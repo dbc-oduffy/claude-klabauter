@@ -588,3 +588,12 @@ def test_sid_from_dict_tolerates_absent_key() -> None:
     }
     restored = PipelineContext.from_dict(data)
     assert restored.sid == ""
+    assert restored.waivers == {}
+
+
+def test_waivers_roundtrip() -> None:
+    ctx = PipelineContext(ceremony="wsc", scope_mode="architecture")
+    ctx.waivers = {"gate": ["item"]}
+    restored = PipelineContext.from_dict(ctx.to_dict())
+    assert restored.waivers == {"gate": ["item"]}
+    assert restored.validate() == []

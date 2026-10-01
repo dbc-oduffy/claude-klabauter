@@ -41,6 +41,95 @@ def stub_import_module():
     _cli._import_module = orig
 
 
+class _Holder:
+    def __init__(self, sid, address, key="k", note="n"):
+        self.session_id, self.address, self.key, self.note = sid, address, key, note
+        self.claimed_at = "2026-10-01T00:00:00Z"
+
+
+class _StubIC:
+    def __init__(self, peers=(), raises=None):
+        self.peers, self.raises, self.calls = list(peers), raises, []
+
+    def set_claim(self, repo, key, note=None):
+        self.calls.append(("set", repo, key, note))
+        if self.raises:
+            raise self.raises
+        return type("R", (), {"peers": self.peers})()
+
+    def release_claim(self, repo, key):
+        self.calls.append(("release", repo, key))
+        return True
+
+    def list_peers(self, repo, key=None):
+        self.calls.append(("list", repo, key))
+        return self.peers
+
+
+@pytest.fixture()
+def stub_incident():
+    orig_m, orig_i = _cli._import_module, _cli._import_incident
+
+    def _apply(ic):
+        core = type("C", (), {"git_root": staticmethod(lambda: "/cwd-root")})()
+        _cli._import_module = lambda: object()
+        _cli._import_incident = lambda: (core, ic)
+
+    yield _apply
+    _cli._import_module, _cli._import_incident = orig_m, orig_i
+
+
+def test_incident_claim_prints_peer_lines_and_exits_0(stub_incident, capsys):
+    ic = _StubIC([_Holder("s1", "addr1"), _Holder("s2", None)])
+    stub_incident(ic)
+    assert _cli.main(["incident-claim", "k", "--note", "hi", "--repo", "/r"]) == 0
+    assert ic.calls == [("set", "/r", "k", "hi")]
+    assert capsys.readouterr().out.splitlines() == [
+        "s1 addr1 2026-10-01T00:00:00Z k -- n",
+        "s2 unreachable 2026-10-01T00:00:00Z k -- n",
+    ]
+
+
+def test_incident_claim_defaults_repo_to_git_root_and_releases(stub_incident):
+    ic = _StubIC()
+    stub_incident(ic)
+    assert _cli.main(["incident-claim", "k", "--release"]) == 0
+    assert ic.calls == [("release", "/cwd-root", "k")]
+
+
+def test_incident_claim_key_refusal_exits_2(stub_incident, capsys):
+    stub_incident(_StubIC(raises=ValueError("bad key")))
+    assert _cli.main(["incident-claim", "k"]) == 2
+    assert "bad key" in capsys.readouterr().err
+
+
+def test_incident_claim_usage_errors_exit_2(stub_incident):
+    stub_incident(_StubIC())
+    assert _cli.main(["incident-claim"]) == 2
+    assert _cli.main(["incident-claim", "k", "--note"]) == 2
+    assert _cli.main(["incident-claim", "k", "--bogus"]) == 2
+    assert _cli.main(["incident-peers", "a", "b"]) == 2
+
+
+def test_incident_peers_lists_with_optional_key(stub_incident, capsys):
+    ic = _StubIC([_Holder("s1", "a1")])
+    stub_incident(ic)
+    assert _cli.main(["incident-peers"]) == 0
+    assert _cli.main(["incident-peers", "k", "--repo", "/r"]) == 0
+    assert ic.calls == [("list", "/cwd-root", None), ("list", "/r", "k")]
+    assert capsys.readouterr().out.count("s1 a1 ") == 2
+
+
+def test_incident_import_failure_exits_3(stub_incident):
+    stub_incident(_StubIC())
+
+    def _boom():
+        raise ImportError("nope")
+
+    _cli._import_incident = _boom
+    assert _cli.main(["incident-peers"]) == 3
+
+
 def test_all_zeros_sid_unknown_exits_1(stub_import_module, capsys):
     stub_import_module(
         _StubLiveness(session_live=lambda *a, **k: False, session_verdict=lambda *a, **k: None)

@@ -147,7 +147,6 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "check-arch-audit-staleness.py",
     "check-atlas-watch-drift.py",
     "check-auto-memory-drained.py",
-    "check-auto-reconcile.py",
     "check-bin-sh-polyglot.py",
     "check-competitor-positioning-nudge.py",
     "check-deferral-orphan-memo.py",

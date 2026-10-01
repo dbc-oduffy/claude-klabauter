@@ -77,18 +77,31 @@ def _engine_root(tmp_path, *, names=(), stamped=True):
     return root
 
 
+@pytest.fixture
+def generator_bin_carrying_publish(tmp_path, monkeypatch):
+    """A generator `coordinator/bin/` that carries `publish.py` while the engine under
+    test does not: the publish-excluded shape, independent of which tree runs the suite."""
+    generator_bin = tmp_path / "generator-bin"
+    generator_bin.mkdir()
+    (generator_bin / "publish.py").write_text("def main(argv):\n    return 0\n", encoding="utf-8")
+    monkeypatch.setattr(door_install, "_GENERATOR_BIN_DIR", generator_bin)
+    return generator_bin
+
+
 def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tmp_path):
-    root = _engine_root(tmp_path, names=["check-claude-klabauter-doctor-sentinel"])
+    root = _engine_root(tmp_path, names=["check-widget-doctor-sentinel"])
 
     assert door_install.engine_carries_entrypoint_script(
-        root, "check-claude-klabauter-doctor-sentinel"
+        root, "check-widget-doctor-sentinel"
     )
     assert not door_install.engine_carries_entrypoint_script(
-        root, "check-claude-klabauter-doctor-sentinel"
+        root, "check-gadget-doctor-sentinel"
     )
 
 
-def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
+def test_a_name_the_engine_cannot_serve_gets_no_launcher(
+    tmp_path, capsys, generator_bin_carrying_publish
+):
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -116,7 +129,9 @@ def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
     assert "python coordinator/bin/publish.py" in err
 
 
-def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(tmp_path):
+def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(
+    tmp_path, generator_bin_carrying_publish
+):
     """The regression this file's unit tests could not see.
 
     `_write_native_door_forwarder` declining to write the native image is
@@ -155,7 +170,9 @@ def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(tmp_pat
     )
 
 
-def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):
+def test_a_stale_launcher_from_an_earlier_install_is_taken_back(
+    tmp_path, generator_bin_carrying_publish
+):
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -169,7 +186,7 @@ def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):
     assert not stale.exists()
 
 
-def test_check_only_removes_nothing(tmp_path):
+def test_check_only_removes_nothing(tmp_path, generator_bin_carrying_publish):
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()

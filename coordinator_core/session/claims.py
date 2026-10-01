@@ -3648,17 +3648,15 @@ def list_claims_by_session_checked(
           ``_commit_orchestration_sequence`` (PipelineContext + commit-outcome
           plumbing), assessed as disproportionate scaffolding for a unit test
           (Review: code-reviewer slice 2, 2026-07-27, Finding 1).
-        - archive (``coordinator_core/ops/ceremony/consumed_handoff_stamp.py
-          :381 post_commit_stamp_and_ship`` -> ``handoff_transition._ship``
-          at ``coordinator_core/ops/handoff_transition.py:639``): SURVIVES.
+        - archive (``coordinator_core/ops/handoff_ship_archive.py`` ->
+          ``handoff_transition._ship``): SURVIVES.
           Neither function imports or calls ``release_artifact``/``claims.``
           anywhere. The ``_ship`` mutator itself IS exercised directly by
           ``coordinator_core/session/tests/test_claims.py::
           test_list_claims_by_session_survives_real_ship_call_site``, which
           calls it for real and asserts the handoff claim survives; the
-          surrounding async ``post_commit_stamp_and_ship`` orchestration
-          (liveness re-check, stamp-before-ship ordering) is not itself
-          exercised by that test.
+          surrounding archive orchestration is not itself exercised by that
+          test.
         - release (explicit ``drop``, ``coordinator_core/pickup_assemble/
           apply.py:~1029 release_artifact(class_, basename, cwd=str(root))``
           inside ``drop()`` at ``:967``, for ``class_ in ("handoff", "memo")``):

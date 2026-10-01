@@ -74,24 +74,6 @@ def _restore_benchmark_origin_env():
             os.environ[op_latency.ORIGIN_ENV] = before
 
 
-def test_harness_run_emits_well_formed_records_for_bare_and_worktree_ops():
-    records = harness.run(ops=_TARGET_OPS, n=_INTEGRATION_N, warmup=1, floor_n=3)
-
-    assert len(records) == len(_TARGET_OPS)
-    assert [r.op for r in records] == _TARGET_OPS
-
-    for record in records:
-        _assert_well_formed_record(record, expected_n=_INTEGRATION_N)
-
-
-def test_harness_run_records_round_trip_through_json():
-    records = harness.run(ops=_TARGET_OPS, n=_INTEGRATION_N, warmup=1, floor_n=3)
-
-    for record in records:
-        round_tripped = ConformanceRecord.from_json(record.to_json())
-        assert round_tripped == record
-
-
 def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> None:
     assert isinstance(record.op, str) and record.op
     assert isinstance(record.op_class, str) and record.op_class

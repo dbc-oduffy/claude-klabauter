@@ -32,6 +32,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from coordinator_core.write_guards import nudge_unmarked_spawning_test
 from coordinator_core.bash_guards.tests.guard_message_corpus import (  # noqa: F401
     test_ac2_every_reachable_guard_has_a_corpus_row,
     test_advisory_and_platform_expected_speaker_matches_measured_reality,
@@ -48,6 +51,18 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (  # noqa: F
 )
 
 _CORPUS_PATH = Path(__file__).with_name("guard_message_corpus.py")
+
+
+@pytest.fixture(autouse=True)
+def _repo_registers_the_spawns_process_marker(tmp_path, monkeypatch):
+    """The unmarked-spawning-test nudge speaks only in a repo whose `pyproject.toml` registers
+    `spawns_process`; the corpus's firing row presumes such a repo, so resolution is pointed at one."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\n"
+        'markers = [\n    "spawns_process: spawns a real OS process",\n]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(nudge_unmarked_spawning_test, "resolve_repo_root", lambda cwd=None: str(tmp_path))
 
 
 def test_every_corpus_self_test_is_collected():

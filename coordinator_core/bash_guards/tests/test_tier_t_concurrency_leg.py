@@ -150,10 +150,12 @@ def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
     assert "with-tier-t-slot" not in text
 
 
-def test_override_env_var_still_disarms_the_whole_guard(repo):
+def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo):
     p = _payload("pytest tests/test_a.py", cwd=repo)
     p["env"] = {"COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION": "1"}
-    assert guard.check(p) is None
+    out = guard.check(p)
+    assert out is not None
+    assert "with-tier-t-slot" in str(out)
 
 
 def test_powershell_dialect_is_classified_too(repo):

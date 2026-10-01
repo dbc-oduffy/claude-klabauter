@@ -19,10 +19,7 @@ through the deleted orchestrator: bookkeeping classification
 (`_credit_from_kind_partition`), the stored-literal-HEAD read-side exclusion
 (`_record_range_has_stored_head`), the verdict filter (`_verdict_counts`), the
 unrecognized-scope_kind WARN aggregation (`emit_unrecognized_kind_warning`),
-and the foreign-session scope set (`_FOREIGN_STRIPPED_SCOPES`) — plus two
-pre-existing tests of `workstream_complete.directives_review`'s
-`_record_membership_shas` spawn-avoidance short-circuit, which never touched
-`build_reviewed_set` and are unrelated to this chunk's deletion.
+and the foreign-session scope set (`_FOREIGN_STRIPPED_SCOPES`).
 
 Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § C3
 """
@@ -319,71 +316,3 @@ def test_credit_from_kind_partition_integration_kind_credits_nothing() -> None:
         {"integration": {"deadbeef00000000000000000000000000000000"}}, "."
     )
     assert credited == set()
-
-
-def test_single_commit_range_outside_chain_set_resolves_without_a_spawn():
-    from coordinator_core.workstream_complete.directives_review import (
-        _record_membership_shas,
-    )
-
-    in_chain = "a" * 40
-    off_chain = "b" * 40
-    calls: list[str] = []
-
-    def _resolver(rng: str):
-        calls.append(rng)
-        return {off_chain}
-
-    for spelling in (f"{off_chain}^..{off_chain}", f"{off_chain}~1..{off_chain}",
-                     f"{off_chain[:9]}^..{off_chain[:9]}"):
-        membership = _record_membership_shas(
-            {
-                "sha_range": spelling,
-                "reviewer": "code-reviewer",
-                "scope": "chain",
-                "scope_kind": "diff",
-                "verdict": "ok",
-            },
-            resolve_range_shas=_resolver,
-            chain_dag_sha_set={in_chain},
-            chain_code_sha_set={in_chain},
-        )
-        assert membership is None, (
-            f"{spelling!r} names a commit outside the chain DAG set and must "
-            f"contribute nothing -- got {membership!r}"
-        )
-
-    assert calls == [], (
-        "the resolver must never be called for a single-commit range whose own "
-        "sha is outside the chain DAG set -- each such call is a git subprocess "
-        f"whose result is already determined; got {calls!r}"
-    )
-
-
-def test_single_commit_range_inside_chain_set_still_resolves_normally():
-    from coordinator_core.workstream_complete.directives_review import (
-        _record_membership_shas,
-    )
-
-    in_chain = "c" * 40
-    calls: list[str] = []
-
-    def _resolver(rng: str):
-        calls.append(rng)
-        return {in_chain}
-
-    membership = _record_membership_shas(
-        {
-            "sha_range": f"{in_chain}^..{in_chain}",
-            "reviewer": "code-reviewer",
-            "scope": "chain",
-            "scope_kind": "diff",
-            "verdict": "ok",
-        },
-        resolve_range_shas=_resolver,
-        chain_dag_sha_set={in_chain},
-        chain_code_sha_set={in_chain},
-    )
-
-    assert calls, "an in-chain record must still be resolved for real"
-    assert membership == {in_chain}, membership

@@ -113,45 +113,20 @@ def _find_offenders(
     return sorted(offenders)
 
 
-def test_no_file_outside_the_exemption_set_gains_the_claude_klabauter_noun():
-    exemption_set = _load_exemption_set(CLASSES_JSON_PATH)
-    if exemption_set is None:
-        pytest.skip(
-            f"{CLASSES_JSON_PATH} is absent or unparseable -- cannot derive the "
-            "exemption set, so the ratchet has nothing to check against. Regenerate "
-            f"with: {REGENERATE_COMMAND}"
-        )
-
-    t0 = time.process_time()
-    offenders = _find_offenders(REPO_ROOT, TREES, exemption_set)
-    cpu_ms = (time.process_time() - t0) * 1000
-    assert cpu_ms < 500, (
-        f"ratchet file walk took {cpu_ms:.1f}ms of process time, over the 500ms DR-344 "
-        "brightline budget -- this is a defect to fix, not a rationale to accept"
-    )
-
-    assert not offenders, (
-        "the following file(s) carry the `claude-klabauter` noun but are NOT in C2's recorded "
-        "exemption set (a new codename debt line, or the exemption set is stale): "
-        + ", ".join(offenders)
-        + f". Regenerate the manifest with: {REGENERATE_COMMAND}"
-    )
-
-
 def test_find_offenders_flags_a_noun_bearing_file_outside_the_exemption_set(tmp_path):
     """AC8 fixture leg (i): a noun-bearing file outside the exemption set fails."""
     tree_dir = tmp_path / "coordinator"
     tree_dir.mkdir()
-    offending = tree_dir / "new_claude_klabauter_thing.py"
-    offending.write_text("claude_klabauter_helper = 1\n", encoding="utf-8")
+    offending = tree_dir / "new_noun_thing.py"
+    offending.write_text(NOUN_NEEDLE.decode("ascii") + "_helper = 1\n", encoding="utf-8")
 
     offenders = _find_offenders(tmp_path, ("coordinator",), exemption_set=set())
-    assert offenders == ["coordinator/new_claude_klabauter_thing.py"]
+    assert offenders == ["coordinator/new_noun_thing.py"]
 
     # Exempting the exact file clears the ratchet -- proves the exemption path works,
     # not just the failure path.
     offenders_exempt = _find_offenders(
-        tmp_path, ("coordinator",), exemption_set={"coordinator/new_claude_klabauter_thing.py"}
+        tmp_path, ("coordinator",), exemption_set={"coordinator/new_noun_thing.py"}
     )
     assert offenders_exempt == []
 

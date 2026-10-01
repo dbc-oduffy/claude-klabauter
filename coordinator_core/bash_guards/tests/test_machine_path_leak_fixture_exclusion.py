@@ -21,17 +21,17 @@ over-grant.
 
 Pure Python -- no git repo, no subprocess.
 
-Spec backlink: coordinator_core/bash_guards/dispatch_checks.py ::
-_is_settings_json, _fixture_suppressible_detail
+Spec backlink: coordinator_core/machine_path_leak.py ::
+is_settings_json, fixture_suppressible
 """
 
 from __future__ import annotations
 
 import pytest
 
-from coordinator_core.bash_guards.dispatch_checks import (
-    _fixture_suppressible_detail,
-    _is_settings_json,
+from coordinator_core.machine_path_leak import (
+    fixture_suppressible as _fixture_suppressible_detail,
+    is_settings_json as _is_settings_json,
 )
 
 _PARSE_ERROR = "ERROR — failed to parse x/settings.json as JSON: Expecting value"

@@ -143,6 +143,27 @@ def test_accept_records_given_mode(tmp_path):
     assert result["exit_code"] == 0, result
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
     assert doc["exit_criterion"]["accepted"]["mode"] == "ceo"
+    assert doc["interaction_mode"] == "ceo"
+
+
+def test_a_recorded_interaction_mode_is_never_overwritten(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED + "interaction_mode: pm\n")
+
+    assert _run(_base(mode="ceo"), repo)["exit_code"] == 0
+
+    assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["interaction_mode"] == "pm"
+
+
+def test_no_mode_given_records_no_interaction_mode(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+
+    assert _run(_base(), repo)["exit_code"] == 0
+
+    assert "interaction_mode" not in yaml.safe_load(sizing.read_text(encoding="utf-8"))
 
 
 def test_other_fields_are_byte_identical(tmp_path):

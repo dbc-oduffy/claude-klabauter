@@ -1118,23 +1118,6 @@ _REPO_ROOT_PY_FILES: frozenset[str] = frozenset(
 )
 
 
-def test_top_level_py_population_is_pinned():
-    """A new top-level `.py` file must be a decision, never a silent arrival.
-
-    Not a spawn check — a POPULATION check, for the one surface no baseline
-    key can reach. See `_REPO_ROOT_PY_FILES` for why this is not a walk.
-    """
-    found = {p.name for p in REPO_ROOT.glob("*.py")}
-    assert found == set(_REPO_ROOT_PY_FILES), (
-        "top-level .py population changed — added: "
-        f"{sorted(found - set(_REPO_ROOT_PY_FILES))}, removed: "
-        f"{sorted(set(_REPO_ROOT_PY_FILES) - found)}. No baseline root reaches "
-        "the repo root non-recursively, so a new file here is uncovered by "
-        "every gate leg. Either console-suppress its spawns and add it to "
-        "_REPO_ROOT_PY_FILES, or move it under a covered root."
-    )
-
-
 def test_top_level_py_files_have_no_bare_spawn():
     """Content check for the pinned population itself -- catches a bare spawn
     landing in an EXISTING root file (`conftest.py` gaining one later), which

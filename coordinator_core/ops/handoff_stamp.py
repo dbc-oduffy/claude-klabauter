@@ -140,8 +140,8 @@ _LOG = logging.getLogger(__name__)
 # here (not just in archive_stamp.py) because this handler is the one
 # structural point THREE of the four current writers already converge on:
 # `archive_stamp.stamp_shipped_in` (wraps this handler), plus
-# `consumed_handoff_stamp.py` and `handoff_ship_archive.py` (both call this
-# handler directly, bypassing that wrapper, but still pass `kind` through the
+# `handoff_ship_archive.py` (calls this
+# handler directly, bypassing that wrapper, but still passes `kind` through the
 # same param this handler validates). The fourth writer
 # (ops.normalize_claimed_frontmatter) still bypasses this handler's RMW path
 # entirely (it has no live file to lock through `_handler`, only marker text
@@ -160,9 +160,8 @@ _SHIPPED_IN_KIND_ENUM = frozenset(
 # Mutate-closure builder — factored out of `_handler` (2026-07-28, ceremony-
 # lock-hold-resurrection Row 7) so a caller that needs to run extra
 # verification INSIDE the same `locked_rmw` lock hold — the ceremony's
-# live-children re-check, `coordinator_core.ops.ceremony.consumed_handoff_
-# stamp._stamp_with_live_children_recheck` — can wrap this mutate in its own
-# composite callable instead of duplicating the frontmatter-mutation logic.
+# live-children re-check — can wrap this mutate in its own composite
+# callable instead of duplicating the frontmatter-mutation logic.
 # `_handler` itself is just the thinnest possible caller of this function;
 # behavior for every existing caller (`archive_stamp.stamp_shipped_in`,
 # `handoff_ship_archive.py`, this module's own `_handler`) is unchanged.

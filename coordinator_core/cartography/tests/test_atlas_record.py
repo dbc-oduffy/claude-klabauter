@@ -14,12 +14,62 @@ from coordinator_core.cartography.atlas_record import (
     recorded_system_for_path,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+_FIXTURE_FILE_INDEX = """\
+---
+last_mapped: 2026-08-06
+---
+
+# File index
+
+## Directory → system
+
+### cartography — atlas tooling
+
+`coordinator_core/cartography/`
+
+### emit-engine — emit
+
+`coordinator_core/ops/emit/`
+
+### guards — guard bodies
+
+`coordinator_core/environment_story/`
+
+### assemblers — pickup and completion
+
+`coordinator_core/learn_lessons_pipeline/`
+
+### source-hygiene — hygiene
+
+`coordinator_core/attribution/` `coordinator_core/commenting/`
+`coordinator_core/comment_strip/` `coordinator_core/source_edit_gate/`
+
+### perforce-vcs — p4
+
+`coordinator_core/p4/`
+
+### workflow-watch — watch
+
+`coordinator_core/workflow_watch/`
+
+### The remaining systems
+
+| System | Directories | Files | Lines |
+|---|---|---|---|
+| support-libraries | `coordinator_core/conservatism/`, `coordinator_core/docindex/`, `coordinator_core/updatedocs/` | 3 | 30 |
+| group-em | `coordinator_core/group_em/` | 1 | 10 |
+| housekeeping | `coordinator_core/housekeeping/` | 1 | 10 |
+| review-trail | `coordinator_core/review_trail/` | 1 | 10 |
+"""
 
 
 @pytest.fixture(scope="module")
-def real_atlas() -> RecordedAtlas:
-    atlas = load_recorded_atlas(REPO_ROOT)
+def real_atlas(tmp_path_factory: pytest.TempPathFactory) -> RecordedAtlas:
+    root = tmp_path_factory.mktemp("atlas_root")
+    index = root / "docs" / "architecture" / "file-index.md"
+    index.parent.mkdir(parents=True)
+    index.write_text(_FIXTURE_FILE_INDEX, encoding="utf-8")
+    atlas = load_recorded_atlas(root)
     assert atlas.error is None
     return atlas
 
@@ -118,11 +168,10 @@ def test_rule10_covers_group_em_housekeeping_review_trail(real_atlas: RecordedAt
     )
 
 
-def test_load_recorded_atlas_real_repo(real_atlas: RecordedAtlas) -> None:
-    assert real_atlas.error is None
+def test_load_recorded_atlas_fixture(real_atlas: RecordedAtlas) -> None:
     assert real_atlas.rules
     assert real_atlas.last_mapped == "2026-08-06"
-    assert real_atlas.system_files["cartography"] == 7
+    assert real_atlas.package_systems["cartography"] == "cartography"
 
 
 def test_load_recorded_atlas_missing(tmp_path: Path) -> None:

@@ -431,8 +431,17 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
 }
 
 
-@pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
+#: Guards whose alternatives name a binary only an installed door provides, so their grading
+#: depends on the box rather than the package; `..._claude_klabauter_corpus.py` runs them.
+_INSTALLED_BINARY_GUARDS = frozenset({"check_raw_pid_liveness"})
+
+
+@pytest.mark.parametrize("guard", sorted(set(altlive.LIVE_TRIGGERS) - _INSTALLED_BINARY_GUARDS))
 def test_named_alternatives_are_not_dead(guard):
+    assert_named_alternatives_are_not_dead(guard)
+
+
+def assert_named_alternatives_are_not_dead(guard):
     ev = altlive.evaluate_guard(guard)
     if not ev.fire.fired:
         pytest.skip("covered by test_registered_trigger_fires; not re-asserted here")

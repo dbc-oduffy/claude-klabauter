@@ -164,12 +164,20 @@ def bookkeep_wave(
     repo_root: Path,
     session_id: str,
     plan_id: str,
-    prep_sidecar: str,
+    prep_sidecar: Optional[str],
     record_stem: str,
+    stage_returns: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run the mechanical bookkeeping step and write the ONE bookkeeping
     record. Returns the record dict (also the return value written to
-    disk's frontmatter, minus the sidecar scaffold boilerplate)."""
+    disk's frontmatter, minus the sidecar scaffold boilerplate).
+
+    `stage_returns` is the run's schema-validated stage results as the wake
+    digest relayed them (`prep`, `delivery`, `tests`, `criterion`, and on the
+    one-stage path `unresolved`/`confinement_violations`/`fixes_applied`).
+    Its keys win over anything derived from a sidecar's frontmatter: a
+    structured return is the engine's own data, frontmatter is an agent's
+    copy of it."""
     ledger_failures: Dict[str, List[str]] = {}
     confinement_notes: List[str] = []
     fixes_applied = 0
@@ -233,6 +241,8 @@ def bookkeep_wave(
         },
         "em_may_think_differently": em_may_think_differently,
     }
+    if stage_returns:
+        record.update({k: v for k, v in stage_returns.items() if v is not None})
 
     record_path = (
         repo_root
@@ -280,7 +290,8 @@ def _bookkeep_wave_handler(params: dict, repo_root: Optional[Path] = None) -> di
         repo_root=root,
         session_id=params["session_id"],
         plan_id=params["plan_id"],
-        prep_sidecar=params["prep_sidecar"],
+        prep_sidecar=params.get("prep_sidecar"),
         record_stem=params["record_stem"],
+        stage_returns=params.get("stage_returns"),
     )
     return {"status": "bookkept", "record": record}

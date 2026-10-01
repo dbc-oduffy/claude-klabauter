@@ -47,7 +47,8 @@ class TestAuthoringPathsStampWork:
         assert "baton_role: work\n" in rendered
         assert "kind: session-handoff\n" in rendered
 
-    def test_scaffold_spinoff_stamps_work(self):
+    def test_scaffold_spinoff_stamps_work(self, monkeypatch):
+        monkeypatch.setattr(_MOD, "_resolve_session_id", lambda: "em-test-session")
         rendered = _MOD._scaffold_spinoff(title="A spinoff baton", branch="work/x/2026-08-19")
         assert "baton_role: work\n" in rendered
         assert "kind: spinoff\n" in rendered

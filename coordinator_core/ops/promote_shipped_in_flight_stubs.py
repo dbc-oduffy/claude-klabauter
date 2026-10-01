@@ -145,7 +145,7 @@ from coordinator_core.lifecycle import git_common_dir as _git_common_dir
 # rather than its lazy-import fallback (get_op_handler() self-resolves a MISS
 # since 2026-07-25, so this pre-import is belt-and-braces, not strictly
 # required for correctness). Mirrors
-# coordinator_core.ops.ceremony.consumed_handoff_stamp's own reuse pattern
+# coordinator_core.ops.handoff_ship_archive's own reuse pattern
 # (public op-registry contract, not a private cross-module reach).
 import coordinator_core.ops.handoff_stamp  # noqa: F401
 from coordinator_core.session.declared_writes import declare_write

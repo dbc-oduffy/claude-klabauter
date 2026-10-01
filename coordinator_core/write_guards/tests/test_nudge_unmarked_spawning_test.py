@@ -66,7 +66,20 @@ def _is_advisory_envelope(result: dict) -> bool:
     )
 
 
-def test_unmarked_spawning_test_fires():
+@pytest.fixture
+def registered_repo(tmp_path, monkeypatch):
+    """A repo whose `pyproject.toml` registers `spawns_process`, which the guard requires before it
+    offers the marker."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\n"
+        'markers = [\n    "spawns_process: spawns a real OS process",\n]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd=None: str(tmp_path))
+    return tmp_path
+
+
+def test_unmarked_spawning_test_fires(registered_repo):
     result = guard.check(
         _payload(
             "Write",
@@ -135,7 +148,7 @@ def test_malformed_payload_returns_none():
     assert guard.check({"tool_name": "Write", "tool_input": "not-a-dict"}) is None
 
 
-def test_guard_fires_through_engine_evaluate_payload_json():
+def test_guard_fires_through_engine_evaluate_payload_json(registered_repo):
     names, import_failed = write_guards_engine.discover_guard_names()
     assert not import_failed, f"write_guards import failure(s): {import_failed}"
     assert "nudge_unmarked_spawning_test" in names

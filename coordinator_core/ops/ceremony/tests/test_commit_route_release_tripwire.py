@@ -399,10 +399,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
-    "ops/ceremony/consumed_handoff_stamp.py::_commit_and_push_follow_up": {
-        "reason": "release",
-        "confirmed": True,
-    },
     "ops/ceremony/post_commit_tail.py::_commit_and_push_origin_stub_close": {
         "reason": "release",
         "confirmed": True,
@@ -598,9 +594,20 @@ def test_no_unlisted_commit_site():
     )
 
 
+#: Allowlist keys whose module ships only in the engine source tree. An entry is
+#: exempt from the stale check only while its module is absent; where the module
+#: exists, the entry is held to the enumerated sites like any other.
+_SOURCE_TREE_ONLY_SITES = frozenset({"percolate/round.py::step_commit"})
+
+
 def test_no_stale_allowlist_entry():
     sites = _enumerate_commit_sites()
-    stale = sorted(set(ALLOWLIST) - set(sites))
+    absent_modules = {
+        key
+        for key in _SOURCE_TREE_ONLY_SITES
+        if not (CORE_ROOT / key.split("::", 1)[0]).is_file()
+    }
+    stale = sorted(set(ALLOWLIST) - set(sites) - absent_modules)
     assert not stale, (
         "Stale allowlist entries name commit sites that no longer exist "
         "(renamed, removed, or merged away) -- remove them or fix the key:\n  "

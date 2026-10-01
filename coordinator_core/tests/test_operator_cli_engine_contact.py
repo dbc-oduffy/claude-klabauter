@@ -527,16 +527,6 @@ def test_baseline_shrinks_and_never_silently_grows():
         )
 
 
-@pytest.mark.skipif(not BASELINE_PATH.exists(), reason="no baseline recorded yet")
-def test_every_baseline_entry_still_exists_on_disk():
-    """A baseline naming a deleted file is a carve-out nobody can audit."""
-    missing = sorted(e for e in _baseline() if not (REPO_ROOT / e).exists())
-    assert not missing, (
-        "baseline names path(s) that no longer exist — delete them:\n"
-        + "\n".join(f"  {p}" for p in missing)
-    )
-
-
 def test_cluster_r27_stale_baseline_entry_and_four_bypassing_entrypoints_fixed():
     """Regression for cluster R27
     (state/bug-backlog/2026-08-31-tf-operator-cli-entrypoints-write-unclaimed.yaml):

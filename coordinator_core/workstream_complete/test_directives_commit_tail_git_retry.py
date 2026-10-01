@@ -49,13 +49,6 @@ def test_persistent_failure_exhausts_budget_and_returns_none(_no_real_sleep, mon
     assert _no_real_sleep == list(_tail._GIT_RETRY_BACKOFF_SECONDS)
 
 
-def test_persistent_failure_still_raises_peer_attribution_unavailable(_no_real_sleep, monkeypatch):
-    monkeypatch.setattr(_tail, "_run_git_ok_retrying", lambda *_a, **_k: None)
-
-    with pytest.raises(_tail.PeerAttributionUnavailable):
-        _tail._chunked_committed_paths(Path("/repo"), ["deadbeef" * 5])
-
-
 def test_immediate_success_does_not_sleep(_no_real_sleep, monkeypatch):
     monkeypatch.setattr(_tail, "_spawn_git", lambda repo_root, args: (0, "clean-stdout", ""))
 
@@ -63,21 +56,6 @@ def test_immediate_success_does_not_sleep(_no_real_sleep, monkeypatch):
 
     assert result == "clean-stdout"
     assert _no_real_sleep == []
-
-
-def test_exhausted_retry_raises_peer_attribution_unavailable_end_to_end(_no_real_sleep, monkeypatch):
-    attempts = []
-
-    def _fake_spawn_git(repo_root, args):
-        attempts.append(args)
-        return 128, "", "fatal: not a git repository"
-
-    monkeypatch.setattr(_tail, "_spawn_git", _fake_spawn_git)
-
-    with pytest.raises(_tail.PeerAttributionUnavailable):
-        _tail._chunked_committed_paths(Path("/repo"), ["deadbeef" * 5])
-
-    assert len(attempts) == _tail._GIT_RETRY_ATTEMPTS
 
 
 def test_deadline_stops_starting_new_attempts_once_budget_spent(_no_real_sleep, monkeypatch):

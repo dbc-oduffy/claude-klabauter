@@ -735,10 +735,10 @@ class TestRunEndToEnd:
         vendored.write_bytes(original_bytes)
         reg_before = sandbox["registry"].read_bytes()
 
-        def _boom(*_a, **_k):
-            raise _mod.SchemaDriftError("simulated post-vendor divergence")
+        def _boom(checks, *_a, **_k):
+            return [_mod.SchemaDriftError("simulated post-vendor divergence") for _ in checks]
 
-        monkeypatch.setattr(_mod, "check_schema_drift", _boom)
+        monkeypatch.setattr(_mod, "check_schema_drift_batch", _boom)
         with pytest.raises(SystemExit):
             _mod.run(schema_names=["alpha"], doe_clone_arg=str(fake_clone), reason="r")
 
@@ -764,8 +764,8 @@ class TestRunEndToEnd:
 
         monkeypatch.setattr(_mod, "_build_plan", _build_then_delete)
         monkeypatch.setattr(
-            _mod, "check_schema_drift",
-            lambda *a, **k: (_ for _ in ()).throw(_mod.SchemaDriftError("nope")),
+            _mod, "check_schema_drift_batch",
+            lambda checks, *a, **k: [_mod.SchemaDriftError("nope") for _ in checks],
         )
         with pytest.raises(SystemExit):
             _mod.run(schema_names=["alpha"], doe_clone_arg=str(fake_clone), reason="r")
@@ -774,6 +774,61 @@ class TestRunEndToEnd:
     def test_missing_doe_clone_fails_closed(self, tmp_path: Path, sandbox) -> None:
         with pytest.raises(SystemExit):
             _mod.run(schema_names=["alpha"], doe_clone_arg=str(tmp_path / "absent"))
+
+
+class TestVerifyIsOneBatch:
+    """`_verify` hands the whole plan set to ONE `check_schema_drift_batch` call, so its
+    cost does not grow with the number of schemas touched."""
+
+    @staticmethod
+    def _plans(tmp_path: Path):
+        from types import SimpleNamespace
+
+        return [
+            SimpleNamespace(name="alpha", vendored_path=tmp_path / "alpha.schema.json", pin_tracked=True),
+            SimpleNamespace(name="beta", vendored_path=tmp_path / "beta.schema.json", pin_tracked=False),
+            SimpleNamespace(name="gamma", vendored_path=tmp_path / "gamma.schema.json", pin_tracked=True),
+        ]
+
+    def test_multiple_plans_make_a_single_batch_call_with_per_plan_refs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plans = self._plans(tmp_path)
+        calls: list = []
+
+        def _batch(checks, clone):
+            calls.append((list(checks), clone))
+            return [None, _mod.SchemaDriftError("beta diverged"), None]
+
+        monkeypatch.setattr(_mod, "check_schema_drift_batch", _batch)
+
+        failures = _mod._verify(plans, tmp_path, "deadbeef")
+
+        assert len(calls) == 1
+        assert calls[0][0] == [
+            (plans[0].vendored_path, "deadbeef"),
+            (plans[1].vendored_path, "HEAD"),
+            (plans[2].vendored_path, "deadbeef"),
+        ]
+        assert calls[0][1] == tmp_path
+        assert failures == ["beta (against HEAD): beta diverged"]
+
+    def test_all_clean_is_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_mod, "check_schema_drift_batch", lambda checks, clone: [None] * len(checks))
+        assert _mod._verify(self._plans(tmp_path), tmp_path, "deadbeef") == []
+
+    def test_unreadable_clone_is_one_failure_string_not_a_raise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _unavailable(checks, clone):
+            raise _mod.SchemaProbeUnavailableError("clone unreadable")
+
+        monkeypatch.setattr(_mod, "check_schema_drift_batch", _unavailable)
+
+        failures = _mod._verify(self._plans(tmp_path), tmp_path, "deadbeef")
+
+        assert len(failures) == 1
+        assert "alpha, beta, gamma" in failures[0] and "clone unreadable" in failures[0]
 
 
 # ---------------------------------------------------------------------------

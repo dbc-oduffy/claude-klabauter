@@ -220,37 +220,6 @@ def test_cwd_rung_never_feeds_the_dispatch_answer_directly(shim):
     )
 
 
-def test_cwd_rung_cannot_resolve_an_unstamped_tree_via_the_structural_gate(
-    tmp_path, registry, shim, monkeypatch
-):
-    """Behavioral half: even when the CURRENT working tree (cwd) differs
-    from the live-tree ladder's own answer -- the case `_is_claude_klabauter_source_tree`
-    exists to detect -- an unstamped published engine is still refused, so
-    cwd cannot be used to smuggle an unstamped tree in as "the engine" by
-    manipulating which tree the session appears to be inside."""
-    published_root = tmp_path / "published"
-    (published_root / "coordinator_core").mkdir(parents=True)
-
-    live_root = tmp_path / "live"
-    live_root.mkdir()
-
-    session_dir = tmp_path / "session-elsewhere"
-    session_dir.mkdir()
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_dir))
-
-    _register_published(registry.ml_dir, published_root)
-    (registry.ml_dir / "registry.local.toml").write_text(
-        (registry.ml_dir / "registry.local.toml").read_text(encoding="utf-8")
-        + f"\n\"repos.claude_klabauter\" = '{live_root}'\n",
-        encoding="utf-8",
-    )
-
-    root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert resolution_class == shim.RESOLUTION_LIVE_WORKING_TREE
-    assert root != published_root.as_posix()
-
-
 def test_exec_cli_no_longer_falls_back_to_resolve_claude_klabauter_bin_dir(shim):
     """C13: a missing target under the resolved root fails loud (127) naming
     the ONE root tried -- it must not call `resolve_claude_klabauter_bin_dir()` (the

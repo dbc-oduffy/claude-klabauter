@@ -10,8 +10,8 @@ deliberate: a restructure that returns the same record COUNT with a different
 BASIS or verdict for some module is exactly the silent regression this guards
 against, and a count-only or length-only check would not catch it.
 
-Observed record count at capture time: 265 (recaptured 2026-09-06; 255 at the
-original capture).
+Observed record count at capture time: 323 (recaptured 2026-09-30; 265 at the
+2026-09-06 recapture, 255 at the original capture).
 
 RESOLVED 2026-09-06 -- the three records this fixture briefly pinned as degraded
 are no longer degraded. `ops/fleet/{memo_compose,memo_reconcile_outbox,memo_send}`

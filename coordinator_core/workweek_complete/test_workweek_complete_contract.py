@@ -189,18 +189,21 @@ def test_pcli_drift_gate_is_never_a_directive() -> None:
         )
 
 
-@pytest.mark.real_home
-def test_brief_envelope_preflight_consumes_manifest_matches_module_constant() -> None:
+def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_path) -> None:
     """The 8-key envelope's `preflight.consumes_manifest` field must be
     byte-identical to the module's own `CONSUMES_MANIFEST` constant --
     catches a `brief()` author hand-copying a stale list into the envelope
     instead of deriving it from the one source of truth.
 
-    `real_home`: mirrors `workday_complete`'s counterpart test -- `brief()`
-    resolves the real machine-local registry, which the suite-root HOME
-    quarantine (`conftest.py`) would otherwise blank out, tripping the
-    never-fail-the-ceremony backstop instead of exercising the real path."""
-    _, envelope = wwc_brief.brief()
+    The injected env resolves the operator-config anchors inside `tmp_path`;
+    without it `brief()` returns a bare `{"error": ...}` envelope."""
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    root = tmp_path / "root"
+    root.mkdir()
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text(str(root))
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path)}
+    _, envelope = wwc_brief.brief(env=env)
     assert envelope["preflight"]["consumes_manifest"] == list(
         wwc_brief.CONSUMES_MANIFEST
     )

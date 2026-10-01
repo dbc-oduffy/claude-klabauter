@@ -837,7 +837,11 @@ def _sha_canonically_matches(supplied: str, prior_value: str) -> bool:
 
 
 def _attribute_claim_holder(
-    fm: str, handoff_abs: Path, repo_root: Path, warnings: list
+    fm: str,
+    handoff_abs: Path,
+    repo_root: Path,
+    warnings: list,
+    target_deployment_state: str,
 ) -> str:
     """Stamp `claimed_by`/`claimed_at` from the durable ledger onto frontmatter
     text whose `status` is being flipped to `claimed`, when the mirror names no
@@ -848,6 +852,12 @@ def _attribute_claim_holder(
     cross-field rule (`frontmatter/schemas/handoff.schema.json`) — this writes
     both halves of that pair together, never `claimed_at` alone, so the flip can
     only ever produce a record the rule actually constrains.
+
+    Absence rule: no holder found on a flip whose target `deployment_state` is
+    in `HANDOFF_TERMINAL_DEPLOYMENT` is the sanctioned shape (a never-claimed
+    predecessor closed by succession) and warns nothing; a non-terminal target
+    with no holder is a defect and warns as one. Contract:
+    `docs/reference/baton-claim-lifecycle.md`.
 
     Negative-spec:
       - Does NOT overwrite an existing holder. A mirror that already names one
@@ -871,11 +881,13 @@ def _attribute_claim_holder(
 
     record = resolve_historical_claim(handoff_abs, repo_root=repo_root)
     if record is None:
+        if target_deployment_state in _TERMINAL_DEPLOYMENT_STATES:
+            return fm
         warnings.append(
-            f"supersede stamped status:claimed on {handoff_abs.name} with no "
-            "claimed_by — neither the frontmatter mirror nor the durable claim "
-            "ledger names a holder, so this record cannot be attributed to a "
-            "consumer. No session id was inferred."
+            f"DEFECT: supersede stamped status:claimed on {handoff_abs.name} "
+            f"with deployment_state:{target_deployment_state} (non-terminal) "
+            "and no claimed_by — neither the frontmatter mirror nor the "
+            "durable claim ledger names a holder. No session id was inferred."
         )
         return fm
 
@@ -935,7 +947,9 @@ def _supersede_continued(
     caller's side. Whenever the mirror carries no holder, the durable ledger is
     consulted (`claim_state.resolve_historical_claim`) and its
     `claimed_by`/`claimed_at` stamped alongside the flip. Nothing is invented:
-    a silent ledger yields a warning, never a manufactured session id.
+    a silent ledger yields no session id, never a manufactured one. The absence
+    is sanctioned because the target `continued` is terminal; see
+    `_attribute_claim_holder` and `docs/reference/baton-claim-lifecycle.md`.
 
     The ledger read is LIVENESS-FREE by design and is not a weakening of
     `resolve_claim_state`'s holder-liveness gate (which stays as documented in
@@ -1010,7 +1024,9 @@ def _supersede_continued(
             else:
                 fm = replace_fm_field(fm, "status", "claimed")
 
-        fm = _attribute_claim_holder(fm, handoff_abs, repo_root, _state["warnings"])
+        fm = _attribute_claim_holder(
+            fm, handoff_abs, repo_root, _state["warnings"], "continued"
+        )
 
         # deployment_state → continued (replace existing; insert after 'status' if missing).
         if deployment != "continued":

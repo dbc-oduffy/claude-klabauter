@@ -1,10 +1,4 @@
-"""STAGED FOR RELOCATION — final destination:
-    C:/claude-klabauter/coordinator_core/hooks/context_pressure_precompact.py
-(a confined general-purpose subagent cannot write outside the coordinator-content-repo repo
-per subagent-sandbox-policy.yaml `confined:` — this file is staged here for
-the EM to `git mv`/copy into the claude-klabauter working tree and commit there.)
-
-coordinator_core.hooks.context_pressure_precompact — PreCompact sentinel +
+"""coordinator_core.hooks.context_pressure_precompact — PreCompact sentinel +
 state-serialization bookkeeping op.
 
 Port of: context-pressure-precompact.sh (DoE d39ab164, 2026-07-16) (W4b, recipe § 2.6).
@@ -17,7 +11,8 @@ import time, using `_envelope.py`'s shape builders. This module follows the
 whose product is an on-disk write side-effect, not an advisory) — see that
 file for the sibling pattern this one mirrors.
 
-Called TWO ways (both in-process, no subprocess, no bash):
+Called TWO ways (both in-process, no subprocess, no bash). hooks.json dials
+the op over the http door (item 2); the DoE stub (item 1) is no longer wired:
   1. Directly by the DoE Shape-P1 stub
      (`coordinator/hooks/scripts/context-pressure-precompact.py`), which
      drains stdin itself and calls `run(raw_stdin)` — this mirrors

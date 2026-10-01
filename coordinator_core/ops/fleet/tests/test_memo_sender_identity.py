@@ -94,19 +94,19 @@ class TestPublishedMirrorResolvesToOwner:
     def test_mirror_root_resolves_to_declared_owner_not_the_mirror_alias(
         self, tmp_path, monkeypatch
     ):
-        mirror_root = _make_sender_root(tmp_path / "claude-klabauter")
+        mirror_root = _make_sender_root(tmp_path / "widget-mirror")
         claude_home = _make_claude_home(
             tmp_path,
             mirror_tables={
-                "claude_klabauter": {"owner": "claude-klabauter-em", "path": str(mirror_root)},
+                "widget_mirror": {"owner": "widget-engine-em", "path": str(mirror_root)},
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         resolved = _resolve_engine_sender_id(root=str(mirror_root))
 
-        assert resolved == "claude-klabauter-em"
-        assert "claude-klabauter" not in resolved
+        assert resolved == "widget-engine-em"
+        assert "widget-mirror" not in resolved
 
 
 class TestComposeTimeAssertionWarnsOnUnacceptedSender:
@@ -126,13 +126,13 @@ class TestComposeTimeAssertionWarnsOnUnacceptedSender:
         )
 
     def test_registered_defaulted_sender_passes(self, tmp_path, monkeypatch):
-        sender = _make_sender_root(tmp_path / "project-rag")
-        claude_home = _make_claude_home(tmp_path, {"project_rag": sender})
+        sender = _make_sender_root(tmp_path / "gadget-repo")
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": sender})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         resolved = resolve_and_assert_sender_id(None, root=str(sender))
 
-        assert resolved == "example-retrieval-repo-em"
+        assert resolved == "gadget-repo-em"
 
     def test_explicit_from_id_bypasses_the_assertion(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(tmp_path, {})

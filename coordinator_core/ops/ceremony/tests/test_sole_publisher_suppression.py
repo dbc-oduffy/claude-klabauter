@@ -21,7 +21,7 @@ merely orphaned by this wave.
 None) because `commit_with_message_file`, `commit_with_message_file_
 pathspec_scoped`, and `commit_scoped` still accept `suppress_post_commit_
 auto_push` as a keyword from callers outside this dispatch's scope
-(`consumed_handoff_stamp.py`, `post_commit_tail.py`) -- this file now pins
+(`post_commit_tail.py`) -- this file now pins
 the no-op contract those three signatures still promise their callers:
 whatever the flag's value, no env is built and `os.environ` is never
 touched.

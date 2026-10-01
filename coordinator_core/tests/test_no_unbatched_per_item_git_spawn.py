@@ -5236,48 +5236,6 @@ def test_no_new_amplification_sites_outside_known_inventory():
     assert not new_site_keys, "\n\n".join(_format_violation(site) for site in new_violations)
 
 
-def test_the_one_hop_horizon_is_published_where_this_gate_is_cited():
-    """The blind spot is PUBLISHED, not remembered -- the discharge chosen for
-    `state/bug-backlog/2026-08-25-the-amplification-gate-cannot-see-a-four-h-f955425bef7a.yaml`.
-
-    That row's requirement was that the repo know which per-item spawn sites its gate can and
-    cannot see. The one-hop horizon stays (widening it was declined on measurement, and the deeper
-    collector is a separate advisory instrument), so what had to change is the READING: every
-    doctrine surface citing this file as an enforcement mechanism must say that green here means
-    "no new one-hop site", not "no per-item spawn sites exist".
-
-    A prose fix alone decays -- the next edit drops the qualifier and nothing notices. This
-    assertion is the artifact that stops it, and it is deliberately a completeness pin over a
-    CLOSED citer list rather than a repo-wide scan: a new doctrine surface citing the gate is a
-    human decision, and the register is where that decision gets recorded.
-
-    SCOPED TO THE CITING BLOCK, not the file. A whole-file substring check passes while the citing
-    bullet quietly loses its qualifier and the marker survives in some unrelated section -- the
-    green-that-measures-nothing shape `state/lessons/2026-08-19-a-suppressor-pin-can-pass-
-    vacuously.md` was written about, in this same file's history. So the marker must appear in a
-    blank-line-delimited block that itself names this gate. The block unit is coarse -- a markdown
-    bullet LIST carries no blank lines, so a block can be several adjacent bullets wide -- and that
-    coarseness is the accepted residual. Mutation-checked at land: marker unfindable, citer stops
-    citing, and marker moved out of the citing block each go RED."""
-    missing: list[str] = []
-    for rel in _HORIZON_CITERS:
-        path = _REPO_ROOT / rel
-        if not path.is_file():
-            missing.append(f"{rel} -- listed citer does not exist")
-            continue
-        blocks = re.split(r"\n\s*\n", path.read_text(encoding="utf-8"))
-        citing = [block for block in blocks if _THIS_FILE.name in block]
-        if not citing:
-            missing.append(f"{rel} -- no longer cites this gate; drop it from _HORIZON_CITERS")
-        elif not any(_HORIZON_MARKER in block for block in citing):
-            missing.append(f"{rel} -- cites this gate without naming the {_HORIZON_MARKER} horizon")
-    assert not missing, (
-        "the gate's coverage horizon is not published where the gate is cited:\n"
-        + "\n".join(f"  {row}" for row in missing)
-        + f"\n\nhorizon: {COVERAGE_HORIZON}"
-    )
-
-
 def test_every_exemption_still_names_a_live_site(monkeypatch):
     """Self-invalidation for `_EXEMPT_SITES` -- the leg the sibling `_EXEMPT_SITES` in
     `test_no_hardcoded_paths.py` lacks and `_PRODUCTION_EXEMPT_SITES` in

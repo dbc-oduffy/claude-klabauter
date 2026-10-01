@@ -149,8 +149,11 @@ class TestC2InProcessConvergence:
         result = ma_apply._dispatch_check_no_illegal_paths([], repo_root)
         assert result == {"cli": "check-no-illegal-paths", "returncode": 0, "stdout": ""}
 
-    def test_merge_recovery_resolve_tag_prefix_anchors_relative_config(self) -> None:
-        repo_root = Path(".").resolve()
+    def test_merge_recovery_resolve_tag_prefix_anchors_relative_config(self, tmp_path: Path) -> None:
+        repo_root = tmp_path
+        (repo_root / "coordinator.local.md").write_text(
+            "---\ntag_prefix: v\n---\n", encoding="utf-8"
+        )
         result = ma_apply._dispatch_merge_recovery_and_tag_cut(
             ["resolve-tag-prefix", "--config", "coordinator.local.md"], repo_root
         )

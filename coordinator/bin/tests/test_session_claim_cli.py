@@ -45,8 +45,14 @@ class _StubClaims:
 
 class _StubLiveness:
 
-    def __init__(self, *, session_live=None):
+    def __init__(self, *, session_live=None, session_live_with_basis=None):
         self.session_live = session_live or (lambda *a, **k: True)
+        # is-session-live reads verdict AND basis from one call; by default
+        # derive the pair from `session_live` so a test that pins only the
+        # verdict still drives the CLI.
+        self.session_live_with_basis = session_live_with_basis or (
+            lambda sid, cwd=None: (self.session_live(sid, cwd), "stable-pid")
+        )
 
 
 class _StubStaleClaims:
@@ -89,12 +95,6 @@ class _StubHarnessRegistry:
 
     def __init__(self, *, lookup=None):
         self.lookup = lookup or (lambda sid: None)
-
-
-class _StubHolderEvidence:
-
-    def __init__(self, *, liveness_basis=None):
-        self.liveness_basis = liveness_basis or (lambda *a, **k: "stable-pid")
 
 
 @pytest.fixture()
@@ -150,17 +150,6 @@ def stub_import_harness_registry_module():
 
     yield _apply
     _cli._import_harness_registry_module = orig
-
-
-@pytest.fixture()
-def stub_import_holder_evidence_module():
-    orig = _cli._import_holder_evidence_module
-
-    def _apply(stub):
-        _cli._import_holder_evidence_module = lambda: stub
-
-    yield _apply
-    _cli._import_holder_evidence_module = orig
 
 
 def test_claim_artifact_true_exits_0(stub_import_module):
@@ -864,11 +853,10 @@ def test_who_claims_path_session_live_raise_exits_transport_fail(
     ["harness-registry", "stable-pid", "recency-window", "recency-window-mtime", "unknown"],
 )
 def test_live_sid_reports_liveness_basis_line(
-    stub_import_liveness_module, stub_import_holder_evidence_module, capsys, basis_value
+    stub_import_liveness_module, capsys, basis_value
 ):
-    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
-    stub_import_holder_evidence_module(
-        _StubHolderEvidence(liveness_basis=lambda *a, **k: basis_value)
+    stub_import_liveness_module(
+        _StubLiveness(session_live_with_basis=lambda *a, **k: (True, basis_value))
     )
     rc = _cli.main(["is-session-live", "some-sid"])
     assert rc == 0
@@ -877,12 +865,9 @@ def test_live_sid_reports_liveness_basis_line(
     assert out_lines[1] == f"liveness_basis:{basis_value}"
 
 
-def test_dead_sid_reports_liveness_basis_line(
-    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
-):
-    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
-    stub_import_holder_evidence_module(
-        _StubHolderEvidence(liveness_basis=lambda *a, **k: "recency-window")
+def test_dead_sid_reports_liveness_basis_line(stub_import_liveness_module, capsys):
+    stub_import_liveness_module(
+        _StubLiveness(session_live_with_basis=lambda *a, **k: (False, "recency-window"))
     )
     rc = _cli.main(["is-session-live", "some-sid"])
     assert rc == _cli._NOT_LIVE
@@ -893,16 +878,15 @@ def test_dead_sid_reports_liveness_basis_line(
 
 
 def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
-    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
+    stub_import_liveness_module, capsys
 ):
-    # C1's ripple, unreviewed.
-    # session_live() stays False for a live foreign-repo peer (AC1: unchanged,
-    # unmigrated) but the basis is "harness-registry-elsewhere"; printing
-    # "dead" over that basis reproduces this plan's own Problem statement in
-    # this sibling CLI. Exit code is unchanged (_NOT_LIVE) for compat.
-    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: False))
-    stub_import_holder_evidence_module(
-        _StubHolderEvidence(liveness_basis=lambda *a, **k: "harness-registry-elsewhere")
+    # A live foreign-repo peer is not live in THIS repo, but its basis is
+    # "harness-registry-elsewhere"; printing "dead" over that basis would
+    # reproduce the conflation C1 closed. Exit code stays _NOT_LIVE for compat.
+    stub_import_liveness_module(
+        _StubLiveness(
+            session_live_with_basis=lambda *a, **k: (False, "harness-registry-elsewhere")
+        )
     )
     rc = _cli.main(["is-session-live", "peer-sid"])
     assert rc == _cli._NOT_LIVE
@@ -911,36 +895,41 @@ def test_live_elsewhere_sid_reports_live_elsewhere_not_dead(
     assert out_lines[1] == "liveness_basis:harness-registry-elsewhere"
 
 
-def test_liveness_basis_call_reuses_holder_evidence_not_a_second_derivation(
-    stub_import_liveness_module, stub_import_holder_evidence_module
-):
-    seen = {}
+def test_verdict_and_basis_come_from_one_liveness_call(stub_import_liveness_module, capsys):
+    """The verdict token and the basis annotating it must be one read: a
+    second call (the old holder_evidence.liveness_basis hop) can describe a
+    different instant than the token it annotates."""
+    calls = []
 
-    def _liveness_basis(sid, cwd=None):
-        seen["args"] = (sid, cwd)
-        return "harness-registry"
+    def _with_basis(sid, cwd=None):
+        calls.append((sid, cwd))
+        return True, "stable-pid"
 
-    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
-    stub_import_holder_evidence_module(_StubHolderEvidence(liveness_basis=_liveness_basis))
+    def _session_live_must_not_be_called(*a, **k):
+        raise AssertionError("is-session-live must not issue a second liveness read")
+
+    stub_import_liveness_module(
+        _StubLiveness(
+            session_live=_session_live_must_not_be_called,
+            session_live_with_basis=_with_basis,
+        )
+    )
     rc = _cli.main(["is-session-live", "some-sid", "/some/repo"])
     assert rc == 0
-    assert seen["args"] == ("some-sid", "/some/repo")
+    assert calls == [("some-sid", "/some/repo")]
+    assert capsys.readouterr().out.splitlines() == ["live", "liveness_basis:stable-pid"]
 
 
-def test_liveness_basis_failure_degrades_to_unknown_without_changing_verdict(
-    stub_import_liveness_module, stub_import_holder_evidence_module, capsys
+def test_session_live_with_basis_raise_exits_transport_fail_not_dead(
+    stub_import_liveness_module, capsys
 ):
-
     def _raise(*a, **k):
-        raise RuntimeError("holder_evidence import failed in test")
+        raise RuntimeError("simulated unexpected failure")
 
-    stub_import_liveness_module(_StubLiveness(session_live=lambda *a, **k: True))
-    _cli._import_holder_evidence_module = _raise
+    stub_import_liveness_module(_StubLiveness(session_live_with_basis=_raise))
     rc = _cli.main(["is-session-live", "some-sid"])
-    assert rc == 0
-    out_lines = capsys.readouterr().out.splitlines()
-    assert out_lines[0] == "live"
-    assert out_lines[1] == "liveness_basis:unknown"
+    assert rc == _cli._TRANSPORT_FAIL
+    assert capsys.readouterr().out.splitlines() == ["indeterminate"]
 
 
 def test_malformed_sid_emits_no_liveness_basis_line(stub_import_liveness_module, capsys):
@@ -1099,9 +1088,31 @@ def test_who_claims_path_with_claimants_reports_liveness_per_row(
     assert rc == 0
     out = capsys.readouterr().out
     assert out == (
-        f"sess-live\tlive\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
-        f"sess-dead\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
+        f"sess-live\tlive\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tyes\n"
+        f"sess-dead\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tno\n"
     )
+
+
+def test_who_claims_path_blocks_column_and_footer(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: {p: ["sess-live", "sess-dead"] for p in paths}
+        )
+    )
+    stub_import_liveness_module(
+        _StubLiveness(session_live=lambda sid, cwd=None: sid == "sess-live")
+    )
+    stub_import_harness_registry_module(_StubHarnessRegistry())
+    assert _cli.main(["who-claims-path", "some/path.txt"]) == 0
+    captured = capsys.readouterr()
+    cols = [line.split("\t") for line in captured.out.splitlines()]
+    assert [c[-1] for c in cols] == ["yes", "no"]
+    assert captured.err.count(
+        "Only rows with blocks=yes can refuse a commit; a dead holder's touch is inert."
+    ) == 1
 
 
 def test_who_claims_path_rung1_recorded_name_wins_over_live_registry(
@@ -1198,7 +1209,7 @@ def test_who_claims_path_rung1_absent_falls_to_rung2_live_registry(
     out = capsys.readouterr().out
     assert out == (
         "sess-b\tlive\tproject-claude-klabauter-99 (live harness registry lookup)\t"
-        f"{_cli._UNKNOWN_KIND_MARKER}\n"
+        f"{_cli._UNKNOWN_KIND_MARKER}\tyes\n"
     )
 
 
@@ -1219,7 +1230,7 @@ def test_who_claims_path_neither_rung_resolves_prints_unnamed_marker(
     assert rc == 0
     out = capsys.readouterr().out
     assert out == (
-        f"sess-c\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
+        f"sess-c\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tno\n"
     )
     assert "sess-c\t" not in _cli._NO_REGISTRY_RECORD_MARKER
     # The registry ANSWERED and holds nothing. That is a fact, and it must not
@@ -1249,7 +1260,7 @@ def test_who_claims_path_rung2_registry_raise_degrades_to_unnamed(
     assert rc == 0
     out = capsys.readouterr().out
     assert out == (
-        f"sess-d\tlive\t{_cli._NAME_UNRESOLVED_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\n"
+        f"sess-d\tlive\t{_cli._NAME_UNRESOLVED_MARKER}\t{_cli._UNKNOWN_KIND_MARKER}\tyes\n"
     )
     # A DEGRADATION, not a fact: the registry was never successfully asked, so
     # this must stay distinguishable from the no-record marker. Asserting only

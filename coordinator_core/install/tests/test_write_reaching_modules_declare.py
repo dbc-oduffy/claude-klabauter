@@ -773,6 +773,134 @@ def test_allowlist_has_no_stale_entries() -> None:
     assert not stale, f"stale _ALLOWLIST entries: {stale}"
 
 
+# ---------------------------------------------------------------------------
+# Kill-switch scope -- every write-reaching module either consults
+# COORDINATOR_DISABLE_MACHINE_MUTATION or is named in the one carve-out list
+# (substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS). The switch promises
+# install-plane writes only; this is the check that keeps the exemption list
+# from rotting into an unchecked roster.
+# ---------------------------------------------------------------------------
+
+_SWITCH_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
+_SWITCH_GUARD_NAME = "_refuse_machine_mutation"
+_GAP_CEILING = 3
+
+
+def _consults_kill_switch(module_path: Path) -> bool:
+    """True iff the module's AST references the guard function by name or
+    spells the env var as a string constant. A docstring or comment naming
+    the switch is not a reference (a docstring is a longer constant, never
+    equal to the env var name)."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == _SWITCH_GUARD_NAME:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == _SWITCH_GUARD_NAME:
+            return True
+        if isinstance(node, ast.FunctionDef) and node.name == _SWITCH_GUARD_NAME:
+            return True
+        if isinstance(node, ast.Constant) and node.value == _SWITCH_ENV:
+            return True
+    return False
+
+
+def _carve_out_problems(
+    modules: list[Path], carve_outs: dict[str, tuple[str, str]]
+) -> tuple[list[str], list[str]]:
+    """(unnamed, stale): unnamed = write-reaching, ungated, absent from
+    ``carve_outs``; stale = a carve-out entry whose module is gone, no longer
+    write-reaching, or now consults the switch."""
+    by_name = {p.name: p for p in modules}
+    unnamed = sorted(
+        p.name
+        for p in modules
+        if _flagged_calls(p) and not _consults_kill_switch(p) and p.name not in carve_outs
+    )
+    stale: list[str] = []
+    for name in sorted(carve_outs):
+        path = by_name.get(name)
+        if path is None:
+            stale.append(f"{name} (module no longer exists)")
+        elif not _flagged_calls(path):
+            stale.append(f"{name} (no longer write-reaching)")
+        elif _consults_kill_switch(path):
+            stale.append(f"{name} (now consults the switch -- drop the entry)")
+    return unnamed, stale
+
+
+def test_every_ungated_write_reaching_module_is_a_named_carve_out() -> None:
+    from coordinator_core.install import substrate
+
+    unnamed, _ = _carve_out_problems(_install_modules(), substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS)
+    assert not unnamed, (
+        f"write-reaching module(s) that neither consult {_SWITCH_ENV} nor appear in "
+        f"substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS: {unnamed} -- gate the write "
+        f"through {_SWITCH_GUARD_NAME}, or name the module there with a class and reason"
+    )
+
+
+def test_carve_out_list_has_no_stale_entries() -> None:
+    from coordinator_core.install import substrate
+
+    _, stale = _carve_out_problems(_install_modules(), substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS)
+    assert not stale, f"stale MACHINE_MUTATION_SWITCH_CARVE_OUTS entries: {stale}"
+
+
+def test_carve_out_entries_have_a_known_class_and_a_reason() -> None:
+    from coordinator_core.install import substrate
+
+    classes = {
+        substrate.CARVE_OUT_INSTALL_PLANE,
+        substrate.CARVE_OUT_CALLER_GATED,
+        substrate.CARVE_OUT_NOT_A_WRITE,
+        substrate.CARVE_OUT_GAP,
+    }
+    for name, (kind, reason) in substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS.items():
+        assert kind in classes, f"{name}: unknown carve-out class {kind!r}"
+        assert reason.strip(), f"{name}: blank carve-out reason"
+
+
+def test_ungated_non_install_plane_gaps_only_shrink() -> None:
+    """``gap`` entries are non-install-plane writers the switch does not yet
+    reach. Closing one means gating it and deleting its entry; adding one
+    means the switch's promise just got weaker."""
+    from coordinator_core.install import substrate
+
+    gaps = sorted(
+        name
+        for name, (kind, _) in substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS.items()
+        if kind == substrate.CARVE_OUT_GAP
+    )
+    assert len(gaps) <= _GAP_CEILING, f"gap carve-outs grew past {_GAP_CEILING}: {gaps}"
+
+
+def test_dep_check_is_a_named_install_plane_carve_out() -> None:
+    from coordinator_core.install import substrate
+
+    kind, _ = substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS["dep_check.py"]
+    assert kind == substrate.CARVE_OUT_INSTALL_PLANE
+
+
+def test_carve_out_check_flags_an_unnamed_ungated_writer(tmp_path: Path) -> None:
+    ungated = tmp_path / "rogue.py"
+    ungated.write_text("import shutil\ndef f(p):\n    shutil.rmtree(p)\n", encoding="utf-8")
+    gated = tmp_path / "careful.py"
+    gated.write_text(
+        "import shutil\n"
+        "def f(p):\n"
+        "    if _refuse_machine_mutation(p, what='x'):\n"
+        "        return\n"
+        "    shutil.rmtree(p)\n",
+        encoding="utf-8",
+    )
+    unnamed, stale = _carve_out_problems(
+        [ungated, gated], {"gone.py": ("gap", "x"), "careful.py": ("gap", "x")}
+    )
+    assert unnamed == ["rogue.py"]
+    assert any("gone.py" in s for s in stale)
+    assert any("careful.py" in s and "now consults" in s for s in stale)
+
+
 def test_read_only_opens_entries_have_non_blank_reason() -> None:
     """AC4: every `_READ_ONLY_OPENS` entry carries a non-blank reason."""
     for key, reason in _READ_ONLY_OPENS.items():

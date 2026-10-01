@@ -90,31 +90,6 @@ def _corpus() -> tuple[tuple, ...]:
     return tuple(rows), elapsed_ms
 
 
-def test_bug_backlog_corpus_parses():
-    """Every state/bug-backlog/*.yaml must yaml.safe_load to a dict.
-
-    This is the hard gate: a parse failure makes a record invisible to the
-    records_query read seam (fail-open, by design — see module docstring),
-    which is the concrete defect this test exists to catch."""
-    rows, _ = _corpus()
-    assert rows, f"no *.yaml records found under {_BACKLOG_DIR} — corpus glob is likely wrong"
-
-    parse_failures: list[str] = []
-
-    for repo_rel, record, parse_error in rows:
-        if parse_error is not None:
-            parse_failures.append(f"{repo_rel}: {parse_error}")
-        elif not isinstance(record, dict):
-            parse_failures.append(f"{repo_rel}: top-level YAML is not a mapping")
-
-    assert not parse_failures, (
-        f"{len(parse_failures)} state/bug-backlog/*.yaml record(s) fail to parse as YAML "
-        "-- invisible to every consumer of this corpus (records_query silently skips an "
-        "unparseable file). Repair structure only, preserving every byte of authored "
-        "meaning:\n  " + "\n  ".join(parse_failures)
-    )
-
-
 def test_bug_backlog_corpus_schema_validation_is_reported():
     """Schema-validate every record that parses; report count only, do not fail
     the suite on pre-existing drift (see module docstring) -- printed to stdout

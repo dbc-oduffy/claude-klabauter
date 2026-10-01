@@ -98,7 +98,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/archive-stamp-cli.py:148` | PROSE-ONLY | `# trigger the error fallback (claude-klabauter-em memo, 2026-07-20).` |
 | `coordinator/bin/break_glass.py:11` | PROSE-ONLY | `is claude-klabauter-resident, not coordinator-content-repo-resident. This module therefore` |
 | `coordinator/bin/break_glass.py:12` | PROSE-ONLY | `lives in claude-klabauter, alongside `setup-verify.py` (one of the tools it` |
-| `coordinator/bin/check-auto-reconcile.py:83` | PROSE-ONLY | `cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md` |
 | `coordinator/bin/check-deferral-orphan-memo.py:50` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
 | `coordinator/bin/check-deferral-partial-strangle.py:49` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
 | `coordinator/bin/check-description-length.py:16` | PROSE-ONLY | `Port target: coordinator_core.ops.check_description_length (claude-klabauter).` |
@@ -610,7 +609,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_atlas_refresh_gate.py:53` | PROSE-ONLY | `# tests/ → coordinator/ → claude-klabauter (repo root)` |
 | `coordinator/tests/test_bash_exclusion_gate.py:50` | PROSE-ONLY | `CLAUDE.md never live in claude-klabauter. A copy here would guard an empty corpus` |
 | `coordinator/tests/test_bootstrap_orchestrate.py:204` | - | `"machine-local registry has repos.claude_klabauter)"` |
-| `coordinator/tests/test_check_auto_reconcile.py:14` | PROSE-ONLY | `cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md` |
 | `coordinator/tests/test_check_deferral_orphan_memo.py:12` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
 | `coordinator/tests/test_check_deferral_partial_strangle.py:13` | PROSE-ONLY | `Spec backlink: cross-repo/inbox/2026-07-21-claude-klabauter-em-deferral-detectors-workday-start.md` |
 | `coordinator/tests/test_check_em_environment.py:34` | PROSE-ONLY | `unresolvable (no `repos.claude_klabauter` machine-local entry) as a` |
@@ -1277,8 +1275,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/ceremony/wsc_disposition.py:88` | PROSE-ONLY | `# Spec backlink: cross-repo memo (claude-klabauter commit 1b07cded) fixed a` |
 | `coordinator_core/ops/check_arch_audit_staleness.py:138` | - | `return _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/check_auto_memory_drained.py:75` | PROSE-ONLY | `live slug, ``-Users-example-operator-X-claude-klabauter``, and coordinator-content-repo's,` |
-| `coordinator_core/ops/check_auto_reconcile.py:28` | PROSE-ONLY | `cross-repo/inbox/2026-07-13-claude-klabauter-em-claude-klabauter-auto-reconcile-wire-surfaces.md` |
-| `coordinator_core/ops/check_auto_reconcile.py:78` | PROSE-ONLY | `claude-klabauter's own state/handoffs/ corpus instead of its own. See` |
 | `coordinator_core/ops/check_native_door_interpreter_handoff.py:1122` | PROSE-ONLY | `Measured (claude-klabauter-7f, 2026-09-02, this repo): ``.exe``/``.com``` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:88` | PROSE-ONLY | `(34 files in claude-klabauter, 1 in coordinator-content-repo), fixed outright on` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:287` | PROSE-ONLY | `scan), so the SAME engine backs a guard in claude-klabauter's own tree and,` |
@@ -3141,8 +3137,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/check-atlas-watch-drift.py:68` | - | `print(f"check-atlas-watch-drift: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
 | `coordinator/bin/check-auto-memory-drained.py:41` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/check-auto-memory-drained.py:51` | - | `print(f"check-auto-memory-drained: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
-| `coordinator/bin/check-auto-reconcile.py:188` | - | `claude_klabauter_root = ensure_engine_on_path(__file__)` |
-| `coordinator/bin/check-auto-reconcile.py:189` | - | `if not claude_klabauter_root:` |
 | `coordinator/bin/check-competitor-positioning-nudge.py:42` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/check-competitor-positioning-nudge.py:51` | - | `print(f"check-competitor-positioning-nudge.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
 | `coordinator/bin/check-deferral-orphan-memo.py:94` | - | `from cc_invoke import _resolve_claude_klabauter_root, cc_invoke  # noqa: E402` |
@@ -5282,8 +5276,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/tests/test_brightline_session_scope_integration.py:98` | - | `pytest.skip(f"{label}: claude-klabauter transport unavailable: {cp.stderr.strip()}")` |
 | `coordinator/tests/test_chain_preinstall_phase.py:71` | - | `pytest.skip(f"{label}: CLAUDE_KLABAUTER_ROOT transport unavailable (rc=95): {cp.stderr.strip()}")` |
 | `coordinator/tests/test_chain_walk_setup_rename_compat.py:61` | - | `pytest.skip(f"{label}: CLAUDE_KLABAUTER_ROOT transport unavailable (rc={_TRANSPORT_FAIL}): {cp.stderr.strip()}")` |
-| `coordinator/tests/test_check_auto_reconcile.py:62` | - | `'{"handoff_id":"h-001","reason":"gate still open","evidence":"claude-klabauter.verbs still pending"}],'` |
-| `coordinator/tests/test_check_auto_reconcile.py:65` | - | `assert result.stdout.strip() == "[auto-reconcile] h-001: gate still open — claude-klabauter.verbs still pending"` |
 | `coordinator/tests/test_check_deferral_orphan_memo.py:48` | - | `'{"basename":"2026-07-01-foo.md","from":"claude-klabauter-engine","kind":"ask","age_days":5,'` |
 | `coordinator/tests/test_check_deferral_orphan_memo.py:49` | - | `'"offer":"[deferral] inbox memo 2026-07-01-foo.md (from claude-klabauter-engine, 5d, kind:ask) -- '` |
 | `coordinator/tests/test_check_deferral_orphan_memo.py:51` | - | `'"offer":"[deferral] inbox memo 2026-07-01-foo.md (from claude-klabauter-engine, 5d, kind:ask) -- '` |
@@ -7197,7 +7189,6 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/ops/test_check_arch_audit_staleness.py:105` | - | `assert caas._resolve_state_root() == str(Path("/claude-klabauter/root") / "state")` |
 | `coordinator_core/ops/test_check_arch_audit_staleness.py:108` | - | `def test_resolve_state_root_meta_repo_unresolvable_claude_klabauter_returns_none(` |
 | `coordinator_core/ops/test_check_arch_audit_staleness.py:114` | - | `monkeypatch.setattr(caas, "_claude_klabauter_root", lambda: None)` |
-| `coordinator_core/ops/test_check_auto_reconcile.py:136` | - | `def test_resolve_own_repo_root_targets_invoking_repo_not_claude_klabauter(` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:17` | - | `from coordinator_core.ops import check_claude_klabauter_doctor_sentinel as mod` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:22` | - | `monkeypatch.delenv("COORDINATOR_CLAUDE_KLABAUTER_DOCTOR_STALE_SEC", raising=False)` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:37` | - | `monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)` |
@@ -9590,7 +9581,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/bin/check-arch-audit-staleness.py`
 - `coordinator/bin/check-atlas-watch-drift.py`
 - `coordinator/bin/check-auto-memory-drained.py`
-- `coordinator/bin/check-auto-reconcile.py`
 - `coordinator/bin/check-bin-sh-polyglot.py`
 - `coordinator/bin/check-competitor-positioning-nudge.py`
 - `coordinator/bin/check-deferral-orphan-memo.py`
@@ -10041,7 +10031,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator/tests/test_brightline_session_scope_integration.py`
 - `coordinator/tests/test_chain_preinstall_phase.py`
 - `coordinator/tests/test_chain_walk_setup_rename_compat.py`
-- `coordinator/tests/test_check_auto_reconcile.py`
 - `coordinator/tests/test_check_em_environment.py`
 - `coordinator/tests/test_check_engine_drift.py`
 - `coordinator/tests/test_check_global_doctrine_mirror_repo_root.py`
@@ -10455,7 +10444,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/ceremony/update_docs_scan.py`
 - `coordinator_core/ops/changelog_ops.py`
 - `coordinator_core/ops/check_arch_audit_staleness.py`
-- `coordinator_core/ops/check_auto_reconcile.py`
 - `coordinator_core/ops/check_generator_output_staleness.py`
 - `coordinator_core/ops/check_harvest_debt.py`
 - `coordinator_core/ops/check_machine_local_regeneratability.py`
@@ -10648,7 +10636,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/strategic/version_highlights.py`
 - `coordinator_core/ops/strategic_emit.py`
 - `coordinator_core/ops/strategic_generate.py`
-- `coordinator_core/ops/test_check_auto_reconcile.py`
 - `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py`
 - `coordinator_core/ops/test_check_posix_exec_assumptions.py`
 - `coordinator_core/ops/test_completion_ops.py`
@@ -11064,3 +11051,4 @@ generator change outside this row's footprint (`coordinator/bin/`,
 `coordinator_core/tests/register_population.json`, and this manifest are C4's declared writes;
 the generator itself is C2's).
 
+**Orphaned check-auto-reconcile surfaces deleted.** `coordinator/bin/check-auto-reconcile.py`, `coordinator_core/ops/check_auto_reconcile.py` and their two tests are deleted (dispatched the gravestoned `handoff.reconcile_open` op for a consumer that no longer exists). Their nine table rows and four `PROSE-ONLY` file entries above are removed; the generated per-class counts stay the SHA-pinned snapshot, not decremented.

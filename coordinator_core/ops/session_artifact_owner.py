@@ -37,36 +37,10 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.session import artifact_owner
-
-
-def _owner_resolution_to_dict(resolution: "artifact_owner.OwnerResolution") -> Dict[str, Any]:
-    result = resolution.result
-    return {
-        "session_id": resolution.owner.session_id,
-        "source_field": resolution.owner.source_field,
-        "outcome": result.outcome,
-        "resolved_session_id": result.session_id,
-        "address": result.address,
-        # AC2's claim_live/claim_stage
-        # were computed in the dataclass but dropped at this JSON-RPC
-        # boundary; only `source_field == "claim_dir"` populates either
-        # (every other convention names no claim dir of its own to ask).
-        "claim_live": resolution.owner.claim_live,
-        "claim_stage": resolution.owner.claim_stage,
-        "candidates": [
-            {
-                "session_id": c.session_id,
-                "name": c.name,
-                "ref": c.ref,
-                "address": c.address,
-            }
-            for c in result.candidates
-        ],
-    }
 
 
 @register_op("session.artifact_owner")
@@ -116,8 +90,4 @@ def _session_artifact_owner(params: dict, repo_root: Optional[Path] = None) -> d
 
     result = artifact_owner.resolve_artifact_owner(raw_path)
 
-    return {
-        "artifact_path": result.artifact_path,
-        "owners": [_owner_resolution_to_dict(o) for o in result.owners],
-        "file_error": result.file_error,
-    }
+    return artifact_owner.to_dict(result)

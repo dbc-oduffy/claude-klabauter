@@ -487,7 +487,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/render_posture_overlay.py': ('claims-explicitly', 'claim token in run'),
     'coordinator_core/ops/render_template.py': ('claims-explicitly', 'claim token in _render_and_write_in_place, main'),
     'coordinator_core/ops/review_freeze_diff.py': ('claims-explicitly', 'claim token in freeze_diff'),
-    'coordinator_core/ops/review_mint/op.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _review_mint_workflow'),
+    'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'bookkeeping record and plan_id stamp land under .coordinator-local/subagent-share (gitignored) box-local run sidecars'),
     'coordinator_core/ops/rewrite_spec_backlinks.py': ('claims-explicitly', 'claim token in rewrite_file'),
     'coordinator_core/ops/roadmap_link_stubs.py': ('to-fix', "raw-write site(s): _roadmap_id_lock; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/run_shellcheck_sweep.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _lint_files'),

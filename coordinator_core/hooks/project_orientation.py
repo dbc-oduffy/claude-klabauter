@@ -393,7 +393,8 @@ def _harness_version_drift_banner(out: List[str], env: Mapping[str, Any], repo_r
         out.append("\n")
         out.append(
             f"── ⚠ Harness drift: {pinned} → {newest_str} — vendored Claude Code docs are "
-            f"{n_desc} behind; re-read the delta and re-pin "
+            f"{n_desc} behind; re-read the delta, then set "
+            f"reconciled_against_harness_version to {newest_str} in "
             "state/reference/anthropic-docs/reconciled-against.json ──\n"
         )
 
@@ -646,7 +647,8 @@ def _tier_currency_banner(out: List[str], env: Mapping[str, Any], repo_root: Opt
         if not isinstance(record, dict) or "ran_at" not in record:
             out.append(
                 f"── {name}: unknown — no run recorded; "
-                f"`tier-last-run record --entry {name} ...` records one ──\n"
+                f"`python3 {settings_home() / 'bin' / 'tier-last-run.py'} record --entry {name} "
+                "--cmd <cmd-run> --exit <code>` records one ──\n"
             )
             continue
 

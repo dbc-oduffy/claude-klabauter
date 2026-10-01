@@ -125,8 +125,17 @@ class TestDestructiveGitOrphanForcePush:
         assert not _denies("g`it push --force origin main @'", "Bash", repo_cwd)
 
 
-@pytest.mark.real_home
 class TestBlanketGitAdd:
+
+    @pytest.fixture(autouse=True)
+    def _checkout_is_a_registered_fleet_repo(self, repo_cwd, tmp_path, monkeypatch) -> None:
+        """The blanket-add guard denies only inside a repo the machine registry lists, so the
+        checkout under test is registered in an isolated registry dir."""
+        (tmp_path / "registry.local.toml").write_text(
+            '[repos]\nunder_test = "%s"\n' % repo_cwd.replace("\\", "/"),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
 
     def test_backtick_escaped_git_add_denies_on_the_powershell_leg_only(self, repo_cwd) -> None:
         cmd = "g`it add -A"

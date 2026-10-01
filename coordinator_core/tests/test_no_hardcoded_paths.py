@@ -764,7 +764,7 @@ def test_gate_detects_a_planted_dirname_join_sibling_shellout(tmp_path):
         "\n"
         "def resolve_sibling():\n"
         "    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))\n"
-        "    return os.path.join(here, \"..\", \"example-retrieval-repo\")\n",
+        "    return os.path.join(here, \"..\", \"coordinator-content-repo\")\n",
         encoding="utf-8",
     )
 
@@ -775,7 +775,7 @@ def test_gate_detects_a_planted_dirname_join_sibling_shellout(tmp_path):
     relpath, lineno, tooth, detail = matches[0]
     assert relpath.endswith("fixture_dirname_join.py")
     assert lineno == 5
-    assert detail == "project-rag"
+    assert detail == "coordinator-content-repo"
 
 
 def test_gate_detects_a_planted_single_expression_dirname_join_str_segments(tmp_path):

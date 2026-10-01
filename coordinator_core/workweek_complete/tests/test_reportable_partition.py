@@ -19,6 +19,18 @@ _EXPECTED_ACTION_CLASS_IDS = {
 }
 
 
+@pytest.fixture
+def operator_env(tmp_path):
+    """Env that resolves the operator-config anchors inside `tmp_path`, so `brief()` needs no
+    machine registry."""
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    root = tmp_path / "root"
+    root.mkdir()
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text(str(root))
+    return {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path)}
+
+
 def _built_directives_and_points():
     directives = _build_directives()
     points = _build_judgment_points()
@@ -43,31 +55,22 @@ def test_action_class_point_carries_explicit_reportable_false():
     assert by_id["jp_step4_triage_dispatch"]["reportable"] is False
 
 
-@pytest.mark.real_home
-def test_reported_points_absent_from_judgment_points():
-    """`real_home`: `brief()` resolves the real machine-local registry via
-    `resolve_operator_config`, which the suite-root HOME quarantine
-    (`coordinator_core/conftest.py`) would otherwise blank out, tripping the
-    never-fail-the-ceremony TRANSPORT_FAIL backstop instead of exercising
-    the real path -- mirrors this module's own
-    `test_brief_envelope_preflight_consumes_manifest_matches_module_constant`."""
-    exit_code, envelope = brief()
+def test_reported_points_absent_from_judgment_points(operator_env):
+    exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     assert ids.isdisjoint(_EXPECTED_REPORTED_IDS)
 
 
-@pytest.mark.real_home
-def test_action_class_point_stays_asked():
-    exit_code, envelope = brief()
+def test_action_class_point_stays_asked(operator_env):
+    exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     assert _EXPECTED_ACTION_CLASS_IDS <= ids
 
 
-@pytest.mark.real_home
-def test_no_point_is_demoted_into_narration_today():
-    exit_code, envelope = brief()
+def test_no_point_is_demoted_into_narration_today(operator_env):
+    exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     narration = envelope["narration"]
     for point_id in _EXPECTED_ACTION_CLASS_IDS:
@@ -90,9 +93,8 @@ def test_narration_renderer_still_carries_question_and_rationale():
     assert _reported_narration([]) == ""
 
 
-@pytest.mark.real_home
-def test_tier3_no_recommendation_points_stay_asked():
-    exit_code, envelope = brief()
+def test_tier3_no_recommendation_points_stay_asked(operator_env):
+    exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     for tier3_id in (

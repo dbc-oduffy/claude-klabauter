@@ -236,6 +236,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "plan already owns, docs/plans/2026-09-23-cascade-write-provenance.md C2)",
     ),
     (
+        "coordinator_core.ops.commit_join_divergence_report",
+        'registers "commit_ledger.join_divergence_report" (read-only, one-git-spawn report of '
+        "ledger vs Deliverable-Id join divergence; never gates)",
+    ),
+    (
         "coordinator_core.ops.audit_two_repo_rate",
         'registers "goal.kr2_two_repo_rate" (read-only KR2 engine-tool commit count, '
         "pairing leg unmeasured, docs/plans/2026-07-20-kr-baselining-package.md C1)",
@@ -345,6 +350,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),
+    ("coordinator_core.ops.session_incident_claim", 'registers "session.incident_claim", "session.incident_peers"'),
     ("coordinator_core.ops.handoff_author_fork", 'registers "handoff.author_fork"'),
     ("coordinator_core.ops.handoff_lineage_ancestry", 'registers "handoff.lineage_ancestry"'),
     ("coordinator_core.ops.plan_tasks_mutate", ""),
@@ -377,7 +383,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.workflow_fire.op",
         'registers "workflow.fire", "workflow.fire_status"',
     ),
-    ("coordinator_core.ops.review_mint.op", 'registers "review.mint_workflow"'),
     (
         "coordinator_core.ops.review_stamp",
         'registers "review_stamp.mint", "review_stamp.check"',
@@ -502,6 +507,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.resolve_baton_path", 'registers "baton.resolve_path_and_repo"'),
     ("coordinator_core.ops.baton_carry_forward", 'registers "baton.carry_forward", "baton.carry_forward_read"'),
     ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
+    (
+        "coordinator_core.ops.fanout.ops",
+        'registers "fanout.compose", "fanout.census", "fanout.reconcile"',
+    ),
     ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
     ("coordinator_core.ops.memo_fate_backfill", 'registers "memo.fate_backfill"'),

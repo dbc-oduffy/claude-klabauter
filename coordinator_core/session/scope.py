@@ -3059,7 +3059,6 @@ def release_own_path_claims(
     passes ``cwd=<worktree root>``. Four call it directly
     (``ops/ceremony/scoped_git_commit.py``,
     ``ops/ceremony/post_commit_tail.py``,
-    ``ops/ceremony/consumed_handoff_stamp.py``,
     ``ops/ceremony/detached_render_commit.py``) and four reach it through
     ``asyncio.to_thread`` because their own call frame is async
     (``ops/fleet/_common.py`` ×2, ``ops/session/boot_sweep.py``,

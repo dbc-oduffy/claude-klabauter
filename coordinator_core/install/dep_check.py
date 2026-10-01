@@ -17,6 +17,13 @@ no longer applies now that the file itself is gone: this module is the sole
 implementation for every consumer, in-repo and sibling-repo vendoring
 alike.
 
+Kill-switch scope: this module's only writes are the visited-set files under
+``<settings_home>/coordinator-claude/`` -- install-plane territory, so it does
+not consult ``COORDINATOR_DISABLE_MACHINE_MUTATION``. That is a named carve-out,
+not an omission: ``substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS`` lists it and
+``install/tests/test_write_reaching_modules_declare.py`` fails if it is
+dropped from that list while still ungated.
+
 Spec backlink: docs/plans/2026-06-15-coordinator-install-chain-application-phase-b.md §7 C3
 Spec backlink: coordinator/docs/wiki/agent-install-contract.md §Dual-mode script UX
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md

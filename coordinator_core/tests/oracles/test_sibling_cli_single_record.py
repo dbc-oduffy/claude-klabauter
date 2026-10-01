@@ -71,7 +71,6 @@ def test_queue_append_takes_one_record():
 @pytest.mark.parametrize(
     "script, entry",
     [
-        ("percolate-gate.py", "_build_parser"),
         ("coordinator-lesson-promote.py", "_build_parser"),
         ("coordinator-queue-append.py", "_build_parser"),
     ],

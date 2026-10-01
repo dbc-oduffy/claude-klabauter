@@ -105,7 +105,11 @@ def cli_module(monkeypatch, tmp_path):
         finally:
             os.chdir(caller_cwd)
 
-    monkeypatch.setattr(module, "route", _fake_route)
+    # The CLI imports `route` lazily inside main(), so stub it at its source.
+    monkeypatch.syspath_prepend(module._LIB_DIR)
+    import cc_invoke
+
+    monkeypatch.setattr(cc_invoke, "route", _fake_route)
     return module, engine_chunk_sha
 
 

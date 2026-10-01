@@ -84,6 +84,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _no_pending_store_writes_outside_real_repos(monkeypatch):
+    """Tests using a fictional worktree root must not create directories there."""
+    from coordinator_core.ops.fleet import _common, _index_resync_pending
+
+    def _guarded(worktree_root, records):
+        if (Path(worktree_root) / ".git").exists():
+            _index_resync_pending.record_pending(worktree_root, records)
+
+    monkeypatch.setattr(_common, "record_pending", _guarded)
+
+
 # ---------------------------------------------------------------------------
 # Part 1 — spawn-free fakes: _resync_main_index_for_moves
 # ---------------------------------------------------------------------------
@@ -971,3 +983,80 @@ def test_reaps_resync_chunk_failure_annotates_only_that_chunk_and_runs_the_rest(
         candidate_id = f"state/handoffs/{path.name}"
         annotated = "index_resync_failed" in reaped_by_id[candidate_id]
         assert annotated is (str(path) in failed_paths)
+
+
+# ---------------------------------------------------------------------------
+# Part 3 — exhausted chunks are recorded as pending resyncs
+# ---------------------------------------------------------------------------
+
+
+def _pending_fixture(tmp_path, n):
+    (tmp_path / ".git").mkdir()
+    moves = [
+        Move(
+            src=tmp_path / "state" / "handoffs" / f"h{i}.md",
+            dst=tmp_path / "archive" / "handoffs" / f"h{i}.md",
+            candidate_id=f"state/handoffs/h{i}.md",
+        )
+        for i in range(n)
+    ]
+    acted = {m.candidate_id: {"id": m.candidate_id, "archived": True} for m in moves}
+    return moves, acted
+
+
+def test_exhausted_resync_records_one_pending_per_failed_move(tmp_path, monkeypatch):
+    from coordinator_core.ops.fleet._index_resync_pending import list_pending
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.fleet._common._persist_index_resync_failure",
+        lambda **kwargs: None,
+    )
+    moves, acted = _pending_fixture(tmp_path, 2)
+    blobs = {moves[0].candidate_id: "a" * 40}
+
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted, worktree_root=tmp_path, env={},
+            run_git=_FakeRunGit(results=["index.lock held"]), committed_blobs=blobs,
+        )
+    )
+
+    recs = {r.candidate_id: r for r in list_pending(tmp_path)}
+    assert set(recs) == {m.candidate_id for m in moves}
+    r0 = recs[moves[0].candidate_id]
+    assert (r0.src, r0.dst) == ("state/handoffs/h0.md", "archive/handoffs/h0.md")
+    assert r0.committed_blob == "a" * 40
+    assert recs[moves[1].candidate_id].committed_blob == ""
+    assert r0.op_label == "archive_and_commit"
+
+
+def test_successful_resync_records_nothing(tmp_path):
+    from coordinator_core.ops.fleet._index_resync_pending import list_pending
+
+    moves, acted = _pending_fixture(tmp_path, 2)
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted, worktree_root=tmp_path, env={}, run_git=_FakeRunGit(),
+        )
+    )
+    assert list_pending(tmp_path) == []
+    assert all("index_resync_failed" not in a for a in acted.values())
+
+
+def test_pending_record_fault_does_not_fail_the_op(tmp_path, monkeypatch):
+    def _boom(*_a, **_k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("coordinator_core.ops.fleet._common.record_pending", _boom)
+    monkeypatch.setattr(
+        "coordinator_core.ops.fleet._common._persist_index_resync_failure",
+        lambda **kwargs: None,
+    )
+    moves, acted = _pending_fixture(tmp_path, 1)
+    _run(
+        _resync_main_index_for_moves(
+            moves, acted, worktree_root=tmp_path, env={},
+            run_git=_FakeRunGit(results=["index.lock held"]),
+        )
+    )
+    assert "index_resync_failed" in acted[moves[0].candidate_id]

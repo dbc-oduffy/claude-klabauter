@@ -77,23 +77,6 @@ def _collect_seeded_yaml() -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def test_initiatives_dir_exists() -> None:
-    """state/initiatives/ directory must exist (created by C1)."""
-    assert _INITIATIVES_DIR.is_dir(), (
-        f"state/initiatives/ not found at {_INITIATIVES_DIR} — "
-        "C1 seed step may not have run"
-    )
-
-
-def test_seeded_files_present() -> None:
-    """At minimum six files must be seeded: five named epics + catch-all bucket."""
-    files = _collect_seeded_yaml()
-    assert len(files) >= 6, (
-        f"Expected ≥6 seeded initiative files, found {len(files)}: "
-        f"{[f.name for f in files]}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # (b)–(h) Per-file schema conformance — parametrised over seeded files
 # ---------------------------------------------------------------------------
@@ -190,25 +173,6 @@ def test_optional_fields_string_or_absent(initiative_file: tuple[Path, dict]) ->
 # ---------------------------------------------------------------------------
 # (i) Catch-all bucket — specific assertions
 # ---------------------------------------------------------------------------
-
-
-def test_catch_all_present() -> None:
-    """(i) The catch-all burn-down bucket must be seeded and have target_date: null."""
-    catch_all = _INITIATIVES_DIR / "catch-all.yaml"
-    assert catch_all.exists(), (
-        "catch-all.yaml missing from state/initiatives/ — "
-        "DR-209 requires exactly one catch-all burn-down bucket per repo"
-    )
-    data = _load_initiative_file(catch_all)
-    assert data.get("id") == "catch-all", (
-        f"catch-all.yaml: id must be 'catch-all', got {data.get('id')!r}"
-    )
-    assert data.get("target_date") is None, (
-        "catch-all.yaml: target_date must be null (burn-down shape — DR-209 rejects period labels)"
-    )
-    assert data.get("status") == "active", (
-        "catch-all.yaml: status must be active (Gate-B constraint)"
-    )
 
 
 # ---------------------------------------------------------------------------

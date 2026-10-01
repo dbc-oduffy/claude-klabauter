@@ -446,3 +446,54 @@ def test_probe_subcommands_are_callable_in_a_clean_interpreter():
     )
     assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
     assert proc.returncode == 0, proc.stderr
+
+
+# --- d-hook-currency: a stale hook disposition surfaces as the directive ---
+
+_RETIRED_AUTO_PUSH_MARKER = "# retired-auto-push-body-fixture\n"
+
+
+def _hook_currency_fleet(monkeypatch, tmp_path, *, stale):
+    """One registered clone; its post-commit hook carries the retired body when
+    `stale`. The disposition table is a synthetic entry so the pin does not
+    depend on the live entry module."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.git import hook_dispositions as hd
+
+    repo = tmp_path / "fleet-clone"
+    hooks = repo / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    body = _RETIRED_AUTO_PUSH_MARKER if stale else "#!/bin/sh\nexit 0\n"
+    (hooks / "post-commit").write_text(body, encoding="utf-8", newline="\n")
+
+    def _identify(text):
+        return hd.Match(0, len(text)) if text == _RETIRED_AUTO_PUSH_MARKER else None
+
+    entry = hd.HookDisposition(
+        id="retired-auto-push-post-commit",
+        hook_name="post-commit",
+        action="remove",
+        identify=_identify,
+    )
+    monkeypatch.setattr(hd, "DISPOSITIONS", (entry,), raising=False)
+    monkeypatch.setattr(
+        machine_resolver,
+        "merged_flat_registry",
+        lambda *a, **k: {"repos.fixture_clone": str(repo)},
+    )
+    return hooks / "post-commit"
+
+
+def test_read_hook_currency_surfaces_stale_disposition_as_directive(monkeypatch, tmp_path):
+    hook = _hook_currency_fleet(monkeypatch, tmp_path, stale=True)
+    result = rhr._read_hook_currency()
+    assert [d["id"] for d in result.directives] == ["d-hook-currency"]
+    assert "retired-auto-push-post-commit" in result.directives[0]["detail"]
+    # The orient reader only checks; it never repairs the clone.
+    assert hook.read_text(encoding="utf-8") == _RETIRED_AUTO_PUSH_MARKER
+
+
+def test_read_hook_currency_clean_fleet_yields_no_directive(monkeypatch, tmp_path):
+    _hook_currency_fleet(monkeypatch, tmp_path, stale=False)
+    result = rhr._read_hook_currency()
+    assert result.directives == []

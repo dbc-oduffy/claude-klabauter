@@ -12,10 +12,11 @@ ambiguous / cross_surface / rot), pathed (repo-root-relative, NOT joined
 against the citing file's directory -- the inherited-bug regression this
 module's Anti-scope names explicitly), and markdown-link (resolved relative
 to the citing file). Also covers the seeded sampler's determinism and a
-smoke test against claude-klabauter's own real `docs/wiki/` corpus, so a wiring
-regression (e.g. `TRACKED_EXTENSIONS` widened without updating resolution)
-is caught even though this module's detailed behaviour is otherwise tested
-on synthetic fixtures.
+smoke test against claude-klabauter's own real `docs/wiki/` corpus, which lives in
+`test_citation_graph_claude_klabauter_corpus.py`, so a wiring regression (e.g.
+`TRACKED_EXTENSIONS` widened without updating resolution) is caught even
+though this module's detailed behaviour is otherwise tested on synthetic
+fixtures.
 """
 
 from __future__ import annotations
@@ -447,12 +448,6 @@ def test_scan_corpus_end_to_end(tmp_path):
     counts = report.counts()
     assert counts.get("live", 0) == 2
     assert counts.get("rot", 0) == 1
-
-
-def test_scan_corpus_states_wiki_file_count_and_sha_over_real_corpus():
-    report = cg.scan_corpus()
-    assert report.wiki_file_count > 0
-    assert report.git_sha is None or len(report.git_sha) == 40
 
 
 def _make_verdicts(n):

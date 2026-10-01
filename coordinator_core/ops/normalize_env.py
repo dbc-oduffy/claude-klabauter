@@ -38,7 +38,12 @@ Negative-spec (retired bash-oracle behavior — do NOT reintroduce differently):
     - Never mutate before the consent prompt (CONSENT-INVARIANT) — the backup
       file write is informational, not a mutation of PATH/shim/alias state;
       it precedes the prompt by design (oracle comment, lines 799-802).
-    - Never touch PATH/shim/alias state on macOS/Linux — offers only.
+    - Never touch PATH/shim/alias state on macOS/Linux — offers only. The
+      persistent coordinator PATH entry is owned by
+      `coordinator_core/install/substrate.py :: _percolation_and_path_steps`
+      (the POSIX `SETTINGS_HOME_BIN` block, via `shell_rc_guard`) and
+      `_windows_health_steps` (the Windows user PATH). normalize_env never
+      writes it.
     - Blast-radius-last mutation ordering on Windows: (1) core.longpaths
       [low], (2) uv [low], (3) Python 3.12 [medium], (4) App Execution alias
       disable [riskier] — preserved verbatim; do not reorder.

@@ -106,9 +106,9 @@ def _fake_machine_local():
 
 
 def test_discover_families_longest_match_first_and_config_families() -> None:
-    families = discover_families(keys=_fake_machine_local)
+    families = discover_families(keys=lambda: ["repos.demo_tool", "repos.demo_tool_ue_addon"])
     ids = [f.id for f in families]
-    assert ids.index("repo_example_retrieval_repo_ue_addon") < ids.index("repo_example_retrieval_repo")
+    assert ids.index("repo_demo_tool_ue_addon") < ids.index("repo_demo_tool")
     assert any(f.id == "claude_config_dir" and f.canonical == "${CLAUDE_HOME:-$HOME}/.claude" for f in families)
     assert any(f.id == "settings_home" for f in families)
 
@@ -1010,19 +1010,19 @@ def test_default_registry_keys_reads_registry_toml(monkeypatch, tmp_path: Path) 
         encoding="utf-8",
     )
     (tmp_path / "registry.local.toml").write_text(
-        '[repos]\nexample_retrieval_repo = "/third/place"\n',  # abs-path-ok: synthetic test fixture
+        '[repos]\ndemo_tool = "/third/place"\n',  # abs-path-ok: synthetic test fixture
         encoding="utf-8",
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
     keys = _default_registry_keys()
     assert "repos.claude_klabauter" in keys
-    assert "repos.project_rag" in keys
+    assert "repos.demo_tool" in keys
     assert "publish.mirrors.claude_klabauter.path" in keys
     assert len(keys) == len(set(keys))
 
     ids = {f.id for f in discover_families(keys=_default_registry_keys)}
     assert "repo_claude_klabauter" in ids
-    assert "repo_example_retrieval_repo" in ids
+    assert "repo_demo_tool" in ids
     assert "publish_mirror_claude_klabauter" in ids
 
 
@@ -1185,7 +1185,7 @@ _ADMISSION_LEDGER = """# test ledger
 def _governed_fixture(tmp_path: Path) -> str:
     body = (
         "## Alpha\n\nalpha body\n\n## Beta\n\n"
-        "config lives at /Users/example-operator/.claude/settings.json today\n"  # abs-path-ok: synthetic test fixture
+        "config lives at /Users/dana/.claude/settings.json today\n"  # abs-path-ok: synthetic test fixture
     )
     (tmp_path / "CLAUDE.md").write_text(body, encoding="utf-8")
     ledger = tmp_path / "state" / "audits" / "claude-classification.md"

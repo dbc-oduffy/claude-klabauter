@@ -246,14 +246,7 @@ def _plan_tasks_schema_without_pm_approved_required(schema: dict | None = None) 
     it originated — `write_guards/` must not import from `ops/` (that
     inverts the claude-klabauter layering), and the mutate op and both write guards
     (deny + advisory) all need the identical filtering LOGIC. One home in
-    the layer both sides can already import from, per the 2026-07-29
-    write-guard-bypass fix (see `check_plan_tasks_source`'s docstring).
-    `ops/plan_tasks_mutate.py` imports this back rather than keeping its own
-    copy. Note the word "logic," not "door": the mutate op and both write
-    guards share this primitive directly, they do NOT route through
-    `check_plan_tasks_source` — see that function's docstring for the
-    residual gap this leaves (the ordering-then-grouping-then-per-row
-    sequence is still hand-duplicated across the guards and this door).
+    the layer both sides can already import from.
 
     Takes an optional `schema` argument (rather than always operating on
     `_PLAN_TASKS_SCHEMA_DICT`) because the two write guards resolve their
@@ -2790,8 +2783,11 @@ def _cf_gate_evidence_legs_shape(fm: dict) -> ErrorDict | None:
 # ---------------------------------------------------------------------------
 
 # DR-096 singular-referent pattern for disposition: coded — a single 7-40
-# char hex SHA. No ranges, comma-lists, or branch names (D2).
-_PLAN_TASKS_CODED_SHA_RE = re.compile(r'^[0-9a-f]{7,40}$')
+# char hex SHA, bare (this repo) or `<repo_key>:`-qualified (another repo's
+# commit, plan-tasks 3.4.0). No ranges, comma-lists, or branch names (D2).
+# Must stay identical to the schema's allOf `disposition_ref.pattern`; the key
+# needs two characters so a drive letter never parses as one.
+_PLAN_TASKS_CODED_SHA_RE = re.compile(r'^([a-z][a-z0-9_-]+:)?[0-9a-f]{7,40}$')
 
 # `_PLAN_TASKS_CLOSED_DISPOSITIONS` was
 # deleted here. It had exactly two call sites before this workstream (the
@@ -2965,8 +2961,8 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
                 'field': 'disposition_ref',
                 'error': f'coded disposition_ref {ref!r} is not a single 7-40 char hex SHA',
                 'hint': (
-                    'disposition_ref for coded is a single commit SHA — no ranges, '
-                    'comma-lists, or branch names (DR-096).'
+                    'disposition_ref for coded is a single commit SHA, optionally '
+                    '`<repo_key>:`-prefixed — no ranges, comma-lists, or branch names (DR-096).'
                 ),
             }
     elif disposition in ('spun_off', 'backlogged') and ref is not None:
@@ -3275,7 +3271,7 @@ def _cf_plan_tasks_writes_declared(
         'field': 'writes',
         'error': f"plan-tasks row {row_label}: 'writes' is required on a non-deferred open row.",
         'hint': (
-            "List the paths this chunk writes. Omit 'writes' only on a row gated "
+            "List the FILE paths this chunk writes, one per path (directories go in 'writes_under'). Omit 'writes' only on a row gated "
             "'epistemic-premise', whose surface a predecessor names; 'writes: []' "
             "means it writes nothing."
         ),
@@ -3658,6 +3654,16 @@ def _plan_tasks_spine_rows(source: str) -> list[dict] | None:
     return rows
 
 
+def _grouping_block_status(block: Any) -> str:
+    """Status label a refusal prints for one grouping block: its recorded
+    `status` (default `pending`) when a mapping, `absent` when the key is
+    missing or empty, `malformed` when a value is present but not a mapping.
+    """
+    if isinstance(block, dict):
+        return block.get('status', 'pending')
+    return 'absent' if block is None else 'malformed'
+
+
 def _plan_tasks_row_grouping(row: dict) -> str:
     """Which grouping this row belongs to, derived from its disposition.
 
@@ -3878,7 +3884,7 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
         block = blocks.get(grouping)
 
         if not isinstance(block, dict) or block.get('status') != 'approved':
-            status = block.get('status', 'pending') if isinstance(block, dict) else 'absent'
+            status = _grouping_block_status(block)
             return {
                 'field': f'grouping_approvals.{grouping}',
                 'error': (
@@ -4116,6 +4122,41 @@ def _plan_tasks_spine_row_label(row_label_fmt: str | None, row_id: Any, field: s
     return row_label_fmt.format(id=row_id, field=field)
 
 
+def plan_tasks_row_errors(
+    row: dict,
+    schema: dict,
+    *,
+    governed: bool,
+    plan_created: str | None,
+) -> list[ErrorDict]:
+    """The ONE per-row plan-tasks sequence: base JSON-Schema shape against
+    `schema`, THEN the registered `plan-tasks` cross-field rules with the
+    resolved `governed`/`plan_created` forwarded. Both lists accumulate,
+    shape errors first; neither short-circuits the other.
+
+    Dates are coerced to ISO strings first, the same normalisation
+    `validate_frontmatter_obj` applies, so a YAML bare date in a per-row
+    field is judged as the string it is on disk rather than rejected as a
+    non-string.
+
+    `schema` is the CALLER-RESOLVED schema — already stripped of the
+    `pm_approved`-required branches (`_plan_tasks_schema_without_pm_approved_required`)
+    when `governed` is True. Callers differ in which physical schema object
+    they hold (claude-klabauter's vendored copy vs a write guard's DoE-resolved copy)
+    and derive the governed variant once per call, not once per row.
+
+    Shared by `plan_tasks_spine_errors`' `per_row` leg (check_plan_tasks_source
+    and both write guards) and `ops/plan_tasks_mutate._validate_row`, so no
+    per-row copy can lag a change to the sequence.
+    """
+    row = _coerce_dates_to_strings(row)
+    errors = list(_validate_json_schema_node(row, schema, schema))
+    errors.extend(_apply_cross_field_rules(
+        row, 'plan-tasks', governed=governed, plan_created=plan_created,
+    ))
+    return errors
+
+
 def plan_tasks_spine_errors(
     source: str,
     frontmatter: dict | None,
@@ -4207,11 +4248,10 @@ def plan_tasks_spine_errors(
                     'hint': 'Each task-spine row is a YAML mapping (id/title/change_kind/surface/...)',
                 })
                 continue
-            row_errors = list(_validate_json_schema_node(row, schema, schema))
-            row_errors.extend(_apply_cross_field_rules(
-                row, 'plan-tasks', governed=governed,
+            row_errors = plan_tasks_row_errors(
+                row, schema, governed=governed,
                 plan_created=fm.get('created') if fm is not None else None,
-            ))
+            )
             for err in row_errors:
                 errors.append({
                     **err,
@@ -4268,13 +4308,13 @@ def check_plan_tasks_source(source: str) -> ErrorDict | None:
     this rewiring, for every source — that is the acceptance test.
 
     Both write guards (`validate_frontmatter_schema_deny.py` and
-    `..._advisory.py`) still independently reimplement this function's
-    row-loop body rather than calling `check_plan_tasks_source` — their
-    return shape (`list[dict]` with per-row `tasks[id].field` labelling)
-    does not fit this door's single-`ErrorDict`-or-`None` contract. Both now
-    import `plan_tasks_spine_errors`/`PLAN_TASKS_SPINE_SEQUENCE` for the
-    LEG SET, so the *sequence* cannot drift between the three sites even
-    though the three return contracts remain distinct by design.
+    `..._advisory.py`) call `plan_tasks_spine_errors` directly rather than
+    this function — their return shape (`list[dict]` with per-row
+    `tasks[id].field` labelling) does not fit this door's
+    single-`ErrorDict`-or-`None` contract. The whole-spine leg set and the
+    per-row shape-then-cross-field sequence (`plan_tasks_row_errors`) are
+    each stated once; `ops/plan_tasks_mutate._validate_row` shares the
+    per-row sequence.
 
     Negative-spec: does NOT replace `validate_frontmatter` for schemas OTHER
     than plan-tasks, and does not change `validate_frontmatter`'s own
@@ -5139,52 +5179,87 @@ def check_schema_drift(
     `foreign_repo_unusable_reason`, so "could not reach the DoE clone" raises as
     exactly that rather than as a tamper finding.
     """
-    schema_path = Path(schema_path)
-    doe_repo_path = Path(doe_repo_path)
+    error = check_schema_drift_batch([(schema_path, ref)], doe_repo_path)[0]
+    if error is not None:
+        raise error
 
-    schema_filename = schema_path.name
-    doe_schema_ref = f'coordinator/schemas/{schema_filename}'
+
+def check_schema_drift_batch(
+    checks: "Sequence[tuple[str | Path, str]]", doe_repo_path: str | Path
+) -> "list[SchemaDriftError | None]":
+    """The tamper-check over N `(schema_path, ref)` pairs, in TWO spawns whatever N is.
+
+    The batched primary; `check_schema_drift` is its one-element call, so the gate
+    and a batched caller (`bin/claude-klabauter-revendor-schema.py::_verify`) run the same
+    comparison and a green result from either is the gate's own verdict. The
+    per-schema form spawned a `foreign_repo_unusable_reason` probe whose answer does
+    not vary with the schema and a `git show` per schema; the probe is hoisted and
+    the reads share one `git_scope.scoped_cat_file_batch`.
+
+    Returns one entry per input, in input order: `None` for a byte-identical
+    schema, else the `SchemaDriftError` that `check_schema_drift` would raise for
+    it. Errors are returned, not raised, so one diverged schema never hides the
+    rest of the set.
+
+    Raises:
+        SchemaProbeUnavailableError: the DoE clone could not be read, or the batch
+            read itself did not complete -- no comparison ran for ANY entry.
+            Never reported as a per-schema finding.
+
+    Negative-spec: an object git cannot resolve (`<token> missing`) is that one
+    entry's `SchemaDriftError`, matching `check_schema_drift`'s long-standing
+    treatment of a nonzero `git show`; a batch that did not complete is not.
+    """
+    pairs = [(Path(path), ref) for path, ref in checks]
+    if not pairs:
+        return []
+    doe_repo_path = Path(doe_repo_path)
 
     unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
+        first_ref = f'coordinator/schemas/{pairs[0][0].name}'
         raise SchemaProbeUnavailableError(
-            f'Cannot read DoE {ref} schema "{doe_schema_ref}": the DoE clone at '
+            f'Cannot read DoE {pairs[0][1]} schema "{first_ref}": the DoE clone at '
             f'{doe_repo_path} could not be read as a git repository ({unusable}). '
             'This is NOT a drift finding — the comparison never ran.'
         )
 
-    # stdin=DEVNULL + CREATE_NO_WINDOW to match the
-    # _run_git hardening pattern used by this slice's sibling modules.
-    #
-    # The timeout is bounded but its EXPIRY is a could-not-check, not a tamper
-    # verdict — the same claim the probe above raises
-    # SchemaProbeUnavailableError for. Left unhandled it escaped as a raw
-    # subprocess.TimeoutExpired, past every could-not-check disclaimer this
-    # module states, to a caller reading `except SchemaDriftError`.
-    try:
-        result = subprocess.run(
-            ['git', '-C', str(doe_repo_path), 'show', f'{ref}:{doe_schema_ref}'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
-            stdin=subprocess.DEVNULL,
-            env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    tokens = sorted({f'{ref}:coordinator/schemas/{path.name}' for path, ref in pairs})
+    blobs = scoped_cat_file_batch(doe_repo_path, tokens)
+    if blobs is None:
         raise SchemaProbeUnavailableError(
-            f'Cannot read DoE {ref} schema "{doe_schema_ref}": git could not be '
-            f'run against {doe_repo_path} ({exc.__class__.__name__}: {exc}). '
+            f'Cannot read DoE schemas from {doe_repo_path}: `git cat-file --batch` '
+            'did not complete (timed out, could not be run, or exited nonzero). '
             'This is NOT a drift finding — the comparison never ran.'
-        ) from exc
-    if result.returncode != 0:
-        raise SchemaDriftError(
-            f'Cannot read DoE {ref} schema "{doe_schema_ref}": {result.stderr.strip()}. '
-            f'Ensure doe_repo_path ({doe_repo_path}) is a valid git repo with the schema at {ref}.'
         )
 
-    doe_content = result.stdout
+    return [
+        _drift_verdict(path, doe_repo_path, ref, blobs.get(f'{ref}:coordinator/schemas/{path.name}'))
+        for path, ref in pairs
+    ]
+
+
+def _drift_verdict(
+    schema_path: Path, doe_repo_path: Path, ref: str, doe_content: str | None
+) -> "SchemaDriftError | None":
+    """One vendored schema against its already-fetched DoE text: None, or the finding.
+
+    Pure of subprocess. `check_schema_drift`'s docstring is the contract for the
+    message, including why the remedy is stated by direction rather than as a `cp`.
+
+    Line endings are normalised on the DoE side because `Path.read_text` opens in
+    universal-newline mode and so did the `text=True` `git show` this replaced;
+    `cat-file --batch`'s bytes are not, and without this a CRLF blob would read as
+    byte drift against an identical LF vendored copy.
+    """
+    schema_filename = schema_path.name
+    doe_schema_ref = f'coordinator/schemas/{schema_filename}'
+    if doe_content is None:
+        return SchemaDriftError(
+            f'Cannot read DoE {ref} schema "{doe_schema_ref}": git has no such object. '
+            f'Ensure doe_repo_path ({doe_repo_path}) is a valid git repo with the schema at {ref}.'
+        )
+    doe_content = doe_content.replace('\r\n', '\n').replace('\r', '\n')
     local_content = schema_path.read_text(encoding='utf-8')
 
     if local_content != doe_content:
@@ -5216,7 +5291,7 @@ def check_schema_drift(
                 'blind re-vendor in either direction drops one side.'
             ),
         }[direction]
-        raise SchemaDriftError(
+        return SchemaDriftError(
             f'Vendored schema "{schema_filename}" diverges from DoE {ref} '
             f'({doe_repo_path}:{doe_schema_ref}). {remedy} '
             'Before applying this remedy to any OTHER file in the same '
@@ -5224,6 +5299,7 @@ def check_schema_drift(
             'may be intentionally divergent forks, not mirrors. '
             'Do NOT reformat the vendored file (see .prettierignore).'
         )
+    return None
 
 
 # Direction vocabulary for check_schema_drift_advisory's diverged=True overload.
@@ -6661,6 +6737,10 @@ def _parse_yaml_lines(
             continue
 
         key = trimmed[:colon_idx].strip()
+        # A quoted key names the bare string: writers quote `'on'`/`'yes'` to
+        # dodge YAML 1.1's boolean reading, and the quotes are not the key.
+        if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
+            key = key[1:-1]
         if dup_keys is not None and key in result:
             dup_keys.append(key)
         rest = trimmed[colon_idx + 1:].strip()

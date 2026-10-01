@@ -24,8 +24,6 @@ chunk's whole point.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest import mock
 
 from coordinator_core.bash_guards._override_doc import (
@@ -72,25 +70,6 @@ def test_resolution_form_stays_split_from_display_form():
     # settings-root display string.
     assert OVERRIDE_KEYS_DOC == "docs/reference/guard-override-keys.md"
     assert OVERRIDE_KEYS_DOC != OVERRIDE_KEYS_DOC_DISPLAY
-
-
-def test_install_manifest_declares_the_pointer_target():
-    manifest_path = (
-        Path(__file__).resolve().parents[3] / "docs" / "install" / "agent-install-manifest.json"
-    )
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entry = data["installed_wiki_pages"]["guard_override_keys_display_pointer"]
-    assert entry["source"] == OVERRIDE_KEYS_DOC
-    assert entry["destination"] == (
-        "<settings_home>/coordinator-claude/docs/wiki/guard-override-keys.md"
-    )
-    # The manifest's declared destination must resolve to the same tail
-    # OVERRIDE_KEYS_DOC_DISPLAY names, modulo the settings-home literal.
-    assert OVERRIDE_KEYS_DOC_DISPLAY.endswith(
-        "coordinator-claude/docs/wiki/guard-override-keys.md"
-    )
-    for marker in _CRITERION_MARKERS:
-        assert marker not in entry["destination"]
 
 
 def test_install_leg_lands_at_the_declared_destination(tmp_path):

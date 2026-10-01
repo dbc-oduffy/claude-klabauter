@@ -1,0 +1,17 @@
+{
+  "s-a": {
+    "id": "s-a",
+    "status_bucket": "running",
+    "parent_session_id": "parent-session-1",
+    "post_turn_summary": {"status_detail": "editing census"},
+    "usage": {"cost_usd": 1.25},
+    "session_context": {"sources": [{"url": "https://example.invalid/example-owner/repo-a"}]}
+  },
+  "s-b": {
+    "id": "s-b",
+    "status_bucket": "completed",
+    "post_turn_summary": {"status_detail": "finished"},
+    "usage": {"cost_usd": 3.5}
+  },
+  "s-c": {"id": "s-c", "status_bucket": "failed", "post_turn_summary": {"status_detail": "crashed"}}
+}

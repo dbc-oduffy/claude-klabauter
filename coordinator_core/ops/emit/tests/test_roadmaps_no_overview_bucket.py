@@ -121,11 +121,3 @@ class TestNoOverviewBucket:
 
         assert records == []
         assert malformed == []
-
-    def test_this_repos_dogfood_roadmap_now_has_overview(self) -> None:
-        """Regression pin for the specific directory this item's body names: authoring
-        state/roadmap/dogfood-2026-05-08/OVERVIEW.md means it no longer falls into the
-        no-OVERVIEW bucket for this real repo tree."""
-        repo_root = Path(__file__).resolve().parents[4]
-        overview = repo_root / "state" / "roadmap" / "dogfood-2026-05-08" / "OVERVIEW.md"
-        assert overview.is_file(), f"expected {overview} to exist"

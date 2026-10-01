@@ -1527,34 +1527,38 @@ def _claim_dir_identity(claim_dir: Path) -> tuple:
     return (_recorded_claim_session_id(claim_dir), mtime)
 
 
-def _terminal_deployment_state(handoff_path: Path) -> Optional[str]:
-    """The record's `deployment_state` when it is one of
-    `HANDOFF_TERMINAL_DEPLOYMENT` ({shipped, abandoned, continued, closed}),
-    else `None` — `drop`'s discriminator for skipping the frontmatter leg
-    while still running the ledger release.
+def _handoff_drop_shape(handoff_path: Path) -> tuple[Optional[str], bool]:
+    """`(terminal deployment_state or None, unstamped)` from ONE frontmatter
+    read — `drop`'s discriminator for skipping the frontmatter leg while
+    still running the ledger release.
 
-    Reads `HANDOFF_TERMINAL_DEPLOYMENT` rather than the two-member
-    {in_flight, ready_to_fire} allowlist `cs_unclaim_handoff` itself checks:
-    the two are complements only across the states the schema actually
-    admits, and a record carrying `awaiting_gate` — neither terminal nor
-    unclaimable — must NOT take the skip path. It falls through to the
-    primitive, which refuses it loudly, because an awaiting-gate baton is a
-    live one whose claim release is not the caller's to decide silently.
+    The first member is the `deployment_state` when it is in
+    `HANDOFF_TERMINAL_DEPLOYMENT`, else `None`. It reads that set rather than
+    the {in_flight, ready_to_fire} allowlist `cs_unclaim_handoff` checks: a
+    record carrying `awaiting_gate` is neither terminal nor unclaimable and
+    must NOT take the terminal skip path.
 
-    `None` on unreadable/absent frontmatter, which routes to the primitive
-    and its own error — never inventing a terminal verdict from a failed
-    read."""
+    `unstamped` is True only when the frontmatter parsed and carries no
+    claim (status not `claimed`, no `claimed_by`) — the stranded shape a crash
+    between the ledger grant and the stamp leaves. An unreadable record is
+    `(None, False)` so it routes to the primitive and its own error, never
+    an invented verdict."""
     try:
         text = handoff_path.read_text(encoding="utf-8")
     except OSError:
-        return None
+        return None, False
     split = split_frontmatter(text)
     if split is None:
-        return None
+        return None, False
     deployment = read_fm_field_unquoted(split.fm_text, "deployment_state")
-    if isinstance(deployment, str) and deployment.strip() in HANDOFF_TERMINAL_DEPLOYMENT:
-        return deployment.strip()
-    return None
+    terminal = (
+        deployment.strip()
+        if isinstance(deployment, str) and deployment.strip() in HANDOFF_TERMINAL_DEPLOYMENT
+        else None
+    )
+    status = (read_fm_field_unquoted(split.fm_text, "status") or "").strip()
+    claimed_by = (read_fm_field_unquoted(split.fm_text, "claimed_by") or "").strip()
+    return terminal, status != "claimed" and not claimed_by
 
 
 def drop(
@@ -1877,24 +1881,9 @@ def drop(
                 # gate acts on. `held_sid` is `""` on a legacy pid-only dir.
                 recorded_holder = _recorded_claim_holder(claims_dir)
                 held_sid = _recorded_claim_session_id(claims_dir)
-                abandoned, basis = _liveness.abandonment_basis(held_sid, cwd=str(root))
-                # A REGISTRY-LIVE HOLDER IS NEVER RELEASABLE, whatever the
-                # basis says. `abandonment_basis`'s `live-dir-signals` leg
-                # fires on directory recency alone and will report
-                # `abandoned=True` for a session that is live in the registry
-                # but has not written to its dir for 30 minutes — a normal
-                # state for a session thinking, or waiting on a long tool
-                # call. Without this check the highest-consequence path in
-                # this file (a WRITE that hands one session's claim to
-                # another) rests on the weakest of the three liveness reads.
-                # `archive-record` cannot reach here with a live holder — its
-                # own arm is gated on `not session_live` — so this costs one
-                # registry read on the rare dead-holder path and changes
-                # nothing for the arm that motivated this plan.
-                if abandoned and held_sid and _liveness.session_live(held_sid, str(root)):
-                    abandoned = False
-                    basis = "live-registry"
-                if not abandoned:
+                verdict = _liveness.abandonment_basis(held_sid, cwd=str(root))
+                basis = verdict.basis
+                if not verdict.abandoned:
                     return APPLY_EXIT_CLAIM_DENIED, {
                         "reason": "drop_not_holder",
                         "error": (
@@ -1938,15 +1927,12 @@ def drop(
             # is free" are two verdicts, not one (state/lessons/2026-08-26-
             # liveness-has-three-answers-not-two-and-m-23bdebd1994e.yaml).
             _warn_dead_holder_residue(class_, basename, gate_held_sid or "", cwd=str(root))
-            _recheck_abandoned, _recheck_basis = _liveness.abandonment_basis(
-                gate_held_sid or "", cwd=str(root)
-            )
-            _still_dead = not _liveness.session_live(gate_held_sid or "", cwd=str(root))
+            _recheck = _liveness.abandonment_basis(gate_held_sid or "", cwd=str(root))
+            _recheck_basis = _recheck.basis
             _identity_now = _claim_dir_identity(claims_dir)
             if (
-                not _recheck_abandoned
+                not _recheck.abandoned
                 or _recheck_basis != gate_abandonment_basis
-                or not _still_dead
                 or _identity_now != gate_claim_identity
             ):
                 return APPLY_EXIT_CLAIM_DENIED, {
@@ -1989,7 +1975,21 @@ def drop(
             # Negative-spec: do NOT relax the primitive's guard to admit
             # terminal states — the frontmatter is meant to stay put; it is
             # the composition that skips the leg, not the leg that widens.
-            terminal_deployment = _terminal_deployment_state(resolved_handoff_path)
+            terminal_deployment, unstamped = _handoff_drop_shape(resolved_handoff_path)
+            if terminal_deployment is None and unstamped:
+                # Stranded claim: the ledger grant landed, the frontmatter
+                # stamp never did. Nothing to revert or commit; release only.
+                release_artifact(class_, basename, cwd=str(root), my_sid=resolved_sid)
+                return APPLY_EXIT_OK, {
+                    "class": class_,
+                    "basename": basename,
+                    "released": True,
+                    "unclaimed": None,
+                    "frontmatter_revert": "skipped-unstamped",
+                    "claim_stage": CLAIM_STAGE_APPLY,
+                    "commit_sha": None,
+                    "abandonment_basis": gate_abandonment_basis,
+                }
             if terminal_deployment is not None:
                 unclaimed = None
                 release_artifact(class_, basename, cwd=str(root), my_sid=resolved_sid)
@@ -2141,7 +2141,7 @@ def main_drop(argv: list[str]) -> int:
 
 def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, dict[str, Any]]:
     """Walks `state/handoffs/*.md` for `status: claimed`, resolves each
-    holder's basis inline (session_live first, then abandonment_basis), and returns
+    holder's basis with one `abandonment_basis` read, and returns
     `(exit_code, report)` using the SAME exit-code contract `drop` pins
     (`APPLY_EXIT_OK` / `APPLY_EXIT_TRANSPORT_FAIL` / `APPLY_EXIT_
     PARTIAL_MUTATION` / `APPLY_EXIT_CLAIM_DENIED`) — no fifth vocabulary is
@@ -2208,23 +2208,10 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
             continue
         sid = (read_fm_field_unquoted(split.fm_text, "claimed_by") or "").strip()
         deployment_state = (read_fm_field_unquoted(split.fm_text, "deployment_state") or "").strip()
-        # Resolved inline, and the `_adjudicate_holder_basis` helper this
-        # replaced is DELETED rather than kept: asking it for the bucket and
-        # then asking `abandonment_basis` again for the boolean doubled this
-        # sweep's measured process time (46.9ms -> 109.4ms on the live corpus,
-        # 2026-09-01), and once inlined the helper had no caller left anywhere,
-        # tests included. `session_live` is still checked FIRST, which is the
-        # part that was load-bearing: a holder confirmed live via the registry
-        # read is reported `live` unconditionally, so this sweep can never
-        # report a live holder the same as an abandoned one even when
-        # `abandonment_basis`'s `live-dir-signals` leg would fire on stale
-        # directory signals for that same sid.
-        if not sid:
-            abandoned, raw_basis = False, "no-sid"
-        elif _liveness.session_live(sid, str(root)):
-            abandoned, raw_basis = False, "live"
-        else:
-            abandoned, raw_basis = _liveness.abandonment_basis(sid, cwd=str(root))
+        # `abandonment_basis` reads liveness once and checks it before any dir
+        # or archive signal, so a live holder is reported `live`, never abandoned.
+        verdict = _liveness.abandonment_basis(sid, cwd=str(root))
+        abandoned, raw_basis = verdict.abandoned, verdict.basis
         counts[raw_basis] = counts.get(raw_basis, 0) + 1
         rows.append(
             {

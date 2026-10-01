@@ -1,6 +1,6 @@
 """coordinator_core.ops.tests.test_verify_coverage_retired_agent_quotes --
 Item 15 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-fyi-rest.md, row R15):
-`coordinator:sid` and `coordinator:the Data Science Reviewer` are retired agent ids with no
+`coordinator:sid` and `coordinator:hook-doctor` are retired agent ids with no
 live `<plugin>/agents/<name>.md` artifact. Doctrine fixtures still quote them
 by name (post-mortem/history context), and `verify_coverage`'s sweep flagged
 those quotes as QUALIFIED_ORPHANED before REF_ALLOWLIST admitted them.
@@ -32,7 +32,7 @@ def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path)
     sweep_root = tmp_path / "sweep-root"
 
     # Minimal plugin root: a "coordinator" plugin dir with no agents/skills/
-    # commands at all, so coordinator:sid / coordinator:the Data Science Reviewer resolve to
+    # commands at all, so coordinator:sid / coordinator:hook-doctor resolve to
     # nothing except via REF_ALLOWLIST.
     os.makedirs(root / "coordinator", exist_ok=True)
 
@@ -40,7 +40,7 @@ def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path)
     _write(
         str(fixture),
         "# Post-mortem\n\n"
-        "The retired agents `coordinator:sid` and `coordinator:the Data Science Reviewer` were "
+        "The retired agents `coordinator:sid` and `coordinator:hook-doctor` were "
         "decommissioned; this doc quotes their ids for history only.\n",
     )
 
@@ -67,11 +67,11 @@ def test_retired_agent_ids_absent_from_allowlist_would_be_flagged_orphaned(tmp_p
     _write(
         str(fixture),
         "# Post-mortem\n\n"
-        "The retired agents `coordinator:sid` and `coordinator:the Data Science Reviewer` were "
+        "The retired agents `coordinator:sid` and `coordinator:hook-doctor` were "
         "decommissioned; this doc quotes their ids for history only.\n",
     )
 
-    pruned_allowlist = vc.REF_ALLOWLIST - {"coordinator:sid", "coordinator:the Data Science Reviewer"}
+    pruned_allowlist = vc.REF_ALLOWLIST - {"coordinator:sid", "coordinator:hook-doctor"}
     monkeypatch.setattr(vc, "REF_ALLOWLIST", pruned_allowlist)
 
     captured: list = []
@@ -90,4 +90,4 @@ def test_retired_agent_ids_absent_from_allowlist_would_be_flagged_orphaned(tmp_p
     assert exit_code == 1
     data = json.loads("".join(captured))
     flagged_refs = {v["ref"] for v in data["violations"]}
-    assert {"coordinator:sid", "coordinator:the Data Science Reviewer"} <= flagged_refs
+    assert {"coordinator:sid", "coordinator:hook-doctor"} <= flagged_refs

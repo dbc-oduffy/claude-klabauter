@@ -317,6 +317,35 @@ def test_schema_help_prints_severity_enum() -> None:
             raise AssertionError(f"{name}: " + (f"severity enum value {value!r} missing from --help output: {combined!r}"))
 
 
+_BUG_ARGS = ["--schema", "bug-backlog", "--title", "t", "--body", "b", "--surface", "s"]
+
+
+def test_bug_backlog_help_names_status_required_and_severity_values() -> None:
+    result = _run_cli(["--schema", "bug-backlog", "--help"])
+    assert result.returncode == 0, result.stderr
+    lines = {ln.split()[0]: ln for ln in result.stdout.splitlines() if ln.strip().startswith("--")}
+    assert "(required)" in lines["--status"]
+    for value in ("P0", "P1", "P2", "P3"):
+        assert value in lines["--severity"]
+
+
+def test_bug_backlog_missing_status_refusal_names_flag_and_values() -> None:
+    result = _run_cli(_BUG_ARGS + ["--severity", "P1"])
+    assert result.returncode != 0
+    assert "usage:" not in result.stderr
+    line = next(ln for ln in result.stderr.splitlines() if "--status" in ln)
+    for value in ("open", "closed", "deferred", "wontfix"):
+        assert value in line
+
+
+def test_bug_backlog_bad_severity_refusal_lists_allowed_values() -> None:
+    result = _run_cli(_BUG_ARGS + ["--status", "open", "--severity", "P9"])
+    assert result.returncode != 0
+    line = next(ln for ln in result.stderr.splitlines() if "--severity" in ln)
+    for value in ("P0", "P1", "P2", "P3"):
+        assert value in line
+
+
 def test_invalid_severity_value_names_valid_set() -> None:
     name = "Test 4d — --severity medium is rejected and the valid P0-P3 set is named"
     with tempfile.TemporaryDirectory() as tmpdir:

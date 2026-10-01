@@ -71,7 +71,8 @@ def _scaffold(display_name: str | None = "claude-klabauter-51") -> str:
     ), mock.patch.object(
         _cli, "_resolve_session_display_name", return_value=display_name
     ), mock.patch.object(
-        _cli, "_resolve_spinoff_workstream", return_value=None
+        _cli, "_resolve_spinoff_origin",
+        return_value=_cli.SpinoffOrigin(None, None, None),
     ), mock.patch.object(
         _cli, "_resolve_minted_by_line", return_value="minted_by: dbc-example-operator"
     ):

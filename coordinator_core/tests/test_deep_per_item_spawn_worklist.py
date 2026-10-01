@@ -1584,7 +1584,7 @@ def _write_module(tmp_path, relpath, source):
 
 def _site_depths(tmp_path, max_depth):
     sites, depth_of = deep_find_with_site_depths((tmp_path,), max_depth)
-    return {site.key: depth_of(site) for site in sites}
+    return {site.key[:3]: depth_of(site) for site in sites}
 
 
 _SPAWNER = (

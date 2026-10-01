@@ -171,6 +171,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from coordinator_core.bash_guards._platform_verdict import platform_verdict_for_shape
+from coordinator_core.bash_guards._sanctioned_remedy import (
+    CALLER_EM,
+    CALLER_SUBAGENT,
+    probe_remedy,
+)
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
@@ -316,16 +321,25 @@ _SCRATCH_SCRIPT_NAME = "multiprobe.py"
 #: reason (AC9: the alternative must be PowerShell-valid; a `python3 -c`
 #: invocation is a subprocess call, not shell syntax, so it runs the same
 #: from a PowerShell prompt).
-#: TRIMMED (C8b): was "a single in-process python3 call batching every
-#: probe, zero per-probe forks" (78 bytes) -- same fact, fewer words.
-_POWERSHELL_BANNER_GENERIC_SUMMARY = "one in-process python3 call, zero per-probe forks"
-def _powershell_banner_generic_example() -> str:
-    return (
-        "%s -c 'import subprocess\\n"
-        "print(subprocess.run([\"git\", \"status\", \"--porcelain=v2\", \"--branch\"], "
-        "capture_output=True, text=True).stdout)'  "
-        "# batch every probe into one process instead of one call per probe" % _mb_python3_invocation()
-    )
+def _powershell_remedy(caller_class: str, script_hint: str) -> Tuple[str, str]:
+    """``(remedy, exemplar)`` for the PowerShell leg, from the shared
+    `_sanctioned_remedy.probe_remedy` so this banner and the spawn-shapes
+    guard cannot name different outlets for one caller class."""
+    remedy, exemplar = probe_remedy(caller_class, Dialect.POWERSHELL, script_hint)
+    if caller_class == CALLER_EM and exemplar.startswith("python3 "):
+        exemplar = _mb_python3_invocation() + exemplar[len("python3") :]
+    return remedy, exemplar
+
+
+def _resolve_caller(payload: Dict[str, Any], session_id: str) -> Tuple[bool, str, Optional[str]]:
+    """``(is_subagent, script_hint, git_root)``; skips `resolve_git_root`
+    entirely when the payload carries neither `agent_id` nor `agent_type`."""
+    if not (payload.get("agent_id") or payload.get("agent_type")):
+        return False, "", None
+    git_root = resolve_git_root(payload.get("cwd"))
+    if resolve_agent_class(payload, git_root) != AGENT_CLASS_SUBAGENT:
+        return False, "", git_root
+    return True, _sandbox_script_hint(git_root, session_id), git_root
 
 
 def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
@@ -377,24 +391,16 @@ def _subagent_script_outlet(
     if len(argv) >= 3 and argv[-2] == "-c":
         script_body = argv[-1]
 
-    path_display = script_hint or "<your session scratchpad>/%s" % _SCRATCH_SCRIPT_NAME
-    summary = "a script at `%s`, run as `python3 %s`. %s" % (
-        path_display,
-        path_display,
-        bypass_note,
-    )
+    remedy, run_cmd = probe_remedy(CALLER_SUBAGENT, Dialect.BASH, script_hint)
+    summary = "%s. %s" % (remedy, bypass_note)
     if script_body:
         example = (
-            "write the script body below to `%s`, then run:\n\n"
-            "  python3 %s\n\n"
-            "Script body:\n%s"
-            % (path_display, path_display, script_body)
+            "write the script body below to the script path, then run:\n\n"
+            "  %s\n\n"
+            "Script body:\n%s" % (run_cmd, script_body)
         )
     else:
-        example = "write the batched-probe script to `%s`, then run `python3 %s`" % (
-            path_display,
-            path_display,
-        )
+        example = "write the batched-probe script to the script path, then run `%s`" % run_cmd
     return summary, example
 
 
@@ -468,12 +474,16 @@ def check(
     # its posix tokenizer. This branch is reachable ONLY after C6 widened
     # `MATCHERS`; before that, `check()` never ran on a PowerShell payload.
     if dialect is Dialect.POWERSHELL:
-        bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
+        ps_subagent, ps_hint, ps_root = _resolve_caller(payload, session_id)
+        bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=ps_root)
+        remedy, exemplar = _powershell_remedy(
+            CALLER_SUBAGENT if ps_subagent else CALLER_EM, ps_hint
+        )
         return platform_verdict_for_shape(
             _SHAPE_NAME,
             cmd,
-            _POWERSHELL_BANNER_GENERIC_SUMMARY,
-            "%s\n  %s" % (_powershell_banner_generic_example(), bypass_note),
+            remedy,
+            "%s\n  %s" % (exemplar, bypass_note),
             host_is_windows=False,
         )
 
@@ -491,14 +501,7 @@ def check(
     if not _seam_confirmed_rewrite(seam_result):
         return None
 
-    is_subagent = False
-    script_hint = ""
-    git_root: Optional[str] = None
-    if payload.get("agent_id") or payload.get("agent_type"):
-        git_root = resolve_git_root(payload.get("cwd"))
-        is_subagent = resolve_agent_class(payload, git_root) == AGENT_CLASS_SUBAGENT
-        if is_subagent:
-            script_hint = _sandbox_script_hint(git_root, session_id)
+    is_subagent, script_hint, git_root = _resolve_caller(payload, session_id)
 
     summary, example = _outlet_from_seam_result(
         seam_result, is_subagent=is_subagent, script_hint=script_hint, payload=payload, git_root=git_root

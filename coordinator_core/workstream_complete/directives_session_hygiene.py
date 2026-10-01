@@ -467,6 +467,9 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _DONE_TASK_KEY,
 )
 
+#: Keys whose value suppresses an advisory; `apply` persists them.
+WAIVER_KEYS: tuple[str, ...] = (_WAIVED_ITEM_KEY,)
+
 
 class CompletenessItem(NamedTuple):
     item_class: str

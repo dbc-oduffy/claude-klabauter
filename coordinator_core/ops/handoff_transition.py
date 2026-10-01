@@ -337,9 +337,8 @@ _SCHEMA_PATH: Path = (
 # "cannot import name '_SPINOFF_KINDS' from partially initialized module
 # ...deliverable_cascade") via `deliverable_cascade -> cascade_baton_rows ->
 # execute_plan_assemble.close_out_and_stamp -> ops.ceremony.post_commit_tail
-# -> ops.ceremony.consumed_handoff_stamp -> handoff_transition`
-# (`consumed_handoff_stamp.py` imports `_PathNotContained`/`_resolve_path`/
-# `build_ship_mutate` from this module at its own top level). AC5's "one
+# -> handoff_transition` (`post_commit_tail`'s import chain reaches this
+# module at its own top level). AC5's "one
 # shared kind-membership constant, not two literals" is still satisfied: the
 # only literal string `"spinoff"` lives in `baton_class.py`'s own enum data;
 # this is a second CALL of `kind_values_for_canonical("spinoff")`, not a
@@ -1021,12 +1020,10 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
 
     Factored out of `_ship` (2026-07-28, ceremony-lock-hold-resurrection Row
     6) so a caller that needs to compose this write with an extra guard
-    inside the SAME lock hold — the ceremony's stamp-then-ship CAS,
-    `coordinator_core.ops.ceremony.consumed_handoff_stamp._ship_with_cas` —
-    can wrap this mutate in its own composite callable instead of
-    duplicating the deployment_state-flip logic. `_ship` itself is just the
-    thinnest possible caller of this function; every other existing caller
-    (`handoff_ship_archive.py`, `handoff_close_origin_stub.py`,
+    inside the SAME lock hold can wrap this mutate in its own composite
+    callable instead of duplicating the deployment_state-flip logic. `_ship`
+    itself is just the thinnest possible caller of this function; every
+    other existing caller (`handoff_ship_archive.py`, `handoff_close_origin_stub.py`,
     `handoff_archive_transition.py`, this module's own `transition` verb
     dispatch) is unaffected.
 

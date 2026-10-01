@@ -323,10 +323,10 @@ def test_git_failure_on_touched_paths_walk_raises_not_empty(repo, monkeypatch):
     since_before = datetime.now(timezone.utc) - timedelta(hours=1)
     _commit(root, "willfail.txt", "x\n", f"peer work\n\nSession-Id: {sid}\n")
 
-    # `_chunked_committed_paths` now calls `_run_git_ok_retrying`, not
-    # `_run_git_ok` directly (bounded retry wrapper added for routine lock
-    # contention — see that function's own docstring). Patched at that
-    # layer so this fail-closed pin exercises the actual call site.
+    # `chunked_show_numstat_blocks` (called by `_committed_paths_for_sids`)
+    # calls `_run_git_ok_retrying`, not `_run_git_ok` directly (bounded retry
+    # wrapper for routine lock contention). Patched at that layer so this
+    # fail-closed pin exercises the actual call site.
     monkeypatch.setattr(directives_commit_tail, "_run_git_ok_retrying", lambda *_a, **_k: None)
 
     with pytest.raises(directives_commit_tail.PeerAttributionUnavailable):

@@ -41,7 +41,12 @@ calls:
      (`_session_reap_due`) is kept to avoid paying even an in-process call on
      the overwhelmingly common "not due" boot.
 
-  4. Global-doctrine-mirror derivation — NOT PORTED. DoE's fourth leg
+  4. Index-resync drain — restores, from HEAD, the main-index entries a
+     prior archival move left stale (`ops.fleet._index_resync_drain`), so a
+     new session drains before its first commit. Zero spawns when no
+     pending record exists. Off-switch: COORDINATOR_INDEX_RESYNC_DRAIN_OFF.
+
+  5. Global-doctrine-mirror derivation — NOT PORTED. DoE's fourth leg
      in-process-imported `derive-global-doctrine-live-copy.py`, a
      doctrine-plane-resident script (its OSS-clobber dev-repo gate, its
      tracked-source/live-copy pair) with no analogue in this engine's own
@@ -50,7 +55,7 @@ calls:
 
 Op contract: `params` is unused. Every leg is independently exception-isolated
 (one leg's failure never skips a sibling leg) and this handler always returns
-`no_advisory()` — none of the four legs produces context-bound output;
+`no_advisory()` — none of the legs produces context-bound output;
 mirrors the source script's own fully-async, stdout-discarded contract.
 
 Negative-spec:
@@ -82,6 +87,7 @@ _SESSION_REAP_PREGATE_SECONDS = 11 * 3600
 
 _ORIENTATION_SELFHEAL_OFF = "COORDINATOR_ORIENTATION_SELFHEAL_OFF"
 _SESSION_REAP_OFF = "COORDINATOR_SESSION_REAP_OFF"
+_INDEX_RESYNC_DRAIN_OFF = "COORDINATOR_INDEX_RESYNC_DRAIN_OFF"
 
 
 def _resolve_this_repo_root() -> "Optional[str]":
@@ -204,6 +210,19 @@ async def _reap_sessions(repo_root: "Optional[str]") -> None:
         pass
 
 
+async def _drain_index_resyncs(repo_root: "Optional[str]") -> None:
+    if os.environ.get(_INDEX_RESYNC_DRAIN_OFF):
+        return
+    if not repo_root:
+        return
+    try:
+        from coordinator_core.ops.fleet._index_resync_drain import drain_pending_resyncs
+
+        await drain_pending_resyncs(Path(repo_root))
+    except Exception:
+        pass
+
+
 @register_op("hooks.sweep_boot")
 async def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
@@ -214,5 +233,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     this_repo_root = _resolve_this_repo_root()
     _selfheal_orientation_cache(this_repo_root)
     await _reap_sessions(this_repo_root)
+    await _drain_index_resyncs(this_repo_root)
 
     return no_advisory()

@@ -20,7 +20,6 @@ import importlib
 PUSH_ONLY_IMPORTERS = [
     "coordinator_core.ops.push_outstanding",
     "coordinator_core.ops.ceremony.post_commit_tail",
-    "coordinator_core.ops.ceremony.consumed_handoff_stamp",
     "coordinator_core.execute_plan_assemble.close_out_and_stamp",
     "coordinator_core.workstream_complete.directives_commit_tail",
     "coordinator_core.ops.session.safe_commit_offer",

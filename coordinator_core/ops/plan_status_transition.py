@@ -135,11 +135,10 @@ Negative-spec:
 Commit ownership (2026-08-05): a real (non-no-op) flip is committed by THIS op,
 scoped to exactly the plan path it just wrote, immediately after the write lands
 (``_commit_plan_flip``, called from ``_stamp_implemented``). Follows the
-writer-commits shape ``coordinator_core.ops.ceremony.consumed_handoff_stamp.
-post_commit_stamp_and_ship`` already proves: that op's docstring is explicit
-that the write and its commit land in ONE explicit follow-up commit "so the
-op never exits with the stamp left as an unswept dirty working-tree edit" --
-this op mirrors that, not a second invented shape. Only fires on the
+writer-commits shape ``coordinator_core.ops.handoff_ship_archive`` already
+proves: the write and its commit land together so the op never exits with the
+stamp left as an unswept dirty working-tree edit -- this op mirrors that, not
+a second invented shape. Only fires on the
 fallback-plain-write branch's/``locked_rmw`` branch's real flip
 (``_state["flipped"]``) AND when a git repo was resolved for the plan path
 (``git_common_dir``/``worktree_root`` both non-None) -- the dry-run

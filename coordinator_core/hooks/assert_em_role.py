@@ -82,6 +82,31 @@ _PEER_READ_POINTER = (
 )
 
 
+_INCIDENT_KEY_CAP = 3
+_INCIDENT_LINE = (
+    "assert-em-role: live incident claim(s) in this repo: {keys} -- discovery "
+    "only; session-liveness-cli incident-peers <key> for addresses.\n"
+)
+
+
+def _incident_claims_line(repo_root) -> str:
+    """One advisory line naming live incident-claim keys; "" when none."""
+    if repo_root is None:
+        return ""
+    from coordinator_core.session import incident_claims
+
+    counts: "dict[str, int]" = {}
+    for holder in incident_claims.list_peers(str(repo_root)):
+        counts[holder.key] = counts.get(holder.key, 0) + 1
+    if not counts:
+        return ""
+    keys = sorted(counts)
+    shown = ", ".join(f"{k} ({counts[k]} session(s))" for k in keys[:_INCIDENT_KEY_CAP])
+    if len(keys) > _INCIDENT_KEY_CAP:
+        shown += f", +{len(keys) - _INCIDENT_KEY_CAP} more"
+    return _INCIDENT_LINE.format(keys=shown)
+
+
 def _plugin_root() -> "Optional[Path]":
     raw = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not raw:
@@ -322,5 +347,12 @@ def _handler(params: dict, repo_root=None) -> dict:
                 parts.append(gem_clause)
         except Exception:
             pass  # advisory text only; a lookup failure must not block SessionStart
+
+    try:
+        incident_line = _incident_claims_line(consumer_repo_root)
+        if incident_line:
+            parts.append(incident_line)
+    except Exception:
+        pass  # advisory text only; a lookup failure must not block SessionStart
 
     return context_only("SessionStart", "".join(parts))

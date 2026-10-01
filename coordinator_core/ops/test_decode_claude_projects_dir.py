@@ -17,18 +17,18 @@ def test_decode_one_drops_subdir_suffix():
 
 
 def test_decode_one_claude_central_double_dash_form():
-    assert _decode_one("C--Users-example-operator--claude") == ("claude-central", "c:/Users/example-operator/.claude")
+    assert _decode_one("C--Users-alice--claude") == ("claude-central", "c:/Users/alice/.claude")
 
 
 def test_decode_one_claude_central_triple_dash_form():
-    assert _decode_one("C---Users--example-operator---claude") == ("claude-central", "c:/Users/example-operator/.claude")
+    assert _decode_one("C---Users--alice---claude") == ("claude-central", "c:/Users/alice/.claude")
 
 
 def test_decode_one_skips_garbled_entries():
     assert _decode_one("tmp") is None
     assert _decode_one("tmp-foo") is None
     assert _decode_one("some-smoketest") is None
-    assert _decode_one("--Users-example-operator---claude") is None
+    assert _decode_one("--Users-alice---claude") is None
     assert _decode_one("AppData-Local-Temp-foo") is None
 
 
@@ -69,7 +69,7 @@ def test_run_positive_corpus_dedupe_and_content(tmp_path):
     for name in (
         "X--coordinator-claude",
         "X--example-sim-repo",
-        "C--Users-example-operator--claude",
+        "C--Users-alice--claude",
         "X---repo-name--tasks--sub",
         "X---repo-name",
         "tmp",
@@ -82,7 +82,7 @@ def test_run_positive_corpus_dedupe_and_content(tmp_path):
     joined = "\n".join(stdout_lines)
     assert "coordinator-claude\tx:/coordinator-claude\tX--coordinator-claude" in joined
     assert "example-sim-repo\tx:/example-sim-repo\tX--example-sim-repo" in joined
-    assert "claude-central\tc:/Users/example-operator/.claude\tC--Users-example-operator--claude" in joined
+    assert "claude-central\tc:/Users/alice/.claude\tC--Users-alice--claude" in joined
     assert any(line.startswith("repo-name\t") for line in stdout_lines)
     assert sum(1 for line in stdout_lines if line.startswith("repo-name\t")) == 1
     assert any("candidate(s) emitted" in line for line in stderr_lines)

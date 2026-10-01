@@ -223,7 +223,7 @@ def test_double_quote_in_cmd_warns_but_emits(tmp_path: Path, monkeypatch: pytest
 
 
 def test_norm_path_windows_drive_lowercases() -> None:
-    assert _norm_path("C:/Claude-Unreal-Example-Game-Repo") == "/x/example-game-workbench-repo"
+    assert _norm_path("C:/Mixed-Case-Repo") == "/x/mixed-case-repo"
 
 
 def test_norm_path_windows_backslash_to_forward() -> None:
@@ -239,7 +239,7 @@ def test_norm_path_msys_form_off_windows_not_folded() -> None:
 
 
 def test_norm_path_msys_form_folds_under_msys_ostype() -> None:
-    assert _norm_path("/x/Claude-Unreal-Example-Game-Repo", ostype="msys") == "/x/example-game-workbench-repo"
+    assert _norm_path("/x/Mixed-Case-Repo", ostype="msys") == "/x/mixed-case-repo"
 
 
 def test_norm_path_trailing_separator_stripped() -> None:

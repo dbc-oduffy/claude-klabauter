@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble.apply as pa_apply
+from coordinator_core.session.liveness import AbandonmentVerdict as _V
 
 pytestmark = [pytest.mark.cadence]
 
@@ -79,15 +80,15 @@ def test_four_way_split(tmp_path, monkeypatch):
     _seed_handoff(repo, "h-no-sid.md", holder="", deployment_state="in_flight")
     _seed_handoff(repo, "h-open.md", status="open", holder="", deployment_state="in_flight")
 
-    def _session_live(sid, cwd=None):
-        return sid == "sid-live"
-
     def _abandonment_basis(sid, cwd=None):
+        if not sid:
+            return _V(False, "no-sid", False)
+        if sid == "sid-live":
+            return _V(False, "live", True)
         if sid == "sid-dead":
-            return (True, "archive-record")
-        return (False, "unknown")
+            return _V(True, "archive-record", False)
+        return _V(False, "unknown", False)
 
-    monkeypatch.setattr(pa_apply._liveness, "session_live", _session_live)
     monkeypatch.setattr(pa_apply._liveness, "abandonment_basis", _abandonment_basis)
 
     exit_code, report = pa_apply.adjudicate_claimed_batons(repo_root=repo)
@@ -114,11 +115,10 @@ def test_live_dir_signals_reads_as_its_own_raw_basis(tmp_path, monkeypatch):
     (repo / "state" / "handoffs").mkdir(parents=True)
     _seed_handoff(repo, "h-stale.md", holder="sid-stale")
 
-    monkeypatch.setattr(pa_apply._liveness, "session_live", lambda sid, cwd=None: False)
     monkeypatch.setattr(
         pa_apply._liveness,
         "abandonment_basis",
-        lambda sid, cwd=None: (True, "live-dir-signals"),
+        lambda sid, cwd=None: _V(True, "live-dir-signals", False),
     )
 
     exit_code, report = pa_apply.adjudicate_claimed_batons(repo_root=repo)
@@ -141,9 +141,8 @@ def test_process_time_budget_under_200ms(tmp_path, monkeypatch):
     for i in range(50):
         _seed_handoff(repo, f"h{i}.md", holder=f"sid-{i}")
 
-    monkeypatch.setattr(pa_apply._liveness, "session_live", lambda sid, cwd=None: False)
     monkeypatch.setattr(
-        pa_apply._liveness, "abandonment_basis", lambda sid, cwd=None: (False, "unknown")
+        pa_apply._liveness, "abandonment_basis", lambda sid, cwd=None: _V(False, "unknown", False)
     )
 
     start = time.process_time()
@@ -153,3 +152,21 @@ def test_process_time_budget_under_200ms(tmp_path, monkeypatch):
     assert exit_code == pa_apply.APPLY_EXIT_OK
     assert report["claimed_count"] == 50
     assert elapsed_ms < 200.0, f"adjudicate_claimed_batons took {elapsed_ms:.1f}ms over 50 rows"
+
+
+def test_sweep_reads_session_live_once_per_row(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "state" / "handoffs").mkdir(parents=True)
+    for i in range(5):
+        _seed_handoff(repo, f"h{i}.md", holder=f"sid-{i}")
+
+    calls = []
+    monkeypatch.setattr(
+        pa_apply._liveness, "session_live", lambda sid, cwd=None: calls.append(sid) or False
+    )
+
+    exit_code, report = pa_apply.adjudicate_claimed_batons(repo_root=repo)
+
+    assert exit_code == pa_apply.APPLY_EXIT_OK
+    assert report["claimed_count"] == 5
+    assert sorted(calls) == [f"sid-{i}" for i in range(5)]

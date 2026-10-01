@@ -28,11 +28,21 @@ from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
 )
 
 
+def _record(status: str, title: str) -> str:
+    # Bare YAML, no --- fence, is correct ONLY for plain-YAML backlog records:
+    # prune_bugs reads them with yaml.safe_load, and a --- fence makes that a
+    # multi-document stream that fails to {}. Markdown-record families (plans,
+    # handoffs) read through dag._read_meta, which returns {} for an unfenced
+    # file, so a bare fixture there silently reads as non-terminal -- those
+    # fixtures need a ---delimited form. Do not copy this shape to them.
+    return f"status: {status}\ntitle: {title}\n"
+
+
 def _make_bug(worktree: Path, name: str, *, status: str = "closed") -> Path:
     bug_dir = worktree / "state" / "bug-backlog"
     bug_dir.mkdir(parents=True, exist_ok=True)
     path = bug_dir / name
-    path.write_text(f"status: {status}\ntitle: {name}\n", encoding="utf-8")
+    path.write_text(_record(status, name), encoding="utf-8")
     return path
 
 
@@ -44,7 +54,8 @@ def test_seam_reproduces_dest_conflict_disposition_git_free(tmp_path: Path) -> N
     dst_dir = worktree / "archive" / "bug-backlog" / "2026-08"
     dst_dir.mkdir(parents=True)
     dst = dst_dir / "2026-08-01-wedged.yaml"
-    dst.write_text("status: closed\ntitle: a DIFFERENT archived copy\n", encoding="utf-8")
+    different = _record("closed", "a DIFFERENT archived copy")
+    dst.write_text(different, encoding="utf-8")
 
     with patched_disposition_seam(prune_bugs, worktree=worktree) as mover:
         result = run(prune_bugs._handler(
@@ -59,13 +70,13 @@ def test_seam_reproduces_dest_conflict_disposition_git_free(tmp_path: Path) -> N
         "generalised seam either"
     )
     assert src.exists()
-    assert dst.read_text(encoding="utf-8") == "status: closed\ntitle: a DIFFERENT archived copy\n"
+    assert dst.read_text(encoding="utf-8") == different
 
 
 def test_seam_reproduces_byte_identical_convergence_git_free(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     cid = "state/bug-backlog/2026-08-01-dup.yaml"
-    body = "status: closed\ntitle: 2026-08-01-dup.yaml\n"
+    body = _record("closed", "2026-08-01-dup.yaml")
     src = _make_bug(worktree, "2026-08-01-dup.yaml")
     src.write_text(body, encoding="utf-8")
 

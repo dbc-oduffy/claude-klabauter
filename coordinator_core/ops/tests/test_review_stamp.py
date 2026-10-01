@@ -763,3 +763,79 @@ def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_p
     assert stamp["build_test"]["verdict"] == "pass"
     assert stamp["unresolved"] == []
     assert stamp["fixes_applied"] == 2
+
+
+def _stage_record_fixture(repo: Path, *, tests: dict, criterion: dict, plan_id: str = "pln-example-abc123"):
+    """A run record carrying the stage returns themselves (what
+    `dispatch.terminal_commit` writes since 2026-10-01): no prep/delivery
+    sidecar frontmatter is read at all. The diff is state-only."""
+    share = repo / ".coordinator-local" / "subagent-share" / "sess1"
+    record = share / "pln-example-abc123.review-wave-bookkeeping.md"
+    data = {
+        "plan_id": plan_id,
+        "prep_sidecar": None,
+        "unresolved": [],
+        "confinement_violations": 0,
+        "fixes_applied": 0,
+        "slices": 1,
+        "brief_conformance": {"items": 0, "met": 0, "unmet": 0},
+        "prep": {"run_base_sha": "deadbeef", "product_files": 0, "foreign_claims": [],
+                 "slice_files": ["state/lessons/a.md"]},
+        "delivery": {"verdict": "PASS", "product_files": 0, "claims_unbacked": 0},
+        "tests": tests,
+        "criterion": criterion,
+    }
+    _write_sidecar(record, data)
+    (repo / "state" / "lessons").mkdir(parents=True, exist_ok=True)
+    (repo / "state" / "lessons" / "a.md").write_text("lesson\n", encoding="utf-8")
+    sha = _commit(
+        repo,
+        "land\n\nInline-Review: applies pln-example-abc123.review-wave-bookkeeping -- execute-review: 1 slices, 0 fixes",
+    )
+    return sha, record, data
+
+
+_NOT_RUN = {"status": "not_run", "run": None, "failed": None, "sidecar": None}
+
+
+def test_mint_reads_stage_returns_and_takes_a_met_criterion_for_a_prose_spine(tmp_path):
+    repo = _setup_repo(tmp_path)
+    sha, _, _ = _stage_record_fixture(
+        repo, tests=_NOT_RUN, criterion={"status": "met", "observation": "13 lessons", "sidecar": None}
+    )
+    plan_path = repo / "docs" / "plans" / "example.md"
+    stamp = m.mint(plan_path, repo, build_test_path=None)
+    assert stamp["terminal_commit_sha"] == sha
+    assert stamp["build_test"]["verdict"] == "not_run"
+    assert stamp["criterion"]["status"] == "met"
+
+
+def test_mint_refuses_a_prose_spine_whose_criterion_was_never_judged(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _stage_record_fixture(repo, tests=_NOT_RUN, criterion={"status": "not_run", "observation": None, "sidecar": None})
+    with pytest.raises(m.MintRefusal, match="build/test verdict is 'not_run'"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+@pytest.mark.parametrize("status", ["not_met", "indeterminate"])
+def test_mint_refuses_an_unmet_criterion_even_with_passing_tests(tmp_path, status):
+    repo = _setup_repo(tmp_path)
+    _stage_record_fixture(
+        repo,
+        tests={"status": "pass", "run": 3, "failed": 0, "sidecar": "x.md"},
+        criterion={"status": status, "observation": "o", "sidecar": None},
+    )
+    with pytest.raises(m.MintRefusal, match=f"exit criterion is {status}"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+def test_mint_with_resolved_skips_the_trailer_walk(tmp_path):
+    repo = _setup_repo(tmp_path)
+    sha, record, data = _stage_record_fixture(
+        repo, tests=_NOT_RUN, criterion={"status": "met", "observation": "o", "sidecar": None}
+    )
+    # Bury the terminal commit's trailer: a walk would still find it, so prove
+    # `resolved` is used by handing it a record the walk could never resolve.
+    stamp = m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None,
+                   resolved=(sha, record, dict(data, plan_id="some-other-plan")))
+    assert stamp["terminal_commit_sha"] == sha

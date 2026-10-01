@@ -6,10 +6,12 @@ import pytest
 from coordinator_core.claude_md_budget import (
     AUDIENCE_MANIFEST_RELPATH,
     DEV_REPO_SENTINEL,
+    BudgetVerdict,
     HARD_LIMIT_BYTES,
     RatchetWatermark,
     RatchetWatermarkError,
     SOFT_LIMIT_BYTES,
+    budget_verdict,
     governed_surface_paths,
     is_claude_md_class,
     is_governed_claude_md,
@@ -454,3 +456,92 @@ class TestRatchetWatermark:
         assert allowed is False
         assert "6000" in msg
         assert "post-cut arming" in msg
+
+
+class TestBudgetVerdict:
+    """In-memory-reader mirror of every case in
+    bash_guards/tests/test_check_seven_claude_md_budget.py."""
+
+    SURFACE = "coordinator/CLAUDE.md"
+
+    def _dev_repo(self, tmp_path, watermark=None):
+        (tmp_path / DEV_REPO_SENTINEL).write_text("s\n", encoding="utf-8")
+        if watermark is not None:
+            ledger = resolve_ledger_path(tmp_path, self.SURFACE)
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(watermark, encoding="utf-8")
+        return tmp_path
+
+    def _verdict(self, root, size, head=None, path=None):
+        path = path or self.SURFACE
+        post = {path: b"x" * size}
+        heads = {} if head is None else {path: b"x" * head}
+        return budget_verdict(root, [path], post.get, heads.get)
+
+    def test_over_hard_limit(self, tmp_path):
+        v = self._verdict(self._dev_repo(tmp_path), HARD_LIMIT_BYTES + 1)
+        assert len(v.hard) == 1 and v.soft == ()
+        assert v.hard[0].startswith("\n  coordinator/CLAUDE.md = 40001 chars")
+        assert v.hard[0].endswith("(limit 40000)")
+
+    def test_exact_hard_limit_is_soft_only(self, tmp_path):
+        v = self._verdict(self._dev_repo(tmp_path), HARD_LIMIT_BYTES)
+        assert v.hard == () and len(v.soft) == 1
+        assert v.soft[0].endswith("(soft 38000; hard 40000)")
+
+    def test_soft_boundaries(self, tmp_path):
+        root = self._dev_repo(tmp_path)
+        assert len(self._verdict(root, SOFT_LIMIT_BYTES + 1).soft) == 1
+        assert self._verdict(root, SOFT_LIMIT_BYTES) == BudgetVerdict((), ())
+        assert self._verdict(root, SOFT_LIMIT_BYTES - 1) == BudgetVerdict((), ())
+
+    def test_repo_root_claude_md_ungoverned(self, tmp_path):
+        v = self._verdict(self._dev_repo(tmp_path), HARD_LIMIT_BYTES + 50000, path="CLAUDE.md")
+        assert v == BudgetVerdict((), ())
+
+    def test_no_sentinel_ungoverned(self, tmp_path):
+        assert self._verdict(tmp_path, HARD_LIMIT_BYTES + 50000) == BudgetVerdict((), ())
+
+    def test_manifest_named_surface_governed(self, tmp_path):
+        (tmp_path / "coordinator").mkdir()
+        (tmp_path / AUDIENCE_MANIFEST_RELPATH).write_text(
+            "coordinator/snippets/em.md\n", encoding="utf-8"
+        )
+        v = self._verdict(tmp_path, HARD_LIMIT_BYTES + 1, path="coordinator/snippets/em.md")
+        assert len(v.hard) == 1
+        other = self._verdict(tmp_path, HARD_LIMIT_BYTES + 1, path="coordinator/snippets/x.md")
+        assert other == BudgetVerdict((), ())
+
+    WM = "## Watermark\n- Bytes: 6000\n- Reason: post-cut arming\n"
+
+    def test_growth_past_watermark_refused(self, tmp_path):
+        v = self._verdict(self._dev_repo(tmp_path, self.WM), 6001)
+        assert len(v.hard) == 1 and "6000" in v.hard[0] and v.soft == ()
+
+    def test_hold_and_shrink_under_watermark_allowed(self, tmp_path):
+        root = self._dev_repo(tmp_path, self.WM)
+        assert self._verdict(root, 6000) == BudgetVerdict((), ())
+        assert self._verdict(root, 100) == BudgetVerdict((), ())
+
+    def test_over_watermark_shrink_admitted(self, tmp_path):
+        root = self._dev_repo(tmp_path, self.WM)
+        assert self._verdict(root, 7000, head=8000) == BudgetVerdict((), ())
+
+    def test_over_watermark_growth_and_same_size_refused(self, tmp_path):
+        root = self._dev_repo(tmp_path, self.WM)
+        assert "6000" in self._verdict(root, 8001, head=8000).hard[0]
+        assert "6000" in self._verdict(root, 8000, head=8000).hard[0]
+
+    def test_over_watermark_without_head_refused(self, tmp_path):
+        root = self._dev_repo(tmp_path, self.WM)
+        assert len(self._verdict(root, 7000, head=None).hard) == 1
+
+    def test_malformed_watermark_is_hard_entry(self, tmp_path):
+        root = self._dev_repo(tmp_path, "## Watermark\n- Reason: x\n")
+        v = self._verdict(root, 100)
+        assert len(v.hard) == 1 and v.hard[0].startswith("\n  coordinator/CLAUDE.md: ")
+
+    def test_empty_or_absent_post_bytes_skipped(self, tmp_path):
+        root = self._dev_repo(tmp_path)
+        assert budget_verdict(root, [self.SURFACE], lambda p: None, lambda p: None) == BudgetVerdict((), ())
+        assert budget_verdict(root, [self.SURFACE], lambda p: b"", lambda p: None) == BudgetVerdict((), ())

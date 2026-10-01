@@ -156,7 +156,7 @@ from coordinator_core.ops.backfill_deliverable_spine import (
 )
 from coordinator_core.ops.spec_backlink_resolve import (
     _content_root_path,
-    _RECOGNIZED_PEER_REPO,
+    peer_repo_name,
     build_index as _build_backlink_index,
     resolve_id as _resolve_id,
     resolve_path_with_index as _resolve_path_with_index,
@@ -384,7 +384,7 @@ def scan_id_form_citations(
             seen.add(key)
             if ":" in token:
                 _repo, _sep, bare_id = token.partition(":")
-                if _repo != _RECOGNIZED_PEER_REPO:
+                if _repo != peer_repo_name():
                     outcome = {"outcome": "miss"}
                 else:
                     peer_root = _content_root_path()

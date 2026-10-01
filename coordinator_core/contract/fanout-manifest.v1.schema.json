@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/fanout-manifest.v1.schema.json",
+  "x-schema-version": "1.0.0",
+  "title": "Cloud fan-out manifest v1",
+  "description": "Declares one cloud fan-out job: the parent session and its channel, the transport, the shared create_session parameters, and the workers to spawn. Consumed by fanout.compose, fanout.census and fanout.reconcile. No field removes a member of the standard child roster.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "job_id", "environment_id", "model", "permission_mode", "parent", "channel", "workers"],
+  "properties": {
+    "schema": {"const": "fanout-manifest.v1"},
+    "job_id": {"$ref": "#/$defs/slug"},
+    "environment_id": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "permission_mode": {"enum": ["default", "acceptEdits", "bypassPermissions", "auto"]},
+    "max_concurrent": {"type": "integer", "minimum": 1, "default": 6},
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "channel_pr_url"],
+      "properties": {
+        "session_id": {"type": "string", "minLength": 1},
+        "channel_pr_url": {"type": "string", "minLength": 1}
+      }
+    },
+    "channel": {"enum": ["pr"]},
+    "comms_repo": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "repos": {"$ref": "#/$defs/repo_names"},
+    "workers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "source_url", "focus", "prompt"],
+        "properties": {
+          "id": {"$ref": "#/$defs/slug"},
+          "source_url": {"type": "string", "minLength": 1},
+          "focus": {"type": "string", "pattern": "^repos\\.[A-Za-z0-9_]+$"},
+          "prompt": {"type": "string", "minLength": 1},
+          "outcome_branch": {"type": "string", "minLength": 1},
+          "tags": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "repos": {"$ref": "#/$defs/repo_names"}
+        }
+      }
+    }
+  },
+  "if": {"properties": {"channel": {"const": "pr"}}, "required": ["channel"]},
+  "then": {"required": ["comms_repo"]},
+  "$defs": {
+    "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "repo_names": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

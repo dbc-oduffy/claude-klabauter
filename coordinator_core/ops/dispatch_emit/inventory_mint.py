@@ -935,6 +935,16 @@ def mint_rows(
                     ),
                     "writes": r_writes,
                 }
+                # The spine's read/prefix sets carry through verbatim: the
+                # emit derives intra-plan read-after-write edges from
+                # `consumes`, and the executor footprint from `writes_under`;
+                # dropping either runs a consumer beside its producer.
+                if r.reads:
+                    entry["consumes"] = list(r.reads)
+                if r.reads_at_head:
+                    entry["reads_at_head"] = list(r.reads_at_head)
+                if r.writes_under:
+                    entry["writes_under"] = list(r.writes_under)
                 if depends_on:
                     entry["depends_on"] = depends_on
                 minted.append(entry)

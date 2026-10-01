@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -92,8 +93,33 @@ def _isolated_settings_home(content_root: Path) -> Path:
     return home
 
 
+def _armed_config_dir(content_root: Path, settings_home: Path) -> Path:
+    """A config dir whose settings deliver one hook (a script no plugin hooks.json names, so
+    the surfaces do not double-deliver) plus a `.coordinator-content-root` rung: the hook plane reads ARMED."""
+    config = content_root.parent / "config"
+    config.mkdir(exist_ok=True)
+    guard = config / "settings-only-guard.py"
+    guard.write_text("import sys\nsys.exit(0)\n")
+    hook = {"type": "command", "command": "python3", "args": ["-c", _LOADER, str(guard)]}
+    (config / "settings.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"hooks": [hook]}]}})
+    )
+    sidecar = content_root / "coordinator" / "hooks" / "effective-delivery.json"
+    hooks_json = sidecar.parent / "hooks.json"
+    if hooks_json.is_file():
+        tails = sorted(set(re.findall(r"scripts/[\w.-]+\.py", hooks_json.read_text())))
+        direct = [{"id": t, "script": t, "tool_names": ["Write"]} for t in tails]
+        sidecar.write_text(json.dumps(
+            {"x-effective-delivery": {"version": 1, "carriers": {}, "direct": direct, "retired": []}}
+        ))
+    (settings_home / "machine-local").mkdir(parents=True, exist_ok=True)
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text(str(content_root) + "\n")
+    return config
+
+
 def _run_doctor(content_root: Path, *args: str) -> subprocess.CompletedProcess:
     settings_home = _isolated_settings_home(content_root)
+    config = _armed_config_dir(content_root, settings_home)
     return subprocess.run(
         [sys.executable, str(_DOCTOR), *args],
         capture_output=True, text=True, creationflags=_NO_WINDOW,
@@ -117,6 +143,7 @@ def _run_doctor(content_root: Path, *args: str) -> subprocess.CompletedProcess:
             # reads this machine's real registered clones.
             COORDINATOR_SETTINGS_HOME=str(settings_home),
             MACHINE_LOCAL_REGISTRY_DIR=str(settings_home / "machine-local"),
+            CLAUDE_CONFIG_DIR=str(config),
         ),
     )
 
@@ -746,3 +773,54 @@ def test_shim_freshness_fix_does_not_touch_the_shim(tmp_path: Path, monkeypatch)
     assert shim_layer.status == "broken"
     assert shim.read_text(encoding="utf-8") == stale_body
     assert not any("_resolve_claude_klabauter" in line for line in fix_report)
+
+
+def test_a_healthy_install_exits_zero_and_a_double_delivered_hook_exits_one(content_root: Path):
+    script = content_root / "coordinator" / "hooks" / "scripts" / "real.py"
+    script.write_text("import sys\nsys.exit(0)\n")
+    _write_hooks(content_root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    healthy = _run_doctor(content_root)
+    assert healthy.returncode == 0, healthy.stdout
+
+    config = content_root.parent / "config"
+    hook = {"type": "command", "command": f"python3 {script}"}
+    (config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [hook]}]}}))
+    doubled = subprocess.run(
+        [sys.executable, str(_DOCTOR)], capture_output=True, text=True, creationflags=_NO_WINDOW,
+        env=dict(
+            os.environ,
+            REPO_CONTENT_ROOT=str(content_root),
+            REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
+            COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
+            COORDINATOR_SETTINGS_HOME=str(content_root.parent / "settings-home"),
+            MACHINE_LOCAL_REGISTRY_DIR=str(content_root.parent / "settings-home" / "machine-local"),
+            CLAUDE_CONFIG_DIR=str(config),
+        ),
+    )
+    assert doubled.returncode == 1, doubled.stdout
+    assert "[BROKEN ] Hook delivery is not duplicated" in doubled.stdout
+
+
+def test_run_doctor_appends_the_boot_banner_layers_after_the_eight_existing(monkeypatch):
+    from coordinator_core.ops import doctor
+    from coordinator_core.ops import doctor_boot_banners as banners
+
+    sentinel = [doctor.Layer("boot-a", "ok", []), doctor.Layer("boot-b", "ok", [])]
+    monkeypatch.setattr(banners, "boot_banner_layers", lambda config_dir: sentinel)
+    report, _ = doctor.run_doctor()
+    assert len(report.layers) == 10
+    assert report.layers[-2:] == sentinel
+
+
+def test_armed_kill_switch_stays_ok_and_reports_the_boot_banners_full_detail(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+    from coordinator_core.ops.session.guard_settings_integrity import (
+        evaluate_hooks_kill_switch_full_detail,
+    )
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / doctor._HOOKS_DISABLED_MARKER_NAME).write_text("armed\n")
+    layer = doctor._check_kill_switch_marker()
+    assert layer.status == "ok"
+    assert [f.message for f in layer.findings] == [evaluate_hooks_kill_switch_full_detail(tmp_path)]
+    assert layer.findings[0].message.strip()

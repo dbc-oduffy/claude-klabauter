@@ -1958,8 +1958,18 @@ def test_edit_row_against_an_absent_path_warns_naming_row_path_and_kind(tmp_path
     assert len(findings) == 1
     assert findings[0].severity is Severity.WARN
     assert findings[0].code == emit.ABSENT_EDIT_TARGET_CODE
-    for named in ("'C1'", "pkg/deleted.py", "'code-edit'"):
-        assert named in findings[0].message
+    assert "C1: pkg/deleted.py" in findings[0].message
+
+
+def test_many_absent_paths_aggregate_into_one_finding(tmp_path):
+    rows = [(f"C{i}", "code-edit", [f"pkg/new_{i}.py"]) for i in range(1, 15)]
+    plan = _absent_target_plan(tmp_path, *rows)
+
+    _, findings = _emit_findings(plan, tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].message.startswith("14 ")
+    assert "(+4 more)" in findings[0].message
 
 
 def test_edit_row_against_a_present_path_does_not_warn(tmp_path):
@@ -2022,3 +2032,110 @@ def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path):
     assert len(hits) == 1
     assert reply["ok"] is True
     assert reply["warn_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Import-window rows -- a new module and its existing importer in one row
+# ---------------------------------------------------------------------------
+
+
+def _import_window_findings(tmp_path, writes, importer_src, *, importer="pkg/user.py"):
+    (tmp_path / "pkg").mkdir(exist_ok=True)
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / importer).write_text(importer_src, encoding="utf-8")
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", writes))
+    _, findings = _emit_findings(plan, tmp_path)
+    return [f for f in findings if f.code == emit.IMPORT_WINDOW_CODE]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from pkg.fresh import thing\n",
+        "import pkg.fresh\n",
+        "from pkg import fresh\n",
+        "from . import fresh\n",
+        "from .fresh import thing\n",
+        "def f():\n    from pkg.fresh.sub import thing\n",
+        "from pkg import (\n    other,\n    fresh,\n)\n",
+    ],
+)
+def test_row_writing_a_new_module_and_its_importer_warns(tmp_path, src):
+    hits = _import_window_findings(tmp_path, ["pkg/fresh.py", "pkg/user.py"], src)
+
+    assert len(hits) == 1
+    assert hits[0].severity is Severity.WARN
+    assert "C1: pkg/user.py imports new pkg/fresh.py" in hits[0].message
+    assert "depends_on" in hits[0].message
+
+
+def test_new_package_init_counts_as_the_module(tmp_path):
+    hits = _import_window_findings(
+        tmp_path, ["pkg/newpkg/__init__.py", "pkg/user.py"], "import pkg.newpkg\n"
+    )
+
+    assert len(hits) == 1
+
+
+def test_importer_not_importing_the_new_module_does_not_warn(tmp_path):
+    hits = _import_window_findings(
+        tmp_path, ["pkg/fresh.py", "pkg/user.py"], "from pkg.other import x\nimport pkg.freshly\n"
+    )
+
+    assert hits == []
+
+
+def test_existing_module_is_not_new(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "fresh.py").write_text("x = 1\n", encoding="utf-8")
+
+    hits = _import_window_findings(
+        tmp_path, ["pkg/fresh.py", "pkg/user.py"], "from pkg.fresh import x\n"
+    )
+
+    assert hits == []
+
+
+def test_existing_test_module_importing_the_new_module_does_not_warn(tmp_path):
+    hits = _import_window_findings(
+        tmp_path,
+        ["pkg/fresh.py", "pkg/test_user.py"],
+        "from pkg.fresh import thing\n",
+        importer="pkg/test_user.py",
+    )
+
+    assert hits == []
+
+
+def test_new_module_and_importer_in_separate_rows_do_not_warn(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "user.py").write_text("from pkg.fresh import x\n", encoding="utf-8")
+    plan = _absent_target_plan(
+        tmp_path,
+        ("C1", "code-edit", ["pkg/fresh.py"]),
+        (
+            "C2",
+            "code-edit",
+            ["pkg/user.py"],
+            "  depends_on:\n    - chunk: C1\n      gate_kind: output-consumption-runtime\n",
+        ),
+    )
+
+    _, findings = _emit_findings(plan, tmp_path)
+
+    assert [f for f in findings if f.code == emit.IMPORT_WINDOW_CODE] == []
+
+
+def test_unparseable_importer_is_skipped_and_the_warn_never_refuses(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "user.py").write_text("def broken(:\n", encoding="utf-8")
+    plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/fresh.py", "pkg/user.py"]))
+
+    script, findings = _emit_findings(plan, tmp_path)
+
+    assert [f for f in findings if f.code == emit.IMPORT_WINDOW_CODE] == []
+    assert_zero_errors(script)
+
+
+def test_import_window_warn_is_a_no_op_without_a_repo_root(tmp_path):
+    assert emit.find_import_window_rows([], None) == []

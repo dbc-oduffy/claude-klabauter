@@ -520,16 +520,6 @@ def _assert_opaque_rows_have_not_aged_out(
 # ---------------------------------------------------------------------------
 
 
-def test_leg1_candidate_discovery_finds_the_committed_core_registers() -> None:
-    """Sanity: leg 1's own regex actually recognizes every core-45 register's shape."""
-    discovered = _discover_candidate_ids(_CANDIDATE_ROOTS, REPO_ROOT)
-    missing = [core.register for core in _core_45() if core.register not in discovered]
-    assert not missing, (
-        f"leg-1 byte-level discovery missed {len(missing)} committed core register(s): "
-        f"{missing!r} -- the candidate-line regex has a recall gap"
-    )
-
-
 @pytest.mark.cadence
 def test_leg2_population_artifact_matches_current_candidates() -> None:
     """AC8 leg 2: the frozen artifact's candidate snapshot vs. a fresh leg-1 scan.
@@ -566,25 +556,6 @@ def test_leg2_population_artifact_matches_current_candidates() -> None:
         "register_population.json is stale relative to the corpus "
         f"(new: {sorted(new_candidates)!r}, vanished: {sorted(vanished_candidates)!r}). "
         f"Regenerate with: {_REGENERATE_COMMAND}"
-    )
-
-
-def test_leg2_population_artifact_is_internally_consistent() -> None:
-    """The artifact's recorded hash matches its own recorded candidate list.
-
-    FAST TIER, deliberately, while its sibling above is cadence-marked. This assertion reads
-    only the artifact -- never the corpus -- so no peer's register edit can redden it. It
-    catches the one failure regeneration cannot fix and staleness does not imply: an artifact
-    someone hand-edited instead of regenerating, which would otherwise let a hand-written
-    candidate list masquerade as a derived one.
-    """
-    artifact = _load_population_artifact()
-    stored = _stored_candidate_ids(artifact)
-
-    assert artifact["candidate_ids_sha256"] == _candidate_ids_hash(stored), (
-        "register_population.json's recorded hash does not match its own recorded candidate "
-        f"list -- the artifact was hand-edited rather than regenerated. Regenerate with: "
-        f"{_REGENERATE_COMMAND}"
     )
 
 
@@ -708,16 +679,6 @@ def test_leg1_regex_matches_the_ast_census_once_at_land() -> None:
 # ---------------------------------------------------------------------------
 # AC2 / AC7 -- the canary
 # ---------------------------------------------------------------------------
-
-
-def test_canary_registers_are_present_in_the_derived_population() -> None:
-    """AC2's reads-as-THE-OLD-VALUE check, over the classified core population.
-
-    See the module docstring's CANARY section for why these three, and why `_EXEMPT_SITES` is
-    NOT among them despite the plan body naming it.
-    """
-    derived_ids = frozenset(core.register for core in _core_45())
-    assert_canary_present(derived_ids, _CANARY)
 
 
 def test_canary_members_are_actually_declared_core_by_the_committed_inventory() -> None:

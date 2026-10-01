@@ -17,7 +17,7 @@ this file is the only caller permitted to assert the DR-411 container opt-in.
 Four facts (docs/research/spike-verdicts/2026-09-06-cloud-environment-setup-script-installs-the-engine.md)
 shape every decision below:
   1. The script runs ONCE and the filesystem is snapshotted. A process does not survive;
-     a file does. No warm engine start here (anti-scope) — anything durable is a disk write.
+     a file does. Anything durable is a disk write; a warm engine is measured, not relied on.
   2. The env-var block is NOT readable from the setup script's own shell
      (anthropics/claude-code#55440, closed as not planned). COORDINATOR_ENGINE_ROOT and
      COORDINATOR_SETTINGS_HOME are set by THIS script, in its own process environment,
@@ -31,7 +31,10 @@ shape every decision below:
 
 Negative-spec:
   - Not a general installer. Never wire this into a workstation's install-doc surface.
-  - Never starts the warm engine. A SessionStart hook is the correct place for that, not here.
+  - A warm engine started here does not survive the snapshot (a process does not outlive
+    the setup run), so this script never relies on one: it may start one only to MEASURE
+    it (`Report.warm_engine`, measured_in "setup-session"). A restored session is warm
+    from its 2nd engine call via spawn-on-miss; a SessionStart hook is the durable route.
   - Never lets a failed step raise past `run_step` / `main`. `main` always calls
     ``sys.exit(0)`` at the end, unconditionally, whatever the recorded verdicts say.
   - Never writes ``PIP_BREAK_SYSTEM_PACKAGES`` (or any pip env var) into the child
@@ -320,9 +323,7 @@ class Report:
     steps: list[StepResult] = field(default_factory=list)
     engine_root: str | None = None
     settings_home: str | None = None
-    #: Verdict of `install_engine_cli_shims`: shim dir, the bin dir CLI names
-    #: were enumerated off, and which bare names were written vs. left alone
-    #: because a non-sentinel file already owned that name.
+    #: Verdict of `sweep_engine_cli_shims`: {swept: [...], skipped_foreign: [...]}.
     engine_cli_shims: dict | None = None
     #: Verdict of `link_engine_cli_shims_onto_image_path`: the image-default-PATH
     #: dir the shims were linked into, and which names were linked vs. left alone.
@@ -357,6 +358,18 @@ class Report:
     #: determination, never an observation of the running session: the box does
     #: not reach this process, so what the session got is unknowable from here.
     session_path: dict | None = None
+    #: Warm-engine measurement. Keys: measured_in ("setup-session"), running (bool),
+    #: discovery_pid (int | None), ping_cold_process_ms, ping_warm_process_ms,
+    #: ping_spawns, survives_snapshot (always False), restored_session_rule
+    #: ("warm from the 2nd engine call via spawn-on-miss"). None = not measured.
+    warm_engine: dict | None = None
+    #: Door-launcher determination. Keys: bin_dir, on_session_path (bool),
+    #: resolved ({name: path}), native_elf (bool), image_count, eligible_count,
+    #: python_shims_remaining. None = not determined.
+    door_launchers: dict | None = None
+    #: Hook transport state. Keys: registrations, port, listening (bool).
+    #: None = not probed.
+    hook_transport: dict | None = None
     #: Whether this run left a verdict surface for the session to read, and where.
     session_verdict: dict | None = None
     #: Whether the composed PATH was pinned into `settings.json`'s `env` block,
@@ -561,29 +574,15 @@ def clone_repo(name: str) -> None:
 
 #: Name of the platform's own per-session fresh checkout of the engine repo
 #: under `/home/user`, distinct from `CLONES["klabauter"]` (this script's own
-#: `/root` clone). See `install_engine_cli_shims` for why the fresh checkout
-#: is preferred over the frozen clone. `locate_existing_checkout` already
-#: treats any name absent from `CLONES` as "search every retrieval root for a
-#: `.git` checkout of this name", reused rather than duplicated here.
+#: `/root` clone).
 FRESH_ENGINE_CHECKOUT_NAME = "claude-klabauter"
 
-#: Where the fresh checkout lands when the platform mounts it, spelled out
-#: literally for `_shim_source` — a generated shim cannot import this module
-#: (see `install_engine_cli_shims`) and must carry this path as its own text.
-FRESH_ENGINE_CHECKOUT_PATH = f"/home/user/{FRESH_ENGINE_CHECKOUT_NAME}"  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
-
-#: Directory the bare-name engine CLI shims are written into
-#: (`install_engine_cli_shims`). On this container's login-shell PATH but NOT
-#: on `/etc/environment`'s, so an agent shell can lack it: every shim is also
-#: linked into an image-default-PATH dir
-#: (`link_engine_cli_shims_onto_image_path`).
+#: Directory a prior run wrote sentinel trampolines into (`sweep_engine_cli_shims`
+#: removes them). Still pinned onto the session PATH when it exists.
 SHIM_DIR = Path("/root/.local/bin")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 
-#: First line of every shim this script writes, so a re-run can tell its own
-#: prior output (safe to overwrite) from any other file at the same bare name
-#: — an EM's hand-wired shim, an operator's own script — which it must leave
-#: alone. Never matched against by prefix or basename: a file this script did
-#: not write itself never carries this exact line.
+#: First line of every trampoline a prior run of this script wrote; the sweep
+#: removes a file only when it carries this exact line, never a foreign file.
 _SHIM_SENTINEL = "# cloud_setup.py: engine-cli-shim (auto-generated, do not hand-edit)"
 
 
@@ -702,151 +701,32 @@ def _engine_env() -> dict[str, str]:
     }
 
 
-def _preferred_engine_root() -> Path:
-    """The engine root to enumerate CLI names off (`install_engine_cli_shims`):
-    the platform's fresh per-session checkout if mounted right now, else this
-    script's own `/root/klabauter` clone.
+def sweep_engine_cli_shims(report: Report) -> None:
+    """Remove the Python-source trampolines a prior run wrote into `SHIM_DIR`.
 
-    A miss (fresh checkout not yet mounted) is the routine case, since this
-    runs before the platform mounts anything under `/home/user` — see
-    `install_engine_cli_shims` for the fresh-vs-frozen rationale. Distinct
-    from `ENGINE_CURRENT_LINK`, which every generated shim execs through
-    instead of re-deriving this preference at call time — see
-    `_shim_source`.
+    Each engine CLI name now has one launcher: its door image, or setup.py's
+    forwarder pair for an image-less name. A file carries `_SHIM_SENTINEL`
+    only if a prior run of this script wrote it; any other file in `SHIM_DIR`
+    (an EM's hand-wired shim, an operator's script) is never removed and is
+    recorded in `skipped_foreign`. Symlinks and directories are ignored.
     """
-    fresh = locate_existing_checkout(FRESH_ENGINE_CHECKOUT_NAME)
-    if fresh is not None:
-        return fresh
-    return Path(CLONES["klabauter"]["dest"])
-
-
-def _shim_source(name: str, engine_link: str) -> str:
-    """The exact text of the bare-name trampoline for CLI *name*.
-
-    Self-contained on purpose: this file cannot `import cloud_setup` (it runs
-    as `sys.executable <this file>`, standalone, in whatever process later
-    types the bare command — the harness never puts this repo on that
-    process' `sys.path`), so every value it needs is interpolated as a
-    literal at generation time.
-
-    Execs through `engine_link` — the stable `ENGINE_CURRENT_LINK` symlink,
-    never a fresh-vs-fallback choice made here. The fresh-vs-frozen decision
-    now lives in one place, `coordinator_core.hooks.repin_cloud_engine_root`
-    (a SessionStart hook, re-pointing the same link atomically), not
-    re-derived per shim invocation — see `install_engine_cli_shims`'s
-    docstring and claude-klabauter#67 (comments 5785027514, 5785078234).
-    """
-    return (
-        "#!/usr/bin/env python3\n"
-        f"{_SHIM_SENTINEL}\n"
-        f'"""{name} — bare-name trampoline for coordinator/bin/{name}.py,\n'
-        "generated by scripts/cloud_setup.py :: install_engine_cli_shims.\n"
-        "\n"
-        "Execs through the stable engine-current symlink, whose target a\n"
-        "SessionStart hook may re-point onto a fresher per-session checkout\n"
-        "— this shim never re-derives fresh-vs-frozen itself.\n"
-        '"""\n'
-        "import os\n"
-        "import sys\n"
-        "\n"
-        f"ENGINE_LINK = {engine_link!r}\n"
-        "\n"
-        "os.environ[\"COORDINATOR_ENGINE_ROOT\"] = ENGINE_LINK\n"
-        f"target = os.path.join(ENGINE_LINK, \"coordinator\", \"bin\", {name!r} + \".py\")\n"
-        "os.execv(sys.executable, [sys.executable, target, *sys.argv[1:]])\n"
-    )
-
-
-def install_engine_cli_shims(report: Report) -> None:
-    """Generate a bare-name trampoline in `SHIM_DIR` for every public
-    `coordinator/bin/*.py` CLI of the engine checkout.
-
-    Skills and emitted workflow prompts invoke coordinator CLIs by bare name
-    (`backlog-grind-assemble`, `coordinator-invoke`, ...), extensionless.
-    Nothing on this image's PATH supplies that: the `.py` files need a `.py`
-    suffix to resolve and the engine's own `.cmd`/`.ps1` launchers are
-    Windows-only. `SHIM_DIR` is the first entry already on this container's
-    PATH, so a shim landing there wins bare-name resolution for free.
-
-    Heuristic for "public CLI": a `.py` file in `coordinator/bin/` with a
-    sibling `.cmd` of the same stem. `coordinator/bin/gen-launcher-shim.py`
-    generates a `.cmd` ONLY for the engine's own public entry points, so the
-    pairing is the engine's own signal, not a guess — verified against this
-    checkout: every `.cmd`-less `.py` under `coordinator/bin/` is a test
-    module (`test_*.py`), `conftest.py`, or a `_`-prefixed private helper,
-    never something meant to be run bare.
-
-    This step enumerates CLI names off whichever checkout is on disk right
-    now (`_preferred_engine_root`), but — unlike that enumeration — what each
-    generated shim actually execs against is re-decided at CALL time inside
-    the shim itself (`_shim_source`), so a fresh checkout that appears only
-    AFTER this step ran is still picked up by every later invocation.
-
-    THE FRESH-VS-FROZEN RATIONALE (stated once, here — every other reference
-    in this module points back to this paragraph): this script's own
-    `/root/klabauter` clone is snapshotted the moment this run ends, while the
-    platform re-clones `claude-klabauter` fresh under `/home/user` every
-    session (abs-path-ok: single-host cloud VM entrypoint, module docstring),
-    so a value pinned once at setup time goes stale the instant the
-    engine's default branch moves. Both `coordinator_core.engine_root`
-    (claude-klabauter's own resolver) and claude-klabauter's `cc_invoke.resolve_engine_root`
-    treat `COORDINATOR_ENGINE_ROOT` as their highest-precedence rung, so
-    whichever path a consumer resolves is what it actually runs against.
-
-    FOLDED BACK (claude-klabauter#67, comments 5785027514, 5785078234): every
-    generated shim used to re-resolve fresh-vs-frozen itself at CALL time.
-    It now execs through `ENGINE_CURRENT_LINK`, a stable symlink this script
-    pins at the frozen clone (`_create_engine_current_symlink`) and that a
-    SessionStart hook (`coordinator_core.hooks.repin_cloud_engine_root`)
-    atomically re-points onto a fresher per-session checkout once one is
-    mounted and stamped no older than the frozen root's own stamp. One
-    fresh-vs-frozen decision, made where a session actually exists to judge
-    freshness — not re-derived per shim invocation from a same-process
-    `os.path.isdir` check that could never see a stamp.
-
-    Idempotent and non-destructive: a target already carrying
-    `_SHIM_SENTINEL` is this step's own prior output and is overwritten; any
-    OTHER pre-existing file at that bare name (an EM's hand-wired shim, an
-    operator's own script) is left untouched and recorded as skipped, never
-    clobbered.
-    """
-    engine_root = _preferred_engine_root()
-    bin_dir = engine_root / "coordinator" / "bin"
-    if not bin_dir.is_dir():
-        raise FileNotFoundError(
-            f"{bin_dir} does not exist — the engine checkout this step "
-            "enumerates CLIs off is absent or its layout changed"
-        )
-    SHIM_DIR.mkdir(parents=True, exist_ok=True)
-
-    written: list[str] = []
+    swept: list[str] = []
     skipped_foreign: list[str] = []
-    for py_file in sorted(bin_dir.glob("*.py")):
-        name = py_file.stem
-        if not (bin_dir / f"{name}.cmd").is_file():
-            continue
-        target = SHIM_DIR / name
-        if target.exists():
-            try:
-                existing = target.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-            if _SHIM_SENTINEL not in existing:
-                skipped_foreign.append(name)
+    if SHIM_DIR.is_dir():
+        for entry in sorted(SHIM_DIR.iterdir()):
+            if entry.is_symlink() or not entry.is_file():
                 continue
-        source = _shim_source(name, str(ENGINE_CURRENT_LINK))
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(source, encoding="utf-8", newline="\n")
-        tmp.chmod(0o755)
-        tmp.replace(target)
-        written.append(name)
-
-    report.engine_cli_shims = {
-        "shim_dir": str(SHIM_DIR),
-        "bin_dir": str(bin_dir),
-        "written": written,
-        "skipped_foreign": skipped_foreign,
-    }
+            try:
+                text = entry.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                skipped_foreign.append(entry.name)
+                continue
+            if _SHIM_SENTINEL in text:
+                entry.unlink()
+                swept.append(entry.name)
+            else:
+                skipped_foreign.append(entry.name)
+    report.engine_cli_shims = {"swept": swept, "skipped_foreign": skipped_foreign}
 
 
 #: A CLI the pre-boot verdict requires to resolve bare under the image default
@@ -868,7 +748,7 @@ def _image_path_link_dir() -> Path:
 
 
 def link_engine_cli_shims_onto_image_path(report: Report) -> None:
-    """Symlink every shim `install_engine_cli_shims` wrote into a directory of
+    """Symlink every shim recorded as written into a directory of
     the image default PATH, then require `PATH_PROBE_CLI` to resolve there.
 
     `SHIM_DIR` reaches a session's PATH only through the env-var box, which
@@ -878,7 +758,7 @@ def link_engine_cli_shims_onto_image_path(report: Report) -> None:
 
     A name that already exists at the link dir (an image binary, an operator's
     file, a prior run's link) is left alone, never replaced. A no-op when
-    `install_engine_cli_shims` recorded nothing: that step's own failure is the
+    shim step recorded nothing: that step's own failure is the
     loud one. Raises when the probe CLI does not resolve under the image
     default PATH, which `run_step` records into the pre-boot verdict.
     """
@@ -889,7 +769,7 @@ def link_engine_cli_shims_onto_image_path(report: Report) -> None:
     linked: list[str] = []
     skipped_existing: list[str] = []
     if link_dir.resolve() != SHIM_DIR.resolve():
-        for name in shims["written"]:
+        for name in shims.get("written", []):
             link = link_dir / name
             if os.path.lexists(link):
                 skipped_existing.append(name)
@@ -1164,6 +1044,245 @@ def assert_hook_plane_armed(report: Report) -> None:
         settings_home=os.environ.get("COORDINATOR_SETTINGS_HOME"),
     )
     problems = hook_plane.hook_plane_problems(report.hook_plane)
+    dark = _dark_hook_port(report)
+    if dark:
+        problems.append(dark)
+    report.hook_plane["armed"] = not problems
+    if problems:
+        raise RuntimeError("; ".join(problems))
+
+
+def _dark_hook_port(report: Report) -> str | None:
+    """The reason the registered `type: http` hooks have no listener, or None.
+
+    `listening` None (no http registration, or the probe never ran) is not dark.
+    """
+    transport = report.hook_transport or {}
+    if transport.get("listening") is False:
+        return f"hook port {transport.get('port')} accepts no connection: registered http hooks reach nothing"
+    return None
+
+
+_ELF_MAGIC = b"\x7fELF"
+_WARM_DISCOVERY_FILENAME = "warm-http.json"
+_PING_TIMEOUT_S = 15
+_PORT_PROBE_TIMEOUT_S = 0.25
+
+
+def _is_elf(path: str) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == _ELF_MAGIC
+    except OSError:
+        return False
+
+
+def _children_cpu_ms() -> float:
+    """User+system CPU of waited-for children, in ms (process time, never wall clock)."""
+    times = os.times()
+    return (times.children_user + times.children_system) * 1000.0
+
+
+def _timed_ping(launcher: str) -> tuple[float, bool]:
+    """Run `<launcher> ping '{}'` once; return (child process ms, exited 0)."""
+    before = _children_cpu_ms()
+    ok = False
+    try:
+        result = subprocess.run(
+            [launcher, "ping", "{}"],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=_PING_TIMEOUT_S,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        ok = result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return round(_children_cpu_ms() - before, 1), ok
+
+
+def _warm_discovery_record(engine_root: str) -> dict | None:
+    """The warm listener's discovery record, read off disk.
+
+    Path derivation mirrors `warm.breadcrumb.svc_dir` (sha1 of the resolved
+    clone root, first 16 hex, under the runtime base) and must agree with it:
+    this script runs before the engine is importable. A mismatch reads as "not
+    running", never as running.
+    """
+    import hashlib
+
+    base = (
+        os.environ.get("COORDINATOR_WARM_RUNTIME_BASE", "").strip()
+        or os.environ.get("LOCALAPPDATA")
+        or str(Path.home() / ".cache")
+    )
+    clone_hash = hashlib.sha1(str(Path(engine_root).resolve()).encode("utf-8")).hexdigest()[:16]
+    path = Path(base) / "coordinator" / "warm" / clone_hash / _WARM_DISCOVERY_FILENAME
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _pid_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _http_hook_urls(node: object) -> list[str]:
+    """Every `url` of a `type: http` hook anywhere under a hooks block."""
+    urls: list[str] = []
+    if isinstance(node, dict):
+        if node.get("type") == "http" and isinstance(node.get("url"), str):
+            urls.append(node["url"])
+        for value in node.values():
+            urls.extend(_http_hook_urls(value))
+    elif isinstance(node, list):
+        for value in node:
+            urls.extend(_http_hook_urls(value))
+    return urls
+
+
+def _probe_hook_transport() -> dict:
+    """Registered `type: http` hook count, their port, and whether it accepts a
+    TCP connect within `_PORT_PROBE_TIMEOUT_S`. `listening` is None when no
+    http hook is registered or the registrations name more than one port."""
+    import socket
+    from urllib.parse import urlparse
+
+    targets = [
+        Path(CLONES["coordinator-claude"]["dest"]).joinpath(*_hook_plane_module().PLUGIN_HOOKS_REL),
+        _claude_home() / "settings.json",
+    ]
+    urls: list[str] = []
+    for path in targets:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        urls.extend(_http_hook_urls(data.get("hooks") if isinstance(data, dict) else None))
+    endpoints = set()
+    for url in urls:
+        parsed = urlparse(url)
+        if parsed.hostname and parsed.port:
+            endpoints.add((parsed.hostname, parsed.port))
+    transport: dict = {"registrations": len(urls), "port": None, "listening": None}
+    if len(endpoints) != 1:
+        if endpoints:
+            transport["ports"] = sorted(port for _, port in endpoints)
+        return transport
+    host, port = next(iter(endpoints))
+    transport["port"] = port
+    try:
+        with socket.create_connection((host, port), timeout=_PORT_PROBE_TIMEOUT_S):
+            transport["listening"] = True
+    except OSError:
+        transport["listening"] = False
+    return transport
+
+
+def record_warm_engine_verdict(report: Report) -> None:
+    """Record whether the engine's launchers are native and on the session PATH,
+    what a cold and a warm `ping` cost, and whether the hook port is listening.
+
+    Fills `Report.door_launchers`, `Report.warm_engine`, `Report.hook_transport`
+    (key contracts on those fields). Resolution runs against the pinned PATH
+    value, the one a session gets. `running`/`discovery_pid` come from the
+    discovery record, never from the ping. `ping_spawns` counts the processes
+    this step launches (one per ping); descendants are not counted.
+
+    Never raises on a measured fact: what failed is listed in
+    `warm_engine["problems"]` and `fail_on_warm_engine_problems` turns it into a
+    red step. Never starts or stops an engine beyond the spawn-on-miss the
+    first ping may trigger.
+    """
+    settings_bin = Path(_engine_env()["COORDINATOR_SETTINGS_HOME"]) / "bin"
+    path_value = (report.session_path_pin or {}).get("value") or (
+        report.session_path or {}
+    ).get("env_box_value") or ""
+    entries = [e for e in path_value.split(":") if e]
+
+    names: list[str] = []
+    try:
+        manifest = json.loads((settings_bin / "_native-forwarder-manifest.json").read_text(encoding="utf-8"))
+        names = [n for n in manifest.get("names", ()) if isinstance(n, str)] if isinstance(manifest, dict) else []
+    except (OSError, ValueError):
+        pass
+    resolved: dict[str, str] = {}
+    elf_count = 0
+    shims = 0
+    for name in names:
+        found = shutil.which(name, path=path_value)
+        if found is None:
+            continue
+        resolved[name] = found
+        if _is_elf(found):
+            elf_count += 1
+        else:
+            shims += 1
+    launcher = shutil.which(PATH_PROBE_CLI, path=path_value)
+    report.door_launchers = {
+        "bin_dir": str(settings_bin),
+        "on_session_path": str(settings_bin) in entries,
+        "resolved": resolved,
+        "native_elf": bool(launcher and _is_elf(launcher)),
+        "image_count": elf_count,
+        "eligible_count": len(names),
+        "python_shims_remaining": shims,
+    }
+
+    warm: dict = {
+        "measured_in": "setup-session",
+        "running": False,
+        "discovery_pid": None,
+        "ping_cold_process_ms": None,
+        "ping_warm_process_ms": None,
+        "ping_spawns": 0,
+        "survives_snapshot": False,
+        "restored_session_rule": "warm from the 2nd engine call via spawn-on-miss",
+    }
+    report.warm_engine = warm
+    pings_ok = False
+    if launcher:
+        cold_ms, cold_ok = _timed_ping(launcher)
+        warm_ms, warm_ok = _timed_ping(launcher)
+        warm.update(ping_cold_process_ms=cold_ms, ping_warm_process_ms=warm_ms, ping_spawns=2)
+        pings_ok = cold_ok and warm_ok
+    record = _warm_discovery_record(_engine_env()["COORDINATOR_ENGINE_ROOT"])
+    if record is not None:
+        warm["discovery_pid"] = record.get("pid") if isinstance(record.get("pid"), int) else None
+        warm["running"] = _pid_alive(record.get("pid"))
+    report.hook_transport = _probe_hook_transport()
+
+    problems: list[str] = []
+    if not names:
+        problems.append("no native-forwarder manifest names under " + str(settings_bin))
+    if not launcher:
+        problems.append(f"`{PATH_PROBE_CLI}` does not resolve on the pinned PATH")
+    elif not report.door_launchers["native_elf"]:
+        problems.append(f"`{PATH_PROBE_CLI}` resolves to a non-ELF launcher: {launcher}")
+    if shims:
+        problems.append(f"{shims} launcher(s) on the pinned PATH are not native images")
+    if launcher and not pings_ok:
+        problems.append("`ping` exited non-zero or timed out")
+    dark = _dark_hook_port(report)
+    if dark:
+        problems.append(dark)
+    warm["problems"] = problems
+
+
+def fail_on_warm_engine_problems(report: Report) -> None:
+    """Raise when `record_warm_engine_verdict` listed problems, so `run_step` records red."""
+    problems = (report.warm_engine or {}).get("problems") or []
     if problems:
         raise RuntimeError("; ".join(problems))
 
@@ -3119,7 +3238,7 @@ def _connect_helper_path() -> Path:
 def _connect_helper_source(url: str, start_argv: list[str] | None) -> str:
     """The exact text of the headersHelper script.
 
-    Self-contained, like `_shim_source`: Claude Code runs it standalone, so
+    Self-contained: Claude Code runs it standalone, so
     every value is a literal interpolated here. With ``start_argv`` None (the
     checkout is not resolved yet) it only probes and prints ``{}``; so does an
     argv whose script (``argv[1]``) is not on disk when the helper runs.
@@ -3474,11 +3593,25 @@ def resolve_session_path(report: Report) -> None:
         parent = str(Path(resolved).parent)
         if parent not in default_entries and parent not in leading:
             leading.append(parent)
+    entries = leading + default_entries
+    settings_bin = Path(_engine_env()["COORDINATOR_SETTINGS_HOME"]) / "bin"
+    settings_bin_absent: str | None = None
+    if settings_bin.is_dir():
+        entries = [str(settings_bin)] + [e for e in entries if e != str(settings_bin)]
+    else:
+        settings_bin_absent = str(settings_bin)
+    shim_dir_pinned = False
+    if SHIM_DIR.is_dir() and str(SHIM_DIR) not in entries:
+        entries.append(str(SHIM_DIR))
+        shim_dir_pinned = True
     report.session_path = {
         "binaries": found,
         "unresolved": [name for name, path in found.items() if path is None],
-        "env_box_value": ":".join(leading + default_entries),
+        "env_box_value": ":".join(entries),
+        "shim_dir_pinned": shim_dir_pinned,
     }
+    if settings_bin_absent is not None:
+        report.session_path["settings_bin_absent"] = settings_bin_absent
 
 
 def session_tools_inventory(report: Report) -> None:
@@ -3515,7 +3648,13 @@ def _hook_plane_status_line(report: Report) -> str:
         module = _hook_plane_module()
     except RuntimeError:
         return "HOOK PLANE: UNARMED (delivery: unknown)"
-    extra = "commit hook: MISSING" if _commit_hook_step_failed(report) else None
+    failures = []
+    if _commit_hook_step_failed(report):
+        failures.append("commit hook: MISSING")
+    dark = _dark_hook_port(report)
+    if dark:
+        failures.append(dark)
+    extra = "; ".join(failures) or None
     return module.hook_plane_status_line(report.hook_plane, extra_failure=extra)
 
 
@@ -4113,6 +4252,23 @@ def _write_report_best_effort(report: Report) -> None:
         print(f"[cloud_setup] could not write install report: {e}")
 
 
+def write_environment_import(root: Path, variant: str) -> None:
+    """Write `.claude/environment.md` from `docs/claude-md/environment.<variant>.md`.
+
+    The project CLAUDE.md imports this file; a missing source is reported, never fatal.
+    """
+    src = root / "docs" / "claude-md" / f"environment.{variant}.md"
+    dest = root / ".claude" / "environment.md"
+    try:
+        text = src.read_text(encoding="utf-8")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"[cloud_setup] WARN environment: could not write {dest} from {src}: {exc}")
+        return
+    print(f"[cloud_setup] environment: wrote {dest} ({variant} variant)")
+
+
 def main(argv: "list[str] | None" = None) -> int:
     # Takes no arguments. Any argument, `--help` included, must not fall through to
     # a full provisioning run: that mutates hooks, settings and installs on a
@@ -4150,7 +4306,7 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step("clone klabauter", lambda: clone_repo("klabauter"), report)
     run_step("verify review payload", verify_review_payload, report)
     run_step("set engine env", lambda: set_engine_env(report), report)
-    run_step("install engine CLI shims", lambda: install_engine_cli_shims(report), report)
+    run_step("sweep engine CLI shims", lambda: sweep_engine_cli_shims(report), report)
     run_step(
         "link engine CLI shims onto image PATH",
         lambda: link_engine_cli_shims_onto_image_path(report),
@@ -4162,6 +4318,12 @@ def main(argv: "list[str] | None" = None) -> int:
     # seed_trust_anchor_keys' docstring for the cascade that ordering caused.
     run_step("seed trust anchor keys", lambda: seed_trust_anchor_keys(report), report)
     run_step("run scripts/setup.py", lambda: run_claude_klabauter_setup(report), report)
+    # AFTER setup.py, which writes the local variant into the same file.
+    run_step(
+        "write cloud environment import",
+        lambda: write_environment_import(Path(CLONES["klabauter"]["dest"]), "cloud"),
+        report,
+    )
     run_step("register plugin settings", register_plugin_settings, report)
     run_step("apply settings-manifest env", lambda: apply_settings_manifest_env(report), report)
     run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
@@ -4237,6 +4399,11 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step(
         "drop double-fired settings hooks",
         lambda: drop_double_fired_settings_hooks(report),
+        report,
+    )
+    run_step(
+        "record warm engine verdict",
+        lambda: (record_warm_engine_verdict(report), fail_on_warm_engine_problems(report)),
         report,
     )
     run_step("assert hook plane armed", lambda: assert_hook_plane_armed(report), report)

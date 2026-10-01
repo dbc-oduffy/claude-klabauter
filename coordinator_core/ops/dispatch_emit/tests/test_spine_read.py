@@ -334,6 +334,26 @@ def test_deferred_row_is_excluded_independent_of_disposition(tmp_path):
     assert ids == {"C2"}
 
 
+def test_em_performed_open_row_is_excluded_with_reason(tmp_path):
+    body = """\
+- id: C1
+  title: EM sends the memos
+  surface: some/surface
+  performer: em
+- id: C2
+  title: live row
+  surface: some/surface
+"""
+    plan_path = _write_plan(tmp_path, body)
+    exclusions: list = []
+    ids = {row.id for row in read_spine(plan_path, exclusions=exclusions)}
+
+    assert ids == {"C2"}
+    assert exclusions == [
+        {"id": "C1", "reason": "em-performed", "detail": "performer: em"}
+    ]
+
+
 def test_live_row_depends_on_filtered_row_does_not_raise_and_edge_is_stripped(tmp_path):
     body = """\
 - id: C1

@@ -5,19 +5,19 @@ from coordinator_core.install.substrate import (
 
 
 def test_repo_key_to_env_var_dots_and_dashes():
-    assert repo_key_to_env_var("repos.project-rag") == "REPO_EXAMPLE_RETRIEVAL_REPO"
+    assert repo_key_to_env_var("repos.gadget-repo") == "REPO_GADGET_REPO"
     assert repo_key_to_env_var("repos.foo.bar") == "REPO_FOO_BAR"
     assert repo_key_to_env_var("repos.plain") == "REPO_PLAIN"
 
 
 def test_resolve_exports_rc0_resolved():
     def getter(key):
-        return (0, "/Users/alice/X/example-retrieval-repo")
+        return (0, "/Users/alice/X/gadget-repo")
 
     exports, warnings, errors = resolve_repo_env_exports(
-        ["repos.project-rag"], getter, preexisting_env={}
+        ["repos.gadget-repo"], getter, preexisting_env={}
     )
-    assert exports == {"REPO_EXAMPLE_RETRIEVAL_REPO": "/Users/alice/X/example-retrieval-repo"}
+    assert exports == {"REPO_GADGET_REPO": "/Users/alice/X/gadget-repo"}
     assert warnings == []
     assert errors == []
 
@@ -54,9 +54,9 @@ def test_resolve_exports_idempotency_gate_honours_preexisting():
         raise AssertionError("getter should not be called when pre-set")
 
     exports, warnings, errors = resolve_repo_env_exports(
-        ["repos.project-rag"],
+        ["repos.gadget-repo"],
         getter,
-        preexisting_env={"REPO_EXAMPLE_RETRIEVAL_REPO": "/already/set/override"},
+        preexisting_env={"REPO_GADGET_REPO": "/already/set/override"},
     )
     assert exports == {}
     assert warnings == []

@@ -173,3 +173,95 @@ def test_the_index_read_happens_under_the_lock(tmp_path):
     )
     assert _status(repo).strip().splitlines()[0] == "A  ours.txt", _status(repo)
     _git(repo, "fsck", "--strict")
+
+
+def _reference_splice_bytes(raw, replacements):
+    """Oracle: parse every entry, splice replacements, sort by name, rehash."""
+    import hashlib
+    import struct
+
+    count = struct.unpack(">I", raw[8:12])[0]
+    offset = 12
+    kept = []
+    for _ in range(count):
+        start = offset
+        nul = raw.find(b"\x00", offset + 62)
+        name = raw[offset + 62 : nul]
+        offset = start + ((62 + len(name) + 8) & ~7)
+        kept.append((name, raw[start:offset]))
+    out, seen = [], set()
+    for name, blob in kept:
+        if name in replacements:
+            seen.add(name)
+            if replacements[name] is not None:
+                out.append((name, replacements[name]))
+            continue
+        out.append((name, blob))
+    for name, blob in replacements.items():
+        if name not in seen and blob is not None:
+            out.append((name, blob))
+    out.sort(key=lambda p: p[0])
+    body = struct.pack(">4sII", b"DIRC", 2, len(out)) + b"".join(b for _, b in out)
+    return body + hashlib.sha1(body).digest()
+
+
+def test_splice_is_byte_identical_to_the_reference_algorithm(tmp_path):
+    repo = _repo(tmp_path)
+    for d in range(20):
+        (repo / f"d{d:02d}").mkdir()
+        for i in range(100):
+            (repo / f"d{d:02d}" / f"f{i:03d}.txt").write_text(
+                f"{d}-{i}\n", encoding="utf-8", newline="\n"
+            )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "bulk")
+    (repo / "000-first.txt").write_text("a\n", encoding="utf-8", newline="\n")
+    (repo / "zzz-last.txt").write_text("z\n", encoding="utf-8", newline="\n")
+    (repo / "d05" / "f050.txt").write_text("changed\n", encoding="utf-8", newline="\n")
+    (repo / "d05" / "f050b.txt").write_text("ins\n", encoding="utf-8", newline="\n")
+    (repo / "d10" / "f010.txt").unlink()
+
+    def sha(text):
+        return write_object(repo / ".git", b"blob", text)
+
+    updates = {
+        "000-first.txt": (0o100644, sha(b"a\n")),
+        "zzz-last.txt": (0o100644, sha(b"z\n")),
+        "d05/f050.txt": (0o100644, sha(b"changed\n")),
+        "d05/f050b.txt": (0o100644, sha(b"ins\n")),
+        "d10/f010.txt": index_write.ABSENT,
+        "d19/f099.txt": index_write.ABSENT,
+        "missing/never.txt": index_write.ABSENT,
+    }
+    index_path = repo / ".git" / "index"
+    before = index_path.read_bytes()
+
+    replacements = {}
+    for path, value in updates.items():
+        key = path.encode()
+        if value is index_write.ABSENT:
+            replacements[key] = None
+        else:
+            replacements[key] = index_write._build_entry(
+                key, value[0], value[1], (repo / path).stat()
+            )
+    expected = _reference_splice_bytes(before, replacements)
+
+    index_write.splice_index(repo, updates)
+    assert index_path.read_bytes() == expected
+    _git(repo, "fsck", "--strict")
+    status = _status(repo)
+    assert "d10/f010.txt" in status and "000-first.txt" in status, status
+
+
+def test_missing_key_absent_keeps_the_entry_block_verbatim(tmp_path):
+    repo = _repo(tmp_path)
+    index_path = repo / ".git" / "index"
+    before = index_path.read_bytes()
+    index_write.splice_index(repo, {"nope.txt": index_write.ABSENT})
+    after = index_path.read_bytes()
+    assert after[:12] == before[:12]
+    count = int.from_bytes(before[8:12], "big")
+    _, body_end = index_write._walk_entries(before, count)
+    assert after[12:-20] == before[12:body_end]
+    assert _status(repo).strip() == ""

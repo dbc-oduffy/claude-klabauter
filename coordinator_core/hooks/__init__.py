@@ -159,6 +159,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.agent_postuse_dispatch",
     "coordinator_core.hooks.context_pressure_precompact",
     "coordinator_core.hooks.postusefailure_cross_repo_memo_remediate",
+    "coordinator_core.hooks.postuse_subagent_compaction_warning",
     "coordinator_core.hooks.nudge_cross_repo_cwd_boundary",
     "coordinator_core.hooks.guard_config_change_hookstack_selfdefence",
     "coordinator_core.hooks.subagent_zero_tool_use",

@@ -327,7 +327,7 @@ def _find_absolute_paths(text: str) -> List[str]:
 #: defined here: `FIXTURE_SCRATCH_ROOTS` is declared next to the constant the
 
 _WRITE_GUARD_CORPUS_CONTENT_LITERALS: Tuple[str, ...] = (
-    "C:\\some-checkout",
+    "X:" + "\\some-checkout",
     "C:\\Users\\someone\\x",
 )
 

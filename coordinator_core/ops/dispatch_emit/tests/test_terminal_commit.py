@@ -726,3 +726,136 @@ def test_unreadable_head_refuses(repo, monkeypatch):
     assert out["committed"] is False
     assert out["refused"] == "branch-unreadable"
     assert _head(repo) == before
+
+
+def test_a_digest_carrying_stage_returns_mints_the_review_stamp_into_the_coded_commit(repo):
+    """The run record holds the stage returns, so the op mints the plan's
+    `review_stamp` against the commit it just landed -- no EM `mint` step, no
+    trailer walk -- and the stamp rides the coded-stamp commit."""
+    plan = _PLAN.replace("title: p\n", "title: p\nplan_id: pln-x-123456\n", 1)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(plan, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),),
+        plan_path="docs/plan.md",
+    )
+    script = _write_script(repo, request)
+    session = "11111111-2222-3333-4444-555555555555"
+    inline_review = {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping",
+        "slices": 1,
+        "fixes": 0,
+        "plan_id": "pln-x-123456",
+        "prep_sidecar": None,
+        "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"},
+        "criterion": {"status": "met", "observation": "a.py exists", "sidecar": None},
+    }
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [], "session_id": session,
+                       "inline_review": inline_review})
+    assert out["committed"] is True
+    assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
+    committed_plan = _show(repo, "HEAD:docs/plan.md")
+    assert f"terminal_commit_sha: {out['sha']}" in committed_plan
+    assert out["rows_coded"] == {"docs/plan.md": ["C3"]}
+    record = ".coordinator-local/subagent-share/" + session + "/pln-x-123456.review-wave-bookkeeping.md"
+    assert (repo / record).is_file()
+    # Open spine rows remain, so the plan is not complete: the flip refuses.
+    assert out["plan_status"] == "refused"
+    assert "C4, C5" in out["plan_status_refusal"]
+
+
+_SINGLE_ROW_PLAN = """---
+title: p
+status: executing
+plan_id: pln-x-123456
+prime_exit_criterion:
+  text: a.py exists
+---
+
+# Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C3
+  title: t3
+  change_kind: code-edit
+  surface: a.py
+  disposition: open
+  deferred: false
+```
+"""
+
+
+def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
+    script = _write_script(repo, request)
+    inline_review = {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
+        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+    }
+    import subprocess as _subprocess
+
+    spawns = 0
+    real_init = _subprocess.Popen.__init__
+
+    def _counting_init(self, *a, **kw):
+        nonlocal spawns
+        spawns += 1
+        real_init(self, *a, **kw)
+
+    _subprocess.Popen.__init__ = _counting_init
+    try:
+        start = time.process_time()
+        out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                           "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
+        elapsed_ms = (time.process_time() - start) * 1000
+    finally:
+        _subprocess.Popen.__init__ = real_init
+    print(f"COMPOSED terminal_commit: {elapsed_ms:.0f}ms process, {spawns} spawns")
+    assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
+    assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
+    assert elapsed_ms < 500, f"composed terminal_commit {elapsed_ms:.0f}ms exceeds the 500ms bar"
+    committed = _show(repo, "HEAD:docs/plan.md")
+    assert "status: implemented" in committed
+    assert "falsifier_output: a.py exists at HEAD" in committed
+
+
+def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
+    plan = _PLAN.replace("title: p\n", "title: p\nplan_id: pln-x-123456\n", 1)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(plan, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
+    script = _write_script(repo, request)
+    inline_review = {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "FAIL", "product_files": 1, "claims_unbacked": 2},
+        "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"},
+        "criterion": {"status": "met", "observation": "o", "sidecar": None},
+    }
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                       "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
+    assert out["committed"] is True and out["sha"]
+    assert out["review_stamp"] == "refused"
+    assert "delivery verdict is 'FAIL'" in out["review_stamp_refusal"]
+    assert "review_stamp:" not in _show(repo, "HEAD:docs/plan.md")

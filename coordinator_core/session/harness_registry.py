@@ -9,6 +9,7 @@ Public surface (pinned contract — do not change without updating consumers):
     def registry_dir() -> Path | None
     def snapshot() -> dict[str, RegistryRecord]
     def lookup(session_id: str) -> RegistryRecord | None
+    def record_for_pid(pid: int) -> tuple[str, RegistryRecord] | None
     def self_record() -> tuple[str, RegistryRecord] | None
     class RegistryRecord: pid: int; start_epoch: float; cwd: str | None;
                            name: str | None; messaging_socket_path: str | None;
@@ -653,6 +654,25 @@ def lookup(session_id: str) -> RegistryRecord | None:
         return None
 
 
+def record_for_pid(pid: int) -> tuple[str, RegistryRecord] | None:
+    """Return `(sessionId, record)` for `<registry_dir>/<pid>.json`, or None.
+
+    The O(1) pid-keyed read: ONE `read_text` through `_parse_one`, no scan.
+    Pure parser, no liveness verdict. Never raises: an unresolvable registry
+    dir, a non-positive or non-int pid, an unreadable or malformed file each
+    yield None.
+    """
+    try:
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            return None
+        directory = registry_dir()
+        if directory is None:
+            return None
+        return _parse_one(directory / f"{pid}.json")
+    except Exception:
+        return None
+
+
 def self_record() -> tuple[str, RegistryRecord] | None:
     """Return this session's own registry record, or None.
 
@@ -699,11 +719,7 @@ def self_record() -> tuple[str, RegistryRecord] | None:
             return None
         pid, _create_time = match
 
-        directory = registry_dir()
-        if directory is None:
-            return None
-
-        parsed = _parse_one(directory / f"{pid}.json")
+        parsed = record_for_pid(pid)
         if parsed is None:
             return None
         session_id, record = parsed

@@ -67,12 +67,16 @@ Negative-spec:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field_unquoted,
+    split_frontmatter,
+)
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.liveness import cs_claim_holder_live
 
@@ -192,32 +196,53 @@ def _read_ledger_claim(claim_dir: Path) -> Optional[tuple]:
     return session_id, (claimed_at or None)
 
 
+MIRROR_READ_CAP = 4096
+
+
+def mirror_fm_text(content: str) -> Optional[str]:
+    """Frontmatter block of a capped head-of-file read, or None when unfenced.
+
+    Trap: a full-window scan lets a column-0 ``claimed_by:`` line in body
+    prose read as a claim. When the cap cuts the block before its closing
+    fence, the whole window is frontmatter, so the window remainder is used.
+    """
+    split = split_frontmatter(content)
+    if split is not None:
+        return split.fm_text
+    if len(content) >= MIRROR_READ_CAP and re.match(r"^---[ \t]*\n", content):
+        return content.split("\n", 1)[1]
+    return None
+
+
 def _read_mirror_claim(handoff_path: Path) -> tuple:
     """Read (holder, claimed_at) off the tracked-frontmatter mirror, or
-    (None, None) on any read failure.
+    (None, None) on any read failure or when the file has no frontmatter fence.
 
     DR-084 dual-tolerant: `claimed_by` (canonical) wins over `consumed_by`
-    (legacy) when both are present — mirrors
-    `coverage.py::_parse_handoff_claimed_by`'s exact resolution order and 4
-    KiB read cap (avoids loading large handoff bodies; the frontmatter block
-    is always near the top of the file).
+    (legacy) when both are present, whatever their line order. Reads are
+    scoped to the frontmatter block within a 4 KiB head read (avoids loading
+    large handoff bodies); body prose is never scanned.
     """
     try:
         with open(handoff_path, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read(4096)
+            content = fh.read(MIRROR_READ_CAP)
     except OSError:
+        return None, None
+
+    fm = mirror_fm_text(content)
+    if fm is None:
         return None, None
 
     holder = None
     for field in ("claimed_by", "consumed_by"):
-        val = read_fm_field_unquoted(content, field)
+        val = read_fm_field_unquoted(fm, field)
         if val:
             val = val.strip()
             if val and val.lower() not in ("null", "none"):
                 holder = val
                 break
 
-    claimed_at = read_fm_field_unquoted(content, "claimed_at")
+    claimed_at = read_fm_field_unquoted(fm, "claimed_at")
     if claimed_at is not None:
         claimed_at = claimed_at.strip()
         if not claimed_at or claimed_at.lower() in ("null", "none"):

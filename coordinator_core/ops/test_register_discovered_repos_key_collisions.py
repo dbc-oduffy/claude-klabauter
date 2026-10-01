@@ -15,7 +15,7 @@ a basename are not case variants and survive any identity-based dedup. They
 still collide on the derived key, which is why this half needs its own fix.
 
 The collision and platform-preference cases below are staged on a
-`example-retrieval-repo-plugin` basename rather than the historical `coordinator-claude`
+`demo-tool-plugin` basename rather than the historical `coordinator-claude`
 one: `repos.coordinator_claude` is now a retired key (see
 `test_retired_key_is_never_registered`), so a fixture using it would exercise
 the exclusion instead of the mechanic under test. The shape is unchanged --
@@ -64,8 +64,8 @@ def _write_installed_plugins(fake_home: Path, name: str, install_path: str) -> N
 def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
     env, tmp_path, monkeypatch, capsys
 ):
-    first = str(tmp_path / "clone-a" / "example-retrieval-repo-plugin")
-    second = str(tmp_path / "clone-b" / "example-retrieval-repo-plugin")
+    first = str(tmp_path / "clone-a" / "demo-tool-plugin")
+    second = str(tmp_path / "clone-b" / "demo-tool-plugin")
     os.makedirs(first)
     os.makedirs(second)
     _stub_discover(monkeypatch, [first, second])
@@ -74,7 +74,7 @@ def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == first
+    assert _read_registry(bin_dir)["repos.demo_tool_plugin"] == first
     err = capsys.readouterr().err
     assert "two different directories" in err
     assert second in err, "the ignored path must be named, or the operator cannot act on it"
@@ -83,34 +83,34 @@ def test_two_distinct_dirs_with_one_derived_key_keep_the_first(
 def test_platform_install_path_beats_a_discovered_bystander(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    discovered = str(tmp_path / "code" / "example-retrieval-repo-plugin")
-    live = str(tmp_path / "example-retrieval-repo-plugin")
+    discovered = str(tmp_path / "code" / "demo-tool-plugin")
+    live = str(tmp_path / "demo-tool-plugin")
     os.makedirs(discovered)
     os.makedirs(live)
-    _write_installed_plugins(isolated_claude_home, "project-rag", live)
+    _write_installed_plugins(isolated_claude_home, "demo-tool", live)
     _stub_discover(monkeypatch, [discovered])
     lib_dir, bin_dir = env
 
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == live
+    assert _read_registry(bin_dir)["repos.demo_tool_plugin"] == live
     assert "the platform loads this plugin from" in capsys.readouterr().err
 
 
 def test_no_correction_when_discovery_already_agrees(
     env, tmp_path, monkeypatch, isolated_claude_home, capsys
 ):
-    live = str(tmp_path / "example-retrieval-repo-plugin")
+    live = str(tmp_path / "demo-tool-plugin")
     os.makedirs(live)
-    _write_installed_plugins(isolated_claude_home, "project-rag", live)
+    _write_installed_plugins(isolated_claude_home, "demo-tool", live)
     _stub_discover(monkeypatch, [live])
     lib_dir, bin_dir = env
 
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
     assert rc == 0
-    assert _read_registry(bin_dir)["repos.project_rag_plugin"] == live
+    assert _read_registry(bin_dir)["repos.demo_tool_plugin"] == live
     assert "the platform loads this plugin from" not in capsys.readouterr().err
 
 

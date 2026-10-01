@@ -52,7 +52,7 @@ def test_no_owner_field_returns_empty_owners_no_error(tmp_path):
 def test_claim_live_and_claim_stage_pass_through_for_claim_dir_owners(tmp_path, monkeypatch):
     """AC2: the two claim-dir-only fields must survive this JSON-RPC
     boundary, not just the internal dataclass (finding: previously dropped
-    at `_owner_resolution_to_dict`)."""
+    at the serializer, now `artifact_owner.to_dict`)."""
     from coordinator_core.session import artifact_owner
 
     f = tmp_path / "artifact.md"
@@ -94,3 +94,27 @@ def test_non_claim_dir_owner_reports_null_claim_fields(tmp_path, monkeypatch):
     row = result["owners"][0]
     assert row["claim_live"] is None
     assert row["claim_stage"] is None
+
+
+def test_op_payload_is_the_shared_serializer_output(tmp_path, monkeypatch):
+    """The op and `session-reachability-cli` both render via `artifact_owner.to_dict`;
+    a field added to the serializer reaches both, with no per-consumer copy."""
+    from pathlib import Path
+
+    from coordinator_core.session import artifact_owner
+
+    f = tmp_path / "artifact.md"
+    f.write_text("---\nclaimed_by: sid-a\n---\n\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(
+        reachability,
+        "resolve_address",
+        lambda oid: reachability.ResolveResult(outcome="reachable", session_id="sid-a", address="peer-1"),
+    )
+
+    assert _session_artifact_owner({"artifact_path": str(f)}) == artifact_owner.to_dict(
+        artifact_owner.resolve_artifact_owner(str(f))
+    )
+    cli_src = (Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "session-reachability-cli.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def _owner_resolution_to_dict" not in cli_src

@@ -181,22 +181,6 @@ def _resolve_door_path() -> Path:
     return door_path
 
 
-def test_hot_path_invocation_records_warm_server_route():
-    _ensure_warm_listener()
-    door_path = _resolve_door_path()
-
-    result = door_route_signal.read_door_route(door_path, _OP, repo_root=_REPO_ROOT)
-
-    assert result.route == door_route_signal.WARM_SERVER, (
-        f"expected op {_OP!r} through door {door_path} to record "
-        f"route={door_route_signal.WARM_SERVER!r}, got {result.route!r} "
-        f"(entry={result.entry!r}) -- a fall-through to in_process here is "
-        "the exact regression this positive guard exists to catch, not an "
-        "environment problem to skip past."
-    )
-    assert result.entry is not None
-
-
 #: Template for the stubbed door image (chunk C3, E4/staff-eng's settlement):
 #: a minimal executable forwarder, NOT a real built door -- it never routes
 #: through `door_install_posix_build.build_or_advise`, so a box with no

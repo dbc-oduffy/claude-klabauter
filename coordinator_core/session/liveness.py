@@ -130,7 +130,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import FrozenSet, Optional
+from typing import FrozenSet, NamedTuple, Optional
 
 from coordinator_core.session import core
 from coordinator_core.session import harness_registry
@@ -484,8 +484,74 @@ def _dir_has_recorded_evidence(sdir: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _holder_repointed(sid: str, stable_pid: str, stable_pid_start_epoch: str) -> bool:
+    """True iff the harness registry shows ``stable_pid``'s process (same start
+    epoch within ``core._STABLE_PID_EPOCH_TOLERANCE_SECS``) now serves a
+    session id other than ``sid``. One file read, no spawn; any read failure,
+    missing record, absent or mismatched epoch, or same-sid record is False."""
+    try:
+        if not stable_pid_start_epoch:
+            return False
+        found = harness_registry.record_for_pid(int(stable_pid))
+        if found is None:
+            return False
+        record_sid, record = found
+        if record_sid == sid:
+            return False
+        return (
+            abs(record.start_epoch - float(stable_pid_start_epoch))
+            <= core._STABLE_PID_EPOCH_TOLERANCE_SECS
+        )
+    except Exception:
+        return False
+
+
 def session_live(sid: str, cwd: Optional[str] = None) -> bool:
-    """Port of ``_cs_session_live <session_id>``.
+    """True iff ``sid`` is a LIVE session; the derivation is documented on
+    ``_decide_session_live``."""
+    return _decide_session_live(sid, cwd)[0]
+
+
+def session_live_with_basis(
+    sid: str, cwd: Optional[str] = None
+) -> "tuple[bool, str]":
+    """``(live, basis)`` from ONE read of ``_decide_session_live`` -- the
+    verdict is ``session_live``'s own (clamped Layer 2, fail-open Layer 1) and
+    ``basis`` names the arm that produced THAT verdict, so the two cannot
+    describe different instants or different arithmetic (the TOCTOU and the
+    clamp divergence a separate ``session_verdict`` read had against
+    ``session_live``). Do not source ``live`` from ``live_session_verdicts`` /
+    ``session_verdict`` instead: their stable_pid-absent Layer 2 is UNCLAMPED
+    and resolves a backward clock step DEAD, which would flip an arbitration
+    surface fail-open (module negative-spec).
+
+    Vocabulary is ``holder_evidence.liveness_basis``'s minus ``"no-record"``
+    (a verdict ``session_live`` does not produce: an evidence-free dir falls to
+    its mtime recency, reported as ``"recency-window-mtime"``). ``"unknown"``
+    is a Layer 1 raise (live, fail-open) or a sid with no local dir and no
+    confirmed registry record (not live). ``"harness-registry-elsewhere"`` is a
+    confirmed registry record with no session dir in THIS repo.
+
+    ``"stable-pid-shared"`` costs ``_shared_stable_pids`` (an mtime-cached
+    scan of the sessions dir) and is resolved only here, after the verdict is
+    fixed; ``session_live`` itself never pays it and it cannot change ``live``.
+    """
+    live, basis, probe = _decide_session_live(sid, cwd)
+    if probe is not None:
+        sdir, stable_pid = probe
+        if str(stable_pid) in _shared_stable_pids(os.path.dirname(sdir)):
+            basis = "stable-pid-shared"
+    return live, basis
+
+
+def _decide_session_live(
+    sid: str, cwd: Optional[str] = None
+) -> "tuple[bool, str, Optional[tuple[str, str]]]":
+    """Port of ``_cs_session_live <session_id>``. Returns ``(live, basis,
+    shared_probe)``: ``basis`` names the arm that concluded ``live`` (see
+    ``session_live_with_basis``), and ``shared_probe`` is ``(sdir,
+    stable_pid)`` only on the plain Layer 1 arm, where the caller may upgrade
+    ``"stable-pid"`` to ``"stable-pid-shared"``.
 
     True iff ``sid`` is a LIVE session. THE shared key for the claim layer —
     claim takeover, release holder-check, the reaper, and the enumeration
@@ -522,6 +588,13 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         but fails ISO parsing (e.g. corrupt-but-non-empty) is NOT covered by
         this fallback and still reads DEAD, unchanged from before.
 
+    Re-pointed holder: between Source 0 and Layer 1, when meta's ``stable_pid``
+    has a registry record (``harness_registry.record_for_pid``) whose start
+    epoch matches ``stable_pid_start_epoch`` and whose sessionId differs from
+    ``sid``, the process now serves another session and ``sid`` reads DEAD
+    (a read failure, missing file, epoch mismatch or same-sid record falls
+    through to Layer 1 unchanged).
+
     Empty/unknown sid or missing session dir -> not live. A meta-less or
     unparseable-meta session dir now falls back to on-disk mtime recency
     (see above) rather than reading instantly-dead. Negative elapsed is
@@ -532,7 +605,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     invariant) — never from the claim takeover / reap / sweep paths.
     """
     if not sid:
-        return False
+        return (False, "unknown", None)
 
     # Source 0: harness session registry (preferred, never depended on) --
     # consulted BEFORE the local sdir existence check below (2026-08-14 fix,
@@ -590,17 +663,24 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         # a raise from the compare (e.g. MissingPsutilError) must fall
         # through to Layer 1/2 unchanged, never propagate out of
         # session_live and never itself mean DEAD.
+        confirmed = False
         try:
-            if core.stable_pid_alive(str(record.pid), "", str(int(record.start_epoch))):
-                return True
+            confirmed = bool(
+                core.stable_pid_alive(str(record.pid), "", str(int(record.start_epoch)))
+            )
         except Exception:
             pass
+        if confirmed:
+            local_dir = core.session_dir(sid, cwd)
+            if local_dir and Path(local_dir).is_dir():
+                return (True, "harness-registry", None)
+            return (True, "harness-registry-elsewhere", None)
 
     sdir = core.session_dir(sid, cwd)
     if not sdir:
-        return False
+        return (False, "unknown", None)
     if not Path(sdir).is_dir():
-        return False
+        return (False, "unknown", None)
 
     # Layer 1: PPID-authoritative process check (when stable_pid captured at init).
     # C3 (73b21f35b) has landed, so this gates a live code path -- Layer 1
@@ -626,6 +706,8 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
         # (dca0e3e80) but still writes stable_pid_start_epoch, which
         # core.stable_pid_alive already accepts as a sufficient witness.
         if stable_pid_lstart or stable_pid_start_epoch:
+            if _holder_repointed(sid, stable_pid, stable_pid_start_epoch):
+                return (False, "stable-pid", None)
             # A raise here (e.g. MissingPsutilError)
             # must fail OPEN (True), matching live_session_verdicts' own
             # Layer-1 arm exactly ((True, "unknown", None)). Do NOT fall
@@ -634,9 +716,10 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
             # MissingPsutilError's own docstring rules out any path where a
             # psutil failure reads DEAD.
             try:
-                return core.stable_pid_alive(
+                alive = core.stable_pid_alive(
                     stable_pid, stable_pid_lstart, stable_pid_start_epoch
                 )
+                return (alive, "stable-pid", (sdir, stable_pid))
             except Exception as exc:
                 # Fail open, but never silently (docs/reference/
                 # layer1-liveness-activation.md § Observability): a
@@ -661,7 +744,7 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
                     )
                 except Exception:
                     pass
-                return True
+                return (True, "unknown", None)
         # Neither witness present — fall through to Layer 2.
 
     # Layer 2: recency fallback (stable_pid absent, legacy meta, or Guard-1 miss).
@@ -686,7 +769,11 @@ def session_live(sid: str, cwd: Optional[str] = None) -> bool:
     elapsed = now_epoch - last_epoch
     if elapsed < 0:
         elapsed = 0
-    return is_session_live(pid, elapsed)
+    return (
+        is_session_live(pid, elapsed),
+        "recency-window" if last_iso else "recency-window-mtime",
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1908,85 +1995,56 @@ def _archived_sids(sessions_dir: str) -> frozenset:
     return result
 
 
-def abandonment_basis(sid: str, cwd: Optional[str] = None) -> "tuple[bool, str]":
-    """The evidence-carrying sibling of `session_abandoned` (C2,
-    docs/plans/2026-09-01-the-abandonment-verdict-outlives-the-archiver.md).
-    `session_abandoned` KEEPS ITS CURRENT ANSWER FOR EVERY INPUT -- this adds
-    a function, it does not change one (see `TestAC1CharacterizationUnchanged`
-    and its archive-arm sibling in `test_liveness.py`). Every existing caller
-    of `session_abandoned` (`scope.py:4020`, `scope.py:4434`, `reap.py:481`)
-    is untouched by construction: the archive arm below is reachable ONLY
-    through this function.
+class AbandonmentVerdict(NamedTuple):
+    """`abandonment_basis`'s answer plus the liveness read it was built on,
+    so a caller never re-reads `session_live` for the same moment."""
+
+    abandoned: bool
+    basis: str
+    live: bool
+
+
+def abandonment_basis(sid: str, cwd: Optional[str] = None) -> AbandonmentVerdict:
+    """The evidence-carrying sibling of `session_abandoned`.
+    `session_abandoned` keeps its answer for every input; the archive arm
+    below is reachable only through this function. Reads `session_live`
+    exactly once and returns it as `.live`.
+
 
     Bases, in resolution order:
-      - `"no-sid"` -- `sid` is empty. Always `(False, "no-sid")`, named so a
-        caller can bucket "no holder at all" separately from a holder this
-        module has evidence about, rather than reading it as a healthy one.
-      - `"live-dir-signals"` -- the existing in-window computation,
-        delegated to `session_abandoned` VERBATIM (never reimplemented): a
-        `True` here carries exactly `session_abandoned`'s own OR-combined
-        signal set and >= 2-stale floor.
-      - `"archive-record"` -- returned only when `not session_live(sid,
-        cwd)` (the registry-grade Source-0 read, never mere session-dir
-        absence) AND a `.archive/<sid>-<YYYY-MM-DD>` entry resolves for
-        `sid`. This holds regardless of which reaper leg wrote the record --
-        sub-reap (i) is the only leg that writes THIS shape, but the arm
-        gates on `session_live`, not on which leg ran, so it stays sound if
-        a future leg starts writing archive entries of its own.
-      - `"unknown"` -- a registry-confirmed-live sid with no session dir
-        (`session_abandoned` reads `False` for "no sdir", `session_live`
-        reads `True` off Source 0 -- neither the live-dir nor the archive
-        arm above ever fires), or a sid with no live dir and no archive
-        record. Always `(False, "unknown")` -- absent evidence is never
-        dispositive of abandonment, matching this module's fail-open bias.
+      - `"no-sid"` -- `sid` is empty: `(False, "no-sid", False)`.
+      - `"live"` -- `session_live(sid, cwd)` is true: `(False, "live", True)`.
+        No session-dir or archive read happens; a live holder is never
+        abandoned, whatever directory recency says.
+      - `"archive-record"` -- the sid is not live and a
+        `.archive/<sid>-<YYYY-MM-DD>` entry resolves for it on THIS
+        machine's `core.sessions_dir()`: `(True, "archive-record", False)`.
+      - `"live-dir-signals"` -- the sid is not live and `session_abandoned`
+        is true (its OR-combined signal set and >= 2-stale floor, delegated
+        verbatim): `(True, "live-dir-signals", False)`.
+      - `"unknown"` -- a non-live sid with neither: `(False, "unknown",
+        False)`. Absent evidence is never dispositive of abandonment.
 
-    Ordering is a CORRECTNESS requirement, not a cost optimisation that
-    happens to save a listing (C2 brief): `live-dir-signals` (via
-    `session_abandoned`, which itself never asserts abandonment for a sid
-    holding ANY fresh signal) and the `not session_live(sid, cwd)` gate both
-    run BEFORE the archive lookup, so a resurrected session -- archived once,
-    live again, and possibly archived a second time by a later reaper pass
-    -- can never reach the archive arm while it is live. Checking the
-    (cheaper) archive listing first would misclassify such a session as
-    abandoned the moment it has ever been archived, which is exactly the
-    defect this ordering forecloses.
-
-    Negative spec -- cross-machine: `"archive-record"` is evidence about
-    THIS machine's reaper only. `session_live`'s registry read is PID-based
-    (`core.stable_pid_alive`), i.e. machine-local -- it can confirm
-    live-HERE, never live-elsewhere. A foreign-machine holder resolves
-    `"unknown"`, never `"archive-record"`, by construction: both the
-    archive lookup and the registry read run against THIS box's own
-    `core.sessions_dir()`, and there is no code path here that lets a
-    foreign holder's record surface as this box's own archive entry.
+    Ordering is correctness: the live check precedes both the archive and
+    the dir arms, so a resurrected session (archived once, live again)
+    can never read abandoned while live. A foreign-machine holder resolves
+    `"unknown"`, never `"archive-record"`: the registry read and the
+    archive lookup both run against this box only.
     """
     if not sid:
-        return (False, "no-sid")
+        return AbandonmentVerdict(False, "no-sid", False)
 
-    # ARCHIVE BEFORE DIR SIGNALS, once the holder is confirmed non-live. An
-    # archived session can still own a leftover session dir -- the reaper's
-    # archival is not conditioned on the dir being gone -- and resolving the
-    # dir arm first meant such a holder reported `live-dir-signals` while its
-    # archive record sat unread. Both arms agree on the boolean, so this
-    # renames rather than reverses; what it fixes is a holder the reaper
-    # positively archived failing to name that record as its basis.
-    #
-    # This does NOT weaken the resurrection ordering. What protects an
-    # archived-then-resumed session is the `session_live` gate below, never
-    # the dir arm's position: a live holder never reaches the archive arm at
-    # all, and a holder `session_live` calls non-live is one the archive
-    # record may speak for. Specimen that forced this (2026-09-01, live
-    # corpus): sid `6a160155-...` carries TWO archive entries and a stale dir,
-    # and reported `live-dir-signals` with its archive record found.
-    if not session_live(sid, cwd):
-        base = core.sessions_dir(cwd)
-        if base and sid in _archived_sids(base):
-            return (True, "archive-record")
+    if session_live(sid, cwd):
+        return AbandonmentVerdict(False, "live", True)
+
+    base = core.sessions_dir(cwd)
+    if base and sid in _archived_sids(base):
+        return AbandonmentVerdict(True, "archive-record", False)
 
     if session_abandoned(sid, cwd):
-        return (True, "live-dir-signals")
+        return AbandonmentVerdict(True, "live-dir-signals", False)
 
-    return (False, "unknown")
+    return AbandonmentVerdict(False, "unknown", False)
 
 
 def active_sessions(cwd: Optional[str] = None) -> list:

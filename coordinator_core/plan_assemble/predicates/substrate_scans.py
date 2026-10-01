@@ -91,7 +91,11 @@ _SCAFFOLD_CHECKLIST_HEADING_RE = re.compile(
 )
 _HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
 
-_FIX_LOCUS_CITATION_RE = re.compile(r"([\w./-]+\.\w+:\d+)")
+# A locator is required: `path.ext:LINE` or `path.ext::enclosing_function`
+# (optionally `Class.method`); a bare path does not satisfy the gate.
+_FIX_LOCUS_CITATION_RE = re.compile(
+    r"([\w./-]+\.\w+(?::\d+|::[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*))"
+)
 _GATE_TYPE_RE = re.compile(r"Gate\s+type:\s*`([^`]+)`", re.IGNORECASE)
 _SYMBOL_TO_REPLACE_RE = re.compile(r"Symbol\s+to\s+replace:\s*`([^`]+)`", re.IGNORECASE)
 _REINTRODUCES_RE = re.compile(r"Reintroduces:\s*`([^`]+)`", re.IGNORECASE)

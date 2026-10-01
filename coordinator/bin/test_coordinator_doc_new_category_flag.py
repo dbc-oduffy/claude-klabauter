@@ -137,7 +137,7 @@ def test_unknown_category_fails_loud_naming_legal_values() -> None:
 def test_spinoff_workstream_resolves_through_the_cli() -> None:
     """The `workstream` half of the placeholder gate below only ever exercises
     the omit-path: its pinned `COORDINATOR_SESSION_ID` holds no baton, so
-    `_resolve_spinoff_workstream` returns `None` on every run and the "no
+    `_resolve_spinoff_origin` returns a `workstream` of `None` on every run and the "no
     PLACEHOLDER" assertion is satisfied by absence, never by a real resolved
     value surviving the CLI subprocess round-trip (code-review finding,
     2026-08-21: `test_spinoff_resolvable_fields_never_scaffold_as_placeholder`

@@ -6,7 +6,7 @@
 export const meta = {
   name: 'queue-grind:fixture',
   description: 'Queue grind over profile \'fixture\'.',
-  phases: ['Grind'],
+  phases: ['Grind', 'Adjudicate'],
 };
 
 

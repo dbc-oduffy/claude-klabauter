@@ -279,3 +279,22 @@ def test_delivery_verifier_degrades_to_general_purpose_unconditionally():
     _, wave_block = phases[1]
     assert "coordinator:delivery-verifier" not in wave_block
     assert "general-purpose" in wave_block
+
+
+def test_prep_prompt_names_the_worktree_freeze_not_a_committed_range():
+    # Regression: a prep told only to "characterise" froze base..HEAD (a peer's
+    # commit) while the run's rows sat uncommitted, so the verifier saw no rows.
+    _, phases = _compose()
+    _, prep_block = phases[0]
+    assert "review.freeze_diff" in prep_block
+    assert "worktree=true" in prep_block
+    assert "whole_diff_path" in prep_block
+
+
+def test_whole_diff_agents_are_handed_the_frozen_diff_path_at_run_time():
+    _, phases = _compose()
+    _, wave_block = phases[1]
+    # every whole-diff call (overengineering, staff-eng, delivery-verifier)
+    assert wave_block.count("_reviewPrep?.whole_diff_path") == 3
+    # only the delivery verifier is handed its sidecar
+    assert wave_block.count("_reviewPrep?.whole_diff_sidecars?.delivery") == 1

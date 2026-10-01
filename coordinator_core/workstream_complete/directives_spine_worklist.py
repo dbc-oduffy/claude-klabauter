@@ -82,6 +82,9 @@ _WAIVED_ROWS_KEY = "waived_open_spine_row_ids"
 #: envelope-names-t.md.
 FREE_VALUE_KEYS: tuple[str, ...] = (_WAIVED_ROWS_KEY,)
 
+#: Keys whose value suppresses an advisory; `apply` persists them.
+WAIVER_KEYS: tuple[str, ...] = (_WAIVED_ROWS_KEY,)
+
 
 class SpineRowItem(NamedTuple):
     id: str

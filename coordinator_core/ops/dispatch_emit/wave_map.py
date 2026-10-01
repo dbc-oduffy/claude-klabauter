@@ -141,9 +141,9 @@ Negative-spec:
 
 from __future__ import annotations
 
+import functools
 import logging
 import posixpath
-from pathlib import PurePosixPath
 from typing import NamedTuple, Optional
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
@@ -207,16 +207,21 @@ class DagPlan(NamedTuple):
     critical_path_rows: int
 
 
-def _normalize_path(path: str) -> PurePosixPath:
-    normalized = posixpath.normpath(path)
-    return PurePosixPath(normalized.lower())
+@functools.lru_cache(maxsize=None)
+def _normalize_path(path: str) -> str:
+    return posixpath.normpath(path).lower()
+
+
+def _is_ancestor(anc: str, path: str) -> bool:
+    """Strict ancestor test on normalized paths (``.`` roots every relative path)."""
+    if anc == ".":
+        return path != "." and not path.startswith("/")
+    return path.startswith(anc if anc.endswith("/") else anc + "/")
 
 
 def _paths_overlap(a: str, b: str) -> bool:
     path_a, path_b = _normalize_path(a), _normalize_path(b)
-    if path_a == path_b:
-        return True
-    return path_a in path_b.parents or path_b in path_a.parents
+    return path_a == path_b or _is_ancestor(path_a, path_b) or _is_ancestor(path_b, path_a)
 
 
 def _writes_overlap(a: EmitterRow, b: EmitterRow) -> bool:
@@ -346,8 +351,8 @@ def _predecessors(
                         prefix
                         for norm_prefix, prefix in write_prefixes.items()
                         if norm_prefix == normalized
-                        or norm_prefix in normalized.parents
-                        or normalized in norm_prefix.parents
+                        or _is_ancestor(norm_prefix, normalized)
+                        or _is_ancestor(normalized, norm_prefix)
                     ),
                     None,
                 )

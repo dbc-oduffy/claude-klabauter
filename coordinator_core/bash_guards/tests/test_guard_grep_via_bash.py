@@ -471,3 +471,66 @@ class TestPowerShellDialect:
             result = guard.check(self._ps_payload("Get-ChildItem -Path ."))
         assert result is None
         assert not was_silent("guard_grep_via_bash", silences)
+
+
+class TestPowerShellTokenizesOnce:
+    """`_check_powershell` tokenizes once, heredoc-stripped, and hands the
+    tokens to `classify_command`; the decline check and the classification
+    agree on the heredoc policy."""
+
+    _PS = {"tool_name": "PowerShell", "session_id": "sess1", "cwd": None}
+
+    def _ps(self, command):
+        return {**self._PS, "tool_input": {"command": command}}
+
+    def test_one_tokenize_per_grep_recognized_call(self, monkeypatch):
+        from coordinator_core.bash_guards import _shape_classifier as sc
+
+        calls = []
+        real = sc.tokenize_command
+
+        def spy(*args, **kwargs):
+            calls.append(args[0])
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(sc, "tokenize_command", spy)
+        guard.check(self._ps("grep -rnP TODO src"))
+        assert len(calls) == 1
+
+    def test_heredoc_body_does_not_trigger_select_string_decline(self):
+        # The raw (unstripped) tokenize fails on this command; the stripped
+        # one sees only `grep -rnP TODO src <<EOF`. The heredoc-stripped
+        # policy is chosen for both the decline check and the
+        # classification, so the GNU-only advisory fires.
+        cmd = "grep -rnP TODO src <<EOF\ndata | Select-String x\nEOF"
+        result = guard.check(self._ps(cmd))
+        assert result is not None
+        assert "GNU-only" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_real_select_string_still_declines(self):
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        with collecting() as silences:
+            result = guard.check(self._ps("Select-String -Pattern TODO -Path ."))
+        assert result is None
+        assert was_silent("guard_grep_via_bash", silences)
+
+
+class TestClassifyCommandPreTokenizedInput:
+    def test_tokens_kwarg_matches_self_tokenized_classification(self):
+        from coordinator_core.bash_guards._dialect import Dialect
+        from coordinator_core.bash_guards import _shape_classifier as sc
+
+        cmd = "grep -rn TODO src <<EOF\nbody | x\nEOF"
+        tokens = sc.tokenize_for_classification(cmd, Dialect.BASH)
+        assert tokens == ["grep", "-rn", "TODO", "src", "<<EOF"]
+        assert sc.classify_command(cmd, tokens=tokens) == sc.classify_command(cmd)
+
+    def test_tokens_kwarg_skips_tokenize(self, monkeypatch):
+        from coordinator_core.bash_guards import _shape_classifier as sc
+
+        monkeypatch.setattr(
+            sc, "tokenize_command", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+        )
+        out = sc.classify_command("ignored", tokens=["grep", "-rn", "x", "."])
+        assert out.tokens == ["grep", "-rn", "x", "."]

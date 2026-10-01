@@ -20,7 +20,7 @@ from coordinator_core.install.substrate import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_FOREIGN_MARKER = "from _resolve_claude_klabauter import exec_cli"
+_FOREIGN_MARKER = "from _resolve_other_engine_root import exec_cli"
 
 
 def _populate_full_settings_home(root: Path) -> Path:
@@ -121,9 +121,10 @@ def test_publish_excluded_name_is_never_missing(
     from coordinator_core.install.engine_root_for_install import InstallEngineRoot
 
     sh = _populate_full_settings_home(tmp_path)
-    excluded_name = "coordinator-publish"
     expected = expected_forwarders(claude_klabauter_root)
-    assert excluded_name in expected, "fixture assumption: repo still ships this CLI"
+    excluded_name = next(
+        n for n in sorted(expected) if n not in (_BYTE_COPIED_NAME, "coordinator-invoke")
+    )
 
     fake_engine_root = tmp_path / "fake-engine-root"
     fake_bin = fake_engine_root / "coordinator" / "bin"

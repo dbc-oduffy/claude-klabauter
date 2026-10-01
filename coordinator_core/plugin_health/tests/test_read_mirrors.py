@@ -7,9 +7,9 @@ from coordinator_core.plugin_health.drift import read_all_mirrors
 
 _NESTED_AND_FLAT_TOML = """\
 schema = 1
-"plugin.mirrors.example-game-repo.propagation_mode" = "copy_install"
-"plugin.mirrors.example-game-repo.source_path" = "/src/example-game-repo"
-"plugin.mirrors.example-game-repo.live_path" = "/live/example-game-repo"
+"plugin.mirrors.widget.propagation_mode" = "copy_install"
+"plugin.mirrors.widget.source_path" = "/src/widget"
+"plugin.mirrors.widget.live_path" = "/live/widget"
 "plugin.mirrors.project-rag.track_ref" = "origin/dev"
 
 [plugin.mirrors.coordinator-claude]
@@ -41,12 +41,12 @@ def test_flat_dotted_key_form_only(tmp_path: Path) -> None:
     reg = tmp_path / "registry.local.toml"
     reg.write_text(_NESTED_AND_FLAT_TOML, encoding="utf-8")
     mirrors = read_all_mirrors(reg)
-    assert mirrors["example-game-repo"] == {
+    assert mirrors["widget"] == {
         "propagation_mode": "copy_install",
-        "source_path": "/src/example-game-repo",
-        "live_path": "/live/example-game-repo",
+        "source_path": "/src/widget",
+        "live_path": "/live/widget",
         "track_ref": "origin/main",
-        "dist_name": "example-game-repo",
+        "dist_name": "widget",
         "reverse_drift_cmd": "",
     }
 
@@ -89,12 +89,12 @@ def test_merged_per_key_precedence(tmp_path: Path) -> None:
     local = tmp_path / "registry.local.toml"
     tracked = tmp_path / "registry.toml"
     local.write_text(
-        "[plugin.mirrors.example-game-repo]\n"
+        "[plugin.mirrors.widget]\n"
         'live_path = "/local/live"\n',
         encoding="utf-8",
     )
     tracked.write_text(
-        "[plugin.mirrors.example-game-repo]\n"
+        "[plugin.mirrors.widget]\n"
         'propagation_mode = "copy_install"\n'
         'live_path = "/tracked/live"\n'
         'track_ref = "origin/dev"\n'
@@ -104,8 +104,8 @@ def test_merged_per_key_precedence(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     merged = read_merged_mirrors([local, tracked])
-    assert merged["example-game-repo"]["live_path"] == "/local/live"
-    assert merged["example-game-repo"]["propagation_mode"] == "copy_install"
-    assert merged["example-game-repo"]["track_ref"] == "origin/dev"
+    assert merged["widget"]["live_path"] == "/local/live"
+    assert merged["widget"]["propagation_mode"] == "copy_install"
+    assert merged["widget"]["track_ref"] == "origin/dev"
     assert merged["tracked-only"]["propagation_mode"] == "source_is_live"
     assert merged["tracked-only"]["dist_name"] == "tracked_only"

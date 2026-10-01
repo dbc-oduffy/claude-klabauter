@@ -43,6 +43,7 @@ why this is a separate one rather than an edit there.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import os
 import struct
@@ -111,27 +112,35 @@ class IndexStaleAfterCommit(IndexWriteError):
         self.outcome = outcome
 
 
-def _entry_span(raw: bytes, offset: int) -> Tuple[bytes, int]:
-    if offset + _ENTRY_FIXED_LEN > len(raw):
-        raise IndexWriteError(f"truncated entry at offset {offset}")
-    entry_start = offset
-    flags = struct.unpack(">H", raw[offset + 60 : offset + 62])[0]
-    if flags & 0x4000:
-        raise IndexWriteError(
-            "extended-flags entry (index v3 shape) -- refused, not guessed at"
-        )
-    if (flags >> 12) & 0x3:
-        raise IndexWriteError(
-            "unmerged entry (stage != 0) -- refusing to splice a mid-conflict index"
-        )
-    offset += _ENTRY_FIXED_LEN
-    nul = raw.find(b"\x00", offset)
-    if nul < 0:
-        raise IndexWriteError(f"unterminated name at offset {offset}")
-    name = raw[offset:nul]
-    entry_len = (offset - entry_start) + len(name) + 1
-    padding = (8 - (entry_len % 8)) % 8
-    return name, offset + len(name) + 1 + padding
+def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:
+    """Entry start offsets and the end of the entry block, reading each name
+    length from the flags field (a 0xFFF length saturates and needs a NUL scan)."""
+    starts: list = []
+    offset = 12
+    limit = len(raw)
+    for _ in range(entry_count):
+        if offset + _ENTRY_FIXED_LEN > limit:
+            raise IndexWriteError(f"truncated entry at offset {offset}")
+        (flags,) = struct.unpack_from(">H", raw, offset + 60)
+        if flags & 0x4000:
+            raise IndexWriteError(
+                "extended-flags entry (index v3 shape) -- refused, not guessed at"
+            )
+        if (flags >> 12) & 0x3:
+            raise IndexWriteError(
+                "unmerged entry (stage != 0) -- refusing to splice a mid-conflict index"
+            )
+        name_len = flags & 0x0FFF
+        if name_len == 0x0FFF:
+            nul = raw.find(b"\x00", offset + _ENTRY_FIXED_LEN)
+            if nul < 0:
+                raise IndexWriteError(f"unterminated name at offset {offset}")
+            name_len = nul - offset - _ENTRY_FIXED_LEN
+        starts.append(offset)
+        offset += (_ENTRY_FIXED_LEN + name_len + 8) & ~7
+    if offset > limit:
+        raise IndexWriteError(f"truncated entry at offset {starts[-1]}")
+    return starts, offset
 
 
 def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> bytes:
@@ -200,21 +209,18 @@ def _splice_locked(
     except OSError as exc:
         raise IndexWriteError(f"could not read {index_path}: {exc}") from exc
 
-    kept: list = []
+    starts: list = []
+    body_end = 12
     if raw:
         if len(raw) < 12 or raw[0:4] != _SIGNATURE:
             raise IndexWriteError(f"{index_path}: not a DIRC index")
-        version, entry_count = struct.unpack(">II", raw[4:12])
+        version, entry_count = struct.unpack_from(">II", raw, 4)
         if version != _SUPPORTED_VERSION:
             raise IndexWriteError(
                 f"{index_path}: index v{version} -- only v2 is written, "
                 "refused rather than guessed at"
             )
-        offset = 12
-        for _ in range(entry_count):
-            name, end = _entry_span(raw, offset)
-            kept.append((name, raw[offset:end]))
-            offset = end
+        starts, body_end = _walk_entries(raw, entry_count)
 
     replacements: Dict[bytes, Optional[bytes]] = {}
     for path, value in updates.items():
@@ -242,27 +248,46 @@ def _splice_locked(
             ) from exc
         replacements[key] = _build_entry(key, int(mode), str(sha_hex), st)
 
-    out_entries: list = []
-    seen: set = set()
-    for name, entry_bytes in kept:
-        if name in replacements:
-            seen.add(name)
-            new_bytes = replacements[name]
-            if new_bytes is not None:
-                out_entries.append((name, new_bytes))
+    view = memoryview(raw)
+    count = len(starts)
+    bounds = starts + [body_end]
+
+    def name_at(start: int) -> bytes:
+        return raw[start + _ENTRY_FIXED_LEN : raw.index(b"\x00", start + _ENTRY_FIXED_LEN)]
+
+    pieces: list = []
+    lo = 0
+    total = count
+    for key in sorted(replacements):
+        new_bytes = replacements[key]
+        idx = bisect.bisect_left(starts, key, lo=lo, key=name_at)
+        present = idx < count and name_at(starts[idx]) == key
+        if not present and new_bytes is None:
             continue
-        out_entries.append((name, entry_bytes))
-    for name, new_bytes in replacements.items():
-        if name not in seen and new_bytes is not None:
-            out_entries.append((name, new_bytes))
+        if idx > lo:
+            pieces.append(view[bounds[lo] : bounds[idx]])
+        if new_bytes is not None:
+            pieces.append(new_bytes)
+        if present:
+            lo = idx + 1
+            if new_bytes is None:
+                total -= 1
+        else:
+            lo = idx
+            total += 1
+    if lo < count:
+        pieces.append(view[bounds[lo] : body_end])
 
-    out_entries.sort(key=lambda pair: pair[0])
+    digest = hashlib.sha1()
+    head = struct.pack(">4sII", _SIGNATURE, _SUPPORTED_VERSION, total)
+    digest.update(head)
+    for piece in pieces:
+        digest.update(piece)
 
-    body = struct.pack(">4sII", _SIGNATURE, _SUPPORTED_VERSION, len(out_entries))
-    body += b"".join(entry_bytes for _, entry_bytes in out_entries)
-    body += hashlib.sha1(body).digest()
-
-    handle.write(body)
+    handle.write(head)
+    for piece in pieces:
+        handle.write(piece)
+    handle.write(digest.digest())
     handle.close()
     if not _replace_with_retry(lock_path, index_path):
         # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This

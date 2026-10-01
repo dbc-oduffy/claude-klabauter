@@ -540,25 +540,23 @@ def test_brief_rejects_malformed_for_date() -> None:
     assert "error" in envelope2
 
 
-@pytest.mark.real_home
-def test_brief_envelope_preflight_consumes_manifest_matches_module_constant() -> None:
+def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_path) -> None:
     """The 8-key envelope's `preflight.consumes_manifest` field (what the
     surface actually announces it consumes) must be byte-identical to the
     module's own `CONSUMES_MANIFEST` constant -- catches a `brief()` author
     hand-copying a stale list into the envelope instead of deriving it from
     the one source of truth.
 
-    `real_home`: `brief()` calls `resolve_operator_config` +
-    `_compute_open_day_goals`/`_compute_dirty_tree_verdict`, which resolve
-    the real machine-local registry and the invoking repo's actual git
-    common dir -- under the suite-root HOME quarantine (`conftest.py`) those
-    resolve against a throwaway tmpdir with no registry, so `brief()` hits
-    its outer never-fail-the-ceremony backstop and returns a bare
-    `{"error": ...}` envelope with no `preflight` key at all, which is a
-    quarantine artifact, not a real assembler defect. This is a live-tree
-    parity oracle by design (AC10: does the envelope really carry what the
-    module claims it consumes) -- read-only, never fails destructively."""
-    _, envelope = wc_brief.brief()
+    The injected env resolves the operator-config anchors inside `tmp_path`;
+    without it `brief()` returns a bare `{"error": ...}` envelope with no
+    `preflight` key."""
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    root = tmp_path / "root"
+    root.mkdir()
+    (settings_home / "machine-local" / ".coordinator-content-root").write_text(str(root))
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path)}
+    _, envelope = wc_brief.brief(env=env)
     assert envelope["preflight"]["consumes_manifest"] == list(
         wc_brief.CONSUMES_MANIFEST
     )

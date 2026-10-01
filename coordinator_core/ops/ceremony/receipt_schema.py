@@ -44,6 +44,11 @@ Receipt top-level shape:
                                   this session (concurrent-tree race visibility).
                                   Same graceful-absent posture as applicable_node_ids;
                                   type-checked only when present.
+  waivers           dict[str, list[str]] — OPTIONAL, additive.  Advisory-gate
+                                  waiver key -> list of waived item strings.  Same
+                                  graceful-absent posture as applicable_node_ids;
+                                  shape-checked only when present.  Key membership
+                                  is the caller's contract, not this schema's.
 
 Node ledger entry shapes (discriminated by "type" field):
   D — {id, type:"D", resolving_op:str, evidence:dict, tail_step:bool}
@@ -252,6 +257,7 @@ def make_receipt(
     applicable_node_ids: list[str] | None = None,
     scoping_method: str | None = None,
     foreign_commit_count: int | None = None,
+    waivers: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Return a schema-valid receipt dict with all required fields present.
 
@@ -309,6 +315,8 @@ def make_receipt(
         receipt["scoping_method"] = scoping_method
     if foreign_commit_count is not None:
         receipt["foreign_commit_count"] = foreign_commit_count
+    if waivers:
+        receipt["waivers"] = {k: list(v) for k, v in waivers.items()}
     return receipt
 
 
@@ -327,6 +335,7 @@ _OPTIONAL_TOP_FIELDS: tuple[str, ...] = (
     "sid",
     "scoping_method",
     "foreign_commit_count",
+    "waivers",
 )
 # D1: additive/backward-compat top-level fields — NOT in _REQUIRED_TOP_FIELDS.
 # A receipt with and without an optional field both validate; when present, it
@@ -427,6 +436,17 @@ def validate(receipt: dict[str, Any]) -> list[str]:
             errors.append(
                 f"foreign_commit_count must be an int when present; got {type(fcc).__name__}"
             )
+
+    if "waivers" in receipt:
+        wv = receipt["waivers"]
+        if not isinstance(wv, dict):
+            errors.append(f"waivers must be a dict when present; got {type(wv).__name__}")
+        else:
+            for wk, wvals in wv.items():
+                if not isinstance(wk, str) or not wk:
+                    errors.append(f"waivers key {wk!r} must be a non-empty string")
+                if not isinstance(wvals, list) or not all(isinstance(x, str) for x in wvals):
+                    errors.append(f"waivers[{wk!r}] must be a list[str]")
 
     op_tail = receipt["op_tail"]
     if not isinstance(op_tail, dict):

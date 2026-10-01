@@ -185,8 +185,6 @@ live — imported directly by `ceremony.session_instructions`) survives as
 | `git_native.py` | — | Windows-safe shared `git` subprocess helper (`_git`) — every native git call in the `wsc_tail` rebuild routes through this single choke point (creationflags/stdin/capture_output/text) |
 | `commit_message.py` | — | Commit-message composer + dual path-set computation — pure functions, no I/O |
 | `commit_gates.py` | — | Deletion-block and dirty-tree classification gates |
-| `resolver.py` | — | Public `resolve_in_repo`/`find_all_consumed_handoffs`/`get_handoff_consumed_by` helpers shared by `branch_resolution.py` and the `wsc_tail` rebuild |
-| `consumed_handoff_stamp.py` | — | Consumed-handoff ship-stamp + R1-R4 ship-drift correctness — `post_commit_stamp_and_ship()`, called by the commit pipeline with no ceremony-wide lock held |
 | `tail_ops.py` | — | Reused tail-op wiring (`coverage.gate`/`review_trail.write`) plus native `cs_archive`/`cs_release_artifact` ports; archive sweeps fire DETACHED via `fire_archive_sweeps_detached` (C2, 2026-07-23), not in-process |
 | `completion_entry.py` | — | Native completion-entry scaffold (op 0) + residue fill (op D2), no bash/node spawn |
 | `records_query.py` | — | In-process frontmatter enumerate + equality-AND `where`-filter over handoff/handoff-archived/cross-repo-memo records — read-side foundation for `renderers.py` |
@@ -200,6 +198,14 @@ Answers questions about live repo state; never mutates. Distinct from `ops/emit/
 | File | Purpose |
 |---|---|
 | `verify_shipped.py` | `verify_shipped(ref_or_sha, plan_path=None)` — combines git ancestry (`ops/emit/resolvers.py`'s promoted `check_origin_main_reachable`/`sha_on_origin_main`/`resolve_ref`), live plan/handoff frontmatter, and a leg-3 `state/cockpit-emission.json` cross-check that can no longer fire (the artifact was deleted 2026-08-23, DR-351 — the leg degrades to None by design and is now permanently silent) into one `ShipVerdict`, keeping disagreement between signals visible (`verdict: shipped/not_shipped/disagreement/indeterminate`) rather than collapsing to a boolean |
+
+### `ops/fanout/` — cloud fan-out manifest contract and pure functions
+Pure functions behind `fanout.compose` / `fanout.census` / `fanout.reconcile`; no I/O, no spawns.
+
+| File | Purpose |
+|---|---|
+| `contract.py` | Single loader/validator for `contract/fanout-manifest.v1.schema.json`; standard child roster, tag/title/idempotency builders, `create_session` arg keys, status-bucket sets, output TypedDicts |
+| `transport.py` | Channel seam (`for_channel`); `pr` transport: child prompt block, check-in parser, broadcast target |
 
 ### `ops/session/` — Class-B session-substrate ops
 Ops mutating untracked `.git/coordinator-sessions/` substrate — do NOT use `git commit` /

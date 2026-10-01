@@ -141,8 +141,7 @@ class PipelineContext:
     paths to EVERY predecessor handoff this session consumed (may live under
     state/handoffs/ or archive/handoffs/ once swept — this module performs no
     disk I/O and does not itself enforce that convention; the source of truth
-    is branch_resolution.py's ``_find_all_consumed_handoffs``, which scans both
-    directories, and the coordinator-handoff-archive sweep script that moves
+    scans both directories, and the coordinator-handoff-archive sweep script that moves
     swept handoffs from state/handoffs/ to archive/handoffs/); ``predecessors``
     is the parallel list of each handoff's frontmatter ``predecessor`` field
     (the session-id of the session that authored the handoff), when present.
@@ -194,6 +193,7 @@ class PipelineContext:
     sid: str = ""
     scoping_method: str = ""
     foreign_commit_count: int = 0
+    waivers: dict[str, list[str]] = field(default_factory=dict)
 
 
     def add_branch(self, resolution: BranchResolution) -> None:
@@ -243,6 +243,7 @@ class PipelineContext:
             "sid": self.sid,
             "scoping_method": self.scoping_method,
             "foreign_commit_count": self.foreign_commit_count,
+            "waivers": {k: list(v) for k, v in self.waivers.items()},
         }
 
     @classmethod
@@ -292,6 +293,7 @@ class PipelineContext:
             sid=data.get("sid", ""),
             scoping_method=data.get("scoping_method", ""),
             foreign_commit_count=data.get("foreign_commit_count", 0),
+            waivers={k: list(v) for k, v in (data.get("waivers") or {}).items()},
         )
 
 
@@ -339,6 +341,11 @@ class PipelineContext:
             errors.append(
                 "foreign_commit_count must be an int; got "
                 f"{type(self.foreign_commit_count).__name__}"
+            )
+
+        if not isinstance(self.waivers, dict):
+            errors.append(
+                f"waivers must be a dict; got {type(self.waivers).__name__}"
             )
 
         for i, ch in enumerate(self.consumed_handoffs):

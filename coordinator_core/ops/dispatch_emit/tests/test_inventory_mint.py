@@ -306,7 +306,7 @@ _NO_TRAILING_SEP_EXISTING_DIRECTORY_INVENTORY = textwrap.dedent(
 
     | id | spec path | summary | footprint | deps | verification | complexity | disposition |
     |---|---|---|---|---|---|---|---|
-    | C1 | `docs/plans/fixture.md` | existing dir, no trailing sep | `docs/wiki` | — | scoped pytest | S | in_progress |
+    | C1 | `docs/plans/fixture.md` | existing dir, no trailing sep | `coordinator_core/ops/dispatch_emit/tests` | — | scoped pytest | S | in_progress |
     """
 )
 
@@ -882,3 +882,63 @@ def test_writes_under_footprint_is_minted_onto_the_row():
     assert minted["C1"]["surface"] == "coordinator_core/fixture_dir/"
     assert minted["C2"]["writes"] == ["coordinator_core/fixture_a.py"]
     assert minted["C2"]["writes_under"] == ["docs/wiki/"]
+
+
+_CONSUMES_PLAN_FIXTURE = textwrap.dedent(
+    """\
+    ---
+    run_id: fixture-plan-c
+    ---
+
+    ## Tasks
+
+    ```yaml plan-tasks
+    - id: C1
+      title: Producer
+      writes:
+        - lib/gate.ts
+    - id: C2
+      title: Consumer, ordered only by what it consumes
+      writes:
+        - app/route.ts
+      writes_under:
+        - app/pages/
+      consumes:
+        - lib/gate.ts
+    ```
+    """
+)
+
+
+def test_plan_sourced_rows_carry_consumes_and_writes_under(tmp_path):
+    # Dropping `consumes` loses the derived C1 -> C2 edge, and dropping
+    # `writes_under` narrows C2's footprint: a mise run once dispatched 11
+    # consumers beside their producers this way.
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "fixture-plan-c.md").write_text(_CONSUMES_PLAN_FIXTURE, encoding="utf-8")
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    inventory_path = inv_dir / "20260918T000000-consumes.md"
+    inventory_path.write_text(
+        textwrap.dedent(
+            """\
+            ---
+            run_id: 20260918T000000-consumes
+            ---
+
+            ## Chunk table
+
+            | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+            |---|---|---|---|---|---|---|---|
+            | P3 | `docs/plans/fixture-plan-c.md` | whole plan C | `docs/plans/fixture-plan-c.md` | — | scoped pytest | S | in_progress |
+            """
+        ),
+        encoding="utf-8",
+    )
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    by_id = {row["id"]: row for row in im.mint_rows(rows, inventory_path=inventory_path)}
+
+    assert by_id["P3.C2"]["consumes"] == ["lib/gate.ts"]
+    assert by_id["P3.C2"]["writes_under"] == ["app/pages/"]
+    assert "consumes" not in by_id["P3.C1"]

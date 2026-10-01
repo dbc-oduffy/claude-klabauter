@@ -30,8 +30,8 @@ conservation violation on the following run). Left unrendered, that steady
 state is indistinguishable from "nothing to do," so `_read_auto_reconcile`
 also renders `result.gates_cleared[]` entries where `dry_run` is truthy AND
 `blocker_ids` is non-empty — the same discriminator
-`coordinator/bin/check-auto-reconcile.py`'s `_render` uses for its own
-would-flip line.
+the since-deleted `coordinator/bin/check-auto-reconcile.py`'s `_render` used for its
+own would-flip line.
 
 Spec backlink: coordinator-content-repo:pln-computed-skills-b2-ceremony-st-e82420, chunk C2c
 Spec backlink: cross-repo/inbox/2026-08-13-example-cockpit-repo-em-clear-verdict-invisible-under-dry-run-so-gates-never-announce.md
@@ -41,9 +41,8 @@ Negative-spec:
       the source script — that subprocess call to `reap-sessions.py` plus
       log-file append stays OUT of this in-process reader path (this
       chunk's explicit AC).
-    - Does NOT pass a `dry_run` override to `check_auto_reconcile.get_response()`
-      — the op's own conservative `dry_run=True` default is preserved
-      unmodified.
+    - Does NOT dispatch `handoff.reconcile_open` at all (the op is gravestoned and
+      `check_auto_reconcile.get_response()` is deleted); this reader is an inert stub.
     - Does NOT re-implement `handoff.reconcile_open`'s verdict logic — the
       `surfaced[]` list from its response is translated into
       `judgment_points[]` as-is, one entry per surfaced handoff.

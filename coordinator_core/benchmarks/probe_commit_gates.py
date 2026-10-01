@@ -118,6 +118,139 @@ def _window(fn, n: int):
     )
 
 
+LEAK_CEILINGS_MS = {1: 5.0, 35: 15.0, "publish": 100.0}
+"""Per-detector ceilings from the authoring-leak spike verdict: 1 path 5 ms, 35 paths 15 ms,
+`coordinator/bin/publish.py` 100 ms, zero spawns."""
+
+PUBLISH_PATH = "coordinator/bin/publish.py"
+
+
+def _process_ms_and_spawns(fn, n: int):
+    """Mean `time.process_time()` ms and spawn-counter delta per call of `fn` over `n` calls.
+
+    The in-process leg for zero-spawn gates: `LiveTreeAccountant` quantises at a scheduler tick,
+    which a sub-5 ms gate cannot resolve per call.
+    """
+    from coordinator_core.telemetry import spawn_counter
+
+    for _ in range(WARMUP):
+        fn()
+    spawns0 = spawn_counter.spawn_count()
+    t0 = time.process_time()
+    for _ in range(n):
+        fn()
+    cpu = (time.process_time() - t0) * 1000.0 / n
+    return cpu, (spawn_counter.spawn_count() - spawns0) / n
+
+
+def _leak_py_sample(root: Path, n: int) -> list:
+    out = run_git(["ls-files", "--", "coordinator_core"], cwd=str(root)).stdout.split("\n")
+    live = [p for p in out if p.strip() and p.endswith(".py") and (root / p).is_file()]
+    return live[:n]
+
+
+def measure_leak_gate(root: Path, n: int = 10) -> dict:
+    """Per-detector and composed `leak_gate` cost at 1 and 35 paths plus `publish.py`.
+
+    Returns `{label: {shape: (proc_ms, spawns)}}`. Detectors and the composed gate run over the
+    live tree, so a clean worktree measures the prefilter-reject floor; the cold-cache variant
+    clears `git_objects._OBJECT_CACHE` before each call.
+    """
+    import importlib
+
+    from coordinator_core.authoring_leaks import WIRED_DETECTORS, leak_gate
+    from coordinator_core.git import git_objects
+
+    shapes = {1: _leak_py_sample(root, 1), 35: _leak_py_sample(root, 35), "publish": [PUBLISH_PATH]}
+    mods = {name: importlib.import_module(f"coordinator_core.authoring_leaks.{name}")
+            for name in WIRED_DETECTORS}
+    results: dict = {}
+    for label, detectors in [(name, [mod]) for name, mod in mods.items()] + [("leak_gate", None)]:
+        for cache in ("warm", "cold"):
+            row = {}
+            for shape, paths in shapes.items():
+                def call(paths=paths, detectors=detectors, cache=cache):
+                    if cache == "cold":
+                        git_objects._OBJECT_CACHE.clear()
+                    return leak_gate(root, paths, detectors=detectors)
+
+                row[shape] = _process_ms_and_spawns(call, n)
+            results[f"{label} ({cache})"] = row
+    return results
+
+
+def _print_leak_gate(results: dict) -> None:
+    print(f"{'leak_gate leg':32s} {'1 path':>14s} {'35 paths':>14s} {'publish.py':>14s}")
+    for label, row in results.items():
+        cells = "".join(f" {row[s][0]:7.2f}ms/{row[s][1]:.0f}sp" for s in (1, 35, "publish"))
+        print(f"{label:32s}{cells}")
+    for label, row in results.items():
+        if label.startswith("leak_gate"):
+            continue
+        for shape, (ms, spawns) in row.items():
+            ceiling = LEAK_CEILINGS_MS.get(shape)
+            if ceiling is not None and (ms > ceiling or spawns):
+                print(f"OVER CEILING: {label} shape={shape} {ms:.2f}ms (ceiling {ceiling}) spawns={spawns}")
+
+
+QUAD_STATIC_CEILING_MS = 10.0
+"""`registration_violations` budget: p50 process ms with zero spawns."""
+
+
+def _register_op_sample(root: Path) -> str:
+    out = run_git(["ls-files", "--", "coordinator_core/ops"], cwd=str(root)).stdout.split("\n")
+    for p in out:
+        if p.endswith(".py") and "/tests/" not in p and (root / p).is_file():
+            if b'@register_op("' in (root / p).read_bytes():
+                return p
+    raise RuntimeError("no register_op-bearing file under coordinator_core/ops")
+
+
+def measure_registration_static(root: Path, n: int = 50) -> dict:
+    """p50 process ms and spawns per `registration_violations` call over the SIZES paths.
+
+    Each shape carries one real `@register_op` file; `read_source` reads the live worktree
+    from disk on every call, so the figure includes the five surface-file reads. Returns
+    `{size: (p50_ms, spawns_per_call, outcome)}`; the outcome is asserted non-skip so a
+    vacuous filter-first return cannot pass for a measurement.
+    """
+    from coordinator_core.authz.registration_quad_static import registration_violations
+    from coordinator_core.telemetry import spawn_counter
+
+    def read_source(rel):
+        try:
+            return (root / rel).read_bytes()
+        except OSError:
+            return None
+
+    op_file = _register_op_sample(root)
+    results: dict = {}
+    for size in SIZES:
+        paths = [op_file] + [p for p in _tracked_sample(root, size + 1) if p != op_file][: size - 1]
+        for _ in range(WARMUP):
+            verdict = registration_violations(read_source, paths)
+        assert verdict.outcome in ("pass", "refuse"), f"vacuous measurement: {verdict}"
+        samples = []
+        spawns0 = spawn_counter.spawn_count()
+        for _ in range(n):
+            t0 = time.process_time()
+            registration_violations(read_source, paths)
+            samples.append((time.process_time() - t0) * 1000.0)
+        samples.sort()
+        results[size] = (
+            samples[len(samples) // 2],
+            (spawn_counter.spawn_count() - spawns0) / n,
+            verdict.outcome,
+        )
+    return results
+
+
+def _print_registration_static(results: dict) -> None:
+    for size, (p50, spawns, outcome) in results.items():
+        flag = "" if p50 <= QUAD_STATIC_CEILING_MS and not spawns else "  OVER CEILING"
+        print(f"registration_violations paths={size:3d} p50={p50:6.2f}ms spawns={spawns:.0f} outcome={outcome}{flag}")
+
+
 def main(n=12):
     declare_benchmark_origin()
     root = SRC
@@ -163,6 +296,8 @@ def main(n=12):
         f"attribution_gate summary: within_{PROCESS_TIME_TARGET_MS}ms_and_0_spawns="
         f"{within_budget}"
     )
+    _print_leak_gate(measure_leak_gate(root))
+    _print_registration_static(measure_registration_static(root))
     return attribution_results, within_budget
 
 

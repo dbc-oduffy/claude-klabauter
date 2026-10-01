@@ -56,6 +56,8 @@ from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.lifecycle import main_worktree_root  # re-export — see note below
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+from coordinator_core.ops.fleet import _index_resync_drain
+from coordinator_core.ops.fleet._index_resync_pending import PendingResync, record_pending
 # Peer-to-peer import, deliberate (2026-08-26, archive_and_commit tree-build
 # chunk): _commit_via_head_spine is the shared "rewrite HEAD's tree spine ->
 # build the commit object -> land it via a locked ref CAS" landing helper
@@ -1475,6 +1477,7 @@ async def _resync_main_index_for_moves(
     worktree_root: Path,
     env: dict,
     run_git=_update_index_with_retry,
+    committed_blobs: Optional[Mapping[str, str]] = None,
 ) -> None:
     """Resync the MAIN index (real .git/index) to the new HEAD for archive_and_commit's moved paths.
 
@@ -1482,63 +1485,24 @@ async def _resync_main_index_for_moves(
     index holding stale entries at src paths.  git status --porcelain therefore
     reports orphaned residue (AC4/AC10 clean-index requirement).
 
-    MEASURED 2026-08-26, and stated MECHANISM-INDEPENDENTLY on purpose.  The
-    original wording named the private-index commit as the thing that desynced
-    the index.  That mechanism is gone -- `dccf2fc01` deleted the private index
-    and `_commit_via_head_spine` now lands a direct locked-ref CAS -- and the
-    EM on the successor plan reasoned from its absence that this resync had
-    become vestigial.  It has not.  The desync source was never the private
-    index; it is that HEAD advances and `.git/index` does not, which is true of
-    every commit mechanism this function has ever run behind.
+    The requirement is independent of the commit mechanism: `_commit_via_head_spine`
+    lands a direct locked-ref CAS, so HEAD advances and `.git/index` does not.
+    A 20-move `restage_src=False` batch without this resync leaves 40 dirty
+    `git status --porcelain` lines (an `RD` per src, a `??` per dst); with it,
+    zero.  Every peer sharing the index reads that status.
 
-    Probed rather than argued, because the vestigial reading was plausible and
-    wrong: one real 20-move `restage_src=False` batch with this function stubbed
-    to a no-op leaves **40 dirty `git status --porcelain` lines** -- an `RD`
-    (rename in index, deleted in worktree) for every src and a `??` for every
-    dst.  With this function running: **zero**.  ~50 peer sessions share this
-    index and read `git status`, so that residue is theirs, not ours.
-
-    WHAT THIS SPAWN ACTUALLY IS: THE UNFINISHED HALF OF OUR OWN COMMIT.  A
-    plain `git commit` updates `.git/index` as part of committing, which is why
-    no ordinary caller has to think about this at all.  We do not use
-    `git commit`: `_commit_via_head_spine` hand-rolls one -- assemble a tree
-    from the spine, CAS the ref -- specifically to avoid git's process cost.
-    The index update is the part of git's commit we did not reimplement, so we
-    spawn git to do that one leftover piece.  This resync is not an inherent
-    cost of committing and not a separate concern; it is the step our own
-    commit mechanism stops short of.
-
-    Two conclusions follow, and they are NOT the same conclusion.  (1) Do not
-    delete the call site on the argument that the private-index commit is gone:
-    that argument is about a mechanism, the requirement outlived it, and the
-    40-vs-0 above is what deleting it actually costs the ~50 peers sharing this
-    index.  (2) Do not treat it as permanent either.  The correct retirement is
-    to FINISH the mechanism -- write `.git/index` back in-process, the way
-    git's own commit would have -- which owes `TREE`/`UNTR` extension
-    preservation and races `index.lock` against the whole fleet, and so needs
-    its own spike before anyone attempts it.  Finish the commit; do not keep
-    paying git to clean up after it, and do not simply stop cleaning up.
-
-    SPIKE PRE-EMPTED, MEASURED 2026-08-30 -- read this before opening it, and
-    note it argues AGAINST the retirement at this index size.  The trade is not
-    "one spawn for free": a MINIMAL Python parse of this repo's index (36,401
-    entries, 5.3MB) costs 15.6ms decoding NAMES ALONE, with no mode/sha/stat
-    decode, no extension handling and no write.  A real implementation carries
-    all of that plus re-serialisation, so it lands far above the spawn it
-    removes -- and it lands in the WRONG BUDGET.  The spawn's 75-98ms is CHILD
-    cpu, which `time.process_time()` does not count and the scheduler can place
-    on another core; an in-process rewrite is our own process time, inside the
-    caller's budget.  Worse, git's index is ONE FILE REWRITTEN WHOLE: updating
-    40 moved paths re-serialises all 36,401 entries, so the cost is fixed by
-    index SIZE, not by move count, and it is paid holding `index.lock` -- the
-    single file every one of ~50 peers touches.  That converts a parallel cost
-    into a serialised one, fleet-wide.
-
-    We fight spawns because process creation is taxed on Windows, not because a
-    spawn is bad in itself (PM, 2026-08-30).  Removing one by taking on a larger
-    cost elsewhere is a regression wearing the spawn-count metric as a disguise.
-    What would reopen this: a materially smaller index, or a git index format
-    permitting partial rewrite.  Neither is true today.
+    The resync is the index half of a commit that `_commit_via_head_spine` does
+    not perform.  It stays a spawned git because an in-process rewrite does not
+    beat the spawn at fleet index size: on a 31,055-entry (4.4MB) v2 index the
+    in-process `splice_index` costs 12.3ms process time and holds `index.lock`
+    for 13.4ms, a cheaper-walk variant costs 13.9ms / 15.4ms, and the spawned
+    `git update-index --remove` child costs 21.5ms CPU against a 1.6ms
+    `git --version` process-creation floor
+    (docs/research/spike-verdicts/2026-09-30-fleet-index-resync-in-process.md).
+    The index is one file rewritten whole, so the in-process cost is fixed by
+    index size, not move count, and is paid inside the caller's process time
+    while holding the lock every peer contends on.  What reopens this: a
+    materially smaller index or a partial-rewrite index format.
 
     Path-scoped index-from-HEAD restore (2026-08-11, C2; batched 2026-08-19,
     amplification burn-down C4) — ONE call for the ENTIRE batch of moved files,
@@ -1563,33 +1527,24 @@ async def _resync_main_index_for_moves(
     removed from HEAD) loses its index entry, dst (which HEAD now holds) is
     restored at the COMMITTED blob rather than whatever is currently on disk.
 
-    HISTORY, so the supersession is legible rather than re-derived: this replaced a
-    2026-08-05 three-step cacheinfo form (`ls-tree HEAD -- dst`, then
-    `update-index --remove -- src`, then `update-index --add --cacheinfo`), which
-    itself replaced a plain `--remove`/`--add` pair. The cacheinfo form's `--add`
-    half was skipped entirely when the ls-tree lookup returned None, and could fail
-    on its own after retries — leaving the index without dst while HEAD held it,
-    which reads as a staged deletion of a file present on disk. That is the residue
-    this single-call form exists to close. Do not reintroduce either older shape.
-
-    The peer-edit guarantee the cacheinfo form bought is PRESERVED, and for the same
-    reason: restoring from HEAD stages dst at the committed blob, not at disk
-    content, so a peer's UNCOMMITTED worktree edit at dst stays an unstaged
-    modification (git status " M dst") instead of being silently staged under this
-    function's commit subject (git status "M  dst"). The pre-2026-08-05 plain
-    `--add -- dst` form read disk at resync time and is exactly the gap that could
-    stage a peer's edit under our subject line.
+    Restoring from HEAD stages dst at the committed blob, not at disk content, so
+    a peer's UNCOMMITTED worktree edit at dst stays an unstaged modification
+    (git status " M dst") instead of being silently staged under this function's
+    commit subject (git status "M  dst"). A single restore also never leaves the
+    index without dst while HEAD holds it.
 
     Path-scoped is also why this is safe on a shared index: unrelated content
     already staged in the main index is untouched, whereas a full `git read-tree
     HEAD` would obliterate it — see DR-211 D3 isolation invariant and
     test_archive_and_commit_private_index_isolation.
 
-    UNMEASURED: whether a peer's DELIBERATE pre-archival staging of dst (as opposed
-    to an uncommitted worktree edit) survives this resync is outside the spike's
-    evidence base — this docstring asserts no specific outcome for that case. Note
-    the question is inherited from the cacheinfo form and was not re-opened by the
-    move to `restore --staged`; both stage dst from HEAD, not from disk.
+    A peer's DELIBERATE pre-archival staging of dst does not survive this resync:
+    `restore --staged` resets dst to HEAD, discarding staged peer intent at either
+    path. The failure branch therefore records a PendingResync instead of retrying
+    blindly, and `_index_resync_drain.drain_pending_resyncs` restores a record only
+    when the index still holds src at the committed blob and dst is absent or equals
+    HEAD; any other state is kept and reported. Records live in
+    `_index_resync_pending`; archive_and_commit drains them after its own resync.
 
     Origin: state/lessons/2026-08-03-an-interrupted-git-mv-leaves-the-shared-
     907008cbcb3c.yaml prescribes an index-only, path-scoped restoration from HEAD
@@ -1617,8 +1572,14 @@ async def _resync_main_index_for_moves(
 
     Mutates each acted_by_id[move.candidate_id] item in place, adding
     `index_resync_failed` only on persistent failure. Does not return a value.
+
+    Each exhausted chunk also records one PendingResync per move (one
+    `record_pending` call per chunk) for a later drain. `committed_blobs` maps
+    candidate_id to the blob archived at dst; a missing id is recorded as "".
+    A record-write fault never fails the op.
     """
     import asyncio
+    from datetime import datetime, timezone
 
     relevant_moves = [m for m in moves if m.candidate_id in acted_by_id]
     if not relevant_moves:
@@ -1679,6 +1640,26 @@ async def _resync_main_index_for_moves(
                 reason=reason,
                 op_label="archive_and_commit",
             )
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        blobs = committed_blobs or {}
+        try:
+            await asyncio.to_thread(
+                record_pending,
+                worktree_root,
+                [
+                    PendingResync(
+                        src=rel_id(move.src, worktree_root),
+                        dst=rel_id(move.dst, worktree_root),
+                        candidate_id=move.candidate_id,
+                        committed_blob=blobs.get(move.candidate_id, ""),
+                        op_label="archive_and_commit",
+                        recorded_at=recorded_at,
+                    )
+                    for move, _tokens in chunk
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 - record fault must not fail the op
+            _LOG.error("archive_and_commit: pending-resync record failed: %s", exc)
 
 
 async def _resync_main_index_for_reaps(
@@ -2584,9 +2565,19 @@ async def archive_and_commit(
         # rationale, moved there along with the code.
         main_env = _make_git_env()
         acted_by_id = {a["id"]: a for a in acted}
+        committed_blobs = {
+            m.candidate_id: assembled[dst_rel_by_id[m.candidate_id]][1]
+            for m in acted_moves
+            if isinstance(assembled.get(dst_rel_by_id[m.candidate_id]), tuple)
+        }
         await _resync_main_index_for_moves(
             moves, acted_by_id, worktree_root=worktree_root, env=main_env,
+            committed_blobs=committed_blobs,
         )
+        try:
+            await _index_resync_drain.drain_pending_resyncs(worktree_root)
+        except Exception as exc:  # noqa: BLE001 - drain fault must not fail the op
+            _LOG.error("archive_and_commit: pending-resync drain failed: %s", exc)
 
         # Post-commit claim release (C3, AC1): same worktree, this session's
         # own sid, and a bounded pathspec — even though the git commit ABOVE

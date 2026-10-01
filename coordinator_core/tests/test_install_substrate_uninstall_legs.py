@@ -618,6 +618,7 @@ def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeyp
     proves rc==0 against a real dual-anchor tree AND asserts the installed
     destination reflects both anchors correctly."""
     plugin_root, claude_klabauter_root = _build_success_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(substrate, "_door_engine_root", lambda: None)
 
     rc = substrate.run()
     assert rc == 0

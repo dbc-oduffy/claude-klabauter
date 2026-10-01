@@ -121,6 +121,56 @@ def test_legacy_consumed_by_shape(workspace):
     assert state.source == "mirror"
 
 
+def test_body_prose_claim_line_is_not_a_claim(workspace):
+    common_dir, handoff = workspace
+    handoff.write_text(
+        "---\nstatus: open\n---\n\nclaimed_by: sess-prose\nconsumed_by: sess-prose\nclaimed_at: 2026-08-07T15:00:00Z\n",
+        encoding="utf-8",
+    )
+
+    state = claim_state.resolve_claim_state(handoff, common_dir=common_dir)
+
+    assert state.holder is None
+    assert state.claimed_at is None
+    assert state.source == "none"
+
+
+def test_unfenced_file_reads_as_no_claim(workspace):
+    common_dir, handoff = workspace
+    handoff.write_text("claimed_by: sess-x\n# body\n", encoding="utf-8")
+
+    state = claim_state.resolve_claim_state(handoff, common_dir=common_dir)
+
+    assert state.holder is None
+    assert state.source == "none"
+
+
+def test_claimed_by_wins_over_earlier_consumed_by_line(workspace):
+    common_dir, handoff = workspace
+    handoff.write_text(
+        "---\nconsumed_by: sess-old\nclaimed_by: sess-new\n---\n# body\n",
+        encoding="utf-8",
+    )
+
+    state = claim_state.resolve_claim_state(handoff, common_dir=common_dir)
+
+    assert state.holder == "sess-new"
+
+
+def test_frontmatter_longer_than_read_cap_still_reads_claim(workspace):
+    common_dir, handoff = workspace
+    filler = "".join(f"note_{i}: {'x' * 40}\n" for i in range(120))
+    handoff.write_text(
+        f"---\nstatus: claimed\nclaimed_by: sess-long\n{filler}---\n# body\n",
+        encoding="utf-8",
+    )
+    assert handoff.read_text().index("\n---\n# body") > 4096
+
+    state = claim_state.resolve_claim_state(handoff, common_dir=common_dir)
+
+    assert state.holder == "sess-long"
+
+
 def test_neither_source_present(workspace):
     common_dir, handoff = workspace
     _write_handoff(handoff, status="open")

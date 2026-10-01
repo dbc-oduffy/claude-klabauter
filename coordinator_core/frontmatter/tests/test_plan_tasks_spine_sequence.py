@@ -212,3 +212,81 @@ class TestRowLabelFmt:
         )
         assert errors
         assert errors[0]["field"] == "tasks[C1].change_kind"
+
+
+_ROW_MATRIX = [
+    # open, clean
+    {"id": "C1", "title": "t", "change_kind": "code-edit", "surface": "a.py",
+     "writes": [], "disposition": "open"},
+    # shape error (missing change_kind)
+    {"id": "C1", "title": "t", "surface": "a.py", "writes": [], "disposition": "open"},
+    # shape error (closed enum)
+    {"id": "C1", "title": "t", "change_kind": "nope", "surface": "a.py",
+     "writes": [], "disposition": "open"},
+    # cross-field: non-open row with no disposition_detail
+    {"id": "C1", "title": "t", "change_kind": "code-edit", "surface": "a.py",
+     "writes": [], "disposition": "coded"},
+    # closed disposition, pm_approved absent (schema branch vs governed)
+    {"id": "C1", "title": "t", "change_kind": "code-edit", "surface": "a.py",
+     "writes": [], "disposition": "spun_off", "disposition_detail": "elsewhere"},
+    # closed disposition, pm_approved present
+    {"id": "C1", "title": "t", "change_kind": "code-edit", "surface": "a.py",
+     "writes": [], "disposition": "spun_off", "disposition_detail": "elsewhere",
+     "pm_approved": True},
+    # open row without writes (cross-field gated on plan_created)
+    {"id": "C1", "title": "t", "change_kind": "code-edit", "surface": "a.py",
+     "disposition": "open"},
+]
+
+
+def _strip_label(field: str) -> str:
+    prefix = "tasks[C1]."
+    return field[len(prefix):] if field.startswith(prefix) else field
+
+
+def _canon(errors):
+    return [{**e, "field": _strip_label(e["field"])} for e in errors]
+
+
+class TestPerRowCopiesAgree:
+    """The per-row shape-then-cross-field sequence is run by the spine
+    driver (check_plan_tasks_source + both write guards) and by
+    plan_tasks_mutate._validate_row. One fixture matrix, every copy, same
+    errors in the same order."""
+
+    @pytest.mark.parametrize("row", _ROW_MATRIX)
+    @pytest.mark.parametrize("created", ["2026-01-01", "2099-01-01"])
+    @pytest.mark.parametrize("governed", [False, True])
+    def test_mutate_and_guards_agree_with_driver(self, row, created, governed):
+        import yaml
+
+        from coordinator_core.frontmatter.schema_validate import (
+            _PLAN_TASKS_SCHEMA_DICT as base,
+        )
+        from coordinator_core.ops.plan_tasks_mutate import _validate_row
+        from coordinator_core.write_guards import (
+            validate_frontmatter_schema_advisory as advisory,
+        )
+        from coordinator_core.write_guards import (
+            validate_frontmatter_schema_deny as deny,
+        )
+
+        fm = {"created": created}
+        if governed:
+            fm["grouping_approvals"] = {}
+        fm_text = yaml.safe_dump(fm)
+        source = _plan(yaml.safe_dump([row]), frontmatter=fm_text.rstrip("\n"))
+
+        driver_errors, _rows = plan_tasks_spine_errors(
+            source, fm, plan_tasks_schema=base, legs=("per_row",),
+        )
+        mutate_errors = _validate_row(row, governed=governed, plan_created=created)
+        assert _canon(driver_errors) == mutate_errors
+
+        schemas = {"plan-tasks": base}
+        assert _canon(deny._plan_tasks_spine_errors(source, schemas, fm)) == mutate_errors
+        advisory_errors = [
+            e for e in advisory._plan_tasks_spine_errors(source, schemas, fm)
+            if "D5" not in e.get("error", "")
+        ]
+        assert _canon(advisory_errors) == mutate_errors

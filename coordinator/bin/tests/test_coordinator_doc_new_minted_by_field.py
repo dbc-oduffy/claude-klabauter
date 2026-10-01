@@ -55,7 +55,8 @@ def _scaffold(arm: str, alias: str | None = "dbc-example-operator") -> str:
     ), mock.patch.object(
         _cli, "_resolve_session_display_name", return_value=_SESSION_NAME
     ), mock.patch.object(
-        _cli, "_resolve_spinoff_workstream", return_value=None
+        _cli, "_resolve_spinoff_origin",
+        return_value=_cli.SpinoffOrigin(None, None, None),
     ), mock.patch.object(
         _cli,
         "_resolve_minted_by_line",

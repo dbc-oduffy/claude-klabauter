@@ -2225,6 +2225,12 @@ def assemble_plan_gate(
         for r in candidate_records
         if r["needs_plan"] and wave_by_id.get(r["id"]) is None
     ]
+    # A blocker that is itself held never clears inside a blitz; naming it
+    # separates "waiting on a PM hold" from "waiting on outside work".
+    for row in unschedulable_rows:
+        row["held_by_held"] = [
+            b for b in row["held_by"] if batons_by_id.get(b) is not None and batons_by_id[b].get("held")
+        ]
 
     # `waves` is keyed by baton id, and a baton id is NOT unique across candidate
     # records: a succession chain and a roadmap stub's fan-out BOTH share one id by
@@ -2269,9 +2275,36 @@ def assemble_plan_gate(
         }
     )
 
+    # A matched target in no wave must say why: a targeted blitz that reads
+    # `waves: []` cannot tell "already planned" from "not a candidate" from
+    # "held", and guesses (2026-10-01: six debt batons read as needing sizing).
+    waved = {i for wave in waves for i in wave}
+    target_exclusions = []
+    for t in matched_targets:
+        for r in records:
+            if not (t in r["ids"] or t == r["path"]) or r["id"] in waved:
+                continue
+            if not r["candidate"]:
+                reason = "not-candidate"
+            elif not r["needs_plan"]:
+                reason = "plan-not-needed"
+            else:
+                reason = "unschedulable"
+            target_exclusions.append(
+                {
+                    "target": t,
+                    "id": r["id"],
+                    "path": r["path"],
+                    "status": r["status"],
+                    "excluded_because": reason,
+                    "plan": r["own_plan"]["path"] if r["own_plan"] else None,
+                }
+            )
+
     return {
         "batons": reported,
         "matched_targets": matched_targets,
+        "target_exclusions": target_exclusions,
         "waves": waves,
         "cycles": cycles,
         "unresolved_blockers": unresolved,
@@ -2295,6 +2328,7 @@ def assemble_plan_gate(
             superseded_deliverable=len(superseded_deliverable_rows),
             deliverable_id_collisions=len(deliverable_id_collision_rows),
             shared_wave_slot=len(shared_wave_slot_rows),
+            blocked_by_held=sum(1 for row in unschedulable_rows if row["held_by_held"]),
         ),
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},
     }

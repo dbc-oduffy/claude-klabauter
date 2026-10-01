@@ -214,21 +214,6 @@ def _iter_live_handoff_md_files() -> list[Path]:
     return sorted((_REPO_ROOT / "state" / "handoffs").rglob("*.md"))
 
 
-def test_hidden_archive_dir_is_covered_by_the_corpus_scan():
-    """Sanity check the fixture premise itself: state/handoffs/.archive/
-    exists and its files are included in _iter_handoff_md_files()'s output —
-    a scan that silently skipped it would make the zero-old-vocabulary
-    assertions below vacuously true for exactly the landmine C8 flagged."""
-    hidden_archive_dir = _REPO_ROOT / "state" / "handoffs" / ".archive"
-    assert hidden_archive_dir.is_dir(), f"missing fixture dir: {hidden_archive_dir}"
-    hidden_files = set(hidden_archive_dir.rglob("*.md"))
-    assert hidden_files, f"{hidden_archive_dir} has no .md files to cover"
-    assert hidden_files <= set(_iter_handoff_md_files())
-    # The live-only scan is what enforces the 'consumed' vocabulary post-narrow,
-    # so the hidden dir must be covered by THAT scan too, not just the wide one.
-    assert hidden_files <= set(_iter_live_handoff_md_files())
-
-
 def _is_archived_corpus_path(rel_path: str) -> bool:
     """True for a path under archive/handoffs/ — the sole scope of the
     'consumed' grandfather restored by ed2c4dd3e / a4a79bf7 / 2cfaadc6 (see

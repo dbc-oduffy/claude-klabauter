@@ -241,7 +241,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
 
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
@@ -1255,11 +1255,70 @@ def _completion_entry_stage_path(
         return None
 
 
+def _emit_waiver_receipt(
+    worktree_root: "Union[Path, str]",
+    decisions: dict[str, Any],
+    sid: Optional[str],
+    session_shape: dict[str, Any],
+    error_sink: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Writes the wsc receipt carrying the close's advisory-gate waivers and
+    returns its repo-relative path; `None` when there is nothing to record
+    (no waiver values, or no sid) or the write failed. A failure's message is
+    appended to `error_sink`; nothing raises out of the close.
+
+    The path is passed to `emit_receipt` explicitly: with `out_path=None` it
+    reuses the session's latest receipt, so a second waiver-bearing close in
+    one session would overwrite the first close's waivers. `scope_mode` stays
+    empty because the close carries no derived light/full label."""
+    from coordinator_core.workstream_complete import WAIVER_KEYS
+
+    waivers = {
+        k: sorted({str(x) for x in decisions.get(k) or ()}) for k in WAIVER_KEYS
+    }
+    waivers = {k: v for k, v in waivers.items() if v}
+    if not waivers or not sid:
+        return None
+
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.ceremony import receipt_emit
+    from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
+    from coordinator_core.wire_paths import rel_id
+
+    root = Path(worktree_root)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ctx = PipelineContext(
+        ceremony="wsc",
+        scope_mode="",
+        disposition=session_shape.get("disposition", ""),
+        consumed_handoff=session_shape.get("consumed_handoff", ""),
+        sid=sid,
+        waivers=waivers,
+    )
+    try:
+        path, _tail = receipt_emit.emit_receipt(
+            ctx,
+            receipt_emit.default_receipt_path(root, "wsc", sid=sid, emitted_at=ts),
+            repo_root=root,
+            sid=sid,
+            tail_phase="archival",
+            receipt_phase="phase-2",
+            emitted_at=ts,
+        )
+    except OSError as exc:
+        if error_sink is not None:
+            error_sink.append(str(exc))
+        return None
+    return rel_id(path, root)
+
+
 def _run_close_commit_tail(
     worktree_root: "Union[Path, str]",
     decisions: dict[str, Any],
     sid: Optional[str],
     completion_entry_path: Optional[str] = None,
+    extra_stage_paths: "Sequence[str]" = (),
 ) -> Optional[dict[str, Any]]:
     """Invokes `directives_commit_tail.run_close_commit_and_release_claims`
     -- never bare `run_close_commit`, which releases neither claim (see that
@@ -1295,6 +1354,11 @@ def _run_close_commit_tail(
             existing = list(kwargs.get("stage_paths") or ())
             if entry_rel not in {str(p).replace("\\", "/") for p in existing}:
                 kwargs["stage_paths"] = existing + [entry_rel]
+        if extra_stage_paths:
+            existing = list(kwargs.get("stage_paths") or ())
+            kwargs["stage_paths"] = existing + [
+                p for p in extra_stage_paths if p not in existing
+            ]
         # C2 (docs/plans/2026-08-30-the-close-ships-the-baton-it-closed.md):
         # ship-stamp the session's own delivered batons BEFORE the commit
         # call (constraint (b) — a pathspec commit re-reads the tree at
@@ -1795,8 +1859,23 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         worktree_root = envelope.get("artifact", {}).get("path")
         if worktree_root:
             completion_entry_path = report.get("completion_entry_path")
+            waiver_errors: list[str] = []
+            waiver_receipt = _emit_waiver_receipt(
+                worktree_root,
+                effective_decisions,
+                sid,
+                envelope.get("preflight", {}).get("session_shape", {}),
+                waiver_errors,
+            )
+            report["waiver_receipt"] = waiver_receipt
+            if waiver_errors:
+                report["waiver_receipt_error"] = waiver_errors[0]
             close_commit_report = _run_close_commit_tail(
-                worktree_root, effective_decisions, sid, completion_entry_path
+                worktree_root,
+                effective_decisions,
+                sid,
+                completion_entry_path,
+                extra_stage_paths=[waiver_receipt] if waiver_receipt else (),
             )
             if close_commit_report is not None:
                 report["close_commit"] = close_commit_report

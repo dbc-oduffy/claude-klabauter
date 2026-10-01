@@ -76,9 +76,12 @@ def test_unterminated_block_is_not_reported_as_a_parse_defect(mod, tmp_path: Pat
     assert mod.check(path) is None
 
 
-def test_corpus_walk_reaches_records_outside_any_plausible_allowlist(mod) -> None:
-    found = {p.relative_to(_REPO_ROOT).parts[0] for p in mod.corpus_paths(_REPO_ROOT)}
-    for root in ("state", "docs", "archive"):
+def test_corpus_walk_reaches_records_outside_any_plausible_allowlist(mod, tmp_path: Path) -> None:
+    for root in ("state", "docs", "archive", "somewhere-nobody-listed"):
+        (tmp_path / root / "nested").mkdir(parents=True)
+        (tmp_path / root / "nested" / "record.md").write_text('---\ntitle: "ok"\n---\n', encoding="utf-8")
+    found = {p.relative_to(tmp_path).parts[0] for p in mod.corpus_paths(tmp_path)}
+    for root in ("state", "docs", "archive", "somewhere-nobody-listed"):
         assert root in found, f"corpus walk never reached {root}/"
 
 

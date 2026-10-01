@@ -220,7 +220,6 @@ class TestDenyReasonRoutes:
         assert "coordinator_core.invoke" in reason
         assert "possession-gated" in reason
         assert "authorship-gated" not in reason
-        assert "--sha" not in reason
 
     def test_close_intent_deny_unchanged_by_correction_route_addition(
         self, tmp_path, monkeypatch
@@ -431,7 +430,16 @@ class TestNoUnlockExistsStatement:
         assert result is None
 
 
-def _reason_for(repo_root: Path, new_strings: list[str]) -> str:
+def _fired_route(monkeypatch, repo_root: Path, new_strings: list[str]) -> str:
+    """Which deny branch of check() fired: "close" or "continuation".
+
+    Read off sentinel reason builders, never off the operator-facing prose,
+    so re-wording either message cannot masquerade as a predicate change.
+    """
+    monkeypatch.setattr(guard, "_close_route_reason", lambda *_: "ROUTE:close")
+    monkeypatch.setattr(
+        guard, "_continuation_route_reason", lambda *_: "ROUTE:continuation"
+    )
     rel = "state/handoffs/2026-07-20_120000_abc.md"
     if len(new_strings) == 1:
         tool_input = {"file_path": rel, "old_string": "x", "new_string": new_strings[0]}
@@ -448,11 +456,9 @@ def _reason_for(repo_root: Path, new_strings: list[str]) -> str:
         {"tool_name": tool_name, "tool_input": tool_input, "cwd": str(repo_root)}
     )
     assert result is not None
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def _is_close_route(reason: str) -> bool:
-    return "--sha" in reason
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason.startswith("ROUTE:")
+    return reason.removeprefix("ROUTE:")
 
 
 class TestCloseIntentDiscrimination:
@@ -461,43 +467,34 @@ class TestCloseIntentDiscrimination:
         repo_root, _ = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         self.repo_root = repo_root
+        self.monkeypatch = monkeypatch
+
+    def _route(self, new_strings):
+        return _fired_route(self.monkeypatch, self.repo_root, new_strings)
 
     def test_shipped_in_alone_is_close_intent(self):
-        assert _is_close_route(_reason_for(self.repo_root, ["shipped_in: deadbeef"]))
+        assert self._route(["shipped_in: deadbeef"]) == "close"
 
     def test_abandoned_is_close_intent(self):
-        assert _is_close_route(
-            _reason_for(self.repo_root, ["deployment_state: abandoned"])
-        )
+        assert self._route(["deployment_state: abandoned"]) == "close"
 
     def test_multiedit_all_frontmatter_is_close_intent(self):
-        assert _is_close_route(
-            _reason_for(
-                self.repo_root,
-                ["deployment_state: shipped", "shipped_in_kind: commit"],
-            )
+        assert (
+            self._route(["deployment_state: shipped", "shipped_in_kind: commit"])
+            == "close"
         )
 
     def test_prose_mentioning_shipped_in_is_not_a_close(self):
-        assert not _is_close_route(
-            _reason_for(
-                self.repo_root,
-                ["We finally set shipped_in on the other baton today."],
-            )
+        assert (
+            self._route(["We finally set shipped_in on the other baton today."])
+            == "continuation"
         )
 
     def test_non_terminal_deployment_state_is_not_a_close(self):
-        assert not _is_close_route(
-            _reason_for(self.repo_root, ["deployment_state: in_flight"])
-        )
+        assert self._route(["deployment_state: in_flight"]) == "continuation"
 
     def test_multiedit_with_one_body_edit_is_not_a_close(self):
-        assert not _is_close_route(
-            _reason_for(
-                self.repo_root,
-                ["deployment_state: shipped", "## Progress\n\nMore work."],
-            )
-        )
+        assert self._route(["deployment_state: shipped", "## Progress\n\nMore work."]) == "continuation"
 
 
 class TestGuardStillDenies:
@@ -588,7 +585,7 @@ _DOCS_WIKI_CITATION_RE = re.compile(r"docs/wiki/[A-Za-z0-9_\-./]+\.md")
 
 
 class TestDocsWikiCitationsLive:
-    def test_docs_wiki_citations_resolve_on_disk(self, tmp_path, monkeypatch):
+    def test_docs_wiki_citations_resolve_on_disk(self):
         """Any docs/wiki/*.md citation still present in the deny text must
         resolve on disk -- but the deny text is no longer GUARANTEED to
         carry one. 2026-08-13 (guard-messages-stop-handing-agents-the-keys,
@@ -603,11 +600,9 @@ class TestDocsWikiCitationsLive:
         citation must exist) pinned the very leak being fixed here; this
         test now only pins liveness for whatever citations remain, if any.
         """
-        repo_root, _ = _make_repo(tmp_path)
-        monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
-
-        continuation_reason = _reason_for(repo_root, ["## Progress\n\nMore work."])
-        close_reason = _reason_for(repo_root, ["deployment_state: shipped"])
+        rel = "state/handoffs/2026-07-20_120000_abc.md"
+        continuation_reason = guard._continuation_route_reason(rel, "")
+        close_reason = guard._close_route_reason(rel, "")
 
         cited = set(
             _DOCS_WIKI_CITATION_RE.findall(continuation_reason)

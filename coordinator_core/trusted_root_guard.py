@@ -205,6 +205,45 @@ def _self_located_engine_root() -> str:
     return ""
 
 
+PUBLISHED_ENGINE_KEY = "repos.claude_klabauter"
+ENGINE_STAMP_RELATIVE_PARTS = ("coordinator_core", "_engine_stamp")
+
+
+def _has_engine_stamp(root: str) -> bool:
+    try:
+        return len(Path(root).joinpath(*ENGINE_STAMP_RELATIVE_PARTS).read_bytes()) > 0
+    except OSError:
+        return False
+
+
+def _published_engine_root(env: dict) -> str:
+    """Registry ``repos.claude_klabauter`` iff that tree carries a non-empty
+    ``coordinator_core/_engine_stamp`` (no stamp, no engine); else "".
+    Never raises."""
+    settings_home_dir = _settings_home_dir_from_env(env)
+    if not settings_home_dir:
+        return ""
+    root = (_registry_key(settings_home_dir, PUBLISHED_ENGINE_KEY) or "").rstrip("\n")
+    if root.endswith("/"):
+        root = root[:-1]
+    if not root or not _has_engine_stamp(root):
+        return ""
+    return root
+
+
+def _published_engine_root_rungs(env: dict) -> list[tuple[str, str]]:
+    settings_home_dir = _settings_home_dir_from_env(env)
+    if not settings_home_dir:
+        return [(f"registry {PUBLISHED_ENGINE_KEY}", "<skipped: settings-home dir resolved empty>")]
+    raw = _registry_key(settings_home_dir, PUBLISHED_ENGINE_KEY)
+    rungs = [(f"registry {PUBLISHED_ENGINE_KEY}", raw or "<absent>")]
+    if raw:
+        stamped = _has_engine_stamp(raw.rstrip("\n").rstrip("/"))
+        rungs.append(("engine stamp", "present" if stamped else "absent"))
+        rungs.append(("verdict", "trusted anchor" if stamped else "not an anchor (no stamp)"))
+    return rungs
+
+
 def _claude_klabauter_root(env: dict) -> str:
     """Read the registry-resolved claude-klabauter root — same shape as ``_content_root``
     above, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
@@ -388,6 +427,9 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
     )
     for label, val in _claude_klabauter_root_rungs(env):
         lines.append(f"      - {label}: {val!r}")
+    lines.append(f"  published engine anchor: {_published_engine_root(env)!r}")
+    for label, val in _published_engine_root_rungs(env):
+        lines.append(f"      - {label}: {val!r}")
     lines.append(f"  plugin mirror anchor:    {_plugin_mirror_root(env)!r}")
     lines.append(
         f"      - registry {PLUGIN_MIRROR_LIVE_PATH_KEY}: "
@@ -474,7 +516,12 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     if claude_home and root_cmp.startswith(trusted_prefix):
         trusted = True
 
-    for anchor in (_content_root(env), _claude_klabauter_root(env), _plugin_mirror_root(env)):
+    for anchor in (
+        _content_root(env),
+        _claude_klabauter_root(env),
+        _plugin_mirror_root(env),
+        _published_engine_root(env),
+    ):
         anchor_cmp = _norm_anchor(anchor)
         if anchor_cmp and _at_or_under(root_cmp, anchor_cmp):
             trusted = True

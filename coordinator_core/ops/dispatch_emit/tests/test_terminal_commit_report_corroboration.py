@@ -1,4 +1,5 @@
-"""Pins that the post-D4 terminal commit corroborates landed work from the marker's declared writes plus the dispatch-report file, never returned text (example-game-repo memo 2026-09-12 item 3)."""
+"""Pins that the terminal commit corroborates landed work from the marker's
+declared writes plus the dispatch-report file, never returned text."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-BUNDLE = "plugin/example-game-repo-control/server/example-game-repo-control.mjs"
+_BUNDLE = "plugin/example-game-repo-control/server/example-game-repo-control.mjs"
 
 
 def _git(args, cwd: Path) -> str:
@@ -53,8 +54,9 @@ def _write_script(repo: Path, request: CommitRequest, name: str = "run.mjs") -> 
     return name
 
 
-def _head_files(repo: Path) -> str:
-    return _git(["show", "--name-only", "--format=", "HEAD"], repo)
+def _committed_files(repo: Path) -> set[str]:
+    out = _git(["show", "--name-only", "--format=", "HEAD"], repo)
+    return {line.strip() for line in out.splitlines() if line.strip()}
 
 
 def test_declared_write_lands_with_no_report_and_no_claim(repo):
@@ -63,24 +65,28 @@ def test_declared_write_lands_with_no_report_and_no_claim(repo):
         chunks=(
             ChunkCommit(
                 id="C1", title="t1", paths=("a.txt",), prefixes=(),
-                report="does/not/exist.md",
+                report=".coordinator-local/subagent-share/absent/C1.md",
             ),
         ),
     )
     script = _write_script(repo, request)
+
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
-    assert out["committed"] is True
-    assert "a.txt" in _head_files(repo)
+
+    assert out["committed"] is True, out
+    assert "a.txt" in _committed_files(repo)
 
 
-def test_unclaimed_bundle_mjs_is_not_withheld(repo):
-    bundle = repo / BUNDLE
+def test_unclaimed_bundle_mjs_is_committed_not_withheld(repo):
+    bundle = repo / _BUNDLE
     bundle.parent.mkdir(parents=True)
-    bundle.write_text("// bundle\n", encoding="utf-8")
+    bundle.write_text("export const x = 1;\n", encoding="utf-8")
     request = CommitRequest(
-        chunks=(ChunkCommit(id="C2", title="t2", paths=(BUNDLE,)),),
+        chunks=(ChunkCommit(id="C2", title="t2", paths=(_BUNDLE,)),),
     )
     script = _write_script(repo, request)
+
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+
     assert out["committed"] is True, out
-    assert BUNDLE in _head_files(repo)
+    assert _BUNDLE in _committed_files(repo)

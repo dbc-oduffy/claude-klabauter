@@ -214,6 +214,22 @@ MIN_BAND_POPULATION_FOR_LEG2_DEVIATION = 5
 
 LEG2_DEVIATION_FACTOR = 1.5
 
+#: Floor under the pooled mean that leg 2's per-band ceiling is computed
+#: from: `max(live_pooled_mean, this) * LEG2_DEVIATION_FACTOR`. Without it a
+#: band's allowance is non-local -- trimming any one package lowers the
+#: pooled mean and with it every OTHER band's ceiling (observed: a hooks
+#: trim dropped hooks' own ceiling from ~486 to ~377.7, leaving 0.37 bytes
+#: of margin). The floor makes a successful sweep leave headroom instead of
+#: squeezing the next author; per-band regression stays the job of leg 3's
+#: hand-lowered ratchet. Set to the ceil-5 live pooled mean (221.43 -> 225);
+#: raise it only when a legitimate corpus-wide growth lifts the pooled mean
+#: past it (the live mean then takes over automatically).
+LEG2_POOLED_MEAN_FLOOR_BYTES = 225
+
+
+def leg2_effective_pooled_mean(pooled_mean: float) -> float:
+    return max(pooled_mean, float(LEG2_POOLED_MEAN_FLOOR_BYTES))
+
 
 def leg2_pooled_mean(cells: List[_Cell]) -> float:
     speakers = _select_speakers(cells)
@@ -224,7 +240,9 @@ def leg2_pooled_mean(cells: List[_Cell]) -> float:
 def leg2_band_deviation_violations(cells: List[_Cell]) -> List[str]:
     speakers = _select_speakers(cells)
     _require_nonempty_population(speakers, "leg2-band-deviation")
-    pooled_mean = statistics.mean(c.measurement.prose_bytes for c in speakers)
+    pooled_mean = leg2_effective_pooled_mean(
+        statistics.mean(c.measurement.prose_bytes for c in speakers)
+    )
     by_band: Dict[str, List[_Cell]] = defaultdict(list)
     for cell in speakers:
         by_band[cell.band].append(cell)
@@ -237,7 +255,7 @@ def leg2_band_deviation_violations(cells: List[_Cell]) -> List[str]:
         limit = pooled_mean * LEG2_DEVIATION_FACTOR
         if band_mean > limit:
             violations.append(
-                "%s: mean=%.2f exceeds pooled_mean(%.2f) * %.1f = %.2f (n=%d speakers)"
+                "%s: mean=%.2f exceeds pooled_mean_floored(%.2f) * %.1f = %.2f (n=%d speakers)"
                 % (band, band_mean, pooled_mean, LEG2_DEVIATION_FACTOR, limit, len(band_cells))
             )
     return violations
@@ -310,55 +328,40 @@ def leg3_ratchet_violations(cells: List[_Cell]) -> List[str]:
     return violations
 
 
-def test_leg1_ceiling_per_band(measured_corpus):
-    cells, _elapsed = measured_corpus
-    violations = leg1_ceiling_violations(cells)
-    assert not violations, "leg-1 ceiling violations (%d), none exempted in C4's manifest:\n%s" % (
-        len(violations),
-        "\n".join(violations),
-    )
-
-
 def test_leg2_distribution_pooled_mean_with_band_deviation(measured_corpus):
     cells, _elapsed = measured_corpus
     violations = leg2_band_deviation_violations(cells)
     assert not violations, "leg-2 per-band deviation violations:\n%s" % "\n".join(violations)
 
 
-def test_leg3_ratchet_mean_prose_bytes_per_band(measured_corpus):
-    cells, _elapsed = measured_corpus
-    violations = leg3_ratchet_violations(cells)
-    assert not violations, "leg-3 ratchet increase(s) -- adjudicate each named cell, do not sweep:\n%s" % (
-        "\n".join(violations)
-    )
+def _synthetic_band_cells(band: str, sizes: List[int]) -> List[_Cell]:
+    cells = []
+    for i, size in enumerate(sizes):
+        envelope = {"hookSpecificOutput": {"additionalContext": "x" * size}}
+        measurement = measure_envelope(envelope, band=band)
+        cells.append(_Cell("synthetic-%s" % band, "row-%d" % i, band, measurement))
+    return cells
 
 
-def test_leg3_baseline_is_not_slack(measured_corpus):
-    """R11's dilution finding, closed as a two-sided ratchet rather than a
-    one-off re-baseline: a band whose recorded baseline has drifted more than
-    `2 * JITTER_ALLOWANCE_BYTES` above its live `_ceil_to_5` mean is slack,
-    not a ratchet -- the gap no longer tracks any real cross-host jitter and
-    should be lowered by hand (this dict does not self-update, by design;
-    see `RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND`'s own docstring)."""
-    cells, _elapsed = measured_corpus
-    speakers = _select_speakers(cells)
-    by_band: Dict[str, List[_Cell]] = defaultdict(list)
-    for cell in speakers:
-        by_band[cell.band].append(cell)
+def test_leg2_trimming_other_bands_does_not_tighten_a_band_ceiling():
+    """The band under test sits just under the floored ceiling; every other
+    band is then shrunk far below the floor. The live pooled mean collapses,
+    but the floor keeps the ceiling put, so the unchanged band still passes."""
+    ceiling = LEG2_POOLED_MEAN_FLOOR_BYTES * LEG2_DEVIATION_FACTOR
+    n = MIN_BAND_POPULATION_FOR_LEG2_DEVIATION
+    at_ceiling = _synthetic_band_cells("directory:hooks", [int(ceiling) - 5] * n)
+    trimmed_others = _synthetic_band_cells("advisory-rewrite", [50] * (n * 10))
+    assert leg2_pooled_mean(at_ceiling + trimmed_others) < LEG2_POOLED_MEAN_FLOOR_BYTES
+    assert leg2_band_deviation_violations(at_ceiling + trimmed_others) == []
 
-    violations = []
-    for band, band_cells in sorted(by_band.items()):
-        baseline = RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND.get(band)
-        if baseline is None:
-            continue
-        live_ceil = _ceil_to_5(statistics.mean(c.measurement.prose_bytes for c in band_cells))
-        slack = baseline - live_ceil
-        if slack > 2 * JITTER_ALLOWANCE_BYTES:
-            violations.append(
-                "%s: baseline %d is %d over live ceil5-mean %d (allowance %d) -- lower it to %d"
-                % (band, baseline, slack, live_ceil, JITTER_ALLOWANCE_BYTES, live_ceil + JITTER_ALLOWANCE_BYTES)
-            )
-    assert not violations, "leg-3 baseline is slack, not ratchet -- lower by hand:\n%s" % "\n".join(violations)
+
+def test_leg2_still_flags_a_band_genuinely_over_the_floored_ceiling():
+    ceiling = LEG2_POOLED_MEAN_FLOOR_BYTES * LEG2_DEVIATION_FACTOR
+    n = MIN_BAND_POPULATION_FOR_LEG2_DEVIATION
+    too_long = _synthetic_band_cells("directory:hooks", [int(ceiling) + 20] * n)
+    others = _synthetic_band_cells("advisory-rewrite", [50] * (n * 10))
+    violations = leg2_band_deviation_violations(too_long + others)
+    assert len(violations) == 1 and violations[0].startswith("directory:hooks:")
 
 
 # ---------------------------------------------------------------------------

@@ -228,6 +228,26 @@ def test_fix_locus_citation_and_gate_type_present(tmp_path: Path):
     assert result["registry_has_gate_type"] is True
 
 
+def test_fix_locus_accepts_enclosing_function_citation(tmp_path: Path):
+    body = "## Fix Locus\nSee coordinator_core/foo.py::_fix_locus for the site.\n"
+    result = ss._fix_locus(_ctx(repo_root=tmp_path, plan_body=body))
+    assert result["citation_present"] is True
+    assert result["citation"] == "coordinator_core/foo.py::_fix_locus"
+
+
+def test_fix_locus_accepts_qualified_method_citation(tmp_path: Path):
+    body = "## Fix Locus\nSee coordinator_core/foo.py::Widget.run for the site.\n"
+    result = ss._fix_locus(_ctx(repo_root=tmp_path, plan_body=body))
+    assert result["citation"] == "coordinator_core/foo.py::Widget.run"
+
+
+def test_fix_locus_bare_path_without_locator_fails(tmp_path: Path):
+    body = "## Fix Locus\nSee coordinator_core/foo.py and also foo.py:: for the site.\n"
+    result = ss._fix_locus(_ctx(repo_root=tmp_path, plan_body=body))
+    assert result["citation_present"] is False
+    assert result["citation"] is None
+
+
 def test_fix_locus_undetermined_without_section(tmp_path: Path):
     ctx = _ctx(repo_root=tmp_path, plan_body="No relevant section here.")
     _assert_undetermined(ss._fix_locus(ctx))

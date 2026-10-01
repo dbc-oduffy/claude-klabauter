@@ -407,9 +407,7 @@ _RUN_ID_ARG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}\Z")
 
 #: A recorded start SHA must be a concrete hex object name. A symbolic ref
 #: (`HEAD`, a branch name) re-resolves at READ time rather than naming the
-#: commit the run actually started from — the same defect
-#: `directives_review.build_write_review_trail_directive` rejects fail-loud
-#: for trail ranges.
+#: commit the run actually started from.
 _START_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
 #: `git diff --numstat` row: `<added>\t<deleted>\t<path>`, with `-` in the

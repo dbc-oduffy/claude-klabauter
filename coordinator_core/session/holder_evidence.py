@@ -97,11 +97,12 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     whole-corpus `live_session_verdicts(cwd)` scan this function used to run
     just to discard every entry but one.
 
-    Public name (promoted from `_liveness_basis`) so `coordinator/bin/
-    session-claim-cli`'s `is-session-live` subcommand can reuse this exact
-    derivation for AC8 rather than computing a second, drift-prone one — see
-    docs/plans/2026-08-10-stable-pid-capture-breadcrumb-and-liveness-basis.md
-    § C3. `_liveness_basis` is kept below as an alias for this module's own
+    NOT the basis `session-claim-cli is-session-live` prints: that CLI takes
+    verdict and basis from one `liveness.session_live_with_basis` read, because
+    this seam's stable_pid-absent Layer 2 is UNCLAMPED and can describe a
+    different verdict than `session_live` on the same session (backward clock
+    step) -- this function explains a pickup-brief verdict, not a claim-layer
+    one. `_liveness_basis` is kept below as an alias for this module's own
     internal caller (`holder_evidence`).
 
     Vocabulary (eight values; see `live_session_verdicts`'s docstring for the

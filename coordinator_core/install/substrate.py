@@ -44,7 +44,13 @@ Env:
         writes into $HOME profile files (write_path_entry_guard_blocks), and
         the fnm brew/curl install — regardless of the path involved. Set
         suite-wide by the test harness (coordinator_core/conftest.py); see
-        `_refuse_machine_mutation`.
+        `_refuse_machine_mutation`. The promise is install-plane writes only
+        (PM-delegated ruling, 2026-08-06 debt row): machine state OUTSIDE the
+        install's own territory is refused, and every module under
+        coordinator_core/install/ that reaches a write primitive without
+        consulting the switch is named in `MACHINE_MUTATION_SWITCH_CARVE_OUTS`
+        -- the one list, enforced by
+        install/tests/test_write_reaching_modules_declare.py.
     CHECK_ONLY         — optional; "1" reports would-do, writes nothing
         (also accepted as CLI --check-only).
 
@@ -179,6 +185,118 @@ def _cygpath_w(posix_path: str) -> str:
 
 _MACHINE_MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 
+CARVE_OUT_INSTALL_PLANE = "install-plane"
+CARVE_OUT_CALLER_GATED = "caller-gated-mechanic"
+CARVE_OUT_NOT_A_WRITE = "not-a-machine-write"
+CARVE_OUT_GAP = "gap"
+
+MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
+    # Every write-reaching module in this package that does NOT consult
+    # `COORDINATOR_DISABLE_MACHINE_MUTATION`, keyed by filename ->
+    # (class, reason). The switch promises install-plane writes only: machine
+    # state outside the install's own territory is refused. A module absent
+    # from this dict and absent from the switch is a test failure; an entry
+    # whose module now gates, vanished, or stopped reaching a write is a
+    # test failure too. `gap` entries are non-install-plane writers still
+    # ungated -- the class may only shrink (pinned in the test).
+    "dep_check.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "writes only the chain-walk visited-set under <settings_home>/coordinator-claude/",
+    ),
+    "detect_test_cmd.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "upserts frontmatter keys in the project's own coordinator.local.md",
+    ),
+    "ensure_venv.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "builds and swaps the settings-home venv; its rmtree targets venv build/previous dirs there",
+    ),
+    "first_run.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "provisions the stamped engine build under settings-home",
+    ),
+    "gen_settings_hooks.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "generates settings.json hook wiring and the positive marker in the install's settings home",
+    ),
+    "door_install.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "installs the door binary and named forwarders into the settings-home bin dir",
+    ),
+    "door_uninstall.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "reverses door_install's writes in the settings-home bin dir",
+    ),
+    "forwarder_self_heal.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "appends its failure ledger beside the settings-home forwarders",
+    ),
+    "hook_plane_verdict.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "writes <claude_home>/rules/<basename>, the install's own rule surface",
+    ),
+    "live_plugin_registration.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "rewrites the installed-plugin record's installPath to the live clone",
+    ),
+    "scaffold_structure.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "scaffolds directories and template files into the repo being onboarded",
+    ),
+    "clone_sibling_repo.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "clones the install's own sibling repo (the DoE clone) into the caller-named target",
+    ),
+    "forwarder_door_census.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "regenerates claude-klabauter's own warm_entrypoint_allowlist.json inside its own tree",
+    ),
+    "uninstall_legs.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "removes the install's own settings-home territory; its machine-state legs (rc blocks, cmd AutoRun) delegate to gated callees",
+    ),
+    "_shared.py": (
+        CARVE_OUT_CALLER_GATED,
+        "atomic_write/ml_set are mechanics parameterized by the caller's target; the caller gates",
+    ),
+    "junction.py": (
+        CARVE_OUT_CALLER_GATED,
+        "create/remove_junction are mechanics parameterized by the caller's link and target; the caller gates",
+    ),
+    "coordinator_install_entry.py": (
+        CARVE_OUT_NOT_A_WRITE,
+        "dispatches claude-klabauter's declared installer by subprocess; the installer gates its own writes",
+    ),
+    "door_route_signal.py": (CARVE_OUT_NOT_A_WRITE, "read-only door invocation; reads the telemetry stamp back"),
+    "door_serving_census.py": (CARVE_OUT_NOT_A_WRITE, "read-only door probe spawn"),
+    "manifest_reader.py": (CARVE_OUT_NOT_A_WRITE, "read-only interpreter probes and a manifest read"),
+    "path_resolution_report.py": (CARVE_OUT_NOT_A_WRITE, "read-only PATH resolution probes"),
+    "prereq_probe.py": (CARVE_OUT_NOT_A_WRITE, "read-only prerequisite probes (git ls-remote and the like)"),
+    "run_platform_localize.py": (
+        CARVE_OUT_NOT_A_WRITE,
+        "its flagged call is the read-only schema validation spawn; the localize write is platform_localize's",
+    ),
+    "step_zero_emit.py": (CARVE_OUT_NOT_A_WRITE, "detector false positive: str.replace in json_escape"),
+    "git_perf_config.py": (CARVE_OUT_NOT_A_WRITE, "detector false positive: sys.path.remove"),
+    "sandbox_check.py": (
+        CARVE_OUT_NOT_A_WRITE,
+        "writes are confined to a throwaway sandbox dir; live files are only read and backed up into it",
+    ),
+    "host_sampler_scheduler.py": (
+        CARVE_OUT_GAP,
+        "registers an OS Task Scheduler entry via schtasks: machine state outside the install plane, ungated",
+    ),
+    "wrapper_onto_path.py": (
+        CARVE_OUT_GAP,
+        "copies a wrapper into the per-user PATH bin dir (~/.local/bin): outside settings-home, ungated",
+    ),
+    "maximalist.py": (
+        CARVE_OUT_GAP,
+        "the orchestrator's own direct writes -- the Defender process-exclusion offer and the claude-author wrapper in the per-user bin dir -- are ungated",
+    ),
+}
+
+
 
 def _refuse_machine_mutation(
     path_being_written: str, *, what: str, check_temp_path: bool = True,
@@ -199,6 +317,8 @@ def _refuse_machine_mutation(
        ones that happen to route through a temp-rooted path. Applies to
        EVERY call site regardless of ``check_temp_path`` — this is the
        operator-facing switch, unconditional.
+       Its scope is install-plane writes only: what it deliberately does
+       not reach is enumerated in ``MACHINE_MUTATION_SWITCH_CARVE_OUTS``.
     2. ``path_being_written`` resolves under the OS temp dir
        (``tempfile.gettempdir()``) — the shape of a pytest ``tmp_path``
        fixture, never a genuine install location (a real install's

@@ -25,7 +25,6 @@ from typing import Any
 
 import pytest
 
-from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
 from coordinator_core.win_portability import no_console_creationflags
 from .fixtures.real_git import real_git_repo
@@ -60,10 +59,6 @@ def _write_completion_entry(root: Path, rel: str, extra_commits_block: str = "co
     return entry_path
 
 
-async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-    return consumed_handoff_stamp.StampOutcome()
-
-
 async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
     return {"exit_code": 0, "closed": [], "skipped": []}
 
@@ -75,7 +70,6 @@ def _run_tail(root: Path, entry_rel: str, sha: str) -> m.PostCommitTailOutcome:
             root,
             "sid-1",
             sha,
-            chain_terminal=False,
             governing_plan_slug="",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -87,7 +81,6 @@ def _run_tail(root: Path, entry_rel: str, sha: str) -> m.PostCommitTailOutcome:
 
 def test_late_landing_commit_folds_into_entry_commits_list(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     entry_rel = "archive/completed/2026-08/entry.md"
     _write_completion_entry(root, entry_rel)
@@ -125,7 +118,6 @@ def test_completion_fold_commit_leaves_index_agreeing_with_head(monkeypatch, tmp
     )
 
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     entry_rel = "archive/completed/2026-08/entry.md"
     _write_completion_entry(root, entry_rel)
     (root / "some-file.txt").write_text("work\n", encoding="utf-8")
@@ -145,7 +137,6 @@ def test_completion_fold_commit_leaves_index_agreeing_with_head(monkeypatch, tmp
 
 def test_placeholder_comment_form_is_handled(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     entry_rel = "archive/completed/2026-08/entry-comment.md"
     _write_completion_entry(
@@ -167,7 +158,6 @@ def test_placeholder_comment_form_is_handled(monkeypatch, tmp_path):
 
 def test_second_fold_pass_is_idempotent_no_op(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     entry_rel = "archive/completed/2026-08/entry-idempotent.md"
     _write_completion_entry(root, entry_rel)
@@ -199,7 +189,6 @@ def test_second_fold_pass_is_idempotent_no_op(monkeypatch, tmp_path):
 
 def test_no_entry_path_is_a_clean_skip_not_a_failure(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     landed_sha = _git(["rev-parse", "HEAD"], root).stdout.strip()
 
     outcome = _run(
@@ -208,7 +197,6 @@ def test_no_entry_path_is_a_clean_skip_not_a_failure(monkeypatch, tmp_path):
             root,
             "sid-1",
             landed_sha,
-            chain_terminal=False,
             governing_plan_slug="",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -222,7 +210,6 @@ def test_no_entry_path_is_a_clean_skip_not_a_failure(monkeypatch, tmp_path):
 
 def test_entry_path_escaping_allowed_roots_is_skipped_not_written(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     landed_sha = _git(["rev-parse", "HEAD"], root).stdout.strip()
 
     outcome = _run_tail(root, "state/handoffs/not-a-completion-entry.md", landed_sha)
@@ -234,7 +221,6 @@ def test_entry_path_escaping_allowed_roots_is_skipped_not_written(monkeypatch, t
 
 def test_malformed_commits_shape_soft_fails(monkeypatch, tmp_path):
     root = real_git_repo(tmp_path)
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     entry_rel = "docs/plans/2026-08-30-malformed.md"
     entry_path = root / entry_rel

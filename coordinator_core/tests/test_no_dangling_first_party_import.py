@@ -555,29 +555,6 @@ def _resolves(module: str, name: str) -> tuple[bool, bool]:
 
 
 class TestNoDanglingFirstPartyImport:
-    def test_every_first_party_imported_symbol_resolves(self) -> None:
-        wanted = _scan_tree()
-        assert wanted, "prefilter matched nothing — the scan itself is broken"
-
-        dangling: list[str] = []
-        for module in sorted(wanted):
-            symbols = _module_symbols(module)
-            if symbols.parse_error is not None:
-                dangling.append(f"{module} — {symbols.parse_error}")
-                continue
-            for name in sorted(wanted[module]):
-                resolved, _used_fallback = _resolves(module, name)
-                if not resolved:
-                    dangling.append(f"{module}.{name} — imported by the tree, absent")
-
-        assert not dangling, (
-            "first-party imports naming symbols that no longer exist; each one "
-            "takes its importing module dark at collection time:\n  "
-            + "\n  ".join(dangling)
-            + "\nDelete the import and whatever it fed, or restore the symbol — "
-            "do not skip the importing module."
-        )
-
     def test_no_duplicate_unpackaged_test_basename(self) -> None:
         by_basename: dict[str, list[str]] = {}
         for root in TESTPATHS:

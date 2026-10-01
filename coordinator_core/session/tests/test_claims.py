@@ -1926,7 +1926,7 @@ class TestListClaimsBySession:
 
     def test_list_claims_by_session_survives_real_ship_call_site(self, tmp_path):
         """Drives the REAL `handoff_transition._ship` mutator (the function
-        the archive path's `post_commit_stamp_and_ship` calls to flip
+        the archive path (`handoff_ship_archive`) calls to flip
         `deployment_state` to `shipped`) against a claimed handoff, then
         asserts the handoff-claims record — read via the real
         `list_claims_by_session` — survives. This is the actual regression

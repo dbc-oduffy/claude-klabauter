@@ -108,8 +108,6 @@ from coordinator_core.ops.ceremony.branch_resolution import (
     _detect_foreign_commits,
     _range_is_contiguous_suffix,
     _read_started_at,
-    _resolve_in_repo,
-    _sanitize_consumed_handoffs,
     _scan_session_scratch,
     _session_added_plans,
     _started_at_candidate_range,
@@ -711,149 +709,6 @@ def test_scan_session_scratch_git_tracked_excluded(git_repo):
 # pickup.handoff points at a temporally-adjacent CONCURRENT session's
 
 
-# ---------------------------------------------------------------------------
-# _resolve_in_repo — direct unit tests
-#
-# Prior coverage of _resolve_in_repo came only
-# through the full resolve_session_branches -> _resolve_branches integration path (the
-# traversal/absolute regression tests below).  That proves the end-to-end
-# behavior but doesn't pin the helper's own contract, including a case no
-# integration test exercises: a `../` traversal that resolves back INSIDE
-# the repo must be ACCEPTED, not rejected — a naive "reject any candidate
-# containing .." reimplementation would silently break this and nothing in
-# the integration suite would catch it.
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_in_repo_relative_in_repo_path_contained(repo):
-    handoff = repo.root / "state" / "handoffs" / "x.md"
-    handoff.write_text("body", encoding="utf-8")
-
-    result = _resolve_in_repo(repo.root, "state/handoffs/x.md")
-
-    assert result == handoff.resolve()
-
-
-def test_resolve_in_repo_parent_traversal_rejected(repo):
-    result = _resolve_in_repo(repo.root, "../outside.md")
-
-    assert result is None
-
-
-def test_resolve_in_repo_absolute_foreign_path_rejected(repo):
-    result = _resolve_in_repo(repo.root, "/absolute/foreign/path.md")
-
-    assert result is None
-
-
-def test_resolve_in_repo_traversal_that_resolves_back_inside_contained(repo):
-    """A `../` traversal that nets back INSIDE worktree_root must be ACCEPTED —
-    the genuine gap: a naive "reject any candidate containing .." reimplementation
-    would wrongly reject this, and only a direct unit test on _resolve_in_repo
-    itself (not the full-handler integration tests) pins this contract.
-    """
-    handoff = repo.root / "state" / "handoffs" / "x.md"
-    handoff.write_text("body", encoding="utf-8")
-
-    result = _resolve_in_repo(repo.root, "subdir/../state/handoffs/x.md")
-
-    assert result == handoff.resolve()
-
-
-def test_resolve_in_repo_dot_is_contained_as_root(repo):
-    result = _resolve_in_repo(repo.root, ".")
-
-    assert result == repo.root.resolve()
-
-
-# ---------------------------------------------------------------------------
-# Defect A regression — foreign-repo path bleed
-#
-# pickup.handoff is producer-written and NOT trusted: an absolute path
-# (or a ../ traversal) escapes worktree_root via Path.__truediv__, letting the
-# primary-path guard validate a file in a DIFFERENT repo (e.g. Example-retrieval-repo)
-# whose frontmatter even has consumed_by: <sid> — existence + consumed_by
-# alone are insufficient; containment inside worktree_root is the invariant
-# _resolve_in_repo asserts.
-#
-# Spec backlink:
-#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Defect A regression (plural array) — foreign-repo bleed into
-# consumed_handoff_paths, the 2026-07-13 example-cockpit-repo incident shape.
-#
-# The per-source scalar guard rejected the foreign pickup.handoff, but the
-# incident receipt still carried the foreign ABSOLUTE path AND a relativized
-# phantom (foreign basename joined to worktree_root) in the PLURAL
-# consumed_handoff_paths array + STEP_2_7 stamp target.  The final-gate
-# sanitizer (_sanitize_consumed_handoffs) enforces containment + sid-ownership
-# on the MERGED set at the one point every source converges, so no
-# foreign/absolute/phantom entry can survive into the receipt or STEP_2_7 even
-# if a per-source guard is bypassed by a different source or a future refactor.
-#
-# Spec backlink:
-#   coordinator_core/ops/ceremony/branch_resolution.py :: _sanitize_consumed_handoffs
-#   docs/plans/2026-07-10-wsc-resolve-foreign-repo-bleed-and-sid-null.md
-# ---------------------------------------------------------------------------
-
-
-def test_sanitize_drops_foreign_absolute_from_merged_set(repo, tmp_path):
-    """A foreign ABSOLUTE path (consumed_by: sid) that reached the merged set
-    is dropped by the final gate and re-expressed as nothing — never survives
-    as an absolute path or a relativized phantom.  Directly exercises the
-    choke point regardless of which upstream source injected the entry.
-    """
-    sid = "sess-sanitize-abs-001"
-
-    foreign_repo = tmp_path / "example-cockpit-repo"
-    foreign_dir = foreign_repo / "state" / "handoffs"
-    foreign_dir.mkdir(parents=True, exist_ok=True)
-    foreign_hf = foreign_dir / "2026-07-13_124503_dashboard-placement-rubric-ratify.md"
-    foreign_hf.write_text(
-        f"---\nstatus: consumed\nconsumed_by: {sid}\npredecessor: sess-foreign-pred\n---\n\nbody\n",
-        encoding="utf-8",
-    )
-
-    local_hf = repo.seed_handoff("real-local.md", consumed_by=sid)
-
-    merged = [
-        (str(foreign_hf), {"predecessor": "sess-foreign-pred"}),
-        ("state/handoffs/real-local.md", {"predecessor": "sess-local"}),
-    ]
-    kept, rejected = _sanitize_consumed_handoffs(repo.root, sid, merged)
-
-    kept_paths = [p for p, _fm in kept]
-    assert str(foreign_hf) not in kept_paths
-    assert not any("dashboard-placement-rubric-ratify" in p for p in kept_paths)
-    assert str(foreign_hf) in rejected
-    assert "state/handoffs/real-local.md" in kept_paths
-    assert all(not Path(p).is_absolute() for p in kept_paths)
-    assert local_hf.exists()
-
-
-def test_sanitize_drops_peer_owned_in_repo_handoff(repo):
-    """An IN-REPO handoff owned by a DIFFERENT sid (consumed_by: other) that
-    reached the merged set is dropped — containment passes but ownership fails,
-    so a temporally-adjacent peer's handoff is never mis-stamped as ours.
-    """
-    sid = "sess-sanitize-owner-001"
-    repo.seed_handoff("mine.md", consumed_by=sid)
-    repo.seed_handoff("peer.md", consumed_by="sess-some-peer-999")
-
-    merged = [
-        ("state/handoffs/mine.md", {}),
-        ("state/handoffs/peer.md", {}),
-    ]
-    kept, rejected = _sanitize_consumed_handoffs(repo.root, sid, merged)
-    kept_paths = [p for p, _fm in kept]
-    assert "state/handoffs/mine.md" in kept_paths
-    assert "state/handoffs/peer.md" not in kept_paths
-    assert "state/handoffs/peer.md" in rejected
-
-
 # the Staff Engineer-finding regression cases (F0 dedup, F2 STEP_2_7 plural evidence —
 # both the STEP_0 evidence dict AND the STEP_2_7 node's own evidence dict,
 
@@ -962,6 +817,37 @@ def test_trailer_reliable_when_no_work_since_started_at(git_repo):
     git_repo.seed_started_at(sid, started_at)
 
     assert _trailer_reliable(git_repo.root, sid, started_at) is True
+
+
+def test_trailer_reliable_fails_closed_when_count_probe_degraded(git_repo, monkeypatch):
+    """A degraded trailer-count probe is indeterminate, never a computed zero: it must
+    not fall through to "reliable" (started_at absent / HEAD unmoved), and the
+    evidence must reach the caller's warnings out-param."""
+    import coordinator_core.ops.ceremony.branch_resolution as br
+
+    sid = "sess-c1-degraded-001"
+    monkeypatch.setattr(
+        br, "session_commit_count_attributed",
+        lambda *_a, **_k: {"degraded": True, "evidence": "probe boom"},
+    )
+    for started_at in (None, "2099-01-01T00:00:00Z"):
+        warnings: list[str] = []
+        assert _trailer_reliable(git_repo.root, sid, started_at, warnings=warnings) is False
+        assert warnings == ["_trailer_reliable: probe boom"]
+
+
+def test_analyze_session_scoping_degraded_probe_is_ambiguous_with_warning(git_repo, monkeypatch):
+    import coordinator_core.ops.ceremony.branch_resolution as br
+
+    sid = "sess-c1-degraded-002"
+    git_repo.seed_started_at(sid, "2099-01-01T00:00:00Z")
+    monkeypatch.setattr(
+        br, "session_commit_count_attributed",
+        lambda *_a, **_k: {"degraded": True, "evidence": "probe boom"},
+    )
+    verdict = analyze_session_scoping(git_repo.root, git_repo.common_dir, sid)
+    assert verdict.method == SCOPING_METHOD_AMBIGUOUS
+    assert any("probe boom" in w for w in verdict.warnings)
 
 
 def test_analyze_session_scoping_trailerless_clean(git_repo):

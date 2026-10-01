@@ -39,7 +39,10 @@ This module writes to the operator's machine (the journal file itself), so
 it declares its own `WRITE_SURFACE` and honours
 `COORDINATOR_DISABLE_MACHINE_MUTATION` via a local `_refuse_machine_mutation`
 guard, gated ABOVE the append — matching `substrate.py`'s delete-leg
-pattern. `coordinator_core/install/tests/test_write_reaching_modules_declare.py`
+pattern. The journal is install-plane bookkeeping, which the switch's
+boundary (`substrate.MACHINE_MUTATION_SWITCH_CARVE_OUTS`) would permit
+ungated; it stays gated on purpose, since gating more than the promise
+requires is safe: an unreported writer resolves to cannot-safely-determine. `coordinator_core/install/tests/test_write_reaching_modules_declare.py`
 enforces every write-reaching module declares; this module's entry in that
 enforcement carries no allowlist bypass.
 

@@ -925,16 +925,16 @@ def test_workflow_shaped_agent_id_denied_without_any_backpointer(repo, free_mute
     assert guard.check(_payload("pytest", repo, agent_id="a" + "0f1e2d3c4b5a6978")) is not None
 
 
-def test_override_env_allows(repo, free_mutex, monkeypatch):
+def test_override_env_never_allows_a_subagent(repo, free_mutex, monkeypatch):
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
-    _assert_allowed(guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)))
-
-
-def test_override_env_read_inline_not_at_import(repo, free_mutex, monkeypatch):
-    monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "0")
     assert guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
+
+
+def test_override_env_still_disarms_the_em(repo, free_mutex, monkeypatch):
+    monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "0")
+    assert guard.check(_payload("pytest", repo)) is not None
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
-    _assert_allowed(guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)))
+    assert guard.check(_payload("pytest", repo)) is None
 
 
 def test_non_bash_tool_allowed(repo, free_mutex):

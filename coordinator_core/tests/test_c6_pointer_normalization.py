@@ -14,7 +14,8 @@ Coverage:
   (c) Differential-oracle agreement: coordinator_core.dag's pointer resolution (engine)
       vs. _baton_dag_oracle's independent from-scratch normalization (oracle) agree on
       "who points at this baton" for every live baton in the coordinator-content-repo corpus (~255
-      files) and the claude-klabauter corpus (~95 files), checked separately for the
+      files); the claude-klabauter-corpus counterpart lives in
+      test_c6_pointer_normalization_claude_klabauter_corpus.py. Checked separately for the
       predecessor-family ({'predecessor', 'predecessor_id'}) and origin_handoff-family
       ({'origin_handoff', 'origin_handoff_id'}) pointer sets. Comparison is on POINTER
       RESOLUTION ONLY — no edge-kind-set is added, removed, or unified by this test;
@@ -285,12 +286,24 @@ class TestReverseEdgeIndexCoverage:
     the `origin_handoff` families went red while `predecessor` passed.
     """
 
-    def _corpus(self):
-        root = str(Path(__file__).resolve().parents[2])
+    def _corpus(self, tmp_path: Path):
+        handoffs = tmp_path / "state" / "handoffs"
+        handoffs.mkdir(parents=True)
+        parent = handoffs / "2026-07-01_000000_parent.md"
+        child = handoffs / "2026-07-02_000000_child.md"
+        _write_handoff(parent, slug="parent", handoff_id="hnd-parent-000001")
+        _write_handoff(
+            child,
+            slug="child",
+            handoff_id="hnd-child-000001",
+            predecessor=parent.name,
+            origin_handoff=parent.name,
+        )
+        root = str(tmp_path)
         return root, oracle.collect_corpus_paths(root)
 
-    def test_index_records_the_kinds_it_covers(self):
-        root, paths = self._corpus()
+    def test_index_records_the_kinds_it_covers(self, tmp_path: Path):
+        root, paths = self._corpus(tmp_path)
         index = dag.build_reverse_edge_index(
             paths, handoff_dir=os.path.dirname(paths[0])
         )
@@ -303,8 +316,8 @@ class TestReverseEdgeIndexCoverage:
         )
         assert widened["edge_kinds"] == frozenset({"origin_handoff"})
 
-    def test_uncovered_kind_raises_instead_of_answering_empty(self):
-        root, paths = self._corpus()
+    def test_uncovered_kind_raises_instead_of_answering_empty(self, tmp_path: Path):
+        root, paths = self._corpus(tmp_path)
         index = dag.build_reverse_edge_index(
             paths, handoff_dir=os.path.dirname(paths[0])
         )
@@ -315,8 +328,8 @@ class TestReverseEdgeIndexCoverage:
         assert "origin_handoff" in str(exc.value)
         assert "build_reverse_edge_index" in str(exc.value)
 
-    def test_a_covered_kind_still_answers(self):
-        root, paths = self._corpus()
+    def test_a_covered_kind_still_answers(self, tmp_path: Path):
+        root, paths = self._corpus(tmp_path)
         index = dag.build_reverse_edge_index(
             paths,
             handoff_dir=os.path.dirname(paths[0]),
@@ -327,10 +340,10 @@ class TestReverseEdgeIndexCoverage:
         )
         assert set(result) == {"referenced", "referencedBy"}
 
-    def test_a_legacy_index_without_coverage_is_read_as_archival(self):
+    def test_a_legacy_index_without_coverage_is_read_as_archival(self, tmp_path: Path):
         """An index built before coverage was recorded carries exactly
         ARCHIVAL_EDGE_KINDS by construction, so absence is not unknown."""
-        root, paths = self._corpus()
+        root, paths = self._corpus(tmp_path)
         index = dag.build_reverse_edge_index(
             paths, handoff_dir=os.path.dirname(paths[0])
         )
@@ -343,15 +356,6 @@ class TestReverseEdgeIndexCoverage:
 
 
 class TestDifferentialOracleAgreement:
-    def test_claude_klabauter_predecessor_family(self):
-        root = str(Path(__file__).resolve().parents[2])
-        assert os.path.isdir(os.path.join(root, "state", "handoffs"))
-        _corpus_agreement(root, oracle.PREDECESSOR_LINK_FIELDS, {"predecessor"})
-
-    def test_claude_klabauter_origin_handoff_family(self):
-        root = str(Path(__file__).resolve().parents[2])
-        _corpus_agreement(root, oracle.ORIGIN_HANDOFF_LINK_FIELDS, {"origin_handoff"})
-
     @pytest.mark.real_home
     def test_content_root_predecessor_family(self):
         content_root = read_content_root_pointer()

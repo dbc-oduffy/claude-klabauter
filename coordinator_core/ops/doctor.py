@@ -1,6 +1,10 @@
 """
 coordinator_core.ops.doctor — the WS-9 out-of-harness health/repair command.
 
+This is the on-demand install-works verdict: does THIS machine's install deliver working hooks
+now. `validate-install-contract` answers a different question, whether the manifest is
+packageable, a property of the source tree; one green is not the other.
+
 WHY THIS EXISTS
     Five occurrences of the same incident class in two days (2026-07-28/29): a
     hook registration or a synced config file goes bad, and the tools needed to
@@ -57,6 +61,18 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list; the last, i
        command using it fails open, so the guards it was meant to run
        silently never run. Detect-only, no spawn — see
        `_check_hook_interpreter_resolvability`'s own docstring.
+    8. Install manifest and steps agree — (the install-drift layer above).
+    9. Hook delivery is not duplicated — the SessionStart reader
+       `detect_hook_delivery_duplication`: broken on double-fire, unknown when
+       the content root or manifest cannot be read. Composed from
+       `doctor_boot_banners`.
+    10. Hook plane is armed   — the SessionStart reader `derive_hook_plane`:
+       will a session launched here run hooks, and does `.coordinator-content-root` resolve
+       through a rung the no-launcher fences read? Composed from
+       `doctor_boot_banners`.
+    The kill-switch layer (4) renders the marker through
+    `evaluate_hooks_kill_switch_full_detail`, the same text the boot banner's
+    on-demand door prints.
 
 REPAIR POSTURE — what this command fixes vs. only reports, and why
     Exactly one layer is auto-repairable, and only when `--fix` is passed
@@ -726,14 +742,11 @@ def _check_kill_switch_marker() -> Layer:
     marker = _config_dir() / _HOOKS_DISABLED_MARKER_NAME
     if not marker.is_file():
         return Layer("Hooks generation kill-switch", "ok", [])
-    findings = [
-        Finding(
-            "info",
-            f"ARMED: {marker} is present — hook-generation regeneration is suppressed "
-            "on this machine (detect-only: whether this marker should still exist is an "
-            "open design decision, WS-12 — this command does not toggle it).",
-        )
-    ]
+    from coordinator_core.ops.session.guard_settings_integrity import (
+        evaluate_hooks_kill_switch_full_detail,
+    )
+
+    findings = [Finding("info", evaluate_hooks_kill_switch_full_detail(_config_dir()))]
     return Layer("Hooks generation kill-switch", "ok", findings)
 
 
@@ -916,20 +929,22 @@ def _repair_each(entry, stale, bin_dir: str, fix_report: List[str], current: int
 # ---------------------------------------------------------------------------
 
 
+def _blob_sha(path: Path) -> str:
+    """Git blob SHA-1 of a file's raw bytes, computed in-process (no spawn)."""
+    import hashlib
+
+    data = path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def _check_shim_freshness() -> Layer:
     """Layer 6 — is the INSTALLED resolve-claude-klabauter shim content-current with
     the source copy it was installed from? (P105-C5)
 
     Compares `<settings-home>/bin/_resolve_claude_klabauter.py` (and the `~/.claude/bin`
     compat mirror, if present) against `<claude-klabauter-live-root>/coordinator/lib/
-    resolve-claude-klabauter/_resolve_claude_klabauter.py`, using the blob-SHA compare primitive
-    `coordinator_core.plugin_health.drift` already carries
-    (`_run_git(["hash-object", "--stdin-paths"], ...)`) rather than
-    reimplementing a second one — see this row's citation note for why only
-    that primitive, and not `_check_copy_install` itself, is reused here:
-    the latter is shaped around a whole plugin-copy check (a `version.txt`
-    sentinel, a `source_subpath`, a `git ls-tree` enumeration) that this
-    single-file compare has no use for.
+    resolve-claude-klabauter/_resolve_claude_klabauter.py`, comparing git blob SHAs computed in-process
+    (`_blob_sha`); no process is spawned.
 
     Absence of a check is not a pass (this module's own stated rule): no
     shim installed on this box, or no resolvable source, is UNKNOWN with a
@@ -982,16 +997,13 @@ def _check_shim_freshness() -> Layer:
             )],
         )
 
-    from coordinator_core.plugin_health.drift import _run_git
-
-    stdin_payload = "".join(f"{p}\n" for p in [source_path, *installed])
-    result = _run_git(["hash-object", "--stdin-paths"], input_text=stdin_payload)
-    out_lines = (result.stdout or "").splitlines()
-    if result.returncode != 0 or len(out_lines) < 1 + len(installed):
+    try:
+        out_lines = [_blob_sha(p) for p in [source_path, *installed]]
+    except OSError as exc:
         return Layer(
             name,
             "unknown",
-            [Finding("info", "could not hash source/installed shim copies for comparison (git hash-object failed)")],
+            [Finding("info", f"could not read source/installed shim copies for comparison ({exc})")],
         )
 
     source_sha = out_lines[0].strip()
@@ -1105,14 +1117,21 @@ def _check_install_drift() -> Layer:
     if script is None or not script.is_file():
         return Layer(name, "ok", [])
     import importlib.util
+    import sys
 
+    spec = None
     try:
         spec = importlib.util.spec_from_file_location("_doctor_coordinator_install", script)
         module = importlib.util.module_from_spec(spec)
+        # @dataclass under `from __future__ import annotations` resolves its module via sys.modules.
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         problems = module.check_manifest_drift()
     except Exception as exc:  # a broken install script is itself the finding
         return Layer(name, "broken", [Finding("broken", f"install drift check raised {exc!r} ({script}).")])
+    finally:
+        if spec is not None:
+            sys.modules.pop(spec.name, None)
     findings = [
         Finding("broken", f"install drift: {p} — fix the manifest or the step in {script.name}.")
         for p in problems
@@ -1130,6 +1149,9 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_shim_freshness())
     report.layers.append(_check_hook_interpreter_resolvability())
     report.layers.append(_check_install_drift())
+    from coordinator_core.ops.doctor_boot_banners import boot_banner_layers
+
+    report.layers.extend(boot_banner_layers(_config_dir()))
 
     fix_report: List[str] = []
     if fix:

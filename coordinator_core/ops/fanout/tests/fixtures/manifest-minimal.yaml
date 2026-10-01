@@ -1,0 +1,15 @@
+schema: fanout-manifest.v1
+job_id: demo-job
+environment_id: env-example
+model: example-model
+permission_mode: acceptEdits
+parent:
+  session_id: parent-session-1
+  channel_pr_url: https://example.invalid/comms/pull/1
+channel: pr
+comms_repo: example-owner/comms
+workers:
+  - id: worker-a
+    source_url: https://example.invalid/example-owner/repo-a
+    focus: repos.repo_a
+    prompt: Do the thing.

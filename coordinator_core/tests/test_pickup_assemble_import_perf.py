@@ -12,7 +12,6 @@ imports from module scope into the functions that use them, in
 `coordinator_core.ops.goal_append`, `coordinator_core.ops.fleet._common`,
 `coordinator_core.ops.coverage_gate`, `coordinator_core.ops.handoff_children`,
 `coordinator_core.ops.emit.sections.cross_repo_memos`,
-`coordinator_core.ops.ceremony.consumed_handoff_stamp`,
 `coordinator_core.hooks.suggest_sonnet_research`,
 `coordinator_core.hooks.nudge_em_code_dispatch`,
 `coordinator_core.hooks.agent_completion_log`,

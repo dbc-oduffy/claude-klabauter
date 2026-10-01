@@ -236,6 +236,72 @@ def test_subagent_zero_tool_use_detect_no_op_when_not_dispatched_this_session(
     assert out == {}
 
 
+def _arm_zero_tool_use_detect(tmp_path, monkeypatch, raising=()):
+    import coordinator_core.hooks.subagent_zero_tool_use_detect as mod
+
+    (tmp_path / ".git").mkdir()
+    sess_dir = tmp_path / ".git" / "coordinator-sessions" / "sess-1"
+    sess_dir.mkdir(parents=True)
+    (sess_dir / "dispatched-agents.txt").write_text("agent-1\texecutor\n")
+
+    calls: dict = {}
+
+    def make(name):
+        async def leg(params, repo_root=None):
+            calls.setdefault(name, []).append(params)
+            if name in raising:
+                raise RuntimeError(name)
+            return {}
+
+        return leg
+
+    monkeypatch.setattr(mod, "_subagent_zero_tool_use_handler", make("zero"))
+    monkeypatch.setattr(mod, "_subagent_review_mark_handler", make("mark"))
+    monkeypatch.setattr(mod, "_receiver_state_sensor_handler", make("sensor"))
+
+    payload = {
+        "agent_type": "coordinator:executor",
+        "session_id": "sess-1",
+        "agent_id": "agent-1",
+        "cwd": str(tmp_path),
+        "agent_transcript_path": "/agent/transcript.jsonl",
+        "transcript_path": "/decoy/parent.jsonl",
+    }
+    return mod, calls, payload
+
+
+def test_subagent_zero_tool_use_detect_fires_each_leg_with_agent_transcript(
+    tmp_path, monkeypatch
+):
+    mod, calls, payload = _arm_zero_tool_use_detect(tmp_path, monkeypatch)
+
+    assert _run(mod._handler({"payload": payload})) == {}
+
+    assert set(calls) == {"zero", "mark", "sensor"}
+    assert all(len(v) == 1 for v in calls.values())
+    assert calls["zero"][0]["agent_transcript_path"] == "/agent/transcript.jsonl"
+    assert calls["mark"][0]["agent_transcript_path"] == "/agent/transcript.jsonl"
+    assert calls["sensor"][0]["transcript_path"] == "/agent/transcript.jsonl"
+    for params in (p[0] for p in calls.values()):
+        assert "/decoy/parent.jsonl" not in params.values()
+
+
+def test_subagent_zero_tool_use_detect_raising_leg_does_not_drop_the_others(
+    tmp_path, monkeypatch
+):
+    mod, calls, payload = _arm_zero_tool_use_detect(
+        tmp_path, monkeypatch, raising=("zero",)
+    )
+
+    assert _run(mod._handler({"payload": payload})) == {}
+
+    assert {k: len(v) for k, v in calls.items()} == {
+        "zero": 1,
+        "mark": 1,
+        "sensor": 1,
+    }
+
+
 def test_group_em_park_spool_registers():
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.group_em_park_spool  # noqa: F401

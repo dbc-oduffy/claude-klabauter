@@ -1983,11 +1983,9 @@ def test_consumed_handoff_completeness_fires_on_single_session_disposition_with_
 _DYNAMIC_SUFFIX_RESOLVES_BASES: frozenset[str] = frozenset()
 
 #: `resolves` ids naming a step with NO backing `directives[]` entry at all,
-#: by design. `d-render-final-summary` is Step 4's pure string-formatting
-#: fan-in (`directives_commit_tail.render_final_summary`) -- that function's
-#: own docstring states explicitly it is "Pure string formatting, no CLI, no
-#: `directives[]` entry". Extend only with an equally specific reason, never
-#: a blanket exemption.
+#: by design. `d-render-final-summary` is Step 4's summary rendering, done
+#: in prose by the EM with no CLI and no `directives[]` entry. Extend only
+#: with an equally specific reason, never a blanket exemption.
 _NO_DIRECTIVE_BACKING_RESOLVES_IDS = frozenset({"d-render-final-summary"})
 
 

@@ -153,6 +153,7 @@ Spec backlink: dispatch brief "session citation stops depending on a name"
 
 from __future__ import annotations
 
+import functools
 import re
 from typing import Any, Dict, Optional
 
@@ -212,17 +213,20 @@ _KNOWN_SLUGS = (
     "example-store-repo",
 )
 
-#: A known slug immediately followed by `-<1-4 alnum chars containing at
-#: least one digit>`, word-bounded on both ends. Built from `_KNOWN_SLUGS`
-#: at import time so the two never drift apart. The suffix charclass is
-#: deliberately narrow (1-4 chars) -- see module docstring "SUFFIX SHAPE".
-#: Kept as a STRING (not compiled directly) so `_ATTRIB_VERB_RE`/
-#: `_ATTRIB_ADDRESS_RE`/`_ATTRIB_FIELD_RE` below can embed the identical
-#: pattern inside their own larger constructions without drifting from it.
-_NAME_CORE = (
-    r"(?:" + "|".join(re.escape(slug) for slug in _KNOWN_SLUGS) + r")"
-    r"-(?=[0-9a-zA-Z]{1,4}\b)[0-9a-zA-Z]*[0-9][0-9a-zA-Z]*"
-)
+
+def _name_core() -> str:
+    """A known slug (literal roster plus registry names) followed by
+    `-<1-4 alnum chars containing at least one digit>`, word-bounded. A STRING
+    so the three attribution patterns embed the identical core."""
+    from coordinator_core._fleet_names import sibling_repo_names
+
+    slugs = tuple(n.casefold() for n in sibling_repo_names(_KNOWN_SLUGS))
+    slugs = tuple(dict.fromkeys(slugs))
+    return (
+        r"(?:" + "|".join(re.escape(slug) for slug in slugs) + r")"
+        r"-(?=[0-9a-zA-Z]{1,4}\b)[0-9a-zA-Z]*[0-9][0-9a-zA-Z]*"
+    )
+
 
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -288,32 +292,28 @@ _ATTRIB_FIELDS = (
     "claimed_by",
 )
 
-#: Verb phrase, case-insensitive (the incident's own shape is "ESTABLISHED
-#: AND FIXED BY"), immediately or near-immediately (optional "the"/
-#: "session") followed by the display-name shape -- the name stays
-#: case-SENSITIVE (a display name is conventionally all-lowercase; loosely
-#: matching would risk pulling in unrelated capitalized hyphenated prose).
-#: Captured in group(1).
-_ATTRIB_VERB_RE = re.compile(
-    r"(?i:\b(?:" + "|".join(re.escape(p) for p in _ATTRIB_VERB_PHRASES) + r")\b)"
-    r"\s+(?:the\s+)?(?:session\s+)?(\b" + _NAME_CORE + r"\b)"
-)
+@functools.lru_cache(maxsize=1)
+def _attrib_patterns() -> tuple:
+    """Verb, address and field patterns over the literal slugs plus registry
+    names; the registry is read at first use, not at import. The verb phrase
+    is case-insensitive; the display name stays case-sensitive. The address
+    pattern bounds the "message ... to" gap at 30 non-newline chars; the field
+    pattern anchors at line start (MULTILINE)."""
+    core = _name_core()
+    verb = re.compile(
+        r"(?i:\b(?:" + "|".join(re.escape(p) for p in _ATTRIB_VERB_PHRASES) + r")\b)"
+        r"\s+(?:the\s+)?(?:session\s+)?(\b" + core + r"\b)"
+    )
+    address = re.compile(
+        r"(?i:\bmessage(?:d|s)?\b)[^\n]{0,30}?(?i:\bto\b)"
+        r"\s+(\b" + core + r"\b)"
+    )
+    field = re.compile(
+        r"(?im:^[ \t]*(?:" + "|".join(re.escape(f) for f in _ATTRIB_FIELDS) + r")\s*:\s*)"
+        r"[\"']?(\b" + core + r"\b)"
+    )
+    return verb, address, field
 
-#: "message ... to <name>" addressing construction -- the name is the
-#: RECIPIENT, not the subject. Bounded gap (`{0,30}`, no newline) between
-#: "message" and "to" so this does not reach across unrelated sentences.
-_ATTRIB_ADDRESS_RE = re.compile(
-    r"(?i:\bmessage(?:d|s)?\b)[^\n]{0,30}?(?i:\bto\b)"
-    r"\s+(\b" + _NAME_CORE + r"\b)"
-)
-
-#: A crediting frontmatter field, at the START of a line (optionally
-#: indented), followed by `:` and an optional quote, then the display
-#: name. `re.MULTILINE` so `^` matches per-line inside a whole-file scan.
-_ATTRIB_FIELD_RE = re.compile(
-    r"(?im:^[ \t]*(?:" + "|".join(re.escape(f) for f in _ATTRIB_FIELDS) + r")\s*:\s*)"
-    r"[\"']?(\b" + _NAME_CORE + r"\b)"
-)
 
 _ADVISORY_TEMPLATE = (
     "Session display name `{token}` used as an identifier — display names "
@@ -346,7 +346,7 @@ def _find_display_name_token(text: str) -> Optional[str]:
     "message ... to" addressing, crediting frontmatter field.
     """
     scanned = _strip_code_spans(text)
-    for pattern in (_ATTRIB_VERB_RE, _ATTRIB_ADDRESS_RE, _ATTRIB_FIELD_RE):
+    for pattern in _attrib_patterns():
         match = pattern.search(scanned)
         if match is None:
             continue

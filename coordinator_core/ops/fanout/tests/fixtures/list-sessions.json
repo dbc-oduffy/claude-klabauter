@@ -1,0 +1,22 @@
+{
+  "sessions": [
+    {"id": "s-a", "title": "demo-job/worker-a", "status_bucket": "running",
+     "parent_session_id": "parent-session-1",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-a", "fanout-parent:parent-session-1"]},
+    {"id": "s-b", "title": "demo-job/worker-b", "status_bucket": "completed",
+     "parent_session_id": "parent-session-1",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-b"]},
+    {"id": "s-c", "title": "demo-job/worker-c", "status_bucket": "failed",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-c"]},
+    {"id": "s-d1", "title": "demo-job/worker-d", "status_bucket": "running",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-d"]},
+    {"id": "s-d2", "title": "demo-job/worker-d", "status_bucket": "running",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-d"]},
+    {"id": "s-e", "title": "demo-job/worker-e", "status_bucket": "weird",
+     "tags": ["fanout:demo-job", "fanout-worker:worker-e"]},
+    {"id": "s-stray", "title": "demo-job/ghost", "status_bucket": "running",
+     "tags": ["fanout:demo-job", "fanout-worker:ghost"]},
+    {"id": "s-other", "title": "other-job/worker-a", "status_bucket": "running",
+     "tags": ["fanout:other-job", "fanout-worker:worker-a"]}
+  ]
+}

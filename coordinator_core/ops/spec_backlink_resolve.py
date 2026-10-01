@@ -80,6 +80,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core._fleet_names import doctrine_repo_name
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.deliverable_rollup import (
@@ -93,11 +94,16 @@ logger = logging.getLogger(__name__)
 _PLN_PREFIX = "pln-"
 _DLV_PREFIX = "dlv-"
 
-# The only <repo>: qualifier resolve() accepts.
-# Mirrors rewrite_spec_backlinks._PEER_REPO_NAME, the fixed literal the emit
-# side ever produces; a queried_id carrying any OTHER qualifier is refused
-# as a typed miss rather than silently routed to the coordinator-content-repo peer index.
-_RECOGNIZED_PEER_REPO = "coordinator-content-repo"
+_PEER_REPO_DEFAULT = "coordinator-content-repo"
+
+
+def peer_repo_name() -> str:
+    """The one <repo>: qualifier resolve() accepts and the rewriter emits.
+
+    Resolved at call time from the doctrine repo; the literal is the fallback.
+    Both modules share this helper so emit and recognition cannot disagree.
+    """
+    return doctrine_repo_name() or _PEER_REPO_DEFAULT
 
 
 def _hit(path: str, queried_id: str) -> dict:
@@ -401,7 +407,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
     scanning worktree_root — the peer index is never built for a local-only
     query.
 
-    The `<repo>:` qualifier is validated against `_RECOGNIZED_PEER_REPO`
+    The `<repo>:` qualifier is validated against `peer_repo_name()`
     (Review: code-reviewer P2): an unrecognized qualifier (typo, wrong case,
     a repo this resolver has no peer index for) is a typed miss carrying
     `reason="unrecognized_repo_qualifier"`, never silently routed to the
@@ -414,7 +420,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
 
     if ":" in queried_id:
         repo, _sep, bare_id = queried_id.partition(":")
-        if repo != _RECOGNIZED_PEER_REPO:
+        if repo != peer_repo_name():
             return _miss(queried_id, reason="unrecognized_repo_qualifier")
         peer_root = _content_root_path()
         if peer_root is None or not peer_root.is_dir():

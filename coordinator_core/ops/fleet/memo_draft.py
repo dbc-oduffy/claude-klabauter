@@ -55,6 +55,7 @@ Negative-spec:
 from __future__ import annotations
 
 import datetime
+import functools
 import os
 import re
 from pathlib import Path
@@ -258,10 +259,17 @@ _KNOWN_REPO_PREFIXES = (
     "claude-klabauter",
 )
 
-_DISPLAY_NAME_RE = re.compile(
-    r"\b(?:%s)-[0-9a-f]{1,3}\b" % "|".join(re.escape(p) for p in _KNOWN_REPO_PREFIXES),
-    re.IGNORECASE,
-)
+@functools.lru_cache(maxsize=1)
+def _display_name_re() -> "re.Pattern[str]":
+    """Display-name pattern over the literal prefixes plus registry names; the
+    registry is read at first use, not at import."""
+    from coordinator_core._fleet_names import sibling_repo_names
+
+    prefixes = sibling_repo_names(_KNOWN_REPO_PREFIXES)
+    return re.compile(
+        r"\b(?:%s)-[0-9a-f]{1,3}\b" % "|".join(re.escape(p) for p in prefixes),
+        re.IGNORECASE,
+    )
 
 _UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
@@ -287,7 +295,7 @@ def detect_unqualified_display_names(text: Optional[str]) -> list:
         return []
     seen: list = []
     seen_set: set = set()
-    for match in _DISPLAY_NAME_RE.finditer(text):
+    for match in _display_name_re().finditer(text):
         start = max(0, match.start() - _DISPLAY_NAME_PROXIMITY_CHARS)
         end = min(len(text), match.end() + _DISPLAY_NAME_PROXIMITY_CHARS)
         window = text[start:end]

@@ -4855,6 +4855,23 @@ def run_preflight() -> int:
     return 1 if hard_failure else 0
 
 
+def write_environment_import(root: Path, variant: str) -> None:
+    """Write `.claude/environment.md` from `docs/claude-md/environment.<variant>.md`.
+
+    The project CLAUDE.md imports this file; a missing source is reported, never fatal.
+    """
+    src = root / "docs" / "claude-md" / f"environment.{variant}.md"
+    dest = root / ".claude" / "environment.md"
+    try:
+        text = src.read_text(encoding="utf-8")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"WARN [environment] could not write {dest} from {src}: {exc}")
+        return
+    print(f"PASS [environment] wrote {dest} ({variant} variant)")
+
+
 def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -4946,6 +4963,8 @@ def main(argv: list[str]) -> int:
             check_governed_authoring_surfaces_manifest(repo_root, args)
 
     claude_klabauter_root_resolved = register_claude_klabauter_root(claude_klabauter_root_resolved, claude_klabauter_root_source, repo_root, args)
+    if not args.register_only:
+        write_environment_import(repo_root, "local")
     offer_warm_opt_in(repo_root, args)
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)

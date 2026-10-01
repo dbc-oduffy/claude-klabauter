@@ -624,6 +624,21 @@ def test_resolve_latest_receipt_path_short_sid_no_cross_match(tmp_path: Path) ->
         f"sid='a1' must resolve its OWN shard, not sid='a1-x''s shard; "
         f"got {resolved_a1}, expected {path_a1}"
     )
+
+
     assert resolved_a1x == path_a1x, (
         f"sid='a1-x' must resolve its OWN shard; got {resolved_a1x}, expected {path_a1x}"
     )
+
+
+def test_emit_writes_waivers_only_when_present(tmp_path: Path) -> None:
+    ctx = _make_ctx()
+    ctx.waivers = {"gate": ["item"]}
+    path, _ = emit_receipt(ctx, repo_root=tmp_path, sid="w-sid",
+                           receipt_phase="phase-1", emitted_at="2026-07-06T12:00:00Z")
+    receipt = read_receipt(path)
+    assert receipt["waivers"] == {"gate": ["item"]}
+    assert validate(receipt) == []
+    path2, _ = emit_receipt(_make_ctx(), repo_root=tmp_path, sid="w2-sid",
+                            receipt_phase="phase-1", emitted_at="2026-07-06T12:00:00Z")
+    assert "waivers" not in read_receipt(path2)

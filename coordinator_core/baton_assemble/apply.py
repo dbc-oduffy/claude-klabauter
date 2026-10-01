@@ -116,7 +116,7 @@ from coordinator_core.telemetry.composition_record import (
 # Import side-effect only: triggers each op module's register_op(...) so
 # _invoke_op_in_process's get_op_handler() lookups below resolve via a direct
 # registry hit rather than its lazy-import fallback -- mirrors the established
-# pattern in ops/ceremony/consumed_handoff_stamp.py, ops/ceremony/wsc_tail.py,
+# pattern in ops/handoff_ship_archive.py, ops/ceremony/wsc_tail.py,
 # ops/cutover_advance.py, et al. Originally added
 # to fix a live break (get_op_handler() alone, with no import trigger, returned
 # None for an op whose owning module was never otherwise imported in this

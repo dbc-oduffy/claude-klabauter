@@ -40,6 +40,31 @@ def test_footprint_carries_both_writes_and_writes_under():
     assert "docs/decisions/" in footprint_line
 
 
+def test_scope_block_carries_writes_under_beside_the_test_file():
+    """The 'ONLY paths you may write' block named just `writes:`, so a row
+    declaring a test file plus `writes_under:` was told the test was its
+    whole scope while the footprint line above it allowed the prefix."""
+    row = _wave_row(
+        "R3",
+        writes=["packages/ddct/test/ui/routes/tabs.test.ts"],
+        writes_under=("src/app/api/ddct/entities/",),
+    )
+    contract = _row_return_contract(row, "docs/plans/fake-plan.md")
+    scope = contract.split("## Files you may write")[1]
+    assert "packages/ddct/test/ui/routes/tabs.test.ts" in scope
+    assert "`src/app/api/ddct/entities/`" in scope
+    assert "over this list of 2" in scope
+
+
+def test_writes_under_only_row_is_not_told_it_writes_no_files():
+    row = _wave_row("R4", writes=[], writes_under=("src/app/api/ddct/rules/",))
+    scope = _row_return_contract(row, "docs/plans/fake-plan.md").split(
+        "## Files you may write"
+    )[1]
+    assert "NO files" not in scope
+    assert "`src/app/api/ddct/rules/`" in scope
+
+
 def test_commit_pathspec_never_widens_to_the_prefix_directory():
     wave = [
         _wave_row(

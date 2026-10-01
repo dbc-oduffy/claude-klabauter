@@ -183,17 +183,7 @@ def test_memo_surface_no_overflow_when_under_cap(monkeypatch, tmp_path):
     assert [jp["id"] for jp in result.judgment_points] == ["j-memo-1"]
 
 
-def test_auto_reconcile_probe_never_dispatches(monkeypatch):
-    import coordinator_core.ops.check_auto_reconcile as check_auto_reconcile
-
-    def _unexpected_call():
-        raise AssertionError(
-            "check_auto_reconcile.get_response was called by the retired "
-            "_read_auto_reconcile probe"
-        )
-
-    monkeypatch.setattr(check_auto_reconcile, "get_response", _unexpected_call)
-
+def test_auto_reconcile_probe_is_an_inert_stub():
     result = rbr._read_auto_reconcile()
 
     assert result.judgment_points == []

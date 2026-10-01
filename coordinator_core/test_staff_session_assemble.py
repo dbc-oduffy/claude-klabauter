@@ -13,26 +13,26 @@ _FIXTURE_ROUTING_MD = """\
 
 | Domain Signal | Default Pair |
 |---|---|
-| Architecture / infrastructure | `the Staff Engineer` + `sid` |
-| Frontend / UI | `the Front-End Reviewer` + `the UX Reviewer` |
+| Architecture / infrastructure | `alpha` + `sid` |
+| Frontend / UI | `beta` + `gamma` |
 
 ### Persona Slug -> Agent File
 
 | Slug | Agent File |
 |---|---|
-| `the Staff Engineer` | `coordinator/agents/staff-eng.md` |
+| `alpha` | `coordinator/agents/staff-eng.md` |
 | `sid` | `game-dev/agents/staff-game-dev.md` |
-| `the Front-End Reviewer` | `coordinator/agents/senior-front-end.md` |
-| `the UX Reviewer` | `coordinator/agents/staff-ux.md` |
+| `beta` | `coordinator/agents/senior-front-end.md` |
+| `gamma` | `coordinator/agents/staff-ux.md` |
 
 ### Persona Slug -> subagent_type
 
 | Slug | subagent_type |
 |---|---|
-| `the Staff Engineer` | `coordinator:staff-eng` |
+| `alpha` | `coordinator:staff-eng` |
 | `sid` | `game-dev:staff-game-dev` |
-| `the Front-End Reviewer` | `coordinator:senior-front-end` |
-| `the UX Reviewer` | `coordinator:staff-ux` |
+| `beta` | `coordinator:senior-front-end` |
+| `gamma` | `coordinator:staff-ux` |
 """
 
 
@@ -43,28 +43,28 @@ def test_domain_signal_resolves_default_pair_and_full_roster():
         routing_md_text=_FIXTURE_ROUTING_MD,
     )
     slugs = [p["slug"] for p in decision["personas"]]
-    assert slugs == ["patrik", "sid"]
+    assert slugs == ["alpha", "sid"]
     by_slug = {p["slug"]: p for p in decision["personas"]}
-    assert by_slug["patrik"]["agent_file"] == "coordinator/agents/staff-eng.md"
-    assert by_slug["patrik"]["subagent_type"] == "coordinator:staff-eng"
+    assert by_slug["alpha"]["agent_file"] == "coordinator/agents/staff-eng.md"
+    assert by_slug["alpha"]["subagent_type"] == "coordinator:staff-eng"
     assert by_slug["sid"]["subagent_type"] == "game-dev:staff-game-dev"
 
 
 def test_explicit_slug_override_bypasses_domain_signal_lookup():
     decision = ssa.resolve_roster(
         session_mode="review",
-        slugs=["pali", "fru"],
+        slugs=["beta", "gamma"],
         routing_md_text=_FIXTURE_ROUTING_MD,
     )
     slugs = [p["slug"] for p in decision["personas"]]
-    assert slugs == ["pali", "fru"]
+    assert slugs == ["beta", "gamma"]
 
 
 def test_synthesizer_cannot_appear_as_a_debater_via_override():
     with pytest.raises(ssa.StaffSessionAssembleError, match="synthesizer"):
         ssa.resolve_roster(
             session_mode="plan",
-            slugs=["patrik", "zoli"],
+            slugs=["alpha", "zoli"],
             routing_md_text=_FIXTURE_ROUTING_MD,
         )
 
@@ -111,7 +111,7 @@ def test_reads_doctrine_side_data_not_a_hardcoded_copy():
         routing_md_text=mutated,
     )
     by_slug = {p["slug"]: p for p in decision["personas"]}
-    assert by_slug["patrik"]["agent_file"] == "coordinator/agents/renamed-staff-eng.md"
+    assert by_slug["alpha"]["agent_file"] == "coordinator/agents/renamed-staff-eng.md"
 
 
 def test_missing_section_heading_is_fail_loud():
@@ -125,7 +125,7 @@ def test_missing_section_heading_is_fail_loud():
 
 
 def test_cli_main_prints_json_roster(capsys):
-    exit_code = ssa.main(["--slug", "patrik", "--session-mode", "plan"])
+    exit_code = ssa.main(["--slug", "alpha", "--session-mode", "plan"])
     assert exit_code == ssa.EXIT_USAGE
     captured = capsys.readouterr()
     assert "staff-session-assemble" in captured.err

@@ -263,6 +263,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import re
@@ -317,7 +318,7 @@ from coordinator_core.executor_return_contract import (
     self_verify_constraint,
 )
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
-from coordinator_core.ops.review_mint.execute_review import compose_execute_review
+from coordinator_core.ops.review_mint.execute_review import compose_criterion_judge, compose_execute_review
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -1894,7 +1895,8 @@ def _declared_scope_block(row: WaveRow) -> str:
         )
     else:
         paths = _declared_paths(row)
-        if not paths:
+        prefixes = list(row.writes_under)
+        if not paths and not prefixes:
             block = (
                 "This chunk declares `writes: []` -- a positive claim that it "
                 "creates or modifies NO files.\n\nIf your work requires writing "
@@ -1903,16 +1905,20 @@ def _declared_scope_block(row: WaveRow) -> str:
                 "declared-empty scope."
             )
         else:
-            listed = "\n".join(f"- `{p}`" for p in paths)
+            listed = "\n".join(
+                [f"- `{p}`" for p in paths]
+                + [f"- `{p}` (any file under this prefix, `writes_under:`)" for p in prefixes]
+            )
             block = (
                 "These are the ONLY paths this chunk may create or modify, "
-                "taken from the row's declared `writes:`.\n\nDo not infer "
+                "taken from the row's declared `writes:` and `writes_under:`."
+                "\n\nDo not infer "
                 "scope from a directory and do not write outside this list. "
                 "**A test path listed here is IN SCOPE and is expected to be "
                 "written, not skipped** -- delivering the module and none of "
                 f"its tests is under-delivery, not staying in scope.\n\n{listed}\n\n"
                 "**Report examined and changed as two separate counts, over "
-                f"this list of {len(paths)}.** A path you opened and found "
+                f"this list of {len(paths) + len(prefixes)}.** A path you opened and found "
                 "nothing to change in is a no-op you examined -- report it. A "
                 "path you never opened is an omission, even if it turns out it "
                 "needed nothing. One number cannot carry both: *examined 60, "
@@ -2628,8 +2634,8 @@ def _excluded_rows_narration(excluded: list) -> str:
 
     An `operator` row is called out separately from the rest. The others are
     exclusions whose work is either done or externally blocked; an operator
-    row is work that is IN SCOPE, READY, and STILL OWED -- by a human, after
-    this run.
+    row is work that is IN SCOPE, READY, and STILL OWED -- by a person physically
+    acting (a credential, hardware), after this run.
     """
     lines = ["  // ROWS THIS SCRIPT DOES NOT RUN -- read before treating the plan as executed."]
     operator_rows = [e for e in excluded if e.get("reason") == "operator"]
@@ -2641,8 +2647,9 @@ def _excluded_rows_narration(excluded: list) -> str:
     if operator_rows:
         lines.append(
             "  // ^ the operator row(s) above are OWED WORK, not skipped work: in "
-            "scope, ready, and waiting on a human. This run completing is not "
-            "that plan completing."
+            "scope, ready, and waiting on an action only a person can physically "
+            "do (a credential, hardware). This run completing is not that plan "
+            "completing."
         )
     return "\n".join(lines)
 
@@ -3128,6 +3135,7 @@ def compose_script(
         "_reviewIntegration",
     )
     review_vars: Optional[dict] = None
+    judge_expr: Optional[str] = None
     if review_roster_fragment is None or review_stage_schemas is None:
         guarded_blocks.append(
             _no_review_stages_narration(
@@ -3194,12 +3202,22 @@ def compose_script(
         ):
             phase_titles.append(title)
             guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
+        judge_expr = compose_criterion_judge(
+            review,
+            stage_schemas=review_stage_schemas,
+            plan_path=plan_path or "",
+            run_base_sha=run_base_sha or "",
+            falsifier=falsifier,
+            prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+        )
         if review.integration is not None:
             review_vars = {
                 "prep": "_reviewPrep",
                 "wave": "_reviewWave",
                 "delivery": "_deliveryVerdict",
                 "integration": "_reviewIntegration",
+                "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
+                "plan_id_literal": _js_string_literal(plan_id or ""),
             }
         else:
             # Zero-integration-stage path (2026-09-28 PM order, step b'):
@@ -3237,16 +3255,23 @@ def compose_script(
     falsifier_var: Optional[str] = None
     test_absent_status = "not_run"
     test_absent_note: Optional[str] = None
+    # The criterion leg: the roster's judge when DoE declares one (it runs any
+    # recorded falsifier itself), else the plan's falsifier on the test runner.
+    criterion_expr: Optional[str] = judge_expr or (
+        _falsifier_agent_call_expr(falsifier, agent_type_host=agent_type_host)
+        if falsifier is not None
+        else None
+    )
+    criterion_block = (
+        f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
+        f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
+    )
     try:
         scope = terminal_test_scope(waves, repo_root=repo_root)
     except NoTestTargetError as exc:
-        if falsifier is not None:
+        if criterion_expr is not None:
             phase_titles.append(_TEST_PHASE_TITLE)
-            guarded_blocks.append(
-                f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
-                f"  {_FALSIFIER_RESULT_VAR} = await "
-                f"{_falsifier_agent_call_expr(falsifier, agent_type_host=agent_type_host)};"
-            )
+            guarded_blocks.append(criterion_block)
             falsifier_var = _FALSIFIER_RESULT_VAR
         else:
             guarded_blocks.append(_no_test_target_narration(exc))
@@ -3259,15 +3284,21 @@ def compose_script(
         if not scope:
             guarded_blocks.append(_no_test_scope_narration())
             test_absent_note = "spine writes no testable surface"
-        elif falsifier is not None:
-            # AC14: both a resolved scope and a falsifier run in ONE
+            # An all-prose spine has no test target but still owes its
+            # criterion a verdict: that is a `criterion` leg, never a `tests` one.
+            if criterion_expr is not None:
+                phase_titles.append(_TEST_PHASE_TITLE)
+                guarded_blocks.append(criterion_block)
+                falsifier_var = _FALSIFIER_RESULT_VAR
+        elif criterion_expr is not None:
+            # AC14: both a resolved scope and the criterion leg run in ONE
             # parallel([...]) after the integration stage.
             phase_titles.append(_TEST_PHASE_TITLE)
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
                 f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host)},\n"
-                f"    () => {_falsifier_agent_call_expr(falsifier, agent_type_host=agent_type_host)},\n"
+                f"    () => {criterion_expr},\n"
                 "  ]);"
             )
             test_var = _TEST_RESULT_VAR
@@ -3474,6 +3505,9 @@ ABSENT_EDIT_TARGET_CODE = "absent-edit-target"
 
 _GLOB_CHARS = frozenset("*?[")
 
+#: Paths named inline in the aggregated ``absent-edit-target`` finding.
+_ABSENT_EDIT_TARGET_SHOWN = 10
+
 
 def find_absent_edit_targets(rows, repo_root: Optional[Path]) -> list:
     """WARN findings for edit-kind rows whose declared ``writes:`` path is
@@ -3495,7 +3529,7 @@ def find_absent_edit_targets(rows, repo_root: Optional[Path]) -> list:
         return []
     root = Path(repo_root)
     seen: set = set()
-    findings = []
+    absent: list = []
     for row in rows:
         writes = row.writes
         if not isinstance(writes, list):
@@ -3509,18 +3543,141 @@ def find_absent_edit_targets(rows, repo_root: Optional[Path]) -> list:
             if _GLOB_CHARS.intersection(raw_path):
                 continue
             if not (root / raw_path).exists():
-                findings.append(
-                    Finding(
-                        Severity.WARN,
-                        ABSENT_EDIT_TARGET_CODE,
-                        f"row {row.id!r} (change_kind {row.change_kind!r}) declares "
-                        f"writes: {raw_path!r}, which is absent from the tree -- "
-                        "either the row creates it or the surface was deleted "
-                        "since the row was authored (an edit needs something to "
-                        "edit); check before dispatching",
-                    )
-                )
-    return findings
+                absent.append(f"{row.id}: {raw_path}")
+    if not absent:
+        return []
+    # One finding per plan, not per path: a plan that creates many new files
+    # would otherwise bury every other WARN under its own (106 on one run).
+    shown = ", ".join(absent[:_ABSENT_EDIT_TARGET_SHOWN])
+    more = len(absent) - _ABSENT_EDIT_TARGET_SHOWN
+    return [
+        Finding(
+            Severity.WARN,
+            ABSENT_EDIT_TARGET_CODE,
+            f"{len(absent)} edit-kind writes: path(s) absent from the tree -- each "
+            "is either created by its row or a surface deleted since the row was "
+            f"authored; check the second kind before dispatching: {shown}"
+            + (f" (+{more} more)" if more > 0 else ""),
+        )
+    ]
+
+
+#: Finding code for ``find_import_window_rows``.
+IMPORT_WINDOW_CODE = "import-window-row"
+
+#: Rows named inline in the aggregated ``import-window-row`` finding.
+_IMPORT_WINDOW_SHOWN = 5
+
+
+def _module_of_path(rel_path: str) -> Optional[str]:
+    """Dotted module name of a repo-relative ``.py`` path, else ``None``."""
+    parts = rel_path.replace("\\", "/").strip("/").split("/")
+    if not parts or not parts[-1].endswith(".py"):
+        return None
+    parts[-1] = parts[-1][: -len(".py")]
+    if parts[-1] == "__init__":
+        parts.pop()
+    if not parts or not all(p.isidentifier() for p in parts):
+        return None
+    return ".".join(parts)
+
+
+def _imported_modules(importer_rel: str, source: str) -> set:
+    """Every module name ``source`` imports, relative imports resolved
+    against ``importer_rel``. ``from pkg import leaf`` yields both ``pkg``
+    and ``pkg.leaf``: ``leaf`` may be a submodule. Unparseable source yields
+    the empty set -- a heuristic must not raise on a file it cannot read.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return set()
+    package = importer_rel.replace("\\", "/").strip("/").split("/")[:-1]
+    found: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                if node.level - 1 > len(package):
+                    continue
+                base = package[: len(package) - (node.level - 1)]
+                if node.module:
+                    base = base + node.module.split(".")
+            else:
+                base = node.module.split(".") if node.module else []
+            if not base:
+                continue
+            dotted = ".".join(base)
+            found.add(dotted)
+            found.update(f"{dotted}.{alias.name}" for alias in node.names)
+    return found
+
+
+def find_import_window_rows(rows, repo_root: Optional[Path]) -> list:
+    """WARN findings for rows whose ``writes:`` include BOTH a ``.py`` module
+    absent from the tree AND an existing ``.py`` file that imports it.
+
+    A row is one opaque ``agent()`` call and commits only land between waves,
+    so the importer's edit sits on the shared worktree for the row's whole
+    dispatch while the module it imports may not yet exist: every concurrent
+    session importing that package hard-fails at import time. The fix is
+    structural and already supported -- two rows joined by ``depends_on`` land
+    in strictly later waves, so a commit falls between the new module and its
+    importer. Only this detection was missing.
+
+    Same-row only: rows in different waves are already separated by a commit.
+    Existing test modules (``test_*.py``) are not importers here -- one
+    breaking affects its own collection, not the package. A heuristic like
+    ``find_absent_edit_targets``, so it only warns. Globs are not resolved.
+    No-op when ``repo_root`` is ``None``.
+    """
+    if repo_root is None:
+        return []
+    root = Path(repo_root)
+    hits: list = []
+    for row in rows:
+        writes = row.writes
+        if not isinstance(writes, list):
+            continue
+        py_paths = [
+            w for w in writes
+            if isinstance(w, str) and w.endswith(".py") and not _GLOB_CHARS.intersection(w)
+        ]
+        new_modules: dict = {}
+        for w in py_paths:
+            mod = _module_of_path(w)
+            if mod is not None and not (root / w).exists():
+                new_modules[mod] = w
+        if not new_modules:
+            continue
+        for importer in py_paths:
+            if Path(importer).name.startswith("test_") or not (root / importer).is_file():
+                continue
+            try:
+                source = (root / importer).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            imported = _imported_modules(importer, source)
+            for mod, new_path in new_modules.items():
+                if any(name == mod or name.startswith(mod + ".") for name in imported):
+                    hits.append(f"{row.id}: {importer} imports new {new_path}")
+    if not hits:
+        return []
+    shown = "; ".join(hits[:_IMPORT_WINDOW_SHOWN])
+    more = len(hits) - _IMPORT_WINDOW_SHOWN
+    return [
+        Finding(
+            Severity.WARN,
+            IMPORT_WINDOW_CODE,
+            f"{len(hits)} row(s) write a new module together with an existing file "
+            "that imports it; commits land only between rows, so the importer "
+            "references a missing module on the shared worktree for the whole "
+            "dispatch and every concurrent session importing that package breaks. "
+            "Split into two rows joined by depends_on (module first): " + shown
+            + (f" (+{more} more)" if more > 0 else ""),
+        )
+    ]
 
 
 def emit_script(
@@ -3541,7 +3698,7 @@ def emit_script(
 
     ``findings_out``, when given, receives the emit-time WARN findings that
     are about the plan rather than the composed script (see
-    ``find_absent_edit_targets``) -- an out-parameter like ``read_spine``'s
+    ``find_absent_edit_targets``, ``find_import_window_rows``) -- an out-parameter like ``read_spine``'s
     ``exclusions``, so the return type stays the script text.
 
     ``agent_type_host`` (S1-C5, docs/plans/2026-09-18-doe-holds-no-scripts.md)
@@ -3645,6 +3802,7 @@ def emit_script(
     check_cross_repo_writes(rows, repo_root)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
+        findings_out.extend(find_import_window_rows(rows, repo_root))
 
     waves = build_waves(rows)
 

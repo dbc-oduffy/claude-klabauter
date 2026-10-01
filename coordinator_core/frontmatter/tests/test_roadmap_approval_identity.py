@@ -79,10 +79,6 @@ def _fields(path: Path) -> dict[str, str]:
     return out
 
 
-def test_roadmap_overview_corpus_is_present():
-    assert _overviews(), f"no */OVERVIEW.md found under {_ROADMAP_DIR} — corpus glob is likely wrong"
-
-
 def test_approved_by_is_a_person_slug():
     """A recorded approver is a person-axis slug, never prose or a name-plus-date."""
     bad = []

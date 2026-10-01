@@ -203,7 +203,57 @@
                       "properties": {
                         "integration_stem": { "type": "string" },
                         "slices": { "type": "integer" },
-                        "fixes": { "type": "integer" }
+                        "fixes": { "type": "integer" },
+                        "plan_id": { "type": ["string", "null"] },
+                        "prep_sidecar": { "type": ["string", "null"] },
+                        "wave_sidecar_paths": { "type": "array", "items": { "type": "string" } },
+                        "prep": {
+                          "type": ["object", "null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "run_base_sha": { "type": ["string", "null"] },
+                            "product_files": { "type": ["integer", "null"] },
+                            "foreign_claims": { "type": "array", "items": { "type": "string" } },
+                            "slice_files": { "type": "array", "items": { "type": "string" } }
+                          }
+                        },
+                        "delivery": {
+                          "type": ["object", "null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "verdict": { "type": ["string", "null"] },
+                            "product_files": { "type": ["integer", "null"] },
+                            "claims_unbacked": { "type": ["integer", "null"] }
+                          }
+                        },
+                        "tests": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "status": { "type": "string" },
+                            "run": { "type": ["integer", "null"] },
+                            "failed": { "type": ["integer", "null"] },
+                            "sidecar": { "type": ["string", "null"] }
+                          }
+                        },
+                        "criterion": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "status": { "type": "string" },
+                            "observation": { "type": ["string", "null"] },
+                            "sidecar": { "type": ["string", "null"] }
+                          }
+                        },
+                        "integration": {
+                          "type": ["object", "null"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "sidecar": { "type": ["string", "null"] },
+                            "unresolved": { "type": "array", "items": { "$ref": "#/$defs/line_anchor" } },
+                            "confinement_violations": { "type": ["integer", "null"] }
+                          }
+                        }
                       }
                     }
                   ]

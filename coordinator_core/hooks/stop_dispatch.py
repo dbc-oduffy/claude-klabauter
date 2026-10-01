@@ -1,5 +1,5 @@
 """
-coordinator_core.hooks.stop_dispatch — Stop-event fan-in, nine legs (not six).
+coordinator_core.hooks.stop_dispatch — Stop-event fan-in, ten legs.
 
 Purpose: warm-engine composition for coordinator-content-repo's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
@@ -8,12 +8,8 @@ its fan-in of folded scripts every Stop, fleet-wide. This module is the
 engine-side op that registration can eventually point at (per this plan's
 own exit criterion — the `type`/`url` edit itself is DoE's, not ours).
 
-THE COUNT IS NINE, NOT SIX. `stop-dispatch.py`'s own `REGISTRY` (read at
-Coordinator-content-repo HEAD `3331187b9cd5b806942e6dba290e5985c7dbfc4c`, unchanged at
-current HEAD `7b9b78f4b211023e34a9d53f2feaacd45ed98154` — same 478 lines)
-carries eight `StopGuard` entries, not the six the classification table's
-prose names — the "six" there is inherited docstring prose this plan's own
-Anti-scope forbids re-deriving from. A ninth leg, `guard_terminal_review`, is
+`stop-dispatch.py`'s own `REGISTRY` carries nine `StopGuard` entries; all
+nine are composed. A tenth leg, `guard_terminal_review`, is
 composed here ahead of DoE's own registration
 (docs/plans/2026-09-26-terminal-review-gate-mechanical.md, chunk C2) — its
 DoE-side `StopGuard` row lands separately (that plan's chunk C3). Disposition
@@ -38,18 +34,12 @@ per leg:
      `tool_name`) routes to `_handle_stop` — the Stop leg is already built.
      Called here via the same `_handler({"payload": payload})` shape.
 
-  3. `guard_manufactured_blocker` — NOT COMPOSED. The op exists:
-     `hooks.guard_manufactured_blocker` (`coordinator_core/hooks/
-     guard_manufactured_blocker.py`) is its own command/native-door `Stop`
-     registration. It is BLOCKING-class per `DR-warm-hook-miss-policy`
-     ("Blocking hooks refuse on a miss. Settled prior behavior, unchanged by
-     this decision"), and `coordinator_core/warm/hook_http.py::
-     BLOCKING_EVENTS` is `frozenset({"PreToolUse"})` only — `Stop` is NOT a
-     member, so an `http`-flipped Stop registration would get NO
-     `unreachable_response` fail-closed treatment on a miss; it would fail
-     OPEN silently against a dead engine, which a blocking guard must never
-     do. Composing it into this fan-in would route it through that
-     transport, so it stays a separate registration outside the fan-in.
+  3. `guard_manufactured_blocker` — COMPOSED by importing its `_handler`
+     (`coordinator_core/hooks/guard_manufactured_blocker.py`), placed after
+     `watchdog_undischarged_next_move` as DoE's REGISTRY places it. Its deny
+     folds into the aggregate deny like the Kira leg's; its per-session
+     fired marker bounds a replayed Stop payload to one deny. A guard that
+     cannot run allows and says so (DR-402).
 
   4. `guard_kira_verdict_routed` — PORTED (residue; no existing op or
      library module covered this script before this chunk). Full verbatim
@@ -82,6 +72,10 @@ per leg:
      fan-in's aggregate verdict — composed for its write side-effect only,
      its return value is not folded into the aggregate.
 
+  10. `group_em_park_spool` — COMPOSED last, after `receiver_state_sensor`
+     (it reads the state that sensor writes). A PRODUCER like leg 8: its
+     return value is not folded.
+
   9. `guard_terminal_review` — COMPOSED, its own registered op
      (`hooks.guard_terminal_review`, `coordinator_core/hooks/
      guard_terminal_review.py`). Refuses the EM's own Stop when this
@@ -93,7 +87,7 @@ per leg:
      below exactly like the Kira leg, placed immediately after it.
 
 AGGREGATION CONTRACT: mirrors `stop-dispatch.py`'s own CONCATENATE-ALL
-(never first-fires-wins) — every composable leg above (all but #3, #8) runs
+(never first-fires-wins) — every foldable leg above (all but the producers #8, #10) runs
 regardless of whether an earlier leg already produced a block/advisory; one
 leg raising is isolated to that leg alone (fail-open for it specifically,
 matching the source script's own per-guard `try/except BaseException`).
@@ -128,6 +122,8 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.em_report_altitude import op as _em_report_altitude_op
+from coordinator_core.hooks.group_em_park_spool import _handler as _group_em_park_spool_handler
+from coordinator_core.hooks.guard_manufactured_blocker import _handler as _guard_manufactured_blocker_handler
 from coordinator_core.hooks.guard_kira_verdict_routed import (
     _guard_kira_verdict_routed,
     _guard_kira_verdict_routed_handler,
@@ -213,9 +209,8 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
 
 @register_op("hooks.stop_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop fan-in: compose the eight composable legs (all but the excluded
-    BLOCKING-class `guard_manufactured_blocker`) and aggregate CONCATENATE-
-    ALL, per module docstring.
+    """Stop fan-in: compose the ten legs and aggregate CONCATENATE-ALL, per
+    module docstring.
 
     `repo_root` (the framework-supplied handler argument) is unused — every
     composed leg resolves its own repo root from `params["payload"]["cwd"]`,
@@ -232,6 +227,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     for leg_call in (
         lambda: _runtime_tripwire_em_check_handler(leg_params),
         lambda: _watchdog_undischarged_next_move_handler(leg_params),
+        lambda: _guard_manufactured_blocker_handler(leg_params),
         lambda: _guard_kira_verdict_routed_handler(leg_params),
         lambda: _guard_terminal_review_handler(leg_params),
         lambda: _stop_em_report_altitude_handler(leg_params),
@@ -272,6 +268,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
             "delegation_evidence": "false",
         }
         await _receiver_state_sensor_handler(sensor_params, repo_root=common_dir)
+    except Exception:
+        pass
+
+    try:
+        _group_em_park_spool_handler(leg_params)
     except Exception:
         pass
 

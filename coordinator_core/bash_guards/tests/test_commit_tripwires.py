@@ -418,266 +418,128 @@ def _stage_op_file(root: str, rel_path: str, op_key: str) -> None:
     _git(root, "add", rel_path)
 
 
+_QUAD_FILES = {
+    "coordinator_core/authz/classification.py": "OP_CLASSIFICATION = {{{ops}}}\n",
+    "coordinator_core/op_scopes.py": "_OP_KEY_SCOPE = {{{ops}}}\n",
+    "coordinator_core/ops/_registry_map.py": "OP_MODULE_MAP = {{{maps}}}\n",
+    "coordinator_core/ops/__init__.py": '_EAGER_OP_MODULES = [("x.y", "fixture")]\n',
+    "coordinator_core/authz/registration_quad.py": (
+        "_KNOWN_UNCLASSIFIED_OPS_DEBT = frozenset()\n_KNOWN_INCOMPLETE_REGISTRATIONS = {}\n"
+    ),
+}
+
+
+def _seed_quad_tree(root: str, complete_ops=()) -> None:
+    """Commit the five surface files as literal tables naming ``complete_ops``."""
+    ops = ", ".join('"{}": 1'.format(k) for k in complete_ops)
+    maps = ", ".join('"{}": "x.y"'.format(k) for k in complete_ops)
+    for rel, template in _QUAD_FILES.items():
+        target = Path(root) / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        body = template.format(ops=ops, maps=maps) if "{ops}" in template or "{maps}" in template else template
+        target.write_text(body, encoding="utf-8")
+        _git(root, "add", rel)
+    _git(root, "commit", "-q", "-m", "seed quad surfaces")
+
+
 class TestCheckRegistrationQuadCompleteness:
-    def test_incomplete_registration_fixture_fires(self, tmp_path, monkeypatch):
-        from coordinator_core.authz.registration_quad import QuadViolation
+    """Check 12 judges the committing repo's own index bytes, so every case here
+    runs with ``coordinator_core`` imported from a tree other than the tmp repo."""
 
+    def test_incomplete_registration_under_a_foreign_engine_root_denies(self, tmp_path):
         root = _init_repo(tmp_path)
+        _seed_quad_tree(root)
         _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
-
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
-
-        import coordinator_core.authz.classification as classification_module
-        import coordinator_core.op_scopes as op_scopes_module
-        import coordinator_core.ops._registry_map as registry_map_module
-        import coordinator_core.authz.registration_quad as registration_quad_module
-
-        monkeypatch.setattr(classification_module, "OP_CLASSIFICATION", {})
-        monkeypatch.setattr(op_scopes_module, "_OP_KEY_SCOPE", {})
-        monkeypatch.setattr(registry_map_module, "OP_MODULE_MAP", {})
-
-        planted = [
-            QuadViolation(
-                op_key="fake.new_op",
-                surfaces_present=(),
-                surfaces_missing=("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
-                missing_surface_files=(
-                    ("OP_CLASSIFICATION", "coordinator_core/authz/classification.py"),
-                    ("_OP_KEY_SCOPE", "coordinator_core/op_scopes.py"),
-                    ("OP_MODULE_MAP", "coordinator_core/ops/_registry_map.py"),
-                ),
-            ),
-            # A second, unrelated violation NOT extracted from this commit's
-            # staged diff -- must NOT appear in the report (AC17: the gate
-            # judges the commit, not the worktree).
-            QuadViolation(
-                op_key="unrelated.worktree_op",
-                surfaces_present=(),
-                surfaces_missing=("OP_CLASSIFICATION",),
-                missing_surface_files=(
-                    ("OP_CLASSIFICATION", "coordinator_core/authz/classification.py"),
-                ),
-            ),
-        ]
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", lambda: planted)
-        # Isolate against the real 65-entry
-        # production baseline, matching TestRegistrationQuadBaselinePruning's own
-        # explicit-injection pattern; this test's fixture keys ("fake.new_op",
-        # "unrelated.worktree_op") happen never to collide with real baseline
-        # entries today, but that was an implicit dependency on production data.
-        monkeypatch.setattr(registration_quad_module, "_KNOWN_UNCLASSIFIED_OPS_DEBT", frozenset())
 
         result = commit_tripwires.check_registration_quad_completeness(root)
         assert result is not None
         assert result.startswith("VIOLATION: REGISTRATION-QUAD-INVARIANT")
         assert "fake.new_op" in result
-        assert "unrelated.worktree_op" not in result
+        assert "coordinator_core/authz/classification.py" in result
 
-    def test_complete_registration_stays_silent(self, tmp_path, monkeypatch):
+    def test_complete_registration_stays_silent(self, tmp_path):
         root = _init_repo(tmp_path)
+        _seed_quad_tree(root, ("fake.complete_op",))
         _stage_op_file(root, "coordinator_core/ops/fake_complete_op.py", "fake.complete_op")
-
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
-
-        import coordinator_core.authz.classification as classification_module
-        import coordinator_core.op_scopes as op_scopes_module
-        import coordinator_core.ops._registry_map as registry_map_module
-
-        monkeypatch.setattr(classification_module, "OP_CLASSIFICATION", {"fake.complete_op": "read"})
-        monkeypatch.setattr(op_scopes_module, "_OP_KEY_SCOPE", {"fake.complete_op": "none"})
-        monkeypatch.setattr(registry_map_module, "OP_MODULE_MAP", {"fake.complete_op": "x.y"})
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
-    def test_no_registration_files_staged_returns_before_expensive_walk(self, tmp_path, monkeypatch):
+    def test_table_edit_staged_with_the_op_is_judged_post_commit(self, tmp_path):
+        root = _init_repo(tmp_path)
+        _seed_quad_tree(root)
+        _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
+        ops = '"fake.new_op": 1'
+        for rel, body in (
+            ("coordinator_core/authz/classification.py", "OP_CLASSIFICATION = {%s}\n" % ops),
+            ("coordinator_core/op_scopes.py", "_OP_KEY_SCOPE = {%s}\n" % ops),
+            ("coordinator_core/ops/_registry_map.py", 'OP_MODULE_MAP = {"fake.new_op": "x.y"}\n'),
+        ):
+            (Path(root) / rel).write_text(body, encoding="utf-8")
+            _git(root, "add", rel)
+
+        assert commit_tripwires.check_registration_quad_completeness(root) is None
+
+    def test_unstaged_table_edit_does_not_count(self, tmp_path):
+        root = _init_repo(tmp_path)
+        _seed_quad_tree(root)
+        _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
+        (Path(root) / "coordinator_core/op_scopes.py").write_text(
+            '_OP_KEY_SCOPE = {"fake.new_op": 1}\n', encoding="utf-8"
+        )
+
+        result = commit_tripwires.check_registration_quad_completeness(root)
+        assert result is not None and "fake.new_op" in result
+
+    def test_no_registration_path_staged_spawns_nothing(self, tmp_path, monkeypatch):
         root = _init_repo(tmp_path)
         (tmp_path / "README.md").write_text("unrelated change\n", encoding="utf-8")
         _git(root, "add", "README.md")
 
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
+        def _boom(*_a, **_kw):
+            raise AssertionError("no spawn expected")
 
-        import coordinator_core.authz.registration_quad as registration_quad_module
+        monkeypatch.setattr(commit_tripwires, "run_git", _boom)
 
-        def _boom():
-            raise AssertionError("expensive full-tree walk must not run (AC11)")
+        assert commit_tripwires.check_registration_quad_completeness(root, ["README.md"]) is None
 
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", _boom)
-
-        assert commit_tripwires.check_registration_quad_completeness(root) is None
-
-    def test_all_staged_keys_already_complete_returns_before_expensive_walk(self, tmp_path, monkeypatch):
+    def test_staged_list_is_reused_and_one_batched_spawn_runs(self, tmp_path, monkeypatch):
         root = _init_repo(tmp_path)
-        _stage_op_file(root, "coordinator_core/ops/fake_already_ok_op.py", "fake.already_ok")
-
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
-
-        import coordinator_core.authz.classification as classification_module
-        import coordinator_core.op_scopes as op_scopes_module
-        import coordinator_core.ops._registry_map as registry_map_module
-        import coordinator_core.authz.registration_quad as registration_quad_module
-
-        monkeypatch.setattr(classification_module, "OP_CLASSIFICATION", {"fake.already_ok": "read"})
-        monkeypatch.setattr(op_scopes_module, "_OP_KEY_SCOPE", {"fake.already_ok": "none"})
-        monkeypatch.setattr(registry_map_module, "OP_MODULE_MAP", {"fake.already_ok": "x.y"})
-        # Stage 1.5's fast path now also
-        # requires the op's OP_MODULE_MAP module path ("x.y") to be present in
-        # the live _EAGER_OP_MODULES set; without this the op is no longer
-        # "already complete" on all five surfaces and the fast path correctly
-        # falls through to the full walk this test asserts must NOT happen.
-        import coordinator_core.ops as ops_module
-
-        monkeypatch.setattr(ops_module, "_EAGER_OP_MODULES", [("x.y", "test fixture")])
-
-        def _boom():
-            raise AssertionError("middle tier should have short-circuited before the walk (AC19)")
-
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", _boom)
-
-        assert commit_tripwires.check_registration_quad_completeness(root) is None
-
-    # C5 (2026-08-22-the-import-path-costs-nothing) -- premise correction: this
-    # chunk originally expected retiring the discovery apparatus to remove
-    # _EAGER_OP_MODULES, making commit_tripwires.py:658's import fail and the
-    # fast path fall through to check_registration_quad() every time. C6 keeps
-    # _eager_import_all() as the registry-miss fallback, and _EAGER_OP_MODULES
-    # is the table that function iterates, so the table -- and this import --
-    # survive untouched. This test pins that against the LIVE module (no
-    # monkeypatch on _EAGER_OP_MODULES) using a real registered op, proving
-    # the fifth surface stays populated and the fast path still fires.
-    def test_fifth_surface_import_resolves_live_and_fast_path_fires(self, tmp_path, monkeypatch):
-        import coordinator_core.ops as ops_module
-        import coordinator_core.authz.classification as classification_module
-        import coordinator_core.op_scopes as op_scopes_module
-        import coordinator_core.ops._registry_map as registry_map_module
-        import coordinator_core.authz.registration_quad as registration_quad_module
-
-        assert hasattr(ops_module, "_EAGER_OP_MODULES")
-        eager_module_paths = frozenset(mp for mp, _note in ops_module._EAGER_OP_MODULES)
-        assert eager_module_paths, "the fifth surface must not be empty post-C6"
-
-        # Pick a real op key complete on all five surfaces off the live tables.
-        live_op_key = next(
-            k
-            for k, mp in registry_map_module.OP_MODULE_MAP.items()
-            if k in classification_module.OP_CLASSIFICATION
-            and k in op_scopes_module._OP_KEY_SCOPE
-            and mp in eager_module_paths
-        )
-
-        root = _init_repo(tmp_path)
-        _stage_op_file(root, "coordinator_core/ops/fake_live_fifth_surface_op.py", live_op_key)
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
-
-        def _boom():
-            raise AssertionError("fast path should short-circuit before the full walk")
-
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", _boom)
-
-        assert commit_tripwires.check_registration_quad_completeness(root) is None
-
-    # Proves the gate now denies an op
-    # complete on OP_CLASSIFICATION/_OP_KEY_SCOPE/OP_MODULE_MAP but missing
-    # only from _EAGER_OP_MODULES -- the exact live gap (roadmap.link_stubs,
-    # 2026-08-05) the stage-1.5 fast path used to let sail through unreachable.
-    def test_op_missing_only_from_eager_modules_is_denied(self, tmp_path, monkeypatch):
-        from coordinator_core.authz.registration_quad import QuadViolation
-
-        root = _init_repo(tmp_path)
-        _stage_op_file(root, "coordinator_core/ops/fake_eager_gap_op.py", "fake.eager_gap")
-
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
-
-        import coordinator_core.authz.classification as classification_module
-        import coordinator_core.op_scopes as op_scopes_module
-        import coordinator_core.ops._registry_map as registry_map_module
-        import coordinator_core.authz.registration_quad as registration_quad_module
-        import coordinator_core.ops as ops_module
-
-        monkeypatch.setattr(classification_module, "OP_CLASSIFICATION", {"fake.eager_gap": "read"})
-        monkeypatch.setattr(op_scopes_module, "_OP_KEY_SCOPE", {"fake.eager_gap": "none"})
-        monkeypatch.setattr(registry_map_module, "OP_MODULE_MAP", {"fake.eager_gap": "x.y"})
-        # Deliberately empty -- "x.y" is complete on the other three surfaces
-        # but absent here, so the fast path must NOT short-circuit clean.
-        monkeypatch.setattr(ops_module, "_EAGER_OP_MODULES", [])
-
-        planted = [
-            QuadViolation(
-                op_key="fake.eager_gap",
-                surfaces_present=("OP_CLASSIFICATION", "_OP_KEY_SCOPE", "OP_MODULE_MAP"),
-                surfaces_missing=("_EAGER_OP_MODULES",),
-                missing_surface_files=(
-                    ("_EAGER_OP_MODULES", "coordinator_core/ops/__init__.py"),
-                ),
-            ),
-        ]
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", lambda: planted)
-        monkeypatch.setattr(registration_quad_module, "_KNOWN_UNCLASSIFIED_OPS_DEBT", frozenset())
-
-        result = commit_tripwires.check_registration_quad_completeness(root)
-        assert result is not None
-        assert result.startswith("VIOLATION: REGISTRATION-QUAD-INVARIANT")
-        assert "fake.eager_gap" in result
-        assert "_EAGER_OP_MODULES" in result
-
-    def test_wrong_repo_returns_before_stage_one_fires(self, tmp_path, monkeypatch):
-        root = _init_repo(tmp_path)
-        _stage_op_file(root, "coordinator_core/ops/fake_wrong_repo_op.py", "fake.wrong_repo_op")
-
-        other_root = str(tmp_path / "not-the-same-tree")
-        Path(other_root).mkdir()
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: other_root)
-
-        calls: List[str] = []
-        real_run_git = commit_tripwires._run_git
-
-        def _tracking_run_git(args, cwd=None, timeout=2.0):
-            calls.append(" ".join(args))
-            return real_run_git(args, cwd=cwd, timeout=timeout)
-
-        monkeypatch.setattr(commit_tripwires, "_run_git", _tracking_run_git)
-
-        assert commit_tripwires.check_registration_quad_completeness(root) is None
-        assert not any("diff" in c and "--cached" in c for c in calls)
-
-    # Proves the "cheap" stage-1 gate stays
-    # O(1) subprocess spawns regardless of how many non-registering .py files a
-    # commit touches under coordinator_core/, mirroring the call-counting pattern
-    # in test_wrong_repo_returns_before_stage_one_fires. The prior implementation
-    # spawned one `git show :<path>` PER staged file here -- this test stages
-    # several to prove that regression cannot silently return.
-    def test_many_non_registering_files_staged_stays_subprocess_bounded(self, tmp_path, monkeypatch):
-        root = _init_repo(tmp_path)
+        _seed_quad_tree(root, ("fake.ok",))
         for i in range(8):
             rel = "coordinator_core/ops/plain_module_{}.py".format(i)
             (Path(root) / rel).parent.mkdir(parents=True, exist_ok=True)
-            (Path(root) / rel).write_text(
-                "def helper_{}():\n    return {}\n".format(i, i), encoding="utf-8"
-            )
+            (Path(root) / rel).write_text("def h():\n    return {}\n".format(i), encoding="utf-8")
             _git(root, "add", rel)
+        staged = [
+            "coordinator_core/ops/plain_module_{}.py".format(i) for i in range(8)
+        ]
 
-        monkeypatch.setattr(commit_tripwires, "_coordinator_core_repo_root", lambda: root)
+        calls: List[List[str]] = []
+        real_run_git = commit_tripwires.run_git
 
-        calls: List[str] = []
-        real_run_git = commit_tripwires._run_git
+        def _tracking_run(args, *a, **kw):
+            calls.append(list(args))
+            return real_run_git(args, *a, **kw)
 
-        def _tracking_run_git(args, cwd=None, timeout=2.0):
-            calls.append(" ".join(args))
-            return real_run_git(args, cwd=cwd, timeout=timeout)
+        monkeypatch.setattr(commit_tripwires, "run_git", _tracking_run)
 
-        monkeypatch.setattr(commit_tripwires, "_run_git", _tracking_run_git)
+        assert commit_tripwires.check_registration_quad_completeness(root, staged) is None
+        assert calls == [["cat-file", "--batch"]]
 
-        import coordinator_core.authz.registration_quad as registration_quad_module
-
-        def _boom():
-            raise AssertionError("expensive full-tree walk must not run (AC11)")
-
-        monkeypatch.setattr(registration_quad_module, "check_registration_quad", _boom)
+    def test_surface_files_absent_fails_open(self, tmp_path):
+        root = _init_repo(tmp_path)
+        _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
-        # rev-parse --show-toplevel, diff --cached --name-only, and ONE batched
-        # grep --cached -- never one subprocess per staged file (8 files staged).
-        assert len(calls) <= 4
-        assert not any(c.startswith("show ") for c in calls)
+
+    def test_unparseable_surface_fails_open(self, tmp_path):
+        root = _init_repo(tmp_path)
+        _seed_quad_tree(root)
+        (Path(root) / "coordinator_core/op_scopes.py").write_text("_OP_KEY_SCOPE = {", encoding="utf-8")
+        _git(root, "add", "coordinator_core/op_scopes.py")
+        _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
+
+        assert commit_tripwires.check_registration_quad_completeness(root) is None
 
 
 class TestRegistrationQuadOverrideAtCallSite:
@@ -695,7 +557,7 @@ class TestRegistrationQuadOverrideAtCallSite:
         monkeypatch.setattr(
             dispatch_checks.commit_tripwires,
             "check_registration_quad_completeness",
-            lambda cwd=None: "VIOLATION: REGISTRATION-QUAD-INVARIANT — planted for override test",
+            lambda cwd=None, staged=None: "VIOLATION: REGISTRATION-QUAD-INVARIANT — planted for override test",
         )
 
         monkeypatch.delenv("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", raising=False)
@@ -709,6 +571,14 @@ class TestRegistrationQuadOverrideAtCallSite:
         assert advisory is not None
         assert advisory["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "REGISTRATION-QUAD-INVARIANT" in advisory["hookSpecificOutput"]["additionalContext"]
+
+
+def _filter(violations, classification_baseline):
+    from coordinator_core.authz.registration_quad import filter_known_violations
+
+    return filter_known_violations(
+        violations, classification_baseline=classification_baseline, incomplete_baseline={}
+    )
 
 
 class TestRegistrationQuadBaselinePruning:
@@ -738,19 +608,15 @@ class TestRegistrationQuadBaselinePruning:
 
     def test_baselined_op_missing_only_classification_is_pruned(self):
         v = self._violation("cartography.stack", ["OP_CLASSIFICATION"])
-        assert (
-            commit_tripwires._prune_baselined_classification(v, frozenset({"cartography.stack"}))
-            is None
-        )
+        assert _filter([v], frozenset({"cartography.stack"})) == []
 
     def test_baselined_op_still_reports_other_missing_surfaces(self):
         """The baseline covers OP_CLASSIFICATION only — a baselined op missing its
         module-map entry is still a live defect and must survive pruning."""
         v = self._violation("cartography.stack", ["OP_CLASSIFICATION", "OP_MODULE_MAP"])
-        pruned = commit_tripwires._prune_baselined_classification(
-            v, frozenset({"cartography.stack"})
-        )
-        assert pruned is not None
+        kept = _filter([v], frozenset({"cartography.stack"}))
+        assert len(kept) == 1
+        pruned = kept[0]
         assert pruned.surfaces_missing == ("OP_MODULE_MAP",)
         assert pruned.missing_surface_files == (
             ("OP_MODULE_MAP", "coordinator_core/ops/_registry_map.py"),
@@ -758,7 +624,7 @@ class TestRegistrationQuadBaselinePruning:
 
     def test_non_baselined_op_is_untouched(self):
         v = self._violation("brand.new_op", ["OP_CLASSIFICATION"])
-        assert commit_tripwires._prune_baselined_classification(v, frozenset()) is v
+        assert _filter([v], frozenset()) == [v]
 
 
 # ---------------------------------------------------------------------------

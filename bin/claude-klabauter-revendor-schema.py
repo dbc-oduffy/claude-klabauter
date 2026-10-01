@@ -109,7 +109,8 @@ from coordinator_core.ops.emit.doe_drift import (  # noqa: E402
 )
 from coordinator_core.frontmatter.schema_validate import (  # noqa: E402
     SchemaDriftError,
-    check_schema_drift,
+    SchemaProbeUnavailableError,
+    check_schema_drift_batch,
     format_validation_errors,
     _parse_semver,
     _read_bump_class,
@@ -760,20 +761,24 @@ def _verify(plans: list[_Plan], clone: Path, sha: str) -> list[str]:
     """Verify every touched schema against the reference its OWN gate uses.
 
     Pin-tracked schemas are checked against the pin this run just wrote; HEAD-tracked
-    schemas against DoE HEAD. Both are `check_schema_drift` — the same function the
-    gating test calls — so a green result here is the gate's own verdict, not a
-    restatement of what this script believes it wrote.
+    schemas against DoE HEAD. Both go through `check_schema_drift_batch`, of which the
+    gating `check_schema_drift` is the one-element call — so a green result here is
+    the gate's own verdict, not a restatement of what this script believes it wrote.
 
     Returns a list of failure strings; empty means green.
     """
-    failures: list[str] = []
-    for plan in plans:
-        ref = sha if plan.pin_tracked else "HEAD"
-        try:
-            check_schema_drift(plan.vendored_path, clone, ref=ref)
-        except SchemaDriftError as exc:
-            failures.append(f"{plan.name} (against {ref}): {exc}")
-    return failures
+    refs = [sha if plan.pin_tracked else "HEAD" for plan in plans]
+    try:
+        verdicts = check_schema_drift_batch(
+            [(plan.vendored_path, ref) for plan, ref in zip(plans, refs)], clone
+        )
+    except SchemaProbeUnavailableError as exc:
+        return [f"{', '.join(p.name for p in plans)}: {exc}"]
+    return [
+        f"{plan.name} (against {ref}): {error}"
+        for plan, ref, error in zip(plans, refs, verdicts)
+        if error is not None
+    ]
 
 
 def _verify_pins_on_disk(
@@ -1024,7 +1029,7 @@ def run(
         _die(f"Write FAILED ({type(exc).__name__}: {exc}) — tree rolled back, nothing applied.")
 
     # --- Step 9: verify BOTH oracles ---------------------------------------
-    _info("[6] Verifying (check_schema_drift, plus a re-read of the rewritten pins)...")
+    _info("[6] Verifying (check_schema_drift_batch, plus a re-read of the rewritten pins)...")
     failures = _verify(actionable, clone, sha)
     if repins:
         failures += _verify_pins_on_disk(

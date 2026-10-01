@@ -1,42 +1,19 @@
 """
 coordinator_core.ops.ceremony.tests.test_post_commit_tail
 
-Op-level tests for `coordinator_core/ops/ceremony/post_commit_tail.py` — the
-C3a (docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a) extraction of
-`wsc_tail.py`'s steps 5c (post-commit consumed-handoff stamp+ship) and 5d
-(origin-stub close) into ONE standalone REGISTERED op,
-`ceremony.post_commit_tail`.
-
-This module is a pure refactor — `wsc_tail.py`'s own existing test suites
-(`test_wsc_tail_parity.py`, `test_consumed_handoff_stamp.py`) already cover
-the composed steps' full end-to-end behavior against real git repos; those
-suites are the acceptance bar (must stay green UNCHANGED). This file instead
-covers the NEW op-level surface directly: registration, sequencing/ordering,
-the origin-stub-close handler-injection contract, timing-span recording, the
-standalone JSON-RPC `_handler` entry, and the no-`ceremony_lock` invariant —
-using fakes/monkeypatch rather than a real git fixture, since the underlying
-git-touching behavior is already covered elsewhere.
+Tests for `coordinator_core/ops/ceremony/post_commit_tail.py`: `run()`'s
+origin-stub-close leg (handler injection, soft-fail, skip rendering, unioned
+follow-up commit, `delivery_proof` threading), the one "origin_stub_close"
+timing span, and the no-`ceremony_lock` invariant. Fakes/monkeypatch stand in
+for the git-touching legs except where a real-git fixture is used.
 
 Coverage:
-  (a) op_is_registered                        — "ceremony.post_commit_tail"
-      resolves via get_op_handler and IS this module's own `_handler`.
-  (b) run_sequences_stamp_then_origin_close    — both composed calls happen,
-      in order (stamp-ship BEFORE origin-stub-close).
-  (c) run_stamp_exception_propagates_before_origin_close_runs — a stamp+ship
-      exception propagates out of `run()` and origin-stub-close never runs
-      (mirrors AC18 crash-before-stamp-completes semantics).
   (d) run_origin_close_failure_does_not_propagate — an injected handler
       exception is soft-failed into the returned `origin_stub_result`, never
       raised past `run()`.
-  (e) run_records_two_separate_timing_spans_when_timing_supplied — the C1
-      "stamp_and_ship"/"origin_stub_close" step-name contract.
-  (f) run_is_noop_safe_without_timing           — `timing=None` (the
-      standalone-dispatch shape) records nothing and does not raise.
-  (g) handler_requires_sid_and_committed_sha    — setup-error paths.
-  (h) handler_requires_repo_root                — setup-error path.
-  (i) handler_errors_when_close_origin_stub_unregistered.
-  (j) handler_happy_path_dispatches_through_run  — the JSON-RPC entry composes
-      `run()` correctly and reports exit_code 0/2 per outcome.
+  (e) run_records_origin_stub_close_timing_span_when_timing_supplied.
+  (f) run_is_noop_safe_without_timing           — `timing=None` records
+      nothing and does not raise.
   (k) module_does_not_import_ceremony_lock       — repo-wide AC9
       reintroduction guard (docs/plans/2026-08-07-excise-the-ceremony-lock.md
       § C7), re-pointed here by C7 from the retired DEC-3 per-module scope:
@@ -44,8 +21,6 @@ Coverage:
       dynamically import, or define/call anything named exactly
       `ceremony_lock` (see `_ceremony_lock_guard.py` for exactly what is and
       is not covered). Not scoped to `post_commit_tail` specifically.
-
-Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C3a.
 """
 
 from __future__ import annotations
@@ -57,7 +32,6 @@ from typing import Any, Optional
 import pytest
 
 from coordinator_core import ipc
-from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.ceremony import post_commit_tail as m
 from coordinator_core.ops.ceremony.push import PUSH_MODE_NONE, PUSH_MODE_SYNC, PushOutcome
 from ._ceremony_lock_guard import assert_no_ceremony_lock_reintroduction
@@ -125,94 +99,16 @@ class _FakeTiming:
         return _Ctx()
 
 
-def _make_stamp_outcome(**kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-    return consumed_handoff_stamp.StampOutcome(**kwargs)
-
-
-def test_run_sequences_stamp_then_origin_close(monkeypatch, tmp_path):
-    call_order: list[str] = []
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        call_order.append("stamp_and_ship")
-        return _make_stamp_outcome(stamped=["state/handoffs/x.md"])
-
-    async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
-        call_order.append("origin_stub_close")
-        return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="my-plan",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub,
-            push_mode="deferred",
-        )
-    )
-
-    assert call_order == ["stamp_and_ship", "origin_stub_close"]
-    assert outcome.stamp_outcome.stamped == ["state/handoffs/x.md"]
-    assert outcome.origin_stub_result == {
-        "acted": [],
-        "skipped": [f"{m.OP_CLOSE_ORIGIN_STUB}:no-op"],
-        "failed": [],
-    }
-
-
-def test_run_stamp_exception_propagates_before_origin_close_runs(monkeypatch, tmp_path):
-    call_order: list[str] = []
-
-    async def _boom(*args: Any, **kwargs: Any) -> Any:
-        call_order.append("stamp_and_ship")
-        raise RuntimeError("simulated crash")
-
-    async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
-        call_order.append("origin_stub_close")
-        return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _boom)
-
-    with pytest.raises(RuntimeError, match="simulated crash"):
-        _run(
-            m.run(
-                tmp_path,
-                tmp_path,
-                "sid-1",
-                "deadbeef",
-                chain_terminal=True,
-                governing_plan_slug="",
-                initial_consumed=[],
-                close_origin_stub_handler=_fake_close_origin_stub,
-            )
-        )
-
-    assert call_order == ["stamp_and_ship"], (
-        "origin-stub close must never run once stamp+ship has raised"
-    )
-
-
 def test_run_origin_close_failure_does_not_propagate(monkeypatch, tmp_path):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     async def _boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("simulated handoff.close_origin_stub crash")
 
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
     outcome = _run(
         m.run(
             tmp_path,
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="my-plan",
             initial_consumed=[],
             close_origin_stub_handler=_boom,
@@ -234,9 +130,6 @@ def test_run_origin_close_surfaces_message_when_no_error_key(monkeypatch, tmp_pa
     reading only `error` silently discarded the op's explanation and
     surfaced a bare "unknown error" for every message-only reply."""
 
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         return {
             "exit_code": 1,
@@ -246,15 +139,12 @@ def test_run_origin_close_surfaces_message_when_no_error_key(monkeypatch, tmp_pa
             "message": "no (roadmap_id,stub_id) resolvable from state/handoffs/x.md",
         }
 
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
     outcome = _run(
         m.run(
             tmp_path,
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="my-plan",
             initial_consumed=[("state/handoffs/x.md", {})],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -278,9 +168,6 @@ def test_run_skip_rendering_distinguishes_live_children_from_indeterminate(
     with a `(+N more)` suffix — and a skip entry carrying neither new field
     (`no-match`) must render exactly as the bare `roadmap:stub:reason` prefix,
     unchanged."""
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
 
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         return {
@@ -316,15 +203,12 @@ def test_run_skip_rendering_distinguishes_live_children_from_indeterminate(
             "message": "closed 0 origin stub(s); skipped 3 of 3 resolved pair(s)",
         }
 
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
     outcome = _run(
         m.run(
             tmp_path,
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="my-plan",
             initial_consumed=[("state/handoffs/x.md", {})],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -402,9 +286,6 @@ def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit
     one follow-up commit per handoff, and never silently truncating to the
     first consumed handoff (the pre-DEC-5 `initial_consumed[0]` defect)."""
 
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     handoff_paths_seen: list[str] = []
 
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
@@ -436,7 +317,6 @@ def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit
         follow_up_calls.append((worktree_root, list(closed_paths), committed_sha, push_mode))
         return ("followupsha", True, m.PUSH_STATUS_PUSHED, None)
 
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
     monkeypatch.setattr(m, "_to_thread_commit_and_push", _fake_to_thread_commit_and_push)
 
     outcome = _run(
@@ -445,7 +325,6 @@ def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="",
             initial_consumed=[
                 ("state/handoffs/baton-a.md", {}),
@@ -472,14 +351,9 @@ def test_run_multi_baton_two_distinct_origin_stubs_close_in_one_follow_up_commit
     assert outcome.origin_stub_result["failed"] == []
 
 
-def test_run_records_two_separate_timing_spans_when_timing_supplied(monkeypatch, tmp_path):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
+def test_run_records_origin_stub_close_timing_span_when_timing_supplied(monkeypatch, tmp_path):
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     timing = _FakeTiming()
     _run(
@@ -488,7 +362,6 @@ def test_run_records_two_separate_timing_spans_when_timing_supplied(monkeypatch,
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -496,21 +369,13 @@ def test_run_records_two_separate_timing_spans_when_timing_supplied(monkeypatch,
         )
     )
 
-    # C6b's deliverable-cascade step deliberately runs untimed -- it must
-    # not widen `wsc_tail.py`'s own pinned `_TailTiming` step-name contract
-    # (see post_commit_tail.py module docstring "Timing-span preservation").
-    assert timing.entered == ["stamp_and_ship", "origin_stub_close"]
-    assert timing.exited == ["stamp_and_ship", "origin_stub_close"]
+    assert timing.entered == ["origin_stub_close"]
+    assert timing.exited == ["origin_stub_close"]
 
 
 def test_run_is_noop_safe_without_timing(monkeypatch, tmp_path):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     # Must not raise with timing=None (the standalone/registry-dispatch shape).
     outcome = _run(
@@ -519,14 +384,13 @@ def test_run_is_noop_safe_without_timing(monkeypatch, tmp_path):
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=True,
             governing_plan_slug="",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
             timing=None,
         )
     )
-    assert outcome.stamp_outcome is not None
+    assert outcome.origin_stub_result["failed"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -792,143 +656,6 @@ def test_origin_stub_close_push_mode_none_keeps_distinct_not_attempted_shape(tmp
 
 
 # ---------------------------------------------------------------------------
-# (m) C6b — second trigger: a newly-stamped consumed handoff fires
-# `deliverable.cascade_terminal` (the SAME shared entrypoint C6 registers),
-# never a second cascade implementation.
-# docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6b.
-# ---------------------------------------------------------------------------
-
-
-def _write_handoff(worktree_root: Path, relpath: str, deliverable_id: str | None) -> None:
-    fm_lines = ["---", "id: h-1", "status: shipped"]
-    if deliverable_id is not None:
-        fm_lines.append(f"deliverable_id: {deliverable_id}")
-    fm_lines += ["---", "", "body"]
-    target = worktree_root / relpath
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(fm_lines) + "\n", encoding="utf-8")
-
-
-async def _fake_close_origin_stub_noop(params: dict, repo_root: Path) -> dict:
-    return {"exit_code": 0, "closed": [], "skipped": []}
-
-
-def test_run_fires_cascade_for_each_newly_stamped_handoff_with_deliverable_id(
-    monkeypatch, tmp_path
-):
-    _write_handoff(tmp_path, "state/handoffs/a.md", "dlv-alpha")
-    _write_handoff(tmp_path, "state/handoffs/b.md", "dlv-beta")
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/a.md", "state/handoffs/b.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    cascade_calls: list[dict] = []
-
-    async def _fake_cascade(params: dict, repo_root: Path) -> dict:
-        cascade_calls.append(params)
-        return {
-            "exit_code": 0,
-            "advanced": [{"handoff_path": f"advanced-for-{params['deliverable_id']}", "message": "advanced"}],
-            "refused": [],
-        }
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            cascade_handler=_fake_cascade,
-        )
-    )
-
-    assert {c["deliverable_id"] for c in cascade_calls} == {"dlv-alpha", "dlv-beta"}
-    assert all(c["source_kind"] == "handoff" for c in cascade_calls)
-    assert {c["source_path"] for c in cascade_calls} == {
-        str(tmp_path / "state/handoffs/a.md"),
-        str(tmp_path / "state/handoffs/b.md"),
-    }
-    assert set(outcome.deliverable_cascade_result["acted"]) == {
-        "advanced-for-dlv-alpha",
-        "advanced-for-dlv-beta",
-    }
-    assert outcome.deliverable_cascade_result["failed"] == []
-
-
-def test_run_skips_cascade_for_stamped_handoff_with_no_deliverable_id(monkeypatch, tmp_path):
-    _write_handoff(tmp_path, "state/handoffs/no-did.md", deliverable_id=None)
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/no-did.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    called = False
-
-    async def _fake_cascade(params: dict, repo_root: Path) -> dict:
-        nonlocal called
-        called = True
-        return {"exit_code": 0, "advanced": [], "refused": []}
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            cascade_handler=_fake_cascade,
-        )
-    )
-
-    assert called is False
-    assert outcome.deliverable_cascade_result["acted"] == []
-    assert outcome.deliverable_cascade_result["failed"] == []
-    assert any("no-deliverable-id" in s for s in outcome.deliverable_cascade_result["skipped"])
-
-
-def test_run_cascade_failure_does_not_propagate(monkeypatch, tmp_path):
-    _write_handoff(tmp_path, "state/handoffs/a.md", "dlv-alpha")
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/a.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    async def _boom(params: dict, repo_root: Path) -> dict:
-        raise RuntimeError("simulated deliverable.cascade_terminal crash")
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            cascade_handler=_boom,
-        )
-    )
-
-    assert outcome.deliverable_cascade_result["acted"] == []
-    assert any(
-        "simulated deliverable.cascade_terminal crash" in f
-        for f in outcome.deliverable_cascade_result["failed"]
-    )
-
-
-# ---------------------------------------------------------------------------
 # (l) delivery_proof threading -- close_out_and_stamp's own delivery proof
 # forwarded verbatim through run()/_run_origin_stub_close into every
 # close_origin_stub_handler call. See `_run_origin_stub_close`'s own
@@ -941,14 +668,9 @@ def test_run_forwards_delivery_proof_into_close_origin_stub_handler_calls(
 ):
     seen_params: list[dict] = []
 
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         seen_params.append(params)
         return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     proof = {
         "deliverable_id": "dlv-alpha",
@@ -963,7 +685,6 @@ def test_run_forwards_delivery_proof_into_close_origin_stub_handler_calls(
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=False,
             governing_plan_slug="my-plan",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -984,14 +705,9 @@ def test_run_omits_delivery_proof_key_when_none(monkeypatch, tmp_path):
     before this threading existed."""
     seen_params: list[dict] = []
 
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome()
-
     async def _fake_close_origin_stub(params: dict, repo_root: Path) -> dict:
         seen_params.append(params)
         return {"exit_code": 0, "closed": [], "skipped": []}
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
 
     _run(
         m.run(
@@ -999,7 +715,6 @@ def test_run_omits_delivery_proof_key_when_none(monkeypatch, tmp_path):
             tmp_path,
             "sid-1",
             "deadbeef",
-            chain_terminal=False,
             governing_plan_slug="my-plan",
             initial_consumed=[],
             close_origin_stub_handler=_fake_close_origin_stub,
@@ -1011,382 +726,6 @@ def test_run_omits_delivery_proof_key_when_none(monkeypatch, tmp_path):
     assert "delivery_proof" not in seen_params[0]
 
 
-# ---------------------------------------------------------------------------
-# (n) C3 — third leg: shipping a baton cascade-clears its live dependents in
-# the same post-commit tail.
-# docs/plans/2026-08-18-auto-reconcile-must-fire.md § C3.
-# ---------------------------------------------------------------------------
 
-
-def _write_gcc_handoff(
-    worktree_root: Path,
-    relpath: str,
-    *,
-    ids: dict | None = None,
-    blocked_by: list[str] | None = None,
-    deployment_state: str = "awaiting_gate",
-) -> None:
-    fm_lines = ["---", "status: open", f"deployment_state: {deployment_state}"]
-    for k, v in (ids or {}).items():
-        fm_lines.append(f"{k}: {v}")
-    if blocked_by is not None:
-        fm_lines.append("blocked_by:")
-        for b in blocked_by:
-            fm_lines.append(f"  - {b}")
-    fm_lines += ["---", "", "body"]
-    target = worktree_root / relpath
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(fm_lines) + "\n", encoding="utf-8")
-
-
-async def _fake_gcc_applied(params: dict, repo_root: Path) -> dict:
-    return {"exit_code": 0, "applied": True, "message": "cleared"}
-
-
-def test_run_gate_cascade_clear_fires_once_per_live_dependent(monkeypatch, tmp_path):
-    """End-to-end against real files (no mocking of the fan-out resolver
-    itself) -- proves the matched-blocker-id intersection logic, not just the
-    fan-out plumbing."""
-    _write_gcc_handoff(tmp_path, "state/handoffs/shipped.md", ids={"stub_id": "stub-a"})
-    _write_gcc_handoff(
-        tmp_path,
-        "state/handoffs/dependent.md",
-        ids={"stub_id": "stub-b"},
-        blocked_by=["stub-a", "stub-other"],
-    )
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-
-    calls: list[dict] = []
-
-    async def _fake_gcc(params: dict, repo_root: Path) -> dict:
-        calls.append(params)
-        return {"exit_code": 0, "applied": True, "message": "cleared"}
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            gate_cascade_clear_handler=_fake_gcc,
-        )
-    )
-
-    assert len(calls) == 1
-    call = calls[0]
-    assert call["verb"] == "gate-cascade-clear"
-    assert call["handoff_path"] == str((tmp_path / "state/handoffs/dependent.md").resolve())
-    assert call["blocker_ids"] == ["stub-a"]  # NOT stub-other -- that names a different baton
-    assert call["blocker_shas"] == ["deadbeef"]
-    assert outcome.gate_cascade_clear_result["acted"] == [
-        str((tmp_path / "state/handoffs/dependent.md").resolve())
-    ]
-    assert outcome.gate_cascade_clear_result["failed"] == []
-
-
-def test_run_gate_cascade_clear_indeterminate_fails_closed_never_reads_as_no_dependents(
-    monkeypatch, tmp_path
-):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(
-        m,
-        "blocked_by_dependents_many",
-        lambda candidates, worktree, exclude=None: {
-            str(c): {
-                "state": "indeterminate",
-                "dependents": [],
-                "identifiers": [],
-                "scan_errors": ["state/handoffs: PermissionError"],
-                "error": "enumeration incomplete",
-            }
-            for c in candidates
-        },
-    )
-
-    called = False
-
-    async def _should_not_be_called(params: dict, repo_root: Path) -> dict:
-        nonlocal called
-        called = True
-        return {"exit_code": 0, "applied": True, "message": "cleared"}
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            gate_cascade_clear_handler=_should_not_be_called,
-        )
-    )
-
-    assert called is False
-    assert outcome.gate_cascade_clear_result["acted"] == []
-    assert outcome.gate_cascade_clear_result["failed"] == []
-    assert any(
-        "indeterminate" in s for s in outcome.gate_cascade_clear_result["skipped"]
-    )
-
-
-def test_run_gate_cascade_clear_classifies_three_named_mutate_abort_shapes_as_skip(
-    monkeypatch, tmp_path
-):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(
-        m,
-        "blocked_by_dependents_many",
-        lambda candidates, worktree, exclude=None: {
-            str(c): {
-                "state": "dependents",
-                "dependents": ["dep-1", "dep-2", "dep-3", "dep-4"],
-                "identifiers": ["stub-a"],
-                "scan_errors": [],
-                "error": None,
-            }
-            for c in candidates
-        },
-    )
-    monkeypatch.setattr(
-        m,
-        "_read_meta",
-        lambda path: {"blocked_by": ["stub-a"]},
-    )
-
-    responses = {
-        "dep-1": {"exit_code": 1, "applied": False, "error": (
-            'gate-cascade-clear requires deployment_state:awaiting_gate (found "in_flight") — dep-1'
-        )},
-        "dep-2": {"exit_code": 1, "applied": False, "error": (
-            "gate-cascade-clear: requested blocker id(s) not present in "
-            "blocked_by: ['stub-a'] — dep-2"
-        )},
-        "dep-3": {"exit_code": 1, "applied": False, "error": (
-            "gate-cascade-clear: blocker 'stub-a' does not clear the gate "
-            "(status: closed) — only a shipped blocker ... — dep-3"
-        )},
-        "dep-4": {"exit_code": 1, "applied": False, "error": "gate-cascade-clear: handoff not found: dep-4"},
-    }
-
-    async def _fake_gcc(params: dict, repo_root: Path) -> dict:
-        return responses[params["handoff_path"]]
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            gate_cascade_clear_handler=_fake_gcc,
-        )
-    )
-
-    result = outcome.gate_cascade_clear_result
-    assert result["acted"] == []
-    # The three NAMED MutateAbort shapes are skips ...
-    assert sum("dep-1" in s for s in result["skipped"]) == 1
-    assert sum("dep-2" in s for s in result["skipped"]) == 1
-    assert sum("dep-3" in s for s in result["skipped"]) == 1
-    # ... everything else (file-not-found here) propagates as failed.
-    assert sum("dep-4" in f for f in result["failed"]) == 1
-    assert not any("dep-4" in s for s in result["skipped"])
-
-
-def test_run_gate_cascade_clear_bounds_fan_out_per_stamped_baton(monkeypatch, tmp_path):
-    dependents = [f"dep-{i}" for i in range(m._MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED + 3)]
-
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(
-        m,
-        "blocked_by_dependents_many",
-        lambda candidates, worktree, exclude=None: {
-            str(c): {
-                "state": "dependents",
-                "dependents": list(dependents),
-                "identifiers": ["stub-a"],
-                "scan_errors": [],
-                "error": None,
-            }
-            for c in candidates
-        },
-    )
-    monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
-
-    calls: list[str] = []
-
-    async def _fake_gcc(params: dict, repo_root: Path) -> dict:
-        calls.append(params["handoff_path"])
-        return {"exit_code": 0, "applied": True, "message": "cleared"}
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            gate_cascade_clear_handler=_fake_gcc,
-        )
-    )
-
-    assert len(calls) == m._MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED
-    assert calls == dependents[: m._MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED]
-    overflow_name = dependents[m._MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED]
-    assert any(
-        overflow_name in s and "deferred-to-cadence-backstop" in s
-        for s in outcome.gate_cascade_clear_result["skipped"]
-    )
-
-
-def test_run_gate_cascade_clear_handler_defaults_to_get_op_handler_when_not_injected(
-    monkeypatch, tmp_path
-):
-    """No `gate_cascade_clear_handler` supplied (the `wsc_tail.py` call-site
-    shape, unchanged by C3) resolves it internally via `get_op_handler` --
-    never a required param existing callers must be updated to pass."""
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(
-        m,
-        "blocked_by_dependents_many",
-        lambda candidates, worktree, exclude=None: {
-            str(c): {
-                "state": "dependents",
-                "dependents": ["dep-1"],
-                "identifiers": ["stub-a"],
-                "scan_errors": [],
-                "error": None,
-            }
-            for c in candidates
-        },
-    )
-    monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
-
-    resolved_calls: list[str] = []
-
-    async def _fake_gcc(params: dict, repo_root: Path) -> dict:
-        resolved_calls.append(params["handoff_path"])
-        return {"exit_code": 0, "applied": True, "message": "cleared"}
-
-    monkeypatch.setattr(
-        m,
-        "get_op_handler",
-        lambda name: _fake_gcc if name == m.OP_HANDOFF_TRANSITION else None,
-    )
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-        )
-    )
-
-    assert resolved_calls == ["dep-1"]
-    assert outcome.gate_cascade_clear_result["acted"] == ["dep-1"]
-
-
-def test_run_gate_cascade_clear_no_op_when_op_not_registered(monkeypatch, tmp_path):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(m, "get_op_handler", lambda name: None)
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-        )
-    )
-
-    assert outcome.gate_cascade_clear_result["acted"] == []
-    assert outcome.gate_cascade_clear_result["failed"] == []
-    assert any("not-registered" in s for s in outcome.gate_cascade_clear_result["skipped"])
-
-
-def test_run_gate_cascade_clear_failure_does_not_propagate(monkeypatch, tmp_path):
-    async def _fake_stamp(*args: Any, **kwargs: Any) -> consumed_handoff_stamp.StampOutcome:
-        return _make_stamp_outcome(stamped=["state/handoffs/shipped.md"])
-
-    monkeypatch.setattr(consumed_handoff_stamp, "post_commit_stamp_and_ship", _fake_stamp)
-    monkeypatch.setattr(
-        m,
-        "blocked_by_dependents_many",
-        lambda candidates, worktree, exclude=None: {
-            str(c): {
-                "state": "dependents",
-                "dependents": ["dep-1"],
-                "identifiers": ["stub-a"],
-                "scan_errors": [],
-                "error": None,
-            }
-            for c in candidates
-        },
-    )
-    monkeypatch.setattr(m, "_read_meta", lambda path: {"blocked_by": ["stub-a"]})
-
-    async def _boom(params: dict, repo_root: Path) -> dict:
-        raise RuntimeError("simulated handoff.transition crash")
-
-    outcome = _run(
-        m.run(
-            tmp_path,
-            tmp_path,
-            "sid-1",
-            "deadbeef",
-            chain_terminal=True,
-            governing_plan_slug="",
-            initial_consumed=[],
-            close_origin_stub_handler=_fake_close_origin_stub_noop,
-            gate_cascade_clear_handler=_boom,
-        )
-    )
-
-    assert outcome.gate_cascade_clear_result["acted"] == []
-    assert any(
-        "simulated handoff.transition crash" in f
-        for f in outcome.gate_cascade_clear_result["failed"]
-    )
 
 

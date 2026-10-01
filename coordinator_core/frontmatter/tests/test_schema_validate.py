@@ -65,6 +65,7 @@ from coordinator_core.frontmatter.schema_validate import (
     check_plan_tasks_ordering,
     check_schema_ahead_of_doe,
     check_schema_drift,
+    check_schema_drift_batch,
     describe,
     is_unowned,
     parse_frontmatter,
@@ -84,7 +85,7 @@ from coordinator_core.frontmatter.schema_validate import (
     _read_bump_class,
     _read_bump_note,
 )
-from coordinator_core.git_scope import foreign_repo_unusable_reason
+from coordinator_core.git_scope import foreign_repo_unusable_reason, reset_foreign_repo_probe_memo
 from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -2530,6 +2531,16 @@ def _valid_plan_task_row(**overrides) -> dict:
     return base
 
 
+class TestPlanTasksPerformer:
+    def test_performer_em_validates(self):
+        errors = validate_frontmatter(_valid_plan_task_row(performer='em'), _PLAN_TASKS_SCHEMA)
+        assert not any(e['field'] == 'performer' for e in errors)
+
+    def test_performer_bogus_rejected(self):
+        errors = validate_frontmatter(_valid_plan_task_row(performer='bogus'), _PLAN_TASKS_SCHEMA)
+        assert any(e['field'] == 'performer' for e in errors)
+
+
 class TestPlanTasksDispositionShape:
     def test_default_open_row_ok(self):
         errors = validate_frontmatter(_valid_plan_task_row(), _PLAN_TASKS_SCHEMA)
@@ -2577,6 +2588,27 @@ class TestPlanTasksDispositionShape:
         )
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition_ref' and 'hex SHA' in e['error'] for e in errors)
+
+    def test_coded_repo_key_qualified_sha_ok(self):
+        """plan-tasks 3.4.0: `<repo_key>:<sha>` names another repo's commit."""
+        row = _valid_plan_task_row(disposition='coded', disposition_ref='claude_klabauter:7730d18f1b')
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        assert not any(e['field'] == 'disposition_ref' for e in errors), errors
+
+    @pytest.mark.parametrize('ref', ['c:7730d18f1b', 'Claude-Klabauter:7730d18f1b', 'a:b:7730d18f1b', 'claude_klabauter:'])
+    def test_coded_malformed_repo_key_rejected(self, ref):
+        """A one-character key (a drive letter), uppercase, a double prefix, or a bare key all refuse."""
+        row = _valid_plan_task_row(disposition='coded', disposition_ref=ref)
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        assert any(e['field'] == 'disposition_ref' and 'hex SHA' in e['error'] for e in errors)
+
+    def test_depends_on_plan_row_ok(self):
+        """plan-tasks 3.4.0's cross-plan predecessor edge validates clean."""
+        row = _valid_plan_task_row(depends_on_plan=[
+            {'plan': 'docs/plans/2026-09-23-sibling.md', 'chunk': 'C1', 'gate_kind': 'epistemic-premise'},
+        ])
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        assert not any(e['field'].startswith('depends_on') for e in errors), errors
 
     def test_coded_missing_ref_rejected(self):
         row = _valid_plan_task_row(disposition='coded', disposition_detail='no ref given')
@@ -3740,7 +3772,7 @@ class TestDriftCheck:
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(_PLAN_TASKS_SCHEMA, _DOE_REPO)  # should not raise
+        _check_vendored_against_doe('plan-tasks', _PLAN_TASKS_SCHEMA)
 
         vendored = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding='utf-8'))
         assert 'grouping_approvals' not in vendored.get('properties', {}), (
@@ -3781,7 +3813,7 @@ class TestDriftCheck:
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(_PLAN_SCHEMA, _DOE_REPO)  # should not raise
+        _check_vendored_against_doe('plan', _PLAN_SCHEMA)
 
         vendored = json.loads(_PLAN_SCHEMA.read_text(encoding='utf-8'))
         assert 'grouping_approvals' in vendored.get('properties', {}), (
@@ -4110,7 +4142,12 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   retire-review-integrator plan: sync vendored review-findings schema to
     #   DoE HEAD 96bcb8fde
-    'review-findings': "96bcb8fdeda580ca5657571852bafe01034c8eb4",
+    # Pin moved 2026-10-01 to 9a2573ca4a089e789f712a555fcd486f6cbb7e63 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE wiki reorg moved cited wiki paths into subdirectories; review-
+    #   findings 3.5.1 note reworded upstream (x-bump-class dropped locally,
+    #   upward ask filed in report)
+    'review-findings': "9a2573ca4a089e789f712a555fcd486f6cbb7e63",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4216,26 +4253,24 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {
-    # sizing-object: 1.23.0 folds DoE's 1.22.0 in verbatim (autonomous_discharge,
-    # its allOf rule) and adds exit_criterion/interaction_mode plus one detents
-    # enum append (exit_criterion_pending). It also DROPS claude-klabauter's own R7 leaves
-    # (first-person, repo_span) relative to claude-klabauter's own prior 1.22.0 — a
-    # narrowing that is safe because DoE never carried either value, so it moves
-    # claude-klabauter strictly toward DoE rather than away from it.
-    # doe_ref is DoE's committed HEAD for this path at authoring time.
-    'sizing-object': {
-        'doe_ref': '2c3ecef6969cf012707120baf7b680094cf2cf4f',
-        'reason': (
-            'exit_criterion/interaction_mode/exit_criterion_pending land at the '
-            'sizing stage ahead of DoE upward-vendoring 1.23.0 '
-            '(pln-sizing-engine-carries-exit-cri-af770b), same declare/gate/'
-            'converge/remove lifecycle as the review-trail worked example above.'
-        ),
-        'provenance': 'pln-sizing-engine-carries-exit-cri-af770b § C1',
-        'local_shape_hash': 'b6a39f959a9e72ffd9d60415a5f1c32718995fef7bf025da9bd353f91544e6ec',
-    },
-}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+
+
+def _check_vendored_against_doe(name: str, schema_path: Path) -> None:
+    """Ahead-pinned schemas take the ahead check; every other one is byte-pinned to DoE HEAD."""
+    entry = _QUEUE_SCHEMA_AHEAD_PINS.get(name)
+    if entry is None:
+        check_schema_drift(schema_path, _DOE_REPO)
+        return
+    check_schema_ahead_of_doe(
+        schema_path,
+        _DOE_REPO,
+        doe_ref=entry['doe_ref'],
+        reason=entry['reason'],
+        provenance=entry['provenance'],
+        exempt_paths=entry.get('exempt_paths', frozenset()),
+        local_shape_hash=entry.get('local_shape_hash'),
+    )
 
 _QUEUE_SCHEMA_NAMES = (
     'bug-backlog',
@@ -5189,18 +5224,11 @@ class TestHeadTrackedQueueSchemaDrift:
         )
 
     def test_sizing_object_matches_doe_head(self):
-        # No longer HEAD-tracked: sizing-object moved to an ahead-pin at
-        # 1.23.0 (pln-sizing-engine-carries-exit-cri-af770b § C1) — it is
-        # DELIBERATELY ahead of DoE HEAD (exit_criterion, interaction_mode,
-        # exit_criterion_pending; R7's first-person/repo_span dropped), so a
-        # byte-equality check_schema_drift call here would fail by design.
-        # Coverage moved to TestAheadPinRegistryRouting via
-        # `_QUEUE_SCHEMA_AHEAD_PINS['sizing-object']`, following the
-        # review-trail worked example this file's registry comment cites:
-        # declare, gate, converge, remove. Restore this as an ordinary
-        # check_schema_drift call once DoE vendors 1.23.0 and the ahead-pin
-        # entry is removed.
-        pytest.skip('sizing-object is ahead-pinned; see TestAheadPinRegistryRouting')
+        if _DOE_REPO is None or not _DOE_REPO.exists():
+            pytest.skip(f'DoE repo not found at {_DOE_REPO}')
+        _skip_if_probe_unavailable(
+            check_schema_drift, _SCHEMAS_DIR / 'sizing-object.schema.json', _DOE_REPO
+        )
 
     def test_workstream_event_matches_doe_head(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
@@ -5232,16 +5260,8 @@ class TestAheadPinRegistryRouting:
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         if not _QUEUE_SCHEMA_AHEAD_PINS:
             pytest.skip('ahead-pin registry is empty — the healthy resting state')
-        for name, entry in _QUEUE_SCHEMA_AHEAD_PINS.items():
-            check_schema_ahead_of_doe(
-                _SCHEMAS_DIR / f'{name}.schema.json',
-                _DOE_REPO,
-                doe_ref=entry['doe_ref'],
-                reason=entry['reason'],
-                provenance=entry['provenance'],
-                exempt_paths=entry.get('exempt_paths', frozenset()),
-                local_shape_hash=entry.get('local_shape_hash'),
-            )
+        for name in _QUEUE_SCHEMA_AHEAD_PINS:
+            _check_vendored_against_doe(name, _SCHEMAS_DIR / f'{name}.schema.json')
 
 
 def _ahead_git(repo: Path, *args: str, env: dict | None = None) -> None:
@@ -7853,3 +7873,139 @@ class TestMultiLineQuotedScalars:
 
         assert fm['statement'] == '"never closed'
         assert fm['n'] == 1
+
+
+class TestCheckSchemaDriftBatch:
+    """`check_schema_drift_batch` — the gating tamper-check over N schemas.
+
+    Two properties: the process count is a constant of the call (one repo probe plus
+    one `git cat-file --batch`), and per-entry verdicts survive the batching with
+    "the comparison never ran" kept distinct from "the schema drifted"."""
+
+    @staticmethod
+    def _git(repo, *args):
+        subprocess.run(
+            ['git', '-C', str(repo), *args],
+            check=True, capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL, **no_console_creationflags(),
+        )
+
+    @pytest.fixture()
+    def fake_doe(self, tmp_path):
+        repo = tmp_path / 'DoE-fake'
+        schemas = repo / 'coordinator' / 'schemas'
+        schemas.mkdir(parents=True)
+        for name in ('a.schema.json', 'b.schema.json', 'c.schema.json'):
+            (schemas / name).write_bytes(f'{{"title": "{name}"}}\n'.encode())
+        # A CRLF blob in git: the vendored LF copy of it must read as clean.
+        (schemas / 'crlf.schema.json').write_bytes(b'{\r\n  "title": "crlf"\r\n}\r\n')
+        self._git(repo, 'init', '-q')
+        self._git(repo, 'config', 'user.email', 'test@example.invalid')
+        self._git(repo, 'config', 'user.name', 'batch drift test')
+        self._git(repo, 'config', 'core.autocrlf', 'false')
+        self._git(repo, 'add', '-A')
+        self._git(repo, 'commit', '-q', '-m', 'seed')
+        return repo
+
+    @pytest.fixture()
+    def vendored(self, tmp_path):
+        directory = tmp_path / 'vendored'
+        directory.mkdir()
+        for name in ('a.schema.json', 'b.schema.json', 'c.schema.json'):
+            (directory / name).write_text(f'{{"title": "{name}"}}\n', encoding='utf-8')
+        (directory / 'crlf.schema.json').write_bytes(b'{\n  "title": "crlf"\n}\n')
+        return directory
+
+    def test_spawn_count_is_two_whatever_the_set_size(
+        self, fake_doe, vendored, monkeypatch
+    ):
+        reset_foreign_repo_probe_memo()
+        spawns = []
+        real_run = subprocess.run
+
+        def counting_run(argv, *args, **kwargs):
+            spawns.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, 'run', counting_run)
+
+        one = check_schema_drift_batch([(vendored / 'a.schema.json', 'HEAD')], fake_doe)
+        assert one == [None]
+        assert len(spawns) == 2, f'one schema: {spawns}'
+
+        spawns.clear()
+        reset_foreign_repo_probe_memo()
+        three = check_schema_drift_batch(
+            [(vendored / n, 'HEAD') for n in
+             ('a.schema.json', 'b.schema.json', 'c.schema.json')],
+            fake_doe,
+        )
+        assert three == [None, None, None]
+        assert len(spawns) == 2, f'three schemas: {spawns}'
+        assert spawns[1][-2:] == ['cat-file', '--batch']
+
+    def test_empty_set_spawns_nothing(self, fake_doe, monkeypatch):
+        def refuse(*_a, **_k):
+            raise AssertionError('an empty batch must not spawn')
+
+        monkeypatch.setattr(subprocess, 'run', refuse)
+        assert check_schema_drift_batch([], fake_doe) == []
+
+    def test_crlf_blob_is_not_drift(self, fake_doe, vendored):
+        reset_foreign_repo_probe_memo()
+        assert check_schema_drift_batch(
+            [(vendored / 'crlf.schema.json', 'HEAD')], fake_doe
+        ) == [None]
+
+    def test_verdicts_align_with_inputs_and_one_drift_does_not_hide_the_rest(
+        self, fake_doe, vendored
+    ):
+        reset_foreign_repo_probe_memo()
+        (vendored / 'b.schema.json').write_text('{"title": "tampered"}\n', encoding='utf-8')
+        results = check_schema_drift_batch(
+            [(vendored / 'a.schema.json', 'HEAD'),
+             (vendored / 'b.schema.json', 'HEAD'),
+             (vendored / 'c.schema.json', 'HEAD')],
+            fake_doe,
+        )
+        assert results[0] is None and results[2] is None
+        assert isinstance(results[1], SchemaDriftError)
+        assert not isinstance(results[1], SchemaProbeUnavailableError)
+        assert 'diverges' in str(results[1])
+
+    def test_missing_object_is_that_entrys_drift_error(self, fake_doe, vendored):
+        reset_foreign_repo_probe_memo()
+        absent = vendored / 'not-in-doe.schema.json'
+        absent.write_text('{}\n', encoding='utf-8')
+        results = check_schema_drift_batch(
+            [(vendored / 'a.schema.json', 'HEAD'), (absent, 'HEAD')], fake_doe
+        )
+        assert results[0] is None
+        assert isinstance(results[1], SchemaDriftError)
+        assert not isinstance(results[1], SchemaProbeUnavailableError)
+        assert 'no such object' in str(results[1])
+
+    def test_unreadable_clone_raises_probe_unavailable(self, tmp_path, vendored):
+        reset_foreign_repo_probe_memo()
+        not_a_repo = tmp_path / 'not_a_repo'
+        not_a_repo.mkdir()
+        with pytest.raises(SchemaProbeUnavailableError):
+            check_schema_drift_batch([(vendored / 'a.schema.json', 'HEAD')], not_a_repo)
+
+    def test_incomplete_batch_raises_probe_unavailable(
+        self, fake_doe, vendored, monkeypatch
+    ):
+        reset_foreign_repo_probe_memo()
+        monkeypatch.setattr(
+            'coordinator_core.frontmatter.schema_validate.scoped_cat_file_batch',
+            lambda *_a, **_k: None,
+        )
+        with pytest.raises(SchemaProbeUnavailableError, match='NOT a drift finding'):
+            check_schema_drift_batch([(vendored / 'a.schema.json', 'HEAD')], fake_doe)
+
+    def test_check_schema_drift_is_the_one_element_call(self, fake_doe, vendored):
+        reset_foreign_repo_probe_memo()
+        check_schema_drift(vendored / 'a.schema.json', fake_doe)
+        (vendored / 'a.schema.json').write_text('{}\n', encoding='utf-8')
+        with pytest.raises(SchemaDriftError, match='diverges'):
+            check_schema_drift(vendored / 'a.schema.json', fake_doe)

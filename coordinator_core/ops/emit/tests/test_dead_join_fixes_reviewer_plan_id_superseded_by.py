@@ -141,13 +141,13 @@ def test_reviewer_join_kind_based_staff_reviewer_outranks_sonnet_review(
         "---\nreviewer: sonnet-5\nkind: sonnet-review\n---\n\nbody\n",
     )
     _write(
-        tmp_path / "docs/plans/2026-07-01-foo.camelia-review.md",
-        "---\nreviewer: the Data Science Reviewer\nkind: staff-eng-review\n---\n\nbody\n",
+        tmp_path / "docs/plans/2026-07-01-foo.dana-review.md",
+        "---\nreviewer: dana\nkind: staff-eng-review\n---\n\nbody\n",
     )
 
     records, malformed = plans_section.collect(ctx)
 
-    assert records[0]["reviewer"] == "camelia"
+    assert records[0]["reviewer"] == "dana"
 
 
 @patch("coordinator_core.ops.emit.sections.plans._query_plan_records")

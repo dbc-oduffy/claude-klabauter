@@ -106,8 +106,12 @@ def test_a_retired_id_never_auto_accepts_however_small_the_registry(repos):
         assert R.unique_nearest_receiver(dead, repos) is None
 
 
-def test_a_live_typo_still_auto_accepts(repos):
-    assert R.unique_nearest_receiver("claude-klabauter-em", repos) == "claude-klabauter-em"
+def test_a_live_typo_still_auto_accepts():
+    neutral = {
+        "repos.sprocket_engine": "/x/sprocket-engine",
+        "repos.unrelated_gizmo": "/x/unrelated-gizmo",
+    }
+    assert R.unique_nearest_receiver("sprocket-em", neutral) == "sprocket-engine-em"
 
 
 def test_a_retired_id_is_not_a_central_receiver_id():

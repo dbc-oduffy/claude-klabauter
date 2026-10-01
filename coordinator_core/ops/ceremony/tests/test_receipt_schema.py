@@ -748,3 +748,20 @@ def test_validate_op_tail_unknown_list_accepted() -> None:
     r["op_tail"]["unknown"] = ["some-indeterminate-item"]
     errors = validate(r)
     assert errors == [], f"unknown as list must validate clean; got {errors}"
+
+
+def test_waivers_roundtrip_and_absent() -> None:
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"), waivers={"k": ["a", "b"]})
+    assert r["waivers"] == {"k": ["a", "b"]}
+    assert validate(r) == []
+    r2 = _minimal_receipt(op_tail=make_empty_op_tail("archival"), waivers={})
+    assert "waivers" not in r2
+    assert validate(r2) == []
+
+
+def test_validate_waivers_rejects_non_list_value_and_empty_key() -> None:
+    r = _minimal_receipt(op_tail=make_empty_op_tail("archival"))
+    r["waivers"] = {"k": "notalist", "": ["x"]}
+    assert len(validate(r)) == 2
+    r["waivers"] = ["x"]
+    assert len(validate(r)) == 1

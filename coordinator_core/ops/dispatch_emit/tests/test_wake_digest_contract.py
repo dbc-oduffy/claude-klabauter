@@ -180,7 +180,14 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     # and a real slice count (from _reviewPrep.slices.length) -- the params
     # dispatch.terminal_commit renders into the Inline-Review trailer.
     inline_review = digest["next_action"]["params"]["inline_review"]
-    assert inline_review == {"integration_stem": "i", "slices": 2, "fixes": 2}
+    assert {k: inline_review[k] for k in ("integration_stem", "slices", "fixes")} == {
+        "integration_stem": "i", "slices": 2, "fixes": 2,
+    }
+    # The run record's stage returns ride along for `dispatch.terminal_commit`.
+    assert inline_review["delivery"]["verdict"] == "PASS"
+    assert inline_review["tests"]["status"] == "pass"
+    assert inline_review["criterion"]["status"] == "met"
+    assert inline_review["integration"]["sidecar"] == "i.md"
 
 
 @pytest.mark.spawns_process

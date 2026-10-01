@@ -1,199 +1,34 @@
 """
-GRAVESTONE NOTICE — READ BEFORE THE DOCSTRING BELOW (2026-08-30).
+coordinator_core.ops.ceremony.post_commit_tail — composes the two post-commit
+legs of a ceremony commit into ONE in-process `run()`: origin-stub-close
+(`handoff.close_origin_stub`, injected as a handler) and the completion-entry
+commit-ledger fold. The sole live caller of `run()` is
+`execute_plan_assemble/close_out_and_stamp.py::_reach_post_commit_tail_stub_close`;
+`workstream_complete.apply` reaches the fold through
+`fold_completion_entry_commit`. This module is not a registered op.
 
-`wsc_tail.py` DOES NOT EXIST (K-046, `c07062c99`, 2026-08-23). Every
-present-tense reference to it below — "`wsc_tail.py` still invokes this op
-IN-PROCESS", "the in-process WSC tail", its `_TailTiming` pinned contract, its
-`_close_origin_stub_handler` module-global — is HISTORICAL and was never
-revised after that kill.
+Ship-stamping a consumed handoff is not composed here: it belongs to
+`/workstream-complete`'s `directives_commit_tail.apply_ship_stamps`, keyed on
+the claim ledger. Verdict:
+`docs/research/spike-verdicts/2026-08-30-baton-ship-stamp-inside-a-500ms-close.md`.
 
-`run()`'s ONE live caller is `execute_plan_assemble/close_out_and_stamp.py::
-_reach_post_commit_tail_stub_close` (`/execute-plan`'s close-out), and that
-caller suppresses the stamp: `post_commit_stamp_and_ship` has ZERO reachable
-invocations anywhere in this tree. Full trace, and why the suppression is
-correct but ownerless:
-`docs/research/spike-verdicts/2026-08-30-baton-ship-stamp-inside-a-500ms-close.md`
-§ CORRECTION; requirement: kill-ledger K-046; retention rationale: K-116.
+HARD CONSTRAINT: this module MUST NOT acquire any ceremony-wide serialization
+lock; neither leg holds one and the lock mechanism no longer exists. Do not add
+one back anywhere in the commit path.
 
-Prose naming a dead caller in the present tense is not cosmetic debt here — it
-previously manufactured a defect that did not exist (see K-046's amendment)
-and hid the requirement that does.
+Origin-stub-close handler injection: `run()` takes `close_origin_stub_handler`
+as an explicit parameter rather than importing
+`coordinator_core.ops.handoff_close_origin_stub._handler`, so a caller (and a
+test) patches the handler at its own call site.
 
-coordinator_core.ops.ceremony.post_commit_tail — `ceremony.post_commit_tail`
-standalone REGISTERED op composing `wsc_tail`'s two post-commit steps (5c:
-the C5 consumed-handoff stamp+ship, 5d: the 2026-07-22 origin-stub-close
-fold) into ONE callable unit.
+Timing: `run()` accepts an optional `timing` object — anything exposing a
+`.measure(name)` context manager — and records one span, "origin_stub_close".
 
-Purpose (C3a, docs/plans/2026-07-23-wsc-tail-slim-down.md § C3a): a PURE
-refactor. `wsc_tail.py` used to sequence these two steps inline, duplicated
-across its fresh-pass and AC18-resumed-pass branches. This module extracts
-that sequencing into one standalone op so C1's per-step timing instrumentation
-can attribute the ~3 git commits these two steps together produce to one op,
-and so a LATER chunk (C3b — NOT this one) can move the invocation itself
-across the repo boundary into the DoE skill occasion without re-deriving the
-sequencing logic. `wsc_tail.py` still invokes this op IN-PROCESS at both call
-sites, on both the fresh pass and the AC18-resumed pass, exactly as it did
-before this extraction — this chunk changes WHERE the sequencing logic lives,
-never WHEN it runs or under what lock.
-
-HARD CONSTRAINT: this op MUST NOT acquire any ceremony-wide serialization
-lock. Neither composed step has ever held one — see
-`consumed_handoff_stamp.py`'s own negative-spec ("Does NOT acquire a
-ceremony-wide lock itself, and its caller does not hold one either") and
-`wsc_tail.py`'s "Does NOT hold an outer lock around steps 5c/5d" negative-spec
-entry — both remain true after this extraction. This was a deliberate
-feature removal, first ratified by the PM as DEC-3 (2026-07-22, jettisoning
-the outer hold around this op specifically) and made repo-wide by the
-2026-08-07 PM ruling that removed the `ceremony_lock` mutex entirely (see
-`docs/plans/2026-08-07-excise-the-ceremony-lock.md`). Do NOT add a lock back
-here, or anywhere in the commit path — restoration is separately sized and
-not planned.
-
-Origin-stub-close handler injection (test-patchability, not DI for its own
-sake): `run()` takes `close_origin_stub_handler` as an explicit parameter
-instead of importing `coordinator_core.ops.handoff_close_origin_stub._handler`
-itself. `wsc_tail.py` keeps its own top-level `_close_origin_stub_handler`
-name — it is independently required by
-`test_close_origin_stub_standalone_op_still_registered`, which asserts
-`get_op_handler("handoff.close_origin_stub") is wsc_tail_mod._close_origin_stub_handler`
-— and passes that SAME module-global name into this op at each in-process
-call site. Because Python resolves a bare module-global name fresh at every
-call, `monkeypatch.setattr(wsc_tail_mod, "_close_origin_stub_handler", _boom)`
-(see `test_origin_stub_close_failure_does_not_fail_the_tail` and
-`test_origin_stub_close_runs_on_ac18_resume` in
-`coordinator_core/ops/ceremony/tests/test_wsc_tail_parity.py`) continues to
-take effect after this extraction exactly as it did when the sequencing lived
-directly in `wsc_tail.py`. `post_commit_stamp_and_ship` needs no equivalent
-treatment: it is already accessed as a `consumed_handoff_stamp` MODULE
-attribute (`consumed_handoff_stamp.post_commit_stamp_and_ship(...)`), not a
-name-bound alias, so patching
-`wsc_tail_mod.consumed_handoff_stamp.post_commit_stamp_and_ship` mutates the
-shared module object's own `__dict__` and is visible to any importer of that
-module, this one included — no injection needed there.
-
-Timing-span preservation: `wsc_tail.py`'s `_TailTiming` recorder pins
-`"stamp_and_ship"` and `"origin_stub_close"` as TWO SEPARATE named steps
-(`test_timing_map_covers_every_instrumented_step_with_nonnegative_ms`, C1).
-`run()` accepts an optional `timing` object — duck-typed, anything exposing a
-`.measure(name)` context manager, mirroring `_run_precommit_tail`'s own
-sub-step-recording convention in `wsc_tail.py` — and records its own two
-spans into it when supplied. The caller's timing map is therefore
-byte-identical whether this op runs standalone via the registry (no timing
-passed — the spans simply aren't recorded) or in-process under `wsc_tail`
-(its own recorder passed straight through).
-
-Six-surface op registration (this op): impl module (here, `@register_op`);
-`coordinator_core/op_scopes.py::_OP_KEY_SCOPE` → `"common_dir"`; no
-`_OP_TIMEOUT_OVERRIDES` entry — this is a `ceremony.*` op, so what bounds it
-is the 2s ceremony budget (`ipc.CEREMONY_BUDGET_SECS`, DR-348), not the
-global 30s runaway guard; this op does strictly less work than
-`ceremony.wsc_tail`, itself held to the same budget post-DEC-2;
-`coordinator_core/authz/classification.py` →
-`OpClass.MUTATING` with the DR-208 five-question affirmation;
-`coordinator_core/ops/__init__.py::_EAGER_OP_MODULES` eager-import entry;
-`coordinator_core/ops/_registry_map.py::OP_MODULE_MAP` lazy-import entry.
-
-Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C3a.
-
-Second trigger (C6b, docs/plans/2026-08-04-terminal-state-propagation-join-keys.md
-§ C6b): the other half of PM ruling R1 — a handoff concluding
-terminally-positive through `/workstream-complete` cascades the same way a
-plan stamped `implemented` does. This module is the natural seam because it
-is already the registered standalone op composed by `wsc_tail` at every
-ceremony that stamps a consumed handoff `shipped` (C5 widened its reach to
-`/execute-plan` close-out and `/mise-en-place` tail on top of `wsc_tail`
-itself). After `stamp_and_ship` names a handoff `stamped` (i.e. this pass
-just flipped it to `deployment_state: shipped`), `run()` reads that handoff's
-own `deliverable_id` and calls THE SAME shared entrypoint C6 registers
-(`deliverable.cascade_terminal`) with `source_kind="handoff"` — never a
-second cascade implementation. Re-entrancy (AC6i) is a property of that
-entrypoint's own construction (idempotent re-scan, self-advance guard on
-`source_path`), not of this trigger: this module fires the op once per
-newly-stamped handoff and never re-invokes it on an artifact the op itself
-advanced. A per-handoff cascade failure is soft-failed into
-`deliverable_cascade_result["failed"]`, mirroring the origin-stub-close leg's
-own soft-fail discipline — one bad cascade call must not fail the whole tail.
-This step runs UNTIMED (see "Timing-span preservation" below) — it does not
-widen `wsc_tail.py`'s own pinned `_TailTiming` step-name contract.
-
-Third leg (C3, docs/plans/2026-08-18-auto-reconcile-must-fire.md § C3, dlv-
-auto-reconcile-must-fire-not-surface-e1e90e): the PM's "a shipped blocker's id
-comes out of every dependent's blocked_by the moment it ships" — cascade-
-clearing PROMPTLY rather than only on C5's cadence backstop. For the SAME
-`stamped` set the deliverable-cascade leg above already reads, this leg calls
-`ops.handoff_children.blocked_by_dependents_many` ONCE for the whole stamped
-set and fires `handoff.transition`'s `gate-cascade-clear` verb (C1's
-MOVE-not-drop writer) once per live dependent whose `blocked_by` names that
-baton. That resolver is TRI-STATE — its own "indeterminate" (a non-empty
-`scan_errors`, or an unresolvable candidate identifier) is fail-closed-and-
-logged here, never read as "no dependents": silently declining a fan-out
-because a scan hiccuped is how a shipped-blocker wall survives. Exactly THREE
-named `_gate_cascade_clear` `MutateAbort` shapes — dependent not
-`awaiting_gate`, requested blocker id no longer in `blocked_by`, blocker's
-live state does not clear the gate — classify as a named skip; every other
-error (validation failure, lock timeout, malformed frontmatter, a usage
-error) propagates into `failed`, never silently swallowed as a no-op.
-
-COST (part (c) of the chunk body): the fan-out resolution walks the full
-live+archive handoff corpus ONCE per tail invocation — not once per stamped
-baton. The corpus walk and its `blocked_by` normalisation are
-candidate-independent, so `blocked_by_dependents_many` hoists them out of the
-per-candidate loop and leaves a set lookup behind; a tail that stamps five
-batons pays one walk, not five. Measured against this repo's own live corpus
-on 2026-08-18: `state/handoffs/*.md` = 142, `archive/handoffs/**/*.md` = 444,
-`archive/completed/**/*.md` = 440 — a ~1026-file walk, run synchronously on
-the commit hot path `ipc.py::_timeout_for` bounds, at the
-50-70-concurrent-session load norm (`docs/wiki/machine-load-norm.md`) this
-plan is sized against.
-
-What the walk does NOT cover is the write side: `_gate_cascade_clear`
-re-resolves each blocker id against LIVE disk a second time per call (its own
-act-time re-verification guard against the shared-worktree carry-forward-
-laundering race — Anti-scope: that re-resolution is NOT cached here), so the
-per-dependent cost is still linear in the fan-out. Chosen option: (ii) BOUND
-the per-tail fan-out (`_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED`) with the
-remainder left in `blocked_by` — untouched, not dropped — for C5's cadence
-backstop to clear on its own pass.
-
-Negative-spec (hard-won):
+Negative-spec:
   - Does NOT acquire any ceremony-wide serialization lock — see HARD
-    CONSTRAINT above. Do not add one back; DEC-3 removed the hold around this
-    op deliberately, and the 2026-08-07 PM ruling removed the underlying
-    `ceremony_lock` mechanism entirely.
-  - Does NOT move the `wsc_tail` call site — that is C3b, a separate chunk
-    with its own PM-recorded fallback (moving invocation across the repo
-    boundary into a DoE skill occasion needs a durable pending-work
-    sentinel). `wsc_tail.py` still invokes this op in-process at steps
-    5c/5d, on both the fresh and AC18-resumed pass, exactly as before this
-    extraction.
-  - Does NOT re-implement `post_commit_stamp_and_ship`'s or
-    `handoff.close_origin_stub`'s own logic — composes both via their
-    existing entry points (a module-attribute call for the former, an
-    injected handler callable for the latter). See "Origin-stub-close
-    handler injection" above for why the two are treated differently.
-  - Does NOT change behavior relative to the pre-extraction `wsc_tail.py`
-    inline sequencing — this chunk (C3a) is a pure refactor; the acceptance
-    bar is behaviour-identical, not latency-improved (that is what C3b,
-    a later chunk, is for).
-  - Does NOT reimplement `deliverable.cascade_terminal`'s join/predicate/
-    write logic (C6b) — this module only fetches and calls that registered
-    op via `get_op_handler`, exactly as it already does for
-    `handoff.close_origin_stub`. A second cascade implementation here would
-    give the repo two propagation paths that can disagree — precisely the
-    dispatch-fragility footgun this repo's conventions warn about.
-  - Does NOT reimplement `_gate_cascade_clear`'s MOVE-not-drop write, its
-    reverse-dependents resolution, or its act-time re-verification (C3) —
-    composes `ops.handoff_children.blocked_by_dependents_many` (read-only) and
-    dispatches the SAME `handoff.transition` op every other caller of
-    `gate-cascade-clear` uses. A second writer of `no_longer_blocked_by`
-    here is exactly the disagreement this repo's two-writers-must-agree
-    precedent (C1) exists to prevent.
-  - Does NOT treat the fan-out resolver's `"indeterminate"` state as
-    `"none"` — see "Third leg (C3)" above. Both fail-closed-and-log; neither
-    silently declines the fan-out as if there were nothing to clear.
-  - Does NOT cache `_gate_cascade_clear`'s act-time re-resolution, and does
-    NOT widen the per-tail fan-out bound past a measured, named option — see
-    "Third leg (C3)" § COST above.
+    CONSTRAINT above.
+  - Does NOT re-implement `handoff.close_origin_stub`'s own logic — composes
+    it via the injected handler callable.
   - Does NOT run `git log --grep`, or any other trailer/history scan, to
     find the sha to fold — `committed_sha` is already a required `run()`
     parameter (spike verdict constraint 1, module section "Completion-entry
@@ -226,13 +61,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from coordinator_core.dag import _read_meta
-from coordinator_core.ipc import get_op_handler, register_op
-from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.ceremony import consumed_handoff_stamp
 from coordinator_core.ops.completion_ops import _parse_existing_commits
-from coordinator_core.ops.handoff_children import blocked_by_dependents_many
 from coordinator_core.ops.ceremony.push import (
     PUSH_MODE_NEVER,
     PUSH_MODE_SYNC,
@@ -265,39 +95,8 @@ MUTATES = ["docs/plans/*.md", "archive/completed/**/*.md"]  # _fold_sha_into_ent
 
 OP_NAME = "ceremony.post_commit_tail"
 
-#: Tail-result label for the origin-stub-close leg — mirrors `wsc_tail.py`'s
-#: own `OP_CLOSE_ORIGIN_STUB` constant (kept as a separate copy there for its
-#: own `tail_results` dict key and the standalone-op-still-registered test;
-#: this module's copy is used only in its own skip-label strings below).
+#: Label prefix for the origin-stub-close leg's skip/fail strings.
 OP_CLOSE_ORIGIN_STUB = "handoff.close_origin_stub"
-
-#: C6b's second trigger — the shared cascade op C6 registers (see
-#: `deliverable_cascade.py`). Fetched via `get_op_handler` at call time,
-#: never re-implemented here (module docstring "RE-ENTRANCY" addition below).
-OP_DELIVERABLE_CASCADE = "deliverable.cascade_terminal"
-
-#: C3's third leg — the registered op `handoff_transition.py` exposes; this
-#: leg dispatches its `gate-cascade-clear` verb. Fetched via `get_op_handler`
-#: at call time (see module docstring "Third leg (C3)"), never a top-level
-#: import of the verb's own implementation function.
-OP_HANDOFF_TRANSITION = "handoff.transition"
-
-#: Label prefix for this leg's own skip/fail strings below — mirrors
-#: `OP_CLOSE_ORIGIN_STUB`/`OP_DELIVERABLE_CASCADE`'s use as a string prefix,
-#: not a second op name.
-OP_GATE_CASCADE_CLEAR = "handoff.transition:gate-cascade-clear"
-
-#: COST bound (option (ii), module docstring "Third leg (C3)" § COST) — caps
-#: the number of live dependents cascade-cleared per stamped baton, per tail
-#: invocation. A dependent past this cap is left in `blocked_by` (untouched,
-#: not dropped) for C5's cadence backstop (`handoff.reconcile_open` on
-#: `boot_sweep`) to clear on its own pass. Deliberately small: each dependent
-#: costs a `_gate_cascade_clear` call that re-resolves its blocker ids against
-#: LIVE disk (module docstring "Third leg (C3)" § COST), on the synchronous
-#: commit hot path, at the 50-70-concurrent-session load norm. The corpus walk
-#: itself is NOT what this bounds — that is hoisted to once per tail by
-#: `blocked_by_dependents_many`.
-_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED = 5
 
 
 def _measure(timing: Optional[Any], name: str):
@@ -318,8 +117,7 @@ def _measure(timing: Optional[Any], name: str):
 def _compose_origin_stub_close_message(closed_paths: list[str], committed_sha: str) -> str:
     """Compose the origin-stub-close follow-up commit's message body.
 
-    Sibling to `consumed_handoff_stamp._compose_follow_up_message` -- not
-    subject to AC4's golden-format parity requirement (scoped to the MAIN
+    Not subject to AC4's golden-format parity requirement (scoped to the MAIN
     ceremony commit only).
     """
     lines = [
@@ -339,13 +137,8 @@ def _commit_and_push_origin_stub_close(
     sid: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[bool], str, Optional[str]]:
     """Computed-mechanism follow-up commit (`git.commit.commit_paths`) for
-    the closed origin-stub file(s) -- its OWN small commit, a sibling to
-    `consumed_handoff_stamp`'s AC17 follow-up commit, never left as an
-    unswept dirty working-tree edit. Mirrors
-    `consumed_handoff_stamp._commit_and_push_follow_up` exactly (same
-    commit_paths/[push] shape, same `push_mode`
-    gating -- DEC-1) -- not reused directly since that function's
-    message/label are stamp-specific. The COMMIT is unconditional; the PUSH
+    the closed origin-stub file(s) -- its OWN small commit, never left as an
+    unswept dirty working-tree edit. The COMMIT is unconditional; the PUSH
     is gated by ``push_mode``: `"sync"` attempts a push here directly
     (via `commit_pipeline.push_with_retry`, so the same branch-policy gate
     the main ceremony commit's push obeys also governs this follow-up push);
@@ -544,10 +337,8 @@ async def _run_origin_stub_close(
     "Origin-stub-close handler injection" for why this is injected rather
     than imported here). Runs UNLOCKED (DEC-3, and repo-wide since the
     2026-08-07 removal -- no ceremony-wide lock is held by this step or its
-    caller), after `committed_sha` is known (mirrors
-    `consumed_handoff_stamp.post_commit_stamp_and_ship`'s own precondition)
-    -- never raises. ``push_mode`` gates the follow-up commit's push exactly
-    as `consumed_handoff_stamp`'s own follow-up (DEC-1).
+    caller), after `committed_sha` is known -- never raises. ``push_mode``
+    gates the follow-up commit's push.
 
     Join inputs mirror the OLD bash Step 2.7b's own `_cosos_args` shape:
     `docs/plans/<governing_plan_slug>.md` (when `governing_plan_slug` is
@@ -697,278 +488,6 @@ async def _run_origin_stub_close(
         skipped.append(f"follow-up:push:{follow_up_push_status}")
 
     return {"acted": closed_paths, "skipped": skipped, "failed": failed}
-
-
-async def _run_deliverable_cascade(
-    worktree_root: Path,
-    repo_root: Path,
-    stamped: list[str],
-    cascade_handler: Optional[Callable[[dict, Path], Awaitable[dict]]],
-) -> dict:
-    """C6b's second trigger: for each handoff `stamp_and_ship` just flipped
-    to `deployment_state: shipped` (a relpath in ``stamped``), read its own
-    `deliverable_id` and fire `deliverable.cascade_terminal` — THE SAME
-    shared entrypoint C6 registers — with `source_kind="handoff"` (see
-    module docstring "Second trigger (C6b)").
-
-    ``cascade_handler`` is resolved by the caller via `get_op_handler` (never
-    re-implemented here); when the op is not registered (e.g. a test harness
-    that never imports `deliverable_cascade`), this step is a clean no-op —
-    the SAME "compose an optional standalone op if present" posture this
-    module already applies to origin-stub-close resolution elsewhere.
-
-    Returns a tail_ops-shaped `{acted, skipped, failed}` dict. A candidate
-    handoff carrying no `deliverable_id` is skipped (named), not failed —
-    plenty of handoffs legitimately carry none. A cascade call that itself
-    reports `exit_code != 0` (e.g. "nothing downstream to advance") is
-    skipped (named with the op's own message), not failed — that is the
-    cascade's own honest "no candidates" outcome, not an error in firing it.
-    Only an exception or a malformed reply is recorded as `failed` — one bad
-    cascade call must not fail the rest of the tail (mirrors
-    `_run_origin_stub_close`'s own soft-fail discipline).
-    """
-    acted: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-
-    if not stamped:
-        return {"acted": acted, "skipped": skipped, "failed": failed}
-
-    if cascade_handler is None:
-        return {
-            "acted": acted,
-            "skipped": [f"{OP_DELIVERABLE_CASCADE}:not-registered"],
-            "failed": failed,
-        }
-
-    for relpath in stamped:
-        handoff_abs = worktree_root / relpath
-        fm = _read_meta(str(handoff_abs))
-        deliverable_id = fm.get("deliverable_id") if fm else None
-        if not isinstance(deliverable_id, str) or not deliverable_id.strip():
-            skipped.append(f"{OP_DELIVERABLE_CASCADE}:{relpath}:no-deliverable-id")
-            continue
-
-        try:
-            result = await cascade_handler(
-                {
-                    "deliverable_id": deliverable_id.strip(),
-                    "source_kind": "handoff",
-                    "source_path": str(handoff_abs),
-                },
-                repo_root,
-            )
-        except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
-            _LOG.warning("post_commit_tail: %s raised %s: %s", OP_DELIVERABLE_CASCADE, type(exc).__name__, exc)
-            failed.append(f"{OP_DELIVERABLE_CASCADE}:{relpath}: {exc}")
-            continue
-
-        if not isinstance(result, dict):
-            failed.append(f"{OP_DELIVERABLE_CASCADE}:{relpath}: malformed reply {result!r}")
-            continue
-
-        if result.get("exit_code") == 0:
-            advanced = result.get("advanced") or []
-            acted.extend(a.get("handoff_path", "") for a in advanced)
-            # `commit_error` (AC8) is
-            # present in the op's own result dict independent of exit_code
-            # (a commit failure never flips exit_code, which stays keyed off
-            # `advanced` alone), but was never read here, so it never reached
-            # `has_failure` below. Fold it into `failed` so it does.
-            commit_error = result.get("commit_error")
-            if commit_error:
-                failed.append(f"{OP_DELIVERABLE_CASCADE}:{relpath}: commit failed: {commit_error}")
-        else:
-            skipped.append(
-                f"{OP_DELIVERABLE_CASCADE}:{relpath}: {result.get('error', 'no downstream artifact advanced')}"
-            )
-
-    return {"acted": acted, "skipped": skipped, "failed": failed}
-
-
-#: The three named `_gate_cascade_clear` `MutateAbort` message shapes (see
-#: `handoff_transition.py`) that are an expected, non-corrupting refusal —
-#: classified as a named skip, never as `failed`. Matched by fixed prefix;
-#: each message also interpolates caller-specific detail (a deployment_state
-#: value, a missing-id list, a blocker id) that this match deliberately does
-#: not pin, since only the FIXED lead text identifies which of the three
-#: shapes fired.
-_GCC_SKIP_PREFIXES = (
-    "gate-cascade-clear requires deployment_state:awaiting_gate",
-    "gate-cascade-clear: requested blocker id(s) not present in blocked_by",
-)
-
-
-def _is_gate_cascade_clear_named_skip(error_message: str) -> bool:
-    """True for exactly the three `_gate_cascade_clear` `MutateAbort` shapes
-    this leg treats as a skip (see `_GCC_SKIP_PREFIXES` and module docstring
-    "Third leg (C3)"): dependent not `awaiting_gate`, requested blocker id no
-    longer present in `blocked_by`, or a blocker whose live state does not
-    clear the gate. Everything else — a lock timeout, an unparseable
-    frontmatter, a post-mutation schema-validation failure, the
-    blocker_ids/blocker_shas usage errors — is a real problem and must
-    propagate into `failed` rather than be swallowed as a no-op.
-    """
-    if not error_message:
-        return False
-    if error_message.startswith(_GCC_SKIP_PREFIXES):
-        return True
-    return (
-        error_message.startswith("gate-cascade-clear: blocker ")
-        and "does not clear the gate" in error_message
-    )
-
-
-async def _run_gate_cascade_clear(
-    worktree_root: Path,
-    repo_root: Path,
-    stamped: list[str],
-    committed_sha: str,
-    gate_cascade_clear_handler: Optional[Callable[[dict, Path], Awaitable[dict]]],
-) -> dict:
-    """C3's third leg: for each handoff `stamp_and_ship` just flipped to
-    `deployment_state: shipped` (a relpath in ``stamped``), resolve its LIVE
-    dependents via `ops.handoff_children.blocked_by_dependents_many`
-    (one corpus walk for the whole stamped set) and fire
-    `handoff.transition`'s `gate-cascade-clear` verb once per dependent whose
-    `blocked_by` names it — see module docstring "Third leg (C3)" for the
-    full design rationale (fail-closed indeterminate handling, the three
-    named skip shapes, and the measured fan-out bound).
-
-    ``gate_cascade_clear_handler`` mirrors ``cascade_handler``'s own
-    optional-injection shape (not ``close_origin_stub_handler``'s required
-    one): resolved by the caller via `get_op_handler` when not supplied, so
-    an existing in-process caller that predates C3 needs no call-site change.
-    A `None` handler (the op genuinely not registered) is a clean skip, same
-    posture as `_run_deliverable_cascade`'s own "not-registered" branch.
-
-    Returns a tail_ops-shaped `{acted, skipped, failed}` dict. `acted` names
-    each dependent path whose `blocked_by` was actually narrowed/emptied;
-    `skipped` carries the indeterminate-fan-out case, the fan-out-bound
-    overflow, the three named `MutateAbort` refusals, and a genuine no-op
-    (already at target state); `failed` carries everything else — a raised
-    exception, a malformed reply, or any other `_gate_cascade_clear` error —
-    mirroring `_run_deliverable_cascade`'s own soft-fail discipline: one bad
-    cascade-clear call must not fail the rest of the tail.
-    """
-    import asyncio
-
-    acted: list[str] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-
-    if not stamped:
-        return {"acted": acted, "skipped": skipped, "failed": failed}
-
-    if gate_cascade_clear_handler is None:
-        return {
-            "acted": acted,
-            "skipped": [f"{OP_GATE_CASCADE_CLEAR}:not-registered"],
-            "failed": failed,
-        }
-
-    # ONE corpus walk for the whole stamped set (module docstring § COST) —
-    # off the event loop, same hygiene rationale as this module's own
-    # `_to_thread_commit_and_push`.
-    candidate_keys = [str(worktree_root / relpath) for relpath in stamped]
-    fan_out = await asyncio.to_thread(
-        blocked_by_dependents_many, candidate_keys, worktree_root
-    )
-
-    for relpath, candidate_key in zip(stamped, candidate_keys):
-        result = fan_out[candidate_key]
-        state = result.get("state")
-
-        if state == "indeterminate":
-            # Tri-state: a scan hiccup or an unresolvable candidate id is
-            # "we could not fully look", never "no dependents" — fail-closed
-            # and logged, not silently declined (module docstring "Third leg
-            # (C3)").
-            _LOG.warning(
-                "post_commit_tail: gate-cascade-clear fan-out for %s came back "
-                "indeterminate (scan_errors=%s) — fail-closed, no dependent acted on",
-                relpath, result.get("scan_errors"),
-            )
-            skipped.append(
-                f"{OP_GATE_CASCADE_CLEAR}:{relpath}:indeterminate: {result.get('error')}"
-            )
-            continue
-
-        if state != "dependents":
-            continue  # "none" — no live dependent for this stamped baton
-
-        dependents = result.get("dependents") or []
-        candidate_identifiers = set(result.get("identifiers") or [])
-        bounded = dependents[:_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED]
-        overflow = dependents[_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED:]
-        for dep_path in overflow:
-            skipped.append(
-                f"{OP_GATE_CASCADE_CLEAR}:{relpath}:{dep_path}:deferred-to-cadence-backstop "
-                f"(fan-out bound {_MAX_GATE_CASCADE_DEPENDENTS_PER_STAMPED} exceeded)"
-            )
-
-        for dep_path in bounded:
-            dep_meta = _read_meta(dep_path) or {}
-            dep_blocked_by = dep_meta.get("blocked_by")
-            if isinstance(dep_blocked_by, str):
-                dep_blocked_by = [dep_blocked_by]
-            if dep_blocked_by is not None and not isinstance(dep_blocked_by, (list, tuple)):
-                failed.append(
-                    f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: blocked_by has unexpected type "
-                    f"{type(dep_blocked_by).__name__!r} on live re-read"
-                )
-                continue
-            matched_ids = [bid for bid in (dep_blocked_by or []) if bid in candidate_identifiers]
-            if not matched_ids:
-                # A concurrent writer (another session, or this tail's own
-                # earlier iteration over a shared blocker) already cleared
-                # this edge between the fan-out resolver's enumeration read
-                # and this re-read. Not an error.
-                skipped.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}:no-longer-blocked-on-reread")
-                continue
-
-            try:
-                gcc_result = await gate_cascade_clear_handler(
-                    {
-                        "verb": "gate-cascade-clear",
-                        "handoff_path": dep_path,
-                        "blocker_ids": matched_ids,
-                        "blocker_shas": [committed_sha] * len(matched_ids),
-                    },
-                    repo_root,
-                )
-            except Exception as exc:  # noqa: BLE001 -- soft-fail, never raise past this tail step
-                _LOG.warning(
-                    "post_commit_tail: gate-cascade-clear raised %s: %s", type(exc).__name__, exc
-                )
-                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {exc}")
-                continue
-
-            if not isinstance(gcc_result, dict):
-                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: malformed reply {gcc_result!r}")
-                continue
-
-            if gcc_result.get("exit_code") == 0:
-                if gcc_result.get("applied"):
-                    acted.append(dep_path)
-                else:
-                    skipped.append(
-                        f"{OP_GATE_CASCADE_CLEAR}:{dep_path}:no-op: {gcc_result.get('message')}"
-                    )
-                continue
-
-            error_message = gcc_result.get("error") or ""
-            if _is_gate_cascade_clear_named_skip(error_message):
-                skipped.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {error_message}")
-            else:
-                # (b): every OTHER _gate_cascade_clear error — a lock
-                # timeout, unparseable frontmatter, schema-validation
-                # failure, a usage error — is a real problem and must
-                # propagate, never be swallowed as "treat every error as a
-                # no-op" would (module docstring "Third leg (C3)").
-                failed.append(f"{OP_GATE_CASCADE_CLEAR}:{dep_path}: {error_message}")
-
-    return {"acted": acted, "skipped": skipped, "failed": failed}
 
 
 # ---------------------------------------------------------------------------
@@ -1246,11 +765,11 @@ def fold_completion_entry_commit(
     """The completion-entry commit-ledger fold, as a seam a SYNCHRONOUS
     caller outside this module can reach.
 
-    Why this exists rather than `run()`: `run()` composes five post-commit
+    Why this exists rather than `run()`: `run()` composes two post-commit
     legs and is `async`, and its only live caller is `/execute-plan`'s
     close-out. The close ceremony that actually WRITES completion entries
-    (`workstream_complete.apply`) is synchronous, reaches none of the other
-    four legs, and — until this seam — had no way to fold its own commit into
+    (`workstream_complete.apply`) is synchronous, reaches no other
+    leg, and — until this seam — had no way to fold its own commit into
     the entry `d-complete-entry` had just written. The fold therefore shipped
     dead: `run()` folded a supplied path correctly and nothing supplied one,
     so every completion entry's `commits:` list stayed empty. This is the one
@@ -1303,38 +822,18 @@ async def _to_thread_commit_and_push(
 
 
 # ---------------------------------------------------------------------------
-# Composed op -- steps 5c (stamp+ship) + 5d (origin-stub close), in one call.
+# Composed run -- origin-stub close + completion-entry fold, in one call.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PostCommitTailOutcome:
-    """Composed outcome of both post-commit tail steps -- see module
-    docstring. `stamp_outcome` is `consumed_handoff_stamp`'s own
-    `StampOutcome`; `origin_stub_result` is a tail_ops-shaped
-    `{acted, skipped, failed}` dict, same shape `wsc_tail.py`'s own
-    `tail_results[OP_CLOSE_ORIGIN_STUB]` entry has always carried."""
+    """Composed outcome of both post-commit tail legs; each result is a
+    tail_ops-shaped `{acted, skipped, failed}` dict."""
 
-    stamp_outcome: consumed_handoff_stamp.StampOutcome = field(
-        default_factory=consumed_handoff_stamp.StampOutcome
-    )
     origin_stub_result: dict = field(
         default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
     )
-    #: C6b's second trigger — tail_ops-shaped `{acted, skipped, failed}`,
-    #: same shape `origin_stub_result` carries. See module docstring
-    #: "Second trigger (C6b)".
-    deliverable_cascade_result: dict = field(
-        default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
-    )
-    #: C3's third leg — tail_ops-shaped `{acted, skipped, failed}`, same
-    #: shape the other two legs carry. See module docstring "Third leg (C3)".
-    gate_cascade_clear_result: dict = field(
-        default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
-    )
-    #: 2026-08-30 completion-entry commit-ledger fold — tail_ops-shaped
-    #: `{acted, skipped, failed}`, same shape the other three legs carry.
-    #: See module section "Completion-entry commit-ledger fold".
     completion_entry_fold_result: dict = field(
         default_factory=lambda: {"acted": [], "skipped": [], "failed": []}
     )
@@ -1346,73 +845,29 @@ async def run(
     sid: str,
     committed_sha: str,
     *,
-    chain_terminal: bool,
     governing_plan_slug: str,
     initial_consumed: list[tuple[str, dict]],
     close_origin_stub_handler: Callable[[dict, Path], Awaitable[dict]],
     push_mode: str = PUSH_MODE_SYNC,
     timing: Optional[Any] = None,
-    cascade_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
     delivery_proof: Optional[dict] = None,
-    gate_cascade_clear_handler: Optional[Callable[[dict, Path], Awaitable[dict]]] = None,
     completion_entry_path: Optional[str] = None,
 ) -> PostCommitTailOutcome:
-    """Compose steps 5c (post-commit consumed-handoff stamp+ship), 5d
-    (origin-stub close), and C6b's second trigger (deliverable cascade) into
-    ONE in-process call. Runs UNLOCKED (DEC-3, and repo-wide since the
-    2026-08-07 removal) -- see module docstring HARD CONSTRAINT; the caller
-    must not wrap this in a ceremony-wide lock.
+    """Compose origin-stub close and the completion-entry commit-ledger fold
+    into ONE in-process call. Runs UNLOCKED -- see module docstring HARD
+    CONSTRAINT; the caller must not wrap this in a ceremony-wide lock.
 
-    `close_origin_stub_handler` is caller-injected (see module docstring
-    "Origin-stub-close handler injection"). `delivery_proof` is OPTIONAL --
-    forwarded verbatim into `_run_origin_stub_close` (see its own docstring);
-    `None` (every `wsc_tail`-invoked call site, which has no proof of its
-    own) preserves today's guard-only behaviour exactly. `cascade_handler`
-    is OPTIONAL --
-    when omitted, it is bound directly to `deliverable_cascade._handler`
-    (REPOINTED 2026-08-27: `deliverable.cascade_terminal` is killed, so this
-    no longer resolves via `get_op_handler` -- see the call site's own
-    comment), so existing callers (`wsc_tail.py`) that predate C6b need no
-    call-site change. `timing`, when supplied, records the SAME two named
-    spans as before C6b ("stamp_and_ship", "origin_stub_close") -- see
-    module docstring "Timing-span preservation"; the deliverable-cascade and
-    gate-cascade-clear steps deliberately run untimed so as not to widen
-    `wsc_tail.py`'s pinned step-name contract. `gate_cascade_clear_handler`
-    (C3) mirrors `cascade_handler`'s own OPTIONAL shape -- when omitted, it
-    is resolved here via `get_op_handler(OP_HANDOFF_TRANSITION)`, folding a
-    future `OpSuspendedError` into the same not-registered skip (see the
-    call site's own comment), so existing callers that predate C3 need no
-    call-site change either. `completion_entry_path` (2026-08-30, module
-    section "Completion-entry commit-ledger fold") is OPTIONAL -- the sha
-    THIS pass just committed is already a required param above (constraint
-    1 of the spike verdict: no `git log --grep` lookup on this path); the
-    entry path is the one piece this leg cannot derive itself (`apply.py`'s
+    `close_origin_stub_handler` is caller-injected. `delivery_proof` is
+    OPTIONAL and forwarded verbatim into `_run_origin_stub_close`; `None`
+    preserves guard-only behaviour. `timing`, when supplied, records one
+    span, "origin_stub_close". `completion_entry_path` is OPTIONAL: the entry
+    path is the one piece the fold cannot derive itself (`apply.py`'s
     `{d-complete-entry.entry_path}` token substitution is the sanctioned
-    resolver, and this function's own negative-spec below forbids
-    re-deriving it). `None` (every existing call site) is a clean skip, not
-    a failure.
+    resolver); `None` is a clean skip, not a failure.
 
-    All five steps run unconditionally in sequence -- a stamp+ship exception
-    propagates BEFORE origin-stub close, the deliverable cascade, the
-    gate-cascade-clear fan-out, or the completion-entry fold ever run
-    (matches the pre-extraction inline sequencing exactly: a crash mid-stamp
-    on the fresh pass must leave the origin stub untouched, recovered only
-    on the AC18-resumed re-invoke). An origin-stub-close failure, a
-    deliverable-cascade failure, a gate-cascade-clear failure, or a
-    completion-entry-fold failure, by contrast, is caught and soft-failed
-    inside its own helper -- none of the four propagates past this
-    function.
+    Both legs soft-fail inside their own helper -- neither propagates past
+    this function.
     """
-    with _measure(timing, "stamp_and_ship"):
-        stamp_outcome = await consumed_handoff_stamp.post_commit_stamp_and_ship(
-            worktree_root,
-            common_dir,
-            sid,
-            committed_sha,
-            chain_terminal=chain_terminal,
-            push_mode=push_mode,
-        )
-
     with _measure(timing, "origin_stub_close"):
         origin_stub_result = await _run_origin_stub_close(
             worktree_root,
@@ -1426,67 +881,8 @@ async def run(
             delivery_proof=delivery_proof,
         )
 
-    resolved_cascade_handler = cascade_handler
-    if resolved_cascade_handler is None:
-        # REPOINTED 2026-08-27: `deliverable.cascade_terminal` is killed (K-104)
-        # and `get_op_handler` now raises OpSuspendedError for it, which would
-        # crash this tail rather than skip a step. The op is dead; its compute is
-        # retained undecorated in `ops/deliverable_cascade.py` precisely for
-        # in-process callers like this one. Bind it directly.
-        #
-        # The `is None` fallback below is kept rather than collapsed: an injected
-        # `cascade_handler` still wins (every test injects one), and a failure to
-        # import degrades to the existing not-registered skip instead of raising.
-        try:
-            from coordinator_core.ops.deliverable_cascade import (
-                _handler as resolved_cascade_handler,
-            )
-        except Exception:
-            resolved_cascade_handler = None
-
-    # NOT wrapped in `_measure()` (unlike the two C3a-composed steps above):
-    # `wsc_tail.py`'s own `_TailTiming` step-name set is a PINNED contract
-    # (`test_timing_map_covers_every_instrumented_step_with_nonnegative_ms`,
-    # C1) this trigger must not widen — see module docstring "Timing-span
-    # preservation". This step still runs unconditionally; it is simply not
-    # separately named in the timing map.
-    deliverable_cascade_result = await _run_deliverable_cascade(
-        worktree_root,
-        common_dir,
-        stamp_outcome.stamped,
-        resolved_cascade_handler,
-    )
-
-    resolved_gate_cascade_clear_handler = gate_cascade_clear_handler
-    if resolved_gate_cascade_clear_handler is None:
-        # `handoff.transition` is not on the suspension roster today, but
-        # `get_op_handler` raises `OpSuspendedError` rather than returning
-        # None for any op that IS suspended (ipc.py's own docstring) -- fold
-        # that raise into the existing not-registered branch below so a
-        # future kill of this op degrades to `_run_gate_cascade_clear`'s
-        # clean "not-registered" skip instead of crashing this tail AFTER
-        # the ceremony commit has already landed (see module docstring's
-        # deliverable-cascade precedent immediately above for the same fold).
-        try:
-            resolved_gate_cascade_clear_handler = get_op_handler(OP_HANDOFF_TRANSITION)
-        except OpSuspendedError:
-            resolved_gate_cascade_clear_handler = None
-
-    # NOT wrapped in `_measure()` -- same rationale as the deliverable-cascade
-    # step immediately above (module docstring "Timing-span preservation").
-    gate_cascade_clear_result = await _run_gate_cascade_clear(
-        worktree_root,
-        common_dir,
-        stamp_outcome.stamped,
-        committed_sha,
-        resolved_gate_cascade_clear_handler,
-    )
-
-    # 2026-08-30 completion-entry commit-ledger fold (spike verdict, module
-    # section "Completion-entry commit-ledger fold"): a clean skip, not a
-    # failed leg, when the caller has no entry path to give — every existing
-    # call site (`close_out_and_stamp._reach_post_commit_tail_stub_close`)
-    # predates this leg and passes none.
+    # A clean skip, not a failed leg, when the caller has no entry path to
+    # give (`close_out_and_stamp._reach_post_commit_tail_stub_close` passes none).
     if completion_entry_path:
         completion_entry_fold_result = await _to_thread_completion_entry_fold(
             worktree_root, completion_entry_path, committed_sha, push_mode
@@ -1499,28 +895,6 @@ async def run(
         }
 
     return PostCommitTailOutcome(
-        stamp_outcome=stamp_outcome,
         origin_stub_result=origin_stub_result,
-        deliverable_cascade_result=deliverable_cascade_result,
-        gate_cascade_clear_result=gate_cascade_clear_result,
         completion_entry_fold_result=completion_entry_fold_result,
     )
-
-
-# ---------------------------------------------------------------------------
-# JSON-RPC entry point -- standalone dispatch (never invoked by wsc_tail.py,
-# which calls `run()` directly, in-process, injecting its own
-# `_close_origin_stub_handler` module-global -- see module docstring).
-# ---------------------------------------------------------------------------
-
-
-
-# `ceremony.post_commit_tail` was DELETED as an op 2026-08-27 under the 200ms
-# process-time bar (kill ledger K-116). Only the standalone dispatch surface is
-# gone: `wsc_tail.py` calls `run()` directly and never went through the handler
-# (see this module's own docstring), so the in-process path is unchanged.
-#
-# The op could only ever fail now anyway -- it resolved deliverable.cascade_terminal
-# and session.sweep_consumed_handoffs, both killed in the same sweep, so every
-# dispatch raised OpSuspendedError. Killing it is the honest disposition; leaving
-# a registered op that cannot succeed is not.

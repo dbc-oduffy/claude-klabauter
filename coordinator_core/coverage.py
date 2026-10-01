@@ -90,7 +90,11 @@ from coordinator_core.dag import walk_forward
 from coordinator_core import session_attribution
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
-from coordinator_core.claim_state import resolve_claim_state
+from coordinator_core.claim_state import (
+    MIRROR_READ_CAP,
+    mirror_fm_text,
+    resolve_claim_state,
+)
 
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -980,8 +984,9 @@ def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
     back to the legacy Session-Id-only attribution (unchanged from today),
     never treated as an error.
 
-    Mirrors _parse_handoff_claimed_by's key resolution and 4 KiB read cap —
-    deliverable_id lives in the same frontmatter block.
+    Mirrors _parse_handoff_claimed_by's 4 KiB read cap and frontmatter-block
+    scoping (``mirror_fm_text``): a column-0 ``deliverable_id:`` line in body
+    prose, or in a file with no frontmatter fence, is not a deliverable_id.
 
     Negative-spec (break-class fix, 2026-07-28): this carried the identical
     ``^deliverable_id:\\s*…`` newline-crossing pad as its sibling above, with
@@ -998,10 +1003,13 @@ def _parse_handoff_deliverable_id(handoff_path: str) -> Optional[str]:
     """
     try:
         with open(handoff_path, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read(4096)
+            content = fh.read(MIRROR_READ_CAP)
     except OSError:
         return None
-    val = read_fm_field_unquoted(content, "deliverable_id")
+    fm = mirror_fm_text(content)
+    if fm is None:
+        return None
+    val = read_fm_field_unquoted(fm, "deliverable_id")
     if val is None:
         return None
     val = val.strip()

@@ -634,6 +634,33 @@ class TestOverrideEscapeHatch:
         assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
 
 
+class TestPowerShellSubagentRemedy:
+    @requires_powershell_grammar
+    def test_subagent_on_powershell_gets_script_outlet_not_inline_dash_c(self, monkeypatch):
+        monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
+        payload = {
+            "tool_name": "PowerShell",
+            "tool_input": {
+                "command": 'Write-Host "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'
+            },
+            "session_id": "sess1",
+            "cwd": "/repo",
+            "agent_id": "a" * 16,
+        }
+        ctx = _ctx(guard.check(payload, host_is_windows=True))
+        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
+        assert "-c '" not in ctx
+        assert "import subprocess" not in ctx
+
+    def test_subagent_remedy_names_the_shared_script_outlet(self):
+        from coordinator_core.bash_guards._sanctioned_remedy import CALLER_SUBAGENT, probe_remedy
+
+        remedy, exemplar = guard._powershell_remedy(CALLER_SUBAGENT, "/s/multiprobe.py")
+        assert (remedy, exemplar) == probe_remedy(
+            CALLER_SUBAGENT, Dialect.POWERSHELL, "/s/multiprobe.py"
+        )
+
+
 class TestTrimAttemptC8b:
 
     def test_seam_confirmed_lede_is_trimmed(self):
@@ -642,9 +669,12 @@ class TestTrimAttemptC8b:
         assert "this rewrite." not in ctx
         assert "rewrite." in ctx
 
-    def test_powershell_generic_summary_is_trimmed(self):
-        assert "batching every probe" not in guard._POWERSHELL_BANNER_GENERIC_SUMMARY
-        assert "zero per-probe forks" in guard._POWERSHELL_BANNER_GENERIC_SUMMARY
+    def test_powershell_remedy_comes_from_the_shared_source(self):
+        from coordinator_core.bash_guards._sanctioned_remedy import CALLER_EM, probe_remedy
+
+        remedy, exemplar = guard._powershell_remedy(CALLER_EM, "")
+        assert remedy == probe_remedy(CALLER_EM, Dialect.POWERSHELL)[0]
+        assert exemplar.endswith(probe_remedy(CALLER_EM, Dialect.POWERSHELL)[1][len("python3") :])
 
     def test_seam_confirmed_prose_bytes_do_not_regrow(self):
         from coordinator_core.bash_guards._message_size import measure_envelope

@@ -118,6 +118,17 @@ def test_get_handoff_claimed_by_legacy_consumed_by_still_works(workspace):
     assert result == "sess-legacy"
 
 
+def test_get_handoff_claimed_by_body_prose_claim_returns_none(workspace):
+    common_dir, handoff = workspace
+    handoff.write_text(
+        "---\nstatus: open\n---\n\nconsumed_by: sess-prose\n", encoding="utf-8"
+    )
+
+    result = coverage._get_handoff_claimed_by(str(handoff), common_dir=common_dir)
+
+    assert result is None
+
+
 def test_get_handoff_claimed_by_unclaimed_returns_none(workspace):
     common_dir, handoff = workspace
     _write_handoff(handoff, status="open")
@@ -161,3 +172,29 @@ def test_parse_handoff_claimed_by_absent_claim_degrades_quietly(workspace):
     result = coverage._parse_handoff_claimed_by(str(handoff), common_dir=common_dir)
 
     assert result is None
+
+
+def test_parse_handoff_deliverable_id_reads_frontmatter_value(workspace):
+    _, handoff = workspace
+    handoff.write_text(
+        "---\nstatus: open\ndeliverable_id: DEL-1\n---\n\n# body\n", encoding="utf-8"
+    )
+
+    assert coverage._parse_handoff_deliverable_id(str(handoff)) == "DEL-1"
+
+
+def test_parse_handoff_deliverable_id_body_prose_returns_none(workspace):
+    _, handoff = workspace
+    handoff.write_text(
+        "---\nstatus: open\n---\n\ndeliverable_id: DEL-9\nclaimed_by: sess-x\n",
+        encoding="utf-8",
+    )
+
+    assert coverage._parse_handoff_deliverable_id(str(handoff)) is None
+
+
+def test_parse_handoff_deliverable_id_unfenced_file_returns_none(workspace):
+    _, handoff = workspace
+    handoff.write_text("# title\n\ndeliverable_id: DEL-9\n", encoding="utf-8")
+
+    assert coverage._parse_handoff_deliverable_id(str(handoff)) is None

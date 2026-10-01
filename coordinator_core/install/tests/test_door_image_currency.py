@@ -190,7 +190,6 @@ def test_report_goes_red_only_when_an_image_diverges(tmp_path, prebuilt_bytes, m
 
 def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeypatch):
     from coordinator_core.install import engine_root_for_install
-    from coordinator_core.warm.engine_root import is_engine_root
 
     published = Path("/published/engine")
     monkeypatch.setattr(
@@ -210,8 +209,6 @@ def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeyp
         ),
     )
     assert substrate._door_engine_root() is None
-
-    assert not is_engine_root(Path(__file__).resolve().parents[3])
 
 
 def test_a_cut_over_name_counts_as_present_without_a_python_body(tmp_path, prebuilt_bytes, monkeypatch):

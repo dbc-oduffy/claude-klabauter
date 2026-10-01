@@ -76,14 +76,10 @@ from typing import Any, Optional
 from functools import lru_cache
 
 from coordinator_core import session_attribution
-from coordinator_core.coverage import _get_handoff_claimed_by
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, get_op_handler
 from coordinator_core.op_budget_suspension import OpSuspendedError
 from coordinator_core.ops.session_commits import (
     resolve_session_commits as _resolve_session_commits_primitive,
-)
-from coordinator_core.ops.ceremony.resolver import (
-    resolve_in_repo as _resolve_in_repo,
 )
 
 log = logging.getLogger(__name__)
@@ -301,7 +297,7 @@ def _scan_session_scratch(
     # PermissionError while walking subdirectories (verified: a chmod-0o000
     # dir under it yields nothing, no exception raised), the same dead-guard
     # shape fixed elsewhere in this module (_scan_open_memos → iterdir(),
-    # _check_idempotency/find_all_consumed_handoffs → os.walk(onerror=...)).
+    # _check_idempotency and the consumed-handoff scan → os.walk(onerror=...)).
     # Converted to os.walk(onerror=...) so a permission-denied subtree forces
     # the existing None graceful-negative contract (an X-node upstream)
     # rather than silently undercounting scratch_count with no signal.
@@ -575,8 +571,7 @@ def _session_surface_count(paths: list[str]) -> int:
 def _record_git_timeout(result: subprocess.CompletedProcess, caller: str, warnings: list[str] | None) -> None:
     """Append a degrade-loud entry to `warnings` iff `result` is a `_git_run` timeout.
 
-    Mirrors this module's `scan_errors` out-param idiom (see
-    `_find_all_consumed_handoffs`) rather than resolver.py's tuple-return
+    Uses an optional out-param rather than resolver.py's tuple-return
     shape — these five call sites already return a bare scalar the ~4,450-
     line test suite asserts on directly (`is True`, `== ""`, …), and an
     optional out-param leaves that contract untouched. A `None` `warnings`
@@ -612,9 +607,7 @@ def _range_commit_count(
 
     `warnings`: optional out-param — a `_git_run` TIMEOUT also appends one
     entry here, in addition to the `None` return, so a caller wanting the
-    human-readable reason (not just the fact) has a signal to read. Same
-    "fold scan_errors into your own evidence" contract
-    `_find_all_consumed_handoffs` already documents.
+    human-readable reason (not just the fact) has a signal to read.
     """
     if not candidate_range:
         return 0
@@ -736,9 +729,9 @@ class ScopingVerdict:
         (e.g. "<first-sha>^..HEAD"), or "" when it could not be derived.
       warnings: one entry per `_git_run` TIMEOUT hit while computing this
         verdict's own `_trailer_reliable` / `_started_at_candidate_range`
-        reads (Review: code-reviewer F1) — empty on a clean read. Mirrors
-        `resolver.py`'s `detect_git_provenance_consumed` degrade-loud
-        contract: a non-empty list here means `method`/`contiguous` were
+        reads (Review: code-reviewer F1), plus one per degraded trailer-count
+        probe in `_trailer_reliable` — empty on a clean read. Mirrors
+        the degrade-loud contract: a non-empty list here means `method`/`contiguous` were
         computed under a fail-open default, not confirmed by a completed git
         read, and the caller MUST fold this into its own evidence rather than
         trusting the verdict as if the reads all succeeded.
@@ -766,7 +759,9 @@ def _trailer_reliable(
     (``session_commit_count_attributed`` reports ``value: 0``, computed) BUT HEAD has moved since the session's
     own ``started_at`` — i.e. the session did real work but none of its
     commits carry the trailer (plain ``git add -- … && git commit``,
-    SC-DR-008 baseline, carries no ``Session-Id:`` trailer).
+    SC-DR-008 baseline, carries no ``Session-Id:`` trailer). Also UNRELIABLE when the
+    count probe itself is degraded (``session_commit_count_attributed`` reports
+    ``degraded: True``) — "could not count" is indeterminate, never a computed zero.
 
     RELIABLE (returns True) when either at least one trailer-tagged commit
     exists, OR started_at is absent/unparseable (nothing to compare HEAD
@@ -794,14 +789,17 @@ def _trailer_reliable(
     `True` — that failure class is unchanged from before this fix and stays
     out of scope, per this function's other preexisting-fail-open note above.
     """
-    # Preexisting fail-open behaviour at this in-module call site is left unchanged by
-    # the C2 sub-task (docs/plans/2026-08-18-session-fact-facade-and-failure-posture.md):
-    # a degraded read is treated the same as a computed `value: 0` here, same as the
-    # old bare-int `_session_commit_count` did. The new degraded-with-evidence
-    # distinction is surfaced by the facade (coordinator_core/session/session_facts.py),
-    # not retrofitted onto this pre-existing ceremony branch.
+    # DR-319 posture: a degraded count is INDETERMINATE, not a computed zero. Folding it
+    # into `value: 0` would let a failed trailer probe fall through to "reliable" below
+    # (no started_at, unparseable started_at, or HEAD not moved) and keep trailer-grep
+    # numbers authoritative on no evidence. Fail toward the range-recompute pipeline,
+    # which itself lands on SCOPING_METHOD_AMBIGUOUS when its own reads are indeterminate.
     commit_count_record = session_commit_count_attributed(worktree_root, sid)
-    if not commit_count_record["degraded"] and commit_count_record["value"] > 0:
+    if commit_count_record["degraded"]:
+        if warnings is not None:
+            warnings.append(f"_trailer_reliable: {commit_count_record['evidence']}")
+        return False
+    if commit_count_record["value"] > 0:
         return True
 
     if started_at is None:
@@ -1000,87 +998,6 @@ def analyze_session_scoping(
         candidate_range=candidate_range,
         warnings=warnings,
     )
-
-
-
-
-def _sanitize_consumed_handoffs(
-    worktree_root: Path,
-    sid: str,
-    consumed_handoffs_all: list[tuple[str, dict[str, Any]]],
-    *,
-    operator_asserted: bool = False,
-    operator_asserted_paths: Optional[list[str]] = None,
-) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
-    """Final containment+ownership gate on the merged consumed-handoff set.
-
-    Defense-in-depth choke point (foreign-repo bleed defect, 2026-07-13 cockpit
-    incident): the per-source scalar guard in _resolve_branches already rejects a
-    foreign or peer-owned pickup.handoff, but the plural ``consumed_handoffs_all``
-    set is assembled from MULTIPLE sources (session-shape pickup path, archive-aware
-    scan UNION, grep-fallback append) and then flows UN-REVERIFIED into both the
-    STEP_0 receipt evidence and ctx.consumed_handoffs → STEP_2_7's stamp target.
-    A single check on one source can be bypassed by a different source or a future
-    refactor; enforcing the invariant HERE — at the one point every source
-    converges — makes the bleed structurally impossible rather than merely absent
-    on the paths tested today.
-
-    Invariant (drops any entry that violates it):
-      1. Containment — the path must resolve INSIDE worktree_root
-         (_resolve_in_repo rejects absolute paths and ../ traversal that escape
-         to a foreign repo).  Entries that pass are re-expressed as repo-RELATIVE
-         POSIX strings so no absolute foreign prefix and no relativized phantom
-         (foreign basename joined to worktree_root) can survive downstream.
-         NEVER bypassable — not even by ``operator_asserted`` (see below) — this
-         is the 2026-07-13 foreign-repo-bleed defense and stays absolute.
-      2. Existence — the path must exist on disk. Also never bypassable.
-      3. Ownership — the handoff's own frontmatter ``consumed_by`` must equal sid
-         (anchored via _get_handoff_claimed_by), so a temporally-adjacent peer's
-         in-repo handoff is never mis-stamped as this session's predecessor.
-         ``operator_asserted=True`` (env-override callers ONLY — see
-         coordinator_core.ops.ceremony.wsc_disposition's escalate-only override
-         contract) bypasses ONLY this third half: an operator naming a handoff
-         via WSC_CONSUMED_HANDOFF is making the ownership assertion manually,
-         for exactly the cases a ``consumed_by`` stamp cannot express (the
-         claiming session crashed/is dead — Detector C indeterminate/ambiguous
-         — or the handoff was archived without ever having a live consume
-         stamp — ship-then-archive). An entry kept via this bypass is appended
-         to ``operator_asserted_paths`` (when the caller supplies a list) so
-         the caller can record the bypass loudly in the receipt — see
-         _resolve_branches' consumed_handoff_ownership_operator_asserted /
-         env_override_diagnostics NOTE. Never let a bypassed entry look like a
-         normally-verified one downstream.
-
-    Returns (kept, rejected_paths) — kept entries carry the repo-relative path;
-    rejected_paths preserves the ORIGINAL (pre-sanitization) string of each
-    dropped entry for evidence/receipt visibility.
-
-    Negative-spec: do NOT relax the containment or existence halves for ANY
-    caller, operator_asserted or not — the whole point of the 2026-07-13
-    incident is that a foreign file both existed AND declared consumed_by:sid;
-    containment is what rejects it, existence is what rejects a phantom path,
-    and only the ownership half is the operator's to assert manually.
-    """
-    kept: list[tuple[str, dict[str, Any]]] = []
-    rejected: list[str] = []
-    seen_rel: set[str] = set()
-    for path, fm in consumed_handoffs_all:
-        hf_in_repo = _resolve_in_repo(worktree_root, path)
-        if hf_in_repo is None or not hf_in_repo.exists():
-            rejected.append(path)
-            continue
-        owned = _get_handoff_claimed_by(str(hf_in_repo)) == sid
-        if not owned and not operator_asserted:
-            rejected.append(path)
-            continue
-        rel = hf_in_repo.relative_to(worktree_root.resolve()).as_posix()
-        if rel in seen_rel:
-            continue
-        seen_rel.add(rel)
-        kept.append((rel, fm))
-        if not owned and operator_asserted_paths is not None:
-            operator_asserted_paths.append(rel)
-    return kept, rejected
 
 
 

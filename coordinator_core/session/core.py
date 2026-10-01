@@ -34,6 +34,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -947,6 +948,99 @@ def read_meta_field(sdir: str, field: str) -> str:
     return str(value)
 
 
+# Serialises meta.json read-modify-write across processes. mkdir-as-mutex, not
+# fcntl: fcntl does not exclude against the mkdir-lock convention on the sibling
+# session-shape surface, and flock is unavailable on Windows Git Bash. The lock
+# dir is bare (no metadata files) so staleness reads its own mtime, which mkdir
+# sets atomically with the claim. Named without the ``meta.json.`` prefix the
+# tempfiles use so leftover-tempfile scans never match it.
+_META_LOCK_NAME = "meta-json.lock"
+# A holder's critical section is one small read + one atomic replace; a lock
+# older than this belongs to a crashed holder.
+_META_LOCK_STALE_SECONDS = 2.0
+_META_LOCK_POLL_SECONDS = 0.005
+_META_LOCK_WAIT_SECONDS = 3.0
+
+
+@contextlib.contextmanager
+def _meta_lock(sdir: Path) -> Iterator[bool]:
+    """Hold the meta.json mutex for the ``with`` body; yields False (lock NOT
+    held) when it could not be taken within ``_META_LOCK_WAIT_SECONDS``, so the
+    caller reports a failed update instead of writing unserialised."""
+    lock_dir = sdir / _META_LOCK_NAME
+    deadline = time.monotonic() + _META_LOCK_WAIT_SECONDS
+    held = False
+    while True:
+        try:
+            os.mkdir(lock_dir)
+            held = True
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - os.stat(lock_dir).st_mtime
+            except OSError:
+                age = 0.0  # released between mkdir and stat: the next claim decides
+            if age > _META_LOCK_STALE_SECONDS:
+                try:
+                    os.rmdir(lock_dir)
+                except OSError:
+                    # Another waiter reaped it first; the next claim decides.
+                    pass
+        except OSError:
+            break  # sdir vanished or is unwritable: no lock, caller fails the write
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_META_LOCK_POLL_SECONDS)
+    try:
+        yield held
+    finally:
+        if held:
+            try:
+                os.rmdir(lock_dir)
+            except OSError:
+                # A stale-reaper may already have removed it; nothing to undo.
+                pass
+
+
+def _rmw_meta(sdir: str, updates: Dict[str, str]) -> bool:
+    """Apply ``updates`` to ``<sdir>/meta.json`` as one locked read-modify-write
+    ending in an atomic tempfile + ``os.replace``. False when meta.json is
+    absent, unreadable, not a JSON object, or the lock/write fails."""
+    meta_path = Path(sdir) / "meta.json"
+    if not meta_path.is_file():
+        return False
+    with _meta_lock(meta_path.parent) as held:
+        if not held:
+            return False
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False  # unreadable or non-JSON meta.json -> no-op update
+        if not isinstance(data, dict):
+            return False
+        data.update(updates)
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                prefix="meta.json.", dir=str(meta_path.parent)
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                    json.dump(data, fh, indent=2)
+                    fh.write("\n")
+                os.replace(tmp_name, meta_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    # Best-effort tmp-file cleanup on the error path; the
+                    # original exception is re-raised below regardless.
+                    pass
+                raise
+        except OSError:
+            return False
+    return True
+
+
 def update_meta_field(sdir: str, field: str, value) -> bool:
     """Port of ``_cs_update_meta_field <session_dir> <field> <value>``:
     updates (or adds) one field in ``<session_dir>/meta.json``, coercing
@@ -954,7 +1048,9 @@ def update_meta_field(sdir: str, field: str, value) -> bool:
     always-string write). Atomic rewrite via tempfile + ``os.replace`` in
     the same directory as the target, mirroring the bash ``mktemp`` +
     ``mv`` pattern (concurrent-reader safety — never a truncated
-    mid-write read).
+    mid-write read). The read-modify-write runs under ``_meta_lock`` so two
+    concurrent writers cannot both read the pre-mutation dict and drop one
+    another's field.
 
     Returns False (no-op) if ``meta.json`` does not exist yet — matches
     the bash original, which requires ``cs_init`` to have created the file
@@ -968,36 +1064,7 @@ def update_meta_field(sdir: str, field: str, value) -> bool:
     """
     if str(value) == "":
         raise ValueError("value required (non-empty)")
-    meta_path = Path(sdir) / "meta.json"
-    if not meta_path.is_file():
-        return False
-    try:
-        data = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False  # unreadable or non-JSON meta.json -> no-op update
-    if not isinstance(data, dict):
-        return False
-    data[field] = str(value)
-    try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="meta.json.", dir=str(meta_path.parent)
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(data, fh, indent=2)
-                fh.write("\n")
-            os.replace(tmp_name, meta_path)
-        except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                # Best-effort tmp-file cleanup on the error path; the original
-                # exception is re-raised below regardless.
-                pass
-            raise
-    except OSError:
-        return False
-    return True
+    return _rmw_meta(sdir, {field: str(value)})
 
 
 def update_meta_fields(sdir: str, fields: "Mapping[str, object]") -> bool:
@@ -1012,7 +1079,7 @@ def update_meta_fields(sdir: str, fields: "Mapping[str, object]") -> bool:
 
     Mirrors ``update_meta_field``'s semantics exactly, just batched:
       - same tempfile + ``os.replace`` atomic pattern, in the target's own
-        directory.
+        directory, under the same ``_meta_lock``.
       - same ``False`` no-op when ``meta.json`` is absent, unreadable, or
         not a JSON object.
       - same string coercion (``str(value)``) for every field.
@@ -1036,37 +1103,7 @@ def update_meta_fields(sdir: str, fields: "Mapping[str, object]") -> bool:
     for key, value in fields.items():
         if str(value) == "":
             raise ValueError(f"value required (non-empty) for field {key!r}")
-    meta_path = Path(sdir) / "meta.json"
-    if not meta_path.is_file():
-        return False
-    try:
-        data = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False  # unreadable or non-JSON meta.json -> no-op update
-    if not isinstance(data, dict):
-        return False
-    for key, value in fields.items():
-        data[key] = str(value)
-    try:
-        fd, tmp_name = tempfile.mkstemp(
-            prefix="meta.json.", dir=str(meta_path.parent)
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(data, fh, indent=2)
-                fh.write("\n")
-            os.replace(tmp_name, meta_path)
-        except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                # Best-effort tmp-file cleanup on the error path; the original
-                # exception is re-raised below regardless.
-                pass
-            raise
-    except OSError:
-        return False
-    return True
+    return _rmw_meta(sdir, {key: str(value) for key, value in fields.items()})
 
 
 # ---------------------------------------------------------------------------

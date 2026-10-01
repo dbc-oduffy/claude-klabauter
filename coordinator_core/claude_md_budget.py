@@ -132,9 +132,10 @@ opposite of the tri-plane's DoE-authors/claude-klabauter-consumes layering.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 #: Unified byte thresholds — see "Derivation" above. Both DoE's hook and
 #: claude-klabauter's Check 7 import these rather than carrying independent literals.
@@ -565,3 +566,80 @@ def ratchet_check(
             f"not this edit's fix."
         )
     return True, ""
+
+
+@dataclass(frozen=True)
+class BudgetVerdict:
+    """Entries carry their own `"\\n  "` lead so a caller joins them with `"".join`."""
+
+    hard: Tuple[str, ...]
+    soft: Tuple[str, ...]
+
+
+def budget_verdict(
+    repo_root: Union[str, Path],
+    candidate_paths: Iterable[str],
+    read_post: Callable[[str], Optional[bytes]],
+    read_head: Callable[[str], Optional[bytes]],
+) -> BudgetVerdict:
+    """Byte-budget verdict for the governed CLAUDE.md-class surfaces among
+    `candidate_paths` (repo-relative, POSIX). `read_post` yields the bytes
+    the commit lands, `read_head` the HEAD bytes (None when absent). Pure
+    over the injected readers apart from the manifest and watermark-ledger
+    reads under `repo_root`. Override handling is the caller's."""
+    root = str(repo_root) if repo_root else ""
+    manifest = load_audience_manifest(root) if root else []
+    named = [f for f in candidate_paths if re.search(r"(^|/)CLAUDE\.md$", f)]
+    manifested = [f for f in candidate_paths if f in manifest]
+    governed = [
+        cf
+        for cf in sorted(set(named) | set(manifested))
+        if is_governed_claude_md(
+            os.path.join(root, cf) if root else cf,
+            repo_root=root or None,
+            audience_manifest=manifest,
+        )
+    ]
+
+    try:
+        from coordinator_core.ops.measure_token_envelope import estimate_tokens
+    except Exception:
+        estimate_tokens = None
+
+    hard: List[str] = []
+    soft: List[str] = []
+    over_watermark: List[Tuple[str, int, RatchetWatermark]] = []
+    for cf in governed:
+        blob = read_post(cf)
+        if not blob:
+            continue
+        size = len(blob)
+        token_note = ""
+        if estimate_tokens is not None:
+            token_note = ", ~%d tokens (estimate)" % estimate_tokens(blob)
+        if size > HARD_LIMIT_BYTES:
+            hard.append("\n  %s = %d chars%s (limit %d)" % (cf, size, token_note, HARD_LIMIT_BYTES))
+        elif size > SOFT_LIMIT_BYTES:
+            soft.append(
+                "\n  %s = %d chars%s (soft %d; hard %d)"
+                % (cf, size, token_note, SOFT_LIMIT_BYTES, HARD_LIMIT_BYTES)
+            )
+
+        if root:
+            try:
+                watermark = parse_watermark(resolve_ledger_path(root, cf))
+            except RatchetWatermarkError as exc:
+                hard.append("\n  %s: %s" % (cf, exc))
+                continue
+            ok, _msg = ratchet_check(size, watermark)
+            if not ok:
+                over_watermark.append((cf, size, watermark))
+
+    for cf, size, watermark in over_watermark:
+        head = read_head(cf)
+        pre_edit_size = len(head) if head is not None else None
+        ok, msg = ratchet_check(size, watermark, pre_edit_size)
+        if not ok:
+            hard.append("\n  %s: %s" % (cf, msg))
+
+    return BudgetVerdict(hard=tuple(hard), soft=tuple(soft))

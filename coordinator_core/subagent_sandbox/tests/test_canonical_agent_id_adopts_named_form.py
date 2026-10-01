@@ -40,10 +40,10 @@ INCIDENT_AGENTS = [
         id="rev-counter-tests",
     ),
     pytest.param(
-        "ayk-kill-ledger-value-4ac9e62cc2ac40b0",
+        "awidget-kill-ledger-value-4ac9e62cc2ac40b0",
         "ddabb4b7-full-session-suffix-irrelevant",
-        "the VP-Product Reviewer-kill-ledger-value@session-ddabb4b7",
-        id="yk-kill-ledger-value",
+        "widget-kill-ledger-value@session-ddabb4b7",
+        id="widget-kill-ledger-value",
     ),
 ]
 

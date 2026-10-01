@@ -172,7 +172,10 @@ def _run_git(args: list[str], cwd: Path):
     included) degrades to a non-zero-returncode `GitResult`, the SAME "never
     raises, every failure degrades to a skip/false" posture every reader of
     this function's result already assumes throughout this module (e.g.
-    `_dispatch_ledger_delivered`'s own docstring).
+    `_dispatch_ledger_delivered`'s own docstring). `GitResult.timed_out`
+    is the one discriminator between "git said no" and "could not tell";
+    a caller turning a result into a delivery verdict must check it before
+    reading `returncode`.
 
     Routed through `coordinator_core.git.run.run_git`: every call here is
     single-object plumbing (`rev-parse`, `rev-list`, `merge-base

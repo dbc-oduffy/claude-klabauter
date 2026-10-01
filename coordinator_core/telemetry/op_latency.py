@@ -377,7 +377,7 @@ def caller_module() -> Optional[str]:
     process-level dispatch chokepoint (see its own docstring), so its one
     `record_op_started`/`record_op_latency` call site cannot distinguish a
     CLI invocation (`coordinator_core.invoke.__main__`) from a direct-import
-    dispatch (`coordinator_core.ops.check_auto_reconcile.get_response`) from
+    dispatch (a non-op module calling `dispatch_message` in-process) from
     a warm-server pool worker -- 63 of 65 `handoff.reconcile_open` rows
     carried no attribution at all before this. Walking the call stack from
     inside the dispatch chokepoint is the only way to answer "who fired

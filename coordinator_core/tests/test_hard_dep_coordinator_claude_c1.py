@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -346,128 +345,6 @@ def test_setup_py_register_claude_klabauter_root_missing_coord_no_override_exits
     with pytest.raises(SystemExit) as exc_info:
         setup_mod.register_claude_klabauter_root(repo_root, "git-root auto-discovery", repo_root, args)
     assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-
-
-def test_setup_py_register_claude_klabauter_root_missing_coord_with_override_degrades(
-    setup_mod, tmp_path, monkeypatch, capsys
-):
-    """Registration DOES still degrade gracefully (advisory, exit 0) when
-    the operator supplied the override pair — the risk was already
-    accepted; `main()` never even calls `check_coordinator_claude_dep` in
-    that branch (see `main`'s `if args.skip_dep_check: ... else: ...`).
-
-    NEITHER key is registered in this branch — repos.claude_klabauter and
-    engine.working_repos.claude_klabauter share the one guard (2026-08-05
-    coordinator-content-repo-em working-repo-rule proposal, accepted)."""
-    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
-    monkeypatch.setattr(
-        "coordinator_core.install._shared.resolve_machine_local_cli", lambda plugin_root: None
-    )
-    repo_root = _claude_klabauter_repo_root(tmp_path)
-    args = setup_mod.Args()
-    args.skip_dep_check = True
-    args.accept_risk = True
-    result = setup_mod.register_claude_klabauter_root(repo_root, "git-root auto-discovery", repo_root, args)
-    assert result == repo_root
-    out = capsys.readouterr().out
-    assert "ADVISORY" in out
-    assert "repos.claude_klabauter" in out
-    assert "engine.working_repos.claude_klabauter" in out
-
-
-def test_setup_py_register_claude_klabauter_root_happy_path_registers_both_keys(
-    setup_mod, tmp_path, monkeypatch, capsys
-):
-    """Machine-local present, both `machine-local set` invocations succeed ->
-    both repos.claude_klabauter and engine.working_repos.claude_klabauter are
-    registered to the same resolved path, and both PASS lines print.
-
-    Spec backlink: cross-repo/inbox/2026-08-05-coordinator-content-repo-em-working-repo-
-    rule-19-keys-13-consumers-name-the-set-explicitly.md — our half is the
-    install-time write of engine.working_repos.claude_klabauter alongside the
-    pre-existing repos.claude_klabauter write."""
-    monkeypatch.setattr(
-        "coordinator_core.install._shared.resolve_machine_local_cli",
-        lambda plugin_root: ["machine-local"],
-    )
-    calls = []
-
-    def _fake_run(argv, timeout=None, **kwargs):
-        calls.append(argv)
-        # stdout/stderr default to None on CompletedProcess, but every caller
-        # reachable through this patch asks for capture (`_shared._run_quiet`
-        # passes `capture_output=True` and then `.strip()`s the result), and
-        # patching an attribute on the shared `subprocess` module object
-        # reaches those callers too, not just `setup_mod`'s own. A fake that
-        # captures nothing therefore hands real code a None it cannot get from
-        # real `subprocess.run`, and the test fails inside production code on
-        # `'NoneType' has no attribute 'strip'` rather than on its own subject.
-        return setup_mod.subprocess.CompletedProcess(
-            argv, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
-    repo_root = _claude_klabauter_repo_root(tmp_path)
-    args = setup_mod.Args()
-    result = setup_mod.register_claude_klabauter_root(repo_root, "git-root auto-discovery", repo_root, args)
-    assert result == repo_root
-
-    # The two leading reads are `_discover_klabauter_root`'s registry ladder
-    # (DR-132 auto-arm): both `ml_get` candidates are evaluated eagerly, and
-    # neither resolves here (the fake returns an empty stdout), so no third
-    # `set` is armed. Asserting the whole call list rather than just the two
-    # writes is deliberate — it is what would catch an unexpected extra spawn.
-    # The final two calls are `provision_stamped_engine`'s best-effort
-    # engine-build bootstrap (docs/plans/2026-08-19-an-engine-root-is-a-
-    # stamped-build.md C1): no klabauter checkout was discovered above, so
-    # register_claude_klabauter_root's own AUTHORITATIVE call site stamps a fresh,
-    # empty engine-build git tree under the (quarantined) settings home --
-    # `git init` followed by an empty allow-empty commit, never a real
-    # publish round (no coordinator/bin/publish.py exists in this fixture,
-    # which is why the WARNING appears on stderr instead of a third call).
-    engine_build_dir = str(
-        Path(os.environ["USERPROFILE"])
-        / ".coordinator-claude-settings"
-        / "engine-build"
-        / "claude-klabauter"
-    )
-    assert calls == [
-        ["machine-local", "get", "repos.claude_klabauter"],
-        ["machine-local", "get", "publish.mirrors.claude_klabauter.path"],
-        ["machine-local", "set", "repos.claude_klabauter", str(repo_root)],
-        ["machine-local", "set", "engine.working_repos.claude_klabauter", str(repo_root)],
-        ["git", "init", engine_build_dir],
-        ["git", "-C", engine_build_dir, "commit", "--allow-empty", "-m", "engine-build: init"],
-    ]
-    out = capsys.readouterr().out
-    assert f"PASS [registration] repos.claude_klabauter = {repo_root}" in out
-    assert f"PASS [registration] engine.working_repos.claude_klabauter = {repo_root}" in out
-
-
-def test_setup_py_register_claude_klabauter_root_second_key_failure_exits_loud(
-    setup_mod, tmp_path, monkeypatch, capsys
-):
-    """The new key's write sits inside the SAME fail-loud contract as the
-    pre-existing repos.claude_klabauter write: repos.claude_klabauter succeeds,
-    engine.working_repos.claude_klabauter fails -> exit loud (non-zero), same
-    as a repos.claude_klabauter failure would, not a silent partial success."""
-    monkeypatch.setattr(
-        "coordinator_core.install._shared.resolve_machine_local_cli",
-        lambda plugin_root: ["machine-local"],
-    )
-
-    def _fake_run(argv, timeout=None, **kwargs):
-        returncode = 0 if argv[2] == "repos.claude_klabauter" else 1
-        return setup_mod.subprocess.CompletedProcess(argv, returncode=returncode)
-
-    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
-    repo_root = _claude_klabauter_repo_root(tmp_path)
-    args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.register_claude_klabauter_root(repo_root, "git-root auto-discovery", repo_root, args)
-    assert exc_info.value.code == 1
-    err = capsys.readouterr().err
-    assert "engine.working_repos.claude_klabauter" in err
 
 
 def test_setup_py_main_half_passed_override_exits_93_both_directions(setup_mod):

@@ -852,7 +852,7 @@ def compose_grind_script(
 
     lines: list[str] = []
     lines.append(_NODE_CHECK_COMMENT)
-    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind"]))
+    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", "Adjudicate"]))
     lines.append(_manifest_const(manifest))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"

@@ -98,58 +98,10 @@ def test_colocated_root_points_at_coordinator_dir():
     assert resolved == repo_root / "coordinator"
 
 
-@pytest.mark.parametrize("dir_name", ["docs", "schemas", "snippets", "templates"])
-def test_both_data_root_entrypoints_agree(dir_name, monkeypatch):
-    """The two `data_root()` entrypoints — this module's own, and the bin/lib
-    twin (`coordinator/bin/lib/coordinator_data_root.py`) — MUST resolve to
-    the SAME path for the same `dir_name` (see both modules' "MUST stay
-    behaviorally consistent" cross-references). This is a REAL-base test —
-    neither `_colocated_root()` is monkeypatched — because the bug this
-    guards against (rung 1 silently probing two DIFFERENT namespaces: the
-    bare claude-klabauter repo root vs. `<repo>/coordinator/`) only manifests with the
-    genuine, un-mocked base. Every other test in both suites monkeypatches
-    `_colocated_root` away, which is exactly why the real base went untested
-    and the divergence shipped unnoticed.
-
-    `REPO_CONTENT_ROOT`/`CONTENT_ROOT` are cleared here, deliberately: this module's
-    own docstring documents that its rung 2 delegates to
-    `coordinator_content_root()`, whose DR-071 order checks the env override
-    BEFORE the codename-free ladder, while the bin/lib twin's rung 1.5
-    (`_cdr_codename_free_root()`) runs BEFORE it ever calls
-    `coordinator_registry.content_root()` — see that module's own
-    `test_codename_free_ladder_wins_before_registry_rung_real_delegation`,
-    which pins the opposite order as intentional. So with the env override
-    set, the two entrypoints legitimately consult it at different ranks and
-    can diverge by design, not by the co-located-namespace bug this test
-    exists to catch. Clearing it isolates the property this test actually
-    pins (namespace parity) from that documented, separately-pinned
-    precedence divergence. Without this, the test is flaky-by-environment:
-    it only fails on a machine/session where the operator override happens
-    to be set (see REPO_CONTENT_ROOT being exported into every login shell per
-    coordinator_core/install/sandbox_check.py AC2).
-    """
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
-
-    doe_for_seed = dr_mod._resolve_content_root()
-    if doe_for_seed:
-        (Path(doe_for_seed) / "coordinator" / dir_name).mkdir(parents=True, exist_ok=True)
-
+def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, monkeypatch) -> None:
     if str(_BIN_LIB_DIR) not in sys.path:
         sys.path.insert(0, str(_BIN_LIB_DIR))
-    import coordinator_data_root as cdr_mod  # noqa: PLC0415
-
-    core_result = dr_mod.data_root(dir_name)
-    bin_result = cdr_mod.data_root(dir_name)
-    assert core_result == bin_result, (
-        f"data_root({dir_name!r}) diverged: "
-        f"coordinator_core.data_root -> {core_result}, "
-        f"coordinator_data_root (bin/lib twin) -> {bin_result}"
-    )
-
-
-def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, monkeypatch) -> None:
-    import coordinator_registry  # noqa: PLC0415 (bin/lib sibling; see module-level sys.path insert above)
+    import coordinator_registry  # noqa: PLC0415 (bin/lib sibling)
     from coordinator_core.ops import coordinator_content_root as content_root_mod
 
     colocated_core_miss = tmp_path / "core-miss"

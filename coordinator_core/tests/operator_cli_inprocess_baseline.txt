@@ -85,7 +85,6 @@
 coordinator/bin/audit-enabled-plugins.py
 coordinator/bin/baton-drift-sweep.py
 coordinator/bin/check-auto-memory-drained.py
-coordinator/bin/check-auto-reconcile.py
 coordinator/bin/check-description-length.py
 coordinator/bin/check-harvest-debt.py
 coordinator/bin/check-shipped-on-main.py

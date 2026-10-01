@@ -22,10 +22,12 @@ import pytest
 
 from coordinator_core.frontmatter.schema_validate import (
     _cf_plan_tasks_disposition_shape,
+    _grouping_block_status,
     check_plan_tasks_grouping_approval,
     check_plan_tasks_source,
     compute_grouping_digest,
     is_governed_plan,
+    plan_tasks_row_errors,
 )
 
 
@@ -464,6 +466,53 @@ class TestMalformedGoverned:
         assert error is not None
         assert error['field'] == 'grouping_approvals.defer'
         assert 'PM' in error['hint']
+
+
+class TestMalformedGroupingBlockLabel:
+    """A present-but-non-mapping grouping block is 'malformed', not 'absent'."""
+
+    def test_status_labels(self):
+        assert _grouping_block_status(None) == 'absent'
+        assert _grouping_block_status({}) == 'pending'
+        assert _grouping_block_status({'status': 'approved'}) == 'approved'
+        assert _grouping_block_status('approved') == 'malformed'
+        assert _grouping_block_status(['defer']) == 'malformed'
+
+    def test_non_mapping_block_refusal_says_malformed(self):
+        source = _plan(
+            _ONE_DEFER,
+            frontmatter="grouping_approvals:\n  defer: 'approved'\n",
+        )
+        error = check_plan_tasks_grouping_approval(source)
+        assert error is not None
+        assert error['field'] == 'grouping_approvals.defer'
+        assert "status 'malformed'" in error['error']
+
+    def test_missing_block_refusal_still_says_absent(self):
+        source = _plan(_ONE_DEFER, frontmatter=_governed_fm(grouping='ruled_out'))
+        error = check_plan_tasks_grouping_approval(source)
+        assert error is not None
+        assert "status 'absent'" in error['error']
+
+
+class TestPerRowDateCoercionParity:
+    """`plan_tasks_row_errors` normalises YAML dates like
+    `validate_frontmatter_obj` does, so a date-typed per-row string field is
+    not rejected as 'not a string'."""
+
+    def test_date_in_string_field_is_not_a_type_error(self):
+        import datetime
+
+        schema = {
+            'type': 'object',
+            'properties': {'due': {'type': 'string'}},
+        }
+        row = {'id': 'C1', 'title': 't', 'due': datetime.date(2026, 7, 29)}
+        errors = plan_tasks_row_errors(
+            row, schema, governed=False, plan_created=None,
+        )
+        assert not [e for e in errors if e.get('field') == 'due']
+        assert row['due'] == datetime.date(2026, 7, 29)
 
 
 class TestRefusalMessages:

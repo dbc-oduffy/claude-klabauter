@@ -337,22 +337,22 @@ from coordinator_core.frontmatter.body_blocks import (
     locate_fenced_block,
 )
 from coordinator_core.frontmatter.schema_validate import (
-    _apply_cross_field_rules,
     _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS,
     _PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS,
     _GROUPING_APPROVAL_HINT,
+    _grouping_block_status,
     _PLAN_TASKS_GROUPING_BY_DISPOSITION,
     _PLAN_TASKS_GROUPING_ORDER,
     _PLAN_TASKS_SCHEMA_DICT,
     _PLAN_TASKS_SCHEMA_GOVERNED_DICT,
     _PLAN_TASKS_SUBORDER_BY_DISPOSITION,
     _plan_tasks_row_disposition,
-    _validate_json_schema_node,
     check_plan_tasks_ordering,
     compute_grouping_digest,
     format_validation_errors,
     is_governed_plan,
     parse_frontmatter,
+    plan_tasks_row_errors,
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
@@ -416,8 +416,8 @@ def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[s
     """Validate a single task row against the vendored base per-row shape
     PLUS the plan-tasks cross-field rules (DR-103 defect fix, 2026-07-29).
 
-    Calls _validate_json_schema_node directly — NOT validate_frontmatter —
-    for the base per-row shape (F5's own reasoning still applies unchanged:
+    Validates the base per-row shape without `validate_frontmatter`
+    (F5's own reasoning still applies unchanged:
     this module never has a schema_name-keyed dict to hand
     validate_frontmatter, only the bare vendored schema), passing
     _PLAN_TASKS_SCHEMA_DICT as both schema and root_schema for a LEGACY row,
@@ -425,7 +425,7 @@ def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[s
     `governed=True` (see the closing paragraph below for why the two
     diverge).
 
-    ALSO runs `_apply_cross_field_rules(row, 'plan-tasks')` — the
+    ALSO runs the cross-field rules (`_apply_cross_field_rules(row, 'plan-tasks')`) — the
     REGISTERED dispatch (`schema_validate._CROSS_FIELD_RULES_BY_SCHEMA
     ['plan-tasks']`), never the private `_cf_plan_tasks_disposition_shape`
     function imported directly, so the vendored schema's own $comment
@@ -444,42 +444,21 @@ def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[s
     shape, so `format_validation_errors` renders either source unchanged.
     Returns a (possibly empty) list of error dicts.
 
-    `_PLAN_TASKS_SCHEMA_GOVERNED_DICT`/`_PLAN_TASKS_SCHEMA_DICT` live in
-    `coordinator_core.frontmatter.schema_validate` (moved there 2026-07-29),
-    not here. That module's `check_plan_tasks_source` is genuinely THREE
-    independent copies away from this one — it hardcodes claude-klabauter's own
-    vendored schema, while the write guards deliberately resolve DoE's
-    vendored corpus copy (which its own docstring notes has drifted from
-    claude-klabauter's), and it short-circuits on the first error where the guards
-    need every row's errors. As of P084-C1/C2, `check_plan_tasks_source`
-    and both write guards share ONE statement of which spine-level legs run
-    and in what order (`PLAN_TASKS_SPINE_SEQUENCE` /
-    `plan_tasks_spine_errors`, in `schema_validate.py`) — but that sharing
-    covers the WHOLE-SPINE legs (integrity, ordering, grouping-approval),
-    not this function's per-row shape-then-cross-field sequence, which
-    remains duplicated here and (independently) inside each write guard's
-    own per-row loop. What IS shared, and does keep the per-row copies from
-    disagreeing about MEANING, are the low-level primitives each copy
-    calls: `_plan_tasks_schema_without_pm_approved_required` (the governed
-    schema derivation), `is_governed_plan`, and `_apply_cross_field_rules`
-    — a row cannot be "governed" in one copy and "legacy" in another. But
-    the per-row validation SEQUENCE itself — which schema to pick, when to
-    run cross-field rules, how to merge the two error lists — stays
-    duplicated across this function and the write guards' per-row loops,
-    and nothing enforces those copies stay in lockstep if one of them
-    changes. This function's own precondition call to
-    `check_plan_tasks_ordering` (in `_resolve`, below) stays a direct
-    single-leg call rather than routing through the accumulating driver —
-    it is a precondition on existing on-disk order, not a spine validation
-    pass, and routing it through the driver would make a mutation refuse on
-    defects it does not own.
+    The per-row shape-then-cross-field sequence is `plan_tasks_row_errors`
+    in `schema_validate.py`, the same function the spine driver's `per_row`
+    leg (`check_plan_tasks_source` and both write guards) runs — this
+    function only picks the schema. `_PLAN_TASKS_SCHEMA_GOVERNED_DICT`/
+    `_PLAN_TASKS_SCHEMA_DICT` live there too. This function's own
+    precondition call to `check_plan_tasks_ordering` (in `_resolve`, below)
+    stays a direct single-leg call rather than routing through the
+    accumulating driver — it is a precondition on existing on-disk order,
+    not a spine validation pass, and routing it through the driver would
+    make a mutation refuse on defects it does not own.
     """
     schema = _PLAN_TASKS_SCHEMA_GOVERNED_DICT if governed else _PLAN_TASKS_SCHEMA_DICT
-    errors = _validate_json_schema_node(row, schema, schema)
-    errors.extend(_apply_cross_field_rules(
-        row, "plan-tasks", governed=governed, plan_created=plan_created,
-    ))
-    return errors
+    return plan_tasks_row_errors(
+        row, schema, governed=governed, plan_created=plan_created,
+    )
 
 
 def _validate_all(
@@ -1298,7 +1277,7 @@ def _resolve(
                 block = blocks.get(grouping) if isinstance(blocks, dict) else None
 
                 if not isinstance(block, dict) or block.get("status") != "approved":
-                    status = block.get("status", "pending") if isinstance(block, dict) else "absent"
+                    status = _grouping_block_status(block)
                     raise MutateAbort(
                         f"resolve: closing task(s) {ids!r} puts them in the {grouping!r} "
                         f"grouping, which reads status {status!r}. {_GROUPING_APPROVAL_HINT}"

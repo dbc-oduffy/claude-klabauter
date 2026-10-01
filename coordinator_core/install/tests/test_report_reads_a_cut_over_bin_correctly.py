@@ -32,7 +32,11 @@ def test_a_process_replacing_name_is_never_audited_for_currency(bin_dir):
     assert names == ["blocked"]
 
 
-def test_a_name_the_engine_carries_no_script_for_is_not_audited(bin_dir, tmp_path):
+def test_a_name_the_engine_carries_no_script_for_is_not_audited(bin_dir, tmp_path, monkeypatch):
+    generator_bin = tmp_path / "generator-bin"
+    generator_bin.mkdir()
+    (generator_bin / "publish.py").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(door_install, "_GENERATOR_BIN_DIR", generator_bin)
     engine = tmp_path / "engine"
     (engine / "coordinator" / "bin").mkdir(parents=True)
     (engine / "coordinator" / "bin" / "blocked.py").write_text("x", encoding="utf-8")

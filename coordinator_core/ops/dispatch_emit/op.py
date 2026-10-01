@@ -979,8 +979,23 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         script_sha256 = None
 
+    finding_dicts = [
+        {
+            "severity": f.severity.value,
+            "code": f.code,
+            "message": f.message,
+            **({"line": f.line} if f.line is not None else {}),
+        }
+        for f in findings
+    ]
+    # The receipt outlives stdout: a later reader (a resumed EM, a peer)
+    # sees the emit-time findings only if they are recorded here.
     receipt = _write_emission_receipt(
-        guarded_path, receipt_plan_path, params, extras=receipt_extras, sha256=script_sha256
+        guarded_path,
+        receipt_plan_path,
+        params,
+        extras={**(receipt_extras or {}), "findings": finding_dicts},
+        sha256=script_sha256,
     )
 
     reply = {
@@ -994,15 +1009,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         # (`_write_emission_receipt`'s own negative-spec).
         "sha256": script_sha256,
         "ok": error_count == 0,
-        "findings": [
-            {
-                "severity": f.severity.value,
-                "code": f.code,
-                "message": f.message,
-                **({"line": f.line} if f.line is not None else {}),
-            }
-            for f in findings
-        ],
+        "findings": finding_dicts,
         "error_count": error_count,
         "warn_count": warn_count,
     }

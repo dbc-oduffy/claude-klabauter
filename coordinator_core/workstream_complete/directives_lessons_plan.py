@@ -38,9 +38,7 @@ Negative-spec:
     - Do NOT invoke any of the above CLIs in-process. Every mutating
       action is a returned `directives[]` dict naming the CLI; this
       module only reads disk (governing-plan existence) and echoes
-      caller-supplied `decisions`, exactly like the sibling `review`
-      dict already does in `workstream_complete/__init__.py`'s existing
-      `build_directives` for `d-write-trail`.
+      caller-supplied `decisions`.
     - Do NOT re-derive the judgment calls this Step spans —
       "what qualifies as a lesson" (`lesson-worth-capturing`),
       "universal vs project-specific + change-kind" (`lesson-scope-

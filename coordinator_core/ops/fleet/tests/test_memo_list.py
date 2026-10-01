@@ -176,13 +176,13 @@ class TestSetupErrorEnvelope:
 
 class TestEnumerationMode:
     def test_enumerates_all_registered_receivers(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         holo_repo = tmp_path / "example-game-workbench-repo"
         rag_repo.mkdir()
         holo_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"project_rag": str(rag_repo), "example_game_workbench_repo": str(holo_repo)},
+            {"gadget_repo": str(rag_repo), "example_game_workbench_repo": str(holo_repo)},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -197,7 +197,7 @@ class TestEnumerationMode:
 
         receivers = _receivers(result["candidates"])
         ids = {c["repo_key"] for c in receivers}
-        assert ids == {"repos.project_rag", "repos.example_game_workbench_repo"}
+        assert ids == {"repos.gadget_repo", "repos.example_game_workbench_repo"}
         for c in receivers:
             assert c["resolved"] is True
             assert c["target_inbox"].endswith(os.path.join("cross-repo", "inbox"))
@@ -236,11 +236,11 @@ class TestEnumerationPublishMirrors:
     def test_publish_mirrors_land_in_own_section_not_conflated_with_receivers(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"project_rag": str(rag_repo)},
+            {"gadget_repo": str(rag_repo)},
             mirror_tables={
                 "deep_research_claude": {
                     "owner": "deep-research-em",
@@ -323,9 +323,9 @@ class TestEnumerationAliasesAndCentral:
         assert doe[0]["is_central"] is True
 
     def test_registry_status_entry_shape(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True}))
@@ -507,13 +507,13 @@ class TestReceiverMirrorPathCollision:
     def test_normal_sibling_with_no_mirror_collision_unaffected(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         mirror_repo = tmp_path / "unrelated-mirror"
         rag_repo.mkdir()
         mirror_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"project_rag": str(rag_repo)},
+            {"gadget_repo": str(rag_repo)},
             mirror_tables={
                 "deep_research_claude": {
                     "owner": "deep-research-em",
@@ -527,7 +527,7 @@ class TestReceiverMirrorPathCollision:
 
         assert result["exit_code"] == 0
         receivers = _receivers(result["candidates"])
-        assert {c["repo_key"] for c in receivers} == {"repos.project_rag"}
+        assert {c["repo_key"] for c in receivers} == {"repos.gadget_repo"}
 
         mirrors = [c for c in result["candidates"] if c["kind"] == "publish_mirror"]
         assert len(mirrors) == 1
@@ -581,18 +581,18 @@ class TestReceiverMirrorPathCollision:
 
 class TestResolutionMode:
     def test_resolved_to_reports_destination_inbox(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
+        result = _run(_memo_list({"dry_run": True, "to": "gadget-repo-em"}))
 
         assert result["exit_code"] == 0
         assert len(result["candidates"]) == 1
         candidate = result["candidates"][0]
         assert candidate["resolved"] is True
-        assert candidate["receiver"] == "example-retrieval-repo-em"
+        assert candidate["receiver"] == "gadget-repo-em"
         assert candidate["target_inbox"] == str(rag_repo / "cross-repo" / "inbox")
         assert candidate["note"] is None
 
@@ -609,32 +609,32 @@ class TestResolutionMode:
         assert "not registered" in candidate["note"]
 
     def test_unresolved_to_suggests_nearest_match(self, tmp_path, monkeypatch):
-        claude_klabauter_repo = tmp_path / "claude-klabauter"
-        claude_klabauter_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"claude_klabauter": str(claude_klabauter_repo)})
+        engine_repo = tmp_path / "sprocket-engine"
+        engine_repo.mkdir()
+        claude_home = _make_claude_home(tmp_path, {"sprocket_engine": str(engine_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        result = _run(_memo_list({"dry_run": True, "to": "claude-klabauter-em"}))
+        result = _run(_memo_list({"dry_run": True, "to": "sprocket-em"}))
 
         candidate = result["candidates"][0]
         assert candidate["resolved"] is False
-        assert "claude-klabauter-em" in candidate["note"]
+        assert "sprocket-engine-em" in candidate["note"]
 
 
 class TestResolvedFilename:
     def test_resolved_to_plus_topic_yields_resolved_filename_matching_send(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
 
         result = _run(
             _memo_list(
-                {"dry_run": True, "to": "example-retrieval-repo-em", "topic": "example-topic"}
+                {"dry_run": True, "to": "gadget-repo-em", "topic": "example-topic"}
             )
         )
 
@@ -649,9 +649,9 @@ class TestResolvedFilename:
     def test_non_claude_klabauter_caller_preview_matches_send_shared_derivation(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
@@ -659,9 +659,9 @@ class TestResolvedFilename:
         result = _run(
             _memo_list({
                 "dry_run": True,
-                "to": "example-retrieval-repo-em",
+                "to": "gadget-repo-em",
                 "topic": "smoke",
-                "from_id": "claude-central-em",
+                "from_id": "other-caller-em",
             })
         )
 
@@ -671,11 +671,11 @@ class TestResolvedFilename:
 
         today = datetime.date.today().isoformat()
         expected = _memo_filename(
-            today, resolve_sender_id("claude-central-em"), "smoke"
+            today, resolve_sender_id("other-caller-em"), "smoke"
         )
         assert candidate["resolved_filename"] == expected
         assert "claude-klabauter-engine" not in candidate["resolved_filename"]
-        assert "claude-central-em" in candidate["resolved_filename"]
+        assert "other-caller-em" in candidate["resolved_filename"]
 
     def test_claude_klabauter_origin_caller_still_previews_correctly(self, tmp_path, monkeypatch):
         """Guard against regressing the currently-accidentally-correct case:
@@ -685,15 +685,15 @@ class TestResolvedFilename:
         (`resolve_sender_id(None)`), never a fixed `claude-klabauter-engine` literal
         (DoE e267d18336 withdrew the concurrence that made that literal
         sufficient)."""
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         import datetime
 
         result = _run(
-            _memo_list({"dry_run": True, "to": "example-retrieval-repo-em", "topic": "smoke"})
+            _memo_list({"dry_run": True, "to": "gadget-repo-em", "topic": "smoke"})
         )
 
         assert result["exit_code"] == 0
@@ -716,14 +716,14 @@ class TestResolvedFilename:
         former. Fails on the unfixed code (which called
         `resolve_sender_id(from_id)` with no `root`, falling through to the
         ambient-cwd fallback)."""
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         caller_repo = tmp_path / "caller-repo"
         caller_repo.mkdir()
         ambient_repo = tmp_path / "ambient-repo"
         ambient_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {
-            "project_rag": str(rag_repo),
+            "gadget_repo": str(rag_repo),
             "caller_repo": str(caller_repo),
             "ambient_repo": str(ambient_repo),
         })
@@ -736,7 +736,7 @@ class TestResolvedFilename:
 
         result = _run(
             _memo_list(
-                {"dry_run": True, "to": "example-retrieval-repo-em", "topic": "root-thread"},
+                {"dry_run": True, "to": "gadget-repo-em", "topic": "root-thread"},
                 repo_root=caller_repo,
             )
         )
@@ -756,15 +756,15 @@ class TestResolvedFilename:
     def test_unknown_caller_identity_fails_loud_not_engine_fallback(
         self, tmp_path, monkeypatch
     ):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(
             _memo_list({
                 "dry_run": True,
-                "to": "example-retrieval-repo-em",
+                "to": "gadget-repo-em",
                 "topic": "smoke",
                 "from_id": "!!!",
             })
@@ -775,21 +775,21 @@ class TestResolvedFilename:
         assert "claude-klabauter-engine" not in str(result)
 
     def test_to_only_resolution_has_no_resolved_filename(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
+        result = _run(_memo_list({"dry_run": True, "to": "gadget-repo-em"}))
 
         candidate = result["candidates"][0]
         assert candidate["resolved"] is True
         assert "resolved_filename" not in candidate
 
     def test_topic_only_no_to_has_no_effect(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(_memo_list({"dry_run": True, "topic": "example-topic"}))
@@ -819,9 +819,9 @@ class TestResolvedFilename:
         no resolved_filename anywhere — and the same input is independently
         confirmed to fail memo.send's own _TOPIC_SLUG_RE (locks the two
         validators together, mirroring the filename-function lock above)."""
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         bad_topic = "bad/topic with spaces"
@@ -831,31 +831,31 @@ class TestResolvedFilename:
         )
 
         result = _run(
-            _memo_list({"dry_run": True, "to": "example-retrieval-repo-em", "topic": bad_topic})
+            _memo_list({"dry_run": True, "to": "gadget-repo-em", "topic": bad_topic})
         )
 
         assert result["exit_code"] == 1
         assert "resolved_filename" not in str(result)
 
     def test_empty_string_topic_fails_loud_not_coerced_to_absent(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         result = _run(
-            _memo_list({"dry_run": True, "to": "example-retrieval-repo-em", "topic": "   "})
+            _memo_list({"dry_run": True, "to": "gadget-repo-em", "topic": "   "})
         )
 
         assert result["exit_code"] == 1
 
     def test_absent_topic_key_still_behaves_as_before(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        result = _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
+        result = _run(_memo_list({"dry_run": True, "to": "gadget-repo-em"}))
 
         assert result["exit_code"] == 0
         candidate = result["candidates"][0]
@@ -865,9 +865,9 @@ class TestResolvedFilename:
 
 class TestNoWriteProof:
     def test_enumeration_leaves_filesystem_unchanged(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         before = _snapshot(tmp_path)
@@ -880,13 +880,13 @@ class TestNoWriteProof:
         )
 
     def test_resolution_leaves_filesystem_unchanged_resolved(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         before = _snapshot(tmp_path)
-        _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
+        _run(_memo_list({"dry_run": True, "to": "gadget-repo-em"}))
         after = _snapshot(tmp_path)
 
         assert after == before, (
@@ -935,9 +935,9 @@ class TestNoMemoIndex:
     def test_handler_calls_do_not_mutate_module_state(self, tmp_path, monkeypatch):
         import coordinator_core.ops.fleet.memo_list as memo_list_mod
 
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         def _mutable_module_names():
@@ -950,7 +950,7 @@ class TestNoMemoIndex:
         names_before = _mutable_module_names()
 
         _run(_memo_list({"dry_run": True}))
-        _run(_memo_list({"dry_run": True, "to": "example-retrieval-repo-em"}))
+        _run(_memo_list({"dry_run": True, "to": "gadget-repo-em"}))
         _run(_memo_list({"dry_run": True, "to": "unregistered-em"}))
 
         names_after = _mutable_module_names()
@@ -968,7 +968,7 @@ class TestListAndResolverAgreeOnInboxTarget:
 
         enum_result = _run(_memo_list({"dry_run": True}))
         receivers = {c["repo_key"]: c for c in _receivers(enum_result["candidates"])}
-        list_target = receivers["repos.project_rag"]["target_inbox"]
+        list_target = receivers["repos.gadget_repo"]["target_inbox"]
 
         inbox_dir, _receiver_repo_path, _all_repos = resolve_receiver_inbox(receiver_em_id)
         resolver_target = str(inbox_dir)
@@ -976,26 +976,26 @@ class TestListAndResolverAgreeOnInboxTarget:
         return list_target, resolver_target
 
     def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         list_target, resolver_target = self._both_targets(
-            tmp_path, monkeypatch, rag_repo, "example-retrieval-repo-em"
+            tmp_path, monkeypatch, rag_repo, "gadget-repo-em"
         )
 
         assert list_target == resolver_target
         assert list_target == str(rag_repo / "cross-repo" / "inbox")
 
     def test_migrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
-        rag_repo = tmp_path / "project-rag"
+        rag_repo = tmp_path / "gadget-repo"
         (rag_repo / "state" / "cross-repo").mkdir(parents=True)
-        claude_home = _make_claude_home(tmp_path, {"project_rag": str(rag_repo)})
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         list_target, resolver_target = self._both_targets(
-            tmp_path, monkeypatch, rag_repo, "example-retrieval-repo-em"
+            tmp_path, monkeypatch, rag_repo, "gadget-repo-em"
         )
 
         assert list_target == resolver_target

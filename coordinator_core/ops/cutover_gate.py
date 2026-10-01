@@ -1078,6 +1078,17 @@ _CONTENT_ROOT_ALIASES: tuple[str, ...] = ("coordinator-content-repo", "coordinat
 _CLAUDE_KLABAUTER_ROOT_ALIASES: tuple[str, ...] = ("claude-klabauter", "claude_klabauter", "claude-klabauter")
 
 
+def _content_root_aliases() -> tuple[str, ...]:
+    """Literal aliases plus the registry-derived doctrine repo name and its case/underscore forms."""
+    from coordinator_core._fleet_names import doctrine_repo_name
+
+    name = doctrine_repo_name()
+    if not name:
+        return _CONTENT_ROOT_ALIASES
+    forms = (name, name.lower(), name.replace("-", "_"), name.lower().replace("-", "_"))
+    return tuple(dict.fromkeys((*_CONTENT_ROOT_ALIASES, *forms)))
+
+
 def _build_repo_roots(content_root: Path) -> dict[str, Path]:
     """Build the {repo-name-alias: local root} map `derive()` scans against.
 
@@ -1092,7 +1103,7 @@ def _build_repo_roots(content_root: Path) -> dict[str, Path]:
     """
     claude_klabauter_root = Path(__file__).resolve().parents[2]
     roots: dict[str, Path] = {}
-    for alias in _CONTENT_ROOT_ALIASES:
+    for alias in _content_root_aliases():
         roots[alias] = content_root
     for alias in _CLAUDE_KLABAUTER_ROOT_ALIASES:
         roots[alias] = claude_klabauter_root

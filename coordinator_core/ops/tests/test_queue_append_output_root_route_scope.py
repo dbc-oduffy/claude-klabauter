@@ -159,7 +159,7 @@ def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monke
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
 
@@ -172,7 +172,7 @@ def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
 
@@ -186,7 +186,7 @@ def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
     monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: root == "/repos/publish-mirror")
 
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
@@ -199,7 +199,7 @@ def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "/repos/publish-mirror")
     monkeypatch.setattr(op_latency, "execution_route", lambda: op_latency.IN_PROCESS)
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
 
     with pytest.raises(qa._ClaudeKlabauterUnresolvable):
@@ -211,7 +211,7 @@ def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
     monkeypatch.setattr(qa, "_engine_source_root", lambda: "/repos/claude-klabauter")
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/publish-mirror")
 
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
 
@@ -221,7 +221,7 @@ def test_absent_transform_proof_key_falls_through_to_the_repo_named_rung(monkeyp
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
-    monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
+    monkeypatch.setattr(qa, "registry_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
 
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"

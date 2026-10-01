@@ -598,3 +598,45 @@ class TestRegistryRecordFieldContract:
             if f.name in ("pid", "start_epoch"):
                 continue
             assert f.default is None, f"{f.name} must default to None"
+
+
+class TestRecordForPid:
+    def test_reads_the_pid_keyed_file(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        epoch = time.time() - 600
+        _write_record(sessions_dir, "4242.json", "sid-a", 4242, _epoch_to_filetime_ticks(epoch))
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        sid, record = hr.record_for_pid(4242)
+        assert sid == "sid-a"
+        assert record.pid == 4242
+        assert record.start_epoch == pytest.approx(epoch, abs=1e-3)
+
+    def test_absent_unreadable_or_bad_pid_yield_none(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        (sessions_dir / "7.json").write_text("{nope", encoding="utf-8")
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        assert hr.record_for_pid(7) is None
+        assert hr.record_for_pid(8) is None
+        assert hr.record_for_pid(0) is None
+        assert hr.record_for_pid(-3) is None
+        assert hr.record_for_pid("7") is None
+
+    def test_registry_dir_none_yields_none(self, monkeypatch):
+        monkeypatch.setattr(hr, "registry_dir", lambda: None)
+        assert hr.record_for_pid(1) is None
+
+    def test_self_record_delegates_to_record_for_pid(self, tmp_path, monkeypatch):
+        sessions_dir = tmp_path / "sessions"
+        _write_record(
+            sessions_dir, "99.json", "sid-self", 99,
+            _epoch_to_filetime_ticks(time.time() - 60),
+        )
+        monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
+        from coordinator_core.session import core
+
+        monkeypatch.setattr(
+            core, "_resolve_claude_pid_from_env", lambda: ((99, 1.0), "env")
+        )
+        sid, record = hr.self_record()
+        assert (sid, record.pid, record.stable_pid_capture) == ("sid-self", 99, "env")

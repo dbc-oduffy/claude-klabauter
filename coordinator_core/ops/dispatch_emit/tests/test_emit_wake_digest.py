@@ -143,6 +143,28 @@ def test_a_falsifier_alone_never_touches_tests_status():
     assert obj["tests"]["status"] == "not_run"
 
 
+def test_a_prose_only_spine_still_runs_its_falsifier():
+    """An empty scope (nothing testable written) is not a missing criterion:
+    the falsifier still composes, and `tests.status` stays `not_run`."""
+    from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
+
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    falsifier = {
+        "how": "count the lessons",
+        "baseline_output": "zero",
+        "expected_when_true": "thirteen",
+    }
+    script = compose_script(waves, name="wf", description="prose + falsifier", falsifier=falsifier)
+
+    assert "No terminal test phase" in script
+    assert "test:terminal-falsifier'" in script
+    assert "criterion: { status: 'not_run'" not in script
+    obj = _simulate_return(script, incomplete_chunks=[], halted=None)
+    errors = validate_digest(obj)
+    assert errors == [], errors
+    assert obj["tests"]["status"] == "not_run"
+
+
 def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
@@ -422,3 +444,95 @@ def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch():
         waves, name="wf", description="scratch", plan_path="docs/plans/example.md"
     )
     assert "delete that directory before you write your report" in script
+
+
+def test_one_stage_inline_review_names_the_engine_record_and_carries_stage_returns():
+    """The one-stage digest points its trailer at the engine's run record and
+    relays the stage RETURNS (prep, delivery, tests, criterion, integration)
+    `dispatch.terminal_commit` writes into it -- never the integrator's own
+    agent-written sidecar, whose frontmatter carried none of them."""
+    from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
+
+    waves = [[_row("C1", ["a.py"])]]
+    script = compose_script(
+        waves,
+        name="wf",
+        description="one-stage record",
+        review_roster_fragment=_V5_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+        plan_id="pln-one-stage-abc123",
+    )
+    assert "integration_stem: 'pln-one-stage-abc123.review-wave-bookkeeping'" in script
+    for key in ("prep: (_reviewPrep ?", "delivery: (_deliveryVerdict ?", "tests: { status:",
+                "criterion: ", "integration: { sidecar: _reviewIntegration.sidecar_path"):
+        assert key in script, key
+
+    obj = _simulate_return(script, incomplete_chunks=[], halted=None, review_integration={"fixes_applied": 0})
+    obj["next_action"]["params"]["inline_review"] = {
+        "integration_stem": "pln-one-stage-abc123.review-wave-bookkeeping",
+        "slices": 1,
+        "fixes": 0,
+        "plan_id": "pln-one-stage-abc123",
+        "wave_sidecar_paths": ["s.md"],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"},
+        "criterion": {"status": "met", "observation": "o", "sidecar": None},
+        "integration": {"sidecar": "i.md", "unresolved": [], "confinement_violations": 0},
+    }
+    assert validate_digest(obj) == []
+
+
+_V5_FRAGMENT_WITH_JUDGE = {
+    **_V5_FRAGMENT,
+    "execute_review": {
+        "stages": list(_V5_FRAGMENT["execute_review"]["stages"])
+        + [{"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
+                                          "effort": "low", "schema": "judge"}]}]
+    },
+}
+_STAGE_SCHEMAS_WITH_JUDGE = {**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}}
+
+
+def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_test_target():
+    """The judge is the criterion leg at every size: a statement-only plan on a
+    prose spine still gets a verdict, from the agent DoE's roster names."""
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(
+        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    assert "_falsifierResult = await agent(" in script
+    assert "agentType: 'coordinator:criterion-judge'" in script
+    assert "test:terminal-falsifier'" not in script
+    assert "criterion: (_falsifierResult ?" in script
+
+
+def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
+    script = compose_script(
+        waves, name="wf", description="judge+falsifier", falsifier=falsifier,
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    body = script[script.index("[_testResult, _falsifierResult] = await parallel([") :].split("]);", 1)[0]
+    assert "test:terminal'" in body
+    assert "coordinator:criterion-judge" in body and "run it" in body
+    assert "test:terminal-falsifier'" not in script
+
+
+def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():
+    """A delivery FAIL stops the run for review but the rows are already on
+    disk: the digest says so and points at the terminal_commit next_action,
+    which stays populated (a FAIL never drops it) and within the cap."""
+    waves = [[_row("C1", ["a.py"])]]
+    script = compose_script(
+        waves,
+        name="wf",
+        description="delivery fail",
+        review_roster_fragment=_V5_FRAGMENT,
+        review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    assert "'review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them'" in script
+    assert len("review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them") <= 300
+    assert "next_action: { kind: 'terminal_commit'" in script

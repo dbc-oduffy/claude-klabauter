@@ -207,6 +207,7 @@ __all__ = [
     "walk_forward",
     "referenced_by",
     "resolve_target",
+    "resolve_target_on_disk",
     "check_lineage_reachability",
     "build_git_history_cache",
     "GitHistoryCache",
@@ -997,15 +998,18 @@ def _ref_names_foreign_family(ref: str) -> bool:
 _SHA_SHAPED_REF_RE = re.compile(r'^[0-9a-f]{7,40}$')
 
 
-def resolve_target(
+def resolve_target_on_disk(
     ref: Any,
     handoff_dir: str,
     repo_root: str,
-    git_history_cache: Optional[Set[str]] = None,
     id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None,
-    *,
-    include_history_tier: bool = True,
 ) -> Optional[str]:
+    """Tiers 1-2 of `resolve_target`: id index, then live/archive paths on disk.
+
+    Never consults git history, so it can never spawn; `None` means "not on
+    disk", not "unresolvable". Callers that only need a disk path (every
+    live-membership scan) call this directly.
+    """
     if ref is None:
         return None
     target = str(ref).strip()
@@ -1015,54 +1019,20 @@ def resolve_target(
     # SHA-shaped ref short-circuit (C9 #1). A ref whose WHOLE stripped value
     # looks like a git commit SHA (7-40 lowercase hex chars) is not a path
     # and not a handoff_id — it is the `kind: recovery` baton convention of
-    # carrying a crash-commit SHA in `predecessor:` (schema comment: "NOT a
-    # predecessor handoff path"). Must sit BEFORE the id_index lookup below —
-    # id_index's `__contains__` is what triggers _LazyHandoffIdIndex's
-    # corpus-wide scan, so checking after it would only save the tier-3 git
-    # spawns, not the scan. A ref that merely CONTAINS hex (e.g. a filename)
-    # does not match `fullmatch`-anchored ^...$ and is unaffected.
+    # carrying a crash-commit SHA in `predecessor:`. Must sit BEFORE the
+    # id_index lookup: id_index's `__contains__` triggers
+    # _LazyHandoffIdIndex's corpus-wide scan.
     if _SHA_SHAPED_REF_RE.match(target):
         return None
 
     if id_index and not target.endswith('.md') and target in id_index:
         return id_index[target]
 
-    _tier3_memo: Dict[str, bool] = {}
-
-    def ever_tracked(repo_rel_path: str) -> bool:
-        return _memoized_ever_tracked(repo_rel_path, _tier3_memo, repo_root, git_history_cache)
-
     if os.path.isabs(target):
-        if os.path.exists(target):
-            return target
-        if repo_root and include_history_tier:
-            norm_root = repo_root.rstrip('/\\')
-            if target.startswith(norm_root):
-                rel = target[len(norm_root):].lstrip('/\\')
-                if ever_tracked(rel):
-                    return 'git-history'
-        return None
+        return target if os.path.exists(target) else None
 
     basename = os.path.basename(target)
-    candidates = [
-        os.path.normpath(os.path.join(handoff_dir, target)),
-        os.path.normpath(os.path.join(repo_root, target)),
-    ]
-    # Basename recovery (the tiers below) is STALE-PATH recovery within the baton
-    # families — it must not re-home a pointer that explicitly names a different
-    # family. `predecessor: cross-repo/inbox/<name>.md` on a handoff itself named
-    # `<name>.md` (the cross-repo memo-pickup convention: the handoff inherits the
-    # memo's slug) otherwise resolves onto the handoff itself once the memo moves
-    # to `cross-repo/archive/`, and `referenced_by` then reports the baton as its
-    # own referencer — a self-edge that blocks its archival forever. Same rule, and
-    # same reasoning, as `tests/_baton_dag_oracle.build_children_index`'s
-    # non-baton-family skip; the two implementations reach it independently.
-    if not _ref_names_foreign_family(target):
-        candidates.extend([
-            os.path.normpath(os.path.join(repo_root, 'state', 'handoffs', basename)),
-            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', target)),
-            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', basename)),
-        ])
+    candidates = _ref_candidates(target, basename, handoff_dir, repo_root)
 
     for candidate in candidates:
         if os.path.exists(candidate):
@@ -1079,30 +1049,82 @@ def resolve_target(
         except OSError:
             pass
 
-    if repo_root and include_history_tier:
-        if ever_tracked(target):
-            return 'git-history'
-        norm_root_rel = repo_root.rstrip('/\\')
-        tier3_extra: List[str] = []
-        foreign_family = _ref_names_foreign_family(target)
-        month_match = re.match(r'^(\d{4}-\d{2})-\d{2}', basename)
-        if month_match and not foreign_family:
-            tier3_extra.append(f'archive/handoffs/{month_match.group(1)}/{basename}')
-        if os.path.isdir(archive_dir) and not foreign_family:
-            try:
-                for entry in os.listdir(archive_dir):
-                    if re.match(r'^\d{4}-\d{2}$', entry):
-                        tier3_extra.append(f'archive/handoffs/{entry}/{basename}')
-            except OSError:
-                pass
-        for cand_abs in candidates:
-            if cand_abs.startswith(norm_root_rel):
-                cand_rel = cand_abs[len(norm_root_rel):].lstrip('/\\')
-                if ever_tracked(cand_rel):
-                    return 'git-history'
-        for cand_rel in tier3_extra:
+    return None
+
+
+def _ref_candidates(target: str, basename: str, handoff_dir: str, repo_root: str) -> List[str]:
+    candidates = [
+        os.path.normpath(os.path.join(handoff_dir, target)),
+        os.path.normpath(os.path.join(repo_root, target)),
+    ]
+    # Basename recovery is STALE-PATH recovery within the baton families — it
+    # must not re-home a pointer that explicitly names a different family
+    # (a cross-repo memo slug matching the handoff's own name would otherwise
+    # resolve onto the handoff itself and block its archival forever).
+    if not _ref_names_foreign_family(target):
+        candidates.extend([
+            os.path.normpath(os.path.join(repo_root, 'state', 'handoffs', basename)),
+            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', target)),
+            os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs', basename)),
+        ])
+    return candidates
+
+
+def resolve_target(
+    ref: Any,
+    handoff_dir: str,
+    repo_root: str,
+    git_history_cache: Optional[Set[str]] = None,
+    id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None,
+    *,
+    include_history_tier: bool = True,
+) -> Optional[str]:
+    found = resolve_target_on_disk(ref, handoff_dir, repo_root, id_index)
+    if found is not None or not include_history_tier or not repo_root:
+        return found
+    target = str(ref).strip() if ref is not None else ''
+    if not target or target in ('none', 'null') or _SHA_SHAPED_REF_RE.match(target):
+        return None
+
+    _tier3_memo: Dict[str, bool] = {}
+
+    def ever_tracked(repo_rel_path: str) -> bool:
+        return _memoized_ever_tracked(repo_rel_path, _tier3_memo, repo_root, git_history_cache)
+
+    if os.path.isabs(target):
+        norm_root = repo_root.rstrip('/\\')
+        if target.startswith(norm_root):
+            rel = target[len(norm_root):].lstrip('/\\')
+            if ever_tracked(rel):
+                return 'git-history'
+        return None
+
+    basename = os.path.basename(target)
+    candidates = _ref_candidates(target, basename, handoff_dir, repo_root)
+    archive_dir = os.path.normpath(os.path.join(repo_root, 'archive', 'handoffs'))
+    if ever_tracked(target):
+        return 'git-history'
+    norm_root_rel = repo_root.rstrip('/\\')
+    tier3_extra: List[str] = []
+    foreign_family = _ref_names_foreign_family(target)
+    month_match = re.match(r'^(\d{4}-\d{2})-\d{2}', basename)
+    if month_match and not foreign_family:
+        tier3_extra.append(f'archive/handoffs/{month_match.group(1)}/{basename}')
+    if os.path.isdir(archive_dir) and not foreign_family:
+        try:
+            for entry in os.listdir(archive_dir):
+                if re.match(r'^\d{4}-\d{2}$', entry):
+                    tier3_extra.append(f'archive/handoffs/{entry}/{basename}')
+        except OSError:
+            pass
+    for cand_abs in candidates:
+        if cand_abs.startswith(norm_root_rel):
+            cand_rel = cand_abs[len(norm_root_rel):].lstrip('/\\')
             if ever_tracked(cand_rel):
                 return 'git-history'
+    for cand_rel in tier3_extra:
+        if ever_tracked(cand_rel):
+            return 'git-history'
 
     return None
 
@@ -1508,12 +1530,8 @@ def build_reverse_edge_index(
         node_handoff_dir = os.path.dirname(node_abs_path)
         for kind in all_kinds:
             for raw_ref in handoff_edges(meta, {kind}):
-                resolved_ref = resolve_target(
-                    raw_ref,
-                    node_handoff_dir,
-                    repo_root,
-                    id_index=id_index,
-                    include_history_tier=False,
+                resolved_ref = resolve_target_on_disk(
+                    raw_ref, node_handoff_dir, repo_root, id_index
                 )
                 if resolved_ref is None or resolved_ref == 'git-history':
                     if not _ref_names_foreign_family(raw_ref):
@@ -1667,12 +1685,8 @@ def referenced_by(
             # live-membership test needs a disk path on both sides, which tier 3 by
             # definition cannot supply. Same grounds as `emit/priority_resolve.py ::
             # _build_parent_map` and `pickup_assemble :: _resolve_lineage_artifact_path`.
-            resolved_ref = resolve_target(
-                raw_ref,
-                node_handoff_dir,
-                repo_root,
-                id_index=id_index,
-                include_history_tier=False,
+            resolved_ref = resolve_target_on_disk(
+                raw_ref, node_handoff_dir, repo_root, id_index
             )
             if resolved_ref is None or resolved_ref == 'git-history':
                 if not _ref_names_foreign_family(raw_ref) and os.path.basename(raw_ref) == target_basename:

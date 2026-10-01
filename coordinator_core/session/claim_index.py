@@ -325,9 +325,17 @@ class _LookupResult(dict):
     lifecycle, same "absent means unprovable, never false" posture. A
     claimant whose line predates the kind axis is simply absent from this
     mapping.
+
+    ``held_by`` maps each claimant sid that appears in any returned path's
+    claimant list (``UNANSWERABLE`` excluded) -> the sorted normalized index
+    keys that sid currently holds with a non-read kind (absent kind counts
+    as write), drawn from the SAME rebuild as ``complete``. A sid whose
+    claims were all released contributes nothing. An incomplete rebuild
+    populates what it saw; read ``.complete``.
     """
 
     complete: bool = True
+    held_by: Dict[str, List[str]] = None  # type: ignore[assignment]
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = None  # type: ignore[assignment]
     recorded_name: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
@@ -650,6 +658,7 @@ def lookup(
         result.edit_ts = {}
         result.recorded_name = {}
         result.recorded_kind = {}
+        result.held_by = {}
         return result
 
     state = rebuild(sessions_dir=base)
@@ -681,6 +690,20 @@ def lookup(
     result.edit_ts = result_edit_ts
     result.recorded_name = result_recorded_name
     result.recorded_kind = result_recorded_kind
+
+    wanted = {
+        sid for claimants in result.values() for sid in claimants if sid != UNANSWERABLE
+    }
+    held: Dict[str, List[str]] = {}
+    if wanted:
+        for key, sids in state.claims.items():
+            kinds = state.recorded_kind.get(key, {})
+            for sid in sids:
+                if sid in wanted and kinds.get(sid) != touch_record.KIND_READ:
+                    held.setdefault(sid, []).append(key)
+        for keys in held.values():
+            keys.sort()
+    result.held_by = held
 
     return result
 

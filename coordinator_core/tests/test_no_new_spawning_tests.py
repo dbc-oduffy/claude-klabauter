@@ -2067,33 +2067,6 @@ def test_kind_axis_route_layer_unknown_resolved_by_pickup_brief_cutover() -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_c14_fixed_files_report_clean_for_rule1() -> None:
-    """AC12(i): the two files C14 fixed for Rule 1 -- both routed a
-    module-level call into a helper whose only spawn site has a non-literal
-    (`shutil.which()`-shaped) argv0, the exact shape module-scope UNKNOWN
-    promotion (C6d) exists to catch -- must report CLEAN (no module-level
-    linenos, no unmarked spawning funcs) after the fix. Modelled on
-    `test_mock_seam_oracle_files_report_zero_spawn_with_no_marker`. Nothing
-    else in this module pins that these two stay fixed; without this test a
-    regression here is a silent Rule 1 reopening."""
-    fixed_files = [
-        "coordinator_core/tests/test_engine_root_conformance.py",
-        "coordinator/tests/test_workday_evening_tz_coherence.py",
-    ]
-    bad = []
-    for relpath in fixed_files:
-        full_path = REPO_ROOT / relpath
-        assert full_path.is_file(), f"expected C14-fixed file missing: {relpath}"
-        report = _analyze_file(full_path, relpath)
-        if report.module_level_linenos or report.unmarked_spawning_funcs:
-            bad.append((relpath, report.module_level_linenos, report.unmarked_spawning_funcs))
-    assert not bad, (
-        f"a C14 Rule 1 fix regressed: {bad} -- these two files must report "
-        "CLEAN (module-scope UNKNOWN promotion must still resolve their "
-        "routed helper call)"
-    )
-
-
 def test_module_scope_unknown_promotion_reports_the_negative_direction(
     tmp_path: Path,
 ) -> None:

@@ -1968,8 +1968,7 @@ def _deny_reason_subagent(
     package_script_note = (
         _PACKAGE_SCRIPT_OFFER if _is_package_script_label(detected) else ""
     )
-    _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
-    _override_line = "  " + _override_note + "\n" if _override_note else ""
+    _override_line = ""
     return (
         "Full-suite subagent runs are denied (concurrency). Use instead:\n"
         + _scoped_alternatives_block(detected)
@@ -2671,7 +2670,7 @@ def _deny_reason_subagent_directory(
             "  python3 -m pytest path/to/test_file.py\n"
             "  python3 -m pytest path/to/test_file.py::test_the_case_you_changed\n"
         )
-    _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
+    _override_note = ""
     return (
         alternative
         + "\nA node id is always permitted, touched or not -- re-running the "
@@ -2830,6 +2829,54 @@ def _matches_declared_fast_test_cmd(segments_argv: Sequence[Sequence[str]],
     return _matches_configured_cmd(segments_argv, fast_only, exact=True) is not None
 
 
+def _caller_is_subagent(payload: Dict[str, Any]) -> bool:
+    """Fail-CLOSED caller identity: any subagent-shaped signal counts.
+
+    ``agent_id`` presence stays the primary key (see the module docstring), but
+    a call whose payload lacks it while carrying ``agent_type`` or a
+    ``transcript_path`` under a ``subagents`` directory is a dispatched caller
+    too -- reading only ``agent_id`` let a first call through as the EM. A
+    non-string truthy ``agent_id`` is unparseable, never "absent".
+    """
+    raw = payload.get("agent_id")
+    if isinstance(raw, str):
+        if raw.strip():
+            return True
+    elif raw:
+        return True
+    agent_type = payload.get("agent_type")
+    if isinstance(agent_type, str):
+        if agent_type.strip():
+            return True
+    elif agent_type:
+        return True
+    transcript = payload.get("transcript_path")
+    if isinstance(transcript, str):
+        parts = transcript.replace("\\", "/").split("/")
+        if "subagents" in parts[:-1]:
+            return True
+    return False
+
+
+def _is_cloud_box(payload: Dict[str, Any]) -> bool:
+    """Harness-rung cloud marker read off the caller's own env, per call."""
+    from coordinator_core.env_locality import harness_rung
+
+    env = payload.get("env")
+    hit = harness_rung(env if isinstance(env, dict) else None)
+    return hit is not None and hit.call == "cloud"
+
+
+def _deny_reason_cloud(detected: str, cmd_safe: str) -> str:
+    return (
+        "Broad test suites do not run on a cloud box, for any caller. Use instead:\n"
+        "  python3 -m pytest path/to/test_file.py::test_the_case_you_changed\n"
+        "  Detected: %s\n"
+        "  Command:  %s\n\n"
+        "Reshaping the command text does not bypass this." % (detected, cmd_safe)
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Read the override off the PER-CALL payload, not this process's environ.
     # Ambient was correct only while every guard evaluation was a fresh child of
@@ -2847,7 +2894,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # standalone-import callers that do not need it.
     from coordinator_core.bash_guards.dispatch_checks import _override
 
-    if _override(_OVERRIDE_ENV_VAR, payload=payload):
+    raw_agent_id = payload.get("agent_id")
+    is_subagent = _caller_is_subagent(payload)
+
+    # No override reaches a subagent: only the EM's operator may disarm.
+    if not is_subagent and _override(_OVERRIDE_ENV_VAR, payload=payload):
         return None
 
     # Widened alongside ``MATCHERS`` (see that constant's comment): a
@@ -2879,9 +2930,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # `_RUNNER_PREFILTER_RE` comment for the incident and cost argument.
         if not _dynamic_prefilter_hit(cmd, cwd):
             return None
-
-    raw_agent_id = payload.get("agent_id")
-    is_subagent = isinstance(raw_agent_id, str) and bool(raw_agent_id.strip())
 
     repo_root = resolve_git_root(cwd) or cwd
     testpaths = _read_testpaths(repo_root)
@@ -2978,6 +3026,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
     collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
     if matched_tiers & {"U", "F"} and not collect_only:
+        if _is_cloud_box(payload):
+            return _deny(_deny_reason_cloud(detected, cmd_safe))
         # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
         # tier legitimately unscoped (``coordinator_core.session.
         # fast_tier_declaration`` owns that declaration and its key). This

@@ -33,7 +33,7 @@ def test_collect_reads_decision_guide_records_in_process(tmp_path: Path) -> None
         tmp_path,
         "fifa-decisions.md",
         "title: FIFA decisions\ncreated: '2026-07-01T00:00:00Z'\nstatus: active\n"
-        "owner: the VP-Product Reviewer\nsummary: consolidated FIFA DRs\nid_range: DR-001..DR-010\n"
+        "owner: dana\nsummary: consolidated FIFA DRs\nid_range: DR-001..DR-010\n"
         "decision_count: 10",
     )
     ctx = _make_ctx(tmp_path)
@@ -46,7 +46,7 @@ def test_collect_reads_decision_guide_records_in_process(tmp_path: Path) -> None
     assert rec["title"] == "FIFA decisions"
     assert rec["created"] == "2026-07-01"
     assert rec["status"] == "active"
-    assert rec["owner"] == "yk"
+    assert rec["owner"] == "dana"
     assert rec["decision_count"] == 10
     assert rec["path"].endswith("fifa-decisions.md")
 

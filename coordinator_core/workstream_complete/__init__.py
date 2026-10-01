@@ -84,9 +84,9 @@ for the literal tuple; grouped here by which submodule names each CLI:
         `directives_review.py` (C2d). `wsc-coverage-gate-runner.py`'s
         `coverage-gate` subcommand was already removed (K-001) and its
         `write-trail` subcommand was DROPPED here (C12) rather than wired a
-        second time — this module's OWN `build_chain_coverage_gate_directive`/
-        `build_write_review_trail_directive` builders stay unwired (see
-        Negative-spec: no duplicate-CLI directive pairs).
+        second time. The trail builders (`build_write_review_trail_directive`,
+        `build_write_trail_directives`) are deleted (DR-372/DR-374); see the
+        C12 drop-note below.
     session-claim-cli, emit-cadence -> `directives_commit_tail.py` (C2e).
         (`archive-session-scope.py` already manifested; this module's own pre-existing
         `d-close-tail-args`/`d-tail` inline builders were superseded by
@@ -186,14 +186,10 @@ Negative-spec:
       a genuine plan gap (no chunk in the overlap table owns updating or
       retiring that file) surfaced to the EM in this chunk's return report,
       not something this module works around.
-    - `directives_review.py`'s `build_chain_coverage_gate_directive` /
-      `build_write_review_trail_directive` are deliberately NOT wired here —
-      both would emit a byte-identical `wsc-coverage-gate-runner.py` call to
-      this module's own pre-existing `d-coverage-gate`/`d-write-trail`
-      under an alternate id, which is exactly the "reconcile the id here...
-      C3's assembly-seam concern" case that module's own Negative-spec
-      names. Keeping the pre-existing ids avoids a duplicate CLI dispatch
-      pair.
+    - The trail builders (`build_write_review_trail_directive`,
+      `build_write_trail_directives`) are deleted (DR-372/DR-374), so no
+      `d-write-trail*` directive exists to wire or duplicate; see the C12
+      drop-note below.
     - C11 (AC15): `coordinator-lesson-add`/`coordinator-queue-append`
       DIRECTIVES are gated on `_is_dispatch_engine_stamped()`, not on
       `decisions["lessons"]` presence — a caller supplying lessons no
@@ -522,6 +518,16 @@ _FREE_VALUE_KEY_SOURCES: tuple[tuple[str, ...], ...] = (
     directives_review.FREE_VALUE_KEYS,
     directives_spine_worklist.FREE_VALUE_KEYS,
     FREE_VALUE_KEYS,
+)
+
+#: Order-preserving union of each advisory gate's `WAIVER_KEYS`.
+WAIVER_KEYS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            *directives_session_hygiene.WAIVER_KEYS,
+            *directives_spine_worklist.WAIVER_KEYS,
+        )
+    )
 )
 
 
@@ -6149,7 +6155,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         "governing_plan_path": str(governing_plan.path) if governing_plan else None,
     }
 
-    # A (spec backlink above): a trail-ready `review_scale.commit_slices`
+    # A (spec backlink above): a `review_scale.commit_slices`
     # payload, additive to `review_scale_decision._asdict()` — never a
     # replacement key, and never emitted when the underlying measurement
     # was unresolvable (`measured_commit_count is None`; see
@@ -6157,15 +6163,9 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # A resolved-but-empty list (session owns zero commits) IS emitted —
     # that is an honest answer, not a failure. `scope_kind` is deliberately
     # NOT set here: this helper cannot tell a plan-file-only commit from a
-    # code commit, and `build_write_review_trail_directive` already omits
-    # `--scope-kind` from argv when the caller passes it falsy, leaving
-    # `coordinator-write-review-trail` to derive the real value per commit;
-    # a uniform value here would overwrite that classification. The caller
-    # fills reviewer/scope/verdict per entry and passes the list straight through as
-    # `decisions["review"]` (`directives_commit_tail.build_write_trail_
-    # directives` consumes this exact shape; `build_close_tail_args_
-    # directive` formerly also did, via its `--review-slice` list branch,
-    # removed in the ceremony.wsc_tail kill, 2026-08-23).
+    # code commit, so a uniform value would misclassify. The payload rides
+    # in `gates.review_scale`, whose live reader is `completion_verdict.py`
+    # (`review_scale`, narration only).
     review_scale_payload = review_scale_decision._asdict()
     # AN UNRESOLVED SCALE MUST NAME ITS OWN UNLOCK, NOT JUST ITS MISSING INPUTS.
     # `decide_review_scale`'s `reason` names `code_loc`/`commit_count`/

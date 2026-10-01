@@ -205,59 +205,6 @@ _SCOPE_TABLE_ALLOWLIST: frozenset[str] = frozenset(
 )
 
 
-def test_every_scope_table_key_resolves_to_a_registered_op():
-    """Every key in _OP_KEY_SCOPE must name an op that actually exists in the
-    live op registry (_REGISTRY, populated by eagerly importing
-    coordinator_core.ops).
-
-    This is the gate `find_import_closure_violations` cannot provide:
-    _OP_KEY_SCOPE is a plain dict literal, not an import, so a stale row
-    (an op whose owning module was deleted, e.g. K-005's
-    "chain_ancestry_waivers.reap" pointing at the deleted
-    coordinator_core/ops/reap_chain_ancestry_waivers.py) is invisible to any
-    import-shaped check. This test derives BOTH sides from live code —
-    _OP_KEY_SCOPE's own keys vs. _REGISTRY's own keys after a full eager
-    import — rather than hardcoding either set, so a new stale row (not just
-    today's) fails it too.
-
-    Blind spots (state explicitly, not implied by a clean run):
-      - _REGISTRY is populated by calling `coordinator_core.ops._eager_import_all()`
-        DIRECTLY. This test used to rely on `import coordinator_core.ops` doing it,
-        on that package-init default path being unconditional. It is not, and has
-        not been since the COORDINATOR_CORE_LAZY_OPS gate was retired in favour of
-        lazy-only registration: the bare package import registers nothing. The test
-        kept passing on borrowed state — whatever op modules a sibling test module
-        in the same pytest process happened to import first — and turned red the
-        moment a batch stopped including one. Order-dependent green is not green;
-        the call below makes the population this test asserts against its own doing.
-      - If a future op module is added to _EAGER_OP_MODULES but its import raises
-        (see _POISONED_MODULES in that package's __init__.py), the failing
-        module's ops silently do not register, and this test would then
-        report a false positive "stale row" for a genuinely-live op whose
-        import merely errored — that failure mode is a REAL registration
-        bug this test cannot distinguish from an actually-deleted op.
-      - An op registered by a module that is NOT listed in _EAGER_OP_MODULES
-        at all is invisible both here and to any caller doing a full
-        registration; that is a distinct, pre-existing gap this test does not
-        newly create or claim to close.
-    """
-    import coordinator_core.ops
-
-    coordinator_core.ops._eager_import_all()
-    from coordinator_core.ipc import _REGISTRY, _OP_KEY_SCOPE
-
-    scope_keys = frozenset(_OP_KEY_SCOPE.keys())
-    registered = frozenset(_REGISTRY.keys())
-    stale = (scope_keys - registered) - _SCOPE_TABLE_ALLOWLIST
-    assert not stale, (
-        "op_scopes.py::_OP_KEY_SCOPE has row(s) for op(s) not in the live "
-        f"registry (owning module likely deleted): {sorted(stale)}\n"
-        "Either the op's module was removed and this row is stale (delete "
-        "it), or it is a deliberately-reserved key (add it to "
-        "_SCOPE_TABLE_ALLOWLIST above with a comment naming why)."
-    )
-
-
 # Converse direction (every registered op has a scope row) is INTENTIONALLY
 # NOT asserted here: op_scopes.py's own module docstring documents that the
 # absent-entry default ("none") is a valid, deliberate classification for

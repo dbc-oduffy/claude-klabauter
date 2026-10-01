@@ -87,9 +87,10 @@ Negative-spec:
   - Does NOT refuse a whole plan for a ``landed-work`` gate. That withholding is
     ROW granularity; refusing the plan would discard schedulable rows alongside
     the blocked one.
-  - Does NOT probe the machine-local registry for fleet repo names. That is a
-    subprocess on a box already running dozens of sessions; the fleet list below
-    is a closed constant.
+  - Does NOT spawn to learn fleet repo names. The machine-local registry is read
+    as a file through ``coordinator_core._fleet_names``, never by running
+    ``machine-local``; the fleet list below is only the source-tree default that
+    read is unioned with.
   - Does NOT import ``coordinator_core.ops.*`` at module scope. The spine readers
     are imported inside the predicate that needs them, so a module under ``ops/``
     importing this one cannot pull ``ops/__init__`` back through itself.
@@ -146,8 +147,9 @@ REQUIRES_VALUES = (REQUIRES_LANDED, REQUIRES_COMMIT)
 #: scrub rewrites these names in the shipped mirror (duplicates and placeholders
 #: such as ``coordinator-content-repo``), so the shipped constant cannot name the
 #: operator's real siblings. ``fleet_siblings`` therefore unions it with the
-#: basenames of the machine-local registry's ``repos.*`` paths, read straight
-#: from the TOML files — never by spawning ``machine-local``.
+#: basenames of the machine-local registry's ``repos.*`` and
+#: ``engine.working_repos.*`` paths (``_fleet_names``), read straight from the
+#: TOML files — never by spawning ``machine-local``.
 #:
 #: EVERY FLEET NAME, INCLUDING THE DOCTRINE REPO'S, and the read-side twin's
 #: ``SIBLING_REPOS`` carries the same eight. Neither half hard-omits a name:
@@ -220,48 +222,10 @@ def fleet_siblings(repo_root: Path) -> tuple:
     subtraction that missed on case would report every self-naming row in one of
     them as a cross-repo dependency.
     """
+    from coordinator_core._fleet_names import sibling_repo_names
+
     own = repo_root.name.casefold()
-    seen = set()
-    out = []
-    for name in (*FLEET_REPOS, *registry_repo_names()):
-        folded = name.casefold()
-        if folded == own or folded in seen:
-            continue
-        seen.add(folded)
-        out.append(name)
-    return tuple(out)
-
-
-def registry_repo_names() -> tuple:
-    """Directory basenames of every ``repos.*`` path in the machine-local registry.
-
-    The operator's real sibling names, which survive publish where the
-    ``FLEET_REPOS`` literal does not. File read only (no process spawn); an
-    absent, unreadable, or unresolvable registry yields ``()`` so the gate
-    degrades to the literal rather than failing.
-    """
-    try:
-        import tomllib
-
-        from coordinator_core._settings_home import machine_local_dir
-
-        reg_dir = machine_local_dir()
-    except Exception:
-        return ()
-    names = []
-    for fname in ("registry.toml", "registry.local.toml"):
-        path = reg_dir / fname
-        try:
-            with open(path, "rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, ValueError):
-            continue
-        for key, val in data.items():
-            if key.startswith("repos.") and isinstance(val, str) and val.strip():
-                leaf = Path(val.strip().replace("\\", "/").rstrip("/")).name
-                if leaf:
-                    names.append(leaf)
-    return tuple(names)
+    return tuple(n for n in sibling_repo_names(FLEET_REPOS) if n.casefold() != own)
 
 
 def repo_root_names(repo_root: Path) -> frozenset:
@@ -452,10 +416,66 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     shape_defect = _writes_shape_refused_at_emit(rows, repo_root)
     if shape_defect is not None:
         return shape_defect
+    unordered = _consumes_not_after_producer(waves)
+    if unordered:
+        return _defect(
+            "consumes-unordered",
+            f"{len(unordered)} consumed path(s) are written by a row that does not land in a "
+            "strictly earlier wave: " + "; ".join(unordered[:6])
+            + ("; ..." if len(unordered) > 6 else "")
+            + " (add a `depends_on` edge from the consumer to the producer; a "
+            "producer that is the consumer's own descendant cannot be ordered by a derived edge)",
+            withheld=sorted({item.split(" ", 1)[0] for item in unordered}),
+        )
     unroutable, first = _unroutable_rows(waves)
     if unroutable:
         return _defect(type(first).__name__, str(first).strip()[:300], withheld=unroutable)
     return _pass(f"{len(rows)} dispatchable row(s) across {len(waves)} wave(s)")
+
+
+def _consumes_not_after_producer(waves: Sequence[Sequence[Any]]) -> List[str]:
+    """``"<consumer> consumes <path> written by <producer>"`` for every ordering
+    read (``reads:`` / ``consumes:``) whose producing row lands in the SAME or a
+    LATER wave than the consumer.
+
+    The invariant is checked on the BUILT waves, not on declared ``depends_on``
+    edges: ``wave_map._predecessors`` derives read-after-write edges, so a
+    ``consumes:`` path is normally ordered without a hand-declared edge. It is
+    left unordered only when that derivation was dropped -- the consumer is a
+    declared ancestor of the producer -- and the Workflow then runs consumer and
+    producer together. A path no row writes (a pre-existing file) is never a
+    finding; ``reads_at_head:`` never orders and is not read here.
+    """
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+    from coordinator_core.ops.dispatch_emit.wave_map import _is_ancestor, _normalize_path
+
+    wave_of = {row.id: index for index, wave in enumerate(waves) for row in wave}
+    producers = [
+        (
+            row,
+            {_normalize_path(p) for p in row.writes} if row.writes is not UNDECLARED else set(),
+            [_normalize_path(p) for p in row.writes_under],
+        )
+        for wave in waves
+        for row in wave
+    ]
+    found: List[str] = []
+    for wave in waves:
+        for consumer in wave:
+            for path in consumer.reads:
+                norm = _normalize_path(path)
+                for producer, written, prefixes in producers:
+                    if producer.id == consumer.id:
+                        continue
+                    hit = norm in written or any(
+                        norm == pre or _is_ancestor(pre, norm) or _is_ancestor(norm, pre)
+                        for pre in prefixes
+                    )
+                    if hit and wave_of[producer.id] >= wave_of[consumer.id]:
+                        found.append(
+                            f"{consumer.id} consumes {path} written by {producer.id}"
+                        )
+    return found
 
 
 def _archive_writes_refused_in_wave(rows: List[Any]) -> Optional[Dict[str, Any]]:
@@ -528,8 +548,9 @@ def _writes_shape_refused_at_emit(
     directory-shaped write; DR-*-terminal-test-phase-refuse-vs-omit.md
     carried a bare glob).
 
-    Glob detection reuses ``inventory_mint._GLOB_CHARS`` (``*``, ``?``,
-    ``[``) rather than a second guess at the character set. Directory-shape
+    Glob detection reuses ``inventory_mint.is_glob_pathspec``, the commit
+    preflight's own rule, so an App Router segment (``[id]``, ``(main)``)
+    certifies here exactly when it commits there. Directory-shape
     detection reuses ``inventory_mint._refuse_if_directory_shaped``'s own
     two-spelling rule (trailing ``/``/``\\``, OR an existing directory on
     disk at ``repo_root`` — never ``pathspec.py``'s narrower trailing-
@@ -542,7 +563,7 @@ def _writes_shape_refused_at_emit(
     deferred) reach here — a closed row is never dispatched, so nothing it
     declares is ever resolved by a driver.
     """
-    from coordinator_core.ops.dispatch_emit.inventory_mint import _GLOB_CHARS
+    from coordinator_core.ops.dispatch_emit.inventory_mint import is_glob_pathspec
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 
     root = repo_root or Path.cwd()
@@ -561,7 +582,7 @@ def _writes_shape_refused_at_emit(
             continue
         for value in row.writes:
             text = str(value)
-            if any(ch in text for ch in _GLOB_CHARS):
+            if is_glob_pathspec(text):
                 unreadable.append(f"{row.id} ({text!r}, glob pathspec)")
                 continue
             if text.endswith("/") or text.endswith("\\"):

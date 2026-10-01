@@ -295,15 +295,15 @@ class TestResolveReceiverInboxZeroMatch:
         assert all_repos == {}
 
     def test_registered_receiver_resolves(self, tmp_path, monkeypatch):
-        receiver_repo = tmp_path / "rag-repo"
-        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        receiver_repo = tmp_path / "gadget-repo"
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": receiver_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox("example-retrieval-repo-em")
+        inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox("gadget-repo-em")
 
         assert receiver_repo_path == receiver_repo
         assert inbox_dir == receiver_repo / "cross-repo" / "inbox"
-        assert all_repos["repos.project_rag"] == str(receiver_repo)
+        assert all_repos["repos.gadget_repo"] == str(receiver_repo)
 
     def test_registry_read_failure_propagates(self, tmp_path, monkeypatch):
         machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
@@ -312,7 +312,7 @@ class TestResolveReceiverInboxZeroMatch:
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
 
         with pytest.raises(RegistryReadError):
-            resolve_receiver_inbox("example-retrieval-repo-em")
+            resolve_receiver_inbox("gadget-repo-em")
 
 
 class TestAmbiguousCentralReceiver:
@@ -374,7 +374,7 @@ class TestAmbiguousCentralReceiver:
 
 class TestConventionAndAliasMapping:
     def test_convention_repo_key_strips_em_suffix(self):
-        assert convention_repo_key("example-retrieval-repo-em") == "repos.project_rag"
+        assert convention_repo_key("gadget-repo-em") == "repos.gadget_repo"
 
     def test_receiver_em_to_repo_key_convention_fallback(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "no-such-home"))
@@ -404,11 +404,11 @@ class TestSuggestNearestReceiver:
         assert suggestion is None
 
     def test_exact_match_still_only_suggests_does_not_resolve(self):
-        all_repos = {"repos.project_rag": "/abs/path/to/example-retrieval-repo"}
+        all_repos = {"repos.gadget_repo": "/abs/path/to/gadget-repo"}
 
-        suggestion = suggest_nearest_receiver("example-retrieval-repo-em", all_repos)
+        suggestion = suggest_nearest_receiver("gadget-repo-em", all_repos)
 
-        assert suggestion == "example-retrieval-repo-em"
+        assert suggestion == "gadget-repo-em"
         assert isinstance(suggestion, str)
 
     def test_suggests_via_alias_shortname_when_alias_registered(self, tmp_path, monkeypatch):
@@ -421,17 +421,17 @@ class TestSuggestNearestReceiver:
                 "identity": {
                     "centralReceiverIds": [],
                     "repoAliases": [
-                        {"shortname": "example-game-repo", "registryKey": "example_game_workbench_repo"}
+                        {"shortname": "sprocket", "registryKey": "sprocket_workbench"}
                     ],
                 }
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        all_repos = {"repos.example_game_workbench_repo": "/abs/path/to/example-game-repo"}
+        all_repos = {"repos.sprocket_workbench": "/abs/path/to/sprocket"}
 
-        suggestion = suggest_nearest_receiver("holodck-em", all_repos)
+        suggestion = suggest_nearest_receiver("sprockt-em", all_repos)
 
-        assert suggestion == "example-game-repo-em"
+        assert suggestion == "sprocket-em"
 
 
 class TestCanonicalReceiverId:
@@ -669,25 +669,25 @@ def _add_mirrors(claude_home: Path, mirrors: dict[str, dict[str, str]]) -> None:
 class TestPublishMirrorReroute:
 
     def test_mirror_registered_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
-        mirror = tmp_path / "claude-klabauter"
-        owner_repo = tmp_path / "claude-klabauter"
+        mirror = tmp_path / "widget-mirror"
+        owner_repo = tmp_path / "widget-engine"
         claude_home = _make_claude_home(
-            tmp_path, {"claude_klabauter": mirror, "claude_klabauter": owner_repo},
+            tmp_path, {"widget_mirror": mirror, "widget_engine": owner_repo},
         )
-        _add_mirrors(claude_home, {"claude_klabauter": {"owner": "claude-klabauter-em", "path": str(mirror)}})
+        _add_mirrors(claude_home, {"widget_mirror": {"owner": "widget-engine-em", "path": str(mirror)}})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        assert reroute_owner("claude-klabauter-em") == "claude-klabauter-em"
-        _inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
+        assert reroute_owner("widget-mirror-em") == "widget-engine-em"
+        _inbox, repo, _all = resolve_receiver_inbox("widget-mirror-em")
         assert same_repo_path(repo, owner_repo)
 
     def test_mirror_alias_not_in_repos_routes_to_its_owner(self, tmp_path, monkeypatch):
-        owner_repo = tmp_path / "project-rag"
-        claude_home = _make_claude_home(tmp_path, {"project_rag": owner_repo})
-        _add_mirrors(claude_home, {"deep_research_claude": {"owner": "example-retrieval-repo-em", "path": str(tmp_path / "drc")}})
+        owner_repo = tmp_path / "gadget-repo"
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": owner_repo})
+        _add_mirrors(claude_home, {"deep_research_mirror": {"owner": "gadget-repo-em", "path": str(tmp_path / "drc")}})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        _inbox, repo, _all = resolve_receiver_inbox("deep-research-claude-em")
+        _inbox, repo, _all = resolve_receiver_inbox("deep-research-mirror-em")
         assert same_repo_path(repo, owner_repo)
 
     def test_ownerless_mirror_path_is_never_a_receiver(self, tmp_path, monkeypatch):
@@ -716,12 +716,12 @@ class TestPublishMirrorReroute:
             assert same_repo_path(repo, doe), alias
 
     def test_an_ordinary_receiver_is_not_rerouted(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "project-rag"
-        claude_home = _make_claude_home(tmp_path, {"project_rag": repo_path})
+        repo_path = tmp_path / "gadget-repo"
+        claude_home = _make_claude_home(tmp_path, {"gadget_repo": repo_path})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        assert reroute_owner("example-retrieval-repo-em") is None
-        _inbox, repo, _all = resolve_receiver_inbox("example-retrieval-repo-em")
+        assert reroute_owner("gadget-repo-em") is None
+        _inbox, repo, _all = resolve_receiver_inbox("gadget-repo-em")
         assert same_repo_path(repo, repo_path)
 
 

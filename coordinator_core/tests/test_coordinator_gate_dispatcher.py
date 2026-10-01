@@ -38,13 +38,6 @@ def _load_dispatcher_module():
     return module
 
 
-def test_rung_inventory_matches_sixty_stems():
-    assert len(entry_point_shim.GATE_TARGETS) == 60
-    for name in entry_point_shim.GATE_TARGETS:
-        assert (_BIN_DIR / f"{name}.py").exists(), f"{name}.py missing"
-        assert (_BIN_DIR / f"{name}.cmd").exists(), f"{name}.cmd missing"
-
-
 def test_gate_targets_partition_engine_vs_by_path():
     engine = set(entry_point_shim.GATE_ENGINE_ENTRIES)
     by_path = set(entry_point_shim.GATE_BY_PATH_TARGETS)

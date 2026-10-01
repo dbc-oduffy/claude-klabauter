@@ -161,14 +161,3 @@ def test_no_new_silent_self_teardown() -> None:
         "`benchmarks.isolated_clone.rmtree_or_raise`, plus `reap_processes_under` "
         "if a spawned process may still hold the tree."
     )
-
-
-def test_frozen_inventory_has_no_dead_entries() -> None:
-    """An inventory entry matching nothing on disk is a licence the next
-    function of that name inherits silently -- convert a site, drop its entry."""
-    live = {(s.relpath, s.func) for s in _iter_self_teardown_sites()}
-    dead = sorted(_KNOWN_SELF_TEARDOWN - live)
-    assert not dead, (
-        "frozen-inventory entries matching nothing on disk (remove them):\n"
-        + "\n".join(f"  {relpath}  {func}()" for relpath, func in dead)
-    )

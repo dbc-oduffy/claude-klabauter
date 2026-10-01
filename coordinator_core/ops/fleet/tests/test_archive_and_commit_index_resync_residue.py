@@ -176,3 +176,69 @@ def test_archive_and_commit_resync_success_has_no_residue_key(tmp_path):
 
     status = _git(["status", "--porcelain"], root).stdout
     assert status.strip() == "", f"expected a clean tree/index after a successful resync: {status!r}"
+
+
+def _spy_drain(monkeypatch):
+    """Route drain_pending_resyncs through a recording runner; returns the argv list."""
+    from coordinator_core.ops.fleet import _index_resync_drain as drain
+
+    calls: list[list[str]] = []
+
+    async def _spy(argv, *, cwd, env):
+        calls.append(list(argv))
+        return await drain._run_git_once(argv, cwd=cwd, env=env)
+
+    real = drain.drain_pending_resyncs
+
+    async def _drain(root, *, run_git=_spy):
+        return await real(root, run_git=run_git)
+
+    monkeypatch.setattr(drain, "drain_pending_resyncs", _drain)
+    return calls
+
+
+def test_archive_and_commit_drains_earlier_batch_record(tmp_path, monkeypatch):
+    from coordinator_core.ops.fleet._index_resync_pending import (
+        PendingResync,
+        list_pending,
+        record_pending,
+    )
+
+    root, src, dst = _seed_repo_with_plan(tmp_path, "2026-01-03-new-plan.md")
+    old_src = root / "docs" / "plans" / "2026-01-04-old-plan.md"
+    old_dst = root / "archive" / "specs" / old_src.name
+    old_src.write_text("---\nstatus: implemented\n---\n\nold\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "seed: old"], root)
+    old_dst.parent.mkdir(parents=True, exist_ok=True)
+    _git(["mv", str(old_src.relative_to(root)), str(old_dst.relative_to(root))], root)
+    _git(["commit", "-q", "-m", "earlier archival"], root)
+    blob = _git(["rev-parse", "HEAD:" + old_dst.relative_to(root).as_posix()], root).stdout.strip()
+    old_src_rel = old_src.relative_to(root).as_posix()
+    _git(["update-index", "--add", "--cacheinfo", f"100644,{blob},{old_src_rel}"], root)
+    record_pending(root, [PendingResync(
+        old_src_rel, old_dst.relative_to(root).as_posix(), "old-cid", blob,
+        "archive_and_commit", "2026-09-30T00:00:00Z",
+    )])
+
+    calls = _spy_drain(monkeypatch)
+    move = Move(src=src, dst=dst, candidate_id="docs/plans/2026-01-03-new-plan.md")
+    acted, failed = _run(archive_and_commit(root, [move], "second archival"))
+
+    assert failed == [] and len(acted) == 1
+    assert list_pending(root) == []
+    restores = [c for c in calls if c[1] == "restore"]
+    assert len(restores) == 1
+    assert old_src_rel in restores[0]
+    assert old_src_rel not in _git(["ls-files"], root).stdout.split("\n")
+
+
+def test_archive_and_commit_without_records_adds_no_drain_spawn(tmp_path, monkeypatch):
+    root, src, dst = _seed_repo_with_plan(tmp_path, "2026-01-05-my-plan.md")
+    calls = _spy_drain(monkeypatch)
+    move = Move(src=src, dst=dst, candidate_id="docs/plans/2026-01-05-my-plan.md")
+
+    acted, failed = _run(archive_and_commit(root, [move], "test archive"))
+
+    assert failed == [] and len(acted) == 1
+    assert calls == []

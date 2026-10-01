@@ -51,11 +51,11 @@ from coordinator_core.ops.assert_no_dangling_plan_backlinks import (
     _BACKLINK_LINE_RE,
     _PLAN_PATH_RE,
 )
+from coordinator_core.ops.spec_backlink_resolve import peer_repo_name
 from coordinator_core.session.declared_writes import declare_write
 
 PathLike = Union[str, Path]
 
-_PEER_REPO_NAME = "coordinator-content-repo"
 
 # Resolver contract (C1, coordinator_core.ops.spec_backlink_resolve): a
 # callable taking the cited docs/plans/...md path and returning a
@@ -151,7 +151,7 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
                 and _emit_id(peer_outcome) is not None
             ):
                 peer_outcome = dict(peer_outcome)
-                peer_outcome["repo"] = _PEER_REPO_NAME
+                peer_outcome["repo"] = peer_repo_name()
                 return peer_outcome
 
         outcome = dict(outcome)

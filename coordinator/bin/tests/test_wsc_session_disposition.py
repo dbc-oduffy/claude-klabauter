@@ -2061,20 +2061,75 @@ class TestDeliverableIdJoinPreferredOverScopePath(unittest.TestCase):
             ):
                 result = wsc.resolve_disposition(repo, "sid-c5")
 
-            self.assertEqual(result.disposition, "predecessor-consumed")
+            real_rel = "state/handoffs/2026-08-20_102353_a-refusal-cannot-exit-zero.md"
+            stranger_rel = "state/handoffs/2026-08-20-sat-06-cockpit-consumption-seam.md"
+            self.assertEqual(result.disposition, "single-session")
+            self.assertEqual(result.consumed_handoff, "")
             self.assertEqual(
-                result.consumed_handoff,
-                "state/handoffs/2026-08-20_102353_a-refusal-cannot-exit-zero.md",
+                result.detection,
+                {"deciding_leg": "none", "detector_c_status": "ambiguous"},
             )
-            self.assertNotIn(
-                "state/handoffs/2026-08-20-sat-06-cockpit-consumption-seam.md",
-                result.consumed_handoff,
-            )
-            self.assertEqual(result.detection["deciding_leg"], "detector-c")
             self.assertTrue(
-                any("deliverable_id join" in line for line in result.diagnostics),
-                f"expected a deliverable_id-join NOTE, got: {result.diagnostics!r}",
+                any(real_rel in line for line in result.diagnostics),
+                f"expected the real baton named in diagnostics, got: {result.diagnostics!r}",
             )
+            self.assertFalse(
+                any(stranger_rel in line for line in result.diagnostics),
+                f"the join must still beat the scope-sharing stranger, got: {result.diagnostics!r}",
+            )
+
+    def test_bug_row_repro_peer_trailer_on_this_sessions_commit_downgrades_to_ambiguous(self):
+        import tempfile
+
+        from coordinator_core.workstream_complete import _session_shape_is_uncertain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _init_repo_with_history(Path(tmp))
+            _git(repo, "commit", "-q", "--allow-empty", "-m", "own work\n\nSession-Id: sid-a")
+            _git(
+                repo,
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "courtesy commit\n\nSession-Id: sid-a\nDeliverable-Id: dlv-peer",
+            )
+
+            peer_baton = repo / "state" / "handoffs" / "2026-09-01_peer-baton.md"
+            peer_baton.parent.mkdir(parents=True, exist_ok=True)
+            peer_baton.write_text('---\ndeliverable_id: "dlv-peer"\n---\n')
+            peer_rel = "state/handoffs/2026-09-01_peer-baton.md"
+
+            fake_cli = repo / "fake-session-claim-cli"
+            fake_cli.write_text("#!/bin/sh\nexit 0\n")
+
+            with unittest.mock.patch.object(
+                wsc, "find_session_claim_cli", return_value=fake_cli
+            ), unittest.mock.patch.object(
+                wsc,
+                "list_stale_claim_handoffs",
+                return_value=([(str(peer_baton), "dead-peer")], 0),
+            ):
+                result = wsc.resolve_disposition(repo, "sid-a")
+
+            self.assertEqual(result.disposition, "single-session")
+            self.assertEqual(result.consumed_handoff, "")
+            self.assertEqual(
+                result.detection,
+                {"deciding_leg": "none", "detector_c_status": "ambiguous"},
+            )
+            self.assertTrue(_session_shape_is_uncertain(result.detection))
+
+            provenance_lines = [
+                line for line in result.diagnostics if "trailer provenance unconfirmed" in line
+            ]
+            self.assertEqual(len(provenance_lines), 1, result.diagnostics)
+            self.assertIn(peer_rel, provenance_lines[0])
+            self.assertIn("dead-peer", provenance_lines[0])
+            self.assertIn("WSC_CONSUMED_HANDOFF=", provenance_lines[0])
+            for line in result.diagnostics:
+                self.assertNotIn("multiple candidate stale batons", line)
+                self.assertNotIn("chain-terminal resolved by the deliverable_id join", line)
 
     def test_ambiguous_session_side_falls_back_to_scope_path(self):
         """The session's own commits carry two CONFLICTING Deliverable-Id

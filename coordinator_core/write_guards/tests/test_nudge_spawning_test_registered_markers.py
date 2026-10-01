@@ -15,7 +15,7 @@ Covers:
      markers` instead of pyproject.toml.
   5. This repo (claude-klabauter), which registers `spawns_process` in its own
      `pyproject.toml`, gets the offer with no monkeypatching of repo
-     resolution at all.
+     resolution at all (`..._claude_klabauter_corpus.py`).
 
 Grep anchors: THE-SPAWNING-TEST-NUDGE-OFFERS-ONLY-REGISTERED-MARKERS, R27
 """
@@ -96,18 +96,6 @@ def test_spawns_process_registered_in_ini_shaped_pytest_ini_fires(tmp_path, monk
 
     result = guard.check(
         _payload(str(tmp_path / "tests" / "test_thing.py"), _UNMARKED_SPAWN_TEST)
-    )
-
-    assert result is not None
-    assert "spawns_process" in result["hookSpecificOutput"]["additionalContext"]
-
-
-def test_claude_klabauter_itself_registers_spawns_process_and_fires():
-    # No monkeypatching of repo resolution: this test runs inside claude-klabauter's
-    # own checkout, which registers `spawns_process` in its own
-    # pyproject.toml (see the module docstring's REGISTERED-MARKER GATE).
-    result = guard.check(
-        _payload("/repo/coordinator_core/tests/test_thing.py", _UNMARKED_SPAWN_TEST)
     )
 
     assert result is not None

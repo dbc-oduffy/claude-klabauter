@@ -92,6 +92,11 @@ def _message_for(error) -> str:
     """
     if error.validator == "not":
         return f"row must NOT satisfy {error.validator_value} here (a conditional branch forbids it)"
+    if error.validator == "pattern" and list(error.path)[:1] == ["writes"]:
+        return (
+            f"writes: {error.instance!r} is a directory; entries are files, one per path "
+            "(directories go in `writes_under:`)"
+        )
     return error.message
 
 

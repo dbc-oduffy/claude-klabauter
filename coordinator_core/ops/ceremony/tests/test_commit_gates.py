@@ -890,3 +890,121 @@ def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path, shape, path):
         "own docstring)"
     )
     assert live.diagnostics == oracle.diagnostics
+
+
+# --- post-commit-reader gates -------------------------------------------------
+
+_QUAD_FILES = {
+    "coordinator_core/authz/classification.py": (
+        "import types\nOP_CLASSIFICATION = types.MappingProxyType({\n"
+        '    "a.b": 1,\n})\n'
+    ),
+    "coordinator_core/op_scopes.py": '_OP_KEY_SCOPE = {\n    "a.b": "none",\n}\n',
+    "coordinator_core/ops/_registry_map.py": 'OP_MODULE_MAP = {\n    "a.b": "m.ab",\n}\n',
+    "coordinator_core/ops/__init__.py": '_EAGER_OP_MODULES = [\n    ("m.ab", "registers"),\n]\n',
+    "coordinator_core/authz/registration_quad.py": (
+        "_KNOWN_UNCLASSIFIED_OPS_DEBT = frozenset()\n_KNOWN_INCOMPLETE_REGISTRATIONS = {}\n"
+    ),
+}
+
+
+def _reader(files):
+    return lambda p: files[p].encode("utf-8") if p in files else None
+
+
+def test_registration_quad_gate_skips_unrelated_paths():
+    outcome = _cg.registration_quad_gate("/unused", ["docs/readme.md"], _reader({}))
+    assert outcome.passed and outcome.skipped
+
+
+def test_registration_quad_gate_passes_complete_op():
+    files = dict(_QUAD_FILES)
+    files["coordinator_core/ops/ab.py"] = '@register_op("a.b")\ndef h(p):\n    pass\n'
+    outcome = _cg.registration_quad_gate("/unused", ["coordinator_core/ops/ab.py"], _reader(files))
+    assert outcome.passed and not outcome.skipped
+
+
+def test_registration_quad_gate_refuses_op_missing_from_tables():
+    files = dict(_QUAD_FILES)
+    files["coordinator_core/ops/xy.py"] = '@register_op("x.y")\ndef h(p):\n    pass\n'
+    outcome = _cg.registration_quad_gate("/unused", ["coordinator_core/ops/xy.py"], _reader(files))
+    assert not outcome.passed
+    assert "x.y" in outcome.diagnostics[0]
+
+
+def test_registration_quad_gate_refuses_unparseable_surface():
+    files = dict(_QUAD_FILES)
+    files["coordinator_core/authz/classification.py"] = "OP_CLASSIFICATION = ({\n"
+    outcome = _cg.registration_quad_gate(
+        "/unused", ["coordinator_core/authz/classification.py"], _reader(files)
+    )
+    assert not outcome.passed
+
+
+def test_claude_md_budget_gate_skips_non_markdown():
+    outcome = _cg.claude_md_budget_gate("/unused", ["a.py"], _reader({}))
+    assert outcome.passed and outcome.skipped
+
+
+def test_claude_md_budget_gate_passes_small_governed_file(tmp_path):
+    (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    files = {"coordinator/CLAUDE.md": "small\n"}
+    outcome = _cg.claude_md_budget_gate(tmp_path, ["coordinator/CLAUDE.md"], _reader(files))
+    assert outcome.passed and not outcome.skipped
+
+
+def test_claude_md_budget_gate_refuses_over_hard_limit(tmp_path):
+    from coordinator_core.claude_md_budget import HARD_LIMIT_BYTES
+
+    (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    files = {"coordinator/CLAUDE.md": "x" * (HARD_LIMIT_BYTES + 1)}
+    outcome = _cg.claude_md_budget_gate(tmp_path, ["coordinator/CLAUDE.md"], _reader(files))
+    assert not outcome.passed
+    assert "coordinator/CLAUDE.md" in outcome.diagnostics[0]
+
+
+def test_machine_path_leak_gate_skips_other_files():
+    outcome = _cg.machine_path_leak_gate("/unused", ["a.json"], _reader({}))
+    assert outcome.passed and outcome.skipped
+
+
+def test_machine_path_leak_gate_refuses_machine_path():
+    files = {".claude/settings.json": '{"k": "/home/someone/x"}'}
+    outcome = _cg.machine_path_leak_gate("/unused", [".claude/settings.json"], _reader(files))
+    assert not outcome.passed
+    assert "/home/someone/x" in outcome.diagnostics[0]
+
+
+def test_machine_path_leak_gate_passes_clean_and_deleted():
+    files = {".claude/settings.json": '{"k": "relative/x"}'}
+    paths = [".claude/settings.json", "gone/settings.json"]
+    outcome = _cg.machine_path_leak_gate("/unused", paths, _reader(files))
+    assert outcome.passed and not outcome.skipped
+
+
+def test_machine_path_leak_gate_fixture_exempts_only_unparseable():
+    broken = {"tests/fixtures/settings.json": "{"}
+    assert _cg.machine_path_leak_gate("/unused", list(broken), _reader(broken)).passed
+    leaked = {"tests/fixtures/settings.json": '{"k": "/Users/me/x"}'}
+    assert not _cg.machine_path_leak_gate("/unused", list(leaked), _reader(leaked)).passed
+
+
+def test_op_scope_gate_refuses_when_scope_edit_is_left_out_of_paths():
+    """The registry edit commits; the `_OP_KEY_SCOPE` edit is not in paths, so HEAD's scopes are judged."""
+    files = {
+        "coordinator_core/ops/_registry_map.py": 'OP_MODULE_MAP = {\n    "a.b": "m",\n    "x.y": "m2",\n}\n',
+        "coordinator_core/op_scopes.py": '_OP_KEY_SCOPE = {\n    "a.b": "none",\n}\n',
+    }
+    outcome = op_scope_coverage_gate(
+        "/unused", [_REGISTRY_RELPATH], read_source=_reader(files)
+    )
+    assert not outcome.passed
+    assert "x.y" in "\n".join(outcome.diagnostics)
+
+
+def test_op_scope_gate_read_source_absence_classes():
+    registry = {"coordinator_core/ops/_registry_map.py": 'OP_MODULE_MAP = {\n    "a.b": "m",\n}\n'}
+    refused = op_scope_coverage_gate("/unused", [_REGISTRY_RELPATH], read_source=_reader(registry))
+    assert not refused.passed
+    skipped = op_scope_coverage_gate("/unused", [_REGISTRY_RELPATH], read_source=_reader({}))
+    assert skipped.passed and skipped.skipped

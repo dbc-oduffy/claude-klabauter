@@ -49,3 +49,20 @@ def test_absent_script_is_ok(content: Path):
 def test_raising_script_is_reported(content: Path):
     (content / "coordinator" / "lib" / "install" / "coordinator_install.py").write_text("raise RuntimeError('x')")
     assert doctor._check_install_drift().status == "broken"
+
+
+def test_dataclass_script_with_future_annotations_loads_ok(content: Path):
+    import sys
+
+    (content / "coordinator" / "lib" / "install" / "coordinator_install.py").write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import dataclass\n\n"
+        "@dataclass\n"
+        "class Step:\n"
+        "    name: str\n\n"
+        "def check_manifest_drift():\n"
+        "    return []\n"
+    )
+    layer = doctor._check_install_drift()
+    assert (layer.status, layer.findings) == ("ok", [])
+    assert "_doctor_coordinator_install" not in sys.modules

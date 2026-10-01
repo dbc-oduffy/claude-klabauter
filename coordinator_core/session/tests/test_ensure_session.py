@@ -30,6 +30,8 @@ nothing here spawns git (unlike `test_ensure_meta.py`, which is
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -209,6 +211,11 @@ class TestRestampArmIsBoundedPerProcess:
             assert not core.read_meta_field(str(_hub(repo) / sid), "stable_pid")
 
         # A NEW process: same session dir, memo empty, Guard-1 now able to stamp.
+        monkeypatch.setattr(
+            core,
+            "_resolve_claude_pid_from_env",
+            lambda: ((os.getpid(), time.time()), "test-forced-hit"),
+        )
         core.reset_stamp_attempt_memo()
         core.ensure_session(sid, str(repo))
 

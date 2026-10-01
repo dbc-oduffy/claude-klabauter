@@ -2682,7 +2682,9 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     # Print absolute path to stdout (the op's `id` is already the absolute
     # target_path — see memo_draft.py's build_act_result acted entry).
     print(draft_path)
-    cap_advisory = acted[0].get("summary_cap_advisory") if isinstance(acted[0], dict) else None
+    receipt_rel = os.path.relpath(_sent_outbox_archive_path(draft_path), sender_root).replace(os.sep, "/")
+    print(f"cross-repo-memo draft: send writes the receipt to {receipt_rel}", file=sys.stderr)
+    cap_advisory =acted[0].get("summary_cap_advisory") if isinstance(acted[0], dict) else None
     if cap_advisory:
         print(f"{cap_advisory} (summary left as the placeholder; original text kept in the draft body)")
     return 0
@@ -3241,6 +3243,16 @@ def _cmd_send(args: argparse.Namespace) -> int:
         # live", not deliver to one), so this stays the one line for the
         # sender to hand the PM, not new infrastructure.
         print(f"Hand the PM this path for relay: {abs_receiver_path}")
+    sent_receipt = acted_item.get("sent_receipt")
+    if sent_receipt:
+        print(f"Sender-side receipt: {sent_receipt}")
+    unresolved = acted_item.get("citations_unresolved")
+    if unresolved:
+        print(
+            "cross-repo-memo send: bare paths left unqualified (ambiguous or "
+            "in neither repo): " + ", ".join(unresolved) + " — qualify as "
+            "<repo>:<path> and re-send."
+        )
     if acted_item.get("sender_unattributed"):
         # Not a failure: the memo IS delivered. But it carries no sender, so
         # the receiver cannot reply to it by message and the only route back
@@ -3689,10 +3701,16 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     # triple (artifact + exactly one of version/sha + seam) is required at
     # send time, else the send fails loud. Mirrors
     # coordinator_core/ops/fleet/memo_send.py — see _scoped_to_errors.
-    draft_p.add_argument("--scoped-to-artifact", metavar="ARTIFACT", default=None, help="scoped_to.artifact — the file/contract/schema/subsystem this decision governs")
-    draft_p.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
-    draft_p.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="scoped_to.sha — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")
-    draft_p.add_argument("--scoped-to-seam", metavar="SEAM", default=None, help="scoped_to.seam — the boundary/interface this decision applies at")
+    scoped_to_group = draft_p.add_argument_group(
+        "scoped_to (all-or-nothing)",
+        "Omit all four, or give all of: --scoped-to-artifact, exactly one of "
+        "--scoped-to-version / --scoped-to-sha, and --scoped-to-seam. "
+        "Any partial set is refused.",
+    )
+    scoped_to_group.add_argument("--scoped-to-artifact", metavar="ARTIFACT", default=None, help="REQUIRED with the group — the file/contract/schema/subsystem this decision governs")
+    scoped_to_group.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="one of version/sha REQUIRED with the group — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
+    scoped_to_group.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="one of version/sha REQUIRED with the group — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")
+    scoped_to_group.add_argument("--scoped-to-seam", metavar="SEAM", default=None, help="REQUIRED with the group — the boundary/interface this decision applies at")
     # --supersedes: draft-only (send reads it off staged frontmatter — a flag
     # there would need a second write path into an already-staged file).
     # Repeatable (action="append"): one occurrence threads the bare string,

@@ -713,7 +713,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "autonomous-verb.py": frozenset({"self_location"}),
     "block-discharge.py": frozenset({"env_first"}),
     "cartography.py": frozenset({"self_location"}),
-    "check-auto-reconcile.py": frozenset({"env_first"}),
     "check-doctrine-status.py": frozenset({"env_first"}),
     "check-claude-klabauter-doctor-sentinel.sh": frozenset({"self_location"}),
     "check-mcp-versions.py": frozenset({"self_location"}),

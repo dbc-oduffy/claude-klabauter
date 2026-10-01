@@ -110,13 +110,13 @@ def test_engine_sibling_arm_resolves_when_oss_payload_importable(monkeypatch):
     import types
 
     fake_oss_payload = types.ModuleType("_oss_payload")
-    fake_oss_payload._ENGINE_REPO_NAME = "claude-klabauter"
+    fake_oss_payload._ENGINE_REPO_NAME = "gadget-engine"
     monkeypatch.setitem(sys.modules, "_oss_payload", fake_oss_payload)
 
     record = ops._sibling_repo_record()
-    assert record["claude-klabauter"]["is_engine_sibling"] is True
-    assert record["claude-klabauter"]["short_forms"] == ("claude-klabauter",)
-    assert record["claude-klabauter"]["oss_reachable"] is False
+    assert record["gadget-engine"]["is_engine_sibling"] is True
+    assert record["gadget-engine"]["short_forms"] == ("engine",)
+    assert record["gadget-engine"]["oss_reachable"] is False
 
 
 def test_irreducible_literals_nonempty_and_scoped():
@@ -144,13 +144,13 @@ def test_mcp_tool_prefixes_derives_from_config_keys(tmp_path, monkeypatch):
     topo = tmp_path / "mcp-topology.yaml"
     topo.write_text(
         "servers:\n"
-        "  - configKey: example-retrieval-repo\n"
-        "  - configKey: example-game-repo-control\n",
+        "  - configKey: widget-search\n"
+        "  - configKey: gadget-control\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(ops, "_resolve_mcp_topology_path", lambda: topo)
     prefixes = ops.mcp_tool_prefixes()
-    assert prefixes == frozenset({"mcp__project-rag__", "mcp__example_game_repo-control__"})
+    assert prefixes == frozenset({"mcp__widget-search__", "mcp__gadget-control__"})
 
 
 def test_mcp_tool_prefix_span_matches_derived_prefix():

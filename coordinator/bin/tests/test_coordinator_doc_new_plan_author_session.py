@@ -271,7 +271,8 @@ class ScaffoldSpinoffAuthoringSessionTest(unittest.TestCase):
         ), mock.patch.object(
             _cli, "_resolve_session_display_name", return_value="claude-klabauter-51"
         ), mock.patch.object(
-            _cli, "_resolve_spinoff_workstream", return_value=None
+            _cli, "_resolve_spinoff_origin",
+            return_value=_cli.SpinoffOrigin(None, None, None),
         ):
             content = _cli._scaffold_spinoff(title="t", branch="b")
         self.assertIn(
@@ -297,7 +298,8 @@ class ScaffoldSpinoffAuthoringSessionTest(unittest.TestCase):
         ), mock.patch.object(
             _cli, "_resolve_session_display_name", return_value="claude-klabauter-51"
         ), mock.patch.object(
-            _cli, "_resolve_spinoff_workstream", return_value="my-workstream"
+            _cli, "_resolve_spinoff_origin",
+            return_value=_cli.SpinoffOrigin(None, None, "my-workstream"),
         ):
             content = _cli._scaffold_spinoff(title="t", branch="b")
         self.assertIn('workstream: "my-workstream"', content)
@@ -313,7 +315,9 @@ class AuthoringSessionStaysMachineReadableTest(unittest.TestCase):
     def _emit(self):
         with mock.patch.object(_cli, "_resolve_session_id", return_value="bc1ca482-6b06-4943-ab49-92c9b35482ad"), \
              mock.patch.object(_cli, "_resolve_session_display_name", return_value="claude-klabauter-51"), \
-             mock.patch.object(_cli, "_resolve_spinoff_workstream", return_value=None):
+             mock.patch.object(
+                 _cli, "_resolve_spinoff_origin",
+                 return_value=_cli.SpinoffOrigin(None, None, None)):
             return _cli._scaffold_spinoff(title="t", branch="b")
 
     def test_authoring_session_line_carries_no_inline_comment(self):

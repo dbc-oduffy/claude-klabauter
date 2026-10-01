@@ -56,11 +56,11 @@ def test_write_under_a_sibling_git_checkout_refuses(tmp_path: Path) -> None:
 def test_writes_under_prefix_also_checked(tmp_path: Path) -> None:
     repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()
-    _make_sibling_repo(tmp_path, "project-rag")
-    rows = [_row("R1", UNDECLARED, writes_under=["example-retrieval-repo/state/"])]
+    _make_sibling_repo(tmp_path, "sibling-repo")
+    rows = [_row("R1", UNDECLARED, writes_under=["sibling-repo/state/"])]
     with pytest.raises(CrossRepoWriteError) as excinfo:
         check_cross_repo_writes(rows, repo_root)
-    assert "project-rag" in str(excinfo.value)
+    assert "sibling-repo" in str(excinfo.value)
 
 
 def test_write_under_own_repo_is_fine(tmp_path: Path) -> None:

@@ -154,9 +154,75 @@ def sender_and_receiver(tmp_path, monkeypatch):
     return sender_repo, receiver_repo
 
 
+def _touch(root: Path, rel: str) -> None:
+    target = root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x\n", encoding="utf-8")
+
+
+def _send_and_read(sender_repo, receiver_repo, topic, body):
+    _write_draft(sender_repo, topic, body=body)
+    result = _memo_send({"dry_run": False, "topic": topic}, repo_root=sender_repo)
+    assert result["exit_code"] == 0, result
+    inbox = [
+        p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+        if p.name != ".gitkeep"
+    ]
+    assert len(inbox) == 1
+    return result["acted"][0], inbox[0].read_text(encoding="utf-8")
+
+
+class TestCitationOwnerDecisionTable:
+    def test_sender_only_qualified_as_sender(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        _touch(sender_repo, "docs/s.md")
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-sender", "See docs/s.md here.\n",
+        )
+        assert "claude-klabauter-engine:docs/s.md" in delivered
+        assert "citations_unresolved" not in acted
+
+    def test_receiver_only_qualified_as_receiver(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        _touch(receiver_repo, "docs/r.md")
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-receiver", "See docs/r.md here.\n",
+        )
+        assert f"{receiver_repo.name.lower()}:docs/r.md" in delivered
+        assert "claude-klabauter-engine:docs/r.md" not in delivered
+        assert "citations_unresolved" not in acted
+
+    def test_both_left_bare_and_reported(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        _touch(sender_repo, "docs/b.md")
+        _touch(receiver_repo, "docs/b.md")
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-both", "See docs/b.md here.\n",
+        )
+        assert "See docs/b.md here." in delivered
+        assert acted["citations_unresolved"] == ["docs/b.md"]
+
+    def test_neither_left_bare_and_reported(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-neither", "See docs/n.md here.\n",
+        )
+        assert "See docs/n.md here." in delivered
+        assert acted["citations_unresolved"] == ["docs/n.md"]
+
+    def test_send_names_sender_receipt_path(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        acted, _ = _send_and_read(
+            sender_repo, receiver_repo, "owner-receipt", "No paths.\n",
+        )
+        assert acted["sent_receipt"] == ".coordinator-local/memo-outbox/sent/owner-receipt.md"
+        assert (sender_repo / acted["sent_receipt"]).is_file()
+
+
 class TestCitationLintQualifiesInsteadOfHolding:
     def test_bare_path_qualified_and_delivered_on_first_call(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
+        _touch(sender_repo, "docs/x.md")
         _write_draft(
             sender_repo, "bare-path-topic",
             body="See docs/x.md for detail.\n",
@@ -202,6 +268,7 @@ class TestCitationLintQualifiesInsteadOfHolding:
         # SAME first call that C2 refuses already carries the fixed body
         # once C2's own predicate clears on retry.
         sender_repo, receiver_repo = sender_and_receiver
+        _touch(sender_repo, "docs/x.md")
         _seed_prior_reply_row(
             sender_repo,
             in_reply_to="orig.md",

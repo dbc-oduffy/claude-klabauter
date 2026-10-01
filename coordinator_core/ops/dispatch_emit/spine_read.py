@@ -734,6 +734,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
+        em_performed = raw.get("performer") == "em"
         if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
             raise UnknownDispositionError(
                 f"row {raw.get('id')!r} has disposition {disposition!r}, which is "
@@ -748,6 +749,8 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 _reason = ("disposition", "disposition: %s" % disposition)
             elif deferred is True:
                 _reason = ("deferred", "deferred: true")
+            elif em_performed:
+                _reason = ("em-performed", "performer: em")
             elif _is_operator_row(raw):
                 _reason = (
                     "operator",
@@ -761,7 +764,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
                 )
 
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed:
             satisfied_ids.add(raw.get("id"))
         elif (
             _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))

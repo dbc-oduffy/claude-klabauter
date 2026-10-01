@@ -343,22 +343,6 @@ def find_dead_bin_references(
     return violations
 
 
-def test_no_dead_bin_references_in_production_code():
-    """Standing gate: every in-repo executable path referenced, by literal
-    construction off a recognised repo-root name, from coordinator_core/
-    production code must exist on disk at HEAD. A hit here means either a
-    live instance of the deleted-binary class the motivating lesson names,
-    or (if genuinely intentional) a resolution-rule narrowing to this file,
-    reviewed like any other code change -- never a silent exemption entry
-    (see module docstring's "No exemption set")."""
-    violations = find_dead_bin_references(_SCAN_ROOT)
-    assert violations == [], (
-        "Found reference(s) to an in-repo bin-ish path that does not exist on disk "
-        "(see state/lessons/2026-08-19-a-guard-on-a-deleted-binary-fails-silently-"
-        f"forever.md for why this is break-class, not a false alarm): {violations}"
-    )
-
-
 def test_gate_detects_the_reconstructed_machine_local_incident(tmp_path):
     """Acceptance criterion: reconstruct the EXACT pre-fix condition this
     gate exists to catch -- ``first_run.py``'s

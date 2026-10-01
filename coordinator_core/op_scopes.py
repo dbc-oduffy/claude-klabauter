@@ -77,6 +77,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.stop_dispatch": "none",
     "hooks.context_pressure_precompact":     "none",
     "hooks.postusefailure_cross_repo_memo_remediate": "none",
+    "hooks.postuse_subagent_compaction_warning": "none",
     "hooks.nudge_cross_repo_cwd_boundary":   "none",
     "hooks.guard_config_change_hookstack_selfdefence": "none",
     "hooks.check_claude_md_size":             "none",
@@ -228,15 +229,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # test-only ops, and dispatch.emit is neither. Both its siblings above are
     # explicit for the same reason.
     "dispatch.emit":                         "none",
-    # review.mint_workflow — fleet-generic, MUTATING op: reads a caller-
-    # supplied plan path plus the DoE-owned review-roster fragment (resolved
-    # via read_content_root_pointer(), not repo_root/_origin_worktree) and writes
-    # an emitted review Workflow script, with containment resolved from the
-    # `output_path`/`target_root` wire params -- the same target-resolution
-    # model dispatch.emit above uses. Listed explicitly for the same reason
-    # dispatch.emit is: the absent-entry default is documented for
-    # unclassified and test-only ops, and this is neither.
-    "review.mint_workflow":                  "none",
     # strategic.generate — fleet-generic, MUTATING op (mirrors the cartography/
     # workflow target-resolution model): explicit REQUIRED `target_root` wire
     # param, any repo, NOT the caller's own dispatching tree. No repo-specific
@@ -391,6 +383,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
     "deliverable.cascade_divergence_report":    "common_dir",
+    "commit_ledger.join_divergence_report":     "common_dir",
     "goal.kr2_two_repo_rate":                   "common_dir",
     "deliverable.fork_detect":                  "common_dir",
     "sizing.decline":                           "common_dir",
@@ -550,6 +543,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.work_state":                       "none",
     "fleet.record_history":                   "none",
     "session.artifact_owner":                 "none",
+    # repo_root is a wire param, same story as session.peer_roster.
+    "session.incident_claim":                 "none",
+    "session.incident_peers":                 "none",
     "handoff.author_fork":                   "common_dir",
     "plan.persist_capture":                  "common_dir",
     "plan.tasks.mutate":                     "common_dir",
@@ -698,6 +694,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # (never a `params.repo_root` override). 2026-09-28 PM order step b'.
     "review_mint.bookkeep_wave":                "common_dir",
     "fanout.poll_scratch_dir":                  "none",
+    "fanout.compose":                           "none",
+    "fanout.census":                            "none",
+    "fanout.reconcile":                         "none",
     "machine.hibernate":                        "none",
     "percolate.run_pre_ci_hooks":               "none",
     "percolate.scan_content_leakage_tiers":     "none",

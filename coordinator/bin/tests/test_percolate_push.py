@@ -970,3 +970,20 @@ def test_print_push_notice_emits_short_form_no_absolute_path(capsys):
     assert "percolate-push alpha" in out
     assert "git -C" not in out
     assert "/" not in out.split("percolate-push alpha")[0].splitlines()[-1]
+
+
+def test_run_decodes_child_output_as_utf8_not_the_locale_codepage(tmp_path):
+    """Windows-equivalence for `gh`/`git` output: `_run` must decode as UTF-8
+    regardless of the locale code page. The child emits `gh auth status`'s
+    check mark as raw UTF-8 bytes; a locale-default `text=True` decodes them
+    as cp1252 mojibake on a stock Windows box."""
+    child = tmp_path / "emit_utf8.py"
+    child.write_text(
+        "import sys\n"
+        "sys.stdout.buffer.write(b'\\xe2\\x9c\\x93 Logged in \\xe2\\x80\\x94 ok')\n"
+        "sys.stderr.buffer.write(b'\\xe2\\x9c\\x97 nope')\n",
+        encoding="utf-8",
+    )
+    result = _mod._run([sys.executable, str(child)])
+    assert result.stdout == "\u2713 Logged in \u2014 ok"
+    assert result.stderr == "\u2717 nope"

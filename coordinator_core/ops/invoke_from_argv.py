@@ -171,6 +171,16 @@ class EntrypointNotWarmLoadableError(ValueError):
 #: makes the process-global directory unambiguous for the caller who
 #: legitimately owns it at any given instant — the shared process is never
 #: read from or written to under a directory it wasn't told about.
+#:
+#: SCOPE IS ONE PROCESS, NOT THE DOOR. `invoke.from_argv` is MUTATING, so the
+#: warm server only ever runs it in a `DISPATCH_PROCESS_POOL_SIZE` pool worker
+#: (`warm.server._pool_dispatch_worker`), which holds one task at a time; the
+#: unisolated in-process fallback refuses MUTATING ops. Each worker owns its
+#: own lock and its own cwd, so sessions never queue on each other here: 4
+#: concurrent 0.3s calls in separate processes finish in 0.30s, the same 4 on
+#: threads of one process in 1.20s. Contention needs two threads in one
+#: process -- a shape no served path produces; pinned by
+#: `test_invoke_from_argv.py :: test_entrypoint_lock_is_uncontended_across_pool_workers`.
 _ENTRYPOINT_CWD_LOCK = threading.Lock()
 
 #: Set to the entrypoint name for the span `_run_entrypoint` runs its `main`,

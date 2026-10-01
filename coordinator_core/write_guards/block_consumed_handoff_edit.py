@@ -471,6 +471,42 @@ def _calling_session_is_holder(
     return bool(session_id) and session_id == claimed_by
 
 
+# The two deny texts are separate functions so a test can tell WHICH branch
+# of check() fired by substituting a sentinel here, not by matching prose.
+def _close_route_reason(file_path: str, note: str) -> str:
+    return (
+        "Claimed-handoff close blocked: hand-editing the terminal "
+        "stamp corrupts the audit trail. Ship instead: "
+        f"`archive-stamp-cli ship-handoff {file_path} --sha <SHA>` "
+        "(stamps shipped_in + deployment_state: shipped; add "
+        "--archive to move now). Ops list: "
+        "`docs/reference/em-callable-ops.md`."
+        + ("\n\n" + note if note else "")
+    )
+
+
+def _continuation_route_reason(file_path: str, note: str) -> str:
+    return (
+        "Claimed handoff: paper trail, not a live journal; edit "
+        "blocked. Not your claim — claim instead via the "
+        "liveness-gated pickup path: `/pickup` (or "
+        "`pickup_assemble`, which refuses a takeover while the "
+        f"current holder is live). Correct/deliver instead: "
+        "`handoff.correct_body` (`possession-gated`; needs "
+        "`override_reason` if you are neither holder nor "
+        "author) via `coordinator_core.invoke`, or "
+        "`handoff.propagate` (no authorship gate). Continue "
+        "instead: `/handoff`. Close "
+        f"instead: `archive-stamp-cli ship-handoff {file_path}` "
+        "(stamps `shipped_in`+`deployment_state: shipped`). "
+        "Roadmap "
+        "dependency edge instead: `roadmap.link_stubs` (writes "
+        "`blocked_by`/`blocks` on a roadmap baton only). Ops "
+        "list: `docs/reference/em-callable-ops.md`."
+        + ("\n\n" + note if note else "")
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if os.environ.get(_OVERRIDE_ENV, "0") == "1":
@@ -546,15 +582,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 # close-intent included.
                 return None
             _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
-            reason = (
-                "Claimed-handoff close blocked: hand-editing the terminal "
-                "stamp corrupts the audit trail. Ship instead: "
-                f"`archive-stamp-cli ship-handoff {file_path} --sha <SHA>` "
-                "(stamps shipped_in + deployment_state: shipped; add "
-                "--archive to move now). Ops list: "
-                "`docs/reference/em-callable-ops.md`."
-                + ("\n\n" + _note if _note else "")
-            )
+            reason = _close_route_reason(file_path, _note)
         else:
             # Remedies are ordered by applicability to THIS calling session
             # (AC7, the Staff Engineer F4): possession is acquirable through a
@@ -587,25 +615,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 # still reachable and still named in the non-holder deny.
                 return None
             _note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
-            reason = (
-                "Claimed handoff: paper trail, not a live journal; edit "
-                "blocked. Not your claim — claim instead via the "
-                "liveness-gated pickup path: `/pickup` (or "
-                "`pickup_assemble`, which refuses a takeover while the "
-                f"current holder is live). Correct/deliver instead: "
-                "`handoff.correct_body` (`possession-gated`; needs "
-                "`override_reason` if you are neither holder nor "
-                "author) via `coordinator_core.invoke`, or "
-                "`handoff.propagate` (no authorship gate). Continue "
-                "instead: `/handoff`. Close "
-                f"instead: `archive-stamp-cli ship-handoff {file_path}` "
-                "(stamps `shipped_in`+`deployment_state: shipped`). "
-                "Roadmap "
-                "dependency edge instead: `roadmap.link_stubs` (writes "
-                "`blocked_by`/`blocks` on a roadmap baton only). Ops "
-                "list: `docs/reference/em-callable-ops.md`."
-                + ("\n\n" + _note if _note else "")
-            )
+            reason = _continuation_route_reason(file_path, _note)
 
         return {
             "hookSpecificOutput": {

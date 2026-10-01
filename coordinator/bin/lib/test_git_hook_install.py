@@ -124,7 +124,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "dab7511ca97cfcda167b65da660c7a8cc5ef3abf06ef03a30f22c05b81529c1e"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "fff2101265e9f0a296cb811f0d0a0449b57e27a91f9528bb822c2ce12dd46722"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -498,6 +498,105 @@ def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch)
     rc = ghi.ensure_hooks_fleet(str(tmp_path), strict=True)
 
     assert rc == 0
+
+
+_RETIRED_BODY = "#!/bin/sh\nexec retired-thing\n"
+
+
+def _disposition_fleet(tmp_path, monkeypatch, kind):
+    from coordinator_core.git import hook_dispositions as hd
+
+    root = tmp_path / "clone"
+    (root / ".git" / "hooks").mkdir(parents=True)
+    hook = root / ".git" / "hooks" / "post-commit"
+    hook.write_text(_RETIRED_BODY, encoding="utf-8")
+    entry = hd.HookDisposition(
+        id="synthetic-retired",
+        hook_name="post-commit",
+        action="remove",
+        identify=lambda t: hd.Match(0, len(t)) if t == _RETIRED_BODY else None,
+    )
+    monkeypatch.setattr(hd, "DISPOSITIONS", (entry,), raising=False)
+    monkeypatch.setattr(ghi, "_registry_repo_roots", lambda bin_dir: [("repos.clone", str(root))])
+    monkeypatch.setattr(ghi, "_classify_target", lambda r: kind)
+    monkeypatch.setattr(ghi, "_unregistered_hooked_repos", lambda registered: [])
+    return hook
+
+
+def test_fleet_check_only_reports_stale_and_does_not_touch_the_hook(tmp_path, monkeypatch, capsys):
+    hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path), check_only=True)
+
+    assert rc == 0
+    assert hook.read_text(encoding="utf-8") == _RETIRED_BODY
+    assert not (hook.parent / "post-commit.retired").exists()
+    err = capsys.readouterr().err
+    assert "coordinator-hook-disposition: stale repos.clone post-commit synthetic-retired" in err
+
+
+def test_fleet_repair_removes_with_backup_on_a_mirror_target(tmp_path, monkeypatch, capsys):
+    hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path))
+
+    assert rc == 0
+    assert not hook.exists()
+    assert (hook.parent / "post-commit.retired").read_text(encoding="utf-8") == _RETIRED_BODY
+    assert "repos.clone post-commit: removed (synthetic-retired)" in capsys.readouterr().err
+
+
+def test_fleet_repair_reports_busy_in_the_errored_style(tmp_path, monkeypatch, capsys):
+    hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
+    from coordinator_core.git import hook_dispositions as hd
+
+    monkeypatch.setattr(hd, "_act", lambda *a, **k: "busy")
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path))
+
+    assert rc == 0
+    assert hook.exists()
+    assert "repos.clone post-commit: busy (synthetic-retired)" in capsys.readouterr().err
+
+
+def test_fleet_skips_disposition_for_missing_targets(tmp_path, monkeypatch, capsys):
+    hook = _disposition_fleet(tmp_path, monkeypatch, "missing")
+
+    rc = ghi.ensure_hooks_fleet(str(tmp_path))
+
+    assert rc == 0
+    assert hook.exists()
+
+
+def test_no_commit_path_caller_reaches_the_repairing_disposition_walk():
+    """Only `ensure_hooks_fleet` (via `_apply_dispositions`) may call
+    `apply_repo`; the per-repo installers and commit-path callers may not."""
+    import ast
+
+    lib = Path(ghi.__file__).resolve()
+    tree = ast.parse(lib.read_text(encoding="utf-8"))
+    callers: dict = {}
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                if name in ("apply_repo", "_apply_dispositions"):
+                    callers.setdefault(name, set()).add(fn.name)
+    assert callers.get("apply_repo") == {"_apply_dispositions"}
+    assert callers.get("_apply_dispositions") == {"ensure_hooks_fleet"}
+
+    bin_dir = lib.parent.parent
+    for name in ("coordinator-ensure-prepare-commit-msg-hook.py",):
+        text = (bin_dir / name).read_text(encoding="utf-8")
+        assert "apply_repo" not in text and "ensure_hooks_fleet" not in text, name
+
+    root = bin_dir.parent.parent
+    for rel in ("coordinator_core/ops/ceremony/git_native.py", "coordinator_core/install/substrate.py"):
+        p = root / rel
+        if p.is_file():
+            text = p.read_text(encoding="utf-8")
+            assert "apply_repo(" not in text and "ensure_hooks_fleet(" not in text, rel
 
 
 # ---------------------------------------------------------------------------
@@ -1036,7 +1135,7 @@ def _run_shim(body, home, tmp_path):
     hook.write_text(body, encoding="utf-8")
     hook.chmod(0o755)
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(home / "nosettings")}
-    return subprocess.run([str(hook)], env=env, capture_output=True, text=True)
+    return subprocess.run([_sh(), str(hook)], env=env, capture_output=True, text=True)
 
 
 def test_shim_resolves_the_installed_cache_root_at_run_time(tmp_path, monkeypatch):
@@ -1061,6 +1160,82 @@ def test_shim_exits_zero_when_no_root_resolves(tmp_path, monkeypatch):
     body = _shim_body("/dead/baked/bin", "coordinator-prepare-commit-msg", 'exec "$_PY" "$SCRIPT" "$@"')
     r = _run_shim(body, home, tmp_path)
     assert r.returncode == 0 and "not found" in r.stderr
+    assert "NOTICE" not in r.stderr, "a total miss warns once; the fallback notice is for a hook that still works"
+
+
+# ---------------------------------------------------------------------------
+# A hook that resolves past rung 1 is observable. Until gen 15 only a TOTAL
+# miss spoke, so a hook running off a later rung was indistinguishable from a
+# healthy one until the last fallback died and it failed open.
+# ---------------------------------------------------------------------------
+
+
+def _plant_cache_script(home, name):
+    cbin = home / ".claude/plugins/cache/coordinator-claude/coordinator/4.3.0/bin"
+    cbin.mkdir(parents=True)
+    (cbin / name).write_text("#!/usr/bin/env python3\nprint('cache-ran')\n", encoding="utf-8")
+    return cbin / name
+
+
+def test_shim_names_the_fallback_rung_it_resolved_through(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    name = "coordinator-prepare-commit-msg"
+    planted = _plant_cache_script(home, name)
+    body = _shim_body("/dead/baked/bin", name, 'exec "$_PY" "$SCRIPT" "$@"')
+    r = _run_shim(body, home, tmp_path)
+    assert r.returncode == 0 and "cache-ran" in r.stdout, "the notice must not stop the hook running"
+    notice = [ln for ln in r.stderr.splitlines() if "NOTICE" in ln]
+    assert len(notice) == 1, r.stderr
+    assert name in notice[0] and planted.name in notice[0] and ".claude/plugins/cache" in notice[0]
+    assert "WARNING" not in r.stderr
+
+
+def test_shim_is_silent_when_the_first_rung_resolves(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    name = "coordinator-prepare-commit-msg"
+    _plant_cache_script(home, name)
+    first = home / "nosettings" / "bin"
+    first.mkdir(parents=True)
+    (first / name).write_text("#!/usr/bin/env python3\nprint('first-ran')\n", encoding="utf-8")
+    body = _shim_body("/dead/baked/bin", name, 'exec "$_PY" "$SCRIPT" "$@"')
+    r = _run_shim(body, home, tmp_path)
+    assert r.returncode == 0 and "first-ran" in r.stdout
+    assert r.stderr == ""
+
+
+def _run_append_block(block, home, tmp_path):
+    hook = tmp_path / "foreign-hook"
+    hook.write_text("#!/bin/sh\necho foreign\n" + block + "\n", encoding="utf-8")
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(home / "nosettings")}
+    return subprocess.run([_sh(), str(hook)], env=env, capture_output=True, text=True)
+
+
+def test_append_block_names_the_fallback_rung_it_resolved_through(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    name = "coordinator-prepare-commit-msg"
+    _plant_cache_script(home, name)
+    block = _append_block("/dead/baked/bin", name, "coordinator test block", '"$_PY" "$_T" "$@"')
+    r = _run_append_block(block, home, tmp_path)
+    assert "foreign" in r.stdout and "cache-ran" in r.stdout
+    notice = [ln for ln in r.stderr.splitlines() if "NOTICE" in ln]
+    assert len(notice) == 1 and name in notice[0] and ".claude/plugins/cache" in notice[0], r.stderr
+    assert "WARNING" not in r.stderr
+
+
+def test_append_block_total_miss_warns_without_the_notice(tmp_path, monkeypatch):
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
+    home = tmp_path / "home"
+    home.mkdir()
+    block = _append_block("/dead/baked/bin", "coordinator-prepare-commit-msg", "coordinator test block", '"$_PY" "$_T" "$@"')
+    r = _run_append_block(block, home, tmp_path)
+    assert "WARNING" in r.stderr and "NOTICE" not in r.stderr
 
 
 def test_append_to_a_shebangless_hook_gains_a_shebang(tmp_path, monkeypatch):

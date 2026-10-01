@@ -118,8 +118,6 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/completion_entry.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
-    "coordinator_core/ops/ceremony/consumed_handoff_stamp.py":
-        "60 marker lines -- the heaviest single non-roster module; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/detached_render_commit.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/detached_spawn.py":
@@ -144,8 +142,6 @@ EXCLUDED_MODULES = {
     "coordinator_core/ops/ceremony/renderers.py":
         "20 marker lines; non-roster module under coordinator_core/ops/ceremony/; unsized by this "
         "plan's scope:.",
-    "coordinator_core/ops/ceremony/resolver.py":
-        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/snapshot_diff_and_head.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/update_docs_scan.py":

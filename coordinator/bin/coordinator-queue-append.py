@@ -1277,6 +1277,17 @@ def _flag_name_for_field(field: str) -> str:
     return "--" + field.replace("_", "-")
 
 
+def _refuse_for_schema(message: str) -> None:
+    """One-line refusal without argparse's generic usage dump (which cannot
+    show per-schema requirements); exits 2 like parser.error."""
+    print(
+        f"coordinator-queue-append: error: {message}. "
+        f"Per-schema flags: --schema NAME --help.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
 def _extract_schema_arg(argv: list[str]) -> str | None:
     """Best-effort extraction of a --schema value from argv for pre-parse --help routing.
 
@@ -1410,7 +1421,11 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
         "--schema",
         required=True,
         metavar="NAME",
-        help="Queue schema to use: debt-backlog, bug-backlog, improvement-queue, or lessons.",
+        help=(
+            "Queue schema to use (debt-backlog, bug-backlog, improvement-queue, lessons, "
+            "workstream, workstream-event, cross-repo-commitment). "
+            "`--schema NAME --help` lists that schema's required flags and enum values."
+        ),
     )
     parser.add_argument(
         "--title",
@@ -1544,8 +1559,7 @@ Spec backlink: docs/plans/2026-06-25-example-initiative-tc-2-queues-lessons-cons
         "--severity",
         default=None,
         metavar="LEVEL",
-        choices=["P0", "P1", "P2", "P3"],
-        help="(debt-backlog, bug-backlog) Priority classification: P0, P1, P2, P3. Required for bug-backlog; optional (default P2) for debt-backlog.",
+        help="(debt-backlog, bug-backlog) Priority classification; allowed values per `--schema NAME --help`.",
     )
 
     # Deferred-grant fields (debt-backlog, bug-backlog): required together with
@@ -2069,9 +2083,15 @@ def main(argv: "list[str] | None" = None) -> int:
             and getattr(args, field, None) is None
         ]
         if missing:
-            parser.error(
-                f"the following arguments are required for --schema {schema_name}: "
-                f"{', '.join(missing)}"
+            _enums = described.get("enums") or {}
+            _named = [
+                f"{flag} {{{','.join(str(v) for v in _enums[flag[2:].replace('-', '_')])}}}"
+                if flag[2:].replace("-", "_") in _enums
+                else flag
+                for flag in missing
+            ]
+            _refuse_for_schema(
+                f"--schema {schema_name} requires {', '.join(_named)}"
             )
 
     # Validate and resolve queue_scope (improvement-queue only; fail-loud on invalid).
@@ -2097,6 +2117,17 @@ def main(argv: "list[str] | None" = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Enum-typed flags are checked against the loaded schema, so the allowed
+    # values named in the refusal are the ones enforcement uses.
+    if schema_name not in _WORKSTREAM_STORE_SCHEMAS:
+        for _field, _allowed in (described.get("enums") or {}).items():
+            _given = getattr(args, _field, None)
+            if isinstance(_given, str) and _given not in [str(v) for v in _allowed]:
+                _refuse_for_schema(
+                    f"{_flag_name_for_field(_field)} {_given!r} is invalid; "
+                    f"allowed: {', '.join(str(v) for v in _allowed)}"
+                )
 
     # Schema guard for --queue-scope; only improvement-queue supports it.
     # --queue-scope central on debt-backlog or bug-backlog would silently redirect those entries

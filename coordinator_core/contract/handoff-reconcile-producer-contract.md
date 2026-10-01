@@ -24,7 +24,7 @@
 > "not yet wired to a live caller… there is no `workday-start` (or other) call site invoking this
 > op today". There is: DoE's `coordinator/commands/workday-start.md` § 1.10.6 makes it a Step -0.9
 > judgment point (`### Auto-Reconcile`, after `### Addon Health`), routing through this repo's
-> `coordinator/bin/check-auto-reconcile.py`. Confirmed by `coordinator-content-repo-em` 2026-08-25, and by the
+> `coordinator/bin/check-auto-reconcile.py` (since deleted -- the surface was an orphan once the op was gravestoned). Confirmed by `coordinator-content-repo-em` 2026-08-25, and by the
 > op-latency sink: **65 fires in 24 h, all `outcome=ok`, across 5 sessions**.
 >
 > **The call site and the arming flip were never coupled** — observation-only was *designed* to

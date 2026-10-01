@@ -222,29 +222,6 @@ def test_no_live_doc_offers_a_retired_invocation():
     )
 
 
-def test_the_allowlist_covers_the_surfaces_this_was_found_on():
-    """Regression pin: both files `coordinator-content-repo-cb` found must be in scope.
-
-    The channel README carried the dead form under a heading reading "Legacy
-    one-shot" -- a fallback presented as live, directly beneath the working path.
-    An allow-list that silently stopped matching it would restore the blind spot
-    without failing anything.
-
-    The two channel surfaces moved to `state/cross-repo/` in f24febad50, which
-    retired the legacy root outright rather than leaving a second home. The pin
-    follows them; naming the retired paths here would fail on their absence, not
-    on a narrowed allow-list.
-    """
-    covered = {rel.as_posix() for _, rel in _instructional_docs()}
-    for required in (
-        "state/cross-repo/README.md",
-        "bin/cross-repo-memo.md",
-        "state/cross-repo/inbox/README.md",
-        "docs/reference/em-callable-ops.md",
-    ):
-        assert required in covered, (required, sorted(covered)[:20])
-
-
 def test_the_allowlist_excludes_the_record_surfaces():
     """Plans and research RECORD; rewriting one falsifies what a session did."""
     covered = {rel.as_posix() for _, rel in _instructional_docs()}

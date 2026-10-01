@@ -381,6 +381,23 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         del builtins._ENTRYPOINT_CWD_RACE_RECORD
 
 
+def test_entrypoint_lock_is_uncontended_across_pool_workers():
+    """`_ENTRYPOINT_CWD_LOCK` is per-process, and the warm server never runs
+    `invoke.from_argv` anywhere but a single-task pool worker process, so
+    sessions do not queue on each other behind it. Pins the two facts that
+    make that true: the op is MUTATING (the unisolated in-process fallback
+    in `warm.server._ServerContext._pool_dispatch` refuses MUTATING ops and
+    so can never put two entrypoint calls on threads of one process), and
+    the dispatch pool is process-based.
+    """
+    from coordinator_core.authz.classification import OpClass, classify
+    from coordinator_core.warm import server
+
+    assert classify("invoke.from_argv") is OpClass.MUTATING
+    assert "ProcessPoolExecutor" in Path(server.__file__).read_text(encoding="utf-8")
+    assert server.DISPATCH_PROCESS_POOL_SIZE >= 1
+
+
 # ---------------------------------------------------------------------------
 # (g) `params.entrypoint` set: the served CLI reads the CALLER's session
 #     identity out of `os.environ`, never the warm server owner's.

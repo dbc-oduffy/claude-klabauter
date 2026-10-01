@@ -55,7 +55,7 @@ def test_record_op_process_time_shape(tmp_path, monkeypatch):
         repo_root=tmp_path,
         sid="sid-abc",
         corr_id="corr-1",
-        caller="coordinator_core.ops.check_auto_reconcile",
+        caller="coordinator_core.ops.check_no_monolith_completion_append",
     )
 
     entries = _read_entries(_sink(common_dir))
@@ -69,7 +69,7 @@ def test_record_op_process_time_shape(tmp_path, monkeypatch):
     assert entry["pid"] == os.getpid()
     assert entry["sid"] == "sid-abc"
     assert entry["corr_id"] == "corr-1"
-    assert entry["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    assert entry["caller"] == "coordinator_core.ops.check_no_monolith_completion_append"
     # elapsed_ms is a DIFFERENT key -- process_ms never masquerades as it.
     assert "elapsed_ms" not in entry
 
@@ -510,7 +510,7 @@ def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path, 
 
     record_op_started(
         op="ping", t_start=1.0, corr_id="corr-caller-1", repo_root=tmp_path,
-        caller="coordinator_core.ops.check_auto_reconcile",
+        caller="coordinator_core.ops.check_no_monolith_completion_append",
     )
     record_op_latency(
         op="ping", t_start=1.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path,
@@ -518,7 +518,7 @@ def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path, 
     )
 
     entries = _read_entries(_sink(common_dir))
-    assert entries[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    assert entries[0]["caller"] == "coordinator_core.ops.check_no_monolith_completion_append"
     # Omitted on the second call -- defaults to None, never raises.
     assert entries[1]["caller"] is None
 
@@ -551,13 +551,13 @@ def test_dispatch_message_explicit_caller_wins_over_the_stack_walk(tmp_path, mon
         "jsonrpc": "2.0", "id": 1, "method": "ping", "params": {},
         "_origin_worktree": str(tmp_path),
     }
-    asyncio.run(ipc.dispatch_message(msg, caller="coordinator_core.ops.check_auto_reconcile"))
+    asyncio.run(ipc.dispatch_message(msg, caller="coordinator_core.ops.check_no_monolith_completion_append"))
 
     entries = _read_entries(_sink(common_dir))
     started = [e for e in entries if e.get("kind") == "started"]
     complete = [e for e in entries if e.get("kind") == "complete"]
-    assert started[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
-    assert complete[0]["caller"] == "coordinator_core.ops.check_auto_reconcile"
+    assert started[0]["caller"] == "coordinator_core.ops.check_no_monolith_completion_append"
+    assert complete[0]["caller"] == "coordinator_core.ops.check_no_monolith_completion_append"
     # Declared identity is real caller-asserted attribution, not `cwd`-style
     # inference -- the row must never read the useless stack-walk fallback.
     assert started[0]["caller"] != __name__
@@ -741,7 +741,7 @@ def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
             self.f_globals = f_globals
             self.f_back = f_back
 
-    caller_frame = _FakeFrame({"__name__": "coordinator_core.ops.check_auto_reconcile"}, None)
+    caller_frame = _FakeFrame({"__name__": "coordinator_core.ops.check_no_monolith_completion_append"}, None)
     entry_frame = _FakeFrame({"__name__": "coordinator_core.ipc"}, caller_frame)
 
     import coordinator_core.telemetry.op_latency as op_latency_mod
@@ -749,6 +749,6 @@ def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
     original_getframe = op_latency_mod.sys._getframe
     try:
         op_latency_mod.sys._getframe = lambda depth: entry_frame
-        assert caller_module() == "coordinator_core.ops.check_auto_reconcile"
+        assert caller_module() == "coordinator_core.ops.check_no_monolith_completion_append"
     finally:
         op_latency_mod.sys._getframe = original_getframe

@@ -311,3 +311,43 @@ def resolve_artifact_owner(artifact_path: str, cwd: Optional[str] = None) -> Art
     ]
 
     return ArtifactOwnerResult(artifact_path=artifact_path, owners=resolutions, file_error=file_error)
+
+
+def owner_resolution_to_dict(resolution: OwnerResolution) -> dict:
+    """Serialize an `OwnerResolution` for a JSON-RPC/CLI payload.
+
+    Owned beside the dataclass it renders so `coordinator_core.ops.
+    session_artifact_owner` and `coordinator/bin/session-reachability-cli.py`
+    share one field list: a new `OwnerRecord` field is added here once, not
+    caught up per consumer. `claim_live`/`claim_stage` are populated only for
+    `source_field == "claim_dir"` (every other convention names no claim dir
+    of its own to ask) and are never folded into `outcome`.
+    """
+    result = resolution.result
+    return {
+        "session_id": resolution.owner.session_id,
+        "source_field": resolution.owner.source_field,
+        "outcome": result.outcome,
+        "resolved_session_id": result.session_id,
+        "address": result.address,
+        "claim_live": resolution.owner.claim_live,
+        "claim_stage": resolution.owner.claim_stage,
+        "candidates": [
+            {
+                "session_id": c.session_id,
+                "name": c.name,
+                "ref": c.ref,
+                "address": c.address,
+            }
+            for c in result.candidates
+        ],
+    }
+
+
+def to_dict(result: ArtifactOwnerResult) -> dict:
+    """Serialize an `ArtifactOwnerResult` for a JSON-RPC/CLI payload."""
+    return {
+        "artifact_path": result.artifact_path,
+        "owners": [owner_resolution_to_dict(o) for o in result.owners],
+        "file_error": result.file_error,
+    }

@@ -61,38 +61,16 @@ own docstring):
     and the commit's own working directory) -- no content-root resolution needed.
   - Check 12 (``check_registration_quad_completeness``, added
     docs/plans/2026-07-25-registration-quad-completeness-gate.md) is a third,
-    DIFFERENT resolution shape again: its oracle is the STAGED-DIFF content of
-    THIS commit, not the worktree, and not any other repo's tables --
-    ``coordinator_core.authz.registration_quad.check_registration_quad()``'s
-    live-introspection result is filtered down to only the op-keys this
-    commit's own staged ``@register_op("...")`` calls mention (AC17). A
-    peer's in-flight, unstaged incomplete registration sitting elsewhere in
-    the shared worktree must never deny an unrelated commit.
-      Repo-scoping (AC20): this check only evaluates when the committing
-      repo's ``git rev-parse --show-toplevel`` is the SAME tree the
-      ``coordinator_core`` package currently imported into this process was
-      loaded from (``_coordinator_core_repo_root()``) -- Checks 9/10's
-      always-the-installed-plugin-repo semantics do not apply here, nor does
-      Check 11's always-the-commit's-own-repo semantics: this check needs
-      BOTH to agree, because its stage-2 oracle (the live Python tables) is
-      whichever ``coordinator_core`` happens to be on ``sys.path``, not
-      necessarily the repo being committed. Any mismatch fails open (returns
-      ``None``) rather than silently checking the wrong tree's tables against
-      the right tree's diff.
-      Three-stage gating (AC11, AC19), cheapest first: (1) a staged
-      path/content gate -- proceed only if the staged set includes one of the
-      three quad-surface files by path, or a staged ``.py`` file anywhere
-      under ``coordinator_core/`` whose staged content contains
-      ``register_op(`` (NOT a directory allowlist -- 23 of 175 registration
-      sites live outside ``coordinator_core/ops/``); (2) a middle tier that
-      extracts op-keys from the staged content with a single capture group on
-      ``@register_op\\("([^"]+)"\\)`` and does three plain dict lookups
-      against the lightweight table modules directly (no
-      ``coordinator_core.ops`` package walk) -- if every extracted key is
-      already in all three tables, returns clean before paying for; (3) only
-      then the expensive full-tree discovery walk
-      (``check_registration_quad()``), with its result restricted back down
-      to the extracted key set before being reported.
+    DIFFERENT resolution shape again: its oracle is the post-commit tree of the
+    committing repo (index blob where staged, HEAD blob elsewhere), judged by
+    ``registration_quad_static.registration_violations`` over one batched
+    ``git cat-file --batch`` read of the staged ``coordinator_core/*.py``
+    candidates plus the five surface files. It never imports the live tables, so
+    the verdict holds under any engine root, and an incomplete registration
+    elsewhere in the shared worktree never denies an unrelated commit. The
+    staged list is the one ``check_validate_commit`` already holds; a commit
+    staging no ``coordinator_core/*.py`` and no surface file spawns nothing.
+    A surface file that cannot be read or parsed fails open here.
       Disposition is HARD DENY (unlike Checks 9/10's warn-only posture),
       subject to a ``COORDINATOR_OVERRIDE_REGISTRATION_QUAD=1`` environment
       override that downgrades deny to an advisory warning -- consumed
@@ -100,14 +78,12 @@ own docstring):
       the ``_override()`` convention; this module's own
       ``check_registration_quad_completeness()`` is unconditional and does
       not read that token itself.
-      § Known coverage limitation (shared with Checks 9-11, restated here
-      because this is the hard-deny check where it matters most): this guard
-      fires only for commits made through Claude Code's own ``Bash`` tool
-      (the PreToolUse hook dispatch path). A human running ``git commit``
-      directly in a terminal, or committing via GitHub Desktop or any other
-      non-agent client, bypasses it entirely. CI (qsub-02/03) remains the
-      only mechanism that catches a non-agent commit -- this module does not
-      close that gap and must not be read as if it does.
+      § Known coverage limitation: this guard fires for commits made through
+      Claude Code's own ``Bash`` tool (the PreToolUse hook dispatch path) and,
+      through the shared cores, on ``ceremony.commit_v2``. A human running
+      ``git commit`` directly in a terminal, or committing via GitHub Desktop
+      or any other non-agent client, bypasses both. CI (qsub-02/03) remains the
+      only mechanism that catches a non-agent commit.
 
 Check 13 (`check_staged_pathspec_divergence`, added 2026-07-27 per SC-DR-015)
 is a fourth resolution shape: its oracle is a live comparison of two
@@ -126,15 +102,15 @@ Spec backlink: coordinator-content-repo coordinator/docs/wiki/scoped-safety-comm
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import re
 import shlex
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from coordinator_core import machine_path_leak
 from coordinator_core.git.divergence import (
     DivergenceCheckFailed,
     diverging_paths as _diverging_paths,
@@ -421,32 +397,6 @@ def check_bin_sh_polyglot() -> Optional[str]:
 # Check 11 -- check-machine-path-leak.py -- machine-path-leak (HARD block)
 # ---------------------------------------------------------------------------
 
-_SETTINGS_PATTERNS = [
-    re.compile(r"^/Users/[^/]+/"),
-    re.compile(r"^/home/[^/]+/"),
-    re.compile(r"^C:[/\\]Users[/\\]"),
-    re.compile(r"^X:[/\\]"),
-    re.compile(r"^E:[/\\]"),
-]
-
-
-def _is_machine_abs(val: str) -> bool:
-    return any(p.search(val) for p in _SETTINGS_PATTERNS)
-
-
-def _walk_json(obj, path=""):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            child = (path + "." + k) if path else k
-            yield from _walk_json(v, child)
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            yield from _walk_json(v, path + "[" + str(i) + "]")
-    elif isinstance(obj, str):
-        if _is_machine_abs(obj):
-            yield (path, obj)
-
-
 def _read_settings_content(rel_path: str, cwd: Optional[str]) -> Optional[str]:
     """Read a staged settings.json's content -- from disk if present, else the
     git index -- mirroring check-machine-path-leak.py's ``_read_file_or_index``.
@@ -465,38 +415,14 @@ def _read_settings_content(rel_path: str, cwd: Optional[str]) -> Optional[str]:
 
 
 def check_machine_path_leak(rel_path: str, cwd: Optional[str] = None) -> Optional[str]:
-    """Port of check-machine-path-leak.py's settings.json HARD-block scan
-    (``_check_settings_json``). Returns a detail string (mirroring the
-    original's stderr violation lines) if ``rel_path`` (a staged settings.json)
-    contains a machine-specific absolute-path leaf value; ``None`` if clean or
-    unparseable/unreadable (fail open -- matches the original's JSONDecodeError
-    branch, which DOES flag a hard_violation on unparseable JSON; preserved
-    below)."""
-    import json
-
+    """Violation text for a staged settings.json (``rel_path``) carrying a
+    machine-absolute leaf value, via ``machine_path_leak.leak_detail``; ``None``
+    when clean or when the file cannot be read (fail open). Unparseable JSON is
+    reported, not passed."""
     content = _read_settings_content(rel_path, cwd)
     if content is None:
         return None
-
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        return "ERROR — failed to parse {} as JSON: {}".format(rel_path, e)
-
-    lines: List[str] = []
-    for leaf_path, leaf_val in _walk_json(data):
-        lines.append("VIOLATION: {}: machine-specific path in JSON leaf".format(rel_path))
-        lines.append("  Leaf path : {}".format(leaf_path))
-        lines.append("  Value     : {}".format(leaf_val))
-        lines.append(
-            "  Remedy    : machine-specific paths must live in gitignored\n"
-            "              settings.local.json or machine-local registry,\n"
-            "              not in tracked settings.json"
-        )
-
-    if not lines:
-        return None
-    return "\n".join(lines)
+    return machine_path_leak.leak_detail(rel_path, content)
 
 
 # ---------------------------------------------------------------------------
@@ -504,28 +430,6 @@ def check_machine_path_leak(rel_path: str, cwd: Optional[str] = None) -> Optiona
 # (HARD block, override-gated). See module docstring above for the full
 # resolution-mechanism writeup; this section is the implementation only.
 # ---------------------------------------------------------------------------
-
-# Derived from
-# `registration_quad._SURFACE_FILES` (the single source of truth for which file
-# each of the five quad surfaces lives in) rather than re-listed here, so the two
-# files cannot drift again the way they did when `_EAGER_OP_MODULES` was added as
-# a fifth surface to `registration_quad.py` without a matching update here. The
-# literal fallback is a fail-safe only -- it must stay in sync with
-# `registration_quad._SURFACE_FILES`'s own four target paths if the import ever
-# fails, not a second independent enumeration to maintain in practice.
-try:
-    from coordinator_core.authz.registration_quad import _SURFACE_FILES as _QUAD_SURFACE_FILES
-
-    _REGISTRATION_SURFACE_FILES = frozenset(_QUAD_SURFACE_FILES.values())
-except Exception:
-    _REGISTRATION_SURFACE_FILES = frozenset(
-        {
-            "coordinator_core/authz/classification.py",
-            "coordinator_core/op_scopes.py",
-            "coordinator_core/ops/_registry_map.py",
-            "coordinator_core/ops/__init__.py",
-        }
-    )
 
 # Anchored to the start of a (stripped) line so
 # a docstring/comment that merely QUOTES this decorator shape as a usage example
@@ -540,218 +444,75 @@ except Exception:
 _REGISTER_OP_KEY_RE = re.compile(r'^@register_op\("([^"]+)"\)')
 
 
-def _coordinator_core_repo_root() -> Optional[str]:
-    """Directory containing the ``coordinator_core`` package currently
-    imported into THIS process -- i.e. wherever this very module lives, one
-    level up from the package itself. Its own function (not inlined) so
-    tests can monkeypatch it directly to simulate a same-tree or
-    cross-tree commit without needing a second real git clone (AC20)."""
-    try:
-        import coordinator_core
-    except Exception:
-        return None
-    module_file = getattr(coordinator_core, "__file__", None)
-    if not module_file:
-        return None
-    package_dir = os.path.dirname(os.path.abspath(module_file))
-    return os.path.dirname(package_dir)
-
-
 def _same_tree(path_a: str, path_b: str) -> bool:
     return os.path.normcase(os.path.realpath(path_a)) == os.path.normcase(os.path.realpath(path_b))
 
 
-# One batched `git grep --cached` subprocess
-# across every candidate path, replacing a `git show :<path>` spawned PER staged
-# file. `--cached` searches the INDEX (staged blobs), never the working tree --
-# preserving the same "judges the commit, not the worktree" guarantee (AC17) the
-# old per-file `git show` gave, at O(1) subprocess spawns instead of O(N).
-def _grep_cached_lines(needle: str, paths: List[str], cwd: Optional[str]) -> Optional[List[str]]:
-    """Lines from the STAGED (index) content of ``paths`` containing the fixed
-    string ``needle``, via one ``git grep --cached`` call. Returns ``[]`` when
-    nothing matches (git grep exits 1 for "no match" -- not an error, unlike
-    every other ``_run_git`` call site in this module). Returns ``None`` only
-    when the invocation itself could not run (fail open)."""
-    if not paths:
-        return []
-    rc, out = _run_git(["grep", "--cached", "--no-color", "-F", "-h", needle, "--", *paths], cwd=cwd)
-    if rc == 1:
-        return []
-    if rc != 0:
-        return None
-    return [l for l in out.splitlines() if l]
-
-
-def _prune_baselined_classification(violation, baseline):
-    """Drop a violation's `OP_CLASSIFICATION` leg when its op-key sits in the frozen
-    known-debt baseline, returning None if nothing punishable remains.
-
-    The baseline (`registration_quad._KNOWN_UNCLASSIFIED_OPS_DEBT`) is a PM-ratified
-    tolerated-debt set covering ONE surface only, so this must never suppress a
-    baselined op's missing `_OP_KEY_SCOPE` or `OP_MODULE_MAP` entry — those are still
-    live defects on an op that merely happens to be unclassified.
-
-    Negative-spec: this is the commit-time half of AC4's single-source-of-truth
-    requirement. Without it the gate hard-denies any commit that merely re-stages one
-    of the baselined ops' `@register_op(...)` lines (a move, a rename, a reformat) --
-    a false deny on debt the plan explicitly placed out of scope.
-    """
-    if violation.op_key not in baseline:
-        return violation
-    kept_missing = tuple(s for s in violation.surfaces_missing if s != "OP_CLASSIFICATION")
-    if not kept_missing:
-        return None
-    kept_files = tuple(
-        (surface, path)
-        for surface, path in violation.missing_surface_files
-        if surface != "OP_CLASSIFICATION"
-    )
-    # Dropped the no-op
-    # `surfaces_present=violation.surfaces_present` kwarg; `dataclasses.replace`
-    # already preserves any field not passed.
-    return dataclasses.replace(
-        violation,
-        surfaces_missing=kept_missing,
-        missing_surface_files=kept_files,
-    )
-
-
-def check_registration_quad_completeness(cwd: Optional[str] = None) -> Optional[str]:
-    """Hard-deny detail string when this commit's own staged content lands an
-    op-key in ``@register_op(...)`` without also landing it in all three of
-    ``OP_CLASSIFICATION``, ``_OP_KEY_SCOPE``, and ``OP_MODULE_MAP`` -- see
-    ``coordinator_core.authz.registration_quad`` for the underlying pure
-    set-diff this reuses. Returns ``None`` when clean, when the check cannot
-    run (fails open, mirroring Checks 9/10/11's own failure posture), or --
-    per AC20 -- when the committing repo is not the same tree the imported
-    ``coordinator_core`` was loaded from.
-
-    Three cheap-to-expensive gates, in order (AC11, AC19): repo-scope, then
-    staged-path/content, then staged-op-key-vs-tables, before ever paying for
-    the full-tree discovery walk. See module docstring for the full writeup.
-    """
-    rc, top_out = _run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
-    if rc != 0:
-        return None
-    committing_root = top_out.strip()
-    if not committing_root:
-        return None
-
-    core_root = _coordinator_core_repo_root()
-    if core_root is None or not _same_tree(committing_root, core_root):
-        return None
-
-    rc, staged_out = _run_git(["diff", "--cached", "--name-only"], cwd=committing_root)
-    if rc != 0:
-        return None
-    staged = [l for l in staged_out.splitlines() if l]
-    if not staged:
-        return None
-
-    staged_py_under_core = [
-        f for f in staged if f.startswith("coordinator_core/") and f.endswith(".py")
-    ]
-    surface_staged = any(f in _REGISTRATION_SURFACE_FILES for f in staged)
-
-    # Test the free check (surface_staged, from
-    # `staged` already in hand) and the "no .py under coordinator_core/ at all"
-    # case BEFORE spending a single subprocess on content. A large non-registration
-    # refactor that never touches a quad-surface file and stages no .py under
-    # coordinator_core/ now pays zero subprocess spawns for this check, not N.
-    if not surface_staged and not staged_py_under_core:
-        return None  # stage 1: nothing under coordinator_core/ staged at all
-
-    matched_lines: List[str] = []
-    if staged_py_under_core:
-        grepped = _grep_cached_lines("register_op(", staged_py_under_core, committing_root)
-        if grepped is None:
-            return None  # grep itself failed to run -- fail open
-        matched_lines = grepped
-
-    if not (surface_staged or matched_lines):
-        return None  # stage 1: no registration surface staged in this commit
-
-    op_keys: set = set()
-    for line in matched_lines:
-        m = _REGISTER_OP_KEY_RE.match(line.strip())
-        if m:
-            op_keys.add(m.group(1))
-
-    if not op_keys:
-        # A quad-surface file was staged (e.g. a comment edit in
-        # classification.py) but no staged file actually registers an op in
-        # this commit -- nothing for this check to report.
-        return None
-
-    try:
-        from coordinator_core.authz.classification import OP_CLASSIFICATION
-        from coordinator_core.op_scopes import _OP_KEY_SCOPE
-        from coordinator_core.ops._registry_map import OP_MODULE_MAP
-    except Exception:
-        OP_CLASSIFICATION = _OP_KEY_SCOPE = OP_MODULE_MAP = None  # type: ignore[assignment]
-
-    # The fast path must also check the
-    # fifth surface (`_EAGER_OP_MODULES`), keyed by an op's `OP_MODULE_MAP`
-    # module path, not just the original three tables. Without this, an op
-    # complete in `OP_CLASSIFICATION`/`_OP_KEY_SCOPE`/`OP_MODULE_MAP` but
-    # missing from `_EAGER_OP_MODULES` returned clean here without ever
-    # reaching `check_registration_quad()` below -- the exact live gap
-    # (`roadmap.link_stubs`, 2026-08-05) this check exists to close. A failure
-    # to resolve the live eager-module set here is NOT treated as "clean" --
-    # it falls through to the full `check_registration_quad()` call instead,
-    # which has its own independent fail-open posture.
-    if OP_CLASSIFICATION is not None:
-        try:
-            from coordinator_core.ops import _EAGER_OP_MODULES
-
-            _eager_module_paths = frozenset(mp for mp, _note in _EAGER_OP_MODULES)
-        except Exception:
-            _eager_module_paths = None
-        if _eager_module_paths is not None and all(
-            k in OP_CLASSIFICATION
-            and k in _OP_KEY_SCOPE
-            and k in OP_MODULE_MAP
-            and OP_MODULE_MAP[k] in _eager_module_paths
-            for k in op_keys
-        ):
-            return None  # stage 1.5: every staged key already complete on all five surfaces
-
-    try:
-        from coordinator_core.authz.registration_quad import (
-            _KNOWN_UNCLASSIFIED_OPS_DEBT,
-            check_registration_quad,
-            prune_known_incomplete,
+def _index_reader(paths: List[str], cwd: Optional[str]) -> Callable[[str], Optional[bytes]]:
+    """Reader over the post-commit tree: ONE ``git cat-file --batch`` over ``paths``
+    resolves each ``:<path>`` index entry (the HEAD blob wherever nothing is staged).
+    A path outside ``paths``, a missing entry, or a failed spawn reads as ``None``."""
+    blobs: Dict[str, Optional[bytes]] = {p: None for p in paths}
+    if paths:
+        proc = run_git(
+            ["cat-file", "--batch"],
+            cwd=cwd,
+            input=("\n".join(":" + p for p in paths) + "\n").encode("utf-8"),
         )
-    except Exception:
-        return None
+        if proc.returncode == 0:
+            out = proc.stdout_bytes
+            pos = 0
+            for p in paths:
+                nl = out.find(b"\n", pos)
+                if nl == -1:
+                    break
+                header = out[pos:nl].split(b" ")
+                pos = nl + 1
+                if len(header) != 3 or header[1] != b"blob":
+                    continue
+                try:
+                    size = int(header[2])
+                except ValueError:
+                    break
+                blobs[p] = out[pos : pos + size]
+                pos += size + 1
+    return blobs.get
 
-    # This call runs the full discovery walk
-    # (re-imports every op module reachable from coordinator_core.ops, plus the
-    # three quad-surface tables) with no params. A syntax/import error in any of
-    # those -- the exact shape of a commit mid-editing this guard's own target
-    # population -- must not escape this HARD-DENY check uncaught; fail open,
-    # matching the docstring's stated posture and the module-import guards above.
+
+def check_registration_quad_completeness(
+    cwd: Optional[str] = None, staged: Optional[List[str]] = None
+) -> Optional[str]:
+    """Hard-deny detail string when the tree this commit lands registers an op-key
+    without all five quad surfaces, judged by
+    ``registration_quad_static.registration_violations`` over an index reader.
+
+    ``staged`` is the caller's already-resolved staged list; ``None`` reads it with
+    one ``git diff --cached``. Returns ``None`` when clean, when no registration-relevant
+    path is staged, or when the check cannot run (fails open). Judges the committing
+    repo's own surface files, wherever ``coordinator_core`` was imported from.
+    """
     try:
-        violations = check_registration_quad()
-        relevant = []
-        for v in violations:
-            if v.op_key not in op_keys:
-                continue
-            pruned = _prune_baselined_classification(v, _KNOWN_UNCLASSIFIED_OPS_DEBT)
-            if pruned is None:
-                continue
-            # Also drop any surfaces recorded in the fuller
-            # `_KNOWN_INCOMPLETE_REGISTRATIONS` ledger (registration_quad.py,
-            # 2026-08-11) -- forgives exactly the recorded gap, never the op
-            # wholesale (see that ledger's own module-level comment).
-            pruned = prune_known_incomplete(pruned)
-            if pruned is None:
-                continue
-            relevant.append(pruned)
+        from coordinator_core.authz.registration_quad_static import (
+            _ALL_SURFACE_FILES,
+            _SURFACE_PATHS,
+            registration_violations,
+        )
+
+        if staged is None:
+            rc, staged_out = _run_git(["diff", "--cached", "--name-only"], cwd=cwd)
+            if rc != 0:
+                return None
+            staged = [l for l in staged_out.splitlines() if l]
+        candidates = [f for f in staged if f.startswith("coordinator_core/") and f.endswith(".py")]
+        if not candidates and not any(f in _SURFACE_PATHS for f in staged):
+            return None
+        read = _index_reader(sorted(set(candidates) | set(_ALL_SURFACE_FILES)), cwd)
+        verdict = registration_violations(read, staged)
     except Exception:
         return None
-    if not relevant:
-        return None
+    if verdict.outcome != "refuse" or not verdict.violations:
+        return None  # an unreadable or ambiguous surface (no violations) fails open here
+    relevant = verdict.violations
 
     lines = [
         "VIOLATION: REGISTRATION-QUAD-INVARIANT — the following op(s) registered by "

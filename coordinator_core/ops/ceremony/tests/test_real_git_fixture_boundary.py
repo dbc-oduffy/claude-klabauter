@@ -31,10 +31,9 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # the third: it proves the diverged (commit-tree) branch replays the
 # prepare-commit-msg hook's Session-Id/Deliverable-Id trailers, which
 # real git hooks (installed into a real .git/hooks/) are needed to exhibit.
-# test_consumed_handoff_stamp.py and test_post_commit_tail.py (route-tail-
-# commits-through-commit_scoped fix) are the fourth and fifth: each proves
-# its own post-commit follow-up commit (`_commit_and_push_follow_up` /
-# `_commit_and_push_origin_stub_close`) now routes through
+# test_post_commit_tail.py (route-tail-commits-through-commit_scoped fix)
+# is the fourth: it proves its post-commit follow-up commit
+# (`_commit_and_push_origin_stub_close`) now routes through
 # `git_native.commit_scoped` rather than a raw `add_paths` +
 # `commit_with_message_file` pair, so a peer's deliberately-staged
 # partial-hunk content on a path in the follow-up commit's own path set
@@ -76,7 +75,6 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",
     "test_commit_scoped_trailer_replay.py",
-    "test_consumed_handoff_stamp.py",
     "test_no_interpreter_on_commit.py",
     "test_post_commit_tail.py",
     "test_post_commit_tail_completion_fold.py",

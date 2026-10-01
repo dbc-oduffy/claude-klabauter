@@ -33,13 +33,6 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_coordinator_invoke_script_declared_in_pyproject() -> None:
-    pyproject = _repo_root() / "pyproject.toml"
-    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    scripts = data["project"]["scripts"]
-    assert scripts["coordinator-invoke"] == "coordinator_core.invoke.__main__:main"
-
-
 def test_coordinator_invoke_script_target_is_importable_callable() -> None:
     from coordinator_core.invoke.__main__ import main
 

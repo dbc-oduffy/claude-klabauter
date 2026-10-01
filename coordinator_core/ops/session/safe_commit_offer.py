@@ -287,7 +287,18 @@ import subprocess
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AbstractSet, Any, List, Literal, Mapping, Optional, Sequence, Tuple, TypedDict
+from typing import (
+    AbstractSet,
+    Any,
+    List,
+    Literal,
+    Mapping,
+    NotRequired,
+    Optional,
+    Sequence,
+    Tuple,
+    TypedDict,
+)
 
 from functools import partial
 
@@ -298,6 +309,7 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
     partition_declared_deletions,
 )
+from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
@@ -408,6 +420,14 @@ class SafeCommitOffer(TypedDict):
     orphans: List[str]
     indeterminate: bool
     ownership: OwnershipReadout
+    # `mtime_orphans` (additive, NotRequired): the dirty paths written at or
+    # after this session's `started_at` that NO session claims -- the
+    # `mtime_only` INTERSECT `orphans` subset `session.scope` derives.
+    # `compute_offer` never sets it (it reads no worktree -- see its
+    # `orphans` negative spec); the `dry_run` seam sets it beside
+    # `reconciliation`, off the one dirty read that seam already pays for.
+    # Absent means "not computed this call", never "none".
+    mtime_orphans: NotRequired[List[str]]
     # their-writes plan) — the four-bucket ownership readout (mine / named
     # peer / unattributed / degraded), extending C3's post-commit `residue`
     # report rather than replacing it. ADDITIVE ONLY: every pre-existing key
@@ -646,6 +666,11 @@ class CommitOfferReport(TypedDict):
     # error -- an empty `residue` after a healthy commit is exactly what a
     # correctly-scoped ceremony should leave behind.
     reconciliation: Reconciliation
+    # `mtime_orphans` (additive, NotRequired): same subset and same contract
+    # as `SafeCommitOffer.mtime_orphans`, computed post-commit off
+    # `reconciliation.unclaimed`. Absent on the early-return envelopes, which
+    # never reach the dirty read.
+    mtime_orphans: NotRequired[List[str]]
     # write ledger against, and what it found. REPORT-ONLY, never a gate:
     # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
     # widen the commit boundary, exactly like `residue`/`excluded` above.
@@ -1465,6 +1490,39 @@ def _reconciliation_from(
     }
 
 
+def _mtime_orphans(
+    session_id: str, unclaimed: Sequence[str], worktree_root: Optional[str]
+) -> List[str]:
+    """The `unclaimed` paths written at or after this session's
+    `started_at` -- the named, single-digit subset of an otherwise ~1870-path
+    bucket, i.e. "written on my behalf, claim missing". Same arithmetic as
+    `session.scope.compute_scope`'s `mtime_only` INTERSECT `orphans`,
+    which this answer cannot call: that
+    function is the multi-spawn mechanism `compute_offer`'s rebuild removed.
+
+    REPORT-ONLY, like `unclaimed`: never fed into a pathspec. Stat-only (one
+    per unclaimed path, no spawn). Fails closed to `[]` -- an unreadable
+    `started_at` is not a licence to call every unclaimed path recent.
+    """
+    if not worktree_root or not unclaimed:
+        return []
+    sdir = core.session_dir(session_id, worktree_root)
+    if not sdir:
+        return []
+    try:
+        started_iso = (Path(sdir) / "started_at").read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    started_epoch = core.iso_to_epoch(started_iso)
+    if not started_epoch:
+        return []
+    return sorted(
+        p
+        for p in unclaimed
+        if core.mtime_epoch("%s/%s" % (worktree_root, p)) >= started_epoch
+    )
+
+
 def _reconcile_offer(
     session_id: str,
     offer: SafeCommitOffer,
@@ -1633,6 +1691,19 @@ async def _commit_group(
             "error": None,
             "commit_failed": False,
             "reason": "phantom-deletions-only",
+            "declared_absent_from_head": absent_from_head,
+        }
+    leak_outcome = leak_gate(worktree_root, list(group["paths"]))
+    if not leak_outcome.passed:
+        return {
+            "paths": group["paths"],
+            "message": group["message"],
+            "committed": False,
+            "sha": None,
+            "push_state": PUSH_STATUS_NOT_ATTEMPTED,
+            "error": "leak_gate: " + "; ".join(leak_outcome.diagnostics[:5]),
+            "commit_failed": True,
+            "reason": None,
             "declared_absent_from_head": absent_from_head,
         }
     message = apply_missing_trailers(
@@ -1935,6 +2006,9 @@ async def commit_session_offer_async(
         "dropped_groups": dropped_groups,
         "residue": residue,
         "reconciliation": reconciliation,
+        "mtime_orphans": _mtime_orphans(
+            session_id, reconciliation["unclaimed"], worktree_root
+        ),
         "outcome": outcome,
     }
 
@@ -2154,6 +2228,21 @@ _DEGRADED_SCOPE_NOTICE = (
 )
 
 
+def _mtime_orphans_line(paths: Sequence[str]) -> str:
+    """One line NAMING the `mtime_orphans` paths, capped at
+    `_REPORT_PATH_PREVIEW_COUNT` with a `(+N more)` tail -- bounded for the
+    same reason `excluded` is (see `_render_report`). Names, never adopts."""
+    shown = list(paths[:_REPORT_PATH_PREVIEW_COUNT])
+    remaining = len(paths) - len(shown)
+    tail = " (+%d more)" % remaining if remaining > 0 else ""
+    return (
+        "Written since this session started, claimed by no session: %d "
+        "path(s) — %s%s. NAMED, NOT ADOPTED: if one is yours, its claim is "
+        "missing; commit it by explicit pathspec."
+        % (len(paths), ", ".join(shown), tail)
+    )
+
+
 def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = None) -> str:
     """Render the operator-facing report: detail first, VERDICT LAST.
 
@@ -2298,6 +2387,9 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             "your own lands here, and so do paths that are nobody's."
             % (len(unclaimed), ", ".join(sample), tail)
         )
+    mtime_orphans = report.get("mtime_orphans") or []
+    if mtime_orphans:
+        lines.append(_mtime_orphans_line(mtime_orphans))
     if not reconciliation.get("reconciled", False):
         lines.append(
             "Ledger not reconciled against the tree this call — the two "
@@ -2508,6 +2600,11 @@ def _handler(params: dict, repo_root=None) -> dict:
         )
         if junk_claimed_absent:
             offer = _drop_junk_from_offer(offer, junk_claimed_absent)
+        offer["mtime_orphans"] = _mtime_orphans(
+            session_id,
+            reconciliation["unclaimed"],
+            core.git_root(cwd) or cwd or ".",
+        )
         return {
             "dry_run": True,
             "rendered": _render_dry_run(offer, reconciliation),
@@ -2572,6 +2669,9 @@ def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> s
             "pathspec; the full list is on `reconciliation.unclaimed`."
             % (", ".join(sample), tail)
         )
+    mtime_orphans = offer.get("mtime_orphans") or []
+    if mtime_orphans:
+        line += "\n" + _mtime_orphans_line(mtime_orphans)
     return line
 
 

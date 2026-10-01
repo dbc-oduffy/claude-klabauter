@@ -618,38 +618,12 @@ def test_overlay_with_malformed_floor_not_treated_as_absent_even_unset(
 # C2: this repo's real `auto-reconcile-policy.local.yaml` overlay (plan
 # `2026-08-15-arm-per-repo-auto-reconcile-so-finished.md` § C2, AC3-AC5).
 #
-# Unlike the fixtures above, these three tests deliberately chdir to the
-# REAL repo root and resolve against the REAL overlay file that ships at
-# the repo root -- that is the point: they are the regression that fires if
-# the overlay is deleted or becomes gitignored.
+# The tests that resolve against the REAL overlay file shipped at the repo
+# root live in `test_policy_loader_claude_klabauter_corpus.py`; the one below pins that
+# a sibling repo cannot inherit it.
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def test_this_repo_resolves_armed_from_the_real_overlay(monkeypatch) -> None:
-    """AC4: from this repo's own root, with `CLAUDE_PLUGIN_ROOT` UNSET
-    (the common non-harness invocation, not just the pytest-inherited case),
-    load_policy() resolves the REAL `auto-reconcile-policy.local.yaml` at the
-    repo root and reports it armed. Fails if that file is deleted or
-    gitignored, and must not depend on `CLAUDE_PLUGIN_ROOT` happening to be
-    set in the calling environment (see the absent-floor-merges-over-
-    conservative-defaults fix this test pins)."""
-    monkeypatch.chdir(_REPO_ROOT)
-    _clear_policy_env(monkeypatch)
-
-    overlay_path = _REPO_ROOT / "auto-reconcile-policy.local.yaml"
-    assert overlay_path.is_file(), (
-        "auto-reconcile-policy.local.yaml is missing from the repo root -- "
-        "this repo's auto-reconcile arming has regressed"
-    )
-
-    result = load_policy(None)
-
-    assert result.source == "loaded"
-    assert result.resolved_path == str(overlay_path)
-    assert result.policy["auto_ship_enabled"] is True
-    assert result.policy["dry_run"] is False
 
 
 def test_a_different_repo_root_does_not_come_back_armed(tmp_path: Path, monkeypatch) -> None:
@@ -665,35 +639,6 @@ def test_a_different_repo_root_does_not_come_back_armed(tmp_path: Path, monkeypa
 
     assert result.resolved_path != str(_REPO_ROOT / "auto-reconcile-policy.local.yaml")
     assert result.policy["auto_ship_enabled"] is False
-
-
-def test_this_repo_overlay_is_a_partial_overlay_floor_supplies_the_rest(monkeypatch) -> None:
-    """The real overlay names only auto_ship_enabled/dry_run -- a key it
-    does not name (cross_handoff_attribution) must still resolve from the
-    floor rather than vanishing, pinning the shallow key-by-key merge
-    contract this file's own header comment documents."""
-    monkeypatch.chdir(_REPO_ROOT)
-    _clear_policy_env(monkeypatch)
-
-    overlay_path = _REPO_ROOT / "auto-reconcile-policy.local.yaml"
-    overlay_data = yaml.safe_load(overlay_path.read_text(encoding="utf-8"))
-    assert set(overlay_data.keys()) == {"auto_ship_enabled", "dry_run"}, (
-        "the real overlay must stay a partial overlay naming only the two "
-        "arming keys -- restating a floor key here would fork it silently"
-    )
-
-    result = load_policy(None)
-
-    if result.source == "loaded":
-        assert "cross_handoff_attribution" in result.policy
-        assert "three_signal" in result.policy
-        assert "mechanical_commit_denylist" in result.policy
-    else:
-        # The floor itself may be absent/malformed depending on this
-        # environment's CLAUDE_PLUGIN_ROOT -- that is a floor-resolution
-        # fact, not a regression of THIS overlay's partial-merge shape,
-        # which the keys-set assertion above already pinned directly.
-        pass
 
 
 def test_overlay_absent_no_git_root_falls_through(tmp_path: Path, monkeypatch) -> None:

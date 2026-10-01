@@ -1,7 +1,7 @@
 """
 coordinator_core.workstream_complete.directives_commit_tail — the
-peer-attribution, commit-tail, push-outstanding, push-verification and
-publish-lag-advisory builders for the `workstream-complete-assemble`
+peer-attribution, commit-tail, push-outstanding and push-verification
+builders for the `workstream-complete-assemble`
 computed-skill engine.
 
 Purpose: this module's live surface is the CLOSE/COMMIT tail itself, not a
@@ -10,9 +10,9 @@ Purpose: this module's live surface is the CLOSE/COMMIT tail itself, not a
 governing-plan and per-path claim releases wired into the latter) /
 `run_push_outstanding_tail`. Everything else here (`resolve_known_
 concurrent_paths` and its `_committed_paths_for_sids`/`chunked_show_
-numstat_blocks` support, `compute_push_landed_gate`, `compute_publish_lag_
-advisory`) is read-only fan-in these callers consume: peer-exclusion pathspec
-resolution, push-landed confirmation, and the DR-335 publish-lag advisory.
+numstat_blocks` support, `compute_push_landed_gate`) is read-only fan-in
+these callers consume: peer-exclusion pathspec resolution and push-landed
+confirmation.
 Mirrors `directives_session_hygiene.py`'s directives-vs-gates split where it
 still applies: a step whose "work" is reading disk/git state or folding
 already-computed one-liners into a fixed template is a plain read-only
@@ -75,14 +75,12 @@ without hand-landing the commit — was rebuilt, not restored, by DR-358
   the existing native port `ops/ceremony/tail_ops.py :: cs_release_
   artifact`, wired into `run_close_commit`'s route by `run_close_commit_
   and_release_claims` (C5), not rebuilt as a directive either.
-- `d-write-trail`'s former review-shape/review-enum assemble-time
-  validators (`validate_review_shape` and the rest of that cluster) lived
-  in this module only because their sole callers — the now-removed
+- The review-shape/review-enum assemble-time validators
+  (`validate_review_shape` and the rest of that cluster) lived in this
+  module only because their sole callers — the now-removed
   `build_wsc_tail_directive`/`build_close_tail_args_directive` — lived here
   too. Deleted as dead code once those builders' removal left them with
-  zero callers; `d-write-trail` itself lives in `directives_review.py`
-  (`build_write_trail_directives`), not here, and was never this module's
-  own step.
+  zero callers; no review-trail step belongs to this module.
 - `accumulate_session_paths` (formerly `d-accumulate-session-paths`) was
   spliced only into the two removed builders' `--stage-paths` argument;
   deleted as dead code once they were gone and no replacement caller
@@ -96,7 +94,7 @@ Negative-spec:
       `concurrent-peer-attribution`, `session-work-summary`, and
       `flag-severity-classification` are C2f's (`judgments.py`) judgment
       points. This module only turns already-decided values into a
-      `commit_paths` call or a rendered summary string.
+      `commit_paths` call.
     - Does NOT implement the dirty-tree classifier itself
       (`d-classify-dirty-tree`) — per the census, that step is already
       engine-owned inside the commit-gate stack (`commit_gates`) and has
@@ -116,7 +114,7 @@ Negative-spec:
       claims`'s route, not this function's body) — it only turns
       already-decided values into one `commit_paths` call; there is no push
       leg here for a mode to govern at all.
-    - DOES retry, narrowly: `_chunked_committed_paths`' per-chunk git spawn
+    - DOES retry, narrowly: `chunked_show_numstat_blocks`' per-chunk git spawn
       (`_run_git_ok_retrying`, `_GIT_RETRY_ATTEMPTS`) is bounded lock-
       contention absorption for a git SPAWN that has not yet succeeded, not
       a general-purpose retry wrapper — scoped to this one call site's known
@@ -153,8 +151,6 @@ from coordinator_core.session.machinery_paths import (
     share_roots as _share_roots,
 )
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
-from coordinator_core.warm import skew as _skew
-from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as _memo_lifecycle
 
@@ -295,7 +291,7 @@ _COMMIT_HEADER_SENTINEL = "\x02"
 #: case.
 _COMMITTED_PATHS_CHUNK = 300
 
-#: Bounded retry budget for a single `_chunked_committed_paths` chunk spawn.
+#: Bounded retry budget for a single `chunked_show_numstat_blocks` chunk spawn.
 #: `_run_git_ok`/`_spawn_git` themselves carry NO retry of any kind (verified
 #: by reading both bodies — `_spawn_git` maps a spawn error straight to
 #: `(1, "", "spawn failed")` and `_run_git_ok` maps any nonzero rc straight to
@@ -455,8 +451,8 @@ def chunked_show_numstat_blocks(
     Chunked at
     `_COMMITTED_PATHS_CHUNK` shas per call, never one call per sha (see
     `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`) — a
-    union of two callers' sha sets is LARGER than either alone, so this is
-    MORE likely to need chunking, not less.
+    union of every requested sid's sha set is LARGER than any one alone, so
+    the call is likely to need chunking.
 
     Returns `{sha: <raw numstat block text, one row per line, no header>}`
     for every sha whose header line was seen in the output — a sha with a
@@ -464,11 +460,10 @@ def chunked_show_numstat_blocks(
     (never a partial dict) on the FIRST chunk that still fails after
     `_run_git_ok_retrying`'s bounded retry budget is exhausted — this
     function does not itself decide fail-open vs fail-closed; each of its
-    two callers (`_chunked_committed_paths` here,
+    caller path (`_committed_paths_for_sids` here,
     `_measure_session_review_scale_inputs` in `__init__.py`) applies its
-    OWN existing contract to a `None` result (raise
-    `PeerAttributionUnavailable`, or return the all-`None` four-tuple,
-    respectively) exactly as it did before this spawn was shared. Issues NO
+    OWN contract to a `None` result (raise `PeerAttributionUnavailable`, or
+    return the all-`None` four-tuple, respectively). Issues NO
     spawn at all for an empty `all_shas` (returns `{}`) rather than one
     over an empty argv.
 
@@ -522,37 +517,6 @@ def _committed_paths_from_blocks(blocks: "Dict[str, str]") -> "Dict[str, Set[str
     return result
 
 
-def _chunked_committed_paths(
-    repo_root: Path, all_shas: "list[str]"
-) -> "Dict[str, Set[str]]":
-    """Spawn 2 of `_committed_paths_for_sids`, now routed through the
-    shared `chunked_show_numstat_blocks` (see that function's own
-    docstring for the spawn/chunking contract this delegates to, and for
-    why the format changed from `log --no-walk -c --name-only` to `show
-    --numstat`). Returns {sha: touched_paths}, the union across every
-    chunk — same return shape as before this consolidation (AC2: frozen).
-
-    Raises `PeerAttributionUnavailable` when `chunked_show_numstat_blocks`
-    reports `None` (any chunk still failing after `_run_git_ok_retrying`'s
-    bounded retry budget) — matches `coverage.py`'s `_bulk_trailer_
-    lookup`'s "never a partial map" posture; a partial union here would
-    silently under-report a peer's touched paths for whichever shas fell in
-    the failed chunk, which is the exact fail-open outcome this function
-    exists to close. The retry layer (see `_GIT_RETRY_ATTEMPTS`'s own
-    docstring) absorbs routine transient lock contention from a concurrent
-    peer's git operation before this fail-closed raise ever fires — it does
-    not weaken the raise itself.
-    """
-    blocks = chunked_show_numstat_blocks(repo_root, all_shas)
-    if blocks is None:
-        raise PeerAttributionUnavailable(
-            f"git show --numstat failed for one of {len(all_shas)} peer-committed "
-            "sha(s) after the bounded retry budget was exhausted — refusing to "
-            "return a partial/empty union."
-        )
-    return _committed_paths_from_blocks(blocks)
-
-
 def _committed_paths_for_sids(
     repo_root: Path,
     sid_to_start: "Dict[str, datetime]",
@@ -592,9 +556,9 @@ def _committed_paths_for_sids(
     site's own responsibility, same fail-closed posture the former per-sha
     `archive_stamp._commit_session_id` call provided).
 
-    Spawn 2 — one or more (never per-sha) `git log --no-walk -c --name-only
-    <shas>` calls, CHUNKED at `_COMMITTED_PATHS_CHUNK` shas per call (see
-    `_chunked_committed_paths`) over the UNION of every sha attributed to
+    Spawn 2 — one or more (never per-sha) `git show --raw --numstat <shas>`
+    calls via `chunked_show_numstat_blocks`, CHUNKED at `_COMMITTED_PATHS_CHUNK` shas per call (see
+    `chunked_show_numstat_blocks`) over the UNION of every sha attributed to
     any requested sid, results unioned across chunks.
 
     A sid with no resolvable start time is simply absent from `sid_to_start`
@@ -2207,35 +2171,6 @@ def compute_push_landed_gate(
 
 
 # ---------------------------------------------------------------------------
-# DR-335 — close-out publish-lag advisory (read-only)
-# ---------------------------------------------------------------------------
-
-
-def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
-    """DR-335, call site (b): "reported as done while inert" — at close-out,
-    if this session's own work left engine-touching commits unpublished,
-    say so. Reuses `coordinator_core.warm.skew.publish_lag` /
-    `publish_lag_message` verbatim (same threshold, same two-git-call
-    bound, same register) rather than re-deriving the computation — this
-    function is placement only, matching `compute_push_landed_gate`'s own
-    read-only, git-log-only shape immediately above.
-
-    Returns `None` whenever the lag helper cannot establish a signal (no
-    stamp, unresolvable sha, below `PUBLISH_LAG_THRESHOLD_MINUTES`, or an
-    unexpected exception anywhere in the chain) — never raises, per
-    DR-335's negative spec that an ordinary between-rounds gap is expected
-    behaviour, not a defect this gate reports on.
-    """
-    try:
-        lag = _skew.publish_lag(_current_engine_clone(), Path(repo_root))
-    except Exception:
-        return None
-    if lag is None:
-        return None
-    return _skew.publish_lag_message(lag, site="close-out")
-
-
-# ---------------------------------------------------------------------------
 # Step 3.5 — d-release-plan-claim — REMOVED (ceremony.wsc_tail kill,
 # 2026-08-23): the governing-plan claim-release directive depended
 # exclusively on `d-run-wsc-tail` landing (`depends_on`/`{d-run-wsc-tail.
@@ -2251,80 +2186,6 @@ def compute_publish_lag_advisory(repo_root: Path) -> Optional[str]:
 # at the Step 3/3.5/3.6 assembly point. `archive-session-scope.py archive-session` and
 # `coordinator_core/session/scope.py`'s `archive()` remain live for that
 # SessionEnd-hook caller; only this module's builder was removed.)
-
-
-# ---------------------------------------------------------------------------
-# Step 4 — d-render-final-summary (read-only fan-in, no CLI)
-# ---------------------------------------------------------------------------
-
-_SUMMARY_HEAD = """## Session Complete
-
-**Work done:** {work_done}
-**Pushed:** {pushed}"""
-
-#: Exception lines, in print order. Each renders only when its caller-supplied
-#: value is non-empty — an all-clean ceremony emits the two head fields alone.
-#: `auto_memory_drain` is the one field with no other record on disk (the
-#: memory store carries no git history), so its caller is responsible for
-#: passing the disposition list whenever the drain gate ever printed residue.
-_EXCEPTION_LABELS: tuple[tuple[str, str], ...] = (
-    ("completeness_checklist", "Completeness checklist"),
-    ("auto_memory_drain", "Auto-memory drain"),
-    ("deferral_harvest", "Deferral harvest"),
-    ("post_summary_reconcile", "Post-summary reconcile"),
-    ("publish_lag", "Publish lag"),
-    ("flag_to_pm", "Flag to PM"),
-)
-
-
-def render_final_summary(
-    work_done: str,
-    pushed: str,
-    completeness_checklist: str = "",
-    auto_memory_drain: str = "",
-    deferral_harvest: str = "",
-    post_summary_reconcile: str = "",
-    publish_lag: str = "",
-    flag_to_pm: str = "",
-) -> str:
-    """Step 4's report-by-exception summary: two always-printed fields plus
-    any exception line whose value is non-empty. Fan-in aggregation only —
-    per the census, "no new content decided here" — `work_done` itself is
-    `session-work-summary`'s ALREADY-DECIDED sentence (C2f), not authored by
-    this function. Pure string formatting, no CLI, no `directives[]` entry:
-    mirrors `directives_session_hygiene.py`'s
-    `compute_completeness_checklist_gate` precedent for a step whose only
-    work is rendering a fixed template from caller-supplied facts.
-
-    Negative-spec: the former fixed 8-field block also printed
-    `Lessons captured`, `Work archived`, `Docs updated` and
-    `Orientation refreshed`. They were dropped, not accidentally lost — each
-    was a count or file list of work the ceremony's own commit already
-    records, carrying no PM decision, and a block of all-clean status lines
-    spends the EM->PM word budget that `hooks/em_report_altitude.py` then
-    measures as a verbosity violation. Do not restore them; do not convert
-    an empty exception value into an explicit "none"/"clean" line, which
-    rebuilds the same fixed block one default at a time.
-
-    `publish_lag` is DR-335's close-out advisory: pass
-    `compute_publish_lag_advisory(repo_root)`'s return value straight
-    through — `None`/empty stays silent (the ordinary case), a non-empty
-    string is `compute_publish_lag_advisory`'s already-formatted,
-    already-threshold-gated message, never re-derived here."""
-    lines = [_SUMMARY_HEAD.format(work_done=work_done, pushed=pushed)]
-    values = {
-        "completeness_checklist": completeness_checklist,
-        "auto_memory_drain": auto_memory_drain,
-        "deferral_harvest": deferral_harvest,
-        "post_summary_reconcile": post_summary_reconcile,
-        "publish_lag": publish_lag,
-        "flag_to_pm": flag_to_pm,
-    }
-    for key, label in _EXCEPTION_LABELS:
-        value = values[key]
-        if value:
-            lines.append(f"**{label}:** {value}")
-    return "\n".join(lines)
 
 
 if __name__ == "__main__":  # pragma: no cover - this module has no standalone CLI

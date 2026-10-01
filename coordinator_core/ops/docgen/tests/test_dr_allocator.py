@@ -57,23 +57,23 @@ def test_malformed_names_tolerated_not_rejected(tmp_path):
 
 
 def test_mixed_prefixes_fall_back_to_unprefixed_namespace(tmp_path):
-    _touch(tmp_path, "DR-EXAMPLE-GAME-REPO-005-a.md", "DR-RAG-010-b.md")
+    _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-RAG-010-b.md")
     assert allocate_dr_number(tmp_path) == "DR-001"
 
 
 def test_sole_shared_prefix_inferred_when_unambiguous(tmp_path):
-    _touch(tmp_path, "DR-EXAMPLE-GAME-REPO-005-a.md", "DR-EXAMPLE-GAME-REPO-006-b.md")
-    assert allocate_dr_number(tmp_path) == "DR-EXAMPLE-GAME-REPO-007"
+    _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-ALPHA-006-b.md")
+    assert allocate_dr_number(tmp_path) == "DR-ALPHA-007"
 
 
 def test_explicit_prefix_overrides_disk_inference(tmp_path):
     _touch(tmp_path, "DR-010-unprefixed.md")
-    assert allocate_dr_number(tmp_path, explicit_prefix="example-game-repo") == "DR-EXAMPLE-GAME-REPO-001"
+    assert allocate_dr_number(tmp_path, explicit_prefix="alpha") == "DR-ALPHA-001"
 
 
 def test_explicit_prefix_scopes_independently_of_other_namespaces(tmp_path):
-    _touch(tmp_path, "DR-EXAMPLE-GAME-REPO-005-a.md", "DR-RAG-010-b.md")
-    assert allocate_dr_number(tmp_path, explicit_prefix="EXAMPLE-GAME-REPO") == "DR-EXAMPLE-GAME-REPO-006"
+    _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-RAG-010-b.md")
+    assert allocate_dr_number(tmp_path, explicit_prefix="ALPHA") == "DR-ALPHA-006"
 
 
 def test_explicit_prefix_lowercased_input_normalized_uppercase(tmp_path):
@@ -97,8 +97,8 @@ def test_width_floor_is_three_digits_even_for_small_numbers(tmp_path):
 
 
 def test_width_padding_is_per_namespace_not_global(tmp_path):
-    _touch(tmp_path, "DR-0999-wide-unprefixed.md", "DR-EXAMPLE-GAME-REPO-005-a.md")
-    assert allocate_dr_number(tmp_path, explicit_prefix="EXAMPLE-GAME-REPO") == "DR-EXAMPLE-GAME-REPO-006"
+    _touch(tmp_path, "DR-0999-wide-unprefixed.md", "DR-ALPHA-005-a.md")
+    assert allocate_dr_number(tmp_path, explicit_prefix="ALPHA") == "DR-ALPHA-006"
 
 
 def test_returns_bare_id_no_suffix(tmp_path):

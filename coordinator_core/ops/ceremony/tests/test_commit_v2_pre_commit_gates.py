@@ -93,7 +93,16 @@ def test_ordinary_commit_passes_both_gates(tmp_path: Path):
     assert _head(repo) != before
 
 
-@pytest.mark.parametrize("gate_name", ["carry_gate", "op_scope_coverage_gate"])
+@pytest.mark.parametrize(
+    "gate_name",
+    [
+        "carry_gate",
+        "op_scope_coverage_gate",
+        "registration_quad_gate",
+        "claude_md_budget_gate",
+        "machine_path_leak_gate",
+    ],
+)
 def test_a_failing_gate_refuses_and_nothing_lands(tmp_path: Path, monkeypatch, gate_name):
     """A gate refusal returns a structured error AND leaves HEAD unmoved.
 

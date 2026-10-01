@@ -346,3 +346,93 @@ def test_two_blocking_legs_both_reasons_appear(monkeypatch):
     assert "BLOCK-REASON-ONE" in blob and "BLOCK-REASON-TWO" in blob, (
         f"a deny must carry every blocking leg's reason, not the first: {result!r}"
     )
+
+
+# --- DoE leg parity ---------------------------------------------------------
+
+# Stop REGISTRY keys at coordinator-content-repo@054f62ba51 (stop-dispatch.py `module_key`s).
+_DOE_STOP_LEGS = (
+    "runtime_tripwire_em_check",
+    "nudge_harness_directive_dispatch",
+    "nudge_unrouted_sizing",
+    "watchdog_undischarged_next_move",
+    "guard_manufactured_blocker",
+    "stop_em_report_altitude",
+    "guard_kira_verdict_routed",
+    "receiver_state_sensor",
+    "group_em_park_spool",
+)
+_LEG_TO_ENGINE_NAME = {"stop_em_report_altitude": "em_report_altitude"}
+
+
+def test_every_doe_stop_leg_is_composed() -> None:
+    mod = importlib.import_module(_MODULE)
+    for key in _DOE_STOP_LEGS:
+        engine_name = _LEG_TO_ENGINE_NAME.get(key, key)
+        candidates = (f"_{engine_name}_handler", f"_{engine_name}_op", f"_{key}_handler")
+        assert any(hasattr(mod, c) for c in candidates), key
+
+
+def _blocker_payload(tmp_path, session_id="sess-mb"):
+    import json
+
+    repo = _make_repo(tmp_path)
+    transcript = tmp_path / "t.jsonl"
+    entry = {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "Done. This is genuinely yours."}]},
+    }
+    transcript.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return {"cwd": repo, "session_id": session_id, "transcript_path": str(transcript)}
+
+
+def test_guard_manufactured_blocker_deny_folds_through(monkeypatch) -> None:
+    from coordinator_core.hooks._envelope import deny
+
+    mod = importlib.import_module(_MODULE)
+    _silence_all_legs(monkeypatch, mod)
+    monkeypatch.setattr(
+        mod, "_guard_manufactured_blocker_handler",
+        lambda _p: deny("Stop", "MB-BLOCK"), raising=True)
+
+    _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "MB-BLOCK" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_replayed_stop_payload_fires_blocker_at_most_once(tmp_path, monkeypatch) -> None:
+    from coordinator_core.hooks import guard_manufactured_blocker as gmb
+
+    monkeypatch.setattr(gmb, "resolve_posture", lambda _r: "default", raising=True)
+    payload = _blocker_payload(tmp_path)
+
+    denies = 0
+    for _ in range(2):
+        _mod, result = _aggregate(dict(payload))
+        if result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+            denies += 1
+    assert denies == 1
+
+
+def test_park_spool_runs_after_receiver_state_sensor(monkeypatch) -> None:
+    mod = importlib.import_module(_MODULE)
+    _silence_all_legs(monkeypatch, mod)
+    calls: list = []
+
+    async def _sensor(_params, repo_root=None):
+        calls.append("sensor")
+        return {}
+
+    def _spool(_p):
+        calls.append("spool")
+        return {}
+
+    monkeypatch.setattr(mod, "_receiver_state_sensor_handler", _sensor, raising=True)
+    monkeypatch.setattr(mod, "_group_em_park_spool_handler", _spool, raising=True)
+    monkeypatch.setattr(mod, "_guard_manufactured_blocker_handler",
+                        lambda _p: mod_no_advisory(), raising=True)
+    monkeypatch.setattr(mod, "_guard_terminal_review_handler",
+                        lambda _p: mod_no_advisory(), raising=True)
+
+    _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
+    assert calls == ["sensor", "spool"]

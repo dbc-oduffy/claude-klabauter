@@ -57,7 +57,7 @@ Negative-spec (hard-won, restated for this row):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, cast
+from typing import Callable, Optional, cast
 
 from coordinator_core.git.commit import (
     CommitOutcome,
@@ -81,12 +81,18 @@ from functools import partial
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import read_tree_spine
+from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.commit_gates import (
     carry_gate,
+    claude_md_budget_gate,
     declared_deletion_gate,
+    machine_path_leak_gate,
     op_scope_coverage_gate,
+    registration_quad_gate,
 )
+from coordinator_core.ops.ceremony.commit_source import post_commit_reader
+from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_root
 from coordinator_core.session import claim_index as session_claim_index
 from coordinator_core.session import core as session_core
@@ -289,6 +295,9 @@ def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant,
     before ``commit_paths`` runs. Reports a live peer's hold; never refuses, never spawns, never raises:
     a lookup failure or ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning.
+    For each live peer found, one further warning names (capped at 5) the files that peer holds which
+    are untracked and outside ``paths`` -- what this commit leaves behind; a failure there degrades to
+    a "companion state indeterminate" warning.
     """
     if not paths:
         return []
@@ -305,6 +314,7 @@ def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
         return [f"claim state indeterminate ({exc!r})"]
 
     warnings: list = []
+    live_peers: list = []
     for path in paths:
         claimants = lookup_result.get(path, [])
         if session_claim_index.UNANSWERABLE in claimants:
@@ -319,18 +329,48 @@ def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
                 warnings.append(f"claim state indeterminate for {path!r}")
                 continue
             if live:
+                if sid not in live_peers:
+                    live_peers.append(sid)
                 warnings.append(
                     f"{path!r} is held by live peer session {sid!r} -- "
                     "committed anyway"
                 )
+    if live_peers:
+        try:
+            companions = untracked_companions(
+                worktree_root, lookup_result.held_by or {}, live_peers, list(paths)
+            )
+            for sid, names in companions.items():
+                shown = ", ".join(names[:5])
+                if len(names) > 5:
+                    shown += f" (+{len(names) - 5} more)"
+                warnings.append(
+                    f"live peer session {sid} holds untracked file(s) this "
+                    f"commit leaves behind: {shown}"
+                )
+        except Exception as exc:  # noqa: BLE001 -- never refuse the commit
+            warnings.append(f"companion state indeterminate ({exc})")
     return warnings
 
 
 def _pre_commit_gates(
-    worktree_root: Path, paths: list, deleted_paths: list
+    worktree_root: Path,
+    paths: list,
+    deleted_paths: list,
+    read_source: Callable[[str], Optional[bytes]],
 ) -> Optional[str]:
     """Run the gates `run_commit_pipeline` ran before landing, returning a
     refusal string or None. TWO of its four, and the omissions are the point.
+
+    Runs now, in order: `declared_deletion_gate`, `carry_gate`,
+    `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
+    `claude_md_budget_gate`, `machine_path_leak_gate`. `read_source` is the
+    post-commit reader (`commit_source.post_commit_reader`): the last three and
+    `op_scope_coverage_gate` judge the tree this commit lands, never the worktree
+    or the index. Of the Bash path's checks only 7, 11 and 12 move here
+    (the three newest gates); 5, 13 and 14 are subsumed by construction, 8 is
+    advisory, and 9, 10 and 15 do not apply to this route. The per-check matrix
+    is docs/plans/2026-09-30-commit-tripwires-on-engine-commit-path.md.
 
     `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
     which ran none, and the resulting capability drop was filed as a P1
@@ -409,11 +449,23 @@ def _pre_commit_gates(
     exists to prevent. Reinstating it as written would also put this op over
     `PROCESS_TIME_TARGET_MS` (50.0), the standing budget its own gate asserts.
 
-    What remains -- `carry_gate` and `op_scope_coverage_gate` -- is free
-    (0.00ms and 2.60ms worst-case, zero spawns), needs no message convention,
-    and catches two things nothing else on this route catches: a staged
+    `carry_gate` and `op_scope_coverage_gate` are free
+    (0.00ms and 2.60ms worst-case, zero spawns), need no message convention,
+    and catch two things nothing else on this route catches: a staged
     handoff whose `carried_items` declare undeclared state, and a registry-map
     change registering an op with no scope coverage.
+
+    `leak_gate` (`coordinator_core/authoring_leaks`) runs fourth. It runs every
+    detector in `authoring_leaks.WIRED_DETECTORS` -- `import_closure`,
+    `payload_locality`, `foreign_identity`, none omitted -- over one shared
+    `HeadView` (one `read_tree_spine`), and refuses a commit that imports what
+    HEAD will lack, carries text the publish scrub does not rewrite, or names a
+    sibling repo undeclared. Zero spawns. Measured by
+    `benchmarks/probe_commit_gates.py` on a clean tree (prefilter-reject floor),
+    process time per call, warm / cold object cache: 1 path 0.47 / 0.78ms;
+    35 paths 16.2 / 22.5ms; `publish.py` 25.6 / 31.2ms. Each detector is under
+    its own ceiling (5ms / 15ms / 100ms); the 35-path composed figure is their
+    sum. A detector that fails to import or raises refuses the commit.
     """
     gate_paths = list(paths) + list(deleted_paths)
     if not gate_paths:
@@ -433,7 +485,11 @@ def _pre_commit_gates(
     # somebody needs to know which gate refused.
     for name, gate in (
         ("carry_gate", carry_gate),
-        ("op_scope_coverage_gate", op_scope_coverage_gate),
+        ("op_scope_coverage_gate", partial(op_scope_coverage_gate, read_source=read_source)),
+        ("leak_gate", leak_gate),
+        ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
+        ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
+        ("machine_path_leak_gate", partial(machine_path_leak_gate, read_source=read_source)),
     ):
         outcome = gate(worktree_root, gate_paths)
         if not outcome.passed:
@@ -526,7 +582,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         under `coordinator_core/write_guards/`. It never gates or delays
         the commit above -- a step failure degrades to a `skips` entry.
         `warnings` also carries one entry per named path a live peer session holds a touch-claim on;
-        never a refusal (see `_peer_claim_warnings`).
+        never a refusal (see `_peer_claim_warnings`), plus one entry per live peer naming the
+        untracked files it holds that this commit leaves behind.
         Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an
@@ -625,7 +682,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
     # after the fact is not one. Contrast `_guard_class_relay_step` below,
     # which runs after and is forbidden from failing the commit.
-    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_removed)
+    read_source = post_commit_reader(
+        worktree_root,
+        resolve_git_common_dir(worktree_root),
+        paths=raw_paths,
+        deleted_paths=raw_removed,
+        prefer_staged=raw_prefer_staged,
+        prefer_deliberate_stage=raw_prefer_deliberate_stage,
+    )
+    gate_refusal = _pre_commit_gates(worktree_root, raw_paths, raw_removed, read_source)
     if gate_refusal is not None:
         return _error(gate_refusal)
 

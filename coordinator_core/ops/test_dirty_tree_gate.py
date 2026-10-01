@@ -492,3 +492,18 @@ def test_parse_porcelain_paths_still_the_single_parser():
         if "def parse_porcelain_paths" in text:
             hits.append(str(path))
     assert hits == [str(root / "ops" / "dirty_tree_gate.py")], hits
+
+
+def test_refusal_text_never_offers_stash(tmp_path, isolated_plugin_root, capsys):
+    repo = _make_repo(tmp_path, "t-nostash")
+    (repo / "orphan.txt").write_text("orphaned content\n")
+
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        rc = main(["--terminator", "test"])
+    finally:
+        os.chdir(cwd)
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "stash" not in (captured.out + captured.err).lower()

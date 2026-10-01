@@ -16,7 +16,10 @@ single addressable applier over a different sub-field of the same sizing-object 
 
 What it writes: `exit_criterion.accepted = {pm_quote, on, mode}`, and `exit_criterion.
 statement` when `statement` is given (the PM's amended criterion replacing the proposed
-one). Nothing else in the document changes.
+one). When `mode` is passed and the document records no top-level `interaction_mode`, that
+field is written too: the mode the PM accepted under IS the mode the sizing ran under, and
+no other op can set it after assemble (`emit-wave-fire --from-sizing` refuses without it).
+An `interaction_mode` already on record is never overwritten. Nothing else changes.
 
 Negative-spec:
   - Does NOT write `pm_resolution`, `surfaced_to_pm`, `detents`, or `route` — those are
@@ -49,7 +52,7 @@ from typing import Optional
 
 import yaml
 
-from coordinator_core.frontmatter.primitives import write_fm_nested_field
+from coordinator_core.frontmatter.primitives import insert_fm_field, write_fm_nested_field
 from coordinator_core.frontmatter.schema_validate import (
     format_validation_errors,
     validate_frontmatter,
@@ -169,6 +172,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         existing = existing if isinstance(existing, dict) else {}
         existing_statement = str(existing.get("statement") or "").strip()
         existing_accepted = existing.get("accepted")
+        record_mode = bool(mode) and not doc.get("interaction_mode")
 
         new_statement = statement_param or existing_statement
         if not new_statement:
@@ -189,7 +193,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 and existing_accepted.get("mode") == new_accepted["mode"]
                 and new_statement == existing_statement
             )
-            if identical:
+            if identical and not record_mode:
                 return old_text
             if not supersede:
                 raise MutateAbort(
@@ -203,6 +207,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             {"statement": new_statement, "accepted": new_accepted}
         )
         new_text = write_fm_nested_field(old_text, "exit_criterion", rendered)
+        if record_mode:
+            new_text = insert_fm_field(new_text, "interaction_mode", mode)
 
         try:
             new_doc = yaml.safe_load(new_text) or {}

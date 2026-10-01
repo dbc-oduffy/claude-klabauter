@@ -420,16 +420,35 @@ def _repair_build_bookkeeping_record(
     return Path(record["sidecar_path"]), record
 
 
+def _count(value: Any) -> int:
+    """A count that arrives either as the number itself (a stage return) or
+    as the list it counts (a legacy sidecar)."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    return len(value) if isinstance(value, (list, tuple)) else 0
+
+
 def mint(
-    plan_path: Path, repo_root: Path, *, build_test_path: Optional[str], repair: bool = False
+    plan_path: Path,
+    repo_root: Path,
+    *,
+    build_test_path: Optional[str],
+    repair: bool = False,
+    resolved: Optional[tuple] = None,
 ) -> Dict[str, Any]:
     """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
     Returns the written stamp dict. Raises `MintRefusal` on any refusal
     condition; writes nothing in that case. `repair=True` is the explicit,
-    never-default repair path for a pre-b' run -- see module docstring."""
-    if not build_test_path:
-        raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
-    build_test_sidecar = Path(build_test_path)
+    never-default repair path for a pre-b' run -- see module docstring.
+
+    Reads the run's stage returns off the engine's own record (`prep`,
+    `delivery`, `tests`, `criterion` -- `wave_bookkeeping.bookkeep_wave`'s
+    `stage_returns`) and falls back to the prep/delivery sidecars' frontmatter
+    only for a record that predates them. `resolved` is `(terminal_sha,
+    record_path, record)` from a caller that just landed the terminal commit
+    itself (`dispatch.terminal_commit`): the trailer walk is skipped."""
     if not repo_root.exists():
         raise MintRefusal(f"review-stamp: repo root does not exist: {repo_root}")
 
@@ -438,70 +457,93 @@ def mint(
     if not plan_id:
         raise MintRefusal(f"review-stamp: refusing to mint: {plan_path} carries no plan_id")
 
-    terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
-        repo_root, plan_id, plan_path, repair=repair
-    )
-
-    prep_rel = integration_data.get("prep_sidecar")
-    if not prep_rel:
-        if not repair:
-            if integration_path is None:
-                raise MintRefusal(
-                    f"review-stamp: refusing to mint: no terminal commit resolved for plan_id {plan_id!r}"
-                )
-            raise MintRefusal(f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar")
-        integration_path, integration_data = _repair_build_bookkeeping_record(
-            repo_root, plan_id, integration_path, integration_data, plan_path
+    if resolved is not None:
+        terminal_sha, integration_path, integration_data = resolved
+    else:
+        terminal_sha, integration_path, integration_data = _resolve_terminal_commit(
+            repo_root, plan_id, plan_path, repair=repair
         )
+
+    prep_data = integration_data.get("prep")
+    if not isinstance(prep_data, dict):
         prep_rel = integration_data.get("prep_sidecar")
         if not prep_rel:
-            raise MintRefusal(
-                "review-stamp: --repair assembled a bookkeeping record with no prep_sidecar -- "
-                f"see {integration_path}"
+            if not repair:
+                if integration_path is None:
+                    raise MintRefusal(
+                        f"review-stamp: refusing to mint: no terminal commit resolved for plan_id {plan_id!r}"
+                    )
+                raise MintRefusal(f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar")
+            integration_path, integration_data = _repair_build_bookkeeping_record(
+                repo_root, plan_id, integration_path, integration_data, plan_path
             )
-    prep_path = repo_root / prep_rel
-    prep_data = _load_sidecar(prep_path)
-    if prep_data is None:
-        raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
+            prep_rel = integration_data.get("prep_sidecar")
+            if not prep_rel:
+                raise MintRefusal(
+                    "review-stamp: --repair assembled a bookkeeping record with no prep_sidecar -- "
+                    f"see {integration_path}"
+                )
+        prep_path = repo_root / prep_rel
+        prep_data = _load_sidecar(prep_path)
+        if prep_data is None:
+            raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
 
     run_base_sha = prep_data.get("run_base_sha")
-    product_file_list = prep_data.get("product_files") or []
     foreign_claims = prep_data.get("foreign_claims") or []
+    # Every file in the reviewed diff, bookkeeping included: a plan whose whole
+    # deliverable sits under an excluded prefix (lessons, a plan doc) still
+    # delivered something. `product_files` alone called that run empty.
+    reviewed_files = max(_count(prep_data.get("slice_files")), _count(prep_data.get("product_files")))
 
-    whole_diff_sidecars = prep_data.get("whole_diff_sidecars") or {}
-    delivery_rel = whole_diff_sidecars.get("delivery")
-    delivery_data: Dict[str, Any] = {}
-    if delivery_rel:
-        delivery_data = _load_sidecar(repo_root / delivery_rel) or {}
+    delivery_data = integration_data.get("delivery")
+    if not isinstance(delivery_data, dict):
+        delivery_rel = (prep_data.get("whole_diff_sidecars") or {}).get("delivery")
+        delivery_data = (_load_sidecar(repo_root / delivery_rel) or {}) if delivery_rel else {}
     delivery_verdict = delivery_data.get("verdict")
 
     unresolved = integration_data.get("unresolved") or []
-    confinement_violations = integration_data.get("confinement_violations") or []
+    confinement_violations = _count(integration_data.get("confinement_violations"))
     fixes_applied = integration_data.get("fixes_applied")
-    slices = prep_data.get("slices") or []
+    slices = integration_data.get("slices")
+    if not isinstance(slices, int) or isinstance(slices, bool):
+        slices = _count(prep_data.get("slices"))
     brief_conformance = integration_data.get("brief_conformance") or {}
 
-    build_test_data = _load_sidecar(build_test_sidecar)
-    if build_test_data is None:
-        raise MintRefusal(f"review-stamp: no build/test record at {build_test_sidecar}")
+    build_test_data: Optional[Dict[str, Any]]
+    if build_test_path:
+        build_test_data = _load_sidecar(Path(build_test_path))
+        if build_test_data is None:
+            raise MintRefusal(f"review-stamp: no build/test record at {build_test_path}")
+        build_test_sidecar = str(build_test_path).replace("\\", "/")
+    else:
+        build_test_data = integration_data.get("tests")
+        if not isinstance(build_test_data, dict):
+            raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
+        build_test_sidecar = build_test_data.get("sidecar")
     tests_status = build_test_data.get("status")
-    build_test_verdict = "pass" if tests_status == "pass" else "fail"
+    criterion = integration_data.get("criterion")
+    criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
     # Refusal predicates, in the order § Contract states them.
     if delivery_verdict != "PASS":
         raise MintRefusal(f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS")
-    if build_test_verdict != "pass":
-        raise MintRefusal(f"review-stamp: refusing to mint: build/test verdict is {tests_status!r}, not pass")
+    if criterion_status in ("not_met", "indeterminate"):
+        raise MintRefusal(f"review-stamp: refusing to mint: exit criterion is {criterion_status}")
+    # A spine that writes nothing testable has no test run to pass; a met
+    # criterion is then the run's verdict. Nothing else stands in for a test.
+    if tests_status != "pass" and not (tests_status == "not_run" and criterion_status == "met"):
+        raise MintRefusal(
+            f"review-stamp: refusing to mint: build/test verdict is {tests_status!r}, not pass"
+            + (f" (exit criterion {criterion_status})" if tests_status == "not_run" else "")
+        )
     if len(unresolved) > 0:
         raise MintRefusal(f"review-stamp: refusing to mint: {len(unresolved)} unresolved finding(s)")
-    if len(confinement_violations) > 0:
-        raise MintRefusal(
-            f"review-stamp: refusing to mint: {len(confinement_violations)} confinement violation(s)"
-        )
+    if confinement_violations > 0:
+        raise MintRefusal(f"review-stamp: refusing to mint: {confinement_violations} confinement violation(s)")
     if len(foreign_claims) > 0:
         raise MintRefusal(f"review-stamp: refusing to mint: {len(foreign_claims)} foreign claim(s) on spine paths")
-    if len(product_file_list) == 0:
-        raise MintRefusal("review-stamp: refusing to mint: zero product files in the reviewed diff")
+    if reviewed_files == 0:
+        raise MintRefusal("review-stamp: refusing to mint: zero files in the reviewed diff")
 
     try:
         tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
@@ -514,7 +556,7 @@ def mint(
         "terminal_tree_sha": terminal_tree_sha,
         "run_base_sha": run_base_sha,
         "integration_sidecar": str(integration_path.relative_to(repo_root)).replace("\\", "/"),
-        "slices": len(slices),
+        "slices": slices,
         "fixes_applied": fixes_applied,
         "em_may_think_differently": integration_data.get("em_may_think_differently") or [],
         "unresolved": [],
@@ -525,16 +567,22 @@ def mint(
         },
         "delivery": {
             "verdict": delivery_verdict,
-            "product_files": len(product_file_list),
+            "product_files": _count(prep_data.get("product_files")),
         },
         "build_test": {
-            "verdict": build_test_verdict,
+            "verdict": "pass" if tests_status == "pass" else "not_run",
             "ran": build_test_data.get("run"),
             "failed": build_test_data.get("failed"),
-            "sidecar": str(build_test_path).replace("\\", "/"),
+            "sidecar": build_test_sidecar,
         },
         "stamped_at": None,
     }
+    if isinstance(criterion, dict) and criterion_status:
+        stamp["criterion"] = {
+            "status": criterion_status,
+            "observation": criterion.get("observation"),
+            "sidecar": criterion.get("sidecar"),
+        }
     from datetime import datetime, timezone
 
     stamp["stamped_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

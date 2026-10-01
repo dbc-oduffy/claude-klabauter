@@ -4,9 +4,8 @@ ownership (2026-08-05 chunk C14).
 Purpose: pins that `_stamp_implemented` now COMMITS its own terminal
 ``status: implemented`` write, scoped to exactly the plan path, immediately
 after the flip lands -- the same writer-commits shape
-`coordinator_core.ops.ceremony.consumed_handoff_stamp.
-post_commit_stamp_and_ship` already proves ("the op never exits with the
-stamp left as an unswept dirty working-tree edit"). Also pins the surviving
+`coordinator_core.ops.handoff_ship_archive` already proves (the op never
+exits with the stamp left as an unswept dirty working-tree edit). Also pins the surviving
 half of the module's former byte-parity obligation: the shared frontmatter
 primitives' emitted bytes and this CLI's stdout lines are unperturbed by the
 added commit (2026-08-04 PM ratification retired the repo-wide byte-parity

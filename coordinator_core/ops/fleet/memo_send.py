@@ -1092,32 +1092,57 @@ def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
     return seen
 
 
-def _citation_lint_notice(paths: list, sender_name: str) -> str:
-    """The informational (never held/refused) citation-qualify notice: an
-    unqualified path in a memo sent from `sender_name`'s repo means
-    `sender_name`, so it is qualified at send time rather than refused —
-    refusing once and then letting an unchanged retry through taught the
-    retry, not the fix (memo friction item 5). Lists at most five paths,
-    because the author needs examples, not an inventory."""
+def _citation_owners(
+    paths: list, sender_root: Path, receiver_root: Path,
+    sender_name: str, receiver_name: str,
+) -> tuple:
+    """Classify each bare path by which tree holds it: `({path: qualifier},
+    [ambiguous_or_unresolved])`. Sender-only -> sender, receiver-only ->
+    receiver, both or neither -> unresolved (left bare). In-process stats
+    only; a guess is never made.
+    """
+    owners: dict = {}
+    unresolved: list = []
+    for p in paths:
+        in_sender = (sender_root / p).exists()
+        in_receiver = (receiver_root / p).exists()
+        if in_sender and not in_receiver:
+            owners[p] = sender_name
+        elif in_receiver and not in_sender:
+            owners[p] = receiver_name
+        else:
+            unresolved.append(p)
+    return owners, unresolved
+
+
+def _citation_lint_notice(paths: list, sender_name: str, owners: Optional[dict] = None) -> str:
+    """The informational (never held/refused) citation-qualify notice: lists
+    each bare path with the repo it was qualified as (`owners`, defaulting to
+    `sender_name`). Lists at most five paths, because the author needs
+    examples, not an inventory."""
+    owners = owners or {}
     shown = paths[:5]
     remainder = len(paths) - len(shown)
-    listed = "\n".join(f"    {p} -> {sender_name}:{p}" for p in shown)
+    listed = "\n".join(f"    {p} -> {owners.get(p, sender_name)}:{p}" for p in shown)
     more_clause = f"\n    ...and {remainder} more" if remainder > 0 else ""
     return (
-        "memo.send: %d body path(s) were not repo-qualified; qualified as "
-        "sent-from-%s and delivered as such.\n"
+        "memo.send: %d body path(s) were not repo-qualified; qualified by "
+        "which repo holds them and delivered as such.\n"
         "%s%s"
-        % (len(paths), sender_name, listed, more_clause)
+        % (len(paths), listed, more_clause)
     )
 
 
-def _qualify_unqualified_citations(body: str, qualifiers: frozenset, sender_name: str) -> str:
+def _qualify_unqualified_citations(
+    body: str, qualifiers: frozenset, sender_name: str,
+    owners: Optional[dict] = None,
+) -> str:
     """Rewrite each unqualified `docs/`/`state/`/`coordinator/`/`archive/`/
-    `cross-repo/`-rooted citation in `body` to `<sender_name>:<path>` —
-    an unqualified path in a memo sent from `sender_name`'s repo means
-    `sender_name` (memo friction item 5). Leaves already-qualified
-    citations untouched. Operates left-to-right over one pass so an
-    inserted qualifier is never itself re-matched.
+    `cross-repo/`-rooted citation in `body` to `<repo>:<path>`. With `owners`
+    (path -> qualifier), a path absent from it is left bare; without it every
+    path is qualified as `sender_name`. Leaves already-qualified citations
+    untouched. Operates left-to-right over one pass so an inserted qualifier
+    is never itself re-matched.
     """
     out: list = []
     cursor = 0
@@ -1131,8 +1156,12 @@ def _qualify_unqualified_citations(body: str, qualifiers: frozenset, sender_name
         out.append(prefix)
         if already_qualified:
             out.append(candidate)
-        else:
+        elif owners is None:
             out.append(f"{sender_name}:{candidate}")
+        elif candidate in owners:
+            out.append(f"{owners[candidate]}:{candidate}")
+        else:
+            out.append(candidate)
         cursor = match.end()
     out.append(body[cursor:])
     return "".join(out)
@@ -1708,6 +1737,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # receiver resolves to the sender's own worktree (D4) — a self-send
     # never crosses a tree boundary.
     self_send = False
+    citations_unresolved: list = []
     try:
         self_send = receiver_repo_path.resolve() == sender_worktree.resolve()
     except OSError:
@@ -1726,8 +1756,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             sender_name = str(from_id or sender_worktree.name).strip()
             if sender_name.endswith("-em"):
                 sender_name = sender_name[: -len("-em")]
+            owners, citations_unresolved = _citation_owners(
+                unqualified, sender_worktree, receiver_repo_path,
+                sender_name, receiver_repo_path.name.lower(),
+            )
             split = split_frontmatter(content)
-            if split is not None:
+            if split is not None and owners:
                 content = (
                     (split.preamble or "")
                     + "---\n"
@@ -1735,14 +1769,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                     + "---"
                     + _qualify_unqualified_citations(
                         split.body_with_leading_newline, qualifiers, sender_name,
+                        owners,
                     )
                 )
-            notice = _warn_once(
-                sender_worktree, f"citation-lint:{topic}",
-                _citation_lint_notice(unqualified, sender_name),
-            )
-            if notice is not None:
-                _LOG.warning(notice)
+            if owners:
+                notice = _warn_once(
+                    sender_worktree, f"citation-lint:{topic}",
+                    _citation_lint_notice(list(owners), sender_name, owners),
+                )
+                if notice is not None:
+                    _LOG.warning(notice)
 
     if held:
         return build_setup_error_result(_MODE, dry_run, _held_once_refusal(held))
@@ -2162,7 +2198,10 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # next occurrence cost one line at send time instead of a cross-repo
         # memo, a sizing, and two sessions' investigation.
         "sender_unattributed": sent_by == _SENT_BY_UNRESOLVED,
+        "sent_receipt": sent_relpath,
     }
+    if citations_unresolved:
+        acted_item["citations_unresolved"] = citations_unresolved
     if cc_delivered:
         acted_item["cc_delivered"] = cc_delivered
     if anchor_warning is not None:

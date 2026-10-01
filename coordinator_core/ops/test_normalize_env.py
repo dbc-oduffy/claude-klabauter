@@ -485,3 +485,27 @@ def test_main_unknown_argument_exits_usage_error():
     out = io.StringIO()
     rc = ne.main(["--nope"], out=out)
     assert rc == ne.EXIT_USAGE_ERROR
+
+
+def test_normalize_env_never_writes_the_persistent_path_entry():
+    """normalize_env never writes the persistent coordinator PATH entry.
+
+    That entry is owned by coordinator_core/install/substrate.py ::
+    _percolation_and_path_steps (POSIX SETTINGS_HOME_BIN block via
+    shell_rc_guard) and _windows_health_steps (Windows user PATH).
+    """
+    import ast
+
+    tree = ast.parse(Path(ne.__file__).read_text(encoding="utf-8"))
+    forbidden = {"write_path_entry_guard_blocks", "write_shell_rc_guard_block"}
+    guard = "coordinator_core.install.shell_rc_guard"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(a.name != guard for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != guard
+            assert not any(a.name in forbidden for a in node.names)
+        elif isinstance(node, ast.Name):
+            assert node.id not in forbidden
+        elif isinstance(node, ast.Attribute):
+            assert node.attr not in forbidden

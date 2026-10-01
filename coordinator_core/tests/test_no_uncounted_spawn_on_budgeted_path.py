@@ -547,9 +547,21 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/assert_doctrine_cross_reference_counts.py",
         ("_handler",),
     ),
+    "fanout.census": (
+        "coordinator_core/ops/fanout/ops.py",
+        ("_census",),
+    ),
+    "fanout.compose": (
+        "coordinator_core/ops/fanout/ops.py",
+        ("_compose",),
+    ),
     "fanout.poll_scratch_dir": (
         "coordinator_core/ops/poll_scratch_dir.py",
         ("_poll_scratch_dir",),
+    ),
+    "fanout.reconcile": (
+        "coordinator_core/ops/fanout/ops.py",
+        ("_reconcile",),
     ),
     "findings.self_persist_fallback": (
         "coordinator_core/ops/self_persist_findings.py",
@@ -827,10 +839,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/verify_scout_inventory_completeness.py",
         ("_handler",),
     ),
-    "review.mint_workflow": (
-        "coordinator_core/ops/review_mint/op.py",
-        ("_review_mint_workflow",),
-    ),
     "roadmap.link_stubs": (
         "coordinator_core/ops/roadmap_link_stubs.py",
         ("_handler",),
@@ -846,6 +854,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "session.artifact_owner": (
         "coordinator_core/ops/session_artifact_owner.py",
         ("_session_artifact_owner",),
+    ),
+    "session.incident_claim": (
+        "coordinator_core/ops/session_incident_claim.py",
+        ("_session_incident_claim",),
+    ),
+    "session.incident_peers": (
+        "coordinator_core/ops/session_incident_claim.py",
+        ("_session_incident_peers",),
     ),
     "session.peer_roster": (
         "coordinator_core/ops/session_peer_roster.py",
@@ -1097,6 +1113,303 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # `merge_assemble.apply` above, not a mechanical enrolment (an empty spawn tuple would
     # certify a live, git-spawning op as spawn-free, which was never true) and no longer a member
     # of `_KNOWN_RESOLVER_GAP_OPS` (retired to an empty frozenset just below).
+    # Enrolled: function-granular reachable spawn set EMPTY (no legitimization, no pin).
+    "deliverable.cascade_backstop_sweep": (
+        "coordinator_core/ops/cascade_backstop_sweep.py",
+        ("_handler",),
+    ),
+    "deliverable.cascade_divergence_report": (
+        "coordinator_core/ops/cascade_divergence_report.py",
+        ("_handler",),
+    ),
+    "queue.append": (
+        "coordinator_core/ops/queue_append.py",
+        ("_queue_append_handler",),
+    ),
+    "session.reap_claims_for_repos": (
+        "coordinator_core/ops/session/reap.py",
+        ("_handler_reap_claims_for_repos",),
+    ),
+    "baton.carry_forward": (
+        "coordinator_core/ops/baton_carry_forward.py",
+        ("_carry_forward",),
+    ),
+    "baton.carry_forward_read": (
+        "coordinator_core/ops/baton_carry_forward.py",
+        ("_carry_forward_read",),
+    ),
+    "changelog.upsert_reviewed": (
+        "coordinator_core/ops/changelog_ops.py",
+        ("_upsert_reviewed_handler",),
+    ),
+    "doctrine.surface_split_regenerate": (
+        "coordinator_core/ops/grind_ops.py",
+        ("_doctrine_surface_split_regenerate",),
+    ),
+    "hooks.allow_emitted_workflow_fire": (
+        "coordinator_core/hooks/allow_emitted_workflow_fire.py",
+        ("_handler",),
+    ),
+    "hooks.assert_em_role": (
+        "coordinator_core/hooks/assert_em_role.py",
+        ("_handler",),
+    ),
+    "hooks.block_dispatch_suite_invocation": (
+        "coordinator_core/hooks/block_dispatch_suite_invocation.py",
+        ("_handler",),
+    ),
+    "hooks.block_unenumerated_agent_type": (
+        "coordinator_core/hooks/block_unenumerated_agent_type.py",
+        ("_handler",),
+    ),
+    "hooks.block_workflow_foreign_emission": (
+        "coordinator_core/hooks/block_workflow_foreign_emission.py",
+        ("_handler",),
+    ),
+    "hooks.block_workflow_unmodeled_agent": (
+        "coordinator_core/hooks/block_workflow_unmodeled_agent.py",
+        ("_handler",),
+    ),
+    "hooks.block_worktree_tool": (
+        "coordinator_core/hooks/block_worktree_tool.py",
+        ("_handler",),
+    ),
+    "hooks.check_claude_md_size": (
+        "coordinator_core/hooks/check_claude_md_size.py",
+        ("_handler",),
+    ),
+    "hooks.derive_global_doctrine_live_copy": (
+        "coordinator_core/hooks/derive_global_doctrine_live_copy.py",
+        ("_handler",),
+    ),
+    "hooks.derive_setup_copies": (
+        "coordinator_core/hooks/derive_setup_copies.py",
+        ("_handler",),
+    ),
+    "hooks.enforce_agent_dispatch_mode": (
+        "coordinator_core/hooks/enforce_agent_dispatch_mode.py",
+        ("_handler",),
+    ),
+    "hooks.flag_em_poll_in_flight": (
+        "coordinator_core/hooks/flag_em_poll_in_flight.py",
+        ("_handler",),
+    ),
+    "hooks.group_em_autofire": (
+        "coordinator_core/hooks/group_em_autofire.py",
+        ("_handler",),
+    ),
+    "hooks.group_em_park_spool": (
+        "coordinator_core/hooks/group_em_park_spool.py",
+        ("_handler",),
+    ),
+    "hooks.guard_config_change_hookstack_selfdefence": (
+        "coordinator_core/hooks/guard_config_change_hookstack_selfdefence.py",
+        ("_handler",),
+    ),
+    "hooks.guard_doctrine_changelog_prose": (
+        "coordinator_core/hooks/guard_doctrine_changelog_prose.py",
+        ("_handler",),
+    ),
+    "hooks.guard_doctrine_surface_bash_write": (
+        "coordinator_core/hooks/guard_doctrine_surface_bash_write.py",
+        ("_handler",),
+    ),
+    "hooks.guard_doctrine_surface_ratio": (
+        "coordinator_core/hooks/guard_doctrine_surface_ratio.py",
+        ("_handler",),
+    ),
+    "hooks.guard_handoff_summary_cap_on_write": (
+        "coordinator_core/hooks/guard_handoff_summary_cap_on_write.py",
+        ("_handler",),
+    ),
+    "hooks.guard_hook_generation_self_probe": (
+        "coordinator_core/hooks/guard_hook_generation_self_probe.py",
+        ("_handler",),
+    ),
+    "hooks.guard_host_subagent_bash_ban": (
+        "coordinator_core/hooks/guard_host_subagent_bash_ban.py",
+        ("_handler",),
+    ),
+    "hooks.guard_host_subagent_bash_spawn_shapes": (
+        "coordinator_core/hooks/guard_host_subagent_bash_spawn_shapes.py",
+        ("_handler",),
+    ),
+    "hooks.guard_kira_verdict_routed": (
+        "coordinator_core/hooks/guard_kira_verdict_routed.py",
+        ("_guard_kira_verdict_routed_handler",),
+    ),
+    "hooks.guard_manufactured_blocker": (
+        "coordinator_core/hooks/guard_manufactured_blocker.py",
+        ("_handler",),
+    ),
+    "hooks.guard_named_dispatch_tool_restriction": (
+        "coordinator_core/hooks/guard_named_dispatch_tool_restriction.py",
+        ("_handler",),
+    ),
+    "hooks.guard_posix_invocation_doctrine_write": (
+        "coordinator_core/hooks/guard_posix_invocation_doctrine_write.py",
+        ("_handler",),
+    ),
+    "hooks.guard_python_syntax_on_write": (
+        "coordinator_core/hooks/guard_python_syntax_on_write.py",
+        ("_handler",),
+    ),
+    "hooks.guard_repo_setup_claude_home_refusal": (
+        "coordinator_core/hooks/guard_repo_setup_claude_home_refusal.py",
+        ("_handler",),
+    ),
+    "hooks.guard_test_tree_git_fixture_spawn": (
+        "coordinator_core/hooks/guard_test_tree_git_fixture_spawn.py",
+        ("_handler",),
+    ),
+    "hooks.nudge_cross_repo_cwd_boundary": (
+        "coordinator_core/hooks/nudge_cross_repo_cwd_boundary.py",
+        ("_handler",),
+    ),
+    "hooks.nudge_initiative_goals_ladder": (
+        "coordinator_core/hooks/nudge_initiative_goals_ladder.py",
+        ("_handler",),
+    ),
+    "hooks.nudge_multiwave_workflow": (
+        "coordinator_core/hooks/nudge_multiwave_workflow.py",
+        ("_handler",),
+    ),
+    "hooks.nudge_plan_test_surface_tier": (
+        "coordinator_core/hooks/nudge_plan_test_surface_tier.py",
+        ("_handler",),
+    ),
+    "hooks.nudge_workflow_authoring_trampoline": (
+        "coordinator_core/hooks/nudge_workflow_authoring_trampoline.py",
+        ("_handler",),
+    ),
+    "hooks.observe_config_change": (
+        "coordinator_core/hooks/observe_config_change.py",
+        ("_handler",),
+    ),
+    "hooks.observe_post_compact": (
+        "coordinator_core/hooks/observe_post_compact.py",
+        ("_handler",),
+    ),
+    "hooks.offer_exploration_tier_dispatch": (
+        "coordinator_core/hooks/offer_exploration_tier_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.postuse_agent_dispatch": (
+        "coordinator_core/hooks/agent_postuse_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.postuse_stop_family_dispatch": (
+        "coordinator_core/hooks/postuse_stop_family_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.postusefailure_cross_repo_memo_remediate": (
+        "coordinator_core/hooks/postusefailure_cross_repo_memo_remediate.py",
+        ("_handler",),
+    ),
+    "hooks.preuse_agent_dispatch": (
+        "coordinator_core/hooks/preuse_agent_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.preuse_search_dispatch": (
+        "coordinator_core/hooks/preuse_search_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.preuse_skill_dispatch": (
+        "coordinator_core/hooks/preuse_skill_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.preuse_write_dispatch": (
+        "coordinator_core/hooks/preuse_write_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.project_orientation": (
+        "coordinator_core/hooks/project_orientation.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_announce_job_mode": (
+        "coordinator_core/hooks/session_start_announce_job_mode.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_guard_plane_check": (
+        "coordinator_core/hooks/session_start_guard_plane_check.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_register_content_root_root": (
+        "coordinator_core/hooks/session_start_register_content_root_root.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_register_published_engine": (
+        "coordinator_core/hooks/session_start_register_published_engine.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_repin_cloud_engine_root": (
+        "coordinator_core/hooks/repin_cloud_engine_root.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_watch_presence": (
+        "coordinator_core/hooks/session_start_watch_presence.py",
+        ("_handler",),
+    ),
+    "hooks.session_start_write_plugin_root_breadcrumb": (
+        "coordinator_core/hooks/session_start_write_plugin_root_breadcrumb.py",
+        ("_handler",),
+    ),
+    "hooks.sessionstart_bin_drift_refresh": (
+        "coordinator_core/hooks/sessionstart_bin_drift_refresh.py",
+        ("_handler",),
+    ),
+    "hooks.strip_worktree_isolation": (
+        "coordinator_core/hooks/strip_worktree_isolation.py",
+        ("_handler",),
+    ),
+    "lessons.extract": (
+        "coordinator_core/ops/grind_ops.py",
+        ("_lessons_extract",),
+    ),
+    "lessons.verify_extraction": (
+        "coordinator_core/ops/grind_ops.py",
+        ("_lessons_verify_extraction",),
+    ),
+    "memo.check_deliveries": (
+        "coordinator_core/ops/fleet/memo_send.py",
+        ("_memo_check_deliveries",),
+    ),
+    "p4.session_state": (
+        "coordinator_core/p4/session_state.py",
+        ("_session_state",),
+    ),
+    "plan.prep_gate": (
+        "coordinator_core/ops/plan_prep_gate.py",
+        ("_handler",),
+    ),
+    "plan.stamp_prepped": (
+        "coordinator_core/ops/plan_stamp_prepped.py",
+        ("_handler",),
+    ),
+    "records.by_origin_plan": (
+        "coordinator_core/ops/campaign_enumerate.py",
+        ("_handler",),
+    ),
+    "roadmap.blitz_land": (
+        "coordinator_core/ops/roadmap_blitz_land.py",
+        ("_handler",),
+    ),
+    "roadmap.plan_gate": (
+        "coordinator_core/ops/roadmap_plan_gate.py",
+        ("_handler",),
+    ),
+    "session.whoami_live": (
+        "coordinator_core/ops/session_whoami_live.py",
+        ("_session_whoami_live",),
+    ),
+    "warm.request_status": (
+        "coordinator_core/ops/warm_request_status.py",
+        ("_warm_request_status",),
+    ),
+    "workflow.bind_args": (
+        "coordinator_core/ops/workflow_bind.py",
+        ("_workflow_bind_args",),
+    ),
 }
 
 #: Live ops whose function-granular reachable-spawn measurement is a known RESOLVER GAP, not
@@ -1646,6 +1959,10 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
 #: cluster the SAME way as every other op rather than widening the module-granular inventory to
 #: follow import hops. It closes no (op, site) pair recorded here -- the reasoning below stays live.
 _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
+    "deliverable.cascade_backstop_sweep": (),
+    "deliverable.cascade_divergence_report": (),
+    "handoff.has_live_children": (),
+    "session.reap_claims_for_repos": (),
     "baton.resolve_path_and_repo": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -1655,14 +1972,10 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "commit.exec_bit_change": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "deliverable.cascade_backstop_sweep": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-    ),
-    "deliverable.cascade_divergence_report": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
+    "commit_ledger.join_divergence_report": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
     "deliverable.cascade_terminal": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -1704,7 +2017,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "fleet.migrate_handoff_vocabulary": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
@@ -1739,9 +2051,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "handoff.has_live_children": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-    ),
     "handoff.lineage_ancestry": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
@@ -1749,7 +2058,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
     "handoff.transition": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_hash_object_stdin_bytes", "<dynamic>", 0),
@@ -1790,9 +2098,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "session.commits": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "session.reap_claims_for_repos": (
-        ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
-    ),
     "session_ledger.aggregate_chain_loe": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
@@ -1810,6 +2115,10 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "baton.resolve_path_and_repo": ("coordinator_core/ops/resolve_baton_path.py", "_resolve_baton_path_and_repo"),
     "ceremony.chunk_commits": ("coordinator_core/ops/ceremony/chunk_commits.py", "_handler"),
     "commit.exec_bit_change": ("coordinator_core/ops/ceremony/commit_exec_bit.py", "_handler"),
+    "commit_ledger.join_divergence_report": (
+        "coordinator_core/ops/commit_join_divergence_report.py",
+        "_handler",
+    ),
     "deliverable.cascade_backstop_sweep": ("coordinator_core/ops/cascade_backstop_sweep.py", "_handler"),
     "deliverable.cascade_divergence_report": (
         "coordinator_core/ops/cascade_divergence_report.py",
@@ -2055,9 +2364,7 @@ _CLUSTER_D4_TARGET_FILES = frozenset(
 #: per-site legitimation. It closes no (op, site) pair recorded here -- the reasoning below
 #: stays live, matching D2/D3's own precedent above.
 _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "ceremony.init_anchor_injection_state": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
+    "ceremony.init_anchor_injection_state": (),
     "goal.append": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
     ),
@@ -2067,12 +2374,9 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "goal.close_day_apply": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
     ),
-    "install.probe_skill_frontmatter_valid": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
+    "install.probe_skill_frontmatter_valid": (),
     "plugin_health.forwarder_drift": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
     ),
     "plugin_health.sentinel": (
         ("coordinator_core/plugin_health/release_currency.py", "_check_ancestry", "git", 0),
@@ -2089,30 +2393,15 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/plugin_health/release_currency.py", "_run", "<dynamic>", 0),
         ("coordinator_core/plugin_health/release_currency.py", "release_currency_probe", "git", 0),
         ("coordinator_core/pyresolve.py", "_launcher_available", "<dynamic>", 0),
-        ("coordinator_core/pyresolve.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/pyresolve.py", "_validate_interpreter", "<dynamic>", 0),
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
     ),
-    "priority.drain": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
-    "priority.set": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
-    "queue.promote": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
-    "repo_setup.copy_console_subprocess_tripwire": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
-    "session.guard_hooks_kill_switch_detail": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
-    "session.guard_settings_integrity": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
-    ),
+    "priority.drain": (),
+    "priority.set": (),
+    "queue.promote": (),
+    "repo_setup.copy_console_subprocess_tripwire": (),
+    "session.guard_hooks_kill_switch_detail": (),
+    "session.guard_settings_integrity": (),
     "workflow.fire": (
-        ("coordinator_core/resolve_coordinator_clone.py", "_machine_local_get", "machine-local", 0),
         ("coordinator_core/warm/skew.py", "publish_lag", "git", 0),
         ("coordinator_core/warm/skew.py", "publish_lag", "git", 1),
     ),
@@ -2173,10 +2462,10 @@ def test_cluster_d4_open_disposition_matches_live_measurement():
         "_CLUSTER_D4_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 34, (
+    assert total_pairs == 21, (
         f"_CLUSTER_D4_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "34 expected after completion.reconcile_commits's kill removed its 1 pair from the "
-        "EM-measured 35 this chunk's own re-derivation found -- update this constant deliberately "
+        "21 left after resolve_coordinator_clone/pyresolve `_machine_local_get` left every op's "
+        "reach (34 -> 21) -- update this constant deliberately "
         "if the shift is real and understood, never to silence a drift you have not traced."
     )
 
@@ -2248,7 +2537,6 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "ceremony.update_docs_scan": ("coordinator_core/ops/ceremony/update_docs_scan.py", "_ceremony_update_docs_scan"),
     "changelog.compute_day_fields": ("coordinator_core/ops/changelog_ops.py", "_compute_day_fields_handler"),
     "changelog.inject_anchor": ("coordinator_core/ops/changelog_ops.py", "_inject_anchor_handler"),
-    "changelog.upsert_reviewed": ("coordinator_core/ops/changelog_ops.py", "_upsert_reviewed_handler"),
     "completion.flip_to_released": ("coordinator_core/ops/completion_ops.py", "_flip_to_released_handler"),
     "crossrepo.closure_status": ("coordinator_core/ops/crossrepo_closure_status.py", "_handler"),
     "cruft_sweep.run": ("coordinator_core/ops/cruft_sweep.py", "_run_handler"),
@@ -2324,12 +2612,7 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "changelog.inject_anchor": (
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_run_git", "git", 0),
     ),
-    "changelog.upsert_reviewed": (
-        ("coordinator_core/ops/workday_complete_backfill_scan.py", "_run_git", "git", 0),
-    ),
-    "completion.flip_to_released": (
-        ("coordinator_core/reconcile/commit_reality.py", "_git", "git", 0),
-    ),
+    "completion.flip_to_released": (),
     "crossrepo.closure_status": (
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
@@ -2464,9 +2747,10 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     )
     # 38 -> 37 on 2026-09-03: the machinery relocation (`5a9bb6c5ba`) took
     # `_resolve_git_root_uncached` off `hooks.cater_subagent_start`'s reachable set.
-    assert total_pairs == 37, (
+    assert total_pairs == 34, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "38 left after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
+        "34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
+        "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
         "deliberately if the shift is real and understood, never to silence a drift you have "
@@ -3339,64 +3623,6 @@ def _spawn_callees_in_function(relpath: str, top_enclosing: str) -> set[str]:
     return out
 
 
-def test_legitimized_site_mechanism_pins_hold():
-    """The assertion that makes a `_GLOBAL_SUBPROCESS_RUN` legitimation structural rather than
-    incidental -- and the reason this gate can admit a counter shape its pre-2026-08-19 text
-    refused outright.
-
-    That counter sees a call only because it substitutes the `subprocess.run` module attribute.
-    `spawn_policy.site_key` is `(path, enclosing, argv0, ordinal)` and carries NO mechanism
-    component, so editing a legitimized site from `subprocess.run` to `subprocess.Popen` (or
-    `os.posix_spawn`, or `asyncio.create_subprocess_exec` -- every one of them a site
-    `spawn_policy.detect` still recognises, so the site does not disappear) keeps the key
-    byte-identical: the exemption would silently outlive the counter that earned it, and the op's
-    budget would stop counting a spawn while still claiming to. THAT, not the width of the patch,
-    is the real defect in resting on a global counter, and pinning the mechanism is what closes it.
-
-    Checked against the enclosing function's FULL callee set, not one ordinal-matched call, so an
-    added second spawn of a different mechanism fails too. Also fails on a stale entry whose site
-    no longer spawns at all -- an exemption for a site that has gone is an exemption that can
-    silently start covering a future one that reuses the name.
-
-    `_SEAM` entries are deliberately exempt from the pin: a function-OBJECT substitution wraps the
-    name, so it keeps counting whatever the body spawns with. Their hole is routing, not mechanism,
-    and no static pin addresses it -- the seven open `ceremony.scoped_git_commit` bypasses are that
-    hole, and they are on the gate's red list rather than papered over here.
-
-    Checked against `_MECHANISM_PINS`, keyed on `leg.counter`, not a single hardcoded string
-    (opro-03 follow-up, 2026-08-21): `_GLOBAL_SUBPROCESS_SPAWN` widens the pin to admit BOTH
-    `subprocess.run` and `subprocess.Popen`, because its own companion counter
-    (`test_commit_e2e_spawn_budget.py::_count_op_spawns_both_ways`) watches both -- see that
-    dict's own docstring. The comparison is SUBSET membership (`found <= pin`), which is a pure
-    generalization of the old exact-equality check: for every singleton pin already in the dict
-    (`_GLOBAL_SUBPROCESS_RUN`), `found <= pin and found` means exactly `found == pin`, so no
-    existing `_GLOBAL_SUBPROCESS_RUN` entry's guarantee is loosened by this generalization."""
-    drifted: list[str] = []
-    for (_op_key, relpath, enclosing, _argv0, _ordinal), leg in _LEGITIMIZED_SITES.items():
-        pin = _MECHANISM_PINS.get(leg.counter)
-        if pin is None:
-            continue
-        found = _spawn_callees_in_function(relpath, enclosing.split(".")[0])
-        if not found:
-            drifted.append(
-                f"  {relpath}::{enclosing} -- legitimized against a global "
-                f"{sorted(pin)} counter, but no recognised spawn call remains in that "
-                f"function. Stale exemption: remove it, or re-earn it for whatever replaced it."
-            )
-        elif not found <= pin:
-            drifted.append(
-                f"  {relpath}::{enclosing} -- legitimized against a global {sorted(pin)} "
-                f"counter, but this function now spawns via {sorted(found)}. That counter does "
-                f"not see those, so the site is no longer counted while its exemption says it is. "
-                f"Route it back through {sorted(pin)}, or re-legitimize it against a counter "
-                f"that actually observes the new mechanism ({leg.counted_by})."
-            )
-    assert not drifted, (
-        f"{len(drifted)} legitimized site(s) drifted off the spawn mechanism their counter "
-        "patches:\n" + "\n".join(drifted)
-    )
-
-
 def test_plant_mechanism_drift_is_detected(tmp_path, monkeypatch):
     """The planted counterpart to `test_legitimized_site_mechanism_pins_hold` -- that test scans
     the live tree and passes today, which on its own proves only that nothing has drifted YET, not
@@ -3969,7 +4195,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/cutover_gate.py", "_git_cat_file_batch_check", "git", 0),
         ("coordinator_core/ops/cutover_gate.py", "_run_pytest_batch", "<dynamic>", 0),
         ("coordinator_core/ops/cutover_gate.py", "resolve_cutover_schema", "git", 0),
-        ("coordinator_core/ops/deliverable_rollup.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/ops/detect_changed_dependency_manifests.py", "_run_git", "git", 0),
         ("coordinator_core/ops/distill_apply_disposal.py", "_run_git", "git", 0),
         ("coordinator_core/ops/draft_plan_aging.py", "_batch_git_commit_epochs", "git", 0),
@@ -3996,13 +4221,11 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/plan_suggest_completion_steps.py", "_resolve_range_shas", "git", 0),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "git", 0),
         ("coordinator_core/ops/propagate_body.py", "_run_git", "git", 0),
-        ("coordinator_core/ops/queue_append.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/ops/record_history.py", "_is_git_worktree", "git", 0),
         ("coordinator_core/ops/record_history.py", "_run_git_log_pass", "git", 0),
         ("coordinator_core/ops/release_tagging.py", "_gh", "gh", 0),
         ("coordinator_core/ops/release_tagging.py", "_git", "git", 0),
         ("coordinator_core/ops/release_tagging.py", "_run", "<dynamic>", 0),
-        ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_set", "<dynamic>", 0),
         ("coordinator_core/ops/resolve_swept_baton.py", "_archiving_commit", "git", 0),
         ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair", "git", 0),
@@ -4023,17 +4246,11 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/verify_fix_files_changed.py", "_changed_files", "git", 0),
         ("coordinator_core/orientation/regenerate_cache.py", "_find_uproject", "<dynamic>", 0),
         ("coordinator_core/orientation/regenerate_cache.py", "_git", "git", 0),
-        ("coordinator_core/orientation/regenerate_cache.py", "_machine_local_get", "<dynamic>", 0),
         ("coordinator_core/plugin_health/drift.py", "_run_git", "git", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "_fetch_machine_json", "<dynamic>", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "_py_ident", "<dynamic>", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "_whoami_importable", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p10", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p2", "<dynamic>", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p20", "bash", 0),
         ("coordinator_core/plugin_health/sentinel.py", "probe_p4", "<dynamic>", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "probe_p6", "<dynamic>", 0),
-        ("coordinator_core/plugin_health/sentinel.py", "probe_p6s", "<dynamic>", 0),
     }
 )
 
@@ -4399,17 +4616,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "as <dynamic>."
     ),
     (
-        "coordinator_core/ops/deliverable_rollup.py",
-        "_machine_local_get",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 resolves to sys.executable (python) on a one-hop read -- "
-        "`[sys.executable, impl, \"get\", key]` is inline at the `subprocess.run` "
-        "call; `impl` is the fixed `machine-local` CLI script path, not the "
-        "program itself."
-    ),
-    (
         "coordinator_core/ops/hibernate_machine.py",
         "_run_binary",
         "<dynamic>",
@@ -4474,17 +4680,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "<dynamic> to the detector, not an uncertain program."
     ),
     (
-        "coordinator_core/ops/queue_append.py",
-        "_machine_local_get",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 resolves to sys.executable (python) on a one-hop read -- "
-        "same `[sys.executable, impl, \"get\", key]` inline shape as "
-        "`deliverable_rollup._machine_local_get`/`orientation.regenerate_cache."
-        "_machine_local_get`."
-    ),
-    (
         "coordinator_core/ops/release_tagging.py",
         "_run",
         "<dynamic>",
@@ -4493,17 +4688,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "2026-08-23 dynamic argv0, runtime evidence not gathered -- `_run` is a "
         "generic subprocess.run wrapper distinct from this module's own "
         "already-named `_git`/`_gh` helpers; `cmd` is caller-supplied."
-    ),
-    (
-        "coordinator_core/ops/repo_bootstrap.py",
-        "_machine_local_get",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- unlike the "
-        "sys.executable-prefixed `_machine_local_get` sites elsewhere, this "
-        "one's argv0 is `machine_local_bin`, a caller-resolved CLI path passed "
-        "in as a parameter with no fixed value at this call site."
     ),
     (
         "coordinator_core/ops/repo_bootstrap.py",
@@ -4580,47 +4764,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "the `subprocess.run` call."
     ),
     (
-        "coordinator_core/orientation/regenerate_cache.py",
-        "_machine_local_get",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 resolves to sys.executable (python) on a one-hop read -- "
-        "same `[sys.executable, impl, \"get\", key]` inline shape as "
-        "`deliverable_rollup._machine_local_get`/`queue_append."
-        "_machine_local_get`."
-    ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
-        "_fetch_machine_json",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- `py_bin` "
-        "is a resolved candidate interpreter, distinct from `sys.executable`, "
-        "per this function's own isolation-boundary docstring."
-    ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
-        "_py_ident",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- same "
-        "caller-resolved candidate `py_bin` as `_fetch_machine_json` above; "
-        "identifying it requires asking that candidate interpreter directly."
-    ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
-        "_whoami_importable",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- same "
-        "caller-resolved candidate `py_bin` pattern as this module's other "
-        "P-series probes."
-    ),
-    (
         "coordinator_core/plugin_health/sentinel.py",
         "probe_p10",
         "<dynamic>",
@@ -4650,26 +4793,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "`ml_cmd`, a resolved machine-local CLI path passed in as a parameter "
         "with no fixed value at this call site."
     ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
-        "probe_p6",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- same "
-        "caller-resolved candidate `py_bin` pattern as this module's other "
-        "P-series probes."
-    ),
-    (
-        "coordinator_core/plugin_health/sentinel.py",
-        "probe_p6s",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 dynamic argv0, runtime evidence not gathered -- same "
-        "caller-resolved candidate `py_bin` pattern as this module's other "
-        "P-series probes."
-    ),
 }
 
 
@@ -4698,16 +4821,17 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 41, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 32, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 41 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "entries, not the 32 <dynamic>-argv0 sites tranche dyn's inventory now "
         "names -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
         "DR-374's last row) removed its `_run` site along with the whole module, "
         "taking the count from 43 to 42, and the 2026-09-22 drain of "
         "`plugin_health/sentinel.py::probe_p3` (no longer a spawn site at all) "
-        "took it from 42 to 41 -- a count drift here means either a site was "
+        "took it from 42 to 41, and the later removal of nine orphaned "
+        "`_machine_local_get`/`sentinel.py` probe sites took it from 41 to 32 -- a count drift here means either a site was "
         "missed or one was double-counted."
     )
 
@@ -6373,9 +6497,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
     # first). That site is already priced into memo.transition and housekeeping.cycle.
     "session.safe_commit_offer": 2,
-    "plugin_health.sentinel": 26,
-    "fleet.migrate_handoff_vocabulary": 5,
-    "handoff.transition": 5,
+    "plugin_health.sentinel": 20,
+    "fleet.migrate_handoff_vocabulary": 4,
+    "handoff.transition": 4,
     "fleet.reap_integrated_findings": 9,
     "fleet.reap_unintegrated_findings": 9,
     # 4 -> 5, 2026-08-27: the value arrived via a concurrent peer commit (76c5cf07b,
@@ -6392,7 +6516,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # per-plan/baton) plus `archive_and_commit`'s four (`run_git`, `write_signed_commit_
     # object`, `_git._invoke`, `_machine_local_get`). Fresh `_measure_static_spawn_counts`
     # read against the live tree, not a guess.
-    "handoff.discharge_landed": 5,
+    "handoff.discharge_landed": 4,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
@@ -6445,7 +6569,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
     "commit.anchors": 2,
-    "completion.flip_to_released": 2,
+    "completion.flip_to_released": 1,
     "fleet.record_history": 2,
     "git_branch.compute_descendant_tip": 2,
     "git_branch.detect_unpushed_commits": 2,
@@ -6463,6 +6587,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo_setup.copy_console_subprocess_tripwire": 2,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,
+    "commit_ledger.join_divergence_report": 1,
     "baton.resolve_path_and_repo": 1,
     "baton.resolve_swept_in_archive": 1,
     "bug_sweep.verify_fix_files_changed": 1,
@@ -6473,13 +6598,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "ceremony.chunk_commits": 1,
     "ceremony.init_anchor_injection_state": 1,
     "changelog.compute_day_fields": 1,
-    "changelog.upsert_reviewed": 1,
     "ci.run_pip_audit": 1,
     "commit.exec_bit_change": 1,
     "crossrepo.closure_status": 1,
     "cutover.gate": 1,
-    "deliverable.cascade_backstop_sweep": 1,
-    "deliverable.cascade_divergence_report": 1,
     "deliverable.cascade_retract": 1,
     "deliverable.rollup": 1,
     "dependency.detect_changed_manifests": 1,
@@ -6560,7 +6682,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.persist_capture": 1,
     "plugin_health.drift": 1,
     "priority.set": 1,
-    "queue.append": 1,
     "queue.promote": 1,
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
@@ -6570,13 +6691,40 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "scratchpad.sweep": 1,
     "session.commits": 1,
     "session.guard_hooks_kill_switch_detail": 1,
-    "session.reap_claims_for_repos": 1,
     "session.resolve_chain_terminal_disposition": 1,
     "session_baton.promote": 1,
     "session_ledger.aggregate_chain_loe": 1,
     "strategic.generate": 1,
     "tracker.mint_person": 1,
     "workflow.fire_status": 1,
+    # Newly live ops measured at their reachable-site counts when first pinned.
+    "ci.run_commenting_sweep": 1,
+    "dispatch.terminal_commit": 7,
+    "docindex.emit": 1,
+    "fleet.delete_superseded_decisions": 8,
+    "fleet.prune_closed_bugs": 3,
+    "goal.kr2_two_repo_rate": 1,
+    "hooks.guard_terminal_review": 1,
+    "hooks.handoff_segment_inject": 2,
+    "hooks.mise_autofire": 1,
+    "hooks.pickup_autofire": 1,
+    "hooks.preuse_bash_dispatch": 9,
+    "hooks.session_start_cloud_focus": 1,
+    "hooks.session_start_repair_prepare_commit_msg_hook": 2,
+    "hooks.sessionend_auto_commit": 2,
+    "hooks.sessionstart_async_dispatch": 3,
+    "hooks.sessionstart_dispatch": 2,
+    "hooks.sessionstart_ensure_http_forwarder": 1,
+    "hooks.subagent_zero_tool_use_detect": 1,
+    "hooks.sweep_boot": 10,
+    "learn_lessons_pipeline.apply": 2,
+    "learn_lessons_pipeline.brief": 2,
+    "memo.correct_note": 4,
+    "memo.heal_inbox": 3,
+    "p4.register_workspace": 1,
+    "review_mint.bookkeep_wave": 7,
+    "review_stamp.check": 2,
+    "review_stamp.mint": 7,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

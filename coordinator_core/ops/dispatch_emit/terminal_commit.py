@@ -153,6 +153,8 @@ def _source_rows_by_plan(
     marker_text = _read_rel(worktree_root, plan_path)
     if marker_text is None:
         return {}
+    # Read-only parses below are LF-shaped; a CRLF checkout must map the same.
+    marker_text = marker_text.replace("\r\n", "\n")
     split = split_frontmatter(marker_text)
     origin = read_fm_field_unquoted(split.fm_text, "derived_from") if split else None
     if origin != _MINTED_SPINE_ORIGIN:
@@ -165,7 +167,7 @@ def _source_rows_by_plan(
     if inventory_text is None:
         return {}
     try:
-        table = parse_chunk_table(inventory_text)
+        table = parse_chunk_table(inventory_text.replace("\r\n", "\n"))
     except InventoryMintError:
         return {}
     spec_by_item = {
@@ -187,7 +189,7 @@ def _source_rows_by_plan(
         rel = guarded.relative_to(worktree_root.resolve()).as_posix()
         if rel not in row_ids_cache:
             text = _read_rel(worktree_root, rel)
-            row_ids_cache[rel] = _spine_row_ids(text) if text is not None else None
+            row_ids_cache[rel] = _spine_row_ids(text.replace("\r\n", "\n")) if text is not None else None
         spine_ids = row_ids_cache[rel]
         if not spine_ids:
             continue
@@ -214,6 +216,11 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
     Only rows currently ``open`` flip; any other disposition is left alone.
     Returns ``(new_text, flipped_ids)``; ``flipped_ids`` empty means no edit.
     """
+    # The row-span stamper matches LF lines only; a uniformly CRLF plan (any
+    # Windows checkout) matched nothing and silently flipped no row.
+    if "\r\n" in plan_text and "\n" not in plan_text.replace("\r\n", ""):
+        new_text, flipped = _flip_rows_coded(plan_text.replace("\r\n", "\n"), row_ids, sha)
+        return (new_text.replace("\n", "\r\n"), flipped) if flipped else (plan_text, [])
     located = locate_fenced_block(plan_text)
     if located.status != LocateStatus.LOCATED or located.span is None:
         return plan_text, []
@@ -263,7 +270,7 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
 
 def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
-    sha: str, session_id: Optional[str],
+    sha: str, session_id: Optional[str], also_commit: tuple = (),
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -294,10 +301,14 @@ def _stamp_coded_commit(
         originals[plan_rel] = original
         rows_coded[plan_rel] = flipped
 
-    if not rows_coded:
+    # A plan `review_stamp.mint` just wrote rides this commit even when none of
+    # its rows flipped (a re-fire over already-coded rows).
+    paths = sorted(set(rows_coded) | set(also_commit))
+    if not paths:
         return {"rows_coded": {}, "coded_sha": None}
     n = sum(len(v) for v in rows_coded.values())
-    params: dict = {"paths": sorted(rows_coded), "message": f"mark {n} rows coded ({sha[:7]})"}
+    message = f"mark {n} rows coded ({sha[:7]})" if n else f"review stamp ({sha[:7]})"
+    params: dict = {"paths": paths, "message": message}
     if session_id is not None:
         params["session_id"] = session_id
     try:
@@ -371,6 +382,86 @@ def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optiona
     return kept
 
 
+def _stage_returns(inline_review: dict) -> Optional[dict]:
+    """The run record's stage-return fields out of the digest's
+    ``inline_review``, or ``None`` when the digest predates them (no ``prep``
+    block). Maps the digest's names onto the record keys ``review_stamp.mint``
+    reads."""
+    if not isinstance(inline_review.get("prep"), dict):
+        return None
+    out: dict = {k: inline_review.get(k) for k in ("prep", "delivery", "tests", "criterion")}
+    fixes = inline_review.get("fixes")
+    if isinstance(fixes, int) and not isinstance(fixes, bool):
+        out["fixes_applied"] = fixes
+    integration = inline_review.get("integration")
+    if isinstance(integration, dict):
+        out["integration_sidecar"] = integration.get("sidecar")
+        out["unresolved"] = integration.get("unresolved") or []
+        out["confinement_violations"] = integration.get("confinement_violations") or 0
+    return out
+
+
+def _mint_review_stamp(
+    worktree_root: Path, plan_rel: Optional[str], sha: str, record_abs: Path, record: dict
+) -> dict:
+    """Mint the plan's ``review_stamp`` against the commit this op just
+    landed. A refusal is reported, never raised: the product commit stands."""
+    if not plan_rel:
+        return {}
+    guarded = contained_path(worktree_root / plan_rel, [worktree_root])
+    if guarded is None:
+        return {}
+    from coordinator_core.ops.review_stamp import MintRefusal, mint
+
+    try:
+        mint(guarded, worktree_root, build_test_path=None, resolved=(sha, record_abs, record))
+    except MintRefusal as exc:
+        return {"review_stamp": "refused", "review_stamp_refusal": str(exc)}
+    except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
+        return {"review_stamp": "refused", "review_stamp_refusal": repr(exc)}
+    return {"review_stamp": "minted"}
+
+
+def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dict:
+    """Flip the plan to ``implemented`` when the review stamp it now carries
+    records a ``met`` criterion. The verdict is read off the plan on disk,
+    never a param, so only a minted stamp can discharge it. A refusal (open
+    spine rows, the goal gate) is reported; every commit before it stands."""
+    import contextlib
+    import io
+
+    from coordinator_core.archive_stamp import cs_stamp_plan_implemented
+    from coordinator_core.ops.plan_status_transition import _FALSIFIER_OUTPUT_MAX
+
+    plan_abs = worktree_root / plan_rel
+    text = _read_rel(worktree_root, plan_rel)
+    split = split_frontmatter(text.replace("\r\n", "\n")) if text is not None else None
+    try:
+        fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
+    except yaml.YAMLError:
+        fm = {}
+    stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
+    criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
+    if not isinstance(criterion, dict) or criterion.get("status") != "met":
+        return {"plan_status": "not-stamped", "plan_status_reason": "review_stamp criterion is not met"}
+    observation = str(criterion.get("observation") or "").strip()
+    if not observation:
+        return {"plan_status": "not-stamped", "plan_status_reason": "criterion observation is empty"}
+    source = criterion.get("sidecar") or "the run's criterion leg"
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = cs_stamp_plan_implemented(
+            str(plan_abs),
+            falsifier_verdict="pass",
+            falsifier_output=observation[:_FALSIFIER_OUTPUT_MAX],
+            prose=f"criterion met at {sha} per {source}",
+            refuse_open_spine_rows=True,
+        )
+    if rc != 0:
+        return {"plan_status": "refused", "plan_status_refusal": err.getvalue().strip()[-600:]}
+    return {"plan_status": "implemented"}
+
+
 def _subject(contributing: list) -> str:
     ids = ", ".join(c.id for c in contributing)
     titles = "; ".join(c.title for c in contributing)
@@ -405,7 +496,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``prefix_files`` (own-prefix-claimed files folded into the commit) and
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
-    when that second step failed -- the product commit stands regardless. A
+    when that second step failed -- the product commit stands regardless.
+    ``review_stamp`` (``minted``/``refused``) reports the stamp, and on a
+    minted stamp with no incomplete chunk ``plan_status`` reports the
+    ``implemented`` flip (``implemented``/``refused``/``not-stamped``), which
+    ``plan_status_transition`` commits on its own. A
     script with no marker returns ``{"committed": False, "nothing_to_commit":
     True}`` without error. ``commit_v2``'s own ``nothing_to_commit: True``
     (a peer already landed the bytes) passes through unmodified, as a
@@ -523,13 +618,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # no JS-callable "invoke a Python op" primitive
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
-    if inline_review is not None and all(
-        inline_review.get(k) for k in ("wave_sidecar_paths", "prep_sidecar", "plan_id")
+    record_abs: Optional[Path] = None
+    record: Optional[dict] = None
+    stage_returns = _stage_returns(inline_review) if inline_review is not None else None
+    if (
+        inline_review is not None
+        and inline_review.get("plan_id")
+        and isinstance(inline_review.get("wave_sidecar_paths"), list)
+        and (inline_review.get("prep_sidecar") or stage_returns)
     ):
         if not session_id:
             return _error(
                 "params.inline_review names a bookkeeping stem (wave_sidecar_paths/"
-                "prep_sidecar/plan_id present) but params.session_id is missing or "
+                "plan_id present) but params.session_id is missing or "
                 "not canonical-UUID-shaped -- bookkeep_wave needs it to place the record"
             )
         wave_sidecar_paths = [
@@ -541,12 +642,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 repo_root=worktree_root,
                 session_id=session_id,
                 plan_id=inline_review["plan_id"],
-                prep_sidecar=inline_review["prep_sidecar"],
+                prep_sidecar=inline_review.get("prep_sidecar"),
                 record_stem=inline_review["integration_stem"],
+                stage_returns=stage_returns,
             )
         except Exception as exc:  # noqa: BLE001 -- surfaced, never silently dropped
             return _error(f"review_mint.bookkeep_wave failed: {exc}")
-        record_path_abs = Path(record["sidecar_path"])
+        record_path_abs = record_abs = Path(record["sidecar_path"])
         try:
             bookkeeping_record_path = str(
                 record_path_abs.relative_to(worktree_root)
@@ -665,12 +767,28 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         source_rows = _source_rows_by_plan(
             worktree_root, request.plan_path, [c.id for c in contributing_chunks]
         )
+        # Before the coded stamp: that commit carries the plan, so a stamp
+        # minted here lands in it and costs no commit of its own.
+        if record_abs is not None and record is not None and request.plan_path in source_rows:
+            reply.update(
+                _mint_review_stamp(
+                    worktree_root, request.plan_path, str(reply["sha"]), record_abs, record
+                )
+            )
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
                 str(reply["sha"]), session_id,
+                also_commit=(request.plan_path,) if reply.get("review_stamp") == "minted" else (),
             )
         )
+        if (
+            request.plan_path
+            and reply.get("review_stamp") == "minted"
+            and not incomplete_chunks
+            and reply.get("coded_sha")
+        ):
+            reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
     reply["branch_check"] = branch_check
     reply["chunks_committed"] = [c.id for c in contributing_chunks]
     reply["dropped_absent"] = dropped_absent

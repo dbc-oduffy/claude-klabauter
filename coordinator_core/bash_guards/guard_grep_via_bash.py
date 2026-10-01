@@ -219,6 +219,7 @@ from coordinator_core.bash_guards._shape_classifier import (
     Shape as _Shape,
     ShapeClassification as _ShapeClassification,
     classify_command as _classify_command,
+    tokenize_for_classification as _tokenize_for_classification,
 )
 from coordinator_core.bash_guards.dispatch_checks import (
     _GREP_FAMILY_BINARIES_BT as _GREP_FAMILY_BINARIES,
@@ -643,7 +644,11 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
         return None
 
-    tokens = _dialect.tokenize_command(
+    # One heredoc-stripped tokenize serves the decline check and the
+    # classification below: a heredoc body is stdin data, so a command that
+    # only fails to parse because of its body is judged on its real command
+    # text, same as the Bash leg.
+    tokens = _tokenize_for_classification(
         cmd, _dialect.Dialect.POWERSHELL, guard_name="guard_grep_via_bash"
     )
     if tokens is None:
@@ -664,9 +669,9 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             )
             return None
 
-    classification = _classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
-    if classification.tokens is None:
-        return None
+    classification = _classify_command(
+        cmd, dialect=_dialect.Dialect.POWERSHELL, tokens=tokens
+    )
     if not classification.has_shape(_Shape.GREP_VIA_BASH):
         return None
     return _evaluate_grep_via_bash_match(classification, payload)

@@ -39,9 +39,13 @@ _SWEPT_MODULES = (
     "ops/changelog_ops.py",
     "ops/cruft_sweep.py",
     "distill/delete_guard.py",
+    "session_ledger/aggregate_chain_loe.py",
+)
+
+#: Swept modules the mirror does not carry; `test_wire_paths_separator_claude_klabauter_corpus.py` sweeps them.
+_SOURCE_ONLY_SWEPT_MODULES = (
     "percolate/guards.py",
     "percolate/rewrite_basename.py",
-    "session_ledger/aggregate_chain_loe.py",
 )
 
 
@@ -88,18 +92,18 @@ def test_fleet_common_reexports_the_single_implementation():
     assert _common.rel_id is rel_id
 
 
-def test_no_swept_module_builds_a_wire_id_with_native_separator():
-    """Source-level guard: none of the swept modules reintroduces str(x.relative_to(y)).
+def assert_no_module_builds_a_wire_id_with_native_separator(modules):
+    """Source-level guard: none of *modules* reintroduces str(x.relative_to(y)).
 
     The defect class is a native separator leaking into a value that crosses a
     process boundary. ``rel_id()`` is the single sanctioned construction; this fails
-    loudly if any swept module hand-rolls the os.sep-rendering form again.
+    loudly if any module hand-rolls the os.sep-rendering form again.
     """
     root = _package_root()
     offenders = []
-    for relpath in _SWEPT_MODULES:
+    for relpath in modules:
         py = root / relpath
-        assert py.is_file(), f"swept module vanished — update _SWEPT_MODULES: {relpath}"
+        assert py.is_file(), f"swept module vanished — update the swept-module list: {relpath}"
         for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
             # Skip comments and docstring prose (rst literals are backticked).
@@ -114,7 +118,7 @@ def test_no_swept_module_builds_a_wire_id_with_native_separator():
     )
 
 
-def test_no_swept_module_interpolates_a_raw_relative_to_into_an_fstring():
+def assert_no_module_interpolates_a_raw_relative_to_into_an_fstring(modules):
     """Second shape of the same defect: ``f"...{p.relative_to(root)}..."``.
 
     ``str()`` is implicit inside an f-string, so the ``str(`` scan above misses it.
@@ -123,7 +127,7 @@ def test_no_swept_module_interpolates_a_raw_relative_to_into_an_fstring():
     """
     root = _package_root()
     offenders = []
-    for relpath in _SWEPT_MODULES:
+    for relpath in modules:
         py = root / relpath
         for lineno, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
@@ -136,6 +140,14 @@ def test_no_swept_module_interpolates_a_raw_relative_to_into_an_fstring():
         "relative_to() interpolated into an f-string without .as_posix() — "
         "use coordinator_core.wire_paths.rel_id():\n" + "\n".join(offenders)
     )
+
+
+def test_no_swept_module_builds_a_wire_id_with_native_separator():
+    assert_no_module_builds_a_wire_id_with_native_separator(_SWEPT_MODULES)
+
+
+def test_no_swept_module_interpolates_a_raw_relative_to_into_an_fstring():
+    assert_no_module_interpolates_a_raw_relative_to_into_an_fstring(_SWEPT_MODULES)
 
 
 def test_os_sep_assumption_documented():

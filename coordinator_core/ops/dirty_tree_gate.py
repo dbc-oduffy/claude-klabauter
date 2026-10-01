@@ -26,7 +26,7 @@ Classification rules applied in order; first match wins for each dirty path:
     (c) Residual: all others -> print to stdout, rc 3
 
 The script does NOT auto-dispose case-(c) paths — disposition (commit /
-stash / name-owner) stays EM judgment in the calling skill's prose.
+name-owner) stays EM judgment in the calling skill's prose.
 
 Port of: dirty-tree-gate.sh (DoE 894d4bc6, 2026-07-22)
 Spec backlink: docs/plans/2026-06-30-session-terminator-mechanism-unification.md C2
@@ -493,14 +493,14 @@ def main(argv: List[str]) -> int:
 
     print(
         f"{_PROG} ({terminator}): {len(unattributable)} unattributable file(s) — "
-        "disposition required (commit / stash / name-owner):",
+        "disposition required (commit / name-owner):",
         file=sys.stderr,
     )
     for p in unattributable:
         print(p)
     print("", file=sys.stderr)
     print(
-        "REFUSING to auto-stash or auto-adopt these paths — this gate cannot tell "
+        "REFUSING to auto-adopt these paths — this gate cannot tell "
         "'orphaned WT change from a crashed session' apart from 'live peer session's "
         "in-flight file on a shared branch' (the two look identical to git status). "
         "On a concurrent-EM branch this is routine, not exceptional.",
@@ -517,7 +517,7 @@ def main(argv: List[str]) -> int:
     )
     print(
         "  2. Peer file (live concurrent-EM session)   -> leave it untouched. Do NOT "
-        "stash, do NOT commit it. Complete via explicit-path commit of ONLY your own "
+        "commit it. Complete via explicit-path commit of ONLY your own "
         "session's files (git add -- <your-paths> && git commit -m ... -- <your-paths>), "
         "skipping this gate's blanket pass for this run.",
         file=sys.stderr,
@@ -529,8 +529,7 @@ def main(argv: List[str]) -> int:
     )
     print(
         "  4. Genuine orphan (crashed/abandoned session) -> commit-with-provenance, "
-        "or stash-with-provenance (git stash push -u -m '...' -- <path>), or name the "
-        "owner explicitly — see skills/workstream-complete/SKILL.md Step 3.0.",
+        "or name the owner explicitly — see skills/workstream-complete/SKILL.md Step 3.0.",
         file=sys.stderr,
     )
     return 3

@@ -139,6 +139,7 @@ __all__ = [
     "ShapeMatch",
     "ShapeClassification",
     "classify_command",
+    "tokenize_for_classification",
 ]
 
 
@@ -905,8 +906,25 @@ _DETECTOR_TABLE: Dict[Dialect, Tuple[Tuple[Shape, Detector], ...]] = {
 _GUARD_NAME = "shape_classifier.classify_command"
 
 
+def tokenize_for_classification(
+    cmd_text: str, dialect: Optional[Dialect], *, guard_name: str = _GUARD_NAME
+) -> Optional[List[str]]:
+    """The one tokenization policy ``classify_command`` applies: heredoc
+    bodies stripped (they are stdin data, never command text), then
+    ``tokenize_command``. A caller that needs the tokens BEFORE classifying
+    (e.g. a decline check) calls this and hands the result to
+    ``classify_command(tokens=...)`` so one tokenize serves both and both
+    see the same heredoc policy. ``None`` on a parse failure."""
+    return tokenize_command(
+        _strip_heredoc_bodies(cmd_text), dialect, guard_name=guard_name
+    )
+
+
 def classify_command(
-    cmd_text: str, *, dialect: Optional[Dialect] = Dialect.BASH
+    cmd_text: str,
+    *,
+    dialect: Optional[Dialect] = Dialect.BASH,
+    tokens: Optional[List[str]] = None,
 ) -> ShapeClassification:
     """Classify `cmd_text` against the shape set for `dialect` and return a
     ``ShapeClassification`` whose ``matches`` are in that dialect's fixed
@@ -947,6 +965,11 @@ def classify_command(
     (``guard_grep_via_bash``, ``guard_multiprobe_banner``,
     ``guard_head_tail_rewrite``, ``guard_plumbing_and_loops``) ever sees a
     heredoc body as a candidate segment.
+
+    `tokens` (keyword-only, optional): tokens the caller already obtained
+    from ``tokenize_for_classification(cmd_text, dialect)``. When given,
+    ``cmd_text`` is not re-stripped or re-tokenized; passing tokens from
+    any other tokenization forfeits the heredoc policy above.
     """
     if dialect is None:
         record_silent(
@@ -955,8 +978,8 @@ def classify_command(
         )
         return ShapeClassification(tokens=None, matches=())
 
-    cmd_text = _strip_heredoc_bodies(cmd_text)
-    tokens = tokenize_command(cmd_text, dialect, guard_name=_GUARD_NAME)
+    if tokens is None:
+        tokens = tokenize_for_classification(cmd_text, dialect)
     if tokens is None:
         return ShapeClassification(tokens=None, matches=())
 

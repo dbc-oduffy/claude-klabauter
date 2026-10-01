@@ -16,7 +16,7 @@ Result bindings (C13 reads these names verbatim): ``_reviewPrep``,
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.ops.review_mint.roster import (
     ExecuteReview,
@@ -180,7 +180,15 @@ def compose_execute_review(
     prep_phase = "Review prep"
     prep_prompt = (
         f"{prompt_head}\n\n"
-        f"Freeze and characterise this run's diff for review.\n"
+        f"Freeze and characterise this run's diff for review. Freeze it with the "
+        f"`review.freeze_diff` op: range={run_base_sha or 'run_base_sha'}, worktree=true, "
+        f"paths=declared_paths, slice_id=a name unique to this run. The run's rows "
+        f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
+        f"`git diff base..HEAD` is never the run's diff. Return the op's diff_path "
+        f"as whole_diff_path. List every file "
+        f"changed in {run_base_sha or 'run_base_sha'}..HEAD or in the working tree "
+        f"that is NOT in declared_paths under foreign_claims: no reviewer may "
+        f"edit it, so it is named here, not discovered at the delivery verdict.\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}\n"
         f"declared_paths: {', '.join(declared_paths)}"
@@ -260,6 +268,21 @@ def compose_execute_review(
             agent_opts=_agent_opts_for(agent, emitted_agent_type=emitted_agent_type),
             schema_literal=_schema_literal(agent.schema, stage_schemas),
         )
+        # A whole-diff agent is handed the frozen diff by path: the wave prompt
+        # is composed before the prep runs, so the pointer is spliced at run
+        # time (as the slice object is). Without it the delivery verifier has
+        # only a base sha and no diff to check claims against, and FAILs.
+        prefix = f"() => agent({_prompt_literal(wave_prompt)}, "
+        assert call.startswith(prefix)
+        frozen = (
+            "'\\n\\nwhole_diff_path: ' + (_reviewPrep?.whole_diff_path ?? 'NONE -- prep froze no diff')"
+            + (
+                " + '\\nsidecar_path: ' + (_reviewPrep?.whole_diff_sidecars?.delivery ?? 'NONE')"
+                if is_delivery_verifier
+                else ""
+            )
+        )
+        call = f"() => agent({_prompt_literal(wave_prompt)} + {frozen}, " + call[len(prefix):]
         item_lines.append(f"    {call}")
 
     map_lines = ",\n".join(item_lines)
@@ -318,3 +341,56 @@ def compose_execute_review(
         )
 
     return phases
+
+
+#: The judge's independence contract: it adjudicates from the artifacts that
+#: define "done", never from the run's own account of itself.
+_JUDGE_PREAMBLE = (
+    "Judge whether this run met its plan's exit criteria. Inputs, all by path: the "
+    "plan (its prime_exit_criterion, gated_exit_criteria and body are the spec), the "
+    "PM's recorded words (the plan's execution_authorized_note, its sizing object's "
+    "intent, any '## PM brief' section), and the working tree against run_base_sha. "
+    "Do not read executor reports, review sidecars or their prose: the run does not "
+    "certify itself. Every 'met' names the command you ran or the path you read. When "
+    "the plan records a falsifier, run it as recorded; it is not yours to replace. "
+    "Return 'indeterminate' when the evidence does not settle the criterion."
+)
+
+
+def compose_criterion_judge(
+    review: ExecuteReview,
+    *,
+    stage_schemas: Dict[str, dict],
+    plan_path: str,
+    run_base_sha: str,
+    falsifier: Optional[dict],
+    prompt_head: str = "",
+) -> Optional[str]:
+    """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
+    ``None`` when the roster declares no judge. Pointers only: the engine
+    never inlines or summarises the PM's words, the judge reads them from the
+    plan and sizing artifacts."""
+    if review.judge is None:
+        return None
+    falsifier_clause = ""
+    if falsifier:
+        falsifier_clause = (
+            f"\nrecorded falsifier: how={falsifier['how']!r}; "
+            f"expected_when_true={falsifier['expected_when_true']!r}"
+            + (f"; baseline_output={falsifier['baseline_output']!r}" if falsifier.get("baseline_output") else "")
+        )
+    prompt = (
+        f"{prompt_head}\n\n{_JUDGE_PREAMBLE}\n"
+        f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
+        f"run_base_sha: {run_base_sha}"
+        f"{falsifier_clause}"
+    ).strip()
+    return _agent_call_literal(
+        review.judge.agent_type,
+        prompt,
+        "Criterion judge",
+        schema=True,
+        as_arrow=False,
+        agent_opts=_agent_opts_for(review.judge),
+        schema_literal=_schema_literal(review.judge.schema, stage_schemas),
+    )

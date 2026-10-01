@@ -67,9 +67,12 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
+from coordinator_core import machine_path_leak
 from coordinator_core.attribution import is_exempt_path, scan_added_lines
+from coordinator_core.authz.registration_quad_static import registration_violations
+from coordinator_core.claude_md_budget import budget_verdict
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_index import (
     IndexParseError as _IndexV4ParseError,
@@ -940,9 +943,14 @@ def _extract_dict_str_keys(source: str, var_name: str, *, filename: str) -> Opti
 def op_scope_coverage_gate(
     worktree_root: Union[str, Path],
     gate_paths: Sequence[str],
+    read_source: Optional[Callable[[str], Optional[bytes]]] = None,
 ) -> GateOutcome:
     """Refuse a commit staging `_registry_map.py` that would register an op with no
     matching `_OP_KEY_SCOPE` entry.
+
+    With `read_source` (the post-commit reader) both tables are read from the tree the
+    commit lands, so an `op_scopes.py` edit left out of the commit's paths is judged as
+    HEAD's bytes; a None answer is the absence classes below. Without it, the worktree.
 
     Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are maintained independently,
     and an op omitted from the latter silently defaults to `"none"` scope rather than failing loud
@@ -988,13 +996,29 @@ def op_scope_coverage_gate(
     root = Path(worktree_root)
     registry_path = root / _REGISTRY_MAP_RELPATH
 
-    if not registry_path.exists():
+    def _present(path: Path, rel: str) -> bool:
+        if read_source is not None:
+            return read_source(rel) is not None
+        return path.exists()
+
+    def _text(path: Path, rel: str) -> str:
+        if read_source is not None:
+            data = read_source(rel)
+            if data is None:
+                raise OSError(f"{rel} is absent from the post-commit tree")
+            try:
+                return data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise OSError(str(exc)) from exc
+        return path.read_text(encoding="utf-8")
+
+    if not _present(registry_path, _REGISTRY_MAP_RELPATH):
         # Staged deletion of the registry map itself -- nothing left to check
         # coverage for; a legitimate skip, never a refusal.
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
 
     try:
-        registry_source = registry_path.read_text(encoding="utf-8")
+        registry_source = _text(registry_path, _REGISTRY_MAP_RELPATH)
     except OSError as exc:
         return GateOutcome(
             passed=False,
@@ -1030,7 +1054,7 @@ def op_scope_coverage_gate(
         )
 
     scopes_path = root / _OP_SCOPES_RELPATH
-    if not scopes_path.exists():
+    if not _present(scopes_path, _OP_SCOPES_RELPATH):
         return GateOutcome(
             passed=False,
             skipped=False,
@@ -1041,7 +1065,7 @@ def op_scope_coverage_gate(
         )
 
     try:
-        scopes_source = scopes_path.read_text(encoding="utf-8")
+        scopes_source = _text(scopes_path, _OP_SCOPES_RELPATH)
     except OSError as exc:
         return GateOutcome(
             passed=False,
@@ -1086,6 +1110,89 @@ def op_scope_coverage_gate(
     ]
     diagnostics.extend(f"  {name}" for name in unclassified)
     diagnostics.append(_OP_SCOPE_GATE_REMEDY)
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
+def registration_quad_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a commit whose post-commit tree registers an op on fewer than all five surfaces.
+
+    Filter-first: a commit touching no `coordinator_core/**.py` and no surface file skips
+    with no read. Unreadable or ambiguous surface files refuse.
+    """
+    verdict = registration_violations(read_source, gate_paths)
+    if verdict.outcome == "skip":
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    if verdict.outcome == "pass":
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+    return GateOutcome(passed=False, skipped=False, diagnostics=[verdict.reason])
+
+
+def claude_md_budget_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a commit that lands a governed CLAUDE.md-class surface over its hard limit or watermark.
+
+    Soft-limit findings do not refuse. Skips unless some path could be a governed surface
+    (a `.md` file).
+    """
+    if not any(p.endswith(".md") for p in gate_paths):
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    head_read: List[Callable[[str], Optional[bytes]]] = []
+
+    def read_head(path: str) -> Optional[bytes]:
+        if not head_read:
+            from coordinator_core.ops.ceremony.commit_source import post_commit_reader
+
+            head_read.append(
+                post_commit_reader(
+                    Path(worktree_root),
+                    resolve_git_common_dir(Path(worktree_root)),
+                    paths=(),
+                    deleted_paths=(),
+                )
+            )
+        return head_read[0](path)
+
+    verdict = budget_verdict(worktree_root, list(gate_paths), read_source, read_head)
+    if not verdict.hard:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+    return GateOutcome(
+        passed=False,
+        skipped=False,
+        diagnostics=[entry.strip() for entry in verdict.hard],
+    )
+
+
+def machine_path_leak_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a commit landing a settings.json that holds a machine-absolute path leaf.
+
+    Filter-first on the file name. A `tests/fixtures/` file is exempt only from the
+    unparseable-JSON finding.
+    """
+    candidates = [p for p in gate_paths if machine_path_leak.is_settings_json(p)]
+    if not candidates:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+    diagnostics: List[str] = []
+    for rel in candidates:
+        data = read_source(rel)
+        if data is None:
+            continue
+        detail = machine_path_leak.leak_detail(rel, data.decode("utf-8", errors="replace"))
+        if detail and not machine_path_leak.fixture_suppressible(rel, detail):
+            diagnostics.append(detail)
+    if not diagnostics:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 

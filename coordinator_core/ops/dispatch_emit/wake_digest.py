@@ -241,15 +241,54 @@ def completion_return_js(
         # here from the review-wave results directly (the same source the
         # bookkeeping step itself reads), since the record does not exist
         # yet at the point this script computes its own return value.
+        # The run record `dispatch.terminal_commit` writes and `review_stamp.
+        # mint` reads: every stage's schema-validated RETURN, never a field an
+        # agent was trusted to copy into its own sidecar frontmatter.
+        record_fields_expr = ""
+        if review_vars:
+            test_num = lambda field: f"({test_var} ? {test_var}.{field} ?? null : null)" if test_present else "null"
+            record_fields_expr = (
+                ", plan_id: " + review_vars.get("plan_id_literal", "null")
+                + ", wave_sidecar_paths: "
+                + f"(Array.isArray({wave_var}) ? {wave_var}.map(r => r && r.sidecar_path).filter(Boolean) : [])"
+                + ", prep: "
+                + f"({prep_var} ? {{ run_base_sha: {prep_var}.run_base_sha ?? null, "
+                + f"product_files: {prep_var}.product_files ?? null, "
+                + f"foreign_claims: {prep_var}.foreign_claims ?? [], "
+                + f"slice_files: ({prep_var}.slices ?? []).flatMap(s => (s && s.files) || []) }} : null)"
+                + ", delivery: "
+                + f"({delivery_var} ? {{ verdict: {delivery_var}.verdict ?? null, "
+                + f"product_files: {delivery_var}.product_files ?? null, "
+                + f"claims_unbacked: ({delivery_var}.claims_unbacked ?? []).length }} : null)"
+                + f", tests: {{ status: {tests_status_expr}, run: {test_num('tests_run')}, "
+                + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"
+                + ", criterion: "
+                + (
+                    f"({falsifier_var} ? {{ status: {falsifier_var}.status, "
+                    f"observation: {falsifier_var}.observation ?? null, "
+                    f"sidecar: {falsifier_var}.sidecar_path ?? null }} "
+                    ": { status: 'not_run', observation: null, sidecar: null })"
+                    if falsifier_present
+                    else "{ status: 'not_run', observation: null, sidecar: null }"
+                )
+            )
         if review_vars and review_vars.get("integration"):
-            integration_stem_expr = (
+            # The trailer names the engine's record (`bookkeeping_stem`), not
+            # the integrator's own sidecar: that sidecar's frontmatter is
+            # agent-written and carried none of what `mint` reads.
+            integration_stem_expr = review_vars.get("bookkeeping_stem") or (
                 "(" + integration_var + "?.sidecar_path ? "
                 "String(" + integration_var + ".sidecar_path).split('/').pop().replace(/\\.md$/, '') : null)"
             )
             slices_count_expr = f"({prep_var} ? {prep_var}.slices.length : null)"
             inline_review_expr = (
                 "(" + integration_var + " ? { integration_stem: " + integration_stem_expr + ", "
-                "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied } : null)"
+                "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied"
+                + record_fields_expr
+                + ", integration: { sidecar: " + integration_var + ".sidecar_path ?? null, "
+                "unresolved: " + integration_var + ".unresolved ?? [], "
+                "confinement_violations: " + integration_var + ".confinement_violations ?? 0 }"
+                " } : null)"
             )
         elif review_vars and review_vars.get("bookkeeping_stem"):
             # Zero-stage `inline_review` carries everything
@@ -261,7 +300,6 @@ def completion_return_js(
             # the commit -- so the record lands in the same commit as the
             # code it reviews.
             stem_lit = review_vars["bookkeeping_stem"]
-            plan_id_lit = review_vars.get("plan_id_literal", "null")
             prep_stem_lit = review_vars.get("prep_label_stem_literal")
             prep_sidecar_expr = (
                 f"({prep_var} && {prep_var}.share_dir ? "
@@ -269,16 +307,13 @@ def completion_return_js(
                 if prep_stem_lit
                 else "null"
             )
-            wave_sidecar_paths_expr = (
-                f"({wave_var} ? {wave_var}.map(r => r && r.sidecar_path).filter(Boolean) : [])"
-            )
             inline_review_expr = (
                 "(" + wave_var + " ? { integration_stem: " + stem_lit + ", "
                 "slices: " + wave_var + ".length, "
                 "fixes: " + wave_var + ".reduce((n, r) => n + ((r && r.applied) || 0), 0), "
-                "prep_sidecar: " + prep_sidecar_expr + ", "
-                "plan_id: " + plan_id_lit + ", "
-                "wave_sidecar_paths: " + wave_sidecar_paths_expr + " } : null)"
+                "prep_sidecar: " + prep_sidecar_expr
+                + record_fields_expr
+                + " } : null)"
             )
         else:
             inline_review_expr = "null"
@@ -305,7 +340,13 @@ def completion_return_js(
 
     decision_required_expr = (
         f"({RUNTIME_VARS[4]} ? {RUNTIME_VARS[4]} : "
-        + (f"({delivery_var} && {delivery_var}.verdict === 'FAIL' ? 'review delivery verdict FAIL' : " if review_vars else "(")
+        + (
+            f"({delivery_var} && {delivery_var}.verdict === 'FAIL' ? 'review delivery verdict FAIL"
+            + ("; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them" if has_commit_request else "")
+            + "' : "
+            if review_vars
+            else "("
+        )
         + (f"({falsifier_var} && {falsifier_var}.status === 'not_met' ? 'falsifier not met' : " if falsifier_present else "(")
         + f"({tests_status_expr} === 'fail' || {tests_status_expr} === 'error' ? 'tests failed' : "
         + (f"({integration_var} && {integration_var}.unresolved && {integration_var}.unresolved.length ? 'unresolved review notes' : " if review_vars else "(")

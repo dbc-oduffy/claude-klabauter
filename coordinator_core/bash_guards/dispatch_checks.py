@@ -148,6 +148,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
+from coordinator_core import machine_path_leak
 from coordinator_core.bash_guards import commit_tripwires
 from coordinator_core.bash_guards._dialect import (
     Dialect,
@@ -7336,45 +7337,6 @@ def _format_owner_token(fact: Optional["OwnerFact"]) -> str:
     return "orphan"
 
 
-_TESTS_FIXTURE_SEGMENT_RE = re.compile(r"(^|/)tests/fixtures/")
-_SETTINGS_JSON_RE = re.compile(r"(^|/)settings\.json$")
-
-
-def _is_settings_json(rel_path: str) -> bool:
-    """Does ``rel_path`` name a settings.json Check 11 (machine-path-leak) scans?
-
-    Every one of them, fixtures included. Which findings a fixture is allowed
-    to suppress is `_fixture_suppressible_detail`'s question, not this one --
-    see there for why the two were split.
-    """
-    return bool(_SETTINGS_JSON_RE.search(rel_path))
-
-
-def _fixture_suppressible_detail(rel_path: str, detail: str) -> bool:
-    """Is ``detail`` the one finding a fixture path is allowed to suppress?
-
-    Only the unparseable-JSON finding, and only under a ``tests/fixtures/``
-    tree. ``coordinator/tests/fixtures/stranded-claude/F-truncated-json/
-    settings.json`` is deliberately malformed
-    (``coordinator/bin/tests/test_break_glass.py``) and
-    ``commit_tripwires.check_machine_path_leak``'s JSONDecodeError branch
-    reports unparseable JSON as a hard violation, so staging that fixture used
-    to hard-block every commit in the repo, whoever's pathspec it was.
-
-    Review (code-reviewer, chain review of `abbbac67d`): the original fix
-    excluded fixture settings.json from the scan ENTIRELY, which is a wider
-    grant than its own justification -- a genuine machine-path leak in a file
-    that happens to sit under a fixtures path would silently skip the scan.
-    Pathname decides only whether the PARSE failure is tolerable; a real leak
-    still blocks wherever it lives. Confirmed against the tracked corpus at the
-    time of this change: four tracked settings.json files, one finding, and it
-    is this fixture's parse error.
-    """
-    if not _TESTS_FIXTURE_SEGMENT_RE.search(rel_path):
-        return False
-    return detail.startswith("ERROR")
-
-
 #: Commands whose exit status is load-bearing: a swallowed failure here lets the
 #: NEXT command in the chain run against a state that never happened.
 _EXIT_STATUS_LOAD_BEARING = ("commit", "push", "merge", "rebase", "cherry-pick", "mv", "rm", "tag")
@@ -8491,105 +8453,35 @@ def check_validate_commit(
     # differently-named surface (e.g. em-operating-doctrine.md) and it joins
     # this same check with no further code change here (see
     # coordinator_core.claude_md_budget.load_audience_manifest).
-    try:
-        from coordinator_core.claude_md_budget import (
-            HARD_LIMIT_BYTES as hard_limit,
-            SOFT_LIMIT_BYTES as soft_limit,
-            is_governed_claude_md,
-            load_audience_manifest,
-            parse_watermark,
-            ratchet_check,
-            resolve_ledger_path,
-            RatchetWatermarkError,
-        )
-    except Exception:
-        # SSOT unresolvable (should not happen in-process -- this module IS
-        # coordinator_core -- but degrade to the pre-unification literal
-        # pair + bare basename match rather than crash the whole commit gate
-        # on an unrelated import failure).
-        hard_limit, soft_limit = 40000, 38000
-
-        def is_governed_claude_md(_path, **_kw):
-            return True
-
-        load_audience_manifest = None
-        parse_watermark = None
-        ratchet_check = None
-        resolve_ledger_path = None
-        RatchetWatermarkError = Exception
+    from coordinator_core.claude_md_budget import budget_verdict, load_audience_manifest
 
     _repo_root_for_governance = _run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()
     _audience_manifest = (
-        load_audience_manifest(_repo_root_for_governance)
-        if load_audience_manifest is not None and _repo_root_for_governance
-        else []
+        load_audience_manifest(_repo_root_for_governance) if _repo_root_for_governance else []
     )
-    claude_md_named = [f for f in staged if re.search(r"(^|/)CLAUDE\.md$", f)]
-    manifest_named = [f for f in staged if f in _audience_manifest]
-    basename_candidates = sorted(set(claude_md_named) | set(manifest_named))
-    claudemd_files = [
-        cf
-        for cf in basename_candidates
-        if is_governed_claude_md(
-            os.path.join(_repo_root_for_governance, cf) if _repo_root_for_governance else cf,
-            repo_root=_repo_root_for_governance or None,
-            audience_manifest=_audience_manifest,
-        )
+    _budget_candidates = [
+        f for f in staged if re.search(r"(^|/)CLAUDE\.md$", f) or f in _audience_manifest
     ]
+    _budget_blobs: Dict[str, Optional[str]] = {}
+    _head_blobs: Dict[str, Optional[str]] = {}
 
-    try:
-        from coordinator_core.ops.measure_token_envelope import estimate_tokens
-    except Exception:
-        estimate_tokens = None  # AC1 token-reporting is best-effort, never load-bearing here
+    def _budget_read_post(path: str) -> Optional[bytes]:
+        if not _budget_blobs:
+            _budget_blobs.update(_batch_show_index_blobs(_budget_candidates, _cwd))
+        blob = _budget_blobs.get(path)
+        return blob.encode("utf-8") if blob is not None else None
 
-    hard_violation = ""
-    soft_names = ""
-    _claudemd_blobs = _batch_show_index_blobs(claudemd_files, _cwd)
-    over_watermark: List[Tuple[str, int, Any]] = []
-    for cf in claudemd_files:
-        blob = _claudemd_blobs.get(cf)
-        if not blob:
-            continue
-        size = len(blob)
-        token_note = ""
-        if estimate_tokens is not None:
-            token_note = ", ~%d tokens (estimate)" % estimate_tokens(blob)
-        if size > hard_limit:
-            hard_violation += "\n  %s = %d chars%s (limit %d)" % (cf, size, token_note, hard_limit)
-        elif size > soft_limit:
-            soft_names += "\n  %s = %d chars%s (soft %d; hard %d)" % (
-                cf, size, token_note, soft_limit, hard_limit,
-            )
+    def _budget_read_head(path: str) -> Optional[bytes]:
+        if not _head_blobs:
+            _head_blobs.update(_batch_show_index_blobs(_budget_candidates, _cwd, ref="HEAD"))
+        blob = _head_blobs.get(path)
+        return blob.encode("utf-8") if blob is not None else None
 
-        # C7b (AC4): the per-surface ratchet watermark, read from the same
-        # repo-local ledger convention C7a's DoE-resident admission gate
-        # uses -- unarmed (no ledger, or no "## Watermark" section) is a
-        # silent no-op, never a violation.
-        if resolve_ledger_path is not None and _repo_root_for_governance:
-            ledger_path = resolve_ledger_path(_repo_root_for_governance, cf)
-            try:
-                watermark = parse_watermark(ledger_path)
-            except RatchetWatermarkError as exc:
-                hard_violation += "\n  %s: %s" % (cf, exc)
-                continue
-            ok, ratchet_msg = ratchet_check(size, watermark)
-            if not ok:
-                over_watermark.append((cf, size, watermark))
-
-    # C7c: admit a shrinking edit on a surface already over its watermark
-    # (mirrors coordinator-content-repo's `admission_check_for_surface`, commit 0f59b1abc)
-    # -- refusing it leaves "raise the watermark" as the only way out. The
-    # pre-edit size is read the SAME way the post-edit `size` is (a `git
-    # cat-file --batch` blob read) against `HEAD`, in ONE batch across every
-    # over-watermark surface, and only when one exists.
-    if over_watermark:
-        head_blobs = _batch_show_index_blobs([cf for cf, _, _ in over_watermark], _cwd, ref="HEAD")
-        for cf, size, watermark in over_watermark:
-            head_blob = head_blobs.get(cf)
-            pre_edit_size = len(head_blob) if head_blob is not None else None
-            ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
-            if not ok:
-                hard_violation += "\n  %s: %s" % (cf, ratchet_msg)
+    _budget = budget_verdict(
+        _repo_root_for_governance, staged, _budget_read_post, _budget_read_head
+    )
+    hard_violation = "".join(_budget.hard)
+    soft_names = "".join(_budget.soft)
 
     if soft_names:
         warnings.append(
@@ -8724,11 +8616,11 @@ def check_validate_commit(
     # malformed, and the checker's JSONDecodeError branch flags that as a hard
     # violation, so staging it used to hard-block every commit in the repo).
     # A genuine machine-path leak still blocks wherever the file sits --
-    # see `_fixture_suppressible_detail`.
-    settings_staged = [f for f in staged if _is_settings_json(f)]
+    # see `machine_path_leak.fixture_suppressible`.
+    settings_staged = [f for f in staged if machine_path_leak.is_settings_json(f)]
     for sf in settings_staged:
         detail = commit_tripwires.check_machine_path_leak(sf, _cwd)
-        if detail and not _fixture_suppressible_detail(sf, detail):
+        if detail and not machine_path_leak.fixture_suppressible(sf, detail):
             reason = (
                 "BLOCKED: %s contains machine-specific absolute "
                 "path(s) that must not be committed.\n\n"
@@ -8747,7 +8639,7 @@ def check_validate_commit(
     # rationale: an incomplete quad is a data-cost bug, not a style nit),
     # subject to COORDINATOR_OVERRIDE_REGISTRATION_QUAD downgrading it to an
     # advisory, mirroring the CLAUDEMD-BUDGET override branch above.
-    registration_quad_violation = commit_tripwires.check_registration_quad_completeness(_cwd)
+    registration_quad_violation = commit_tripwires.check_registration_quad_completeness(_cwd, staged)
     if registration_quad_violation:
         if _override("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", payload=payload):
             warnings.append("REGISTRATION-QUAD-TRIPWIRE (override):\n%s" % registration_quad_violation)
@@ -10336,6 +10228,13 @@ def _sweeping_scope_sentence(operands: List[str]) -> str:
         return (
             "'--only' selects git's self-scoped mode but names no path, so "
             "this commit's content is whatever is staged, including a peer's."
+        )
+    expansions = [o for o in operands if "$" in o]
+    if expansions:
+        return (
+            "%s is a shell expansion — its paths are unknown until the shell "
+            "runs, so the scope cannot be read back; name the files inline."
+            % ", ".join(expansions)
         )
     if len(operands) == 1:
         return (

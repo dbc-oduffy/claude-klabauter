@@ -320,20 +320,6 @@ class TestGoldensReproduction:
             d["name"] for d in DISCARDED_PROPERTIES
         }
 
-    def test_holdout_split_matches_live_function(self, goldens):
-        # A `[:200]` prefix slice samples
-        # only the alphabetically-first entries (the golden is written with
-        # sort_keys=True), front-loading `archive/` and never touching
-        # `docs/plans/` or the tail of `state/handoffs/`. A stride sample
-        # touches every corpus directory instead, deterministically.
-        per_artifact = goldens.get("per_artifact", {})
-        items = list(per_artifact.items())
-        assert items, "goldens per_artifact is empty"
-        stride = max(1, len(items) // 200)
-        sample = items[::stride]
-        for rel_path, entry in sample:
-            assert split_holdout(rel_path) == entry["split"]
-
 
 class TestStructuralAbsences:
     """AC-5: the checker never exits non-zero and never raises on a failing

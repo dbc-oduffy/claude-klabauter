@@ -132,7 +132,8 @@ from typing import Optional
 # already-hand-composed document, never to construct it.
 import yaml
 
-from coordinator_core._claude_klabauter_root import _claude_home, _machine_local_get
+from coordinator_core._claude_klabauter_root import _claude_home
+from coordinator_core.machine_resolver import registry_get
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -622,7 +623,7 @@ def _claude_klabauter_root() -> Optional[str]:
         1. ``COORDINATOR_ENGINE_ROOT`` env var (via the accessor) — trusted
            as-is, but ONLY when this process is the one the caller ran in
            (see below).
-        2. ``machine-local get repos.claude_klabauter``.
+        2. registry ``repos.claude_klabauter`` (in-process read).
         3. Returns None when unresolvable; callers degrade gracefully (WARN+skip).
 
     The engine-root env var is a property of a CALLING process, same as
@@ -649,7 +650,7 @@ def _claude_klabauter_root() -> Optional[str]:
     source_root = _engine_source_root()
     if source_root:
         return source_root
-    val = _machine_local_get("repos.claude_klabauter")
+    val = registry_get("repos.claude_klabauter")
     return _refuse_published_mirror(val) if val else None
 
 

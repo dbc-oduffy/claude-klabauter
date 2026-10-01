@@ -152,5 +152,30 @@ def test_a_held_target_is_matched_not_unmatched(corpus):
     assert "matched_targets" not in report
 
 
+def test_a_target_in_no_wave_names_why(corpus):
+    _baton(
+        corpus,
+        "held-1",
+        'plan_blitz_hold_reason: "the PM ruled it does not fire"\n',
+    )
+
+    report = _call(corpus, targets=["held-1"])
+
+    assert report["waves"] == [] or all("held-1" not in w for w in report["waves"])
+    [row] = [r for r in report["target_exclusions"] if r["target"] == "held-1"]
+    assert row["excluded_because"] in {"not-candidate", "plan-not-needed", "unschedulable"}
+
+
+def test_a_baton_waiting_on_a_held_baton_says_so(corpus):
+    _baton(corpus, "held-2", 'plan_blitz_hold_reason: "PM holds it"\n')
+    _baton(corpus, "waits-on-held", "blocked_by: [held-2]\n")
+
+    report = _call(corpus)
+
+    [row] = [r for r in report["unschedulable"] if r["id"] == "waits-on-held"]
+    assert row["held_by_held"] == ["held-2"]
+    assert report["counts"]["blocked_by_held"] >= 1
+
+
 def test_a_sweep_reports_no_unmatched_targets(corpus):
     assert _call(corpus)["unmatched_targets"] == []

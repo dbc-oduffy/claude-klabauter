@@ -33,11 +33,6 @@ the convention).
 Consumes (orchestrates, reimplements none):
     coordinator/bin/review-brightline-gate.py
         -> d-run-review-brightline-gate's directives[].cli (mid-chain).
-    coordinator/bin/wsc-coverage-gate-runner.py (write-trail)
-        -> d-write-review-trail's directives[].cli. `write-trail` and
-        `claim-plan` are all that runner still exposes; its
-        `brightline-gate` and `coverage-gate --from-handoff` subcommands
-        were removed 2026-08-19 (state/kill-ledger.md K-007).
     coordinator/bin/freeze-review-diff.py
         -> d-freeze-and-dispatch-review-partition's per-slice
         directives[].cli.
@@ -51,9 +46,7 @@ caller to invoke. Rows with no such CLI — the diff-shape row-selection
 table (d-review-scale-decide), the mid-chain diff-scope resolution
 algorithm (d-resolve-mid-chain-review-scope), the doc-fragile domain-lens
 predicate (d-run-doc-fragile-gate-and-dispatch), the quota-exhaustion
-scan (d-detect-quota-exhausted-dispatch), and the trail
-range-termination disbelief predicate (d-verify-trail-range-termination,
-the check half of Step 2.9's trail-write paragraph) — are exposed as
+scan (d-detect-quota-exhausted-dispatch) — are exposed as
 plain pure functions/NamedTuples instead. Modeling any of these as a
 phantom `directives[].cli` value would fail this package's own
 `test_directives_only_name_known_real_clis_and_never_invoke_them` guard
@@ -76,33 +69,11 @@ Negative-spec:
       (freeze-before, integrator-after) and the read-only predicate that
       decides whether the doc-fragile dispatch fires at all.
     - Does NOT invoke `list-review-trail-records.py` or any `git`
-      subprocess itself. `resolve_mid_chain_review_scope` and
-      `verify_trail_range_termination` take the already-fetched trail
-      records and an injected `is_ancestor` callable — fetching the
-      records and deciding `git merge-base --is-ancestor` are the
-      caller's job, consistent with every other builder module in this
-      package staying pure/IO-free (D-4). The `chain_attribution` import
-      (C6a, docs/plans/2026-08-15-composition-invocation-budgets.md) is
-      the SAME posture, not an exception to it: only `foreign_shas_from_
-      window` is called, and that function is pure set math over an
-      already-resolved window (`ChainAttributionWindow.commit_map`) —
-      resolving the window itself (`bulk_commit_attribution_map`,
-      `bulk_grep_attributed_shas`, both real `git log` spawns) stays the
-      caller's job, injected via `ChainAttributionWindow` exactly like
-      `resolve_range_shas`/`narrow_foreign_shas` already are. The live caller is
-      `coordinator/bin/wsc-coverage-gate-runner.py`'s `coverage-gate`
-      subcommand (not `workstream_complete.apply`, which never reads trail
-      records at all) — it loads records via
-      `coordinator_core.ops.list_review_trail_records`, resolves
-      `chain_tip_sha` to the CHAIN'S OWN TIP (the newest substantive commit
-      the coverage gate itself reasoned over, via
-      `_resolve_chain_tip_sha`'s re-derivation of `coordinator_core.coverage.
-      _derive_dag_chain_set` — NOT raw `git rev-parse HEAD`; see that
-      function's docstring for why raw HEAD is structurally unsatisfiable on
-      this fleet's shared `work/*` branches, fixed 2026-07-27), and supplies
-      `is_ancestor` via `git merge-base --is-ancestor`, then uses this
-      predicate's `False` to qualify (never demote-to-halt) an already-COVERED
-      verdict.
+      subprocess itself. `resolve_mid_chain_review_scope` takes the
+      already-fetched trail records and an injected `is_ancestor`
+      callable — fetching the records and deciding `git merge-base
+      --is-ancestor` are the caller's job, consistent with every other
+      builder module in this package staying pure/IO-free (D-4).
     - Does NOT write `state/review-trail/*.json`, freeze a diff file, or
       run any mutating op in-process. Every mutation this module names is
       an existing CLI for the apply half (C4) to invoke, never invoked
@@ -125,14 +96,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
 
-from coordinator_core import chain_attribution
 from coordinator_core.commit_ledger.oracle import OracleReport
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
-from coordinator_core.coverage import (
-    SAFE_RANGE as _SAFE_RANGE,
-    _FOREIGN_STRIPPED_SCOPES,
-    _record_range_has_stored_head,
-)
 
 #: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
 #: record_gate_memo() below writes state/ceremony/wsc-gate-verdict-memo/<hash>.json
@@ -722,26 +687,6 @@ def record_gate_memo(repo_root: Path, gate_id: str, *input_parts: str) -> None:
 
 _LIVE_GATE_MEMO_DIRECTIVE_IDS = frozenset({"d-run-review-brightline-gate"})
 
-#: C4 (docs/plans/2026-08-15-the-ceremony-tail-stops-lying-about-why-it-
-#: failed.md): `__init__.py::build_write_trail_directives` emits ONE
-#: `d-write-trail` directive for the single-dict `review` shape, or N
-#: `d-write-trail-<index>` directives (index = position in the ORIGINAL
-#: list, not a count of qualifying entries) for the list shape — see that
-#: function's own docstring. `_LIVE_GATE_MEMO_DIRECTIVE_IDS` is a frozenset
-#: of exact strings and therefore CANNOT match the indexed shape by simple
-#: membership, so eligibility for a write-trail directive is a prefix test
-#: (`_is_write_trail_directive_id`) checked ALONGSIDE, never inside, the
-#: frozenset — see `record_gate_verdict_if_passed`'s combined check.
-_WRITE_TRAIL_DIRECTIVE_ID_PREFIX = "d-write-trail"
-
-
-def _is_write_trail_directive_id(gate_id: Optional[str]) -> bool:
-    if not gate_id:
-        return False
-    return gate_id == _WRITE_TRAIL_DIRECTIVE_ID_PREFIX or gate_id.startswith(
-        _WRITE_TRAIL_DIRECTIVE_ID_PREFIX + "-"
-    )
-
 #: Full-length git object id — 40 hex digits (sha1; this fleet has not
 #: migrated to sha256 object ids). Deliberately strict (fullmatch, not
 #: search): a bare ref name (`"HEAD"`, `"main"`, `"origin/main"`), an
@@ -832,7 +777,7 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
         for it.
 
     Any other directive id is a no-op — this function is not a general
-    dispatch-result hook, only the two live gates named above ever carry a
+    dispatch-result hook, only the live gate named above ever carries a
     memo. Best-effort from the CALLER's perspective (`apply.py` wraps this
     in a try/except so a memo-write I/O failure degrades to "next pass
     re-walks," never to a reported apply failure) — this function itself
@@ -841,14 +786,7 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
     the same division of responsibility `record_gate_memo` already
     documents for its own callers."""
     gate_id = directive.get("id")
-    write_trail = _is_write_trail_directive_id(gate_id)
-    if (gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS and not write_trail) or exit_code != 0:
-        return
-    if write_trail:
-        key_parts = directive.get("_gate_memo_key_parts")
-        if not isinstance(key_parts, (list, tuple)) or len(key_parts) != 2:
-            return
-        record_gate_memo(repo_root, _WRITE_TRAIL_DIRECTIVE_ID_PREFIX, *[str(p) for p in key_parts])
+    if gate_id not in _LIVE_GATE_MEMO_DIRECTIVE_IDS or exit_code != 0:
         return
     args = list(directive.get("args") or [])
     if gate_id != "d-run-review-brightline-gate":
@@ -863,17 +801,6 @@ def record_gate_verdict_if_passed(repo_root: Path, directive: Mapping[str, Any],
 
 _REVIEW_BRIGHTLINE_CLI = "review-brightline-gate"
 _COVERAGE_GATE_RUNNER_CLI = "wsc-coverage-gate-runner"
-
-#: The review-trail writer, addressed DIRECTLY rather than through
-#: `wsc-coverage-gate-runner write-trail`. That subcommand was REMOVED by PM
-#: ruling 2026-08-23 (kill `review_trail.write`'s wrapper) and its argparse now
-#: offers only `claim-plan`, so every emitted `d-write-trail-*` directive was
-#: rejected at argv before the CLI ran -- which gates `d-run-wsc-tail`, i.e. the
-#: ceremony's own commit step, on a partitioned close. This CLI is the same
-#: native-op trampoline the removed subcommand shelled out to (see
-#: `build_write_review_trail_directive`'s docstring), so addressing it directly
-#: is the shortest path back to the behaviour the ruling intended to keep.
-_REVIEW_TRAIL_WRITER_CLI = "coordinator-write-review-trail"
 
 
 def build_review_brightline_gate_directive(
@@ -1095,73 +1022,6 @@ def scan_dispatch_output(text: str) -> bool:
     return False
 
 
-_HEX_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
-
-
-def build_write_review_trail_directive(
-    sha_range: str,
-    reviewer: str,
-    scope: str,
-    verdict: str,
-    diff_loc: int,
-    scope_kind: Optional[str] = None,
-) -> dict[str, Any]:
-    """`wsc-coverage-gate-runner.py write-trail`. `sha_range` MUST be
-    `<start>..<end>` with both sides CONCRETE hex SHAs — SKILL.md:554's
-    own rule, enforced here as a fail-loud `ValueError` rather than left
-    as caller discipline, because a symbolic ref (`<sha>..HEAD`)
-    re-resolves at *read* time and silently over-claims coverage (the
-    known engine-side defect the SKILL cites,
-    `state/improvement-queue/2026-06-30-review-coverage-gate-false-covered-on-tr.yaml`).
-    Callers pass `reviewer='waived'` / `verdict='waived'` for the
-    PM-waived negative-spec branch — this function does not special-case
-    it, it is a valid call shape. Row 1/2 trivial sessions skip trail
-    writes entirely per the SKILL's own negative-spec — the caller simply
-    does not call this builder in that case; there is no `applies` flag
-    to check here.
-
-    `reviewer` and `verdict` MUST agree on whether this record is waived
-    (docs/plans/2026-08-05-coverage-gate-planning-artifact-class.md § C14,
-    folded from the coordinator-content-repo-em memo): `reviewer='waived'` requires
-    `verdict='waived'`; any other verdict (including `pending`) requires a
-    real, non-waived reviewer. Enforced here, fail-loud via `ValueError`
-    mirroring the `sha_range` guard above — NOT coerced, because silently
-    rewriting one field to match the other would mint a waiver nobody
-    decided on. `verdict='pending'` stays writable with a real reviewer:
-    an open review with a named reviewer on the hook closes when that
-    reviewer reports back, unlike the incident shape
-    (`reviewer='waived'`, `verdict='pending'`) which is a loop nothing
-    will ever close. The seam BOTH this builder's callers and any direct
-    CLI call cross is `coordinator/bin/coordinator-write-review-trail.py`
-    (the sole native-op trampoline `wsc-coverage-gate-runner.py
-    write-trail` itself shells out to) — this check is duplicated there
-    rather than imported, per this package's own pure/`__init__`-independent
-    convention, so a direct CLI call is rejected even when it bypasses this
-    builder entirely."""
-    if (reviewer == "waived") != (verdict == "waived"):
-        raise ValueError(
-            f"incoherent reviewer/verdict pair: reviewer={reviewer!r}, verdict={verdict!r} — "
-            "reviewer='waived' requires verdict='waived', and verdict='pending' (or any "
-            "non-waived verdict) requires a real, non-waived reviewer"
-        )
-    start, sep, end = sha_range.partition("..")
-    if not sep or not _HEX_SHA_RE.match(start) or not _HEX_SHA_RE.match(end):
-        raise ValueError(
-            f"sha_range must be '<start>..<end>' with two concrete hex SHAs, got {sha_range!r} — "
-            "never a symbolic ref like HEAD (SKILL.md:554)"
-        )
-    args = [
-        "--sha-range", sha_range,
-        "--reviewer", reviewer,
-        "--scope", scope,
-        "--verdict", verdict,
-        "--diff-loc", str(diff_loc),
-    ]
-    if scope_kind:
-        args += ["--scope-kind", scope_kind]
-    return _directive("d-write-review-trail", _REVIEW_TRAIL_WRITER_CLI, args)
-
-
 #: A range-endpoint token whose BASE (before any ^/~N ops) is the literal
 #: symbolic ref "HEAD" — case-sensitive, matching git's own ref spelling.
 #: Mirrors `coordinator_core.coverage._STORED_HEAD_ENDPOINT_RE`: a stored
@@ -1195,288 +1055,6 @@ def resolve_trail_range_tip(record: Mapping[str, Any]) -> tuple[Optional[str], O
     if _HEAD_TIP_RE.match(end):
         return None, f"unterminated ..HEAD range ({sha_range!r})"
     return end, None
-
-
-def classify_untrusted_trail_ranges(
-    trail_records: Iterable[Mapping[str, Any]],
-) -> list[tuple[Mapping[str, Any], str]]:
-    rejected: list[tuple[Mapping[str, Any], str]] = []
-    for record in trail_records:
-        tip, reason = resolve_trail_range_tip(record)
-        if tip is None:
-            rejected.append((record, reason or "unknown"))
-    return rejected
-
-
-def verify_trail_range_termination(
-    trail_records: Iterable[Mapping[str, Any]],
-    chain_tip_sha: str,
-    is_ancestor: Callable[[str, str], bool],
-) -> bool:
-    for record in trail_records:
-        tip, _reason = resolve_trail_range_tip(record)
-        if tip is None:
-            continue
-        if tip == chain_tip_sha or is_ancestor(chain_tip_sha, tip):
-            return True
-    return False
-
-
-_NON_DISCHARGING_VERDICTS = frozenset({"pending", "waived"})
-
-
-#: Scope-kind values that never discharge ANYTHING in this chain-terminal
-#: path, unconditionally — mirrors `coverage.build_reviewed_set`'s Phase 1
-#: classification (review-integrator finding W1, 2026-08-06): "integration"
-#: is skipped entirely, not reopened by this module.
-#:
-#: 2026-08-07 correction (audit `state/audits/2026-08-07-wsc-chain-gate-
-#: counts-doc-only-commits.md`, Q4's "second gap"): "plan" is DELIBERATELY
-#: NOT in this set any more. It used to be — a `scope_kind: "plan"` record
-#: was rejected outright, exactly like "integration" — but that made the
-#: chain-terminal discharge path structurally incapable of crediting a plan
-#: review for a PLANNING-classified commit, even a session's own honest,
-#: self-owned plan review of its own PLANNING commit (chain_code_shas keeps
-#: PLANNING commits IN the obligation set per AC9 — see
-#: `_record_membership_shas`'s own "membership-vs-coverage split" docstring
-#: note). `_record_membership_shas` now credits a "plan" record, but
-#: ONLY against `chain_planning_sha_set` (the PLANNING-classified subset of
-_NON_CODE_SCOPE_KINDS = frozenset({"integration"})
-
-
-class ChainAttributionWindow(NamedTuple):
-    """C6a (docs/plans/2026-08-15-composition-invocation-budgets.md): the
-    zero-further-spawn accelerator for `_record_membership_shas`'s foreign-
-    session narrowing — an OPTIONAL layer on top of `narrow_foreign_shas`,
-    never a replacement for it (a caller that omits `chain_window` sees
-    byte-identical behaviour to before this type existed; a record whose
-    range escapes the window still falls back to `narrow_foreign_shas`).
-
-    `commit_map` is the caller-resolved result of ONE
-    `chain_attribution.bulk_commit_attribution_map(range_str, cwd, run)`
-    walk over a single covering range (the intended shape is `merge-
-    base..HEAD`, resolved once per close, not once per trail record) — a
-    `Mapping[str, chain_attribution.CommitAttribution]` keyed on full
-    40-char LOWERCASE hex sha, matching `git log --format=%H`'s own output
-    case (no defensive re-lowering here; the same no-re-lowering posture
-    `_record_membership_shas` already takes on `chain_dag_sha_set` /
-    `chain_code_sha_set`, both resolved the same way).
-
-    `grep_attributed_for_session` is `session_id -> iterable-of-shas`,
-    the caller's closure over `chain_attribution.bulk_grep_attributed_shas`
-    scoped to the SAME covering range `commit_map` was built from — never a
-    different range, or the window-coverage precondition below is violated
-    silently. `_collect_discharging_range_shas` wraps whatever this
-    resolves to in ITS OWN per-call memo (keyed on `session_id`), so an
-    unmemoized caller callable still pays at most once per DISTINCT
-    session_id seen in one pass, not once per record — this is what turns
-    the narrowing's git-spawn count from O(records) to O(distinct
-    sessions).
-
-    WINDOW-COVERAGE PRECONDITION (`chain_attribution.foreign_shas_from_
-    window`'s own docstring: a sha absent from `window` reads as FOREIGN,
-    proving coverage is the caller's job): `_record_membership_shas`
-    discharges this itself, per record, BEFORE ever calling
-    `foreign_shas_from_window` — a record's already-resolved `raw` sha set
-    is checked as a subset of `commit_map`'s keys first. Only when every
-    sha in `raw` is present does the window fast path fire; a record naming
-    even one sha `commit_map` does not cover falls back to the per-record
-    `narrow_foreign_shas` callable instead — never silently treated as
-    foreign, and never a correctness change from the pre-window behaviour
-    on that record (this is the escaping-range case C6a's AC5 fixture
-    exercises)."""
-
-    commit_map: Mapping[str, Any]
-    grep_attributed_for_session: Callable[[Optional[str]], Any]
-
-
-_SINGLE_COMMIT_RANGE_RE = re.compile(
-    r"^(?P<base>[0-9a-fA-F]{7,40})(?:\^|~1)\.\.(?P=base)$"
-)
-
-
-def _single_commit_range_base(sha_range: str) -> Optional[str]:
-    match = _SINGLE_COMMIT_RANGE_RE.match(sha_range)
-    if match is None:
-        return None
-    return match.group("base").lower()
-
-
-def _prefix_hits_chain_set(base: str, chain_dag_sha_set: set[str]) -> bool:
-    if len(base) == 40:
-        return base in chain_dag_sha_set
-    return any(sha.startswith(base) for sha in chain_dag_sha_set)
-
-
-def _record_membership_shas(
-    record: Mapping[str, Any],
-    resolve_range_shas: Callable[[str], Any],
-    chain_dag_sha_set: set[str],
-    chain_code_sha_set: set[str],
-    narrow_foreign_shas: Optional[Callable[[str, Optional[str]], Any]] = None,
-    chain_planning_sha_set: Optional[set[str]] = None,
-    chain_window: Optional[ChainAttributionWindow] = None,
-) -> Optional[set[str]]:
-    """Resolve one trail record's contribution to the chain-membership
-    union, or `None` if this record contributes nothing.
-
-    Two different sets answer two different questions:
-
-    - MEMBERSHIP — is this record about THIS chain at all? — tests the
-      record's raw resolved range against `chain_dag_sha_set`, the chain's
-      UNFILTERED DAG sha set (every commit in the chain, ceremony
-      bookkeeping and handoff-authoring commits included). This is an
-      INTERSECTION test, not a subset test (2026-08-06 subset-to-
-      intersection correction, review-integrator finding B4/F4): a record
-      contributes iff it names AT LEAST ONE commit that is a DAG member of
-      this chain — a subset requirement rejected every honest multi-commit
-      review range that straddled even one concurrent PEER commit on this
-      fleet's interleaving-sessions norm (91 of 1213 on-disk records, live
-      measured). This does not reopen the original peer-leakage defect that
-      motivated the (then-subset) membership check: that leakage came from
-      the retired tip-reaching leg discharging on bare TIP REACHABILITY,
-      with no range-containment test at all. A peer's own `X^..X` record
-      over their own commit intersects `chain_dag_sha_set` in the EMPTY SET
-      (their commit is not a DAG member of this chain at all) and still
-      contributes nothing here.
-    - COVERAGE — which obligations does a membership-passing record
-      discharge? — the returned contribution is `raw & chain_code_sha_set`,
-      the intersection with the FILTERED, code-bearing set — never more than
-      the code-bearing commits the record actually names, regardless of how
-      many non-chain or bookkeeping commits its raw range also spans.
-
-    Trust filter applied BEFORE the resolver is ever consulted (review-
-    integrator findings B1/B2/W1 — reuse the codebase's already-hardened
-    validators rather than a second, narrower copy):
-
-    1. `scope_kind` in `_NON_CODE_SCOPE_KINDS` (`"integration"` only, as of
-       the 2026-08-07 correction — see that constant's own docstring) —
-       rejected outright, mirrors `coverage.build_reviewed_set`'s own
-       Phase-1 classification. `"plan"` is no longer in this set: it falls
-       through the same membership machinery as `"diff"`, capped at
-       `chain_planning_sha_set` rather than `chain_code_sha_set` (see the
-       tail of this function).
-    2. `coverage.SAFE_RANGE` — the shared argument-injection validator
-       (blocks a leading-dash `sha_range` reaching `git rev-list` argv as a
-       flag); also enforces the `..`/`...` separator shape, so a bare-sha
-       `sha_range` is rejected here rather than becoming an unbounded
-       ancestry walk.
-    3. `coverage._record_range_has_stored_head` — the same stored-`HEAD`
-       defence `resolve_trail_range_tip` and `coverage.build_reviewed_set`
-       apply to these exact on-disk records, citing the verified 2026-07-25
-       `work/machine-a/2026-07-21` incident (8 stale `<sha>..HEAD` records
-       reading as COVERED). Checked on the RAW STRING, before
-       `resolve_range_shas` is ever called — a caller can therefore assert
-       rejection without needing a resolver double at all.
-
-    `narrow_foreign_shas`, optional, is `(sha_range, session_id) ->
-    iterable-of-shas` — applied when `record["scope"]` is one of
-    `coverage._FOREIGN_STRIPPED_SCOPES` (`session`/`chain`/
-    `workstream-close-auto`), mirroring `coverage.build_reviewed_set`'s own
-    session-narrowing (review-integrator finding W2): a session/chain-scoped
-    record only credits commits belonging to ITS OWN session, never a
-    different session's commits its range happens to also span. Any failure
-    resolving the foreign-set (the callable raises) rejects the record
-    entirely — fail-closed, never a silent guess at what to strip. `None`
-    (the default) skips this narrowing — every existing caller that omits it
-    sees byte-identical behavior to before this parameter existed.
-
-    No admission path re-credits a narrowed commit. A `reviewer_attestation`
-    parameter briefly did (`attested_shas`, DR-321); it admitted nothing in
-    ~761 records and was removed with the refusal apparatus it depended on
-    (K-010, state/kill-ledger.md). The chain-ancestry-waiver mechanism it
-    replaced is retired too (K-005, 2026-08-16). This plan's Anti-scope
-    forbids reproducing either under a new name: a per-session store
-    consulted by both writer and reader is wider than any one record's own
-    evidence and uncountable for an admission ratchet.
-
-    `chain_planning_sha_set`, optional, is the PLANNING-classified subset of
-    `chain_code_sha_set` (2026-08-07 correction — see `_NON_CODE_SCOPE_KINDS`'s
-    own docstring above). A `scope_kind: "plan"` record's contribution is
-    `raw & chain_planning_sha_set` — never `raw & chain_code_sha_set` — so a
-    plan review can discharge a PLANNING commit but never a plain CODE one,
-    mirroring `coverage._credit_from_kind_partition`'s own kind-aware
-    crediting. `None` (the default) means the caller has not supplied a
-    planning set; a "plan" record then credits nothing, byte-identical to
-    this function's behavior before this correction existed.
-    coverage. `None` (the default) skips this entirely — every existing
-    caller that omits it sees byte-identical behavior to before this
-    parameter existed. This module performs no filesystem read of its own to
-    resolve either store — both are the caller's (`wsc-coverage-gate-
-    runner.py`) job to resolve and inject, per this package's pure/IO-free
-    convention (D-4).
-
-    `chain_window`, optional, is a `ChainAttributionWindow` (see that type's
-    own docstring for the full contract) — a zero-further-spawn accelerator
-    for the `narrow_foreign_shas` branch only, engaged solely when this
-    record's already-resolved `raw` sha set is fully covered by `chain_
-    window.commit_map`. `None` (the default, and every escaping-range
-    record even when `chain_window` is supplied) falls back to calling
-    `narrow_foreign_shas(sha_range, session_id)` exactly as before this
-    parameter existed — byte-identical behavior, never a second, divergent
-    narrowing rule.
-
-    sha comparison is case-insensitive, full-hex only — `resolve_range_shas`
-    (the live `git rev-list` injection) and both chain sha sets (resolved
-    via `git log`) always emit full 40-char lowercase hex, so no
-    abbreviated-prefix matching is needed here (contrast the retired
-    `_sha_matches` helper this replaces, which existed only to bridge
-    abbreviated-vs-full SHA spellings the tip-comparison path could see)."""
-    scope_kind = record.get("scope_kind")
-    if scope_kind in _NON_CODE_SCOPE_KINDS:
-        return None
-    sha_range = record.get("sha_range")
-    if not sha_range or not isinstance(sha_range, str):
-        return None
-    if not _SAFE_RANGE.match(sha_range):
-        return None
-    if _record_range_has_stored_head(sha_range):
-        return None
-    if _single_commit_range_base(sha_range) is not None:
-        _base = _single_commit_range_base(sha_range)
-        if _base is not None and not _prefix_hits_chain_set(_base, chain_dag_sha_set):
-            return None
-    try:
-        raw = {str(s).lower() for s in resolve_range_shas(sha_range)}
-    except Exception:  # noqa: BLE001 - a broken resolver must reject, never crash
-        return None
-    if not raw:
-        return None
-    if not (raw & chain_dag_sha_set):
-        return None
-    if narrow_foreign_shas is not None:
-        # `_FOREIGN_STRIPPED_SCOPES`) used to fall through the narrowing
-        # The write path (`review_trail_write._VALID_SCOPES`) enforces the
-        # an unrecognized `scope`, mirroring `_NON_CODE_SCOPE_KINDS`'s own
-        if record.get("scope") not in _FOREIGN_STRIPPED_SCOPES:
-            return None
-        session_id = record.get("session_id")
-        if chain_window is not None and raw <= chain_window.commit_map.keys():
-            try:
-                grep_attributed = frozenset(
-                    str(s).lower() for s in chain_window.grep_attributed_for_session(session_id)
-                )
-                foreign = {
-                    str(s).lower()
-                    for s in chain_attribution.foreign_shas_from_window(
-                        raw, session_id, chain_window.commit_map, grep_attributed,
-                    )
-                }
-            except Exception:  # noqa: BLE001 - a broken window resolver must reject, never crash
-                return None
-        else:
-            try:
-                foreign = {str(s).lower() for s in narrow_foreign_shas(sha_range, session_id)}
-            except Exception:  # noqa: BLE001 - a broken narrowing must reject, never crash
-                return None
-        raw = raw - foreign
-        if not (raw & chain_dag_sha_set):
-            return None
-    if scope_kind == "plan":
-        if chain_planning_sha_set is None:
-            return None
-        return raw & chain_planning_sha_set
-    return raw & chain_code_sha_set
 
 
 _CLASSIFY_DISPATCH_SHAPE_CLI = "classify-dispatch-shape"

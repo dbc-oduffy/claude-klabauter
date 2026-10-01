@@ -55,10 +55,11 @@ OP_CLASSIFICATION entry" without naming `coordinator_core/authz/classification.p
 relocates the problem instead of discharging it.
 
 § Known coverage limitation. The commit-time tripwire this module feeds
-(`coordinator_core/bash_guards/commit_tripwires.py`) fires only for commits made
-through Claude Code's own Bash tool — a human running `git commit` directly in a
-terminal, or committing via GitHub Desktop or any other non-agent client, bypasses it
-entirely. CI (qsub-02/03) remains the only mechanism that catches a non-agent commit.
+(`coordinator_core/bash_guards/commit_tripwires.py`) fires for commits made through
+Claude Code's own Bash tool and, via the shared static oracle, on `ceremony.commit_v2` —
+a human running `git commit` directly in a terminal, or committing via GitHub Desktop or
+any other non-agent client, bypasses both. CI (qsub-02/03) remains the only mechanism
+that catches a non-agent commit.
 Do not overclaim coverage: this module plus its commit-time consumer is an
 agent-authorship-time guardrail, not a repo-wide enforcement boundary — the pytest
 guard and CI are what make the check unconditional.
@@ -345,10 +346,8 @@ def prune_known_incomplete(
     Forgives only the recorded gap, never the op wholesale: an op on the baseline
     that is ALSO missing a surface not listed for it there is still reported for
     that residual surface. An op not on the baseline at all is returned unchanged
-    (same object, no copy) — mirrors
-    `coordinator_core.bash_guards.commit_tripwires._prune_baselined_classification`'s
-    contract exactly, generalized from a single fixed surface (OP_CLASSIFICATION)
-    to an arbitrary per-op surface set.
+    (same object, no copy). Generalizes the classification-only prune to an
+    arbitrary per-op surface set.
     """
     if baseline is None:
         baseline = _KNOWN_INCOMPLETE_REGISTRATIONS

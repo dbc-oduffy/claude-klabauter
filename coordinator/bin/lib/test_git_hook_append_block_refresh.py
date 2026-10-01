@@ -254,7 +254,7 @@ def test_block_extent_matches_markers_only_on_their_own_line():
 # hashing it would make this pass only on the box that last updated the constant.
 
 _EXPECTED_APPEND_BLOCK_CHECKSUM = (
-    "64aa9b7a31de871ddb97933906ee9dcfd2e77cfd35bbcea06c3ec0a4442c530c"
+    "804b234683b833f2e5d4c05009803a715fcb5582007668b9c5bfaa0424cf8fe7"
 )
 
 
@@ -264,9 +264,14 @@ def _normalize_baked_py(body: str) -> str:
     return re.sub(r'^(_PY=")[^"]*(")$', r"\1<BAKED-INTERPRETER>\2", body, flags=re.M)
 
 
-def test_stamp_bump_is_required_for_append_block_shape_changes():
+def test_stamp_bump_is_required_for_append_block_shape_changes(monkeypatch):
     import hashlib
 
+    # Hermetic: the candidate rungs are machine state (a checkout or mirror
+    # path that exists on one box and not another), and hashing them made this
+    # guard red on any box other than the one that last updated the constant.
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     block = ghi._append_block("/fake/coord/bin", _SCRIPT, _HEADER, _INVOKE)
     checksum = hashlib.sha256(
         _normalize_baked_py(block).encode("utf-8")

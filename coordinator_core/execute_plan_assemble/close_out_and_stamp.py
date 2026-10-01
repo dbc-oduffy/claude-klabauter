@@ -55,7 +55,8 @@ parsing:
      _has_uncleared_execution_gate`, reused rather than re-read). An absent,
      malformed, unresolvable, or non-ancestor ref, or a verified ref on a
      still-gated row, is REJECTED (one of `DISPOSITION_REF_ABSENT`/
-     `_MALFORMED`/`_UNRESOLVABLE`/`_NOT_ANCESTOR`/`_GATED` -- see
+     `_MALFORMED`/`_UNRESOLVABLE`/`_NOT_ANCESTOR`/`_GATED`; a git timeout is
+     `_INDETERMINATE` and aborts the verdict instead -- see
      `_disposition_ref_evidence`'s own returned rejection map).
   2. For a plan that predates the `## Tasks` spine entirely (`## Dispatch
      Ledger` fallback, Defect fix 2026-08-06): the plan's own `## Dispatch
@@ -466,7 +467,10 @@ def _batch_git_cat_file_check(
     object anyway, so a sha that resolved-but-wasn't-a-commit was already
     guaranteed to end up `missing` under the pre-batch code path too.
     Never raises -- an empty `shas` short-circuits with no spawn at all,
-    matching this module's existing zero-work-zero-spawn posture."""
+    matching this module's existing zero-work-zero-spawn posture.
+
+    Raises `_GitIndeterminate` on a timeout -- "could not tell" must not
+    collapse onto the `None` (= "does not exist") entries."""
     result: dict[str, Optional[str]] = {sha: None for sha in shas}
     if not shas:
         return result
@@ -478,7 +482,7 @@ def _batch_git_cat_file_check(
         input=("\n".join(shas) + "\n").encode("utf-8"),
     )
     if proc.timed_out:
-        return result
+        raise _GitIndeterminate("git cat-file --batch-check timed out")
     out_lines = (proc.stdout or "").splitlines()
     for sha, line in zip(shas, out_lines):
         parts = line.split()
@@ -498,10 +502,13 @@ def _rev_list_ancestor_shas(repo_root: Path) -> Optional[set[str]]:
 
     Returns `None` on a `rev-list` failure (non-zero exit) -- the
     caller degrades that to the same not-shipped, no-crash posture every
-    other git-query failure in this module already takes, distinct from
+    other git-query failure in this module already takes -- except a
+    timeout, which raises `_GitIndeterminate` -- distinct from
     an empty-but-successful set (a repo with a one-commit `HEAD`, whose
     ancestor set is genuinely just that commit)."""
     result = _run_git(["rev-list", "HEAD"], repo_root)
+    if result.timed_out:
+        raise _GitIndeterminate("git rev-list HEAD timed out")
     if result.returncode != 0:
         return None
     return set((result.stdout or "").splitlines())
@@ -516,7 +523,9 @@ def _dispatch_ledger_delivered(
     meaningless) means the ledger could not be read at all -- no heading, no
     table, or an unrecognizable header -- which callers treat as NOT-SHIPPED
     (conservative), distinct from a genuine per-row gap only for diagnostic
-    messaging.
+    messaging. A git timeout is reported through `error` too (delivery
+    indeterminate), never as a `missing` row: a contention-driven timeout
+    must not read as "not delivered".
 
     A row counts as delivered ONLY when its `status` cell matches
     `committed <sha>` (optionally followed by trailing prose, e.g.
@@ -560,8 +569,11 @@ def _dispatch_ledger_delivered(
             row_shas[idx] = match.group(1)
 
     distinct_shas = sorted(set(row_shas.values()))
-    resolved = _batch_git_cat_file_check(distinct_shas, repo_root)
-    ancestor_shas = _rev_list_ancestor_shas(repo_root) if distinct_shas else set()
+    try:
+        resolved = _batch_git_cat_file_check(distinct_shas, repo_root)
+        ancestor_shas = _rev_list_ancestor_shas(repo_root) if distinct_shas else set()
+    except _GitIndeterminate as exc:
+        return False, [], f"delivery indeterminate -- {exc}; re-run close-out"
 
     missing: list[str] = []
     for idx, row in enumerate(rows):
@@ -653,7 +665,15 @@ def _determine_shipped(
     # real, ancestor commit. `verified_ids` names the exact row it is
     # evidence for (no sub-chunk-suffix coverage matching needed -- that
     # matching was part of the deleted commit-subject join).
-    verified_ids, _rejections = _disposition_ref_evidence(rows, repo_root)
+    verified_ids, rejections = _disposition_ref_evidence(rows, repo_root)
+    timed_out_ids = sorted(
+        cid for cid, reason in rejections.items() if reason == DISPOSITION_REF_INDETERMINATE
+    )
+    if timed_out_ids:
+        return False, [], True, (
+            f"{plan_path_rel}: delivery indeterminate -- git timed out verifying "
+            f"disposition_ref for {', '.join(timed_out_ids)}; re-run close-out"
+        )
     missing = [cid for cid in chunk_ids if cid not in verified_ids]
     return (len(missing) == 0), missing, True, None
 
@@ -872,6 +892,19 @@ DISPOSITION_REF_MALFORMED = "malformed"
 DISPOSITION_REF_UNRESOLVABLE = "unresolvable"
 DISPOSITION_REF_NOT_ANCESTOR = "non-ancestor"
 
+#: A git probe behind the ref check timed out (`GitResult.timed_out`): the
+#: ref's delivery is UNDETERMINED, not negative. Never folded into
+#: `UNRESOLVABLE`/`NOT_ANCESTOR` -- those are verdicts about the sha, this is
+#: a statement about the probe.
+DISPOSITION_REF_INDETERMINATE = "git-timed-out"
+
+
+class _GitIndeterminate(Exception):
+    """A git probe that feeds a delivery verdict timed out. Internal to this
+    module: raised by the batch helpers, caught in `_dispatch_ledger_delivered`
+    and surfaced as its `error` leg so a timeout never reads as "not
+    delivered"."""
+
 #: A `coded` row's `disposition_ref` verified as a real, ancestor commit, but
 #: the row itself carries an uncleared `external_gate` that `blocks:
 #: execution` -- the same predicate `coordinator_core.ops.dispatch_emit.
@@ -918,9 +951,11 @@ def _verify_disposition_ref(
     git), `DISPOSITION_REF_UNRESOLVABLE` (hex-shaped, but `git rev-parse
     --verify` cannot resolve it to a commit object in this repo -- a typo, a
     sha from a repo this isn't, or an object this shallow/partial clone does
-    not have), or `DISPOSITION_REF_NOT_ANCESTOR` (resolves to a real commit,
+    not have), `DISPOSITION_REF_NOT_ANCESTOR` (resolves to a real commit,
     but `HEAD` never reached it -- a rebased-away, cherry-picked-into-a-
-    different-branch, or fabricated sha). Never raises."""
+    different-branch, or fabricated sha), or `DISPOSITION_REF_INDETERMINATE`
+    (a git probe timed out -- the ref is neither proven nor disproven).
+    Never raises."""
     if not isinstance(ref, str) or not ref.strip():
         return None, DISPOSITION_REF_ABSENT
     ref = ref.strip()
@@ -928,11 +963,15 @@ def _verify_disposition_ref(
         return None, DISPOSITION_REF_MALFORMED
 
     resolve_result = _run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], repo_root)
+    if resolve_result.timed_out:
+        return None, DISPOSITION_REF_INDETERMINATE
     sha = (resolve_result.stdout or "").strip()
     if resolve_result.returncode != 0 or not sha:
         return None, DISPOSITION_REF_UNRESOLVABLE
 
     ancestor_result = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root)
+    if ancestor_result.timed_out:
+        return None, DISPOSITION_REF_INDETERMINATE
     if ancestor_result.returncode != 0:
         return None, DISPOSITION_REF_NOT_ANCESTOR
 
@@ -976,7 +1015,8 @@ def _verify_baseline_ref(
     registered key whose path does not exist on disk, and a sha the
     sibling repo cannot resolve to a commit object -- the same "this
     checkout cannot prove it" bucket `_verify_disposition_ref` already
-    uses for its own same-repo unresolvable case. Never raises."""
+    uses for its own same-repo unresolvable case. A timed-out probe is
+    `DISPOSITION_REF_INDETERMINATE`. Never raises."""
     if not isinstance(ref, str) or not ref.strip():
         return None, DISPOSITION_REF_ABSENT
     stripped = ref.strip()
@@ -993,6 +1033,8 @@ def _verify_baseline_ref(
         return None, DISPOSITION_REF_UNRESOLVABLE
 
     resolve_result = _run_git(["rev-parse", "--verify", f"{sha_token}^{{commit}}"], sibling_root)
+    if resolve_result.timed_out:
+        return None, DISPOSITION_REF_INDETERMINATE
     sha = (resolve_result.stdout or "").strip()
     if resolve_result.returncode != 0 or not sha:
         return None, DISPOSITION_REF_UNRESOLVABLE
@@ -2110,23 +2152,11 @@ def _reach_post_commit_tail_stub_close(
     both ceremonies reach in one place (spec: docs/plans/2026-08-04-
     terminal-state-propagation-join-keys.md § C5).
 
-    `chain_terminal=False` on the composed call is deliberate: it makes
-    `post_commit_tail.run()`'s OTHER composed step
-    (`consumed_handoff_stamp.post_commit_stamp_and_ship`) a documented,
-    side-effect-free no-op here -- this ceremony has no WSC session id and
-    owns no consumed-handoff set of its own. Only the origin-stub-close leg
-    is a genuine reach target for this ceremony.
-
-    ~~and stamping consumed handoffs is `ceremony.wsc_tail`'s job, not this
-    one's.~~ **Struck 2026-08-30.** That deferral named an owner that stopped
-    existing: K-046 deleted `ceremony.wsc_tail` on 2026-08-23 (`c07062c99`).
-    Nothing inherited the job. Because THIS is the only live call site of
-    `post_commit_tail.run()`, and it hardcodes `chain_terminal=False`,
-    `post_commit_stamp_and_ship` now has ZERO reachable invocations anywhere
-    in the tree -- the suppression above is correct for this ceremony and is
-    simultaneously the whole reason the consumed-handoff ship-stamp never
-    fires for anyone. Keep the `False`; it is not this ceremony's job. The
-    missing owner is kill-ledger K-046's standing requirement.
+    The close-out composes origin-stub-close only. The consumed-handoff
+    ship-stamp's owner is `directives_commit_tail.apply_ship_stamps`, keyed on
+    the claim ledger; an unclaimed baton is not seen by any close, by design --
+    the claim `/pickup` takes is the contract, and a tail-side detector would
+    be a scan.
 
     `initial_consumed=[]` -- this ceremony resolves no consumed handoffs of
     its own; the plan path alone (via `governing_plan_slug`) is the join
@@ -2146,7 +2176,6 @@ def _reach_post_commit_tail_stub_close(
             common_dir,
             "",
             committed_sha,
-            chain_terminal=False,
             governing_plan_slug=governing_plan_slug,
             initial_consumed=[],
             close_origin_stub_handler=_close_origin_stub_handler,
@@ -2588,7 +2617,7 @@ def close_out_and_stamp(
         row carried a `disposition_ref` that did NOT verify, `reason` being
         one of `DISPOSITION_REF_ABSENT`/`DISPOSITION_REF_MALFORMED`/
         `DISPOSITION_REF_UNRESOLVABLE`/`DISPOSITION_REF_NOT_ANCESTOR`/
-        `DISPOSITION_REF_GATED` -- the specific cause a rejected
+        `DISPOSITION_REF_GATED`/`DISPOSITION_REF_INDETERMINATE` -- the specific cause a rejected
         disposition_ref did not count, present alongside `missing_chunk_ids`
         for the same reason.
         `partial_evaluation_stamped` (2026-08-06, Defect 2 fix -- see

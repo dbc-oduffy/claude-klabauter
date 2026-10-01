@@ -337,11 +337,22 @@ def _reconcile_repo_set(registered: Dict[str, str]) -> List[dict]:
     it is a fleet repo this pre-flight must scan, or noise it should ignore.
     """
     fleet_full_keys = {f"repos.{suffix}" for suffix in FLEET_REPO_KEYS.values()}
+    fleet_basenames = {name.casefold() for name in FLEET_REPO_KEYS}
+    from coordinator_core._fleet_names import doctrine_repo_name
+
+    doctrine = doctrine_repo_name()
+    if doctrine:
+        fleet_basenames.add(doctrine.casefold())
     unclassified: List[dict] = []
     for key in sorted(registered):
         if not key.startswith("repos."):
             continue
         if key in fleet_full_keys or key in NON_FLEET_EXCLUDED_KEYS:
+            continue
+        value = registered[key]
+        if isinstance(value, str) and (
+            value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].casefold() in fleet_basenames
+        ):
             continue
         unclassified.append({
             "key": key,

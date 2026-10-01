@@ -286,6 +286,29 @@ def _build_checkin_repo(tmp_path: Path, name: str) -> Path:
     return repo
 
 
+_REGISTERED_OP_SURFACES = {
+    "coordinator_core/authz/classification.py": (
+        "import types\n\nOP_CLASSIFICATION = types.MappingProxyType({\n"
+        '    "bench.op": 1,\n})\n'
+    ),
+    "coordinator_core/op_scopes.py": '_OP_KEY_SCOPE = {\n    "bench.op": "none",\n}\n',
+    "coordinator_core/ops/_registry_map.py": (
+        'OP_MODULE_MAP = {\n    "bench.op": "coordinator_core.ops.benchop",\n}\n'
+    ),
+    "coordinator_core/ops/__init__.py": (
+        '_EAGER_OP_MODULES = [\n    ("coordinator_core.ops.benchop", "registers"),\n]\n'
+    ),
+    "coordinator_core/authz/registration_quad.py": (
+        "_KNOWN_UNCLASSIFIED_OPS_DEBT = frozenset()\n_KNOWN_INCOMPLETE_REGISTRATIONS = {}\n"
+    ),
+}
+"""A fully registered op: the register_op arm commits through the registration oracle and passes."""
+
+
+def _op_module_text(rev: int) -> str:
+    return f'@register_op("bench.op")\ndef handler(params):\n    return {{"rev": {rev}}}\n'
+
+
 def _door_argv(door: Path, params_path: Path, repo: Path) -> List[str]:
     return [
         str(door), OP_NAME,
@@ -418,6 +441,28 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         crlf_committed.append(_parse_committed(completed.stdout))
         return completed.returncode
 
+    op_repo = _build_checkin_repo(tmp_path_factory.mktemp("commit_v2_op"), "op_repo")
+    op_rel = "coordinator_core/ops/benchop.py"
+    for rel, text in _REGISTERED_OP_SURFACES.items():
+        (op_repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (op_repo / rel).write_text(text, encoding="utf-8", newline="\n")
+        _git(op_repo, "add", "--", rel)
+    (op_repo / op_rel).write_text(_op_module_text(-1), encoding="utf-8", newline="\n")
+    _git(op_repo, "add", "--", op_rel)
+    _git(op_repo, "commit", "-q", "-m", "seed fully registered op")
+    op_params_path = op_repo / ".c5-op-params.json"
+    op_committed: List[Optional[bool]] = []
+    _op_seq = itertools.count()
+
+    def _dispatch_op(i: int) -> int:
+        (op_repo / op_rel).write_text(
+            _op_module_text(next(_op_seq)), encoding="utf-8", newline="\n"
+        )
+        _write_params(op_params_path, paths=[op_rel], message=f"c5 register_op rev {i}")
+        completed = _dispatch(_door_argv(door, op_params_path, op_repo), env)
+        op_committed.append(_parse_committed(completed.stdout))
+        return completed.returncode
+
     with LiveTreeAccountant(server_pid) as acct:
         # ATTACH-BEFORE-WARMTH (mandatory correction). This warmth probe is
         # the FIRST dispatch through this isolated server -- the accountant
@@ -445,6 +490,7 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
 
         lf_windows = _run_windows(acct, _dispatch_lf)
         crlf_windows = _run_windows(acct, _dispatch_crlf)
+        op_windows = _run_windows(acct, _dispatch_op)
 
     print("\n" + "=" * 78)
     print(f"C6 -- {OP_NAME} PROCESS-TIME GATE (job-object, bracketed)")
@@ -513,6 +559,24 @@ def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
         f"windows={WINDOWS}: bracketed mean {lf_procs_mean} procs/call exceeds "
         f"the {PROCS_TARGET} prime exit criterion by "
         f"{round(lf_procs_mean - PROCS_TARGET, 3)} (per-window: {lf_procs_values})"
+    )
+
+    # --- GATED: a commit carrying a register_op-bearing path runs the registration oracle. ---
+    assert all(op_committed), (
+        f"[gate corruption guard] arm=register_op: {op_committed.count(False)} of "
+        f"{len(op_committed)} dispatches returned committed=false (or an unparseable "
+        f"envelope) -- the gate would be measuring refusals. committed flags: {op_committed}"
+    )
+    op_ms_values = [w["ms_per_call"] for w in op_windows]
+    op_procs_values = [w["procs_per_call"] for w in op_windows]
+    assert _mean(op_ms_values) <= PROCESS_TIME_TARGET_MS, (
+        f"[{AXIS_PROCESS_TIME}] arm=register_op: bracketed mean {_mean(op_ms_values)}ms "
+        f"exceeds {PROCESS_TIME_TARGET_MS}ms (per-window: {op_ms_values})"
+    )
+    assert _mean(op_procs_values) <= PROCS_TARGET, (
+        f"[{AXIS_PROCS}] arm=register_op: bracketed mean {_mean(op_procs_values)} "
+        f"procs/call exceeds {PROCS_TARGET} -- the oracle must add 0 spawns "
+        f"(per-window: {op_procs_values})"
     )
 
     # --- REPORTED, NOT GATED: eol=crlf shape, its known 2-spawn fallback. ---

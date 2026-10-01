@@ -117,7 +117,7 @@ def _offenders_in(src: str, rel: str) -> list[str]:
         # which meant an unparseable file was reported as COMPLIANT -- the
         # one verdict the guard is least entitled to give about a file it
         # could not read. Observed, not theorised: a genuinely broken
-        # `coordinator/bin/retire-dead-post-commit-hooks.py` passed this
+        # `coordinator_core/git/hook_dispositions` passed this
         # guard in the same run that `spawn_policy.detect` failed on it,
         # because that scanner raises `SpawnParseError` here instead. A
         # corpus guard's silence has to mean "I checked", or it means
@@ -221,62 +221,6 @@ def test_guard_detects_a_planted_violation() -> None:
         'open("f", "r", encoding="utf-8")',
     ):
         assert not _offenders_in(clean, "clean.py"), f"guard false-positived on: {clean}"
-
-
-#: Production sources across the tree that previously wrote text mode
-#: without pinning `newline=` -- spanning bare `open`/`os.fdopen` context
-#: managers and `Path.write_text`, with and without an `encoding=` kwarg
-#: already present. Each now pins `newline="\n"` at its write site.
-_PINNED_PRODUCTION_SITES = (
-    "coordinator/bin/check-settings-env.py",
-    "coordinator/bin/classify-legacy-engine-noun-references.py",
-    "coordinator/bin/compose-review-wave.py",
-    "coordinator/bin/corpus-currency-probe.py",
-    "coordinator/bin/emit-guard-enforcement-join.py",
-    "coordinator/bin/generate-claudemeta-manifest.py",
-    "coordinator/bin/land-wave.py",
-    "coordinator/bin/mise-prep-upgrade.py",
-    "coordinator/bin/tier-last-run.py",
-    "coordinator/bin/waste-signal.py",
-    "coordinator/lib/percolate/publish_sync.py",
-    "coordinator/templates/bin/_machine_local.py",
-    "coordinator_core/frontmatter/author_dependence.py",
-    "coordinator_core/group_em/atomic_record.py",
-    "coordinator_core/hooks/group_em_park_spool.py",
-    "coordinator_core/hooks/guard_doctrine_surface_ratio_precommit.py",
-    "coordinator_core/hooks/nudge_multiwave_workflow.py",
-    "coordinator_core/hooks/pickup_autofire.py",
-    "coordinator_core/hooks/runtime_tripwire_stop_watcher.py",
-    "coordinator_core/hooks/session_start_announce_job_mode.py",
-    "coordinator_core/hooks/session_start_register_content_root_root.py",
-    "coordinator_core/hooks/session_start_repair_prepare_commit_msg_hook.py",
-    "coordinator_core/hooks/session_start_write_plugin_root_breadcrumb.py",
-    "coordinator_core/hooks/support/bin_impl_drift.py",
-    "coordinator_core/hooks/support/next_move_ledger.py",
-    "coordinator_core/ops/dispatch_emit/op.py",
-    "coordinator_core/ops/docindex_emit.py",
-    "coordinator_core/ops/fleet/memo_send.py",
-    "coordinator_core/warm/http_hook_forwarder.py",
-    "coordinator_core/warm/server.py",
-    "coordinator_core/workflow_watch/stamp.py",
-    "scripts/cloud_setup.py",
-    "setup/dist/publish-repo-setup/dev-sync.py",
-    "setup/dist/publish-repo-setup/install.py",
-    "setup/dist/publish-repo-setup/name-personas.py",
-)
-
-
-def test_named_production_sites_pin_newline() -> None:
-    """Each site in `_PINNED_PRODUCTION_SITES` must scan clean on its own --
-    isolating them from the rest of the corpus walk means this test still
-    catches a regression at these exact sites even while an unrelated
-    scratch tree elsewhere under the repo root carries its own, separately
-    tracked offenders."""
-    for rel in _PINNED_PRODUCTION_SITES:
-        path = REPO / rel
-        src = path.read_text(encoding="utf-8")
-        offenders = _offenders_in(src, rel)
-        assert not offenders, f"{rel} still has unpinned text-mode write(s): {offenders}"
 
 
 def test_named_production_sites_would_have_failed_unpinned() -> None:

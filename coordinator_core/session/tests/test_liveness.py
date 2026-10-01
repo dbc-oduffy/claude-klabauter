@@ -2627,7 +2627,11 @@ class TestAbandonmentBasis:
 
     def test_empty_sid_is_no_sid(self, tmp_path):
         repo = _make_repo(tmp_path)
-        assert liveness.abandonment_basis("", cwd=str(repo)) == (False, "no-sid")
+        assert liveness.abandonment_basis("", cwd=str(repo)) == (
+            False,
+            "no-sid",
+            False,
+        )
 
     def test_live_dir_signals_delegates_to_session_abandoned(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -2641,23 +2645,41 @@ class TestAbandonmentBasis:
         assert liveness.abandonment_basis("s-basis-abandoned", cwd=str(repo)) == (
             True,
             "live-dir-signals",
+            False,
         )
 
-    def test_registry_confirmed_live_no_session_dir_is_unknown(
+    def test_registry_confirmed_live_no_session_dir_is_live(
         self, tmp_path, monkeypatch
     ):
-        # The C2 test's named anti-scope: a live registry-confirmed sid with
-        # NO local session dir must never read as a dead verdict of any
-        # kind -- session_abandoned already reads False (no sdir), and
-        # session_live reads True (Source 0), so neither the live-dir nor
-        # the archive arm fires; the fixture must land on "unknown", never
-        # "archive-record" or a fabricated abandoned basis.
+        # A live registry-confirmed sid with NO local session dir must never
+        # read as a dead verdict of any kind.
         repo = _make_repo(tmp_path)
         monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
         assert liveness.abandonment_basis("s-registry-live-no-dir", cwd=str(repo)) == (
             False,
-            "unknown",
+            "live",
+            True,
         )
+
+    def test_one_session_live_read_per_call(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        self._archive(repo, "s-spy-archived")
+        seen = []
+        real = liveness.session_live
+
+        def _spy(sid, cwd=None):
+            seen.append(sid)
+            return real(sid, cwd)
+
+        monkeypatch.setattr(liveness, "session_live", _spy)
+        for sid in ("", "s-spy-archived", "s-spy-nowhere"):
+            seen.clear()
+            liveness.abandonment_basis(sid, cwd=str(repo))
+            assert len(seen) == (0 if not sid else 1), sid
+        monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: seen.append(sid) or True)
+        seen.clear()
+        assert liveness.abandonment_basis("s-spy-live", cwd=str(repo)).live is True
+        assert len(seen) == 1
 
     def test_not_live_with_archive_record_is_archive_record(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -2667,6 +2689,7 @@ class TestAbandonmentBasis:
         assert liveness.abandonment_basis("s-archived-only", cwd=str(repo)) == (
             True,
             "archive-record",
+            False,
         )
 
     def test_not_live_no_archive_record_is_unknown(self, tmp_path):
@@ -2674,6 +2697,7 @@ class TestAbandonmentBasis:
         assert liveness.abandonment_basis("s-nowhere", cwd=str(repo)) == (
             False,
             "unknown",
+            False,
         )
 
     def test_live_session_never_reaches_archive_arm(self, tmp_path):
@@ -2688,7 +2712,8 @@ class TestAbandonmentBasis:
         assert liveness.session_live("s-resurrected", cwd=str(repo)) is True
         assert liveness.abandonment_basis("s-resurrected", cwd=str(repo)) == (
             False,
-            "unknown",
+            "live",
+            True,
         )
 
     def test_archive_agents_entries_are_not_counted(self, tmp_path):
@@ -2701,6 +2726,7 @@ class TestAbandonmentBasis:
         assert liveness.abandonment_basis("s-agent-only", cwd=str(repo)) == (
             False,
             "unknown",
+            False,
         )
 
     def test_archive_listing_revalidates_after_archiving(self, tmp_path):
@@ -2711,11 +2737,13 @@ class TestAbandonmentBasis:
         assert liveness.abandonment_basis("s-late-archive", cwd=str(repo)) == (
             False,
             "unknown",
+            False,
         )
         self._archive(repo, "s-late-archive")
         assert liveness.abandonment_basis("s-late-archive", cwd=str(repo)) == (
             True,
             "archive-record",
+            False,
         )
 
 
@@ -2806,6 +2834,7 @@ class TestAC1CharacterizationUnchanged:
         assert liveness.abandonment_basis("s-archived-ac1", cwd=str(repo)) == (
             True,
             "archive-record",
+            False,
         )
 
     def test_live_corpus_unchanged_by_session_abandoned(self, tmp_path):
@@ -3006,4 +3035,158 @@ class TestSharedStablePidIsNotAConfidentLiveness:
             "only UUID-shaped session dirs may count toward sharing -- two "
             "stray dirs must not make a single live session's handle read "
             "indeterminate"
+        )
+
+
+class TestSessionLiveWithBasis:
+    """`session_live_with_basis` is ONE read: `session_live`'s own verdict plus
+    the arm that concluded it. It must never agree with the unclamped seam
+    where the two differ (a backward clock step reads DEAD there), and it must
+    not consult `session_verdict` / `live_session_verdicts` at all -- those
+    were the second read whose instant and arithmetic could differ from the
+    verdict token it annotated.
+    """
+
+    def test_never_consults_the_verdict_seam(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _write_session(repo, "s-a", {"pid": "1", "last_activity": core.now_iso()})
+        with mock.patch.object(
+            liveness, "session_verdict", side_effect=AssertionError("second read")
+        ), mock.patch.object(
+            liveness, "live_session_verdicts", side_effect=AssertionError("corpus scan")
+        ):
+            assert liveness.session_live_with_basis("s-a", cwd=str(repo)) == (
+                True,
+                "recency-window",
+            )
+
+    def test_backward_clock_step_stays_live_where_the_seam_reads_dead(self, tmp_path):
+        """Fail-safe direction: the clamped arithmetic resolves a future
+        `last_activity` LIVE (a peer will not take the session over). Sourcing
+        the verdict from the seam would flip it DEAD, fail-open on an
+        arbitration surface."""
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "s-future", {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"}
+        )
+        assert liveness.session_live_with_basis("s-future", cwd=str(repo)) == (
+            True,
+            "recency-window",
+        )
+        assert liveness.live_session_verdicts(cwd=str(repo))["s-future"][0] is False
+
+    @pytest.mark.parametrize(
+        "meta",
+        [
+            {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"},
+            {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"},
+            {"pid": "1"},
+            {"pid": "1", "last_activity": "not-a-timestamp"},
+            {"pid": "1", "stable_pid": "7"},
+        ],
+    )
+    def test_verdict_equals_session_live(self, tmp_path, meta):
+        repo = _make_repo(tmp_path)
+        _write_session(repo, "s-x", meta)
+        live, _basis = liveness.session_live_with_basis("s-x", cwd=str(repo))
+        assert live is liveness.session_live("s-x", cwd=str(repo))
+
+    def test_stale_recency_is_dead_with_recency_basis(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "s-stale", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"}
+        )
+        assert liveness.session_live_with_basis("s-stale", cwd=str(repo)) == (
+            False,
+            "recency-window",
+        )
+
+    def test_metaless_dir_names_the_mtime_source(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _session_dir_path(repo, "s-mid-write")
+        sdir.mkdir(parents=True)
+        marker = sdir / "lock"
+        marker.write_text("x")
+        _touch(marker, core.now_epoch())
+        assert liveness.session_live_with_basis("s-mid-write", cwd=str(repo)) == (
+            True,
+            "recency-window-mtime",
+        )
+
+    def test_empty_and_absent_sid_are_not_live_unknown(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.session_live_with_basis("", cwd=str(repo)) == (False, "unknown")
+        assert liveness.session_live_with_basis("nope", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+
+    def test_layer1_raise_fails_open_with_unknown_basis(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-psutil",
+            {"pid": "1", "stable_pid": "4242", "stable_pid_start_epoch": "1"},
+        )
+
+        def _boom(*a, **k):
+            raise RuntimeError("psutil unavailable")
+
+        monkeypatch.setattr(core, "stable_pid_alive", _boom)
+        assert liveness.session_live_with_basis("s-psutil", cwd=str(repo)) == (
+            True,
+            "unknown",
+        )
+
+    def test_layer1_basis_distinguishes_shared_from_unshared_handle(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        a = "aaaaaaaa-1111-2222-3333-444444444444"
+        b = "bbbbbbbb-1111-2222-3333-444444444444"
+        c = "cccccccc-1111-2222-3333-444444444444"
+        for sid, pid in ((a, "5000"), (b, "5000"), (c, "6000")):
+            _write_session(
+                repo, sid, {"pid": "1", "stable_pid": pid, "stable_pid_start_epoch": "1"}
+            )
+        monkeypatch.setattr(core, "stable_pid_alive", lambda *a, **k: True)
+        assert liveness.session_live_with_basis(a, cwd=str(repo)) == (
+            True,
+            "stable-pid-shared",
+        )
+        assert liveness.session_live_with_basis(c, cwd=str(repo)) == (True, "stable-pid")
+
+    def test_session_live_alone_never_pays_the_shared_scan(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo,
+            "s-l1",
+            {"pid": "1", "stable_pid": "5000", "stable_pid_start_epoch": "1"},
+        )
+        monkeypatch.setattr(core, "stable_pid_alive", lambda *a, **k: True)
+        with mock.patch.object(
+            liveness, "_shared_stable_pids", side_effect=AssertionError("scan")
+        ):
+            assert liveness.session_live("s-l1", cwd=str(repo)) is True
+
+    def test_confirmed_registry_record_names_local_vs_elsewhere(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(repo, "s-local", {"pid": "1", "last_activity": "2000-01-01T00:00:00Z"})
+        _write_registry_record(
+            registry_dir, "a.json", "s-local", os.getpid(), _self_create_time()
+        )
+        _write_registry_record(
+            registry_dir, "b.json", "s-elsewhere", os.getpid(), _self_create_time()
+        )
+        assert liveness.session_live_with_basis("s-local", cwd=str(repo)) == (
+            True,
+            "harness-registry",
+        )
+        assert liveness.session_live_with_basis("s-elsewhere", cwd=str(repo)) == (
+            True,
+            "harness-registry-elsewhere",
         )

@@ -1,216 +1,51 @@
-
 import pytest
 
 from coordinator_core.ops.dispatch_emit.emit import _AGENT_MODEL_GRAMMAR
 from coordinator_core.ops.review_mint.compose import (
     _AGENT_MODEL_GRAMMAR as _COMPOSE_AGENT_MODEL_GRAMMAR,
 )
-from coordinator_core.ops.review_mint.compose import ComposeError, compose
-from coordinator_core.ops.review_mint.roster import Stage
+from coordinator_core.ops.review_mint.compose import ComposeError, _agent_call_literal
 
-_PROMPT = "Review this plan."
-_PHASE_TITLE = "Review"
+_AGENT = "coordinator:prior-art-checker"
 
 
-def _disarmed_policy(stage, index, results):
-    return ""
-
-
-def _abort_policy(stage, index, results):
-    var = results[0][1]
-    return (
-        f"  if ({var}.verdict) {{\n"
-        f"    return {{ blocking_agent: {var!r}, verdict: {var}.verdict, "
-        f"reason: {var}.reason, sidecar_path: {var}.sidecar_path }};\n"
-        "  }"
+def _call(agent_opts=None, **kw):
+    return _agent_call_literal(
+        _AGENT, "p", "Review", schema=False, as_arrow=False, agent_opts=agent_opts, **kw
     )
 
 
-def test_single_agent_stage_emits_serial_call():
-    stages = [Stage(agents=["coordinator:code-reviewer"], gate=False)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    assert len(out) == 1
-    title, block = out[0]
-    assert title == _PHASE_TITLE
-    assert "await agent(" in block
-    assert "parallel(" not in block
-    assert "model:" not in block
-    assert "schema:" not in block
-
-
-def test_multi_agent_stage_emits_parallel_call():
-    stages = [
-        Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False)
-    ]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    title, block = out[0]
-    assert "await parallel([" in block
-    assert block.count("() => agent(") == 2
-    assert "model:" not in block
-
-
-def test_stage_order_and_unique_titles_preserved():
-    stages = [
-        Stage(agents=["coordinator:prior-art-checker"], gate=True),
-        Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
-        Stage(agents=["coordinator:code-reviewer-weekly"], gate=False),
-    ]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    titles = [t for t, _ in out]
-    assert titles == ["Review 1/3", "Review 2/3", "Review 3/3"]
-    assert len(set(titles)) == len(titles)
-
-
-def test_gate_stage_serial_carries_schema_and_calls_gate_policy():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    seen = {}
-
-    def policy(stage, index, results):
-        seen["stage"] = stage
-        seen["index"] = index
-        seen["results"] = results
-        return "  // abort here"
-
-    out = compose(stages, _PROMPT, _PHASE_TITLE, policy)
-    _, block = out[0]
-    assert "schema:" in block
-    assert "verdict" in block and "reason" in block and "sidecar_path" in block
-    assert "const reviewStage0Result = await agent(" in block
-    assert "// abort here" in block
-    assert seen["index"] == 0
-    assert seen["results"] == [("coordinator:prior-art-checker", "reviewStage0Result")]
-
-
-def test_gate_stage_parallel_indexes_result_per_agent():
-    stages = [
-        Stage(
-            agents=["coordinator:prior-art-checker", "coordinator:docs-checker"],
-            gate=True,
-        )
-    ]
-    seen = {}
-
-    def policy(stage, index, results):
-        seen["results"] = results
-        return ""
-
-    out = compose(stages, _PROMPT, _PHASE_TITLE, policy)
-    _, block = out[0]
-    assert "const reviewStage0Result = await parallel([" in block
-    assert block.count("schema:") == 2
-    assert seen["results"] == [
-        ("coordinator:prior-art-checker", "reviewStage0Result[0]"),
-        ("coordinator:docs-checker", "reviewStage0Result[1]"),
-    ]
-
-
-def test_disarmed_gate_policy_emits_no_branch():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    _, block = out[0]
-    assert "return" not in block
-
-
-def test_abort_policy_returns_ac5_shaped_object():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy)
-    _, block = out[0]
-    assert "return {" in block
-    for field in ("blocking_agent", "verdict", "reason", "sidecar_path"):
-        assert field in block
-
-
-def test_non_gate_agent_completes_without_schema_or_branch():
-    stages = [Stage(agents=["coordinator:docs-checker"], gate=False)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    _, block = out[0]
-    assert "schema:" not in block
-    assert "return" not in block
-
-
-def test_empty_stage_list_refuses_loudly():
-    with pytest.raises(ComposeError):
-        compose([], _PROMPT, _PHASE_TITLE, _disarmed_policy)
-
-
-def test_gate_stage_schema_carries_run_nonce_and_marks_it_required():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    _, block = out[0]
-    assert "run_nonce: { type: 'string' }" in block
-    assert "required: ['verdict', 'run_nonce']" in block
-
-
-def test_gate_stage_prompt_carries_the_run_nonce_when_supplied():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
-    _, block = out[0]
-    assert "run_nonce: deadbeef01234567" in block
-
-
-def test_non_gate_stage_prompt_never_carries_a_run_nonce():
-    stages = [Stage(agents=["coordinator:code-reviewer-weekly"], gate=False)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy, run_nonce="deadbeef01234567")
-    _, block = out[0]
-    assert "run_nonce" not in block
-
-
-def test_run_nonce_omitted_by_default_leaves_prompt_unmodified():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _disarmed_policy)
-    _, block = out[0]
-    assert "run_nonce:" in block
-    assert "\\n\\nrun_nonce:" not in block
-
-
-def test_no_model_key_anywhere_by_default():
-    stages = [
-        Stage(agents=["coordinator:prior-art-checker"], gate=True),
-        Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
-    ]
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy)
-    for _, block in out:
-        assert "model:" not in block
-        assert "effort:" not in block
+def test_no_model_key_by_default():
+    call = _call()
+    assert "model:" not in call
+    assert "effort:" not in call
 
 
 def test_agent_opts_emits_model_and_effort_for_named_agent_only():
-    stages = [
-        Stage(agents=["coordinator:prior-art-checker"], gate=True),
-        Stage(agents=["coordinator:code-reviewer", "coordinator:staff-eng"], gate=False),
-    ]
-    agent_opts = {
-        "coordinator:prior-art-checker": {"model": "opus", "effort": "low"},
-    }
-    out = compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
-    gate_block = out[0][1]
-    assert "model: 'opus'" in gate_block
-    assert "effort: 'low'" in gate_block
-
-    parallel_block = out[1][1]
-    assert "model:" not in parallel_block
-    assert "effort:" not in parallel_block
+    opts = {_AGENT: {"model": "opus", "effort": "low"}}
+    call = _call(opts)
+    assert "model: 'opus'" in call
+    assert "effort: 'low'" in call
+    other = _agent_call_literal(
+        "coordinator:staff-eng", "p", "Review", schema=False, as_arrow=False, agent_opts=opts
+    )
+    assert "model:" not in other
+    assert "effort:" not in other
 
 
-def test_agent_opts_unknown_key_refuses():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    agent_opts = {"coordinator:prior-art-checker": {"reasoning": "extended"}}
+def test_gate_schema_requires_verdict_and_run_nonce():
+    call = _agent_call_literal(_AGENT, "p", "Review", schema=True, as_arrow=True)
+    assert call.startswith("() => agent(")
+    assert "required: ['verdict', 'run_nonce']" in call
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [{"reasoning": "extended"}, {"model": "-bad"}, {"effort": "extreme"}],
+)
+def test_agent_opts_invalid_entry_refuses(entry):
     with pytest.raises(ComposeError):
-        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
-
-
-def test_agent_opts_malformed_model_refuses():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    agent_opts = {"coordinator:prior-art-checker": {"model": "-bad"}}
-    with pytest.raises(ComposeError):
-        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
-
-
-def test_agent_opts_malformed_effort_refuses():
-    stages = [Stage(agents=["coordinator:prior-art-checker"], gate=True)]
-    agent_opts = {"coordinator:prior-art-checker": {"effort": "extreme"}}
-    with pytest.raises(ComposeError):
-        compose(stages, _PROMPT, _PHASE_TITLE, _abort_policy, agent_opts=agent_opts)
+        _call({_AGENT: entry})
 
 
 def test_compose_agent_model_grammar_equals_emit_agent_model_grammar():

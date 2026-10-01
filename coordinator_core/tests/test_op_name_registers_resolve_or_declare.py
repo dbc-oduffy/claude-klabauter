@@ -134,12 +134,12 @@ def _derive_op_names(repo_root: Path = REPO_ROOT, scan_root: str = _SCAN_ROOT) -
 #: reading as a smaller-but-plausible population. Each member's LIVE registration was verified by
 #: hand at authoring time (2026-09-24) -- the live registry is the oracle for the canary, never
 #: for the run itself:
-#:   - `coordinator_core/ops/percolate_ci_smoke_check.py:134` -- `@register_op("percolate.run_ci_smoke_check")`
+#:   - `coordinator_core/ops/baton_carry_forward.py:107` -- `@register_op("baton.carry_forward")`
 #:   - `coordinator_core/hooks/agent_completion_log.py:90` -- `@register_op("hooks.agent_completion_log")`
 #:   - `coordinator_core/baton_assemble/ops.py:59` -- `@register_op("baton_assemble.brief")`
 _OP_CANARY: frozenset[str] = frozenset(
     {
-        "percolate.run_ci_smoke_check",
+        "baton.carry_forward",
         "hooks.agent_completion_log",
         "baton_assemble.brief",
     }

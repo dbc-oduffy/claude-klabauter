@@ -2,10 +2,8 @@
 coordinator_core.ops.ceremony.receipt_emit — Ceremony evidence receipt emitter.
 
 Purpose: Writes state/ceremony/<ceremony>/<sid-short>-<emitted-at>.json from a
-PipelineContext.  Historically called by the two-phase ceremony.wsc_resolve
-(phase-1) / ceremony.wsc_commit (phase-2) pipeline; both ops' registrations
-were removed 2026-07-29 (kill-list op removal) — the single-pass ceremony.wsc_tail
-op is the live caller today. NOT an op — no @register_op call here.
+PipelineContext.  workstream_complete.apply is the one caller; it writes only on
+a waiver-bearing close. NOT an op — no @register_op call here.
 
 Session-keyed tracked shard (C3, 2026-07-08-concurrency-safe-strangled-op-writes.md
 § "The session-keyed shard shape"): the receipt used to live at the fixed singleton
@@ -37,10 +35,9 @@ Key rules (HARD, from the design §receipt):
     (returns silently when the session dir is absent).
   - Phase-1 (resolve) and phase-2 (commit) write to the SAME sid-keyed shard —
     phase-2 overwrites phase-1 in place (same sid → same shard path, resolved via
-    resolve_latest_receipt_path()). Historical: this described the retired
-    wsc_resolve/wsc_commit pipeline; wsc_tail.py's single-pass call writes once.
-  - NO op registration — this module is called by wsc_tail, not registered as
-    a standalone JSON-RPC op.
+    resolve_latest_receipt_path()); a single-pass caller writes once.
+  - NO op registration — this module is called by workstream_complete.apply, not
+    registered as a standalone JSON-RPC op.
 
 Public API:
   emit_receipt(ctx, out_path=None, *, repo_root, sid, tail_phase, receipt_phase, emitted_at)
@@ -273,6 +270,7 @@ def emit_receipt(
         foreign_commit_count=(
             ctx.foreign_commit_count if ctx.scoping_method else None
         ),
+        waivers=ctx.waivers or None,
     )
 
     _atomic_write_json(out_path, receipt)

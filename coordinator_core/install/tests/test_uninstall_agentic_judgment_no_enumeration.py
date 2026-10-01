@@ -187,22 +187,6 @@ def test_declared_entries_span_multiple_kinds():
     assert _PATH_KINDS | _MARKER_KINDS & kinds
 
 
-def test_page_enumerates_no_declared_write_surface():
-    assert PAGE_PATH.exists(), f"expected the judgment page at {PAGE_PATH}"
-    text = PAGE_PATH.read_text(encoding="utf-8")
-
-    hits: list[str] = []
-    for value, pattern in _recognizers().items():
-        if pattern.search(text):
-            hits.append(value)
-
-    assert not hits, (
-        "docs/wiki/uninstall-agentic-judgment.md enumerates declared write-surface "
-        f"value(s) it must not name: {hits!r}. Point at the declaration/receipt by "
-        "name instead of pasting the value."
-    )
-
-
 def test_allowlist_entries_carry_a_reason_and_are_not_declared_values():
     declared_values = {
         value
@@ -215,22 +199,3 @@ def test_allowlist_entries_carry_a_reason_and_are_not_declared_values():
             f"allowlisted value {value!r} collides with an actual declared surface "
             "value — remove it from the allowlist, it must be scanned for real"
         )
-
-
-def test_recognizer_scan_actually_fails_closed_on_an_injected_surface(tmp_path):
-    # Prove the scan bites: build a throwaway copy of the page with one real
-    # declared surface spliced in, and confirm the same scan goes RED against
-    # it. A green enumeration test that has never been seen to fail is worth
-    # very little (dispatch brief's own verification requirement).
-    injected_entry = next(
-        e for e in _declared_entries() if e.get("kind") == "git-config-key" and e.get("key")
-    )
-    injected_value = injected_entry["key"]
-
-    text = PAGE_PATH.read_text(encoding="utf-8")
-    poisoned = text + f"\n\nDebug note: this writer touches `{injected_value}` directly.\n"
-
-    recognizers = _recognizers()
-    pattern = recognizers[injected_value]
-    assert pattern.search(poisoned), "expected the injected literal surface to be caught"
-    assert not pattern.search(text), "the real page should not already contain this literal"

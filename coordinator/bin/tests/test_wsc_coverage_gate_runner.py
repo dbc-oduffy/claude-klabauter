@@ -37,11 +37,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from coordinator_core.workstream_complete.directives_review import (
-    _record_membership_shas,
-    verify_trail_range_termination,
-)
-
 # Declared, not excused: `_git`'s callers below spawn real `git` processes
 # because the properties under test are real DAG-mode chain re-derivation
 # and commit-clock/history plumbing (`_derive_dag_chain_set`,
@@ -190,87 +185,6 @@ _TIER_B_SINGLE_REVIEWER_OK_STDOUT = (
 # denominator, and the verdict are untouched — only the message's labeling
 # of the SAME uncovered list.
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# chain_partition_verdict_discharged / chain_partition_uncovered_shas —
-# 2026-08-06 chain-scoping correction. Live instrumentation against
-# `state/handoffs/2026-08-06-eliminate-claude-klabauter-s-non-test-subprocess-spawn-
-# population.md` (chain tip `72eee33c6`, 15 chain code shas) proved the
-# original tip-reaching scoping condition (`tip == chain_tip_sha or
-# is_ancestor(chain_tip_sha, tip)`, shared by both the retired "leg (a)" and
-# "leg (b)") is not a chain-scoping check at all on this fleet's ONE SHARED
-# `work/{machine}/{date}` branch: every record ANY concurrent peer session
-# wrote later on the shared branch also satisfies it, regardless of whether
-# it reviewed a single commit of the chain under evaluation. All 11 records
-# that discharged the old condition against the live chain belonged to two
-# unrelated peer sessions; zero belonged to this chain's own 17 records.
-#
-# Both legs are replaced by ONE within-chain-membership check: a record
-# contributes to discharge only when its resolved range's sha set is a
-# NON-EMPTY SUBSET of `chain_code_shas`. `chain_partition_verdict_
-# discharged` no longer takes `chain_tip_sha`/`is_ancestor` at all — the
-# tests below drive the fixed, four-argument signature directly. See
-# `directives_review.chain_partition_verdict_discharged`'s own docstring
-# for the full incident writeup and why the legacy leg collapsed into
-# redundancy under the new scoping rather than surviving as a second leg.
-#
-# 2026-08-06 membership-vs-coverage split (review-integrator P1): unless a
-# test is specifically exercising the difference, `chain_dag_shas` below is
-# passed equal to `chain_code_shas` — every scenario that doesn't name a
-# same-chain bookkeeping/handoff-authoring sha behaves identically whether
-# membership is tested against the filtered or unfiltered set, since
-# `chain_code_shas` is always a subset of `chain_dag_shas` in practice. See
-# `test_record_spanning_code_and_same_chain_bookkeeping_commit_accepted_and_
-# contributes_only_code_shas` below for the dedicated case where the two
-# sets must actually differ.
-# ---------------------------------------------------------------------------
-
-
-def test_record_membership_rejects_stored_head_range_before_consulting_resolver():
-
-    def _resolver_must_not_be_called(sha_range: str):
-        raise AssertionError(f"resolver must not be consulted for a stored-HEAD range: {sha_range!r}")
-
-    record = {"verdict": "ok", "sha_range": "abc..HEAD"}
-    assert _record_membership_shas(
-        record, _resolver_must_not_be_called, {"aaaaaaa1"}, {"aaaaaaa1"},
-    ) is None
-
-
-def test_record_membership_rejects_unsafe_range_before_consulting_resolver():
-    """2026-08-06 review-integrator finding B2: `coverage.SAFE_RANGE` — the
-    shared argument-injection validator ("blocks leading-dash argument
-    injection, e.g. `--output=/x..y` reaching `git rev-list` as a flag") —
-    is applied at every OTHER `git rev-list` call site in this codebase;
-    `_record_membership_shas` now applies it too, before the resolver is
-    ever consulted. Also covers the related shape gap: a bare-sha
-    `sha_range` (no `..`/`...` separator) is rejected by the same check
-    rather than becoming an unbounded `git rev-list <sha>` ancestry walk."""
-
-    def _resolver_must_not_be_called(sha_range: str):
-        raise AssertionError(f"resolver must not be consulted for an unsafe range: {sha_range!r}")
-
-    injection_record = {"verdict": "ok", "sha_range": "--output=/x..y"}
-    assert _record_membership_shas(
-        injection_record, _resolver_must_not_be_called, {"aaaaaaa1"}, {"aaaaaaa1"},
-    ) is None
-
-    bare_sha_record = {"verdict": "ok", "sha_range": "aaaaaaa1"}
-    assert _record_membership_shas(
-        bare_sha_record, _resolver_must_not_be_called, {"aaaaaaa1"}, {"aaaaaaa1"},
-    ) is None
-
-
-def test_record_membership_skips_integration_scope_kind():
-
-    def _resolver_must_not_be_called(sha_range: str):
-        raise AssertionError(f"resolver must not be consulted for a non-code scope_kind: {sha_range!r}")
-
-    record = {"verdict": "ok", "sha_range": "base..tip", "scope_kind": "integration"}
-    assert _record_membership_shas(
-        record, _resolver_must_not_be_called, {"aaaaaaa1"}, {"aaaaaaa1"},
-    ) is None
 
 
 def _commit_with_session_trailer(repo_dir, filename, message, session_id):

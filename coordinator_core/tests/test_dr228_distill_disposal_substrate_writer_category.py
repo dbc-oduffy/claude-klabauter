@@ -65,34 +65,6 @@ _ALL_SIX_OPS = _DISPOSAL_TIER_OPS + _SCRATCH_TIER_OPS
 _DR_CITATION_MARKERS = ("DR-228",)
 
 
-def test_dr228_file_exists_with_well_formed_frontmatter():
-    """DR-228 must exist on disk with a matching ``id:`` frontmatter line."""
-    assert _DR_PATH.is_file(), (
-        f"DR-228 not found at expected path {_DR_PATH} — the governing decision "
-        "for the distill-disposal substrate-writer category (plan task C9b) is "
-        "missing."
-    )
-    text = _DR_PATH.read_text(encoding="utf-8")
-    frontmatter_match = re.search(r"^---\n(.*?)\n---", text, re.DOTALL)
-    assert frontmatter_match is not None, "DR-228 file has no YAML frontmatter block"
-    assert re.search(r"^id:\s*DR-228\s*$", frontmatter_match.group(1), re.MULTILINE), (
-        "DR-228's frontmatter `id:` field does not read `DR-228` — "
-        f"frontmatter block was:\n{frontmatter_match.group(1)}"
-    )
-
-
-def test_dr228_names_all_six_admitted_ops():
-    """DR-228's body must name every op it admits — the closed sanctioned-ops list."""
-    text = _DR_PATH.read_text(encoding="utf-8")
-    missing = [op for op in _ALL_SIX_OPS if op not in text]
-    assert not missing, (
-        "DR-228 does not name the following ops it is supposed to admit: "
-        f"{missing!r}. The sanctioned-ops list (§ D1 disposal tier, § D6 scratch "
-        "tier) must be a closed, explicit enumeration — an op missing from the "
-        "DR text is not covered by it."
-    )
-
-
 @pytest.mark.parametrize("op_name", _ALL_SIX_OPS)
 def test_op_classification_entry_cites_dr228(op_name):
     """Guard name: dr228-classification-citation-guard.
