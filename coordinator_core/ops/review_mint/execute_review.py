@@ -181,11 +181,13 @@ def compose_execute_review(
     prep_prompt = (
         f"{prompt_head}\n\n"
         f"Freeze and characterise this run's diff for review. Freeze it with the "
-        f"`review.freeze_diff` op: range={run_base_sha or 'run_base_sha'}, worktree=true, "
-        f"paths=declared_paths, slice_id=a name unique to this run. The run's rows "
+        f"`freeze-review-diff` CLI (coordinator/bin/freeze-review-diff.py, the "
+        f"`review.freeze_diff` op's entrypoint): `--worktree --range "
+        f"{run_base_sha or 'run_base_sha'} --slice-id <a name unique to this run> "
+        f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
-        f"`git diff base..HEAD` is never the run's diff. Return the op's diff_path "
-        f"as whole_diff_path, verbatim; never write or edit a diff yourself. List every file "
+        f"`git diff base..HEAD` is never the run's diff. Return its single stdout "
+        f"line as whole_diff_path, verbatim; never write or edit a diff yourself. List every file "
         f"changed in {run_base_sha or 'run_base_sha'}..HEAD or in the working tree "
         f"that is NOT in declared_paths under foreign_claims: no reviewer may "
         f"edit it, so it is named here, not discovered at the delivery verdict.\n"
@@ -357,6 +359,10 @@ _JUDGE_PREAMBLE = (
 )
 
 
+#: The judge agent's own phase label; the emitter lists it in meta.phases.
+CRITERION_JUDGE_PHASE_TITLE = "Criterion judge"
+
+
 def compose_criterion_judge(
     review: ExecuteReview,
     *,
@@ -388,7 +394,7 @@ def compose_criterion_judge(
     return _agent_call_literal(
         review.judge.agent_type,
         prompt,
-        "Criterion judge",
+        CRITERION_JUDGE_PHASE_TITLE,
         schema=True,
         as_arrow=False,
         agent_opts=_agent_opts_for(review.judge),

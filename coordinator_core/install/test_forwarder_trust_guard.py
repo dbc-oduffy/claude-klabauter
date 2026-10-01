@@ -45,7 +45,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.install import substrate
 from coordinator_core.install.substrate import (
+    _AGENT_FORWARDER_MARKER,
+    _AGENT_PS1_FORWARDER_MARKER,
     _LEGACY_CMD_MARKER,
     SubstrateFatalError,
     _AGENT_CMD_FORWARDER_MARKER,
@@ -1732,3 +1735,213 @@ def test_forwarder_append_ordering_earlier_path_entry_wins(
         "expected the guarded entry to be APPENDED after $PATH, not "
         f"prepended before it; got assignment: {assignment!r}"
     )
+
+
+# --- Moved from test_substrate.py: sweep tests --------------------------------
+
+
+def test_sweep_orphaned_agent_helpers_disabled_does_not_unlink(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    dst_dir = tmp_path / "bin"
+    dst_dir.mkdir()
+    orphan = dst_dir / "retired-helper"
+    orphan.write_text(f"#!/usr/bin/env python3\n{_AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(dst_dir, {}, {}, check_only=False)
+
+    assert orphan.exists(), "disabled mutation must not delete the orphan forwarder"
+    assert "REFUSED" in capsys.readouterr().err
+
+
+def test_sweep_orphaned_agent_helpers_enabled_unlinks(monkeypatch, tmp_path):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    # tmp_path itself lives under the system temp dir, which would otherwise
+    # trip _refuse_machine_mutation's OWN sandbox heuristic -- redirect that
+    # heuristic's notion of "temp" away from tmp_path so this positive
+    # control isolates the env-var trigger being tested, not the path one.
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
+    dst_dir = tmp_path / "bin"
+    dst_dir.mkdir()
+    orphan = dst_dir / "retired-helper"
+    orphan.write_text(f"#!/usr/bin/env python3\n{_AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(dst_dir, {}, {}, check_only=False)
+
+    assert not orphan.exists(), "with the guard unset the orphan sweep must still delete"
+
+
+# --- .ps1 launcher class -- orphan sweep (C1 of the ps1-launcher-class plan) -
+#
+# `_sweep_orphaned_agent_helpers` used to treat `.ps1` as an ordinary
+# extensionless file, requiring `_AGENT_FORWARDER_MARKER` -- a string no
+# emitted `.ps1` body carries -- so a retired CLI's `.ps1` forwarder could
+# never reach deletion. These tests cover the new `.ps1`-specific marker
+# branch and its `protected_names` complement, both required together (see
+# `_sweep_orphaned_agent_helpers`'s docstring, condition 1 vs condition 2).
+
+
+def test_sweep_orphaned_agent_helpers_retires_both_legs_cmd_and_ps1(monkeypatch, tmp_path):
+    """AC2: retiring a CLI (absent from this run's derived maps) must sweep
+    BOTH launcher legs -- the pre-existing `.cmd` forwarder AND its `.ps1`
+    sibling. The `.ps1` must not survive merely because it isn't the `.cmd`
+    branch; before limb 1, landing emission first would leave a retired
+    CLI's `.ps1` leg executable under PowerShell."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
+    name = "retired-cli"
+    cmd_orphan = tmp_path / f"{name}.cmd"
+    # Fabricated rather than generated: the generator is deleted, but the
+    # SWEEP that clears what it left on real boxes is live and is what this
+    # test is about. Only the marker matters to the sweep.
+    cmd_orphan.write_text(
+        f"@echo off\nREM {substrate._AGENT_CMD_FORWARDER_MARKER}\nREM stale fixture for {name}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    ps1_orphan = tmp_path / f"{name}.ps1"
+    ps1_orphan.write_text(
+        f"# {_AGENT_PS1_FORWARDER_MARKER}\n& python3 '{name}.py' @args\n",
+        encoding="utf-8",
+    )
+
+    _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
+
+    assert not cmd_orphan.exists(), "orphaned .cmd leg must be swept"
+    assert not ps1_orphan.exists(), "orphaned .ps1 leg must be swept alongside its .cmd sibling"
+
+
+def test_sweep_does_not_remove_ps1_orphan_lacking_the_marker(tmp_path):
+    """The `.ps1` branch is content-gated by the same positive-marker
+    discipline as the `.cmd` and extensionless branches, not name-gated -- a
+    hand-authored or foreign-tool `.ps1` sharing an orphaned name must
+    survive."""
+    decoy = tmp_path / "retired-cli.ps1"
+    decoy.write_text("# hand-authored, not ours\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
+
+    assert decoy.is_file()
+
+
+def test_sweep_static_family_ps1_with_legacy_marker_survives(tmp_path):
+    """AC2b regression: `_LEGACY_CMD_MARKER` is stamped by
+    `coordinator/bin/gen-launcher-shim.py::render_ps1` into source-side
+    `.ps1` files for every CLI it renders, including static-family ones --
+    it is NOT exclusive to agent-helper forwarders (mirroring the existing
+    `.cmd` hazard). `_AGENT_PS1_FORWARDER_MARKER` was deliberately chosen to
+    be distinct from `_LEGACY_CMD_MARKER` and the `.ps1` branch does not
+    accept the legacy marker at all -- a static-family `.ps1` must survive.
+
+    The real manifest carries `platform-localize.cmd` (and `.py`), NOT
+    `platform-localize.ps1` -- verified against the live, un-monkeypatched
+    `_static_bin_family_names()` at HEAD (18 names; `.cmd`/`.py` present,
+    `.ps1` absent). So survival does NOT come from direct `.ps1` membership
+    in that set -- it comes from `_sweep_orphaned_agent_helpers`'s limb 2,
+    which synthesizes `Path(n).stem + ".ps1"` for every protected name
+    (including `platform-localize.cmd`) before checking `protected_names`.
+    A monkeypatch that injects `platform-localize.ps1` directly into
+    `_static_bin_family_names()`'s return value tests membership-protection
+    only -- never in doubt -- and stays green even if limb 2 is deleted,
+    which defeats the regression this test exists to be. Using the REAL,
+    unpatched function is what makes the assertion fail if limb 2 goes."""
+    assert "platform-localize.cmd" in _static_bin_family_names()
+    assert "platform-localize.ps1" not in _static_bin_family_names()
+    protected = tmp_path / "platform-localize.ps1"
+    protected.write_text(f"# {_LEGACY_CMD_MARKER}\n$null = 1\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
+
+    assert protected.is_file()
+
+
+def test_sweep_protects_ps1_sibling_of_currently_installed_name(tmp_path):
+    """Limb 2: a `.ps1` sibling of a name in THIS run's derived maps must
+    survive even without the ps1 marker at all -- `protected_names`
+    extends to the `.ps1` form of every protected bare name. This is a
+    complement to the marker branch, not a substitute for it: protection
+    alone would make `.ps1` orphans unsweepable, which is why limb 1's
+    marker branch is what makes deletion reachable in the first place."""
+    name = "cross-repo-memo"
+    kept_ps1 = tmp_path / f"{name}.ps1"
+    kept_ps1.write_text("# no marker at all\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(tmp_path, {name: f"{name}.py"}, {}, False)
+
+    assert kept_ps1.is_file()
+
+
+def test_sweep_protects_ps1_derived_via_limb_two_not_marker_or_static_family(monkeypatch, tmp_path):
+    """Limb 2
+    (`protected_names |= {Path(n).stem + ".ps1" for n in protected_names}`)
+    is checked BEFORE the marker branch in the sweep loop, so a fixture must
+    be deletion-ELIGIBLE under limb 1 (carries `_AGENT_PS1_FORWARDER_MARKER`)
+    while its bare name is protected ONLY via limb 2's derivation -- never
+    directly as a `.ps1` entry in `_static_bin_family_names()` or the maps.
+    `foo-cli.cmd` is the protected name (via `agent_cmd_dest_map.values()`);
+    `foo-cli.ps1` is not itself a member of any protected set, and
+    `foo-cli.ps1` is not in `_static_bin_family_names()`. Deleting limb 2
+    would drop `foo-cli.ps1` from `protected_names` entirely, and since it
+    carries the marker it would then be unlinked -- this test fails without
+    limb 2 present."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
+    assert "foo-cli.ps1" not in _static_bin_family_names()
+    ps1 = tmp_path / "foo-cli.ps1"
+    ps1.write_text(f"# {_AGENT_PS1_FORWARDER_MARKER}\n$null = 1\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(tmp_path, {}, {"foo-cli": "foo-cli.cmd"}, False)
+
+    assert ps1.is_file(), (
+        "foo-cli.ps1 is protected only via limb 2's derivation from the "
+        "protected foo-cli.cmd name -- surviving here is evidence limb 2 ran"
+    )
+
+
+def test_sweep_ps1_legacy_marker_alone_grants_no_deletion_eligibility(monkeypatch, tmp_path):
+    """The
+    `.ps1` branch's marker check does NOT accept `_LEGACY_CMD_MARKER` (only
+    `_AGENT_PS1_FORWARDER_MARKER`), so a `.ps1` file carrying only the legacy
+    marker, whose bare name is UNPROTECTED (not in
+    `_static_bin_family_names()`, not derivable via limb 2 from any name in
+    this run's maps), must still survive -- proving the `.ps1` branch's
+    deletion-eligibility gate (`_AGENT_PS1_FORWARDER_MARKER not in text`)
+    never treats `_LEGACY_CMD_MARKER` as sufficient. This is the negative
+    control the `..._legacy_marker_survives` test above cannot provide on
+    its own, since that test's survival comes from static-family membership
+    and never reaches this branch's marker check at all -- it cannot tell
+    "protected" apart from "would also survive a legacy-marker allowance had
+    one existed." Here protection is deliberately absent, so survival is
+    proof positive the marker check itself is what's gating deletion, not
+    incidental protected-name membership. A regression that widened the
+    `.ps1` branch to accept `_LEGACY_CMD_MARKER` (mirroring the `.cmd`
+    branch's `or` today) would make this fixture deletion-eligible and,
+    being unprotected, actually deleted -- flipping this assertion."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
+    name = "not-a-real-static-family-member"
+    assert f"{name}.cmd" not in _static_bin_family_names()
+    assert f"{name}.py" not in _static_bin_family_names()
+    decoy = tmp_path / f"{name}.ps1"
+    decoy.write_text(f"# {_LEGACY_CMD_MARKER}\n$null = 1\n", encoding="utf-8")
+
+    _sweep_orphaned_agent_helpers(tmp_path, {}, {}, False)
+
+    assert decoy.is_file(), (
+        "an unprotected legacy-marker-only .ps1 must survive -- the .ps1 "
+        "branch's marker check grants no legacy-marker deletion-eligibility"
+    )
+
+
+def test_static_bin_family_names_marker_constant_is_module_sourced():
+    """AC12: `_AGENT_PS1_FORWARDER_MARKER` is a real module-level constant
+    (not a literal string improvised in this test file) and is distinct
+    from every other marker -- the property the sweep's docstring claims
+    for the whole marker family."""
+    assert _AGENT_PS1_FORWARDER_MARKER
+    assert _AGENT_PS1_FORWARDER_MARKER != _LEGACY_CMD_MARKER
+    assert _AGENT_PS1_FORWARDER_MARKER not in _LEGACY_CMD_MARKER
+    assert _LEGACY_CMD_MARKER not in _AGENT_PS1_FORWARDER_MARKER
+    assert _AGENT_PS1_FORWARDER_MARKER != _AGENT_FORWARDER_MARKER
+    assert _AGENT_PS1_FORWARDER_MARKER != substrate._AGENT_CMD_FORWARDER_MARKER
+
+

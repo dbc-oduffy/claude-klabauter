@@ -362,6 +362,29 @@ def test_a_consumer_that_is_the_producers_ancestor_is_refused(tmp_path):
     assert report["verdict"] != pg.PREPPED
 
 
+def test_a_path_scaffolded_early_and_finalized_late_is_ordered(tmp_path):
+    """W0 creates lib.py, K1 consumes it, then F1 (after K1) rewrites it: the
+    earliest writer satisfies the read, so the late finalizer is not a defect."""
+    spine = _consumes_spine(
+        _CONSUMES_ROW.format(id="W0", writes="[coordinator_core/lib.py]", consumes="[]", extra=""),
+        _CONSUMES_ROW.format(
+            id="K1",
+            writes="[coordinator_core/k1.py]",
+            consumes="[coordinator_core/lib.py]",
+            extra="  depends_on:\n    - chunk: W0\n      gate_kind: output-consumption-runtime\n",
+        ),
+        _CONSUMES_ROW.format(
+            id="F1",
+            writes="[coordinator_core/lib.py]",
+            consumes="[]",
+            extra="  depends_on:\n    - chunk: K1\n      gate_kind: output-consumption-runtime\n",
+        ),
+    )
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["SPINE"]["status"] == "PASS", report["classes"]["SPINE"]
+
+
 def test_a_consumed_writes_under_prefix_is_ordered_or_refused_like_a_file(tmp_path):
     spine = _consumes_spine(
         _CONSUMES_ROW.format(id="P1", writes="[]", consumes="[]", extra="  writes_under: [coordinator_core/gen/]\n"),

@@ -102,3 +102,67 @@ def test_door_core_table_matches_derivation_exactly():
         f"C1's derivation no longer finds reading stdin: {sorted(stale_in_table)} "
         "-- the door pays a needless cold fall-through for these"
     )
+
+
+_SCOPED_DECL_RE = re.compile(
+    r"door_stdin_subcommand_scoped\[\]\s*=\s*\{(?P<body>.*?)\n\};",
+    re.DOTALL,
+)
+_SCOPED_PAIR_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}')
+
+
+def parse_scoped_pairs(source: str) -> "list[tuple[str, str]]":
+    match = _SCOPED_DECL_RE.search(source)
+    assert match is not None, (
+        "could not find 'door_stdin_subcommand_scoped[] = { ... };' in "
+        f"{_DOOR_CORE_C_PATH}"
+    )
+    return _SCOPED_PAIR_RE.findall(match.group("body"))
+
+
+def test_scoped_names_are_a_subset_of_the_stdin_table():
+    source = _DOOR_CORE_C_PATH.read_text(encoding="utf-8")
+    pairs = parse_scoped_pairs(source)
+    assert pairs, "the scoped table parsed empty"
+    assert {name for name, _ in pairs} <= parse_door_core_table(source)
+
+
+@pytest.mark.real_home
+def test_scoped_subcommand_is_the_only_stdin_site_in_the_body():
+    """A name may be narrowed to one subcommand only if every `sys.stdin`
+    reference in its body sits inside that subcommand's `_cmd_<name>`
+    handler -- otherwise warm service would starve another subcommand."""
+    import ast
+
+    from coordinator_core.warm.door.tests.test_stdin_reading_entrypoint_population import (
+        resolve_entrypoint_body,
+    )
+
+    roots = configured_bin_roots()
+    if not roots:
+        pytest.skip("no configured bin root resolves on this machine")
+    for name, sub in parse_scoped_pairs(_DOOR_CORE_C_PATH.read_text(encoding="utf-8")):
+        body = resolve_entrypoint_body(name, roots)
+        if body is None:
+            continue
+        tree = ast.parse(body.read_text(encoding="utf-8"))
+        handler = "_cmd_" + sub.replace("-", "_")
+        inside = {
+            id(n)
+            for fn in ast.walk(tree)
+            if isinstance(fn, ast.FunctionDef) and fn.name == handler
+            for n in ast.walk(fn)
+        }
+        outside = [
+            n.lineno
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute)
+            and n.attr == "stdin"
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "sys"
+            and id(n) not in inside
+        ]
+        assert not outside, (
+            f"{name}: sys.stdin referenced outside {handler} at lines {outside}; "
+            f"narrowing the cold route to {sub!r} would starve those paths"
+        )

@@ -38,6 +38,12 @@ RUNTIME_VARS = (
     "_verifications",
 )
 
+# An observation that says the criterion is not met, or that what matched was the
+# baseline (pre-change) state. A JS regex literal, rendered into the emitted script.
+_CRITERION_CONTRADICTION_RE_JS = (
+    r"/\bnot (?:yet )?met\b|\bbaseline (?:still )?match(?:es|ed)\b|\bmatch(?:es|ed)? (?:the )?baseline\b/i"
+)
+
 _CAP_HELPER_JS = (
     "function _cap(s, n) { "
     "if (s === null || s === undefined) return null; "
@@ -215,6 +221,18 @@ def completion_return_js(
     )
 
     falsifier_present = falsifier_var is not None
+    # The falsifier agent self-reports `status` and has reported `met` for "the
+    # observation matches the BASELINE" -- the pre-change state, i.e. NOT met --
+    # while its own observation said "not yet met". `met` is the value that
+    # stamps a plan implemented (terminal_commit._stamp_plan_implemented), so a
+    # `met` whose observation contradicts it is demoted; the safe direction.
+    criterion_status_expr = (
+        f"({falsifier_var} ? (({falsifier_var}.status === 'met' && "
+        + _CRITERION_CONTRADICTION_RE_JS
+        + f".test({falsifier_var}.observation ?? '')) ? 'not_met' : {falsifier_var}.status) : 'not_run')"
+        if falsifier_present
+        else "'not_run'"
+    )
 
     next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
     next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
@@ -264,7 +282,7 @@ def completion_return_js(
                 + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"
                 + ", criterion: "
                 + (
-                    f"({falsifier_var} ? {{ status: {falsifier_var}.status, "
+                    f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
                     f"sidecar: {falsifier_var}.sidecar_path ?? null }} "
                     ": { status: 'not_run', observation: null, sidecar: null })"
@@ -347,7 +365,7 @@ def completion_return_js(
             if review_vars
             else "("
         )
-        + (f"({falsifier_var} && {falsifier_var}.status === 'not_met' ? 'falsifier not met' : " if falsifier_present else "(")
+        + (f"({criterion_status_expr} === 'not_met' ? 'falsifier not met' : " if falsifier_present else "(")
         + f"({tests_status_expr} === 'fail' || {tests_status_expr} === 'error' ? 'tests failed' : "
         + (f"({integration_var} && {integration_var}.unresolved && {integration_var}.unresolved.length ? 'unresolved review notes' : " if review_vars else "(")
         + (f"({integration_var} && {integration_var}.rebuild_decision ? 'rebuild decision raised' : " if review_vars else "(")
@@ -355,6 +373,19 @@ def completion_return_js(
         + f"({RUNTIME_VARS[0]}.length ? 'incomplete chunks' : "
         + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null))"
         + ")))))))"
+    )
+
+    # A row an executor reported PARTIAL/BLOCKED (or answered without a status)
+    # has WRITTEN files; only a row the halt kept from starting never did. Each
+    # id is deduped (an unanswered row rides both arrays) and named by what
+    # happened to it, never blanket `not_started`.
+    deviation_ids_expr = (
+        f"[...new Set([...{RUNTIME_VARS[0]}, ...{RUNTIME_VARS[1]}, ...{RUNTIME_VARS[3]}])]"
+    )
+    deviation_kind_expr = (
+        f"({RUNTIME_VARS[3]}.includes(id) ? 'not_started' : "
+        f"({RUNTIME_VARS[2]}.includes(id) ? 'stop_rule' : "
+        f"({RUNTIME_VARS[1]}.includes(id) ? 'no_answer' : 'partial')))"
     )
 
     table = {
@@ -366,16 +397,14 @@ def completion_return_js(
         "completed": completed_expr,
         "halted": f"({RUNTIME_VARS[4]} ? _cap({RUNTIME_VARS[4]}, {_maxlength(schema, 'halted')}) : null)",
         "chunks": _js_lit(list(chunks)),
-        "criterion.status": (
-            f"({falsifier_var} ? {falsifier_var}.status : 'not_run')" if falsifier_present else "'not_run'"
-        ),
+        "criterion.status": criterion_status_expr,
         "criterion.observation": (
-            f"_cap({falsifier_var}.observation, {_maxlength(schema, 'criterion.observation')})"
+            f"_cap({falsifier_var}?.observation ?? null, {_maxlength(schema, 'criterion.observation')})"
             if falsifier_present
             else "null"
         ),
         "criterion.sidecar": (
-            f"_cap({falsifier_var}.sidecar_path ?? null, {_maxlength(schema, 'criterion.sidecar')})"
+            f"_cap({falsifier_var}?.sidecar_path ?? null, {_maxlength(schema, 'criterion.sidecar')})"
             if falsifier_present
             else "null"
         ),
@@ -450,8 +479,8 @@ def completion_return_js(
             if review_vars
             else "null"
         ),
-        "deviations[].chunk": f"{RUNTIME_VARS[0]}.concat({RUNTIME_VARS[1]}).concat({RUNTIME_VARS[3]})[0]",
-        "deviations[].kind": "'not_started'",
+        "deviations[].chunk": f"{deviation_ids_expr}[0]",
+        "deviations[].kind": deviation_kind_expr,
         "deviations[].anchor": f"_cap(null, {_maxlength(schema, 'deviations[].anchor')})",
         "run_base_sha": _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
@@ -558,7 +587,7 @@ def completion_return_js(
     lines.append(
         "  deviations: %s.map(id => ({ chunk: id, kind: %s, anchor: %s })),"
         % (
-            f"{RUNTIME_VARS[0]}.concat({RUNTIME_VARS[1]}).concat({RUNTIME_VARS[3]})",
+            deviation_ids_expr,
             table["deviations[].kind"],
             table["deviations[].anchor"],
         )

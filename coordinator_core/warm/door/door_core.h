@@ -245,6 +245,16 @@ int door_argv_declares_advisory(int argc, const char *const *argv);
  * would then no longer be honest about. */
 int door_basename_declares_stdin_read(const char *basename);
 
+/* The invocation-level form of the gate above, which both doors call:
+ * `door_basename_declares_stdin_read`, narrowed by `door_core.c ::
+ * door_stdin_subcommand_scoped` to the single subcommand that reads stdin
+ * for names whose stdin read lives in one handler. `argv` is the door's
+ * argv with argv[0] the program (argv[1] the subcommand); an unreadable
+ * argv returns 1 (cold). Unscoped names behave exactly as the basename
+ * predicate. */
+int door_invocation_declares_stdin_read(
+    const char *basename, int argc, const char *const *argv);
+
 /* =========================================================================
  * The install-class basename gate -- checked right after the image's own
  * basename resolves, BEFORE engine-root resolution and before any transport

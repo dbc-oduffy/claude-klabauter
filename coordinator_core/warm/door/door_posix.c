@@ -1417,7 +1417,8 @@ int main(int argc, char **argv) {
      * as `door.c`'s twin gate reads it. */
     if (!g_door_hook_mode &&
         (!g_own_basename_ok ||
-         door_basename_declares_stdin_read(door_entrypoint_basename()))) {
+         door_invocation_declares_stdin_read(
+             door_entrypoint_basename(), argc, (const char *const *)argv))) {
         int rc = fall_through(argc, argv, engine_root);
         free(engine_root);
         return rc;

@@ -496,3 +496,37 @@ def test_dispatch_emit_accepts_plan_and_out_path_spellings(tmp_path):
 
     assert result["path"] == str(output_path.resolve())
     assert output_path.is_file()
+
+
+def test_terminal_commit_script_path_is_repo_root_relative_when_target_root_defaults(tmp_path):
+    """With no target_root the containment root falls to the output's parent, which
+    used to make `script_path` a bare basename that terminal_commit (it resolves
+    against the repo root) could not open."""
+    from coordinator_core.ops.dispatch_emit.op import _terminal_commit_script_path
+
+    (tmp_path / ".git").mkdir()
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    plan = plans / "p.md"
+    plan.write_text("x", encoding="utf-8")
+    out = plans / "p.workflow.mjs"
+    out.write_text("x", encoding="utf-8")
+
+    got = _terminal_commit_script_path(out, None, str(plan), str(plans))
+    assert got == "docs/plans/p.workflow.mjs"
+    assert (tmp_path / got).is_file()
+
+
+def test_terminal_commit_script_path_falls_back_to_target_root_outside_the_plan_repo(tmp_path):
+    from coordinator_core.ops.dispatch_emit.op import _terminal_commit_script_path
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    plan = repo / "p.md"
+    plan.write_text("x", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    out = elsewhere / "run.mjs"
+    out.write_text("x", encoding="utf-8")
+
+    assert _terminal_commit_script_path(out, None, str(plan), str(elsewhere)) == "run.mjs"

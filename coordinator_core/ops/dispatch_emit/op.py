@@ -394,6 +394,25 @@ def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
         return None
 
 
+def _terminal_commit_script_path(
+    guarded_path: Path, repo_root: Optional[Path], plan_path: str, target_root: str
+) -> Optional[str]:
+    """Repo-root-relative ``script_path`` for ``dispatch.terminal_commit``.
+
+    ``target_root`` defaults to the output's own parent directory when neither
+    the request nor the caller names one, so relativising against it alone
+    emits a bare basename that terminal_commit (which resolves against the
+    repo root) cannot find. The plan's repo root is tried first; ``target_root``
+    is the fallback for a script outside that tree.
+    """
+    plan_root = repo_root or _repo_root_for_plan(plan_path)
+    if plan_root is not None:
+        rel = _script_path_under(guarded_path, str(plan_root))
+        if rel is not None:
+            return rel
+    return _script_path_under(guarded_path, target_root)
+
+
 def guard_against_fired_drift(script_path: Path, expected_sha256: str) -> None:
     """Refuse to fire bytes this caller did not emit, ported from
     coordinator-content-repo's ``emit-dispatch-workflow.py ::
@@ -939,7 +958,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             review_stage_schemas=review_stage_schemas,
             agent_type_host=agent_type_host,
             preamble=preamble,
-            script_path=_script_path_under(guarded_path, target_root),
+            script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
         )
 

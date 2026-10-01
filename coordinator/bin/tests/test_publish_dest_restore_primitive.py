@@ -206,3 +206,28 @@ def test_process_target_finally_restores_after_a_post_swap_exception(monkeypatch
 
     assert not sub.exists()
     assert _porcelain(dest_root) == ""
+
+
+def test_restore_handles_a_dirty_set_larger_than_the_windows_argv_cap(tmp_path):
+    """A failed round that wrote ~1000 paths overflowed the 32K command line;
+    the restore swallowed the spawn failure and the assertion then raised."""
+    dest_root = tmp_path / "dest"
+    _init_git_repo(dest_root)
+    _git(dest_root, "config", "core.autocrlf", "true")
+    sub = dest_root / "coordinator" / "bin"
+    sub.mkdir(parents=True)
+    names = [f"{'long-file-name-padding-' * 3}{i:05d}.py" for i in range(1500)]
+    for name in names:
+        (sub / name).write_bytes(b"print('original')\n")
+    _git(dest_root, "add", "-A")
+    _git(dest_root, "commit", "-m", "seed")
+
+    for name in names:
+        (sub / name).write_bytes(b"print('mutated')\r\n")
+    (sub / "new file.txt").write_text("untracked\n", encoding="utf-8")
+    assert sum(len(str(sub / n)) + 1 for n in names) > 32768
+
+    publish._restore_dest_subtree_to_head(dest_root, sub)
+
+    assert _porcelain(dest_root) == ""
+    publish._assert_dest_subtree_clean(dest_root, sub, context="argv-cap test")

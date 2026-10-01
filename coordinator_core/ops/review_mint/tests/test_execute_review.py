@@ -286,8 +286,9 @@ def test_prep_prompt_names_the_worktree_freeze_not_a_committed_range():
     # commit) while the run's rows sat uncommitted, so the verifier saw no rows.
     _, phases = _compose()
     _, prep_block = phases[0]
-    assert "review.freeze_diff" in prep_block
-    assert "worktree=true" in prep_block
+    # The agent cannot call an op; it must be handed the runnable CLI with --worktree.
+    assert "freeze-review-diff" in prep_block
+    assert "--worktree" in prep_block
     assert "whole_diff_path" in prep_block
 
 

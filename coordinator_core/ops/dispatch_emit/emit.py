@@ -318,7 +318,11 @@ from coordinator_core.executor_return_contract import (
     self_verify_constraint,
 )
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
-from coordinator_core.ops.review_mint.execute_review import compose_criterion_judge, compose_execute_review
+from coordinator_core.ops.review_mint.execute_review import (
+    CRITERION_JUDGE_PHASE_TITLE,
+    compose_criterion_judge,
+    compose_execute_review,
+)
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -3210,6 +3214,8 @@ def compose_script(
             falsifier=falsifier,
             prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         )
+        if judge_expr:
+            phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
         if review.integration is not None:
             review_vars = {
                 "prep": "_reviewPrep",

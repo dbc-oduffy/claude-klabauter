@@ -536,3 +536,43 @@ def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():
     assert "'review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them'" in script
     assert len("review delivery verdict FAIL; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them") <= 300
     assert "next_action: { kind: 'terminal_commit'" in script
+
+
+def _criterion_status_regex(script: str):
+    """The emitted contradiction guard's JS regex literal, as a Python pattern."""
+    import re
+
+    m = re.search(r"\(_falsifierResult\.status === 'met' && /(.+?)/i\.test\(", script)
+    assert m, "criterion.status carries no met-vs-observation contradiction guard"
+    return re.compile(m.group(1), re.IGNORECASE)
+
+
+def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not_met():
+    """A falsifier agent reported `met` with observation "baseline matches
+    ('absent'). Exit criterion not yet met": the BASELINE matching is the
+    pre-change state, so the digest must read not_met -- `met` stamps the plan
+    implemented."""
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    falsifier = {"how": "run it", "baseline_output": "absent", "expected_when_true": "present"}
+    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier)
+
+    assert "? 'not_met' : _falsifierResult.status) : 'not_run')" in script
+    guard = _criterion_status_regex(script)
+    assert guard.search("baseline matches ('absent'). Exit criterion not yet met")
+    assert guard.search("output matches the baseline")
+    assert guard.search("criterion not met")
+    assert not guard.search("output is 'present', differs from the baseline: criterion satisfied")
+    # The same demoted value feeds decision_required, not only criterion.status.
+    assert script.count("'not_met' : _falsifierResult.status") >= 2
+
+
+def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
+    """Rows reported PARTIAL/BLOCKED have written files; only a row the halt kept
+    from starting is `not_started`. Deviations are deduped and kinded per id."""
+    waves = [[_row("C1", ["a.py"])]]
+    script = compose_script(waves, name="wf", description="deviation kinds")
+    line = next(l for l in script.splitlines() if l.lstrip().startswith("deviations:"))
+    assert "kind: 'not_started'" not in line
+    assert "[...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted])]" in line
+    assert "(_notStarted.includes(id) ? 'not_started' : " in line
+    assert "'no_answer'" in line and "'stop_rule'" in line and "'partial'" in line

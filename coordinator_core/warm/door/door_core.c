@@ -515,6 +515,41 @@ int door_basename_declares_stdin_read(const char *basename) {
 }
 
 /* =========================================================================
+ * Subcommand-scoped narrowing of the stdin-reading table. A basename in
+ * `door_stdin_reading_basenames` whose stdin read lives in ONE subcommand's
+ * handler (the textual scan that derives the table cannot tell) needs the
+ * cold leg only for that subcommand; every other invocation of the name
+ * carries no stdin need and is served warm. `door_stdin_subcommand_scoped`
+ * pairs {basename, the only argv[1] that reads stdin}.
+ * `test_stdin_reading_table_parity.py` pins each pair against the bin's
+ * own body: the scoped subcommand's handler must be the sole stdin site.
+ * A basename ABSENT here keeps the whole-name cold route.
+ * ========================================================================= */
+typedef struct {
+    const char *basename;
+    const char *subcommand;
+} door_stdin_scope_t;
+
+static const door_stdin_scope_t door_stdin_subcommand_scoped[] = {
+    { "misc-session-and-guards", "claim-classify" },
+};
+
+#define DOOR_STDIN_SUBCOMMAND_SCOPED_COUNT     (sizeof(door_stdin_subcommand_scoped) / sizeof(door_stdin_subcommand_scoped[0]))
+
+int door_invocation_declares_stdin_read(
+    const char *basename, int argc, const char *const *argv
+) {
+    if (!door_basename_declares_stdin_read(basename)) return 0;
+    for (size_t i = 0; i < DOOR_STDIN_SUBCOMMAND_SCOPED_COUNT; i++) {
+        if (strcmp(basename, door_stdin_subcommand_scoped[i].basename) != 0) continue;
+        /* Fail closed: an argv the door cannot read stays on the cold leg. */
+        if (argc < 2 || argv == NULL || argv[1] == NULL) return 1;
+        return strcmp(argv[1], door_stdin_subcommand_scoped[i].subcommand) == 0;
+    }
+    return 1;
+}
+
+/* =========================================================================
  * The install-class basename table -- see door_core.h for the full policy.
  * PM ruling 2026-09-23: install-class CLIs (`INSTALL_CLASS = True` in
  * `coordinator/bin/<name>.py`) never dial the warm engine -- they install,

@@ -435,8 +435,8 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
 
 def _consumes_not_after_producer(waves: Sequence[Sequence[Any]]) -> List[str]:
     """``"<consumer> consumes <path> written by <producer>"`` for every ordering
-    read (``reads:`` / ``consumes:``) whose producing row lands in the SAME or a
-    LATER wave than the consumer.
+    read (``reads:`` / ``consumes:``) none of whose producing rows lands in a
+    strictly EARLIER wave than the consumer.
 
     The invariant is checked on the BUILT waves, not on declared ``depends_on``
     edges: ``wave_map._predecessors`` derives read-after-write edges, so a
@@ -464,17 +464,25 @@ def _consumes_not_after_producer(waves: Sequence[Sequence[Any]]) -> List[str]:
         for consumer in wave:
             for path in consumer.reads:
                 norm = _normalize_path(path)
-                for producer, written, prefixes in producers:
-                    if producer.id == consumer.id:
-                        continue
-                    hit = norm in written or any(
-                        norm == pre or _is_ancestor(pre, norm) or _is_ancestor(norm, pre)
-                        for pre in prefixes
-                    )
-                    if hit and wave_of[producer.id] >= wave_of[consumer.id]:
-                        found.append(
-                            f"{consumer.id} consumes {path} written by {producer.id}"
+                writers = [
+                    producer
+                    for producer, written, prefixes in producers
+                    if producer.id != consumer.id
+                    and (
+                        norm in written
+                        or any(
+                            norm == pre or _is_ancestor(pre, norm) or _is_ancestor(norm, pre)
+                            for pre in prefixes
                         )
+                    )
+                ]
+                # A path written twice (scaffold early, finalize late) is satisfied
+                # by its earliest writer; only a path with NO earlier writer runs
+                # beside its producer.
+                if writers and all(wave_of[w.id] >= wave_of[consumer.id] for w in writers):
+                    found.extend(
+                        f"{consumer.id} consumes {path} written by {w.id}" for w in writers
+                    )
     return found
 
 

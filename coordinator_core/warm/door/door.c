@@ -685,11 +685,24 @@ static int door_argv_declares_advisory_w(int argc, wchar_t **wargv) {
  * 0` -- is handled at the call site, not here: this function is never
  * told whether the name it was given is the real one or the pre-C0
  * default.) */
-static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
+static int door_basename_declares_stdin_read_w(
+    const wchar_t *basename, int argc, wchar_t **wargv
+) {
     int len = 0;
     char *basename_u8 = wide_to_utf8(basename, &len);
     if (!basename_u8) return 1;
-    int declared = door_basename_declares_stdin_read(basename_u8);
+    int declared;
+    if (argc >= 2 && wargv != NULL) {
+        /* Only argv[1] (the subcommand) is consulted by the scoped gate. */
+        const char *argv_u8[2] = { NULL, NULL };
+        char *sub_u8 = wide_to_utf8(wargv[1], &len);
+        if (!sub_u8) { free(basename_u8); return 1; }
+        argv_u8[1] = sub_u8;
+        declared = door_invocation_declares_stdin_read(basename_u8, argc, argv_u8);
+        free(sub_u8);
+    } else {
+        declared = door_invocation_declares_stdin_read(basename_u8, argc, NULL);
+    }
     free(basename_u8);
     return declared;
 }
@@ -1008,6 +1021,15 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     return 0;
 }
 
+/* WHY the cold leg is being taken, named on the fall-through line so the
+ * cause reads off the symptom. `g_fall_code != 0` is the JSON-RPC error code
+ * of a delivered request the server rejected as provably undispatched
+ * (`do_fallback`); otherwise `g_fall_reason` names the pre-delivery gate, and
+ * the default covers the remaining pre-delivery doubts (no engine root, no
+ * pipe, stamp unreadable, escape hatch). */
+static long g_fall_code = 0;
+static const wchar_t *g_fall_reason = L"pre-delivery doubt (engine root, pipe, stamp, or escape hatch)";
+
 static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
     if (g_door_hook_mode) {
         return hook_fall_through(argc, wargv, engine_root_w);
@@ -1017,9 +1039,16 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
     if (!cmdline_w) return 1;
 
-    fwprintf(stderr,
-        L"door: falling through to the cold entrypoint (%s)\n",
-        script_path_w);
+    if (g_fall_code != 0) {
+        fwprintf(stderr,
+            L"door: falling through to the cold entrypoint (%s) "
+            L"[server rejected the request, JSON-RPC code %ld]\n",
+            script_path_w, g_fall_code);
+    } else {
+        fwprintf(stderr,
+            L"door: falling through to the cold entrypoint (%s) [%s]\n",
+            script_path_w, g_fall_reason);
+    }
 
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
@@ -1572,7 +1601,8 @@ int main(void) {
      * beats a guaranteed crash. */
     if (!g_door_hook_mode &&
         (!g_own_basename_ok ||
-         door_basename_declares_stdin_read_w(door_entrypoint_basename()))) {
+         door_basename_declares_stdin_read_w(door_entrypoint_basename(), argc, wargv))) {
+        g_fall_reason = L"stdin-reading entrypoint (or unresolved image name): the door does not forward stdin";
         free(engine_root_u8);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }
@@ -2033,7 +2063,7 @@ int main(void) {
         free(rf.stderr_buf.data);
 
         if (have_error && is_provably_undispatched(error_code)) {
-            
+            g_fall_code = error_code;
             goto do_fallback;
         }
         free(engine_root_w); 

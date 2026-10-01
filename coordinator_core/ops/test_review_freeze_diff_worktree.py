@@ -227,6 +227,53 @@ def test_worktree_freeze_undeclared_path_peer_commit_stays_out(tmp_path: Path) -
     assert "peer content" not in diff_text
 
 
+def test_worktree_freeze_is_exactly_the_declared_changes_amid_peer_activity(
+    tmp_path: Path,
+) -> None:
+    # The execute-review shape: the run's rows land uncommitted (one modified,
+    # one brand new) while a peer both edits an undeclared file in the
+    # worktree and commits another after base. Only the declared changes may
+    # appear, and none of them may be dropped.
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "queue").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "plan.md").write_text("plan v1\n")
+    (tmp_path / "state" / "queue" / "peer-edited.yaml").write_text("peer v1\n")
+    (tmp_path / "state" / "queue" / "peer-committed.yaml").write_text("pc v1\n")
+    _git(["add", "-A"], cwd=tmp_path)
+    assert _git(["commit", "-q", "-m", "base"], cwd=tmp_path).returncode == 0
+    base = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    (tmp_path / "state" / "queue" / "peer-committed.yaml").write_text("pc v2\n")
+    _git(["add", "state/queue/peer-committed.yaml"], cwd=tmp_path)
+    assert _git(["commit", "-q", "-m", "peer commit"], cwd=tmp_path).returncode == 0
+
+    (tmp_path / "docs" / "plans" / "plan.md").write_text("plan v2 declared edit\n")
+    (tmp_path / "docs" / "plans" / "new-plan.md").write_text("declared untracked\n")
+    (tmp_path / "state" / "queue" / "peer-edited.yaml").write_text("peer v2 edit\n")
+
+    result = freeze_diff(
+        tmp_path,
+        base,
+        "declared-amid-peers",
+        paths=["docs/plans/plan.md", "docs/plans/new-plan.md"],
+        worktree=True,
+    )
+
+    assert result["error"] is None, result["error"]
+    diff_text = Path(result["diff_path"]).read_text()
+    headers = sorted(
+        line for line in diff_text.splitlines() if line.startswith("diff --git ")
+    )
+    assert headers == [
+        "diff --git a/docs/plans/new-plan.md b/docs/plans/new-plan.md",
+        "diff --git a/docs/plans/plan.md b/docs/plans/plan.md",
+    ]
+    assert "plan v2 declared edit" in diff_text
+    assert "declared untracked" in diff_text
+    assert "peer" not in diff_text and "pc v2" not in diff_text
+
+
 def test_worktree_freeze_binary_untracked_file(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     base = _commit(tmp_path, "tracked.txt", "line one\n", "add tracked.txt")
