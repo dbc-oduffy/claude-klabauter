@@ -121,7 +121,7 @@ def test_compose_execute_review_emits_three_phases_in_order():
 def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
     _, phases = _compose()
     _, prep_block = phases[0]
-    assert "const _reviewPrep = await agent(" in prep_block
+    assert "const _reviewPrep = await (async () => { try { return await agent(" in prep_block
     assert "docs/plans/example.md" in prep_block
     assert "a" * 40 in prep_block
     assert "'label: " not in prep_block  # label rendered unquoted key
@@ -135,13 +135,13 @@ def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
     _, wave_block = phases[1]
     assert wave_block.count("await parallel([") == 1
     assert (
-        "...(_reviewPrep?.slices ?? []).map(s => () => agent(" in wave_block
+        "...(_reviewPrep?.slices ?? []).map(s => () => (async () => { try { return await agent(" in wave_block
     )
     assert "JSON.stringify(s)" in wave_block
     # one whole-diff call per non-slice agent (overengineering-reviewer,
     # the signal-resolved staff-eng, delivery-verifier), plus the one
     # slice-map arrow -- 4 total `() => agent(` occurrences.
-    assert wave_block.count("() => agent(") == 4
+    assert wave_block.count("() => (async () => { try { return await agent(") == 4
     assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in wave_block
 
 
@@ -163,7 +163,7 @@ def test_every_wave_call_carries_its_roster_model_effort_and_schema():
 def test_integration_phase_binds_reviewintegration():
     _, phases = _compose()
     _, integration_block = phases[2]
-    assert "const _reviewIntegration = await agent(" in integration_block
+    assert "const _reviewIntegration = await (async () => { try { return await agent(" in integration_block
     assert "agentType: 'coordinator:code-reviewer'" in integration_block
     assert json.dumps(_STAGE_SCHEMAS["review-integration-result"], sort_keys=True) in integration_block
 
@@ -365,3 +365,10 @@ def test_judge_prompt_asks_for_the_boolean_comparison():
         falsifier={"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"},
     )
     assert "differs_from_baseline" in call and "baseline_output" in call
+
+
+def test_every_review_phase_call_degrades_to_null_not_a_throw():
+    blocks = dict(_compose()[1])
+    for title in ("Review prep", "Review wave", "Review integration"):
+        assert "catch (e)" in blocks[title], title
+        assert "catch (e) { return null; }" in blocks[title], title

@@ -3183,6 +3183,19 @@ def test_pathspec_from_manifest_names_head_diverged_worktree_equal_path(tmp_path
     assert "stranded.md" in pathspec
 
 
+def test_a_failed_diff_probe_names_tracked_paths_rather_than_dropping_them(tmp_path, monkeypatch):
+    """A `git diff HEAD` probe that fails (timeout after a whole-tree swap)
+    is unknown, not empty: every updated file must still reach the commit."""
+    repo = _init_head_repo(tmp_path, {"updated.md": "old\n"})
+    (repo / "updated.md").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "_dest_head_diff_names", lambda _root: None)
+
+    manifest = _mod._RoundManifest(
+        round_id="r1", declared_payload=frozenset({"updated.md"})
+    )
+    assert "updated.md" in _mod._pathspec_from_manifest(manifest, str(repo))[0]
+
+
 def test_removal_side_is_live_at_the_shipped_flag_value(tmp_path):
     """The removal side is ON (§ `_REMOVAL_SIDE_ENABLED`, PM 2026-08-26). This
     test guarded the closed gate and now guards the open one -- inverted in

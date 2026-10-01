@@ -187,7 +187,11 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
-from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
+from coordinator_core.ops.dispatch_emit.emit import (
+    check_agent_types_resolve,
+    emit_script,
+    resolve_agent_type_host,
+)
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core._content_root_primitive import content_root_for
@@ -961,6 +965,12 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
         )
+
+    check_agent_types_resolve(
+        script,
+        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
+        agent_type_host=agent_type_host,
+    )
 
     findings = [*run_checks(script), *plan_findings]
     error_count = sum(1 for f in findings if f.severity is Severity.ERROR)

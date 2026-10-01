@@ -1148,6 +1148,41 @@ def resolve_agent_type_host(
     return _AGENT_TYPE_HOST_DEGRADED
 
 
+class UnresolvedAgentTypeError(ValueError):
+    """A composed script names a ``coordinator:*`` agentType the installed
+    plugin does not ship."""
+
+
+_COORDINATOR_AGENT_TYPE_RE = re.compile(r"""agentType:\s*["']coordinator:([A-Za-z0-9._-]+)["']""")
+
+
+def check_agent_types_resolve(
+    script: str,
+    *,
+    claude_plugin_root: Optional[str],
+    agent_type_host: Optional[str],
+) -> None:
+    """Refuse a script naming a ``coordinator:<name>`` agentType with no
+    ``<claude_plugin_root>/agents/<name>.md``. Pure stat calls. Skipped when
+    agent types are host-degraded or the plugin root is unset or absent:
+    there is nothing to resolve against."""
+    if agent_type_host == _AGENT_TYPE_HOST_DEGRADED or not claude_plugin_root:
+        return
+    agents_dir = Path(claude_plugin_root) / "agents"
+    if not agents_dir.is_dir():
+        return
+    missing = sorted(
+        {n for n in _COORDINATOR_AGENT_TYPE_RE.findall(script) if not (agents_dir / f"{n}.md").is_file()}
+    )
+    if missing:
+        raise UnresolvedAgentTypeError(
+            "unresolved agentType: "
+            + ", ".join(f"coordinator:{n}" for n in missing)
+            + f" not in {agents_dir}. Install the plugin version that ships them, "
+            "then re-emit."
+        )
+
+
 def _degrade_agent_type(agent_type: str, agent_type_host: Optional[str]) -> str:
     """The ``agentType`` LITERAL to emit for ``agent_type`` given
     ``agent_type_host`` -- never the ``model:`` literal, which callers must
@@ -2352,6 +2387,22 @@ _TEST_RESULT_VAR = "_testResult"
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 
 
+def _never_stranding_criterion(call_expr: str) -> str:
+    """Wrap the criterion leg so a throw (an agentType the firing session
+    cannot resolve, a schema refusal) yields ``indeterminate`` instead of
+    killing the run after every executor has written: the run must still
+    reach its terminal_commit next_action. ``differs_from_baseline: null``
+    routes wake_digest's computed status to this ``status`` verbatim."""
+    return (
+        "(async () => { try { return await "
+        + call_expr
+        + "; } catch (e) { log('criterion leg threw; criterion is indeterminate (unjudged): ' + "
+        "String(e && e.message || e)); return { status: 'indeterminate', "
+        "differs_from_baseline: null, observation: 'unjudged: ' + "
+        "String(e && e.message || e), sidecar_path: null }; } })()"
+    )
+
+
 def _test_agent_call_expr(scope: list[str], agent_type_host: Optional[str] = None) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -3291,6 +3342,8 @@ def compose_script(
         if falsifier is not None
         else None
     )
+    if criterion_expr is not None:
+        criterion_expr = _never_stranding_criterion(criterion_expr)
     criterion_block = (
         f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
         f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"

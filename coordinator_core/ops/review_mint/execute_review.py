@@ -127,6 +127,20 @@ def _prompt_literal(prompt: str) -> str:
     return _js_string_literal(prompt)
 
 
+def _degrading(call: str) -> str:
+    """``call`` (``agent(...)`` or ``() => agent(...)``) rewritten so a
+    rejection resolves to ``null`` instead of throwing the run past its
+    terminal commit. Null, not an object: the wake digest's review and
+    delivery legs treat any truthy result as a phase that ran, and null is
+    already their not_run reading. Review-phase calls only."""
+    body = call[len("() => "):] if call.startswith("() => ") else call
+    wrapped = (
+        "(async () => { try { return await " + body + "; } catch (e) { "
+        "return null; } })()"
+    )
+    return f"() => {wrapped}" if call.startswith("() => ") else wrapped
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -208,7 +222,7 @@ def compose_execute_review(
         (
             prep_phase,
             f"  phase({_js_string_literal(prep_phase)});\n"
-            f"  const _reviewPrep = await {prep_call};",
+            f"  const _reviewPrep = await {_degrading(prep_call)};",
         )
     )
 
@@ -245,7 +259,7 @@ def compose_execute_review(
             f"JSON.stringify(s), " + call[len(prefix):]
         )
         item_lines.append(
-            f"    ...(_reviewPrep?.slices ?? []).map(s => () => {spliced_call})"
+            f"    ...(_reviewPrep?.slices ?? []).map(s => () => {_degrading(spliced_call)})"
         )
 
     for agent in whole_diff_agents:
@@ -285,7 +299,7 @@ def compose_execute_review(
             )
         )
         call = f"() => agent({_prompt_literal(wave_prompt)} + {frozen}, " + call[len(prefix):]
-        item_lines.append(f"    {call}")
+        item_lines.append(f"    {_degrading(call)}")
 
     map_lines = ",\n".join(item_lines)
 
@@ -338,7 +352,7 @@ def compose_execute_review(
             (
                 integration_phase,
                 f"  phase({_js_string_literal(integration_phase)});\n"
-                f"  const _reviewIntegration = await {integration_call};",
+                f"  const _reviewIntegration = await {_degrading(integration_call)};",
             )
         )
 
@@ -422,3 +436,4 @@ def compose_criterion_judge(
         agent_opts=_agent_opts_for(review.judge),
         schema_literal=_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)),
     )
+

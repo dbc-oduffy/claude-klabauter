@@ -148,7 +148,7 @@ def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
     script = compose_script(waves, name="wf", description="f", falsifier=falsifier)
-    call = script[script.index("_falsifierResult = await agent(") :].split("});", 1)[0]
+    call = script[script.index("_falsifierResult = await (async () => { try { return await agent(") :].split("});", 1)[0]
     assert "differs_from_baseline" in call and "baseline_output" in call
     m = re.search(r'schema: (\{.*\})', call)
     schema = json.loads(m.group(1))
@@ -523,10 +523,23 @@ def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_te
         waves, name="wf", description="judge", plan_path="docs/plans/p.md",
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    assert "_falsifierResult = await agent(" in script
+    assert "_falsifierResult = await (async () => { try { return await agent(" in script
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "test:terminal-falsifier'" not in script
     assert "criterion: (_falsifierResult ?" in script
+
+
+def test_a_throwing_judge_leaves_the_criterion_indeterminate_and_the_run_reaching_its_commit():
+    """A judge whose agentType the firing session cannot resolve throws; that
+    must not kill a run whose executors have all written."""
+    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
+    script = compose_script(
+        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
+        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
+    )
+    leg = script[script.index("_falsifierResult = await (async () => {") :].split("})();", 1)[0]
+    assert "catch (e)" in leg
+    assert "status: 'indeterminate', differs_from_baseline: null" in leg
 
 
 def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
