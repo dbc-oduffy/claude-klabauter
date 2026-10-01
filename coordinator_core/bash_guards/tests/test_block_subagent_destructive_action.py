@@ -3093,6 +3093,30 @@ def test_unrecognized_git_verb_still_default_denies_generically():
     assert "unrecognized git verb (default-deny)" in reason
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git ls-tree HEAD",
+        "git -C /some/repo ls-tree -r HEAD --name-only",
+        "git merge-file -p a b c",
+        "git -C /some/repo merge-file --stdout a b c",
+    ],
+)
+def test_ls_tree_and_stdout_merge_file_allow(command):
+    assert guard.check(_payload(command, agent_type="coordinator:executor")) is None
+
+
+@pytest.mark.parametrize(
+    "command", ["git merge-file a b c", "git merge-file -- -p b c"]
+)
+def test_bare_merge_file_denies_naming_stdout_alternative(command):
+    result = guard.check(_payload(command, agent_type="coordinator:executor"))
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "git merge-file (overwrites first file)" in reason
+    assert "-p" in reason
+    assert "unrecognized git verb" not in reason
+
+
 def test_git_show_sha_path_allows():
     # DoE memo's second P2 ask (read-only `git show <sha>:<path>` for a
     # before/after diff) needed no change -- `show` was already safe-listed.

@@ -224,7 +224,9 @@ def compose_execute_review(
         f"foreign_claims list ONLY declared paths that a commit in "
         f"{run_base_sha or 'run_base_sha'}..HEAD also changed: a peer landed inside this "
         f"run's footprint. Peers' work elsewhere in the shared tree is normal and is never "
-        f"a foreign claim; an empty list is the usual answer.\n"
+        f"a foreign claim; an empty list is the usual answer. When the verdict is "
+        f"single-reviewer-ok, slices is exactly ONE slice spanning every product file, with "
+        f"diff_path equal to whole_diff_path; slices is never empty while product_files > 0.\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}\n"
         f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
@@ -254,6 +256,15 @@ def compose_execute_review(
             prep_phase,
             f"  phase({_js_string_literal(prep_phase)});\n"
             f"  const _reviewPrep = await {_degrading(prep_call)};\n"
+            # A single-reviewer-ok verdict over product files is one slice of the
+            # whole diff; prep that omitted it is synthesised here, never refused.
+            f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+            f"!(_reviewPrep.slices ?? []).length && (_reviewPrep.product_files ?? 0) > 0) {{ "
+            f"_reviewPrep.slices = [{{ id: 'whole-diff', files: [], "
+            f"diff_path: _reviewPrep.whole_diff_path, "
+            f"sidecar_path: (_reviewPrep.whole_diff_sidecars?.personas ?? [])[0] ?? "
+            f"String(_reviewPrep.whole_diff_path).replace(/\\.diff$/, '') + '.whole-slice.md', "
+            f"contract_blocks: 0 }}]; }}\n"
             # A failed or refused prep yields no slices -- a refusal reports
             # product_files 0, so the guard keys on the slices alone. The wave's
             # `?? []` would otherwise expand to no sliced reviewer and land the

@@ -421,3 +421,67 @@ def test_prep_scopes_foreign_claims_to_peer_commits_inside_the_footprint():
     _, prep_block = phases[0]
     assert "foreign_claims list ONLY declared paths" in prep_block
     assert "NOT in declared_paths under foreign_claims" not in prep_block
+
+
+def _run_prep_block(prep_result: dict) -> dict:
+    """Execute the emitted prep block under node with the agent call stubbed to
+    return ``prep_result``; returns ``{"slices": [...]}`` or ``{"error": msg}``."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    _, phases = _compose()
+    lines = phases[0][1].splitlines()
+    body = [ln for ln in lines if not ln.lstrip().startswith("phase(")]
+    body = [
+        f"  const _reviewPrep = {json.dumps(prep_result)};"
+        if ln.startswith("  const _reviewPrep = await")
+        else ln
+        for ln in body
+    ]
+    script = (
+        "(async () => { try {\n" + "\n".join(body) +
+        "\n console.log(JSON.stringify({slices: _reviewPrep.slices}));"
+        "\n} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+_PREP = {
+    "verdict": "single-reviewer-ok",
+    "product_files": 27,
+    "slices": [],
+    "whole_diff_path": "state/share/whole.diff",
+    "whole_diff_sidecars": {"kira": "k.md", "personas": ["p.md"], "delivery": "d.md"},
+}
+
+
+def test_single_reviewer_ok_with_product_files_yields_exactly_one_whole_diff_slice():
+    result = _run_prep_block(dict(_PREP))
+    assert len(result["slices"]) == 1
+    assert result["slices"][0]["diff_path"] == "state/share/whole.diff"
+    assert result["slices"][0]["sidecar_path"] == "p.md"
+
+
+@pytest.mark.parametrize(
+    "prep",
+    [
+        {**_PREP, "verdict": "PARTITION-MANDATORY"},
+        {**_PREP, "product_files": 0},
+        None,
+    ],
+)
+def test_empty_slices_without_single_reviewer_ok_over_product_files_still_refuses(prep):
+    result = _run_prep_block(prep)
+    assert "review prep returned no slices" in result["error"]
+
+
+def test_prep_prompt_says_single_reviewer_ok_returns_one_whole_diff_slice():
+    _, phases = _compose()
+    assert "single-reviewer-ok, slices is exactly ONE slice" in phases[0][1]

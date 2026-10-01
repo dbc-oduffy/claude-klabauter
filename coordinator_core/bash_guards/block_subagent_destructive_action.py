@@ -2050,8 +2050,14 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
         "for-each-ref",
         "name-rev",
         "check-ignore",
+        "ls-tree",
     }
 )
+
+#: `git merge-file` overwrites its first file argument unless `-p`/`--stdout`
+#: sends the merge result to stdout. Scanned before any `--` end-of-options.
+_MERGE_FILE_STDOUT_FLAGS = frozenset({"-p", "--stdout"})
+_MERGE_FILE_DENY_KIND = "git merge-file (overwrites first file)"
 
 #: `git worktree` SECOND-level subcommand classification (2026-07-25 fix).
 #: `list` is the only read-only second-level subcommand; a bare `git
@@ -2282,6 +2288,11 @@ def _evaluate_git_segment_anchored(
         if "--get" in remaining:
             return None
         return "git config (not --get)"
+    if subcmd == "merge-file":
+        options = remaining[: remaining.index("--")] if "--" in remaining else remaining
+        if _MERGE_FILE_STDOUT_FLAGS.intersection(options):
+            return None
+        return _MERGE_FILE_DENY_KIND
     if subcmd == "mv":
         # Classified explicitly rather than falling through to the
         # default-deny below, SOLELY to earn a named forward path in
@@ -3003,6 +3014,14 @@ def _build_reason(
             "A per-dispatch carve-out for `git mv` was considered and declined\n"
             "2026-07-28 for this reason — a brief cannot grant it, because there is\n"
             "nothing to grant."
+        )
+    if deny_kind == _MERGE_FILE_DENY_KIND:
+        return (
+            "BLOCKED: `git merge-file` overwrites its first file argument.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Denied:   {deny_kind}\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Use `git merge-file -p ...` (or `--stdout`) to write the result to stdout."
         )
     if deny_kind == "git stash pop/apply":
         return (
