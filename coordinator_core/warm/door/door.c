@@ -43,7 +43,7 @@
  * nothing this door forwards across the wire can stand in for the
  * caller's own piped bytes.
  *
- * PM RULING (2026-08-21): a live op must never silently execute claude-klabauter
+ * PM RULING (2026-08-21): a live op must never silently execute the authoring engine
  * (the live working tree) -- the published engine, or a loud failure, are
  * the only two acceptable outcomes; a slow-but-working degrade to the
  * wrong engine is worse than an outright error because it hides the
@@ -95,10 +95,10 @@
  * ambient editable-install `sys.meta_path` pin, which points at the LIVE
  * working tree, not a published engine (DR-315 §2). Per PM ruling
  * (2026-08-21): a live op must never silently fall back to executing
- * claude-klabauter's live tree -- it must run the published engine, or fail loudly.
+ * the authoring engine's live tree -- it must run the published engine, or fail loudly.
  * Spawning the SCRIPT (not the bare module) is what buys that: the
  * script's own self-location-first resolution
- * (`resolve_colocated_claude_klabauter_root`'s contract) agrees with whatever root
+ * (the colocated-root resolver's contract) agrees with whatever root
  * THIS file already validated as a real, stamped engine (see
  * `resolve_engine_root()`/`BUILD_ENGINE_ROOT_W` below) -- it is never
  * handed an unvalidated path to resolve from. `engine_root` -- from
@@ -175,7 +175,7 @@
  * an earlier prose draft) -- an unstamped, uncommitted, actively-edited
  * checkout DR-315 §2 rules is never an engine. Every fallen-through
  * invocation would silently have executed ops out of the wrong tree.
- * `PYTHONPATH`/`CLAUDE_KLABAUTER_ROOT` env-var overrides do NOT fix this: the
+ * `PYTHONPATH`/engine-root env-var overrides do NOT fix this: the
  * editable-install finder's `sys.meta_path` entry is consulted before
  * `sys.path` is, so it outranks both -- verified this does not work
  * before reaching for this macro instead.
@@ -184,7 +184,7 @@
  * (verified directly, 2026-08-21: that script's own `cc_invoke.
  * require_dispatch_engine_on_path()` call resolves `coordinator_core.
  * __file__` correctly to WHEREVER THAT SCRIPT ITSELF LIVES ON DISK --
- * self-location-first, `resolve_colocated_claude_klabauter_root`'s own contract --
+ * self-location-first, the colocated-root resolver's own contract --
  * regardless of the ambient editable-install pin). So the door only needs
  * a valid PATH to some `coordinator-invoke.py`, not a working env-var
  * override.
@@ -205,7 +205,7 @@
  * install-time hint and nothing more. The shipped, committed `door.exe`
  * therefore carries whichever engine root the machine that ran
  * `build.py` last had -- meaningless on any OTHER machine, customer or
- * otherwise (customers have no claude-klabauter install at all, ever). This is why
+ * otherwise (customers have no authoring-engine install at all, ever). This is why
  * `fall_through()` (see its own comment) VALIDATES this value at runtime
  * via `is_valid_engine_root_w()` before ever trusting it, and REFUSES
  * outright -- no process spawned at all -- rather than attempting to

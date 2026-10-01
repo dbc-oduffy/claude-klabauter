@@ -239,7 +239,7 @@ def _write_prebuilt_record(tmp_path, monkeypatch, record):
 
 def _tree_sources():
     return {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        path.name: door_install.door_build.source_sha256(path)
         for path in door_install.door_build.SOURCES
     }
 

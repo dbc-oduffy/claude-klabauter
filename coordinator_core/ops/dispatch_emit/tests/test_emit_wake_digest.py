@@ -17,6 +17,7 @@ task C13.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -141,6 +142,26 @@ def test_a_falsifier_alone_never_touches_tests_status():
     errors = validate_digest(obj)
     assert errors == [], errors
     assert obj["tests"]["status"] == "not_run"
+
+
+def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
+    falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
+    script = compose_script(waves, name="wf", description="f", falsifier=falsifier)
+    call = script[script.index("_falsifierResult = await agent(") :].split("});", 1)[0]
+    assert "differs_from_baseline" in call and "baseline_output" in call
+    m = re.search(r'schema: (\{.*\})', call)
+    schema = json.loads(m.group(1))
+    assert schema["properties"]["differs_from_baseline"] == {"type": "boolean"}
+    assert schema["properties"]["baseline_output"]["type"] == "string"
+    assert {"differs_from_baseline", "baseline_output"} <= set(schema["required"])
+
+
+def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    script = compose_script(waves, name="wf", description="b")
+    assert "const _blockedChunks = [];" in script
+    assert "if (/^\"?\\s*BLOCKED:|<exit-status>BLOCKED<\\/exit-status>/.test(_text)) _blockedChunks.push(id);\n      _incompleteChunks.push(id);" in script
 
 
 def test_a_prose_only_spine_still_runs_its_falsifier():
@@ -556,7 +577,7 @@ def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not
     falsifier = {"how": "run it", "baseline_output": "absent", "expected_when_true": "present"}
     script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier)
 
-    assert "? 'not_met' : _falsifierResult.status) : 'not_run')" in script
+    assert "? 'not_met' : _falsifierResult.status))) : 'not_run')" in script
     guard = _criterion_status_regex(script)
     assert guard.search("baseline matches ('absent'). Exit criterion not yet met")
     assert guard.search("output matches the baseline")
@@ -576,3 +597,21 @@ def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
     assert "[...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted])]" in line
     assert "(_notStarted.includes(id) ? 'not_started' : " in line
     assert "'no_answer'" in line and "'stop_rule'" in line and "'partial'" in line
+    assert "(_blockedChunks.includes(id) ? 'blocked' : 'partial')" in line
+    assert line.index("'no_answer'") < line.index("'blocked'") < line.index("'partial'")
+
+
+def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status():
+    """The boolean leg precedes the legacy status/regex leg, and a null result is
+    `not_run` in the criterion block, the run record and decision_required alike."""
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    falsifier = {"how": "run it", "baseline_output": "absent", "expected_when_true": "present"}
+    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier)
+    expr = (
+        "(_falsifierResult ? (_falsifierResult.differs_from_baseline === true ? 'met' : "
+        "(_falsifierResult.differs_from_baseline === false ? 'not_met' : "
+    )
+    assert script.count(expr) >= 2  # criterion.status, decision_required
+    assert ": 'not_run')" in script
+    first = script.index(expr)
+    assert first < script.index("_falsifierResult.status === 'met'", first)

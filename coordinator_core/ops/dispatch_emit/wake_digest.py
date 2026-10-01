@@ -36,6 +36,7 @@ RUNTIME_VARS = (
     "_notStarted",
     "_halted",
     "_verifications",
+    "_blockedChunks",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -221,15 +222,18 @@ def completion_return_js(
     )
 
     falsifier_present = falsifier_var is not None
-    # The falsifier agent self-reports `status` and has reported `met` for "the
-    # observation matches the BASELINE" -- the pre-change state, i.e. NOT met --
-    # while its own observation said "not yet met". `met` is the value that
-    # stamps a plan implemented (terminal_commit._stamp_plan_implemented), so a
-    # `met` whose observation contradicts it is demoted; the safe direction.
+    # `met` is the value that stamps a plan implemented (terminal_commit.
+    # _stamp_plan_implemented), so it is COMPUTED from the agent's required
+    # boolean `differs_from_baseline`, never trusted from its self-reported
+    # `status` (which has said `met` for "the observation matches the BASELINE").
+    # A result without the boolean (a script emitted before it existed) falls
+    # back to the agent's status, demoted when its own observation contradicts it.
     criterion_status_expr = (
-        f"({falsifier_var} ? (({falsifier_var}.status === 'met' && "
+        f"({falsifier_var} ? ({falsifier_var}.differs_from_baseline === true ? 'met' : "
+        f"({falsifier_var}.differs_from_baseline === false ? 'not_met' : "
+        f"(({falsifier_var}.status === 'met' && "
         + _CRITERION_CONTRADICTION_RE_JS
-        + f".test({falsifier_var}.observation ?? '')) ? 'not_met' : {falsifier_var}.status) : 'not_run')"
+        + f".test({falsifier_var}.observation ?? '')) ? 'not_met' : {falsifier_var}.status))) : 'not_run')"
         if falsifier_present
         else "'not_run'"
     )
@@ -385,7 +389,8 @@ def completion_return_js(
     deviation_kind_expr = (
         f"({RUNTIME_VARS[3]}.includes(id) ? 'not_started' : "
         f"({RUNTIME_VARS[2]}.includes(id) ? 'stop_rule' : "
-        f"({RUNTIME_VARS[1]}.includes(id) ? 'no_answer' : 'partial')))"
+        f"({RUNTIME_VARS[1]}.includes(id) ? 'no_answer' : "
+        f"({RUNTIME_VARS[6]}.includes(id) ? 'blocked' : 'partial'))))"
     )
 
     table = {
@@ -481,7 +486,8 @@ def completion_return_js(
         ),
         "deviations[].chunk": f"{deviation_ids_expr}[0]",
         "deviations[].kind": deviation_kind_expr,
-        "deviations[].anchor": f"_cap(null, {_maxlength(schema, 'deviations[].anchor')})",
+        # Schema types anchor as a string: no anchor is '', never null.
+        "deviations[].anchor": "''",
         "run_base_sha": _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),

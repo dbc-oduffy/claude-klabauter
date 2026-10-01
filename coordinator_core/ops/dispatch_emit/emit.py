@@ -264,6 +264,7 @@ Negative-spec:
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import os
 import re
@@ -2435,8 +2436,14 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
         f"Run this plan's own recorded falsifier. "
         f"Observation: {falsifier['how']!r}.{baseline_clause} Expected when "
         f"the prime exit criterion is TRUE: {falsifier['expected_when_true']!r}. "
-        f"Report the raw observation and whether it matches; do not gate on "
-        f"exit code alone."
+        f"Report the raw observation as `observation`, and copy the baseline "
+        f"output you compared against (empty string if none) as "
+        f"`baseline_output`. Set the REQUIRED boolean `differs_from_baseline` "
+        f"to true only if the observation differs from the baseline in the way "
+        f"the expected-when-true text describes. Set `status` to 'met' only "
+        f"when `differs_from_baseline` is true, 'not_met' when it is false, "
+        f"'indeterminate' if you could not run the observation. Do not gate "
+        f"on exit code alone."
     )
     return (
         "agent("
@@ -2446,9 +2453,23 @@ def _falsifier_agent_call_expr(falsifier: dict, agent_type_host: Optional[str] =
         f"phase: {_js_string_literal(_TEST_PHASE_TITLE)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))}, "
         f"{_model_opt(_TEST_AGENT_TYPE)}, "
-        f"schema: {stage_schema_literal('falsifier_result')} "
+        f"schema: {_falsifier_schema_literal()} "
         "})"
     )
+
+
+def _falsifier_schema_literal() -> str:
+    """The contract's ``falsifier_result`` schema plus the two fields the
+    terminal verdict is computed from: required boolean
+    ``differs_from_baseline`` and string ``baseline_output``. Widened here, not
+    in the contract file, so the digest schema's own shape is unchanged."""
+    schema = json.loads(stage_schema_literal("falsifier_result"))
+    schema["properties"]["differs_from_baseline"] = {"type": "boolean"}
+    schema["properties"]["baseline_output"] = {"type": "string", "maxLength": 300}
+    schema["required"] = sorted(
+        {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
+    )
+    return json.dumps(schema, sort_keys=True)
 
 
 def _no_test_target_narration(error: NoTestTargetError) -> str:
@@ -2734,6 +2755,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    const _text = JSON.stringify(result ?? null);\n"
         "    let incomplete = false;\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
+        f"      if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n"
         "      _incompleteChunks.push(id);\n"
         "      incomplete = true;\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
@@ -3021,6 +3043,7 @@ def compose_script(
     # return` below unchanged; `_stoppedBy`/`_notStarted`/`_halted`/
     # `_verifications` are new with the DAG shape.
     body_blocks.append("  const _incompleteChunks = [];")
+    body_blocks.append("  const _blockedChunks = [];")
     body_blocks.append("  const _unansweredBriefs = [];")
     body_blocks.append("  const _stoppedBy = [];")
     body_blocks.append("  const _notStarted = [];")
@@ -3385,6 +3408,13 @@ def compose_script(
 #: "no PARTIAL chunks" is still DONE.
 _NON_DONE_STATUS_JS_RE = (
     r'/^"?\s*(?:PARTIAL|BLOCKED):|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
+)
+
+#: The BLOCKED subset of ``_NON_DONE_STATUS_JS_RE``: a chunk matching it goes
+#: to ``_blockedChunks``; the remaining non-DONE match (PARTIAL) stays in
+#: ``_incompleteChunks``.
+_BLOCKED_STATUS_JS_RE = (
+    r'/^"?\s*BLOCKED:|<exit-status>BLOCKED<\/exit-status>/'
 )
 
 #: Any contract status, DONE included, leading the reply or any line of it.

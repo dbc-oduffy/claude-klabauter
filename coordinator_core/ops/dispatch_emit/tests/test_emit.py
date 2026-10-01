@@ -873,8 +873,8 @@ def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
     script = compose_script(
         waves, name="wf", description="halted with falsifier", falsifier=falsifier
     )
-    assert "criterion: { status: (_falsifierResult ? ((_falsifierResult.status === 'met'" in script
-    assert "'not_met' : _falsifierResult.status) : 'not_run')" in script
+    assert "criterion: { status: (_falsifierResult ? (_falsifierResult.differs_from_baseline === true ? 'met' : " in script
+    assert "'not_met' : _falsifierResult.status))) : 'not_run')" in script
 
 
 def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():

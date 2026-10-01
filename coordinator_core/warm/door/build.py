@@ -196,6 +196,12 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def source_sha256(path: Path) -> str:
+    """sha256 of a door source with every CR stripped: provenance identity is
+    line-ending-blind, so the writer and every verifier share this one hash."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r", b"")).hexdigest()
+
+
 def _compiler_version(kind: str, compiler_path: str) -> str:
     """First line of `<compiler> --version` -- human-identifiable ("clang
     version 22.1.2 ..." / "Microsoft (R) C/C++ Optimizing Compiler Version
@@ -278,8 +284,8 @@ def write_provenance(
     Defaults to `None`/self-computed so a direct or test caller that has
     no digest handy keeps working unchanged."""
     provenance = {
-        "door_c_sha256": _sha256_file(_SOURCE),
-        "sources": {path.name: _sha256_file(path) for path in SOURCES},
+        "door_c_sha256": source_sha256(_SOURCE),
+        "sources": {path.name: source_sha256(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),

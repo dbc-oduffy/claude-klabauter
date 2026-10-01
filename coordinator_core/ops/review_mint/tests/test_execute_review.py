@@ -299,3 +299,69 @@ def test_whole_diff_agents_are_handed_the_frozen_diff_path_at_run_time():
     assert wave_block.count("_reviewPrep?.whole_diff_path") == 3
     # only the delivery verifier is handed its sidecar
     assert wave_block.count("_reviewPrep?.whole_diff_sidecars?.delivery") == 1
+
+
+def _judge_review():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].append(
+        {
+            "kind": "judge",
+            "agents": [
+                {
+                    "agentType": "coordinator:criterion-judge",
+                    "model": "opus",
+                    "effort": "low",
+                    "schema": "judge-result",
+                }
+            ],
+        }
+    )
+    return parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+
+
+def _compose_judge(stage_schemas, falsifier=None):
+    from coordinator_core.ops.review_mint.execute_review import compose_criterion_judge
+
+    return compose_criterion_judge(
+        _judge_review(),
+        stage_schemas=stage_schemas,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        falsifier=falsifier,
+    )
+
+
+def _emitted_schema(call: str) -> dict:
+    start = call.index("schema: ") + len("schema: ")
+    obj, _ = json.JSONDecoder().raw_decode(call[start:])
+    return obj
+
+
+def test_judge_schema_requires_the_boolean_and_baseline_output():
+    stage_schemas = {
+        **_STAGE_SCHEMAS,
+        "judge-result": {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+        },
+    }
+    schema = _emitted_schema(_compose_judge(stage_schemas))
+    assert schema["properties"]["differs_from_baseline"] == {"type": "boolean"}
+    assert schema["properties"]["baseline_output"] == {"type": "string", "maxLength": 300}
+    assert {"status", "differs_from_baseline", "baseline_output"} <= set(schema["required"])
+    assert "status" in schema["properties"]
+
+
+def test_judge_schema_widening_tolerates_a_bare_object_schema():
+    schema = _emitted_schema(_compose_judge({**_STAGE_SCHEMAS, "judge-result": {"type": "object"}}))
+    assert schema["properties"]["differs_from_baseline"] == {"type": "boolean"}
+    assert set(schema["required"]) == {"differs_from_baseline", "baseline_output"}
+
+
+def test_judge_prompt_asks_for_the_boolean_comparison():
+    call = _compose_judge(
+        {**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
+        falsifier={"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"},
+    )
+    assert "differs_from_baseline" in call and "baseline_output" in call

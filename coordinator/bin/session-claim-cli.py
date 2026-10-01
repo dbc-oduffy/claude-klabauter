@@ -48,7 +48,7 @@
 #     0, same as before) — the note is additive output only, distinct in
 #     BOTH output and exit code from a live-holder refusal (which prints
 #     "refusing to clear claim ... holder is live" and exits 1).
-#   claim-plan <slug> [--for-execution] -> claims.claim_plan(slug, for_execution=...)
+#   claim-plan <slug> [--for-execution] [--plan-path <rel>] -> claims.claim_plan(slug, for_execution=..., plan_path=...)
 #     --for-execution is passed ONLY by /execute-plan Step 0 (DoE SKILL.md) —
 #     it gates claims.claim_plan's stamp-executing status flip (C4,
 #     docs/plans/2026-08-20-the-rungs-get-writers.md); the other two
@@ -723,13 +723,22 @@ def _dispatch(argv: list[str]) -> int:
         return _call_claim_bool("clear-claim-if-dead", mod.clear_claim_if_dead, class_, basename, baton_repo_root)
 
     if subcmd == "claim-plan":
-        if not rest:
-            return _usage("session-claim-cli claim-plan <slug> [--for-execution]")
-        for_execution = "--for-execution" in rest
-        positional = [a for a in rest if a != "--for-execution"]
-        if not positional:
-            return _usage("session-claim-cli claim-plan <slug> [--for-execution]")
-        return _bool_to_exit(mod.claim_plan(positional[0], for_execution=for_execution))
+        usage = "session-claim-cli claim-plan <slug> [--for-execution] [--plan-path <repo-relative path>]"
+        args = list(rest)
+        plan_path = None
+        if "--plan-path" in args:
+            i = args.index("--plan-path")
+            if i + 1 >= len(args):
+                return _usage(usage)
+            plan_path = args[i + 1]
+            del args[i : i + 2]
+        for_execution = "--for-execution" in args
+        positional = [a for a in args if a != "--for-execution"]
+        if len(positional) != 1 or positional[0].startswith("--"):
+            return _usage(usage)
+        return _bool_to_exit(
+            mod.claim_plan(positional[0], for_execution=for_execution, plan_path=plan_path)
+        )
 
     if subcmd == "take-over-claim":
         _usage_line = (

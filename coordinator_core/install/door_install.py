@@ -304,31 +304,11 @@ _WINDOWS_PREBUILT_PROVENANCE = _DOOR_DIR / "door.exe.provenance.json"
 
 
 def _source_matches_recorded(path: Path, recorded_hash: "Optional[str]") -> bool:
-    """True iff `path`'s recorded hash matches `recorded_hash`, either as
-    checked out or after a CRLF<->LF normalisation.
-
-    The recorded hash is `sha256` of the checkout bytes on the machine that
-    ran the build -- `door.exe.provenance.json` is written by `write_
-    provenance()` reading these same source files off disk, with whatever
-    line endings that box's checkout had (Windows: `autocrlf` CRLF; a
-    POSIX/cloud clone: LF). The bytes this function reads are THIS
-    checkout's, which may differ in line endings alone from the box that
-    built the committed binary -- a content-identical source then hashes
-    differently and reads as drift that is not real drift. Comparing the raw
-    hash first (the common case, no normalisation cost) and falling back to
-    both CRLF->LF and LF->CRLF normalised forms answers "is this the same
-    source" regardless of which checkout produced which line endings,
-    without touching what `write_provenance` itself records."""
+    """True iff `path` hashes (line-ending-blind, `door_build.source_sha256`)
+    to `recorded_hash`."""
     if recorded_hash is None:
         return False
-    raw = path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() == recorded_hash:
-        return True
-    to_lf = raw.replace(b"\r\n", b"\n")
-    if hashlib.sha256(to_lf).hexdigest() == recorded_hash:
-        return True
-    to_crlf = to_lf.replace(b"\n", b"\r\n")
-    return hashlib.sha256(to_crlf).hexdigest() == recorded_hash
+    return door_build.source_sha256(path) == recorded_hash
 
 
 def committed_prebuilt_source_drift() -> "list[str]":

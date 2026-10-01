@@ -41,7 +41,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .build import write_sidecar
+from .build import source_sha256, write_sidecar
 
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")

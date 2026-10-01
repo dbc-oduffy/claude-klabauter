@@ -1789,7 +1789,13 @@ def _report_concurrent_executing_plans(slug: str, root: str, cwd: Optional[str])
         return
 
 
-def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = False) -> bool:
+def claim_plan(
+    slug: str,
+    cwd: Optional[str] = None,
+    *,
+    for_execution: bool = False,
+    plan_path: Optional[str] = None,
+) -> bool:
     """Port of ``cs_claim_plan <basename>`` (980-1011).
 
     ONE-arg wrapper (the ``baton_repo_root`` arg is DELIBERATELY DROPPED —
@@ -1901,6 +1907,20 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
         )
         return False
 
+    # `plan_path` only LOCATES the file for the for_execution flip (a plan kept
+    # outside docs/plans, e.g. a throwaway e2e plan under state/audits); the
+    # claim key stays the bare slug, so the path's stem must equal it or two
+    # spellings would claim one plan under different keys.
+    rel_path = Path(plan_path.replace("\\", "/")) if plan_path is not None else None
+    if rel_path is not None:
+        if rel_path.is_absolute() or ".." in rel_path.parts or rel_path.suffix != ".md" or rel_path.stem != slug:
+            print(
+                f"cs_claim_plan: plan_path must be a repo-relative .md path whose "
+                f"stem equals the slug {slug!r} — got {plan_path!r}",
+                file=sys.stderr,
+            )
+            return False
+
     if not claim_artifact("plan", slug, cwd=cwd):
         return False
 
@@ -1909,7 +1929,7 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
     # exactly when session id fails to resolve, reintroducing the
     # best-effort posture for_execution exists to remove.
     if for_execution:
-        rel = f"docs/plans/{slug}.md"
+        rel = rel_path.as_posix() if rel_path is not None else f"docs/plans/{slug}.md"
         root = core.git_root(cwd)
         if not root or not (Path(root) / rel).is_file():
             print(

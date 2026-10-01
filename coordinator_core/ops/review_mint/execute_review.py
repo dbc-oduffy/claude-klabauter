@@ -355,8 +355,30 @@ _JUDGE_PREAMBLE = (
     "Do not read executor reports, review sidecars or their prose: the run does not "
     "certify itself. Every 'met' names the command you ran or the path you read. When "
     "the plan records a falsifier, run it as recorded; it is not yours to replace. "
-    "Return 'indeterminate' when the evidence does not settle the criterion."
+    "Return 'indeterminate' when the evidence does not settle the criterion. Report "
+    "the REQUIRED boolean `differs_from_baseline`: true only if what you observed "
+    "differs from the baseline in the way the criterion describes, false otherwise "
+    "(including when it matches the baseline), and copy the baseline you compared against as `baseline_output` "
+    "(empty string if none). The run's verdict is computed from that boolean; "
+    "`status` must agree with it."
 )
+
+
+def _widen_judge_schema(schema_literal: str) -> str:
+    """The judge's roster schema plus the two fields the terminal verdict is
+    computed from, matching ``dispatch_emit.emit._falsifier_schema_literal`` so
+    both producers of ``_falsifierResult`` share one result shape."""
+    schema = json.loads(schema_literal)
+    schema.setdefault("properties", {}).update(
+        {
+            "differs_from_baseline": {"type": "boolean"},
+            "baseline_output": {"type": "string", "maxLength": 300},
+        }
+    )
+    schema["required"] = sorted(
+        {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
+    )
+    return json.dumps(schema, sort_keys=True)
 
 
 #: The judge agent's own phase label; the emitter lists it in meta.phases.
@@ -398,5 +420,5 @@ def compose_criterion_judge(
         schema=True,
         as_arrow=False,
         agent_opts=_agent_opts_for(review.judge),
-        schema_literal=_schema_literal(review.judge.schema, stage_schemas),
+        schema_literal=_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)),
     )

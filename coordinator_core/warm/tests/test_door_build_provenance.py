@@ -42,3 +42,31 @@ def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_pat
 
     record = json.loads(provenance_path.read_text(encoding="utf-8"))
     assert record["image_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+
+
+def test_source_sha256_is_line_ending_blind(tmp_path):
+    lf = tmp_path / "lf.c"
+    crlf = tmp_path / "crlf.c"
+    lf.write_bytes(b"int a;\nint b;\n")
+    crlf.write_bytes(b"int a;\r\nint b;\r\n")
+    assert door_build.source_sha256(lf) == door_build.source_sha256(crlf)
+    assert door_build.source_sha256(lf) == hashlib.sha256(b"int a;\nint b;\n").hexdigest()
+
+
+def test_verifier_accepts_crlf_copy_of_recorded_source(tmp_path):
+    from coordinator_core.install import door_install
+
+    src = tmp_path / "door.c"
+    src.write_bytes(door_build._SOURCE.read_bytes().replace(b"\r", b"").replace(b"\n", b"\r\n"))
+    recorded = door_build.source_sha256(door_build._SOURCE)
+    assert door_install._source_matches_recorded(src, recorded)
+
+
+def test_no_door_c_or_h_source_names_the_authoring_engine():
+    door_dir = door_build._SOURCE.parent
+    offenders = [
+        p.name
+        for p in [*door_dir.glob("*.c"), *door_dir.glob("*.h")]
+        if b"claude-klabauter" in p.read_bytes().lower()
+    ]
+    assert offenders == []

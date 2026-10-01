@@ -105,3 +105,27 @@ def test_check_failure_never_fails_the_claim(tmp_path, me, monkeypatch):
 
     monkeypatch.setattr(claims, "_concurrent_executing_plan_overlaps", boom)
     assert claims.claim_plan("plan-b", cwd=str(repo), for_execution=True) is True
+
+
+def _audit_plan(repo, slug):
+    p = Path(repo) / "state" / "audits" / "e2e" / f"{slug}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\nstatus: approved\nscope:\n  - x.py\n---\n# {slug}\n", encoding="utf-8")
+    return p
+
+
+def test_plan_path_locates_a_plan_outside_docs_plans(tmp_path, me):
+    repo = _repo(tmp_path)
+    p = _audit_plan(repo, "run-met")
+    assert claims.claim_plan(
+        "run-met", cwd=str(repo), for_execution=True, plan_path="state/audits/e2e/run-met.md"
+    ) is True
+    assert "status: executing" in p.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("bad", ["state/audits/e2e/other.md", "../run-met.md", "state/audits/e2e/run-met.txt"])
+def test_plan_path_whose_stem_or_shape_disagrees_is_refused(tmp_path, me, bad):
+    repo = _repo(tmp_path)
+    _audit_plan(repo, "run-met")
+    assert claims.claim_plan("run-met", cwd=str(repo), for_execution=True, plan_path=bad) is False
+    assert not (Path(repo) / ".git" / "coordinator-sessions" / "plan-claims" / "run-met").exists()

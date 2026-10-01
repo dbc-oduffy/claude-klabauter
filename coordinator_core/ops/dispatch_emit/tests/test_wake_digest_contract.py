@@ -153,7 +153,8 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     js = wd.completion_return_js(**_kwargs())
     harness = tmp_path / "harness.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [];\n"
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "_blockedChunks = [];\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
         "let _verifications = [{chunk:'C1', status:'pass'}];\n"
@@ -203,7 +204,7 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
     harness = tmp_path / "harness2.js"
     harness.write_text(
         "let _halted = 'stop rule fired', _incompleteChunks = [], "
-        "_unansweredBriefs = [], _notStarted = [];\n"
+        "_unansweredBriefs = [], _notStarted = [], _blockedChunks = [];\n"
         "let _verifications = [];\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
@@ -222,6 +223,76 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
 def _find_node():
     import shutil
     return shutil.which("node")
+
+
+def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **overrides):
+    """Evaluate the emitted return expression under node with the given
+    `_falsifier` binding (a JS literal) and chunk arrays; skip without node."""
+    js = wd.completion_return_js(**_kwargs(
+        review_vars=None, has_commit_request=False, skipped_rows=[], **overrides,
+    ))
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    harness = tmp_path / "criterion.js"
+    harness.write_text(
+        f"let _halted = null, _incompleteChunks = {json.dumps(list(incomplete))}, "
+        "_unansweredBriefs = [], _notStarted = [], _stoppedBy = [], "
+        f"_blockedChunks = {json.dumps(list(blocked))};\n"
+        "let _testResult = {status:'pass', tests_run:1, tests_failed:0, build_clean:true, "
+        "summary:'ok', sidecar_path:'s.md'};\n"
+        "let _verifications = [];\n"
+        f"let _falsifier = {falsifier_js};\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "falsifier_js, expected, decision",
+    [
+        # The boolean wins over the agent's own status in both directions.
+        ("{status:'not_met', differs_from_baseline:true, observation:'ok'}", "met", None),
+        ("{status:'met', differs_from_baseline:false, observation:'ok'}", "not_met", "falsifier not met"),
+        # A null result (halted run) is not_run.
+        ("null", "not_run", None),
+        # Legacy result with no boolean: the agent's status, regex-demoted.
+        ("{status:'met', observation:'passes now'}", "met", None),
+        ("{status:'met', observation:'baseline still matches'}", "not_met", "falsifier not met"),
+        ("{status:'indeterminate', observation:'could not run'}", "indeterminate", None),
+    ],
+)
+def test_criterion_status_is_computed_from_differs_from_baseline(tmp_path, falsifier_js, expected, decision):
+    digest = _run_digest(tmp_path, falsifier_js=falsifier_js)
+    assert digest["criterion"]["status"] == expected
+    assert digest["decision_required"] == decision
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_null_falsifier_result_keeps_observation_null(tmp_path):
+    digest = _run_digest(tmp_path, falsifier_js="null")
+    assert digest["criterion"] == {"status": "not_run", "observation": None, "sidecar": None}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_blocked_chunks_read_blocked_and_the_rest_of_incomplete_read_partial(tmp_path):
+    digest = _run_digest(
+        tmp_path,
+        falsifier_js="null",
+        incomplete=["C1", "C2"],
+        blocked=["C2"],
+    )
+    kinds = {d["chunk"]: d["kind"] for d in digest["deviations"]}
+    assert kinds == {"C1": "partial", "C2": "blocked"}
+    assert wd.validate_digest(digest) == []
 
 
 # --- validate_digest --------------------------------------------------------
@@ -282,6 +353,18 @@ def test_validate_digest_rejects_over_cap_string():
     d["decision_required"] = "x" * 301
     errs = wd.validate_digest(d)
     assert errs
+
+
+def test_blocked_chunks_is_a_declared_runtime_var_and_drives_the_deviation_kind():
+    assert "_blockedChunks" in wd.RUNTIME_VARS
+    js = wd.completion_return_js(**_kwargs())
+    assert "(_blockedChunks.includes(id) ? 'blocked' : 'partial')" in js
+
+
+def test_blocked_chunks_is_a_declared_runtime_var_and_drives_the_deviation_kind():
+    assert "_blockedChunks" in wd.RUNTIME_VARS
+    js = wd.completion_return_js(**_kwargs())
+    assert "(_blockedChunks.includes(id) ? 'blocked' : 'partial')" in js
 
 
 def test_terminal_commit_params_carry_script_path_and_session_id():
