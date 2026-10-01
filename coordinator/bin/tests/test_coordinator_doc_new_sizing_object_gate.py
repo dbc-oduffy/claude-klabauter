@@ -350,7 +350,7 @@ class ScaffoldSizingMintsDeliverableIdTest(unittest.TestCase):
             out_path = repo / "state" / "sizings" / "custom-out.yaml"
             result = subprocess.run(
                 [
-                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                     "--title", "A sizing mints its own join key",
                     "--out", str(out_path),
                 ],
@@ -401,7 +401,7 @@ class ScaffoldSizingMintsDeliverableIdTest(unittest.TestCase):
             carried_id = "dlv-carried-abc123"
             result = subprocess.run(
                 [
-                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                     "--title", "A carried sizing id",
                     "--deliverable-id", carried_id,
                     "--out", str(out_path),
@@ -485,7 +485,7 @@ class EndToEndSizingCascadeClosesTest(unittest.TestCase):
             sizing_out = repo / "state" / "sizings" / "2026-08-10-e2e.yaml"
             sizing_result = subprocess.run(
                 [
-                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                     "--title", "End to end cascade closure sizing",
                     "--out", str(sizing_out),
                 ],

@@ -185,7 +185,7 @@ class FullCliSizingExitCriterionTest(unittest.TestCase):
             out_path.parent.mkdir(parents=True)
             result = subprocess.run(
                 [
-                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                     "--title", "an example PM ask",
                     "--exit-criterion", "S",
                     "--interaction-mode", "pm",

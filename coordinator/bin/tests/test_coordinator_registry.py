@@ -66,6 +66,7 @@ _EXPECTED_KNOWN_TYPES: frozenset[str] = frozenset({
     "audit-record",
     "problem-set",
     "completion",
+    "completion-receipt",
     "goal",
     "health-status",
     "run-report",
@@ -93,7 +94,7 @@ def test_known_types():
 
 
 def test_known_types_count():
-    assert len(reg.KNOWN_TYPES) == 31
+    assert len(reg.KNOWN_TYPES) == 32
 
 
 def test_sidecar_types():

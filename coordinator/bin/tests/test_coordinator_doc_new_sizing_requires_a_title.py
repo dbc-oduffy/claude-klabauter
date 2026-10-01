@@ -46,7 +46,7 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def test_an_untitled_sizing_object_is_refused_and_writes_nothing(repo: Path):
-    result = _run(repo, "--type", "sizing-object")
+    result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read")
 
     assert result.returncode != 0
     assert "--title is required" in result.stderr
@@ -57,7 +57,7 @@ def test_an_untitled_sizing_object_is_refused_and_writes_nothing(repo: Path):
 def test_a_titled_sizing_object_still_scaffolds(repo: Path):
     """The refusal is about the absent title, not about the type — the positive
     verdict has to keep working or the guard has removed the tool."""
-    result = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+    result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
 
     assert result.returncode == 0, result.stderr
     minted = list((repo / "state" / "sizings").glob("*.yaml"))
@@ -76,7 +76,7 @@ def test_the_scaffolded_id_comment_names_the_join_route(repo: Path):
     example-store-repo: the scaffolder produced a wrong value and then told the author not
     to fix it. That author overrode it; the next one might obey and leave two ids on
     one deliverable."""
-    result = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+    result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
 
     assert result.returncode == 0, result.stderr
     stamped = (repo / "state" / "sizings").glob("*.yaml")
@@ -91,7 +91,7 @@ def test_an_explicit_id_is_joined_not_re_minted(repo: Path):
 
     result = _run(
         repo,
-        "--type", "sizing-object",
+        "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
         "--title", "Sized against an existing baton",
         "--deliverable-id", carried,
     )

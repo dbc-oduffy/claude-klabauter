@@ -244,7 +244,7 @@ def compose_ask_script(
             "Size this ask by following the sizing skill (`coordinator:sizing`) to a sizing the "
             "gate can read, in this order: (1) run `sizing-assemble` for the estimate and route; "
             "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
-            "--route, --name, --premise with --premise-evidence, --exit-criterion (one sentence "
+            "--route, --name, --premise executed|read|not-applicable with --premise-evidence, --exit-criterion (one sentence "
             "stating what done means) and --interaction-mode (the mode this session runs under); "
             "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
             "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "

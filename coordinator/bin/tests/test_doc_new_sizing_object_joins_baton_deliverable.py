@@ -92,7 +92,7 @@ def test_sizing_object_joins_a_same_title_batons_deliverable_id(repo, tmp_path):
     _write_recent_baton(repo, "same-title-sizing-baton-test", "dlv-same-title-sizing-baton-test-407949")
     out = tmp_path / "sz-same-title.yaml"
     result = _run(
-        ["--type", "sizing-object", "--title", "Same Title Sizing Baton Test", "--out", str(out)],
+        ["--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "Same Title Sizing Baton Test", "--out", str(out)],
         repo,
     )
 
@@ -108,7 +108,7 @@ def test_sizing_object_same_title_carry_refuses_an_ambiguous_match(repo, tmp_pat
     _write_recent_baton(repo, "b", "dlv-ambiguous-sizing-baton-test-222222")
     out = tmp_path / "sz-ambiguous.yaml"
     result = _run(
-        ["--type", "sizing-object", "--title", "Ambiguous Sizing Baton Test", "--out", str(out)],
+        ["--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "Ambiguous Sizing Baton Test", "--out", str(out)],
         repo,
     )
 
@@ -126,7 +126,7 @@ def test_sizing_object_same_title_carry_honours_new_chain(repo, tmp_path):
     out = tmp_path / "sz-new-chain.yaml"
     result = _run(
         [
-            "--type", "sizing-object", "--title", "New Chain Sizing Baton Test",
+            "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "New Chain Sizing Baton Test",
             "--new-chain", "--out", str(out),
         ],
         repo,
@@ -141,7 +141,7 @@ def test_sizing_object_with_no_matching_baton_still_mints(repo, tmp_path):
     unaffected (negative-spec — this tier never blocks scaffolding)."""
     out = tmp_path / "sz-no-baton.yaml"
     result = _run(
-        ["--type", "sizing-object", "--title", "No Baton Sizing Test", "--out", str(out)],
+        ["--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "No Baton Sizing Test", "--out", str(out)],
         repo,
     )
 

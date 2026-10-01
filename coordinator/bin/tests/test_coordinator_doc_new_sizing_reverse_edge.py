@@ -593,7 +593,7 @@ class PlanCarryPrefersCitedSizingOverHeldBatonTest(unittest.TestCase):
             env["CLAUDE_CODE_SESSION_ID"] = self._SESSION
             scaffold = subprocess.run(
                 [
-                    sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                    sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                     "--title", "Novel work sizing",
                     "--out", str(repo / sizing_rel),
                 ],
@@ -689,7 +689,7 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
         """
         result = subprocess.run(
             [
-                sys.executable, str(_CLI_PATH), "--type", "sizing-object",
+                sys.executable, str(_CLI_PATH), "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
                 "--title", "Reverse edge claim sizing",
                 "--out", str(repo / sizing_rel),
             ],

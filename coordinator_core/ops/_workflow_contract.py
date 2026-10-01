@@ -62,6 +62,61 @@ class Finding:
 # it does not build an AST or understand statements, only span membership.
 
 
+def _scrub_template(script: str, i: int, out: List[str], placeholder: str) -> int:
+    """Mask the template literal opening at `script[i]` (a backtick) into
+    `out`; return the index after its closing backtick. A `${...}` body is
+    skipped by brace depth, with nested quotes and templates consumed whole,
+    so a backtick inside an interpolation does not end the outer template."""
+    n = len(script)
+    out.append("`")
+    i += 1
+
+    def mask(c: str) -> str:
+        return "\n" if c == "\n" else placeholder
+
+    while i < n and script[i] != "`":
+        c = script[i]
+        if c == "\\" and i + 1 < n:
+            out.append(placeholder)
+            out.append(mask(script[i + 1]))
+            i += 2
+        elif c == "$" and i + 1 < n and script[i + 1] == "{":
+            out.append(placeholder * 2)
+            i += 2
+            depth = 1
+            while i < n and depth:
+                d = script[i]
+                if d == "`":
+                    sub: List[str] = []
+                    i = _scrub_template(script, i, sub, placeholder)
+                    out.append("".join(mask(x) if x != "`" else placeholder for x in sub))
+                    continue
+                if d in ("'", '"'):
+                    out.append(placeholder)
+                    i += 1
+                    while i < n and script[i] != d:
+                        step = 2 if script[i] == "\\" and i + 1 < n else 1
+                        out.extend(mask(x) for x in script[i : i + step])
+                        i += step
+                    if i < n:
+                        out.append(placeholder)
+                        i += 1
+                    continue
+                if d == "{":
+                    depth += 1
+                elif d == "}":
+                    depth -= 1
+                out.append(mask(d))
+                i += 1
+        else:
+            out.append(mask(c))
+            i += 1
+    if i < n:
+        out.append("`")
+        i += 1
+    return i
+
+
 def scrub(script: str) -> str:
     """Return `script` with string/template-literal/comment CONTENTS masked.
 
@@ -116,7 +171,11 @@ def scrub(script: str) -> str:
                 i += 2
             continue
 
-        if ch in ("'", '"', "`"):
+        if ch == "`":
+            i = _scrub_template(script, i, out, placeholder)
+            continue
+
+        if ch in ("'", '"'):
             quote = ch
             out.append(ch)
             i += 1
@@ -530,8 +589,17 @@ def _has_top_level_option_key(args: str, key: str) -> bool:
             bracket += 1
         elif ch == "]":
             bracket -= 1
-        elif paren == 1 and brace == 1 and bracket == 0 and pattern.match(args, i):
-            if i == 0 or not (args[i - 1].isalnum() or args[i - 1] in "_$"):
+        elif paren == 1 and brace == 1 and bracket == 0:
+            # A top-level spread (`...withRole('x', { model: 'opus' })`) may
+            # supply the key; the scanner cannot evaluate it, so it is
+            # treated as supplying it. Trade-off: a spread that omits the
+            # key goes unflagged (false negative) rather than a spread that
+            # carries it being flagged (false positive).
+            if args.startswith("...", i):
+                return True
+            if pattern.match(args, i) and (
+                i == 0 or not (args[i - 1].isalnum() or args[i - 1] in "_$")
+            ):
                 return True
     return False
 

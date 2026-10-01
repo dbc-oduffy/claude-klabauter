@@ -442,6 +442,29 @@ def test_model_default_credits_model_after_spread():
     assert check_model_default(scrub(src)) == []
 
 
+def test_model_default_credits_model_supplied_through_call_spread():
+    src = "await agent('p', {...withRole('x', { model: 'opus' }), label: 'l'});"
+    assert check_model_default(scrub(src)) == []
+
+
+def test_model_default_flags_absent_model_with_no_spread():
+    src = "await agent('p', {label: withRole('x', { effort: 'high' })});"
+    assert [f.code for f in check_model_default(scrub(src))] == ["agent-model-default"]
+
+
+def test_scrub_masks_nested_template_literal_in_interpolation():
+    src = "const s = `a ${ ok ? `b ${x}` : 'c' } d`; await agent('p');"
+    scrubbed = scrub(src)
+    assert "agent(" in scrubbed
+    assert "ok" not in scrubbed
+    assert len(check_model_default(scrubbed)) == 1
+
+
+def test_model_default_survives_nested_template_before_agent_call():
+    src = "const s = `x ${ `y ${z}` } w`;\nawait agent('p', {model: 'sonnet'});"
+    assert check_model_default(scrub(src)) == []
+
+
 def test_run_checks_conformant_script_has_no_error_findings():
     src = (
         "export const meta = { name: 'x', description: 'y', phases: ['Scout'] };\n"

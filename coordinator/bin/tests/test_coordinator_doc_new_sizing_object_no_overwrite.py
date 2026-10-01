@@ -44,7 +44,7 @@ def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def test_second_scaffold_at_same_path_is_refused_and_first_is_unchanged(repo: Path):
-    first = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+    first = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
     assert first.returncode == 0, first.stderr
 
     minted = list((repo / "state" / "sizings").glob("*.yaml"))
@@ -52,7 +52,7 @@ def test_second_scaffold_at_same_path_is_refused_and_first_is_unchanged(repo: Pa
     out_path = minted[0]
     original_bytes = out_path.read_bytes()
 
-    second = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+    second = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
 
     assert second.returncode != 0
     assert "refusing to overwrite" in second.stderr
@@ -63,13 +63,13 @@ def test_second_scaffold_at_same_path_is_refused_and_first_is_unchanged(repo: Pa
 
 
 def test_an_explicit_out_still_scaffolds_alongside_the_existing_one(repo: Path):
-    first = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+    first = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read", "--title", "A real PM ask")
     assert first.returncode == 0, first.stderr
 
     other_path = repo / "state" / "sizings" / "explicit-out.yaml"
     second = _run(
         repo,
-        "--type", "sizing-object",
+        "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read",
         "--title", "A different PM ask",
         "--out", str(other_path),
     )

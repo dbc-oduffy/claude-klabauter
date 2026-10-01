@@ -4088,8 +4088,16 @@ _QUEUE_SCHEMA_PINS = {
     #   the sweep. Discharges the hold recorded in cross-repo memo
     #   2026-08-17-claude-klabauter-em-adopt-stable-id-spec-backlinks-or-tell-
     #   us-to-stop.md
-    'lesson-entry': "2d81501bfaed77ed433a2a160e69f4e51684d992",
-    'lessons-outbox': _C1_LANDING_SHA,
+    # Pin moved 2026-10-01 to 78e0fb1a511bdf2b453412656cded0fafbda2128 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
+    #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
+    #   release suite)
+    'lesson-entry': "78e0fb1a511bdf2b453412656cded0fafbda2128",
+    # Pin moved 2026-10-01 to 78e0fb1a511bdf2b453412656cded0fafbda2128 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lessons-outbox.
+    #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
+    #   release suite)
+    'lessons-outbox': "78e0fb1a511bdf2b453412656cded0fafbda2128",
     # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   re-vendor: DoE bumped x-schema-version and changed shape
