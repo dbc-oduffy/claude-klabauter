@@ -144,7 +144,7 @@ def _degrading(call: str) -> str:
 #: Thrown by the emitted script when review prep yields nothing to review
 #: over a diff that has product files. Fails the run closed before anything lands.
 _NO_SLICES_REFUSAL = (
-    "review prep returned no slices for a non-empty diff (or failed outright); "
+    "review prep returned no slices (it failed, refused, or froze nothing); "
     "refusing to continue unreviewed. Re-run the review prep, then resume."
 )
 
@@ -155,7 +155,8 @@ def compose_execute_review(
     stage_schemas: Dict[str, dict],
     plan_path: str,
     run_base_sha: str,
-    declared_paths: List[str],
+    declared_paths: Optional[List[str]] = None,
+    declared_paths_js: Optional[str] = None,
     prompt_head: str = "",
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
@@ -196,6 +197,11 @@ def compose_execute_review(
        compose time.
     3. **integration** -- one call bound to ``_reviewIntegration``.
     """
+    if (declared_paths is None) == (declared_paths_js is None):
+        raise ValueError(
+            "compose_execute_review takes exactly one of declared_paths / "
+            "declared_paths_js"
+        )
     phases: List[Tuple[str, str]] = []
 
     # -- 1. prep ----------------------------------------------------------
@@ -210,13 +216,14 @@ def compose_execute_review(
         f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
         f"`git diff base..HEAD` is never the run's diff. Return its single stdout "
-        f"line as whole_diff_path, verbatim; never write or edit a diff yourself. List every file "
-        f"changed in {run_base_sha or 'run_base_sha'}..HEAD or in the working tree "
-        f"that is NOT in declared_paths under foreign_claims: no reviewer may "
-        f"edit it, so it is named here, not discovered at the delivery verdict.\n"
+        f"line as whole_diff_path, verbatim; never write or edit a diff yourself. Under "
+        f"foreign_claims list ONLY declared paths that a commit in "
+        f"{run_base_sha or 'run_base_sha'}..HEAD also changed: a peer landed inside this "
+        f"run's footprint. Peers' work elsewhere in the shared tree is normal and is never "
+        f"a foreign claim; an empty list is the usual answer.\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}\n"
-        f"declared_paths: {', '.join(declared_paths)}"
+        f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
     ).strip()
     prep_call = _agent_call_literal(
         review.prep.agent_type,
@@ -227,16 +234,26 @@ def compose_execute_review(
         agent_opts=_agent_opts_for(review.prep),
         schema_literal=_schema_literal(review.prep.schema, stage_schemas),
     )
+    if declared_paths_js:
+        prep_prefix = f"agent({_prompt_literal(prep_prompt)}, "
+        if not prep_call.startswith(prep_prefix):
+            raise ValueError("prep agent call does not open with its prompt literal")
+        prep_call = (
+            f"agent({_prompt_literal(prep_prompt)} + ' ' + "
+            f"JSON.stringify({declared_paths_js}), " + prep_call[len(prep_prefix):]
+        )
     phases.append(
         (
             prep_phase,
             f"  phase({_js_string_literal(prep_phase)});\n"
             f"  const _reviewPrep = await {_degrading(prep_call)};\n"
-            # A failed prep, or zero slices over a non-empty diff, would
-            # otherwise expand the wave's `?? []` to no sliced reviewer at all
-            # and land the run reviewed by the whole-diff tail alone.
-            f"  if (!_reviewPrep || ((_reviewPrep.product_files ?? 0) > 0 "
-            f"&& !(_reviewPrep.slices ?? []).length)) {{ throw new Error("
+            # A failed or refused prep yields no slices -- a refusal reports
+            # product_files 0, so the guard keys on the slices alone. The wave's
+            # `?? []` would otherwise expand to no sliced reviewer and land the
+            # run reviewed by the whole-diff tail alone. Declared paths are
+            # non-empty here: the plan route always declares them, and the queue
+            # route skips the wave before prep when no row committed.
+            f"  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length) {{ throw new Error("
             f"{_js_string_literal(_NO_SLICES_REFUSAL)}); }}",
         )
     )

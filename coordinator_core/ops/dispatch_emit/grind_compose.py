@@ -79,7 +79,9 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import pm_adjudication
-from coordinator_core.ops.dispatch_emit.emit import _meta_block
+from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError, _BRIEF_PRECEDENCE_CLAUSE, _meta_block
+from coordinator_core.ops.review_mint.execute_review import compose_execute_review
+from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -96,6 +98,8 @@ __all__ = [
     "compose_grind_script",
 ]
 
+
+_REVIEW_FIX_PHASE = "Review fixes"
 
 STAGE_OUTPUT_TOKENS: dict[str, int] = {
     "triage": 5786,
@@ -780,6 +784,9 @@ def compose_grind_script(
     preamble: Optional[str] = None,
     queue_dirs: Sequence[str] = (),
     commit_trailers: Sequence[str] = (),
+    review_roster_fragment: Optional[dict] = None,
+    review_stage_schemas: Optional[dict] = None,
+    review_run_base_sha: str = "",
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -804,6 +811,14 @@ def compose_grind_script(
     ``commit_trailers`` are host-required trailer lines passed verbatim to
     the commit stage's prompt; empty leaves the prompt unchanged.
 
+    ``review_roster_fragment`` / ``review_stage_schemas`` carry the execute_review
+    wave inputs; either being None, or a fragment not at schema_version 5,
+    raises ``NoReviewStageError`` before anything is composed. The wave runs
+    after ``runGrind()`` over the union of committed rows' touched files, and
+    is skipped at run time when no row committed. ``review_run_base_sha`` is
+    the reviewed range's base, resolved by the caller (this function reads no
+    disk); empty leaves the prompt's ``run_base_sha`` placeholder.
+
     ``preamble`` (optional) is a run-wide posture block declared
     ONCE as a ``const PREAMBLE`` and prepended, at RUN time via a bare
     ``PREAMBLE +`` expression, to every general-purpose (executor-tier)
@@ -812,6 +827,23 @@ def compose_grind_script(
     own discipline, ``emit.py``'s ``SharedBlocks``), and never spliced into
     ``verify-op`` or ``commit``, which are not executor prompts. A no-op
     when omitted."""
+    if review_roster_fragment is None or review_stage_schemas is None:
+        raise NoReviewStageError("no review roster fragment or stage schemas were supplied")
+    if review_roster_fragment.get("schema_version") != 5:
+        raise NoReviewStageError(
+            "review roster fragment is schema_version "
+            f"{review_roster_fragment.get('schema_version')!r}, not 5"
+        )
+    review = parse_execute_review(review_roster_fragment)
+    review_blocks = compose_execute_review(
+        review,
+        stage_schemas=review_stage_schemas,
+        plan_path="",
+        run_base_sha=review_run_base_sha,
+        declared_paths_js="_reviewPaths",
+        prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+    )
+    review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
@@ -852,7 +884,7 @@ def compose_grind_script(
 
     lines: list[str] = []
     lines.append(_NODE_CHECK_COMMENT)
-    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", "Adjudicate"]))
+    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", *review_phase_titles, _REVIEW_FIX_PHASE, "Adjudicate"]))
     lines.append(_manifest_const(manifest))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
@@ -1318,6 +1350,24 @@ def compose_grind_script(
         "  await _drainSweep();\n"
         "}\n"
         "await runGrind();"
+    )
+
+    review_fix_raw = stages.compose_review_fix_commit_call(
+        touched_files_js="_reviewPaths", label="review-fix-commit", phase_title=_REVIEW_FIX_PHASE,
+        profile=profile.name, agent_type_host=agent_type_host, trailers=commit_trailers,
+    )
+    review_fix_call = _capture(review_fix_raw, "review-fix-commit")
+    lines.append(
+        "const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed')"
+        ".flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));\n"
+        "if (_reviewPaths.length === 0) {\n"
+        "  log('execute_review skipped: no row committed, nothing landed to review');\n"
+        "} else {\n"
+        + "\n".join(block for _, block in review_blocks)
+        + f"\n  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"
+        + "  await (async () => {\n"
+        + _indent_block(review_fix_call, "  ")
+        + "\n  })();\n}"
     )
 
     lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host))

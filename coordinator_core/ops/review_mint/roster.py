@@ -13,8 +13,25 @@ _VALID_EFFORTS = frozenset({"low", "medium", "high"})
 _VALID_PER_VALUES = frozenset({"slice", "whole-diff"})
 
 
+EMIT_ROUTE_PLAN = "plan"
+EMIT_ROUTE_INVENTORY = "inventory"
+EMIT_ROUTE_QUEUE = "queue"
+EMIT_ROUTE_WAVE_FIRE = "wave-fire-dispatch"
+
+
 class RosterFragmentError(ValueError):
     pass
+
+
+def require_emit_route(fragment: dict, route: str) -> None:
+    """Raise ``RosterFragmentError`` naming ``route`` unless
+    ``fragment["execute_review"]["required_for_emit"]`` is a list containing it."""
+    block = fragment.get("execute_review") if isinstance(fragment, dict) else None
+    required = block.get("required_for_emit") if isinstance(block, dict) else None
+    if not isinstance(required, list) or route not in required:
+        raise RosterFragmentError(
+            f"review roster 'execute_review.required_for_emit' does not list route {route!r}"
+        )
 
 
 @dataclass(frozen=True)

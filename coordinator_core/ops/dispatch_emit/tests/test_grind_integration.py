@@ -39,6 +39,8 @@ from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.ops.dispatch_emit.queue_emit import emit_queue_script
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
 
+from .conftest import REVIEW_KW
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
@@ -133,6 +135,7 @@ def _emit(grind_repo: dict, script_path: Path) -> str:
         repo_root=grind_repo["repo_root"],
         run_dir=grind_repo["run_dir"],
         session_id="sess1",
+        **REVIEW_KW,
     )
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(emission.script, encoding="utf-8")
@@ -355,8 +358,11 @@ def test_reemit_is_byte_identical_and_zero_spawn(grind_repo, monkeypatch):
     assert "Date.now" not in script_1
     assert "Math.random" not in script_1
     assert "new Date()" not in script_1
-    agent_call_count = len(re.findall(r"await agent\(", script_1))
-    sonnet_model_count = len(re.findall(r"model: 'sonnet'", script_1))
+    review_start = script_1.index("phase('Review prep')")
+    review_end = script_1.index("phase('Review fixes')")
+    grind_only = script_1[:review_start] + script_1[review_end:]
+    agent_call_count = len(re.findall(r"await agent\(", grind_only))
+    sonnet_model_count = len(re.findall(r"model: 'sonnet'", grind_only))
     assert agent_call_count == sonnet_model_count > 0
 
 

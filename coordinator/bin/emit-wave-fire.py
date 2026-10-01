@@ -707,6 +707,18 @@ def _bind(
     if live_engine_tree:
         allow_unstamped_dispatch()
 
+    try:
+        from coordinator_core.ops.review_mint import op as _review_op
+        from coordinator_core.ops.review_mint import roster as _review_roster
+
+        fragment = _review_op.load_fragment()
+        stage_schemas = _review_op.load_stage_schemas()
+        _review_roster.require_emit_route(fragment, _review_roster.EMIT_ROUTE_WAVE_FIRE)
+        _review_roster.parse_execute_review(fragment)
+    except Exception as exc:  # noqa: BLE001 -- any failure must refuse the fire
+        raise ValueError(f"execute_review unavailable: {exc}") from exc
+    args = {**args, "executeReview": {"fragment": fragment, "stageSchemas": stage_schemas}}
+
     msg = {
         "jsonrpc": "2.0",
         "id": 1,

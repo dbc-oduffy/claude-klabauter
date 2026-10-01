@@ -34,6 +34,8 @@ from coordinator_core.ops.dispatch_emit.queue_emit import (
 )
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
 
+from .conftest import REVIEW_KW
+
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 
 
@@ -96,6 +98,7 @@ def _emit(tmp_path: Path, *, n_rows: int = 3, **overrides):
         run_dir=run_dir,
         session_id="sess1",
         agent_type_host=None,
+        **REVIEW_KW,
     )
     kwargs.update(overrides)
     return emit_queue_script(kwargs.pop("profile"), kwargs.pop("appetite"), kwargs.pop("overrides"), **kwargs)
@@ -133,6 +136,7 @@ def test_receipt_extras_reemit_argv_round_trips_through_cli(tmp_path):
         repo_root=repo_root,
         run_dir=run_dir,
         session_id="sess1",
+        **REVIEW_KW,
     )
     reemit = emission.receipt_extras["reemit"]
     assert "--limit" in reemit
@@ -194,6 +198,8 @@ def _expected_signature() -> inspect.Signature:
         agent_type_host: Optional[str] = None,
         preamble: Optional[str] = None,
         commit_trailers: Sequence[str] = (),
+        review_roster_fragment: Optional[dict] = None,
+        review_stage_schemas: Optional[dict] = None,
     ) -> QueueEmission: ...
 
     return inspect.signature(emit_queue_script)
@@ -262,6 +268,7 @@ def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeyp
         repo_root=repo_root,
         run_dir=run_dir,
         session_id="sess1",
+        **REVIEW_KW,
     )
     elapsed_ms = (time.process_time() - start) * 1000.0
 
@@ -562,6 +569,7 @@ def test_end_to_end_resume_over_a_seeded_ledger(tmp_path):
         repo_root=repo_root,
         run_dir=run_dir,
         session_id="sess1",
+        **REVIEW_KW,
     )
     assert emission.script
     assert emission.receipt_extras["manifest_digest"] == manifest.digest

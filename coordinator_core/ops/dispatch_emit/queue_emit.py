@@ -78,6 +78,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
+from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.grind_compose import compose_grind_script
 from coordinator_core.ops.dispatch_emit.grind_profile import (
@@ -145,7 +146,11 @@ def emit_queue_script(
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
     commit_trailers: Sequence[str] = (),
+    review_roster_fragment: Optional[dict] = None,
+    review_stage_schemas: Optional[dict] = None,
 ) -> QueueEmission:
+    """Both review kwargs thread to compose_grind_script; either being None
+    raises NoReviewStageError."""
     repo_root = Path(repo_root).resolve()
 
     guarded_run_dir = contained_path(Path(run_dir), [repo_root])
@@ -193,6 +198,9 @@ def emit_queue_script(
         agent_type_host=agent_type_host,
         preamble=preamble,
         commit_trailers=commit_trailers,
+        review_roster_fragment=review_roster_fragment,
+        review_stage_schemas=review_stage_schemas,
+        review_run_base_sha=head_sha(repo_root) or "",
         queue_dirs=[Path(os.path.relpath(q, repo_root)).as_posix() for q in guarded_queue_dirs],
     )
 

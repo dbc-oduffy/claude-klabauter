@@ -1148,7 +1148,9 @@ def _tier1b_pointer_and_shim(
         Path(sandbox_rc).write_text("# sandbox-rc\n", encoding="utf-8", newline="\n")
 
         env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_CONTENT_ROOT": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc}
-        shim_argv = ["--template", shim_tmpl]
+        # This section probes the bash shim; without --shell the family defaults
+        # to powershell on Windows and the generator refuses the .sh template.
+        shim_argv = ["--template", shim_tmpl, "--shell", "bash"]
         rc, err = _call_gen_claude_author_shim(shim_argv, env)
         gs_err = os.path.join(sandbox, "gen-shim-err.txt")
         Path(gs_err).write_text(err or "", encoding="utf-8", newline="\n")

@@ -30,6 +30,32 @@ def test_load_fragment_reads_and_parses_the_real_relpath(tmp_path, monkeypatch):
     assert fragment == {"schema": "review-roster-fragment", "tiers": {}}
 
 
+def _schema_root(tmp_path, text):
+    schemas = tmp_path / "coordinator" / "schemas"
+    schemas.mkdir(parents=True)
+    (schemas / "review-stage.schema.json").write_text(text, encoding="utf-8")
+
+
+def test_load_stage_schemas_returns_defs(tmp_path, monkeypatch):
+    _schema_root(tmp_path, '{"$defs": {"a": {"type": "object"}}}')
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(tmp_path))
+    assert review_mint_op.load_stage_schemas() == {"a": {"type": "object"}}
+
+
+def test_load_stage_schemas_missing_defs_raises(tmp_path, monkeypatch):
+    _schema_root(tmp_path, '{"title": "x"}')
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(tmp_path))
+    with pytest.raises(ValueError, match=r"\$defs"):
+        review_mint_op.load_stage_schemas()
+
+
+def test_load_stage_schemas_missing_file_raises(tmp_path, monkeypatch):
+    (tmp_path / "coordinator").mkdir()
+    monkeypatch.setattr(review_mint_op, "read_content_root_pointer", lambda: str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        review_mint_op.load_stage_schemas()
+
+
 @pytest.mark.parametrize("layout", ["private", "flat"])
 def test_load_fragment_resolves_private_and_flat_mirror(tmp_path, monkeypatch, layout):
     root = tmp_path / "doe"

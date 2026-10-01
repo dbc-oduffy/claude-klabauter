@@ -839,3 +839,43 @@ def test_mint_with_resolved_skips_the_trailer_walk(tmp_path):
     stamp = m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None,
                    resolved=(sha, record, dict(data, plan_id="some-other-plan")))
     assert stamp["terminal_commit_sha"] == sha
+
+
+def _set_prep(repo: Path, **fields):
+    prep = repo / ".coordinator-local" / "subagent-share" / "sess1" / "2026-09-27-prep.md"
+    data = {
+        "run_base_sha": "deadbeef",
+        "product_files": ["coordinator_core/foo.py"],
+        "slices": [{"id": "A"}],
+        "whole_diff_sidecars": {"delivery": ".coordinator-local/subagent-share/sess1/2026-09-27-delivery.md"},
+    }
+    data.update(fields)
+    _write_sidecar(prep, data)
+
+
+def test_mint_ignores_peer_claims_outside_the_reviewed_footprint(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, slice_files=["coordinator_core/foo.py"],
+              foreign_claims=["peer/a.py", "peer/b.md"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    assert m.mint(plan_path, repo, build_test_path=str(build_test))["unresolved"] == []
+
+
+def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, slice_files=["coordinator_core/foo.py"],
+              foreign_claims=["coordinator_core/foo.py", "peer/a.py"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="1 foreign claim"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, foreign_claims=["peer/a.py"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="1 foreign claim"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))

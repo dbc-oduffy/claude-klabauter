@@ -2,6 +2,9 @@
 import pytest
 
 from coordinator_core.ops.review_mint.roster import (
+    EMIT_ROUTE_PLAN,
+    EMIT_ROUTE_QUEUE,
+    require_emit_route,
     ExecuteReview,
     ReviewAgent,
     RosterFragmentError,
@@ -249,3 +252,18 @@ def test_parse_execute_review_two_judges_refuses():
     fragment["execute_review"]["stages"].append({"kind": "judge", "agents": [_JUDGE_AGENT, _JUDGE_AGENT]})
     with pytest.raises(RosterFragmentError, match="at most one 'judge' stage"):
         parse_execute_review(fragment)
+
+
+def test_require_emit_route_listed_passes():
+    require_emit_route({"execute_review": {"required_for_emit": [EMIT_ROUTE_PLAN]}}, EMIT_ROUTE_PLAN)
+
+
+def test_require_emit_route_missing_route_raises():
+    with pytest.raises(RosterFragmentError, match="queue"):
+        require_emit_route({"execute_review": {"required_for_emit": ["plan"]}}, EMIT_ROUTE_QUEUE)
+
+
+@pytest.mark.parametrize("fragment", [{}, {"execute_review": {}}, {"execute_review": {"required_for_emit": "plan"}}])
+def test_require_emit_route_absent_or_non_list_raises(fragment):
+    with pytest.raises(RosterFragmentError):
+        require_emit_route(fragment, "plan")

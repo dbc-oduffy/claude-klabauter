@@ -42,6 +42,7 @@ _V5_FRAGMENT = {
     "schema": "review-roster-fragment",
     "schema_version": 5,
     "execute_review": {
+        "required_for_emit": ["plan", "inventory", "queue"],
         "stages": [
             {
                 "kind": "prep",
@@ -392,10 +393,9 @@ def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(
 
     from coordinator_core.ops.review_mint import op as review_op_mod
 
-    monkeypatch.setattr(op_mod, "read_content_root_pointer", lambda: str(content_root))
     monkeypatch.setattr(review_op_mod, "read_content_root_pointer", lambda: str(content_root))
 
-    fragment, stage_schemas = op_mod._load_review_roster_and_stage_schemas()
+    fragment, stage_schemas = op_mod._load_review_inputs("plan")
     assert fragment == _V5_FRAGMENT
     assert stage_schemas == _V5_STAGE_SCHEMAS
 
@@ -404,13 +404,13 @@ def test_dispatch_emit_refuses_when_the_content_root_is_unresolvable(monkeypatch
     from coordinator_core.ops.dispatch_emit import op as op_mod
 
     monkeypatch.setattr(
-        op_mod,
-        "_load_review_roster_fragment",
+        op_mod.review_mint_op,
+        "load_fragment",
         lambda: (_ for _ in ()).throw(FileNotFoundError("no sibling root")),
     )
 
     with pytest.raises(op_mod.NoReviewStageError, match="no sibling root"):
-        op_mod._load_review_roster_and_stage_schemas()
+        op_mod._load_review_inputs("plan")
 
 
 def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path, monkeypatch):
@@ -418,8 +418,8 @@ def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path,
 
     monkeypatch.setattr(
         op_mod,
-        "_load_review_roster_and_stage_schemas",
-        lambda: (_V5_FRAGMENT, _V5_STAGE_SCHEMAS),
+        "_load_review_inputs",
+        lambda route: (_V5_FRAGMENT, _V5_STAGE_SCHEMAS),
     )
 
     plan_path = tmp_path / "plan.md"

@@ -116,6 +116,7 @@ Prior bash implementation: coordinator/scripts/install-maximalist.sh (622 lines,
 from __future__ import annotations
 
 import contextlib
+import filecmp
 import json
 import os
 import shutil
@@ -1211,6 +1212,35 @@ def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: b
     return claude_md_created, rules_created
 
 
+#: Launcher names the install wrote before the command took the claude-author
+#: name. The .bak-* siblings are operator backups and stay.
+LEGACY_DOE_LAUNCHERS = ("claude-author", "claude-author.cmd", "claude-author.ps1")
+
+
+def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_only: bool) -> List[str]:
+    """Remove the pre-rename launchers from ~/.local/bin and the settings bin.
+
+    Left in place, a stale claude-author shadows nothing yet still runs the old
+    wrapper for anyone who types it, and every re-install leaves it behind.
+    """
+    retired = []
+    for d in (os.path.join(claude_home_dir, ".local", "bin"), settings_bin):
+        for name in LEGACY_DOE_LAUNCHERS:
+            path = os.path.join(d, name)
+            if not os.path.lexists(path):
+                continue
+            if not check_only:
+                try:
+                    os.unlink(path)
+                except OSError as exc:
+                    print(f"WARN: could not retire legacy launcher {path}: {exc}", file=sys.stderr)
+                    continue
+            retired.append(path)
+    verb = "would retire" if check_only else "retired"
+    print(f"legacy_doe_launchers: {f'{verb} ' + ', '.join(retired) if retired else 'none'}")
+    return retired
+
+
 def _install_claude_author_wrapper(
     coord_root: str,
     claude_home_dir: str,
@@ -1300,11 +1330,17 @@ def _install_claude_author_wrapper(
         sys.exit(1)
 
     if os.name == "nt":
+        # Byte equality, not existence: a present-but-stale copy launches the
+        # old wrapper while every check reports ready.
+        current = os.path.isfile(wrapper_dst) and filecmp.cmp(wrapper_src, wrapper_dst, shallow=False)
         if check_only:
-            if os.path.isfile(wrapper_dst):
+            if current:
                 print(f"claude_author_wrapper: ready ({wrapper_dst})")
             else:
                 print(f"claude_author_wrapper: would install ({wrapper_dst})")
+            return
+        if current:
+            print(f"claude_author_wrapper: ready ({wrapper_dst})")
             return
 
         os.makedirs(local_bin, exist_ok=True)
@@ -1857,6 +1893,9 @@ def _run_body(
             launcher_args,
             env=env,
         )
+        # After the launcher, never before: a failed render must not leave the
+        # box with neither name.
+        retire_legacy_doe_launchers(claude_home_dir, settings_bin, check_only)
 
         # -- Step 3.5b.3 -- install-global-doctrine (copy-if-absent, never overwrite/prune) --
         orch.phase_header(

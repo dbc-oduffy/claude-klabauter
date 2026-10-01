@@ -181,7 +181,6 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.cartography._guard import PathEscapeError
-from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
@@ -195,46 +194,33 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
-from coordinator_core._content_root_primitive import content_root_for
-from coordinator_core.ops.review_mint.op import load_fragment as _load_review_roster_fragment
+from coordinator_core.ops.review_mint import op as review_mint_op
+from coordinator_core.ops.review_mint.roster import (
+    EMIT_ROUTE_INVENTORY,
+    EMIT_ROUTE_PLAN,
+    EMIT_ROUTE_QUEUE,
+    RosterFragmentError,
+    require_emit_route,
+)
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
-#: Content-root-relative path of DoE's roster-v5 stage-schema file (AC22) --
-#: resolved from the SAME pointer ``review_mint.op.load_fragment`` uses,
-#: through ``content_root_for`` so the flat mirror resolves too.
-_REVIEW_STAGE_SCHEMA_RELPATH = "schemas/review-stage.schema.json"
-
-
-def _load_review_roster_and_stage_schemas() -> tuple:
-    """Load the v5 review roster fragment plus DoE's stage schemas (AC22) --
-    reusing ``review_mint.op.load_fragment``'s own content-root resolution for the
-    fragment, never a duplicated pointer. Returns ``(fragment, stage_schemas)``;
-    raises ``NoReviewStageError`` naming whichever input is unavailable.
-    """
+def _load_review_inputs(route: str) -> tuple:
+    """Return ``(fragment, stage_schemas)`` for ``route``; raise
+    ``NoReviewStageError`` when either input is unloadable or the fragment's
+    ``required_for_emit`` omits the route."""
     try:
-        fragment = _load_review_roster_fragment()
+        fragment = review_mint_op.load_fragment()
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise NoReviewStageError(f"review roster fragment unloadable ({exc})") from exc
-
-    content_root = read_content_root_pointer()
-    if not content_root:
-        raise NoReviewStageError("DoE root pointer unresolved; review-stage schemas unlocatable")
-
-    content_root = content_root_for(content_root)
-    if content_root is None:
-        raise NoReviewStageError(f"{content_root} is not a coordinator content root")
-    schema_path = content_root / _REVIEW_STAGE_SCHEMA_RELPATH
-
     try:
-        doc = json.loads(schema_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise NoReviewStageError(f"review-stage schemas unloadable at {schema_path} ({exc})") from exc
-
-    stage_schemas = doc.get("$defs") if isinstance(doc, dict) else None
-    if not isinstance(stage_schemas, dict):
-        raise NoReviewStageError(f"{schema_path} carries no `$defs` mapping")
-
+        stage_schemas = review_mint_op.load_stage_schemas()
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise NoReviewStageError(str(exc)) from exc
+    try:
+        require_emit_route(fragment, route)
+    except RosterFragmentError as exc:
+        raise NoReviewStageError(str(exc)) from exc
     return fragment, stage_schemas
 
 
@@ -912,6 +898,12 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "preamble_sha256": params.get("preamble_sha256"),
         }
 
+    review_route = (
+        EMIT_ROUTE_QUEUE if is_queue_route
+        else EMIT_ROUTE_INVENTORY if inventory_path
+        else EMIT_ROUTE_PLAN
+    )
+
     if is_queue_route:
         if not queue:
             raise ValueError("dispatch.emit queue route requires param: queue")
@@ -921,6 +913,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not profile_dir:
             raise ValueError("dispatch.emit queue route requires param: profile_dir")
 
+        review_roster_fragment, review_stage_schemas = _load_review_inputs(review_route)
         target_root_path = Path(target_root)
         emission = emit_queue_script(
             profile_name,
@@ -937,6 +930,8 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             agent_type_host=agent_type_host,
             preamble=preamble,
             commit_trailers=read_host_commit_trailers(target_root_path),
+            review_roster_fragment=review_roster_fragment,
+            review_stage_schemas=review_stage_schemas,
         )
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
@@ -946,7 +941,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         # schemas itself, through the existing content-root pointer resolution
         # -- never a caller-supplied fragment param, and never a guessed
         # roster on an unresolvable sibling root (refuses instead).
-        review_roster_fragment, review_stage_schemas = _load_review_roster_and_stage_schemas()
+        review_roster_fragment, review_stage_schemas = _load_review_inputs(review_route)
         script = emit_script(
             plan_path,
             name=params.get("name"),

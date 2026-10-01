@@ -489,7 +489,15 @@ def mint(
             raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
 
     run_base_sha = prep_data.get("run_base_sha")
-    foreign_claims = prep_data.get("foreign_claims") or []
+    # Prep names every path a peer dirtied in the shared tree; on a busy repo
+    # that is never empty. Only a claim inside the reviewed footprint threatens
+    # this run's review, so the refusal keys on those. With no footprint on
+    # record, every claim still counts.
+    footprint = prep_data.get("slice_files")
+    foreign_claims = [
+        c for c in prep_data.get("foreign_claims") or []
+        if not isinstance(footprint, list) or str(c).split(" ", 1)[0] in footprint
+    ]
     # Every file in the reviewed diff, bookkeeping included: a plan whose whole
     # deliverable sits under an excluded prefix (lessons, a plan doc) still
     # delivered something. `product_files` alone called that run empty.

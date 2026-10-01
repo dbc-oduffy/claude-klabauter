@@ -850,6 +850,43 @@ def compose_commit_call(
     )
 
 
+def compose_review_fix_commit_call(
+    *,
+    touched_files_js: str,
+    label: str,
+    phase_title: str,
+    profile: str = "",
+    agent_type_host: Optional[str] = None,
+    trailers: Sequence[str] = (),
+) -> str:
+    """`commit` for reviewer edits: stages exactly the run-time
+    `touched_files_js` list and commits. Takes no row id and never settles a
+    ledger; nothing staged is a no-op, not a failure."""
+    parts: list[tuple[str, str]] = [
+        *_REPO_ANCHOR_PARTS,
+        ("lit", "You are the committer for the review wave's fixes. You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
+        *_list_parts((), touched_files_js),
+        (
+            "lit",
+            "]. Never name a state/queue-grind/ path in either commit path list. "
+            "If the list is empty, or nothing ends up staged, commit nothing and report a no-op. "
+            f"Use commit subject `grind({profile}): review fixes` and a commit body naming the reviewed work.",
+        ),
+    ]
+    if trailers:
+        parts.append(
+            (
+                "lit",
+                " End the commit message with exactly these trailer lines, verbatim and in order "
+                "(JSON-quoted list): " + json.dumps(list(trailers)) + ".",
+            )
+        )
+    parts.extend(_COMMIT_TAIL_PARTS)
+    return _compose_commit_agent_call(
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
+    )
+
+
 def compose_ledger_sweep_call(
     *,
     label: str,

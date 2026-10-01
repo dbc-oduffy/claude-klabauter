@@ -32,6 +32,8 @@ from coordinator_core.ops.dispatch_emit import grind_compose as gc
 from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 
+from .conftest import REVIEW_KW
+
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 _GOLDEN_PATH = Path(__file__).parent / "fixtures" / "grind-fixture.golden.mjs"
 
@@ -69,6 +71,7 @@ def _compose(**overrides):
         appetite=appetite,
         agent_type_host=None,
         queue_dirs=["state/bug-backlog"],
+        **REVIEW_KW,
     )
 
 
@@ -94,8 +97,16 @@ def test_reemit_is_byte_identical():
 # ---------------------------------------------------------------------------
 
 
+def grind_only(script: str) -> str:
+    """The script with the composed review wave cut out: review agents carry
+    roster models and are not counted stage calls."""
+    start = script.index("phase('Review prep')")
+    end = script.index("phase('Review fixes')")
+    return script[:start] + script[end:]
+
+
 def test_every_agent_call_site_carries_model_sonnet():
-    script = _compose()
+    script = grind_only(_compose())
     calls = len(re.findall(r"\bagent\(", script))
     sonnet = len(re.findall(r"model: 'sonnet'", script))
     assert calls > 0
@@ -182,7 +193,7 @@ def test_every_agent_call_site_has_recordcall_equivalent():
     """Defect: fix/verify/commit/refute-close never called `_recordCall`.
     Every captured call (`_capture`) appends `_recordCall(<kind>);`
     immediately after its own `agent(...)` -- count them 1:1."""
-    script = _compose()
+    script = grind_only(_compose())
     calls = len(re.findall(r"\bagent\(", script))
     # `_recordCall\('` (a quoted stage-kind literal) is a CALL SITE; the
     # bare `_recordCall(kind)` is the function's own definition.
@@ -238,7 +249,7 @@ def test_agent_call_site_count_independent_of_row_count():
     def _agent_count(n):
         script = gc.compose_grind_script(
             _manifest(n), profile, knobs,
-            run_dir=Path("state/queue-grind/fixture/run-1"), agent_type_host=None,
+            run_dir=Path("state/queue-grind/fixture/run-1"), agent_type_host=None, **REVIEW_KW,
         )
         return len(re.findall(r"\bagent\(", script)), len(script.encode("utf-8"))
 
@@ -286,7 +297,7 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
     # no literal manifest row path inside a "stage exactly"/"you hold the
     # lock on" clause -- those clauses interpolate a live expression now.
     for m in re.finditer(r"Stage exactly this touched list: \[", script):
-        assert script[m.end() : m.end() + 40].startswith("' + ((row.touchedFiles")
+        assert script[m.end() : m.end() + 40].startswith(("' + ((row.touchedFiles", "' + ((_reviewPaths"))
 
 
 # ---------------------------------------------------------------------------
@@ -896,7 +907,7 @@ def test_finding1_every_captured_agent_result_is_null_guarded():
     """Every `_result = await agent(...)` capture is wrapped `|| {}` so a
     null/undefined agent result reads as an empty object instead of
     throwing on the first `.field` access."""
-    script = _compose()
+    script = grind_only(_compose())
     captures = re.findall(r"const _result = \(await agent\(", script)
     guards = re.findall(r"\)\) \|\| \{\};", script)
     assert captures

@@ -605,3 +605,20 @@ def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
         assert "--repo-root ." not in call_text, kind
         if "--repo-root" in call_text:
             assert "--repo-root ' + (REPO_ROOT) + '" in call_text, kind
+
+
+def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger():
+    text = grind_stages.compose_review_fix_commit_call(
+        touched_files_js="reviewFix.touched_files",
+        label="commit:review",
+        phase_title="Review fixes",
+        profile="p",
+        trailers=["X: 1"],
+    )
+    assert "(reviewFix.touched_files).join(', ')" in text
+    assert "ledger:" not in text
+    assert "grind-row settle" not in text
+    assert "--row-id" not in text
+    assert '"X: 1"' in text
+    assert "no-op" in text
+    assert "state/queue-grind/ path" in text

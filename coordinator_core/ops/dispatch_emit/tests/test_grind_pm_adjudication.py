@@ -11,6 +11,9 @@ from coordinator_core.ops.dispatch_emit import pm_adjudication as pa
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 from coordinator_core.session import record_homes
 
+from .conftest import REVIEW_KW
+from .test_grind_compose import grind_only
+
 _PROFILES = Path(__file__).parent / "fixtures" / "queue-profiles"
 
 
@@ -22,7 +25,7 @@ def _script() -> str:
     manifest = Manifest(entries=entries, batch_sizes={"P0": 4}, source=None, digest="deadbeef")
     return gc.compose_grind_script(
         manifest, profile, knobs, run_dir=Path(record_homes.home_dir("", "queue-grind")) / "fixture" / "run-1",
-        appetite="standard", agent_type_host=None,
+        appetite="standard", agent_type_host=None, **REVIEW_KW,
     )
 
 
@@ -53,6 +56,6 @@ def test_pm_only_false_cannot_clear_an_irreversible_gate():
 
 
 def test_adjudicator_call_is_a_counted_sonnet_call_site():
-    s = _script()
+    s = grind_only(_script())
     assert len(re.findall(r"\bagent\(", s)) == len(re.findall(r"_recordCall\('", s))
     assert "_recordCall('adjudicate');" in s

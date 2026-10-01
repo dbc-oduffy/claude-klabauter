@@ -130,12 +130,12 @@ def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
     assert "effort: 'low'" in prep_block
 
 
-def test_prep_phase_fails_closed_on_no_prep_or_no_slices_over_a_non_empty_diff():
+def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     _, phases = _compose()
     _, prep_block = phases[0]
     guard = prep_block.splitlines()[-1]
-    assert guard.startswith("  if (!_reviewPrep || ((_reviewPrep.product_files ?? 0) > 0")
-    assert "!(_reviewPrep.slices ?? []).length" in guard
+    assert guard.startswith("  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length)")
+    assert "product_files" not in guard
     assert "throw new Error(" in guard
 
 
@@ -381,3 +381,43 @@ def test_every_review_phase_call_degrades_to_null_not_a_throw():
     for title in ("Review prep", "Review wave", "Review integration"):
         assert "catch (e)" in blocks[title], title
         assert "catch (e) { return null; }" in blocks[title], title
+
+
+def _compose_with(**paths):
+    review = parse_execute_review(
+        _v5_fragment(), signals={"named": ["coordinator:staff-eng"]}
+    )
+    return compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        **paths,
+    )
+
+
+def test_declared_paths_js_is_spliced_into_the_prep_prompt_at_run_time():
+    phases = _compose_with(declared_paths_js="_declared")
+    prep_block = phases[0][1]
+    assert "JSON.stringify(_declared)" in prep_block
+    assert "declared_paths:' + ' ' + JSON.stringify(_declared)" in prep_block
+
+
+def test_declared_paths_and_declared_paths_js_together_or_neither_raise():
+    with pytest.raises(ValueError):
+        _compose_with(declared_paths=["a.py"], declared_paths_js="_declared")
+    with pytest.raises(ValueError):
+        _compose_with()
+
+
+def test_literal_declared_paths_path_is_unchanged():
+    prep_block = _compose_with(declared_paths=["a.py", "b.py"])[0][1]
+    assert "declared_paths: a.py, b.py" in prep_block
+    assert "JSON.stringify(_declared" not in prep_block  # no run-time splice
+
+
+def test_prep_scopes_foreign_claims_to_peer_commits_inside_the_footprint():
+    _, phases = _compose()
+    _, prep_block = phases[0]
+    assert "foreign_claims list ONLY declared paths" in prep_block
+    assert "NOT in declared_paths under foreign_claims" not in prep_block

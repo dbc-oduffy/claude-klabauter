@@ -28,6 +28,17 @@ def _hook_layer_always_reachable(monkeypatch):
     monkeypatch.setattr(_gsi, "_hook_layer_reachable", lambda settings_data: True)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_guardless_peers(monkeypatch):
+    """The real detector reads this box's process table; any unguarded peer
+    session would leak into every silence assertion. Tests that exercise the
+    detector patch it again."""
+    monkeypatch.setattr(
+        "coordinator_core.ops.detect_guardless_sessions.detect",
+        lambda: DetectionResult(cannot_determine=False, reason=None, observed=[], guardless=[]),
+    )
+
+
 def _write_settings(config_dir: Path, enabled_plugins: dict) -> None:
     (config_dir / "settings.json").write_text(
         json.dumps({"enabledPlugins": enabled_plugins}), encoding="utf-8"
