@@ -317,6 +317,11 @@ JSON-RPC dispatch utilities for the command-type execution model. The HTTP invok
 | `__main__.py` | Generic in-process op dispatcher entrypoint |
 | `dispatch.py` | JSON-RPC error helper + dispatch utilities |
 
+### `completion_receipts/` — run-end completion receipt contract
+`model` owns shape and validation, `store` the append-only files and readers, `verdict` the
+judge predicate, `day` the day derivation, `approve` the `receipt.approve` op (MUTATING; appends
+a quoted superseding receipt).
+
 ### `contract/`
 Vendored cockpit-contract pin (see `docs/wiki/cockpit-contract-revendor.md`). Also home of
 producer-contract docs for claude-klabauter-owned ops, e.g. `handoff-reconcile-producer-contract.md`

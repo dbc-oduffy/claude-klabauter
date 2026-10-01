@@ -116,6 +116,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
     partition_reportable,
 )
+from coordinator_core.completion_receipts.day import receipts_for_day
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -184,6 +185,18 @@ def _compute_open_day_goals() -> dict[str, Any]:
             file=sys.stderr,
         )
         return {"today": [], "stale": [], "unreadable_error": str(exc)}
+
+
+def _compute_completion_receipts_gate(for_date: Optional[str]) -> dict[str, Any]:
+    try:
+        common_dir = _resolve_repo_common_dir_for_ceremony()
+        if common_dir is None:
+            return {"error": "could not resolve the invoking repo's git common dir"}
+        return receipts_for_day(
+            main_worktree_root(common_dir), for_date or date.today().isoformat()
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail the brief
+        return {"error": str(exc)}
 
 
 def _open_day_goals_present(open_day_goals: dict[str, Any]) -> bool:
@@ -938,7 +951,10 @@ def brief(
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workday-complete"},
         preflight={"consumes_manifest": list(CONSUMES_MANIFEST)},
-        gates={"cockpit_contract_freshness": compute_cockpit_contract_freshness()},
+        gates={
+            "cockpit_contract_freshness": compute_cockpit_contract_freshness(),
+            "completion_receipts": _compute_completion_receipts_gate(for_date),
+        },
         directives=directives,
         judgment_points=judgment_points,
         decisions=decisions if decisions is not None else {},

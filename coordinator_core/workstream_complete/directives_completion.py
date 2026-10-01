@@ -439,10 +439,11 @@ def build_plan_reversibility_eligibility_directive(
     positional, when `plan_path` is falsy; this is a hard gate, not a
     best-effort pass-through of an empty argument (§ Approach, eng-director
     F2). The exit code IS the verdict (`0` eligible, `1` ineligible) rather
-    than an error signal — `best_effort: true` routes the `1` branch to
-    `degraded` the same way any other non-zero exit already does, and the
-    captured `--json` document (not the exit code) is what a `next_move`
-    reading consults."""
+    than an error signal — `verdict_exit_codes: [1]` makes apply land the
+    ineligible answer like an eligible one, and the captured `--json`
+    document (not the exit code) is what a `next_move` reading consults.
+    `best_effort: true` still degrades any other non-zero exit (e.g. `2`,
+    an unreadable plan)."""
     if not plan_path:
         return None
     args = [plan_path, "--json", "--repo-root", str(repo_root)]
@@ -450,6 +451,7 @@ def build_plan_reversibility_eligibility_directive(
         "d-plan-reversibility-eligibility", _PLAN_REVERSIBILITY_ELIGIBILITY_CLI, args
     )
     directive["best_effort"] = True
+    directive["verdict_exit_codes"] = [1]
     return directive
 
 

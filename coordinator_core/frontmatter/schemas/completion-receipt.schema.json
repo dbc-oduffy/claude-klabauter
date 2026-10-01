@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/completion-receipt.schema.json",
+  "x-schema-name": "completion-receipt",
+  "x-schema-version": "1.0.0",
+  "x-bump-class": "major",
+  "x-bump-note": "1.0.0 initial. Per-baton run-end completion receipt, written by the engine at the run's terminal commit and never hand-authored. DR-097 push-side duty: ATTACHES (claude-klabauter vendors this schema and emits the matching CompletionReceipt cockpit entity); the hold is HOLDING until claude-klabauter vendors it, tracked by the memo thread 2026-10-01-coordinator-content-repo-em-completion-receipts. Spec backlink: pln-run-end-completion-receipts-69aeb1 § C0.",
+  "applies_to": "state/completion-receipts/**/*.md",
+  "description": "What one execute-plan or mise-en-place run concluded for one baton, and who vouched for it. Stored as state/completion-receipts/<YYYY-MM>/<receipt_id>.md: this frontmatter, then a prose body (what concluded, what was observed, what remains). Append-only: a receipt is never edited after its commit; human approval is a new human-approved receipt whose supersedes names the agent-delivered one. `superseded` is never written into a file; a reader derives it from a later receipt's supersedes. The verdict lives here and never on the baton (DR-176). Spec backlink: pln-run-end-completion-receipts-69aeb1 § Pinned interfaces.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "baton_id",
+    "deliverable_id",
+    "workstream_id",
+    "repo",
+    "plan_path",
+    "branch",
+    "run",
+    "verdict",
+    "judge",
+    "commit_range",
+    "started_at",
+    "concluded_at",
+    "loe",
+    "prose_ref",
+    "supersedes",
+    "approved_by",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "completion-receipt",
+      "description": "Schema discriminator, always 'completion-receipt'."
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^rcp-[a-z0-9-]+-[0-9a-f]{6}$",
+      "description": "Durable receipt id, rcp-<slug>-<6hex>."
+    },
+    "baton_id": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Id of the baton the run claimed. At least one of baton_id and deliverable_id is non-null."
+    },
+    "deliverable_id": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Deliverable spine id of the work the run concluded. At least one of baton_id and deliverable_id is non-null."
+    },
+    "workstream_id": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Workstream slug grouping this receipt with its siblings; null when unknown."
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repo key the run ran in."
+    },
+    "plan_path": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Repo-relative plan path; null for a mise item with no plan."
+    },
+    "branch": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Branch the run committed on; null when unknown."
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": ["execute-plan", "mise-en-place"],
+          "description": "Which run produced the receipt. A new run kind is an additive enum widen, a MINOR rung here and on the cockpit entity."
+        },
+        "id": {
+          "type": "string",
+          "description": "Run identifier, opaque to readers."
+        }
+      }
+    },
+    "verdict": {
+      "anyOf": [
+        { "enum": ["agent-delivered", "human-approved", "rejected"] },
+        { "type": "null" }
+      ],
+      "description": "agent-delivered = terminal judge met; human-approved / rejected = an appended human act (supersedes and approved_by non-null); null = the run concluded without a met judge (not_met, indeterminate, delivery not PASS, a CONTINUANCE item, or no plan to judge). `superseded` is derived by readers, never written."
+    },
+    "judge": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity", "observation_summary", "judged_at"],
+          "properties": {
+            "identity": { "type": "string", "description": "Judge identity (agent or stage name)." },
+            "observation_summary": { "type": "string", "description": "What the judge observed that earned the verdict." },
+            "judged_at": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC time of the judgment." }
+          }
+        },
+        { "type": "null" }
+      ],
+      "description": "The terminal judge's record. Non-null whenever verdict is agent-delivered."
+    },
+    "commit_range": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base", "head"],
+          "properties": {
+            "base": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+            "head": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+          }
+        },
+        { "type": "null" }
+      ],
+      "description": "Commits the run landed, base exclusive to head inclusive; null when the run committed nothing."
+    },
+    "started_at": {
+      "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }],
+      "description": "ISO-8601 UTC run start; null when unknown."
+    },
+    "concluded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC run conclusion."
+    },
+    "loe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["estimated", "actual"],
+      "properties": {
+        "estimated": {
+          "anyOf": [{ "enum": ["XS", "S", "M", "L", "XL", "XXL"] }, { "type": "null" }],
+          "description": "From the cited sizing's estimate.tshirt."
+        },
+        "actual": {
+          "anyOf": [{ "enum": ["XS", "S", "M", "L", "XL", "XXL"] }, { "type": "null" }],
+          "description": "Measured t-shirt for the run; null when not captured."
+        }
+      }
+    },
+    "prose_ref": {
+      "type": "string",
+      "description": "Repo-relative path of this receipt file."
+    },
+    "supersedes": {
+      "anyOf": [{ "type": "string", "pattern": "^rcp-[a-z0-9-]+-[0-9a-f]{6}$" }, { "type": "null" }],
+      "description": "receipt_id of the receipt this one supersedes; null for a first receipt."
+    },
+    "approved_by": {
+      "anyOf": [{ "type": "string" }, { "type": "null" }],
+      "description": "Human who approved or rejected; null for an agent-written receipt."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_at", "derivation", "ref"],
+      "description": "Shaped after the cockpit ProvenanceEnvelope (cockpit-contract README § Entities, DECISIONS D5); not imported from it.",
+      "properties": {
+        "observed_at": { "type": "string", "format": "date-time" },
+        "derivation": { "type": "string", "description": "How the receipt's facts were derived." },
+        "ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["branch", "sha"],
+          "properties": {
+            "branch": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+            "sha": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+          }
+        }
+      }
+    }
+  },
+  "anyOf": [
+    { "properties": { "baton_id": { "type": "string" } } },
+    { "properties": { "deliverable_id": { "type": "string" } } }
+  ],
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "const": "agent-delivered" } }, "required": ["verdict"] },
+      "then": { "properties": { "judge": { "type": "object" } } }
+    },
+    {
+      "if": { "properties": { "verdict": { "enum": ["human-approved", "rejected"] } }, "required": ["verdict"] },
+      "then": {
+        "properties": {
+          "supersedes": { "type": "string" },
+          "approved_by": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

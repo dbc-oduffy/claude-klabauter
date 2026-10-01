@@ -311,7 +311,9 @@ def memo_flip_resolves_ids(dispositions: list[dict[str, Any]]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_consumed_handoff_ship_directives(consumed_handoff_paths: list[str]) -> list[dict[str, Any]]:
+def build_consumed_handoff_ship_directives(
+    consumed_handoff_paths: list[str], sha: Optional[str] = None
+) -> list[dict[str, Any]]:
     """`d-ship-consumed-handoff:<basename>` (C1): one directive per element
     of `consumed_handoff_paths`, PLURAL to match the plural, per-element
     consumed-handoff completeness gate this hangs off
@@ -329,10 +331,11 @@ def build_consumed_handoff_ship_directives(consumed_handoff_paths: list[str]) ->
     module's own Negative-spec on why `__init__.py`'s private helper is
     never imported into this module. An empty input emits nothing.
 
-    Each directive fronts `archive-stamp-cli ship-handoff <path>` with NO
-    `--sha` (`handoff.archive_transition`'s Position A derives it and
-    refuses, non-zero, naming `--sha`, when it cannot — this row does not
-    duplicate that derivation) and NO `--archive` (the git-mv belongs to the
+    Each directive fronts `archive-stamp-cli ship-handoff <path>`, with
+    `--sha <sha>` when the caller supplies one (the close-out commit does not
+    exist yet at directive time, so the caller passes the chain tip it
+    resolved; without it the CLI's scope derivation refuses on a baton that
+    names no scope paths) and NO `--archive` (the git-mv belongs to the
     already-unconditional `d-sweep-terminal-handoffs` drain) and no
     `best_effort` key (the default hard-fail path is the whole of AC2).
     `depends_on=None` here — the gate edge (`jp-consumed-handoff-
@@ -355,9 +358,10 @@ def build_consumed_handoff_ship_directives(consumed_handoff_paths: list[str]) ->
     directives: list[dict[str, Any]] = []
     for path in consumed_handoff_paths:
         basename = Path(path).name
-        directives.append(
-            _directive(f"d-ship-consumed-handoff:{basename}", "archive-stamp-cli", ["ship-handoff", path])
-        )
+        args = ["ship-handoff", path]
+        if sha:
+            args += ["--sha", sha]
+        directives.append(_directive(f"d-ship-consumed-handoff:{basename}", "archive-stamp-cli", args))
     return directives
 
 

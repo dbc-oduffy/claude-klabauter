@@ -312,6 +312,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",
     "review_stamp.check":                     "coordinator_core.ops.review_stamp",
     "review_mint.bookkeep_wave":              "coordinator_core.ops.review_mint.wave_bookkeeping",
+    "review_mint.record_superseding_review":  "coordinator_core.ops.review_mint.supersede",
+    "receipt.approve":                        "coordinator_core.completion_receipts.approve",
     "strategic.generate":                     "coordinator_core.ops.strategic_generate",
     "strategic.emit":                         "coordinator_core.ops.strategic_emit",
     "handoff.close_origin_stub":              "coordinator_core.ops.handoff_close_origin_stub",

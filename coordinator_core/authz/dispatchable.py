@@ -117,6 +117,8 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         # either.
         "baton-chain-closure",
         "plan-reversibility-eligibility",
+        "record-superseding-review",
+        "review-stamp",
     }),
     "workweek_complete": frozenset({
         "list-week-changelog",

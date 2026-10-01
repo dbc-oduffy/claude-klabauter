@@ -65,6 +65,9 @@ from coordinator_core.contract.cockpit_schema.entities.intelligence_signal impor
 from coordinator_core.contract.cockpit_schema.entities.lesson_summary import (
     LessonSummary,
 )
+from coordinator_core.contract.cockpit_schema.entities.completion_receipt import (
+    CompletionReceipt,
+)
 from coordinator_core.contract.cockpit_schema.entities.plan_summary import (
     PlanSummary,
 )
@@ -127,6 +130,7 @@ __all__ = [
     "InitiativeSummary",
     "IntelligenceSignal",
     "LessonSummary",
+    "CompletionReceipt",
     "PlanSummary",
     "PriorityLedgerEntry",
     "RoadmapDagEdge",

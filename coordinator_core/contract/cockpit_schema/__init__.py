@@ -40,6 +40,7 @@ from coordinator_core.contract.cockpit_schema.entities import (
     InitiativeSummary,
     IntelligenceSignal,
     LessonSummary,
+    CompletionReceipt,
     PlanSummary,
     PriorityLedgerEntry,
     ReviewTrail,
@@ -116,6 +117,7 @@ ENTITY_SCHEMAS: dict[str, Any] = {
     "intelligence-signal": IntelligenceSignal,
     "financial-metric-summary": FinancialMetricSummary,
     "priority-ledger-entry": PriorityLedgerEntry,
+    "completion-receipt": CompletionReceipt,
     "snapshot-envelope": SnapshotEnvelope,
     "emission-scope": ScopedEmission,
 }

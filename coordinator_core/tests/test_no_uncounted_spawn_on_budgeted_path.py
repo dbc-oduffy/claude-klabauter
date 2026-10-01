@@ -311,6 +311,12 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/postuse_subagent_compaction_warning.py",
         ("_handler",),
     ),
+    # Enrolled 2026-10-01 (completion-receipts C11): empty reachable spawn set;
+    # the plan pins receipt.approve at zero spawns.
+    "receipt.approve": (
+        "coordinator_core/completion_receipts/approve.py",
+        ("_approve_op",),
+    ),
     "hooks.sessionstart_async_dispatch": (
         "coordinator_core/hooks/sessionstart_async_dispatch.py",
         ("_handler",),
@@ -6745,6 +6751,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "memo.heal_inbox": 3,
     "p4.register_workspace": 1,
     "review_mint.bookkeep_wave": 7,
+    "review_mint.record_superseding_review": 8,
     "review_stamp.check": 2,
     "review_stamp.mint": 7,
 }

@@ -2177,6 +2177,28 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # 2026-09-28 PM order step b' (engine tolerates zero execute-review
     # integration stages).
     "review_mint.bookkeep_wave": OpClass.MUTATING,
+    # review_mint.record_superseding_review — MUTATING: writes the superseding
+    # review record (and its bookkeeping sidecar) under the caller's worktree.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      `review_stamp.mint` reads the record it writes.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "review_mint.record_superseding_review": OpClass.MUTATING,
+    # receipt.approve — MUTATING: appends a quoted superseding completion
+    # receipt under the caller's worktree.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      Receipt readers derive the approved verdict from the appended file.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "receipt.approve": OpClass.MUTATING,
     # push.outstanding — MUTATING: it pushes refs to a remote. The decision half
     # is a zero-spawn read, but the act half is an outward-facing publish.
     "push.outstanding": OpClass.MUTATING,

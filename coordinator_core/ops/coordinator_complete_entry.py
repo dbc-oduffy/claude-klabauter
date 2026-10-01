@@ -91,6 +91,10 @@ Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-p
       any guard miss (no ``--governing-plan-slug``, no plan file, no
       ``deliverable_id:`` frontmatter line, render exception) leaves
       ``rollup_sentence`` empty; render failure never aborts the write.
+    - Receipt-derived fields: when a completion receipt joins the entry,
+      ``receipts``, ``commits`` and ``loe.tshirt`` are recomputed from it on every
+      call that is not an already-fully-authored skip; the three EM-owned surfaces (title, nature, prose) are never touched.
+      No joining receipt means byte-identical output to the pre-receipt shape.
     - Exit codes reproduced exactly: 0 — entry written, or idempotent no-op
       (pre-existing chain entry found); 1 — argument error; 2 — environment
       error (not inside a git repository). A NEW dedicated code (3) is used
@@ -119,6 +123,8 @@ from datetime import date
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+from coordinator_core.completion_receipts import store as _receipt_store
+from coordinator_core.completion_receipts.model import TSHIRTS as _TSHIRT_ORDER
 from coordinator_core.chain_attribution import bulk_grep_attributed_shas, shas_touching_paths
 from coordinator_core.completion_record_integrity import (
     REASON_PLACEHOLDER,
@@ -1076,6 +1082,72 @@ def _resolve_entry_title(repo_root: str, governing_plan_slug: str, consumed_hand
     return f"{_ACCOMPLISHED_PREFIX}{source}"
 
 
+_RECEIPT_LOE_COMMENT = "# loe.tshirt: session ledger (receipts carry no actual)"
+
+
+def _previous_month(day: date) -> str:
+    y, m = (day.year, day.month - 1) if day.month > 1 else (day.year - 1, 12)
+    return f"{y:04d}-{m:02d}"
+
+
+def _resolve_joined_receipts(
+    repo_root: str, deliverable_id: str, consumed_handoff: str, today: date
+) -> List[dict]:
+    """Receipt heads of the current and previous month joining this entry: the
+    receipt's `deliverable_id` is the governing plan's, or its `baton_id` is the
+    consumed handoff's `handoff_id`. Sorted by receipt_id; fail-open to `[]`."""
+    handoff_id = _plan_frontmatter_field(consumed_handoff, "handoff_id") if consumed_handoff else ""
+    if not deliverable_id and not handoff_id:
+        return []
+    try:
+        root = Path(repo_root)
+        found: List[dict] = []
+        for month in (today.strftime("%Y-%m"), _previous_month(today)):
+            found.extend(_receipt_store.read_receipts(root, month=month))
+        heads = _receipt_store.current_heads(found)
+    except Exception:
+        print(f"skip: _resolve_joined_receipts: failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return []
+    return [
+        r
+        for _, r in sorted(heads.items())
+        if (deliverable_id and r.get("deliverable_id") == deliverable_id)
+        or (handoff_id and r.get("baton_id") == handoff_id)
+    ]
+
+
+def _apply_receipts(repo_root: str, joined: List[dict], loe_block: str, commits: List[str]):
+    """Derive `(receipts, commits, loe_block)` from the joined receipts: commits
+    are the sorted introducing shas (ONE git spawn), `loe.tshirt` the highest
+    non-null `loe.actual`. `commits` is kept as given when no receipt is committed;
+    the ledger `loe` is kept, with a comment saying so, when no receipt has an actual."""
+    paths = [r["_path"] for r in joined]
+    entries = [{"receipt_id": r["receipt_id"], "path": r["_path"]} for r in joined]
+    try:
+        shas = _receipt_store.introducing_commits(Path(repo_root), paths)
+    except Exception:
+        print(f"skip: _apply_receipts: introducing_commits failed: {sys.exc_info()[1]}", file=sys.stderr)
+        shas = {}
+    derived = sorted({sha for sha in shas.values() if sha})
+    actuals = [
+        (r.get("loe") or {}).get("actual")
+        for r in joined
+        if (r.get("loe") or {}).get("actual") in _TSHIRT_ORDER
+    ]
+    if not actuals:
+        return entries, derived or commits, f"{loe_block}\n{_RECEIPT_LOE_COMMENT}"
+    top = max(actuals, key=_TSHIRT_ORDER.index)
+    out: List[str] = []
+    in_loe = False
+    for line in loe_block.split("\n"):
+        if line and not line[0].isspace():
+            in_loe = line.startswith("loe:")
+        if in_loe and line.startswith("  tshirt:"):
+            line = f'  tshirt: "{top}"'
+        out.append(line)
+    return entries, derived or commits, "\n".join(out)
+
+
 def _git_log_runner_for_commits(argv: List[str], cwd: Optional[str]) -> tuple[int, str, str]:
     """`chain_attribution.GitRunner` contract for `_resolve_session_commits`'s
     one log walk — "never raises, returns (rc, stdout, stderr)", matching
@@ -1225,6 +1297,7 @@ def _write_entry(
     commits: Optional[List[str]] = None,
     authored_by_unknown: bool = False,
     computed_title: str = "",
+    receipts: Optional[List[dict]] = None,
 ) -> bool:
     """Writes (or idempotent-preserving re-writes) the completion-entry
     scaffold at `entry_path`. Returns `True` when the file was written,
@@ -1318,6 +1391,11 @@ def _write_entry(
             lines.append(f'  - "{sha}"')
     else:
         lines.append("commits: []")
+    if receipts:
+        lines.append("receipts:")
+        for rec in receipts:
+            lines.append(f'  - receipt_id: "{rec["receipt_id"]}"')
+            lines.append(f'    path: "{rec["path"]}"')
     lines.append("status: pending-release")
     lines.append(f"chain_terminal: {'true' if chain_terminal else 'false'}")
     if authored_by_unknown:
@@ -1476,6 +1554,12 @@ def main(argv: List[str]) -> int:
             _entry_scope_paths(repo_root, governing_plan_slug, consumed_handoff),
         )
 
+    receipts: List[dict] = []
+    if not already_fully_authored:
+        joined = _resolve_joined_receipts(repo_root, deliverable_id, consumed_handoff, today)
+        if joined:
+            receipts, commits, loe_block = _apply_receipts(repo_root, joined, loe_block, commits)
+
     if for_date is not None:
         # `--for-date` is the explicit backfill/finalize leg -- reconstructing
         # the record of a session that has already ENDED (module Negative-
@@ -1525,6 +1609,7 @@ def main(argv: List[str]) -> int:
         commits,
         authored_by_unknown,
         computed_title,
+        receipts,
     )
 
     print(entry_path)

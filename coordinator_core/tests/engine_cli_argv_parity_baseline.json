@@ -820,16 +820,16 @@
     },
     {
       "module": "coordinator_core/workstream_complete/directives_review.py",
-      "directive_id": "d-run-review-brightline-gate",
-      "cli": "review-brightline-gate",
+      "directive_id": "d-mint-superseding-stamp",
+      "cli": "review-stamp",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
     },
     {
       "module": "coordinator_core/workstream_complete/directives_review.py",
-      "directive_id": "d-write-review-trail",
-      "cli": "coordinator-write-review-trail",
+      "directive_id": "d-run-review-brightline-gate",
+      "cli": "review-brightline-gate",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

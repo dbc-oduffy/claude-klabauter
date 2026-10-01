@@ -127,7 +127,7 @@ def _directive(
 #: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md),
 #: and a future caller-side `decisions` param added to this module has one
 #: obvious place to register its keys.
-FREE_VALUE_KEYS: tuple[str, ...] = ()
+FREE_VALUE_KEYS: tuple[str, ...] = ("superseding_review",)
 
 
 class ReviewScaleDecision(NamedTuple):
@@ -1148,4 +1148,155 @@ def build_close_coverage_advisory_directive(
         [],
         depends_on=None,
         already_satisfied=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stranded-run superseding review (docs/plans/2026-10-01-completion-receipts.md,
+# C10). A plan that was run (a `<stem>.workflow.mjs.emitted.json` sits beside
+# it) but never review-stamped can be stamped against a superseding record
+# the EM writes over the run's commit range. `decisions["superseding_review"]`
+# carries the record's inputs; `decisions["jp-stranded-run-superseding-review"]`
+# = `record` fires the two directives below.
+# ---------------------------------------------------------------------------
+
+SUPERSEDING_RECORD_DIRECTIVE_ID = "d-record-superseding-review"
+SUPERSEDING_STAMP_DIRECTIVE_ID = "d-mint-superseding-stamp"
+STRANDED_RUN_JUDGMENT_POINT_ID = "jp-stranded-run-superseding-review"
+_SUPERSEDING_REVIEW_KEY = "superseding_review"
+
+
+def is_stranded_plan(plan_path: Path) -> bool:
+    """True when the plan carries no `review_stamp`, is not `implemented`, and
+    has a `<stem>.workflow.mjs.emitted.json` beside it. An unreadable plan is
+    not stranded."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    emitted = plan_path.with_name(plan_path.stem + ".workflow.mjs.emitted.json")
+    try:
+        if not emitted.is_file():
+            return False
+        text = plan_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    split = split_frontmatter(text)
+    try:
+        fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
+    except yaml.YAMLError:
+        return False
+    if not isinstance(fm, dict):
+        return False
+    return not fm.get("review_stamp") and str(fm.get("status") or "") != "implemented"
+
+
+def _superseding_slice(decisions: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The validated `decisions["superseding_review"]` mapping, or `None` when
+    the caller has not supplied one. Raises `ValueError` on a malformed one."""
+    raw = decisions.get(_SUPERSEDING_REVIEW_KEY)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"decisions[{_SUPERSEDING_REVIEW_KEY!r}] must be a mapping")
+    commit_range = raw.get("commit_range")
+    if not (
+        isinstance(commit_range, dict)
+        and commit_range.get("base")
+        and commit_range.get("head")
+    ):
+        raise ValueError(
+            f"decisions[{_SUPERSEDING_REVIEW_KEY!r}].commit_range needs both base and head"
+        )
+    sidecars = raw.get("wave_sidecar_paths")
+    if not isinstance(sidecars, list) or not sidecars:
+        raise ValueError(
+            f"decisions[{_SUPERSEDING_REVIEW_KEY!r}].wave_sidecar_paths must be a non-empty list"
+        )
+    return raw
+
+
+def superseding_review_resolves_ids(decisions: Mapping[str, Any]) -> list[str]:
+    """The directive ids a `record` disposition resolves: both ids once
+    `decisions["superseding_review"]` is supplied, else `[]`."""
+    if _superseding_slice(decisions) is None:
+        return []
+    return [SUPERSEDING_RECORD_DIRECTIVE_ID, SUPERSEDING_STAMP_DIRECTIVE_ID]
+
+
+def build_superseding_review_directives(
+    *, plan_rel: str, sid: str, repo_root: Path, decisions: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """`d-record-superseding-review` then `d-mint-superseding-stamp`, the
+    second reading the first's printed record path through the
+    `{d-record-superseding-review.entry_path}` token. `[]` when
+    `decisions["superseding_review"]` is absent."""
+    slice_ = _superseding_slice(decisions)
+    if slice_ is None:
+        return []
+    commit_range = slice_["commit_range"]
+    record_args = [
+        "--plan", plan_rel,
+        "--session-id", sid,
+        "--base", str(commit_range["base"]),
+        "--head", str(commit_range["head"]),
+        "--repo-root", str(repo_root),
+    ]
+    for sidecar in slice_["wave_sidecar_paths"]:
+        record_args += ["--wave-sidecar", str(sidecar)]
+    if slice_.get("prep_sidecar"):
+        record_args += ["--prep-sidecar", str(slice_["prep_sidecar"])]
+    if slice_.get("stage_returns") is not None:
+        record_args += ["--stage-returns-json", json.dumps(slice_["stage_returns"])]
+    if slice_.get("supersedes"):
+        record_args += ["--supersedes", str(slice_["supersedes"])]
+    return [
+        _directive(
+            SUPERSEDING_RECORD_DIRECTIVE_ID,
+            "record-superseding-review",
+            record_args,
+            depends_on=STRANDED_RUN_JUDGMENT_POINT_ID,
+        ),
+        _directive(
+            SUPERSEDING_STAMP_DIRECTIVE_ID,
+            "review-stamp",
+            [
+                "mint",
+                "--plan", plan_rel,
+                "--superseding-record", f"{{{SUPERSEDING_RECORD_DIRECTIVE_ID}.entry_path}}",
+                "--repo-root", str(repo_root),
+            ],
+            depends_on=STRANDED_RUN_JUDGMENT_POINT_ID,
+        ),
+    ]
+
+
+def wire_stranded_run_superseding_review(
+    directives: list[dict[str, Any]],
+    judgment_points: list[dict[str, Any]],
+    *,
+    plan_path: Optional[Path],
+    plan_rel: Optional[str],
+    sid: str,
+    repo_root: Path,
+    decisions: Mapping[str, Any],
+) -> None:
+    """Appends the stranded-run judgment point (and, once the EM supplies
+    `decisions["superseding_review"]`, its two directives) when the governing
+    plan is stranded. A no-op for any other plan."""
+    if plan_path is None or not plan_rel or not is_stranded_plan(plan_path):
+        return
+    from coordinator_core.workstream_complete.judgments import (
+        build_stranded_run_superseding_review_judgment_point,
+    )
+
+    judgment_points.append(
+        build_stranded_run_superseding_review_judgment_point(
+            superseding_review_resolves_ids(decisions)
+        )
+    )
+    directives.extend(
+        build_superseding_review_directives(
+            plan_rel=plan_rel, sid=sid, repo_root=repo_root, decisions=decisions
+        )
     )

@@ -131,6 +131,8 @@ def _seed_disk_fixtures(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    (plans_dir / f"{_GOVERNING_PLAN_SLUG}.workflow.mjs.emitted.json").write_text("{}", encoding="utf-8")
+
     sidecar_dir = tmp_path / "state" / "subagent-share" / _SESSION_ID
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     (sidecar_dir / f"{_GOVERNING_PLAN_SLUG}.wave1.md").write_text(
@@ -176,6 +178,10 @@ def _rich_decisions(*, governing_plan_slug: bool, review_present: bool, tmp_path
         },
         "ubt_check": {"applies": True, "since_sha": "aaaaaaa"},
         "classify_dispatch_plan_file": f"docs/plans/{_GOVERNING_PLAN_SLUG}.md",
+        "superseding_review": {
+            "commit_range": {"base": "aaaaaaa", "head": "bbbbbbb"},
+            "wave_sidecar_paths": ["state/contract-test-wave.md"],
+        },
     }
     if governing_plan_slug:
         decisions["governing_plan_slug"] = _GOVERNING_PLAN_SLUG

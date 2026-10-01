@@ -401,6 +401,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.review_mint.wave_bookkeeping",
         'registers "review_mint.bookkeep_wave"',
     ),
+    (
+        "coordinator_core.ops.review_mint.supersede",
+        'registers "review_mint.record_superseding_review"',
+    ),
+    ("coordinator_core.completion_receipts.approve", 'registers "receipt.approve"'),
     ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
     ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),
     ("coordinator_core.ops.handoff_close_origin_stub", 'registers "handoff.close_origin_stub"'),

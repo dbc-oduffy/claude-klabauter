@@ -696,6 +696,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # worktree, keyed identically to review_stamp.mint/dispatch.terminal_commit
     # (never a `params.repo_root` override). 2026-09-28 PM order step b'.
     "review_mint.bookkeep_wave":                "common_dir",
+    # review_mint.record_superseding_review / receipt.approve — MUTATING: write
+    # only the caller's own worktree, never a `params.repo_root` override.
+    "review_mint.record_superseding_review":    "common_dir",
+    "receipt.approve":                          "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "fanout.compose":                           "none",
     "fanout.census":                            "none",

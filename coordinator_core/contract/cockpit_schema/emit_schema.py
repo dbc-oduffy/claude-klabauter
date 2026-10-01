@@ -498,7 +498,13 @@ GENERATES: list = []
 # TrackerSummary has carried since 3.13.0; `owner` stays the repo-owner join
 # anchor), emitted only under `cockpit.human_axis_vendored`. PlanSummary's
 # `status` enum widens by `blocked`, which reached the emitter without a bump.
-CONTRACT_VERSION = "4.9.0"
+#
+# MINOR bump 4.9.0 -> 4.10.0 (2026-10-01, DoE D55): new `CompletionReceipt`
+# entity (`completion-receipt`), a pure addition with no existing entity
+# changed — MINOR under D46 and DoE D55. Expected red window:
+# `ops/emit/tests/test_vendor_pin_version_consistency.py` stays red until
+# the DoE bundle is regenerated and re-vendored (plan step C12).
+CONTRACT_VERSION = "4.10.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

@@ -1271,12 +1271,27 @@ def test_resolve_arg_tokens_nested_json_review_slice_also_passes_through_unchang
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_arg_tokens_landed_field_substitutes_empty_string_when_producer_landed() -> None:
+def test_resolve_arg_tokens_landed_field_drops_whole_arg_when_producer_landed() -> None:
     resolved, error = ws_apply._resolve_arg_tokens(
         ["{d-run-wsc-tail.landed}"], {"d-run-wsc-tail": "some captured stdout\n"}
     )
     assert error is None
-    assert resolved == [""]
+    assert resolved == []
+
+
+def test_stamp_plan_implemented_directive_resolves_to_no_empty_positional() -> None:
+    from coordinator_core.workstream_complete import directives_lessons_plan as dlp
+
+    from pathlib import Path
+
+    plan = dlp.GoverningPlan(slug="p", path=Path("docs/plans/p.md"), rel="docs/plans/p.md")
+    directives = dlp.build_plan_claim_and_stamp_directives(plan)
+    stamp = next(d for d in directives if d["id"] == "d-stamp-plan-implemented")
+    resolved, error = ws_apply._resolve_arg_tokens(
+        stamp["args"], {"d-claim-plan-execution-lock": ""}
+    )
+    assert error is None
+    assert resolved == ["stamp-plan-implemented", "docs/plans/p.md"]
 
 
 def test_resolve_arg_tokens_landed_field_substitutes_empty_string_even_with_no_stdout() -> None:
@@ -1288,7 +1303,7 @@ def test_resolve_arg_tokens_landed_field_substitutes_empty_string_even_with_no_s
         {"d-run-wsc-tail": ""},
     )
     assert error is None
-    assert resolved == ["release-artifact", "plan", "some-slug", ""]
+    assert resolved == ["release-artifact", "plan", "some-slug"]
 
 
 def test_resolve_arg_tokens_landed_field_fails_loud_when_producer_never_landed() -> None:
@@ -1842,6 +1857,42 @@ def test_best_effort_directive_alone_reaches_success_not_partial_mutation(
     assert [entry["id"] for entry in report["degraded"]] == ["d_degraded"]
     assert report["failed"] == []
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_verdict_exit_code_lands_and_threads_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared verdict exit (plan-reversibility-eligibility's `1` with
+    `eligible: false` JSON) is a landed answer, not a failure; an undeclared
+    non-zero exit from the same directive still fails."""
+    verdict_json = '{"eligible": false}\n'
+
+    def verdict_main(argv: list[str]) -> int:
+        print(verdict_json, end="")
+        return 1
+
+    def unreadable_main(argv: list[str]) -> int:
+        return 2
+
+    modules = {
+        "plan-reversibility-eligibility": _fake_module(verdict_main, "fake_verdict"),
+        "coordinator-fold-execution-record": _fake_module(unreadable_main, "fake_unreadable"),
+    }
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda cli_name: modules[cli_name])
+
+    verdict = _directive("d_verdict", "plan-reversibility-eligibility")
+    verdict["verdict_exit_codes"] = [1]
+    consumer = _directive("d_consumer", "coordinator-fold-execution-record")
+    consumer["args"] = ["{d_verdict.entry_path}"]
+    unreadable = _directive("d_unreadable", "coordinator-fold-execution-record")
+    unreadable["verdict_exit_codes"] = [1]
+    exit_code, report = ws_apply._execute_directives([verdict, consumer, unreadable], [], {})
+
+    assert "d_verdict" in report["landed"]
+    assert [e["id"] for e in report["failed"]] == ["d_consumer", "d_unreadable"]
+    consumer_error = report["failed"][0]["error"]
+    assert "unresolved" not in consumer_error and '{"eligible": false}' in consumer_error
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.PARTIAL_MUTATION)
 
 
 def test_non_best_effort_nonzero_exit_is_unchanged(
@@ -3097,3 +3148,13 @@ class TestAC8bThreeNamedDoeScripts:
             before = list(sys.path)
             load_cli_module(f"_ac8b_syspath_{name.replace('-', '_')}", _LIVE_PLUGIN_ROOT / f"{name}.py")
             assert sys.path == before, f"{name} mutated sys.path at import — hazard AC8 excludes"
+
+
+def test_consumed_handoff_ship_directive_threads_sha_flag() -> None:
+    from coordinator_core.workstream_complete import directives_memo_lifecycle as dml
+
+    sha = "a" * 40
+    (with_sha,) = dml.build_consumed_handoff_ship_directives(["state/handoffs/h.md"], sha=sha)
+    assert with_sha["args"] == ["ship-handoff", "state/handoffs/h.md", "--sha", sha]
+    (without,) = dml.build_consumed_handoff_ship_directives(["state/handoffs/h.md"])
+    assert without["args"] == ["ship-handoff", "state/handoffs/h.md"]

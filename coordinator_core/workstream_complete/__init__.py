@@ -438,6 +438,12 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     # MEMBERS`.
     "baton-chain-closure",
     "plan-reversibility-eligibility",
+    # Stranded-run superseding review (docs/plans/2026-10-01-completion-
+    # receipts.md, C10): the record writer prints its path on line one for
+    # the `{d-record-superseding-review.entry_path}` token; `review-stamp`
+    # mints against it.
+    "record-superseding-review",
+    "review-stamp",
 )
 
 
@@ -1665,9 +1671,11 @@ def build_directives(
     # `d-ship-consumed-handoff:*` always precedes `d-sweep-terminal-handoffs`
     # — see `_consumed_handoff_ship_paths`'s own docstring for the ordering
     # constraint this satisfies by construction.
+    _consumed_ship_paths = _consumed_handoff_ship_paths(gate, repo_root, effective_decisions)
     directives.extend(
         directives_memo_lifecycle.build_consumed_handoff_ship_directives(
-            _consumed_handoff_ship_paths(gate, repo_root, effective_decisions)
+            _consumed_ship_paths,
+            sha=_resolve_head_sha(repo_root) if _consumed_ship_paths else None,
         )
     )
     deletion_blocks_check_directive = build_deletion_blocks_check_directive(
@@ -6077,6 +6085,16 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         _append_directive_dependency(
             directives, "d-stamp-plan-implemented", "jp-review-receipt-block-stamp"
         )
+
+    directives_review.wire_stranded_run_superseding_review(
+        directives,
+        judgment_points,
+        plan_path=governing_plan.path if governing_plan else None,
+        plan_rel=governing_plan.rel if governing_plan else None,
+        sid=gate.sid,
+        repo_root=root,
+        decisions=decisions,
+    )
 
     # C2 (docs/plans/2026-08-15-judgment-points-that-gate-nothing-stop-
     # being-questions.md): route every judgment point assembled above

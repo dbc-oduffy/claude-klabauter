@@ -613,7 +613,9 @@ def _resolve_arg_tokens(
       coincide here).
     - `.landed` substitutes the EMPTY STRING unconditionally once the
       producer precondition holds — it threads no value, only proves the
-      producer ran and exited 0 before this directive dispatches. Exists
+      producer ran and exited 0 before this directive dispatches. An arg
+      that is ONLY that token is dropped from the resolved argv (an empty
+      positional is a usage error for strict-argparse CLIs). Exists
       for a directive whose CLI needs nothing from its producer's output
       (a pure ordering dependency) but still must not dispatch silently
       when the producer never landed.
@@ -652,6 +654,7 @@ def _resolve_arg_tokens(
             continue
 
         resolved_arg = arg
+        whole_arg_landed = False
         for producer_id, field in _ARG_TOKEN_RE.findall(arg):
             if field == "argv":
                 return None, (
@@ -667,6 +670,8 @@ def _resolve_arg_tokens(
                 )
             if field == "landed":
                 resolved_arg = resolved_arg.replace(f"{{{producer_id}.landed}}", "")
+                if not resolved_arg:
+                    whole_arg_landed = True
                 continue
             producer_stdout = stdout_by_id[producer_id]
             first_line = producer_stdout.splitlines()[0].strip() if producer_stdout.strip() else ""
@@ -676,6 +681,8 @@ def _resolve_arg_tokens(
                     "to resolve its {entry_path} token from"
                 )
             resolved_arg = resolved_arg.replace(f"{{{producer_id}.entry_path}}", first_line)
+        if whole_arg_landed and not resolved_arg:
+            continue
         resolved.append(resolved_arg)
 
     for resolved_arg in resolved:
@@ -922,6 +929,11 @@ def _execute_directives(
     the exit-code ladder reads `failed` only, never `degraded`, by
     construction.
 
+    Verdict exit codes: a directive carrying `verdict_exit_codes: [n, ...]`
+    treats those non-zero exits as a successful answer, not a failure -- the
+    directive lands and its stdout threads downstream exactly as exit 0
+    would. Any other non-zero exit is still `failed`/`degraded`.
+
     Inter-directive arg-token threading (module docstring, deviation 3):
     `stdout_by_id` accumulates the captured stdout of every directive that
     LANDED this pass (exit 0), keyed by directive id — mirrors `workday_
@@ -1117,7 +1129,9 @@ def _execute_directives(
             f"{directive['id']} exited {result.get('exit_code', 0)} "
             f"in {time.monotonic() - started:.1f}s"
         )
-        if result.get("exit_code", 0) != 0:
+        if result.get("exit_code", 0) != 0 and result.get("exit_code") not in (
+            directive.get("verdict_exit_codes") or ()
+        ):
             error = f"{directive['cli']} exited {result['exit_code']} (args={result.get('args', [])})"
             exit_class_note = describe_exit_class(
                 CliExitClass(result.get("exit_class", CliExitClass.RETURNED.value))

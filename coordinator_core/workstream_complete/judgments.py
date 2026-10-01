@@ -926,6 +926,40 @@ def build_no_governing_plan_judgment_point() -> dict[str, Any]:
     )
 
 
+def build_stranded_run_superseding_review_judgment_point(
+    record_resolves_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Offered when the governing plan was run but never review-stamped.
+    No recommendation, deliberately: whether the stranded run's commit range
+    was reviewed is known only to the EM. `record_resolves_ids` MUST be the
+    ids `directives_review.superseding_review_resolves_ids` returns -- `[]`
+    until `decisions["superseding_review"]` supplies the record's inputs."""
+    return build_judgment_point(
+        None,
+        id="jp-stranded-run-superseding-review",
+        question=(
+            "The governing plan was run (a workflow emission exists beside it) but carries no "
+            "review_stamp and is not implemented. Record a superseding review over the run's "
+            "commit range and mint the stamp against it?"
+        ),
+        dispositions=[
+            build_disposition("record", resolves=list(record_resolves_ids or [])),
+            build_disposition("skip", resolves=[]),
+        ],
+        evidence=(
+            "governing plan frontmatter has no review_stamp and status is not implemented; "
+            "<stem>.workflow.mjs.emitted.json exists beside it. To record, supply "
+            "decisions.superseding_review = {commit_range: {base, head}, wave_sidecar_paths, "
+            "prep_sidecar, stage_returns} and re-run brief"
+        ),
+        reason=(
+            "which commit range the stranded run produced, and whether its wave reviews stand "
+            "as the review, are not computable from the plan"
+        ),
+        revalidate_at_dispatch=False,
+    )
+
+
 # `JUDGMENT_POINT_BUILDERS` deliberately -- see that tuple's own docstring
 
 

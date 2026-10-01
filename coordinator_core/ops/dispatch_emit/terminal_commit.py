@@ -30,6 +30,7 @@ Negative-spec:
   - Does NOT compare head_sha: peers commit to the shared branch mid-run.
     Only the branch NAME is checked (detached, unreadable, or differing from
     the marker's ``expected_branch`` refuses before any write).
+  - Does NOT write a receipt when there is nothing to commit.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
     toward ``commit_paths``.
@@ -41,10 +42,10 @@ classification.py):
      Indirectly: the one in-process ``ceremony.commit_v2`` call this handler
      makes writes git objects and moves the branch ref.
   2. Writes into rag's relational store?                                  No.
-  3. Opens any file for write (including sentinel creation)?              No.
-     This handler itself opens nothing for write -- it reads the emitted
-     script and DONE chunks' report files, and delegates the one write
-     (index splice, object write) to ``ceremony.commit_v2``.
+  3. Opens any file for write (including sentinel creation)?              YES.
+     Exclusive-creates the run's completion-receipt files
+     (``completion_receipt.write_run_receipts``) before the commit; all other
+     writes (index splice, object write) are delegated to ``ceremony.commit_v2``.
   4. Mutates shared mutable state outside its own module?                 YES.
      The landed commit and moved ref, via the delegated commit_v2 call, are
      read by every subsequent dispatch against this repo.
@@ -742,6 +743,35 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     ]
 
+    from datetime import datetime, timezone
+
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit.completion_receipt import (
+        _remove,
+        build_run_receipts,
+        write_run_receipts,
+    )
+
+    receipt_paths: list = []
+    receipts_built: list = []
+    try:
+        receipts_built = build_run_receipts(
+            worktree_root,
+            request,
+            done_ids=[c.id for c in done_chunks],
+            incomplete_ids=sorted(incomplete_chunks),
+            record=record,
+            script_path=script_path_raw,
+            session_id=session_id,
+            base_sha=head_sha(worktree_root),
+            branch=observed_branch,
+            now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        receipt_paths = write_run_receipts(worktree_root, receipts_built)
+    except Exception as exc:  # noqa: BLE001 -- write_run_receipts already removed its partial writes
+        return _error(f"completion receipt write failed: {exc}", refused="receipt-write-failed")
+    all_paths.extend(receipt_paths)
+
     message_lines = [_subject(contributing_chunks)]
     if deleted_paths:
         # The undeclared-staged-deletion guard reads the message for a removal verb.
@@ -768,11 +798,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         reply = commit_v2(commit_params, repo_root)
     except OpUnavailableError:
+        _remove(worktree_root, receipt_paths)
         return _error("ceremony.commit_v2 is not registered")
+    except BaseException:
+        _remove(worktree_root, receipt_paths)
+        raise
     if not isinstance(reply, dict):
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    if not reply.get("committed"):
+        _remove(worktree_root, receipt_paths)
+        receipt_paths = []
     if reply.get("committed") and reply.get("sha"):
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
@@ -801,6 +838,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             and reply.get("coded_sha")
         ):
             reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
+    reply["receipts"] = receipt_paths
+    reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
+    if (
+        receipt_paths
+        and reply.get("plan_status", "implemented") != "implemented"
+        and any(fm.get("verdict") == "agent-delivered" for fm, _prose in receipts_built)
+    ):
+        reply["receipt_divergence"] = (
+            f"receipt verdict agent-delivered beside plan_status {reply['plan_status']!r}"
+        )
     reply["branch_check"] = branch_check
     reply["chunks_committed"] = [c.id for c in contributing_chunks]
     reply["dropped_absent"] = dropped_absent

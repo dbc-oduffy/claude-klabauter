@@ -84,6 +84,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.completion_receipts.verdict import mint_refusal
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -437,6 +438,7 @@ def mint(
     build_test_path: Optional[str],
     repair: bool = False,
     resolved: Optional[tuple] = None,
+    superseding_record: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
     Returns the written stamp dict. Raises `MintRefusal` on any refusal
@@ -456,6 +458,23 @@ def mint(
     plan_id = read_fm_field_unquoted(split.fm_text, "plan_id")
     if not plan_id:
         raise MintRefusal(f"review-stamp: refusing to mint: {plan_path} carries no plan_id")
+
+    if superseding_record is not None:
+        record_path = superseding_record if superseding_record.is_absolute() else repo_root / superseding_record
+        record = _load_sidecar(record_path)
+        if record is None:
+            raise MintRefusal(f"review-stamp: could not read superseding record {record_path}")
+        if record.get("kind") != "superseding-review":
+            raise MintRefusal(f"review-stamp: {record_path} is not a superseding-review record")
+        if str(record.get("plan_id") or "") != plan_id:
+            raise MintRefusal(
+                f"review-stamp: superseding record plan_id {record.get('plan_id')!r} does not match {plan_id!r}"
+            )
+        commit_range = record.get("commit_range")
+        head = commit_range.get("head") if isinstance(commit_range, dict) else None
+        if not head:
+            raise MintRefusal(f"review-stamp: superseding record {record_path} carries no commit_range.head")
+        resolved = (str(head), record_path, record)
 
     if resolved is not None:
         terminal_sha, integration_path, integration_data = resolved
@@ -489,28 +508,12 @@ def mint(
             raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
 
     run_base_sha = prep_data.get("run_base_sha")
-    # Prep names every path a peer dirtied in the shared tree; on a busy repo
-    # that is never empty. Only a claim inside the reviewed footprint threatens
-    # this run's review, so the refusal keys on those. With no footprint on
-    # record, every claim still counts.
-    footprint = prep_data.get("slice_files")
-    foreign_claims = [
-        c for c in prep_data.get("foreign_claims") or []
-        if not isinstance(footprint, list) or str(c).split(" ", 1)[0] in footprint
-    ]
-    # Every file in the reviewed diff, bookkeeping included: a plan whose whole
-    # deliverable sits under an excluded prefix (lessons, a plan doc) still
-    # delivered something. `product_files` alone called that run empty.
-    reviewed_files = max(_count(prep_data.get("slice_files")), _count(prep_data.get("product_files")))
-
     delivery_data = integration_data.get("delivery")
     if not isinstance(delivery_data, dict):
         delivery_rel = (prep_data.get("whole_diff_sidecars") or {}).get("delivery")
         delivery_data = (_load_sidecar(repo_root / delivery_rel) or {}) if delivery_rel else {}
     delivery_verdict = delivery_data.get("verdict")
 
-    unresolved = integration_data.get("unresolved") or []
-    confinement_violations = _count(integration_data.get("confinement_violations"))
     fixes_applied = integration_data.get("fixes_applied")
     slices = integration_data.get("slices")
     if not isinstance(slices, int) or isinstance(slices, bool):
@@ -532,26 +535,9 @@ def mint(
     criterion = integration_data.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
-    # Refusal predicates, in the order § Contract states them.
-    if delivery_verdict != "PASS":
-        raise MintRefusal(f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS")
-    if criterion_status in ("not_met", "indeterminate"):
-        raise MintRefusal(f"review-stamp: refusing to mint: exit criterion is {criterion_status}")
-    # A spine that writes nothing testable has no test run to pass; a met
-    # criterion is then the run's verdict. Nothing else stands in for a test.
-    if tests_status != "pass" and not (tests_status == "not_run" and criterion_status == "met"):
-        raise MintRefusal(
-            f"review-stamp: refusing to mint: build/test verdict is {tests_status!r}, not pass"
-            + (f" (exit criterion {criterion_status})" if tests_status == "not_run" else "")
-        )
-    if len(unresolved) > 0:
-        raise MintRefusal(f"review-stamp: refusing to mint: {len(unresolved)} unresolved finding(s)")
-    if confinement_violations > 0:
-        raise MintRefusal(f"review-stamp: refusing to mint: {confinement_violations} confinement violation(s)")
-    if len(foreign_claims) > 0:
-        raise MintRefusal(f"review-stamp: refusing to mint: {len(foreign_claims)} foreign claim(s) on spine paths")
-    if reviewed_files == 0:
-        raise MintRefusal("review-stamp: refusing to mint: zero files in the reviewed diff")
+    refusal = mint_refusal({**integration_data, "delivery": delivery_data}, prep_data, build_test_data)
+    if refusal is not None:
+        raise MintRefusal(refusal)
 
     try:
         tree_out = _run_git(["log", "-1", "--format=%T", terminal_sha], cwd=str(repo_root))
@@ -585,6 +571,8 @@ def mint(
         },
         "stamped_at": None,
     }
+    if superseding_record is not None:
+        stamp["superseding_record"] = stamp["integration_sidecar"]
     if isinstance(criterion, dict) and criterion_status:
         stamp["criterion"] = {
             "status": criterion_status,
@@ -686,6 +674,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     mint_p.add_argument("--build-test", required=False, default=None)
     mint_p.add_argument("--repo-root", required=False, default=None)
     mint_p.add_argument(
+        "--superseding-record",
+        required=False,
+        default=None,
+        help="Path to a superseding-review record to mint against instead of an Inline-Review trailer.",
+    )
+    mint_p.add_argument(
         "--repair",
         action="store_true",
         help="Explicit, never-default repair path for a pre-b' run whose sidecar predates "
@@ -723,7 +717,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.verb == "mint":
         try:
             stamp = mint(
-                plan_path, repo_root, build_test_path=args.build_test, repair=bool(getattr(args, "repair", False))
+                plan_path,
+                repo_root,
+                build_test_path=args.build_test,
+                repair=bool(getattr(args, "repair", False)),
+                superseding_record=Path(args.superseding_record) if args.superseding_record else None,
             )
         except MintRefusal as exc:
             print(str(exc), file=sys.stderr)
@@ -750,7 +748,14 @@ from coordinator_core.ipc import register_op  # noqa: E402 — after CLI-safe mo
 def _mint_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = Path(params["plan"])
     root = repo_root or Path(params.get("repo_root") or ".")
-    stamp = mint(plan_path, root, build_test_path=params.get("build_test"), repair=bool(params.get("repair", False)))
+    record = params.get("superseding_record")
+    stamp = mint(
+        plan_path,
+        root,
+        build_test_path=params.get("build_test"),
+        repair=bool(params.get("repair", False)),
+        superseding_record=Path(record) if record else None,
+    )
     return {"status": "minted", "review_stamp": stamp}
 
 
