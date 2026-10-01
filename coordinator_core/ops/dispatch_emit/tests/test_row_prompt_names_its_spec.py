@@ -1,3 +1,4 @@
+from .conftest import REVIEW_KW
 """An emitted executor prompt must name where its own spec lives.
 
 Spec backlink:
@@ -90,7 +91,7 @@ def test_emitted_script_carries_the_spec_pointer_for_every_row():
         [[_ROW, other]],
         name="t",
         description="t",
-        plan_path=_PLAN,
+        plan_path=_PLAN, **REVIEW_KW,
     )
     assert script.count(_PLAN) >= 2
     assert "id: C7" in script

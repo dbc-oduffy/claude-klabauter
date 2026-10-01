@@ -59,7 +59,8 @@ def _run(repo: Path, marker_id: Optional[str], plan_id: Optional[str], plan_exis
     (repo / "run.mjs").write_text(render_marker(req) + "\n", encoding="utf-8")
     head = _git(["rev-parse", "HEAD"], repo)
     out = terminal_commit._handler(
-        {"script_path": "run.mjs", "incomplete_chunks": []}, repo_root=repo / ".git"
+        {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}},
+        repo_root=repo / ".git"
     )
     return out, head
 

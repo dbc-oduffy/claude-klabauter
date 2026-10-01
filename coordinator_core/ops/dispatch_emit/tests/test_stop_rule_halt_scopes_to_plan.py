@@ -12,6 +12,7 @@ code path, no more ``_skipIfHalted``/``if _multi_plan:`` branching.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
@@ -42,7 +43,7 @@ def test_single_plan_compose_declares_empty_plan_tables_and_the_global_halt():
         waves,
         name="single-plan",
         description="single-plan spine",
-        plan_path="docs/plans/example.md",
+        plan_path="docs/plans/example.md", **REVIEW_KW,
     )
 
     assert "const _rowPlan = {  };" in script
@@ -58,7 +59,7 @@ def test_single_plan_compose_unaffected_by_a_wave_row_with_no_spec_line():
         waves,
         name="single-plan-prose-body",
         description="single-plan spine with a non-Spec body",
-        plan_path="docs/plans/example.md",
+        plan_path="docs/plans/example.md", **REVIEW_KW,
     )
     assert "const _rowPlan = {  };" in script
 
@@ -78,7 +79,7 @@ def test_multi_plan_compose_scopes_halt_to_the_stopping_rows_plan():
         waves,
         name="multi-plan",
         description="mise-inventory spine spanning two plans",
-        plan_path="state/mise-inventory/example.spine.md",
+        plan_path="state/mise-inventory/example.spine.md", **REVIEW_KW,
     )
 
     assert "const _rowPlan = {" in script
@@ -102,7 +103,7 @@ def test_multi_plan_requires_at_least_two_distinct_plans():
         waves,
         name="one-plan-with-spec-lines",
         description="mise-inventory spine over a single plan",
-        plan_path="state/mise-inventory/example.spine.md",
+        plan_path="state/mise-inventory/example.spine.md", **REVIEW_KW,
     )
     assert "'C1': 'docs/plans/p1.md'" in script
     assert "'C2': 'docs/plans/p1.md'" in script

@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import pytest
 
@@ -34,7 +35,7 @@ def test_an_override_no_longer_silences_the_unroutable_diagnostic():
             [[_row([_EVIDENCE], change_kind="verification",
                    agent_type="coordinator:enricher")]],
             name="wf",
-            description="c4",
+            description="c4", **REVIEW_KW,
         )
     assert "Split the row" in str(excinfo.value)
 
@@ -44,7 +45,7 @@ def test_the_same_row_without_an_override_still_raises():
         compose_script(
             [[_row([_EVIDENCE], change_kind="verification")]],
             name="wf",
-            description="c4-bare",
+            description="c4-bare", **REVIEW_KW,
         )
 
 
@@ -52,7 +53,7 @@ def test_an_override_on_a_routable_body_row_is_still_honoured():
     script = compose_script(
         [[_row([_EVIDENCE], agent_type="coordinator:enricher")]],
         name="wf",
-        description="routable",
+        description="routable", **REVIEW_KW,
     )
     assert "agentType: 'coordinator:enricher'" in script
 
@@ -63,5 +64,5 @@ def test_mixed_writes_still_outrank_an_override():
             [[_row([_EVIDENCE, "coordinator_core/ops/dispatch_emit/emit.py"],
                    agent_type="coordinator:enricher")]],
             name="wf",
-            description="mixed",
+            description="mixed", **REVIEW_KW,
         )

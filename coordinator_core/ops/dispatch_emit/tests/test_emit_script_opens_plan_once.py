@@ -1,3 +1,4 @@
+from .conftest import REVIEW_KW
 """AC16: `emit_script` opens the plan file at most once per call.
 
 Spec backlink:
@@ -75,7 +76,7 @@ def test_emit_script_reads_plan_text_at_most_once(tmp_path):
         return real_read_text(self, *args, **kwargs)
 
     with patch.object(Path, "read_text", counting_read_text):
-        emit_script(plan_path, repo_root=tmp_path)
+        emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
     assert call_count <= 1, (
         f"emit_script called Path.read_text on the plan file {call_count} "
@@ -90,7 +91,7 @@ def test_emit_script_still_composes_goal_and_problem_into_every_row_prompt(tmp_p
     this file exists to catch."""
     plan_path = _write_plan(tmp_path)
 
-    script = emit_script(plan_path, repo_root=tmp_path)
+    script = emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
     assert "Plan: A plan with a goal" in script
     assert "Goal: The engine refuses a null-delta stamp." in script

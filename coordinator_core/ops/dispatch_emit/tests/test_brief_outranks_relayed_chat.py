@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import json
 import re
@@ -105,6 +106,6 @@ def test_an_unanswered_brief_is_incomplete_and_named():
 
 
 def test_the_script_declares_reports_and_halts_on_unanswered_briefs():
-    script = compose_script([[_row("C1")]], name="wf", description="one wave")
+    script = compose_script([[_row("C1")]], name="wf", description="one wave", **REVIEW_KW)
     assert "const _unansweredBriefs = [];" in script
     assert "'unanswered briefs: ' + _unansweredBriefs.join(', ')" in script

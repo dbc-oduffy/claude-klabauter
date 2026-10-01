@@ -483,12 +483,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              run did NOT finish DONE. Any id
                                              not present in the marker's
                                              request refuses the call.
-        inline_review (dict, optional)   -- ``{integration_stem, slices,
+        inline_review (dict, required when the script carries a marker) --
+                                             ``{integration_stem, slices,
                                              fixes}``, relayed verbatim from
                                              the digest's
                                              ``next_action.params.inline_review``.
-                                             When present, its trailer is
-                                             appended to the commit message.
+                                             Absent or missing stem/slices
+                                             refuses (``refused="unreviewed"``);
+                                             its trailer is appended to the
+                                             commit message.
         session_id (str, optional)       -- forwarded to ``ceremony.commit_v2``
                                              when canonical-UUID shaped.
 
@@ -553,6 +556,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     request: Optional[CommitRequest] = parse_marker(script_text)
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
+
+    # Review at close is deterministic (PM ruling 2026-10-01): a run whose
+    # result carries no review-stage output cannot land code, however the
+    # script was composed or stripped.
+    if inline_review is None:
+        return _error(
+            "params.inline_review is absent -- the run carries no review-stage "
+            "output; re-emit with a review stage and re-fire",
+            refused="unreviewed",
+        )
+    if not inline_review.get("integration_stem") or inline_review.get("slices") is None:
+        return _error(
+            "params.inline_review is missing integration_stem and/or slices -- "
+            f"no review-stage output to land against (got: {inline_review!r})",
+            refused="unreviewed",
+        )
 
     observed_branch = head_branch(worktree_root)
     if observed_branch == "HEAD":
@@ -729,20 +748,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         message_lines.append("Removes declared write(s): " + ", ".join(deleted_paths))
     if request.deliverable_id:
         message_lines.append(f"Deliverable-Id: {request.deliverable_id}")
-    if inline_review is not None:
-        stem = inline_review.get("integration_stem")
-        slices = inline_review.get("slices")
-        fixes = inline_review.get("fixes")
-        if not stem or slices is None:
-            return _error(
-                "params.inline_review is missing integration_stem and/or slices -- "
-                "refusing to write an Inline-Review trailer with a None field "
-                f"(got: {inline_review!r})"
-            )
-        message_lines.append(
-            f"Inline-Review: applies {stem} -- execute-review: {slices} slices, "
-            f"{fixes} fixes"
-        )
+    message_lines.append(
+        f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
+        f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
+    )
     message = "\n\n".join([message_lines[0], "\n".join(message_lines[1:])]) if len(
         message_lines
     ) > 1 else message_lines[0]

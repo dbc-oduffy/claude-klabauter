@@ -878,8 +878,8 @@ def test_review_scale_judgment_point_unresolved_enum_is_never_a_singleton(monkey
         (value.endswith("-recompute") or "report" in value) and value in _KNOWN_SETTLING_DISPOSITIONS
         for value in values
     )
-    assert "proceed-unresolved" in values
-    assert values != ["proceed-unresolved"]
+    assert "proceed-unresolved" not in values
+    assert set(values) == {"resolve-input-and-recompute", "partition-review-by-hand"}
     assert not any("single-reviewer-ok" in value for value in values)
     assert jp["recommendation"] is None
 

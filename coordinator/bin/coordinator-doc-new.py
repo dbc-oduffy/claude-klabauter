@@ -3003,8 +3003,14 @@ def _scaffold_spinoff(
     category: str | None = None,
     gated_open: str | None = None,
     sizing_object: str | None = None,
+    summary: str | None = None,
+    what_this_covers: str | None = None,
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
+
+    summary / what_this_covers, when supplied, replace the placeholder
+    `summary:` line and the `## What this covers` comment; absent, the
+    placeholder skeleton is byte-identical to before.
 
     Produces a conformant spinoff (kind: spinoff) against the handoff schema.
     Spinoffs use the same schema as session-handoffs; kind discriminates the body dialect.
@@ -3177,7 +3183,7 @@ def _scaffold_spinoff(
         "baton_role: work",
         f"deployment_state: {_deployment_state}",
         f"category: {_category}",
-        f"summary: {_yaml_quote(placeholder_summary)}",
+        f"summary: {_yaml_quote(summary if summary else placeholder_summary)}",
         f"pickup_ready: {_pickup_ready}",
         _authoring_session_line,
     ]
@@ -3216,7 +3222,9 @@ def _scaffold_spinoff(
         # skills/spinoff/SKILL.md; replaced orphan ## Context with the full addressable-section set.
         "## What this covers",
         "",
-        "<!-- One paragraph: origin context, what surface is in play, who's affected. -->",
+        what_this_covers
+        if what_this_covers
+        else "<!-- One paragraph: origin context, what surface is in play, who's affected. -->",
         "",
         "## Reference materials (read first)",
         "",
@@ -4475,13 +4483,19 @@ def _mutate_sizing_reverse_edge(
     # text surgery blind — a `plan:` value the schema's
     # `^docs/plans/.+\.md$` pattern rejects must abort here, not land on
     # disk and be discovered by a later reader.
+    _validate_mutated_sizing(old_text, new_text)
+    return new_text
+
+
+def _validate_mutated_sizing(old_text: str, new_text: str) -> None:
+    """Raise MutateAbort unless ``new_text`` parses and satisfies the vendored sizing schema."""
     import yaml as _yaml  # noqa: PLC0415
     from pathlib import Path as _ValidatePath  # noqa: PLC0415
     import coordinator_core.frontmatter as _frontmatter_pkg  # noqa: PLC0415
     from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
-        format_validation_errors as _format_validation_errors,
         validate_frontmatter as _validate_frontmatter,
     )
+    from coordinator_core.locked_write import MutateAbort as _MutateAbort  # noqa: PLC0415
 
     try:
         _parsed = _yaml.safe_load(new_text) or {}
@@ -4496,7 +4510,6 @@ def _mutate_sizing_reverse_edge(
     _errors = _validate_frontmatter(_parsed, _schema_path)
     if _errors:
         raise _MutateAbort(_sizing_validation_abort(old_text, _schema_path, _errors))
-    return new_text
 
 
 def _sizing_validation_abort(old_text: str, schema_path, errors: list) -> str:
@@ -4635,6 +4648,172 @@ def _revert_sizing_reverse_edge(
         _locked_rmw(_Path(sizing_abs_path), lambda _old: old_text, repo_root=_Path(repo_root))
     except Exception:  # noqa: BLE001 -- best-effort revert; original error takes priority
         pass
+
+
+# ---------------------------------------------------------------------------
+# Baton mint from a sizing — `--type spinoff --from-sizing`
+# ---------------------------------------------------------------------------
+
+_FROM_SIZING_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
+_SUMMARY_LIMIT = 140
+
+
+class SizingMintRefused(Exception):
+    """A sizing cannot mint a baton; ``fields`` names every failing input at once."""
+
+    def __init__(self, fields: list[str], message: str):
+        super().__init__(message)
+        self.fields = fields
+
+
+def _mutate_sizing_baton_edge(old_text: str, baton_repo_rel_path: str) -> str:
+    """Return sizing YAML text with `baton:` set; touches no other key."""
+    _bootstrap_engine()
+    from coordinator_core.frontmatter.primitives import (  # noqa: PLC0415
+        insert_fm_field_raw,
+        read_fm_field_unquoted,
+        replace_fm_field_raw,
+    )
+
+    _raw = _yaml_quote(baton_repo_rel_path)
+    if read_fm_field_unquoted(old_text, "baton") is not None:
+        new_text = replace_fm_field_raw(old_text, "baton", _raw)
+    else:
+        _after = "plan" if read_fm_field_unquoted(old_text, "plan") is not None else "status"
+        new_text = insert_fm_field_raw(old_text, "baton", _raw, _after)
+    _validate_mutated_sizing(old_text, new_text)
+    return new_text
+
+
+def _write_sizing_baton_edge(
+    sizing_abs_path: str, baton_repo_rel_path: str, repo_root: str,
+) -> str:
+    """Write the sizing->baton edge under ``locked_rmw``; return the pre-mutation text."""
+    _ensure_engine_on_path()
+    from pathlib import Path as _Path  # noqa: PLC0415
+    from coordinator_core.locked_write import locked_rmw as _locked_rmw  # noqa: PLC0415
+
+    _captured: dict[str, str] = {}
+
+    def _mutate(old_text: str) -> str:
+        _captured["old_text"] = old_text
+        return _mutate_sizing_baton_edge(old_text, baton_repo_rel_path)
+
+    _locked_rmw(_Path(sizing_abs_path), _mutate, repo_root=_Path(repo_root))
+    return _captured.get("old_text", "")
+
+
+def _write_baton_file(out_abs: str, content: str) -> None:
+    """Create the baton exclusively; an existing file at the path is an error."""
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+    with open(out_abs, "x", encoding="utf-8", newline="\n") as fh:
+        fh.write(content)
+        if not content.endswith("\n"):
+            fh.write("\n")
+
+
+def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
+    """Mint the baton for an M+ sizing, or return the one its `baton:` edge already names.
+
+    Returns ``{"id", "path", "title", "created"}``; ``path`` is repo-relative POSIX.
+    Raises ``SizingMintRefused`` naming every failing field (`estimate.tshirt`,
+    `intent`, `baton`). Write order: sizing edge first, then the baton, with the
+    edge reverted when the baton write fails. ``repo_root`` is the caller's.
+    """
+    _bootstrap_engine()
+    _ensure_engine_on_path()
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted  # noqa: PLC0415
+    from coordinator_core.ops.deliverable_cascade import _read_sizing_meta  # noqa: PLC0415
+
+    _parts = sizing_rel.replace("\\", "/").split("/")
+    if os.path.isabs(sizing_rel) or ".." in _parts or _parts[:2] != ["state", "sizings"]:
+        raise SizingMintRefused(
+            ["sizing"], f"--from-sizing refused: {sizing_rel} is not a repo-relative state/sizings/ path"
+        )
+    sizing_abs = os.path.join(repo_root, sizing_rel)
+    try:
+        meta = _read_sizing_meta(sizing_abs)
+    except Exception as exc:  # noqa: BLE001 -- unreadable sizing is a refusal, not a crash
+        raise SizingMintRefused(["sizing"], f"sizing {sizing_rel} is unreadable: {exc}") from exc
+
+    reasons: list[str] = []
+    fields: list[str] = []
+    estimate = meta.get("estimate")
+    tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
+    if tshirt not in _FROM_SIZING_TSHIRTS:
+        fields.append("estimate.tshirt")
+        reasons.append(f"estimate.tshirt is {tshirt!r}; a baton is minted for M, L, XL or XXL only")
+    intent = meta.get("intent")
+    intent = intent.strip() if isinstance(intent, str) else ""
+    if not intent:
+        fields.append("intent")
+        reasons.append("intent is absent")
+    existing = meta.get("baton")
+    existing_abs = None
+    if isinstance(existing, str) and existing:
+        existing_abs = os.path.join(repo_root, existing)
+        if not os.path.isfile(existing_abs):
+            fields.append("baton")
+            reasons.append(f"baton edge {existing} resolves to no file")
+    if fields:
+        raise SizingMintRefused(
+            fields, f"--from-sizing refused for {sizing_rel}: " + "; ".join(reasons)
+        )
+
+    if existing_abs is not None:
+        text = open(existing_abs, encoding="utf-8").read()
+        return {
+            "id": read_fm_field_unquoted(text, "handoff_id"),
+            "path": existing,
+            "title": read_fm_field_unquoted(text, "title"),
+            "created": False,
+        }
+
+    title = " ".join(str(meta.get("name") or intent).split())
+    one_line = " ".join(intent.split())
+    summary = one_line if len(one_line) <= _SUMMARY_LIMIT else one_line[: _SUMMARY_LIMIT - 1] + "…"
+    dlv_source = meta.get("deliverable_id")
+    if dlv_source:
+        deliverable_id = _mint_deliverable_id(
+            deliverable_id=dlv_source, carry_source="cited sizing-object (--from-sizing)"
+        )
+    else:
+        deliverable_id = _mint_deliverable_id_from_title(title, "spinoff", repo_root)
+    handoff_id = _mint_artifact_id_from_title("hnd", title, "spinoff", "handoff_id")
+    out_rel = f"state/handoffs/{_today()}-{_slug_from_title(title)}.md"
+    out_abs = os.path.join(repo_root, out_rel)
+    if os.path.exists(out_abs):
+        raise SizingMintRefused(
+            ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
+        )
+    content = _scaffold_spinoff(
+        title=title,
+        branch=_current_branch(),
+        deliverable_id=deliverable_id,
+        handoff_id=handoff_id,
+        sizing_object=sizing_rel,
+        summary=summary,
+        what_this_covers=intent,
+    )
+    _assert_no_archived_handoff_twin(out_abs, handoff_id, repo_root)
+    _assert_scaffold_content_valid(content, out_abs, repo_root)
+
+    old_text = _write_sizing_baton_edge(sizing_abs, out_rel, repo_root)
+    try:
+        _write_baton_file(out_abs, content)
+    except Exception:
+        _revert_sizing_reverse_edge(sizing_abs, old_text, repo_root)
+        raise
+    try:
+        from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415
+        from coordinator_core.session.declared_writes import declare_write  # noqa: PLC0415
+
+        with recording_declared_writes(cwd=repo_root):
+            declare_write(out_abs)
+            declare_write(sizing_abs)
+    except Exception:  # noqa: BLE001 -- claim stamping must never undo a landed mint
+        pass
+    return {"id": handoff_id, "path": out_rel, "title": title, "created": True}
 
 
 def _scaffold_decision(title: str, dr_id: str) -> str:
@@ -6442,6 +6621,20 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--from-sizing",
+        dest="from_sizing",
+        default=None,
+        metavar="PATH",
+        help=(
+            "(spinoff only) Mint, or return the existing, baton for the M+ "
+            "state/sizings/<id>.yaml at PATH: inherits its deliverable_id, cites it as "
+            "sizing_object, writes the reverse `baton:` edge, and prints the baton path. "
+            "Refuses XS/S, an absent intent, or a dangling baton edge, naming every "
+            "failing field. Mutually exclusive with --title, --summary, "
+            "--deliverable-id and --sizing-object."
+        ),
+    )
+    parser.add_argument(
         "--fan-out",
         dest="fan_out",
         action="store_true",
@@ -6935,6 +7128,32 @@ def main(argv: "list[str] | None" = None) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.from_sizing:
+        _conflicts = [
+            flag
+            for flag, value in (
+                ("--title", args.title),
+                ("--summary", args.summary),
+                ("--deliverable-id", args.deliverable_id),
+                ("--sizing-object", args.sizing_object),
+            )
+            if value
+        ]
+        if args.doc_type != "spinoff":
+            parser.error("--from-sizing is valid only with --type spinoff.")
+        if _conflicts:
+            parser.error(
+                f"--from-sizing derives its own title, summary, deliverable_id and "
+                f"sizing_object; drop {', '.join(_conflicts)}."
+            )
+        try:
+            _minted = mint_baton_from_sizing(args.from_sizing, _current_repo_root() or ".")
+        except SizingMintRefused as _refusal:
+            print(f"error: {_refusal} [fields: {', '.join(_refusal.fields)}]", file=sys.stderr)
+            return 1
+        print(_minted["path"])
+        return 0
 
     # Prose-flag argv fidelity (post-parse, ahead of any id mint below): a
     # newline-bearing --title/--summary reaching this CLI through its

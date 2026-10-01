@@ -1934,8 +1934,9 @@ def build_review_scale_judgment_point(
         table and is running the partitioned review on that basis. This is
         the "resolved: partition-mandatory" answer the enum previously could
         not express.
-      - `proceed-unresolved` — retained, unrecommended, and still described
-        by `reason` as the route-around it is.
+    `proceed-unresolved` was removed (PM ruling 2026-10-01, relayed by
+    example-stats-repo-6c): it let a mise-en-place run close a 10k-LOC diff with zero
+    review. Every exit now ends in a review.
 
     Negative-spec on that enum: there is deliberately NO hand-declared
     `single-reviewer-ok` / "resolve-not-mandatory" counterpart. The
@@ -2026,13 +2027,11 @@ def build_review_scale_judgment_point(
         dispositions=[
             build_disposition("resolve-input-and-recompute", resolves=[]),
             build_disposition("partition-review-by-hand", resolves=[]),
-            build_disposition("proceed-unresolved", resolves=[]),
         ],
         evidence="gates['review_scale'] (decide_review_scale's ReviewScaleDecision)",
         reason=(
             f"review scale unresolved: {decision.reason}. `resolve-input-and-recompute` and "
-            "`partition-review-by-hand` are the exits that settle it; proceed-unresolved is "
-            "selectable, not endorsed."
+            "`partition-review-by-hand` are the only exits; a close with no review has none."
         ),
     )
 

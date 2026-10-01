@@ -36,8 +36,12 @@ def _git(args, cwd: Path) -> None:
     )
 
 
+# A marked run lands only with review-stage output; tests that aren't about it carry this one.
+_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+
+
 def _call(repo: Path, params: dict) -> dict:
-    return terminal_commit._handler(params, repo_root=repo / ".git")
+    return terminal_commit._handler({"inline_review": _REVIEWED, **params}, repo_root=repo / ".git")
 
 
 @pytest.fixture
@@ -704,6 +708,19 @@ def test_detached_head_refuses(repo):
     assert out["committed"] is False
     assert out["refused"] == "detached-head"
     assert out["observed_branch"] == "HEAD"
+    assert _head(repo) == before
+
+
+@pytest.mark.parametrize("inline_review", [None, {"slices": 2, "fixes": 0}, {"integration_stem": "s", "fixes": 0}])
+def test_a_run_with_no_review_stage_output_refuses_before_any_write(repo, inline_review):
+    script = _branch_request(repo, None)
+    before = _head(repo)
+    out = terminal_commit._handler(
+        {"script_path": script, "incomplete_chunks": [], "inline_review": inline_review},
+        repo_root=repo / ".git",
+    )
+    assert out["committed"] is False
+    assert out["refused"] == "unreviewed"
     assert _head(repo) == before
 
 

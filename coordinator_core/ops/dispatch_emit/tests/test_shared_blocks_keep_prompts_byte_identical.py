@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import emit
+from .conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from ._shared_expand import expand_shared
@@ -35,7 +36,7 @@ def _compose(waves, *, shared: bool) -> str:
     )
     kwargs = dict(
         name="wf", description="d", plan_path="docs/plans/example.md", plan_context=context,
-        deliverable_id="dlv-example",
+        deliverable_id="dlv-example", **REVIEW_KW,
     )
     if shared:
         return emit.compose_script(waves, **kwargs)

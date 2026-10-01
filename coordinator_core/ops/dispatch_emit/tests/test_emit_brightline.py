@@ -6,6 +6,7 @@ row C12.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import subprocess
 import time
@@ -47,7 +48,7 @@ def test_emit_script_forty_row_fixture_is_fast_and_spawns_at_most_once(tmp_path,
     monkeypatch.setattr(subprocess, "run", _counting_run)
 
     start = time.process_time()
-    emit_script(str(plan_path), repo_root=tmp_path)
+    emit_script(str(plan_path), repo_root=tmp_path, **REVIEW_KW)
     elapsed = time.process_time() - start
 
     assert elapsed < 0.2
@@ -66,7 +67,7 @@ def test_map_written_path_to_test_target_called_at_most_once_per_distinct_path(t
 
     monkeypatch.setattr(emit_mod, "_map_written_path_to_test_target", _counting_map)
 
-    emit_script(str(plan_path), repo_root=tmp_path)
+    emit_script(str(plan_path), repo_root=tmp_path, **REVIEW_KW)
 
     assert len(calls) <= 40
     assert len(calls) == len(set(calls))

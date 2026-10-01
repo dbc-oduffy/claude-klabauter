@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import logging
 import re
@@ -234,7 +235,7 @@ def test_a_prefix_only_wave_still_names_its_prefix_in_the_row_prompt():
         [[_wave_row("C1", [], [_AUDITS])]],
         name="wf",
         description="prefix wave",
-        plan_path="docs/plans/fake-plan.md",
+        plan_path="docs/plans/fake-plan.md", **REVIEW_KW,
     )
     assert "state/audits/" in script
 
@@ -279,7 +280,7 @@ def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path)
     _git("commit", "-q", "-m", "seed")
 
     waves = [[_wave_row("C1", ["registry/registry.db"], [_AUDITS])]]
-    script = compose_script(waves, name="wf", description="ignored+prefix", repo_root=repo)
+    script = compose_script(waves, name="wf", description="ignored+prefix", repo_root=repo, **REVIEW_KW)
 
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 

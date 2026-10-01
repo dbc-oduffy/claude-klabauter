@@ -15,6 +15,8 @@ task C13.
 """
 
 from __future__ import annotations
+from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
+from .conftest import REVIEW_KW
 
 import json
 import re
@@ -92,7 +94,7 @@ def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
-    script = compose_script(waves, name="wf", description="prose only")
+    script = compose_script(waves, name="wf", description="prose only", **REVIEW_KW)
 
     assert "No terminal test phase" in script
     obj = _simulate_return(script, incomplete_chunks=[], halted=None)
@@ -113,11 +115,12 @@ def test_a_resolved_scope_and_a_falsifier_run_together_in_one_parallel():
         "expected_when_true": "succeeds",
     }
     script = compose_script(
-        waves, name="wf", description="both", falsifier=falsifier
+        waves, name="wf", description="both", falsifier=falsifier, **REVIEW_KW
     )
 
-    assert "await parallel([" in script
-    parallel_block = script[script.index("await parallel([") :]
+    terminal = script[script.index("phase('Scoped test run')") :]
+    assert "await parallel([" in terminal
+    parallel_block = terminal[terminal.index("await parallel([") :]
     body = parallel_block.split("]);", 1)[0]
     assert "test:terminal'" in body
     assert "test:terminal-falsifier'" in body
@@ -134,7 +137,7 @@ def test_a_falsifier_alone_never_touches_tests_status():
         "baseline_output": "fails today",
         "expected_when_true": "succeeds",
     }
-    script = compose_script(waves, name="wf", description="falsifier only", falsifier=falsifier)
+    script = compose_script(waves, name="wf", description="falsifier only", falsifier=falsifier, **REVIEW_KW)
 
     assert "test:terminal-falsifier'" in script
     assert "test:terminal'" not in script
@@ -147,7 +150,7 @@ def test_a_falsifier_alone_never_touches_tests_status():
 def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
-    script = compose_script(waves, name="wf", description="f", falsifier=falsifier)
+    script = compose_script(waves, name="wf", description="f", falsifier=falsifier, **REVIEW_KW)
     call = script[script.index("_falsifierResult = await (async () => { try { return await agent(") :].split("});", 1)[0]
     assert "differs_from_baseline" in call and "baseline_output" in call
     m = re.search(r'schema: (\{.*\})', call)
@@ -159,7 +162,7 @@ def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
 
 def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
-    script = compose_script(waves, name="wf", description="b")
+    script = compose_script(waves, name="wf", description="b", **REVIEW_KW)
     assert "const _blockedChunks = [];" in script
     assert "if (/^\"?\\s*BLOCKED:|<exit-status>BLOCKED<\\/exit-status>/.test(_text)) _blockedChunks.push(id);\n      _incompleteChunks.push(id);" in script
 
@@ -175,7 +178,7 @@ def test_a_prose_only_spine_still_runs_its_falsifier():
         "baseline_output": "zero",
         "expected_when_true": "thirteen",
     }
-    script = compose_script(waves, name="wf", description="prose + falsifier", falsifier=falsifier)
+    script = compose_script(waves, name="wf", description="prose + falsifier", falsifier=falsifier, **REVIEW_KW)
 
     assert "No terminal test phase" in script
     assert "test:terminal-falsifier'" in script
@@ -190,7 +193,7 @@ def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
-    script = compose_script(waves, name="wf", description="degraded")
+    script = compose_script(waves, name="wf", description="degraded", **REVIEW_KW)
 
     assert "No terminal test phase" in script
     obj = _simulate_return(script, incomplete_chunks=[], halted=None)
@@ -202,18 +205,17 @@ def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status():
 def test_review_wave_composes_only_from_a_v5_fragment_with_stage_schemas():
     waves = [[_row("C1", ["a.py"])]]
 
-    absent = compose_script(waves, name="wf", description="absent")
-    assert "No review stages composed" in absent
+    with pytest.raises(NoReviewStageError):
+        compose_script(waves, name="wf", description="absent")
 
-    v4 = compose_script(
-        waves,
-        name="wf",
-        description="v4",
-        review_roster_fragment={"schema": "review-roster-fragment", "schema_version": 4},
-        review_stage_schemas=_V5_STAGE_SCHEMAS,
-    )
-    assert "No review stages composed" in v4
-    assert "schema_version 4" in v4
+    with pytest.raises(NoReviewStageError, match="schema_version 4"):
+        compose_script(
+            waves,
+            name="wf",
+            description="v4",
+            review_roster_fragment={"schema": "review-roster-fragment", "schema_version": 4},
+            review_stage_schemas=_V5_STAGE_SCHEMAS,
+        )
 
     v5 = compose_script(
         waves,
@@ -286,7 +288,7 @@ def test_a_halted_run_still_returns_a_validating_digest():
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["a.py"]), _row("C2", ["a.py"], depends_on=["C1"])]]
-    script = compose_script(waves, name="wf", description="halted")
+    script = compose_script(waves, name="wf", description="halted", **REVIEW_KW)
     obj = _simulate_return(script, incomplete_chunks=["C1"], halted="C1")
     errors = validate_digest(obj)
     assert errors == [], errors
@@ -453,7 +455,7 @@ def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incom
     so a halted run's not-started rows must ride `incomplete_chunks` too --
     otherwise they are stamped coded with no work behind them."""
     waves = [[_row("C1", ["a.py"])], [_row("C2", ["b.py"])]]
-    script = compose_script(waves, name="wf", description="halt")
+    script = compose_script(waves, name="wf", description="halt", **REVIEW_KW)
     line = next(l for l in script.splitlines() if "incomplete_chunks:" in l)
     assert "_notStarted" in line and "_incompleteChunks" in line
 
@@ -462,7 +464,7 @@ def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch():
     """Per-row clones and venvs left behind filled a cloud disk mid-run."""
     waves = [[_row("C1", ["a.py"])]]
     script = compose_script(
-        waves, name="wf", description="scratch", plan_path="docs/plans/example.md"
+        waves, name="wf", description="scratch", plan_path="docs/plans/example.md", **REVIEW_KW
     )
     assert "delete that directory before you write your report" in script
 
@@ -556,7 +558,7 @@ def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
     assert "'met demoted: '" in judged and "differs_from_baseline: null, reason" in judged
     assert "with no reason" in judged
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
-    plain = compose_script(waves, name="wf", description="f", falsifier=falsifier)
+    plain = compose_script(waves, name="wf", description="f", falsifier=falsifier, **REVIEW_KW)
     assert "'met demoted: '" not in plain
 
 
@@ -606,7 +608,7 @@ def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not
     implemented."""
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     falsifier = {"how": "run it", "baseline_output": "absent", "expected_when_true": "present"}
-    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier)
+    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier, **REVIEW_KW)
 
     assert "? 'not_met' : _falsifierResult.status))) : 'not_run')" in script
     guard = _criterion_status_regex(script)
@@ -622,7 +624,7 @@ def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
     """Rows reported PARTIAL/BLOCKED have written files; only a row the halt kept
     from starting is `not_started`. Deviations are deduped and kinded per id."""
     waves = [[_row("C1", ["a.py"])]]
-    script = compose_script(waves, name="wf", description="deviation kinds")
+    script = compose_script(waves, name="wf", description="deviation kinds", **REVIEW_KW)
     line = next(l for l in script.splitlines() if l.lstrip().startswith("deviations:"))
     assert "kind: 'not_started'" not in line
     assert "[...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted])]" in line
@@ -637,7 +639,7 @@ def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status(
     `not_run` in the criterion block, the run record and decision_required alike."""
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     falsifier = {"how": "run it", "baseline_output": "absent", "expected_when_true": "present"}
-    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier)
+    script = compose_script(waves, name="wf", description="falsifier", falsifier=falsifier, **REVIEW_KW)
     expr = (
         "(_falsifierResult ? (_falsifierResult.differs_from_baseline === true ? 'met' : "
         "(_falsifierResult.differs_from_baseline === false ? 'not_met' : "

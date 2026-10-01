@@ -5,6 +5,8 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C4.
 """
 
 from __future__ import annotations
+from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
+from .conftest import REVIEW_KW, execute_section, _V5_ROSTER_FRAGMENT, _V5_STAGE_SCHEMAS
 
 import re
 import subprocess as _subprocess
@@ -78,12 +80,12 @@ def _two_wave_fixture():
 
 def test_compose_script_refuses_on_empty_waves():
     with pytest.raises(NoWavesError):
-        compose_script([], name="empty", description="empty spine")
+        compose_script([], name="empty", description="empty spine", **REVIEW_KW)
 
 
 def test_compose_script_refuses_before_touching_pathspec_derivation():
     with pytest.raises(NoWavesError) as excinfo:
-        compose_script([], name="empty", description="empty spine")
+        compose_script([], name="empty", description="empty spine", **REVIEW_KW)
     assert "zero waves" in str(excinfo.value)
 
 
@@ -94,7 +96,7 @@ def test_compose_script_refuses_before_touching_pathspec_derivation():
 
 def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
     assert "function run(" not in script
     assert "function run (" not in script
@@ -108,7 +110,7 @@ def test_first_statement_after_meta_block_is_a_phase_call():
     because every later status-check block needs somewhere to push into.
     """
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
     meta_end = script.index("};\n") + len("};\n")
     remainder = expand_shared(script[meta_end:]).lstrip()
@@ -120,7 +122,7 @@ def test_first_statement_after_meta_block_is_a_phase_call():
 
 def test_terminal_test_phase_is_last():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
 
@@ -129,28 +131,28 @@ def test_terminal_test_phase_is_last():
 
 def test_every_row_gets_one_execute_phase_no_commit_phase():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
 
-    assert phase_titles == ["Execute", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
 
 
 def test_wave_phase_carries_executor_agent_type():
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
-    script = compose_script(waves, name="wf", description="one wave")
+    script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
     assert "agentType: 'coordinator:executor'" in script
 
 
 def test_no_git_commit_agent_type_anywhere():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
     assert "coordinator:git-commit-agent" not in script
 
 
 def test_terminal_phase_carries_test_runner_agent_type():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="two waves")
+    script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
     assert "agentType: 'coordinator:test-runner'" in script
 
 
@@ -161,8 +163,8 @@ def test_multi_row_wave_never_uses_parallel_wrap():
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="two rows")
-    assert "parallel(" not in script
+    script = compose_script(waves, name="wf", description="two rows", **REVIEW_KW)
+    assert "parallel(" not in execute_section(script)
     assert script.count("agentType: 'coordinator:executor'") == 2
 
 
@@ -173,14 +175,14 @@ def test_plan_body_write_row_derives_enricher_agent_type():
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="plan body row")
+    script = compose_script(waves, name="wf", description="plan body row", **REVIEW_KW)
     assert "agentType: 'coordinator:enricher'" in script
     assert script.count("agentType: 'coordinator:executor'") == 1
 
 
 def test_ordinary_code_row_still_derives_executor_agent_type():
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
-    script = compose_script(waves, name="wf", description="code row")
+    script = compose_script(waves, name="wf", description="code row", **REVIEW_KW)
     assert "agentType: 'coordinator:executor'" in script
     assert "agentType: 'coordinator:enricher'" not in script
 
@@ -198,7 +200,7 @@ def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error():
         ]
     ]
     with pytest.raises(MixedAgentTypeRowError):
-        compose_script(waves, name="wf", description="mixed row")
+        compose_script(waves, name="wf", description="mixed row", **REVIEW_KW)
 
 
 def test_problem_set_write_row_derives_enricher_agent_type():
@@ -208,7 +210,7 @@ def test_problem_set_write_row_derives_enricher_agent_type():
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="problem-set row")
+    script = compose_script(waves, name="wf", description="problem-set row", **REVIEW_KW)
     assert "agentType: 'coordinator:enricher'" in script
     assert script.count("agentType: 'coordinator:executor'") == 1
 
@@ -226,7 +228,7 @@ def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error():
         ]
     ]
     with pytest.raises(MixedAgentTypeRowError):
-        compose_script(waves, name="wf", description="mixed problem-set row")
+        compose_script(waves, name="wf", description="mixed problem-set row", **REVIEW_KW)
 
 
 def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_matters():
@@ -235,7 +237,7 @@ def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_m
     # guard for that ordering -- see _row_agent_type's UNDECLARED docstring.
     waves = [[_wave_row("C1", UNDECLARED)]]
     with pytest.raises(NoWritesDeclaredError):
-        compose_script(waves, name="wf", description="undeclared row")
+        compose_script(waves, name="wf", description="undeclared row", **REVIEW_KW)
 
 
 def test_malformed_agent_type_raises_malformed_agent_override_error():
@@ -249,7 +251,7 @@ def test_malformed_agent_type_raises_malformed_agent_override_error():
         ]
     ]
     with pytest.raises(MalformedAgentOverrideError):
-        compose_script(waves, name="wf", description="malformed agent_type")
+        compose_script(waves, name="wf", description="malformed agent_type", **REVIEW_KW)
 
 
 def test_malformed_agent_model_raises_malformed_agent_override_error():
@@ -263,7 +265,7 @@ def test_malformed_agent_model_raises_malformed_agent_override_error():
         ]
     ]
     with pytest.raises(MalformedAgentOverrideError):
-        compose_script(waves, name="wf", description="malformed agent_model")
+        compose_script(waves, name="wf", description="malformed agent_model", **REVIEW_KW)
 
 
 def test_mixed_writes_row_still_raises_even_with_explicit_agent_type():
@@ -280,7 +282,7 @@ def test_mixed_writes_row_still_raises_even_with_explicit_agent_type():
         ]
     ]
     with pytest.raises(MixedAgentTypeRowError):
-        compose_script(waves, name="wf", description="mixed row, explicit agent_type")
+        compose_script(waves, name="wf", description="mixed row, explicit agent_type", **REVIEW_KW)
 
 
 def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error():
@@ -298,7 +300,7 @@ def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error():
         ]
     ]
     with pytest.raises(MalformedAgentOverrideError):
-        compose_script(waves, name="wf", description="unmodellable agent_type alone")
+        compose_script(waves, name="wf", description="unmodellable agent_type alone", **REVIEW_KW)
 
 
 def test_unmodellable_agent_type_with_agent_model_does_not_raise():
@@ -315,7 +317,7 @@ def test_unmodellable_agent_type_with_agent_model_does_not_raise():
             )
         ]
     ]
-    script = compose_script(waves, name="wf", description="unmodellable agent_type with model")
+    script = compose_script(waves, name="wf", description="unmodellable agent_type with model", **REVIEW_KW)
     assert "agentType: 'coordinator:workflow-maker'" in script
     assert "model: 'opus'" in script
 
@@ -337,7 +339,7 @@ def test_agent_model_is_escaped_not_interpolated_raw():
             )
         ]
     ]
-    script = compose_script(waves, name="wf", description="agent_model escaping")
+    script = compose_script(waves, name="wf", description="agent_model escaping", **REVIEW_KW)
     assert "model: 'opus-model'" in script
 
 
@@ -368,7 +370,7 @@ def test_spine_text_agent_type_reaches_emitted_call(tmp_path):
 
     rows = read_spine(plan_path)
     waves = build_waves(rows)
-    script = compose_script(waves, name="wf", description="spine-sourced override")
+    script = compose_script(waves, name="wf", description="spine-sourced override", **REVIEW_KW)
 
     assert "agentType: 'coordinator:workflow-maker'" in script
     assert "model: 'opus'" in script
@@ -428,7 +430,7 @@ def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
 
     with pytest.raises(UnroutableWorkKindRowError) as excinfo:
         compose_script(
-            build_waves(read_spine(plan_path)), name="wf", description="unroutable"
+            build_waves(read_spine(plan_path)), name="wf", description="unroutable", **REVIEW_KW
         )
     assert "Split the row" in str(excinfo.value)
 
@@ -458,7 +460,7 @@ def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path)
 
     with pytest.raises(UnroutableWorkKindRowError) as excinfo:
         compose_script(
-            build_waves(read_spine(plan_path)), name="wf", description="forced"
+            build_waves(read_spine(plan_path)), name="wf", description="forced", **REVIEW_KW
         )
     assert "Split the row" in str(excinfo.value)
 
@@ -478,7 +480,7 @@ def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_pat
     )
 
     script = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="ordinary"
+        build_waves(read_spine(plan_path)), name="wf", description="ordinary", **REVIEW_KW
     )
     assert "agentType: 'coordinator:executor'" in script
 
@@ -498,7 +500,7 @@ def test_doc_edit_row_writing_a_plan_body_still_routes_enricher(tmp_path):
     )
 
     script = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="enricher"
+        build_waves(read_spine(plan_path)), name="wf", description="enricher", **REVIEW_KW
     )
     assert "agentType: 'coordinator:enricher'" in script
 
@@ -524,24 +526,24 @@ def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
     )
 
     script_from_spine = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="no overrides"
+        build_waves(read_spine(plan_path)), name="wf", description="no overrides", **REVIEW_KW
     )
     script_from_hand_built = compose_script(
         [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]],
         name="wf",
-        description="no overrides",
+        description="no overrides", **REVIEW_KW,
     )
 
     assert script_from_spine == script_from_hand_built
     assert "agentType: 'coordinator:workflow-maker'" not in script_from_spine
     assert "agentType: 'coordinator:executor'" in script_from_spine
-    assert "model: 'opus'" not in script_from_spine
+    assert "model: 'opus'" not in execute_section(script_from_spine)
 
 
 def test_single_row_wave_is_a_plain_await_agent():
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
-    script = compose_script(waves, name="wf", description="serial wave")
-    assert "await parallel(" not in script
+    script = compose_script(waves, name="wf", description="serial wave", **REVIEW_KW)
+    assert "await parallel(" not in execute_section(script)
     assert "await agent(" in script
 
 
@@ -567,7 +569,7 @@ def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path, 
     with caplog.at_level(logging.WARNING):
         waves = [[_wave_row("C1", ["registry/registry.db"])]]
         script = compose_script(
-            waves, name="wf", description="degraded", repo_root=tmp_path
+            waves, name="wf", description="degraded", repo_root=tmp_path, **REVIEW_KW
         )
 
     assert "GITIGNORE FILTER DID NOT RUN" in script
@@ -578,7 +580,7 @@ def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path):
     """The negative half: an ordinary run (no paths to filter, so the early
     return never touches git) must not emit the degraded narration."""
     waves = [[_wave_row("C1", ["a.py"])]]
-    script = compose_script(waves, name="wf", description="healthy", repo_root=tmp_path)
+    script = compose_script(waves, name="wf", description="healthy", repo_root=tmp_path, **REVIEW_KW)
     assert "GITIGNORE FILTER DID NOT RUN" not in script
 
 
@@ -591,13 +593,13 @@ def test_completed_run_returns_a_positive_record_not_undefined():
     Replaced by ``wake_digest.completion_return_js``'s wake-digest shape
     (§ Design D1, task C13) -- ``completed`` now reads off ``outcome``.
     """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     assert "outcome: (_halted ? 'halted' :" in script
     assert script.rstrip().endswith("};")
 
 
 def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     tail = script[script.index("return {"):]
     assert "chunks: [" in tail
     for wave in _two_wave_fixture():
@@ -607,7 +609,7 @@ def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
 
 def test_completion_return_is_last_so_no_phase_follows_it():
     """An early completion return would silently skip the phases after it."""
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     completion = script.index("return {")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
@@ -621,7 +623,7 @@ def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     batch feeding a shared `_incompleteChunks` array that the terminal
     return's `completed` reads, never a hard-coded `true`.
     """
-    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     assert "const _incompleteChunks = [];" in script
     assert "_incompleteChunks.push(id)" in script
     assert "incomplete_chunks: [...new Set([..._incompleteChunks, ..._notStarted])]" in script
@@ -657,7 +659,7 @@ def test_multi_row_wave_status_checked_per_row_via_its_own_promise():
     an array indexed by dispatch position (there is no shared results
     array to misindex any more)."""
     waves = [[_wave_row("C1", ["a.py"]), _wave_row("C2", ["b.py"])]]
-    script = compose_script(waves, name="wf", description="two rows")
+    script = compose_script(waves, name="wf", description="two rows", **REVIEW_KW)
     assert "_rows['C1'] = _runRow('C1', []," in script
     assert "_rows['C2'] = _runRow('C2', []," in script
 
@@ -670,7 +672,7 @@ def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
     Negative spec for `_model_opt`.
     """
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="tier check")
+    script = compose_script(waves, name="wf", description="tier check", **REVIEW_KW)
 
     def opts_for(label):
         idx = script.index(label)
@@ -694,7 +696,7 @@ def test_every_agent_call_carries_an_active_model():
         ],
         [_wave_row("C3", ["coordinator_core/ops/dispatch_emit/pathspec.py"])],
     ]
-    script = compose_script(waves, name="wf", description="model check")
+    script = compose_script(waves, name="wf", description="model check", **REVIEW_KW)
 
     agent_call_count = len(_AGENT_CALL_RE.findall(script))
     model_count = script.count("model: '")
@@ -710,7 +712,7 @@ def test_every_agent_call_carries_an_active_model():
 
 def test_run_checks_reports_no_model_default_warn():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="warn check")
+    script = compose_script(waves, name="wf", description="warn check", **REVIEW_KW)
     findings = run_checks(script)
     model_warns = [f for f in findings if f.code == "agent-model-default"]
     assert model_warns == []
@@ -718,7 +720,7 @@ def test_run_checks_reports_no_model_default_warn():
 
 def test_composed_script_passes_run_checks_with_zero_errors():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="round trip")
+    script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
 
     findings = run_checks(script)
     errors = [f for f in findings if f.severity is Severity.ERROR]
@@ -727,7 +729,7 @@ def test_composed_script_passes_run_checks_with_zero_errors():
 
 def test_assert_zero_errors_does_not_raise_on_a_conformant_script():
     waves = _two_wave_fixture()
-    script = compose_script(waves, name="wf", description="round trip")
+    script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
     assert_zero_errors(script)
 
 
@@ -744,7 +746,7 @@ def test_multi_row_wave_script_also_passes_run_checks():
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="parallel round trip")
+    script = compose_script(waves, name="wf", description="parallel round trip", **REVIEW_KW)
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []
 
@@ -752,14 +754,14 @@ def test_multi_row_wave_script_also_passes_run_checks():
 def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
     with pytest.raises(NoWritesDeclaredError):
-        compose_script(waves, name="wf", description="undeclared")
+        compose_script(waves, name="wf", description="undeclared", **REVIEW_KW)
 
 
 def test_all_empty_writes_wave_emits_with_no_marker():
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
-    script = compose_script(waves, name="wf", description="all-empty wave")
+    script = compose_script(waves, name="wf", description="all-empty wave", **REVIEW_KW)
 
     assert _AGENT_CALL_RE.search(script) is not None
     assert parse_marker(script) is None
@@ -767,7 +769,7 @@ def test_all_empty_writes_wave_emits_with_no_marker():
 
 def test_all_empty_writes_wave_still_dispatches_its_agent_calls():
     waves = [[_wave_row("C1", [])]]
-    script = compose_script(waves, name="wf", description="all-empty wave")
+    script = compose_script(waves, name="wf", description="all-empty wave", **REVIEW_KW)
     assert "C1" in script
 
 
@@ -780,7 +782,7 @@ def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
             _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
         ]
     ]
-    script = compose_script(waves, name="wf", description="mixed wave")
+    script = compose_script(waves, name="wf", description="mixed wave", **REVIEW_KW)
     request = parse_marker(script)
     assert request is not None
     assert [c.id for c in request.chunks] == ["C2"]
@@ -790,8 +792,8 @@ def test_compose_script_threads_expected_branch_into_the_marker():
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
-    with_branch = compose_script(waves, name="wf", description="d", expected_branch="feat-x")
-    without = compose_script(waves, name="wf", description="d")
+    with_branch = compose_script(waves, name="wf", description="d", expected_branch="feat-x", **REVIEW_KW)
+    without = compose_script(waves, name="wf", description="d", **REVIEW_KW)
     assert parse_marker(with_branch).expected_branch == "feat-x"
     assert parse_marker(without).expected_branch is None
 
@@ -800,7 +802,7 @@ def _emit_with_head(tmp_path, head_text):
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text(head_text, encoding="utf-8")
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/x.py"]))
-    return emit_script(plan, repo_root=tmp_path)
+    return emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_emit_script_captures_the_head_branch_into_the_marker(tmp_path):
@@ -822,7 +824,7 @@ def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
     # same shape as every row explicitly declaring `writes: []`.
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
     with pytest.raises(NoWritesDeclaredError):
-        compose_script(waves, name="wf", description="all-undeclared")
+        compose_script(waves, name="wf", description="all-undeclared", **REVIEW_KW)
 
 
 def test_commit_pathspec_directly_still_refuses_an_all_empty_wave():
@@ -833,7 +835,7 @@ def test_commit_pathspec_directly_still_refuses_an_all_empty_wave():
 
 def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly():
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
-    script = compose_script(waves, name="wf", description="uncovered module")
+    script = compose_script(waves, name="wf", description="uncovered module", **REVIEW_KW)
     assert "No terminal test phase" in script
     assert "coordinator_core/ops/dispatch_emit/nonexistent_module.py" in script
     assert "no prime_exit_criterion.falsifier" in script
@@ -847,7 +849,7 @@ def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_re
         "baseline_output": "the flag reads disabled",
     }
     script = compose_script(
-        waves, name="wf", description="uncovered module", falsifier=falsifier
+        waves, name="wf", description="uncovered module", falsifier=falsifier, **REVIEW_KW
     )
     assert "Scoped test run" in script
     assert "coordinator:test-runner" in script
@@ -871,7 +873,7 @@ def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
         "baseline_output": "fails today",
     }
     script = compose_script(
-        waves, name="wf", description="halted with falsifier", falsifier=falsifier
+        waves, name="wf", description="halted with falsifier", falsifier=falsifier, **REVIEW_KW
     )
     assert "criterion: { status: (_falsifierResult ? (_falsifierResult.differs_from_baseline === true ? 'met' : " in script
     assert "'not_met' : _falsifierResult.status))) : 'not_run')" in script
@@ -879,7 +881,7 @@ def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
 
 def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
     waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
-    script = compose_script(waves, name="wf", description="doc only")
+    script = compose_script(waves, name="wf", description="doc only", **REVIEW_KW)
     assert "Scoped test run" not in script
     assert "_rows['C1'] = _runRow('C1', [], null," in script
 
@@ -926,7 +928,7 @@ def test_prime_exit_criterion_falsifier_is_none_when_absent_or_incomplete():
 
 def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script():
     waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
-    script = compose_script(waves, name="wf", description="doc only")
+    script = compose_script(waves, name="wf", description="doc only", **REVIEW_KW)
     assert "No terminal test phase" in script
     assert "declared, not a pass" in script
     assert "log(" in script
@@ -944,7 +946,7 @@ def test_compose_script_still_composes_the_terminal_phase_for_a_mixed_spine():
             )
         ]
     ]
-    script = compose_script(waves, name="wf", description="mixed")
+    script = compose_script(waves, name="wf", description="mixed", **REVIEW_KW)
     assert "Scoped test run" in script
     assert "No terminal test phase" not in script
 
@@ -1001,7 +1003,7 @@ def test_emit_script_reads_a_plan_file_and_composes_a_conformant_script(tmp_path
     plan_path = tmp_path / "fixture-plan.md"
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
-    script = emit_script(plan_path)
+    script = emit_script(plan_path, **REVIEW_KW)
 
     assert_zero_errors(script)
     assert "fixture-plan" in script
@@ -1014,7 +1016,7 @@ def test_emit_script_honors_explicit_name_and_description(tmp_path):
     plan_path = tmp_path / "fixture-plan.md"
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
-    script = emit_script(plan_path, name="custom-name", description="custom description")
+    script = emit_script(plan_path, name="custom-name", description="custom description", **REVIEW_KW)
 
     assert "name: 'custom-name'" in script
     assert "description: 'custom description'" in script
@@ -1029,13 +1031,13 @@ def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
     preamble = "RUN POSTURE: this is a resumed run; do not re-plan."
-    script = emit_script(plan_path, preamble=preamble)
+    script = emit_script(plan_path, preamble=preamble, **REVIEW_KW)
 
     assert_zero_errors(script)
     assert script.count(preamble) == 1
     assert script.count("agent(") >= 2
 
-    baseline = emit_script(plan_path)
+    baseline = emit_script(plan_path, **REVIEW_KW)
     assert preamble not in baseline
 
 
@@ -1204,95 +1206,28 @@ def test_derive_review_tier_raises_on_unmapped_tshirt(tmp_path):
         derive_review_tier(plan_path, repo_root=tmp_path)
 
 
-_V5_ROSTER_FRAGMENT = {
-    "schema": "review-roster-fragment",
-    "schema_version": 5,
-    "execute_review": {
-        "stages": [
-            {
-                "kind": "prep",
-                "agents": [
-                    {
-                        "agentType": "coordinator:review-prep",
-                        "model": "sonnet",
-                        "effort": "low",
-                        "schema": "prep",
-                    }
-                ],
-            },
-            {
-                "kind": "review-wave",
-                "agents": [
-                    {
-                        "agentType": "coordinator:code-reviewer",
-                        "model": "opus",
-                        "effort": "low",
-                        "per": "whole-diff",
-                        "schema": "wave",
-                    }
-                ],
-            },
-            {
-                "kind": "integration",
-                "agents": [
-                    {
-                        "agentType": "coordinator:integrator",
-                        "model": "opus",
-                        "effort": "low",
-                        "schema": "integration",
-                    }
-                ],
-            },
-        ]
-    },
-}
-
-_V5_STAGE_SCHEMAS = {
-    "prep": {"type": "object"},
-    "wave": {"type": "object"},
-    "integration": {"type": "object"},
-}
-
-
-def test_compose_script_composes_no_review_phase_when_fragment_or_schemas_absent():
-    waves = _two_wave_fixture()
-
-    script_neither = compose_script(waves, name="wf", description="no review")
-    assert "No review stages composed" in script_neither
-    assert "review:coordinator" not in script_neither
-
-    script_fragment_only = compose_script(
-        waves,
-        name="wf",
-        description="fragment only",
-        review_roster_fragment=_V5_ROSTER_FRAGMENT,
-    )
-    assert "No review stages composed" in script_fragment_only
-
-    script_schemas_only = compose_script(
-        waves,
-        name="wf",
-        description="schemas only",
-        review_stage_schemas=_V5_STAGE_SCHEMAS,
-    )
-    assert "No review stages composed" in script_schemas_only
-
-
-def test_compose_script_narrates_a_pre_v5_fragment_rather_than_composing_it():
-    """The v4 tier/stage review path is deleted, not degraded into: a
-    fragment on an earlier ``schema_version`` composes no review phase, just
-    a loud ``log()`` naming why."""
+def test_compose_script_refuses_a_missing_or_pre_v5_review_roster():
     waves = _two_wave_fixture()
     v4_fragment = {"schema": "review-roster-fragment", "schema_version": 4, "tiers": {}}
-    script = compose_script(
-        waves,
-        name="wf",
-        description="v4 fragment",
-        review_roster_fragment=v4_fragment,
-        review_stage_schemas=_V5_STAGE_SCHEMAS,
-    )
-    assert "No review stages composed" in script
-    assert "schema_version 4" in script
+
+    with pytest.raises(NoReviewStageError):
+        compose_script(waves, name="wf", description="no review")
+    with pytest.raises(NoReviewStageError):
+        compose_script(
+            waves, name="wf", description="fragment only", review_roster_fragment=_V5_ROSTER_FRAGMENT
+        )
+    with pytest.raises(NoReviewStageError):
+        compose_script(
+            waves, name="wf", description="schemas only", review_stage_schemas=_V5_STAGE_SCHEMAS
+        )
+    with pytest.raises(NoReviewStageError, match="schema_version 4"):
+        compose_script(
+            waves,
+            name="wf",
+            description="v4 fragment",
+            review_roster_fragment=v4_fragment,
+            review_stage_schemas=_V5_STAGE_SCHEMAS,
+        )
 
 
 def test_compose_script_composes_the_v5_execute_review_wave():
@@ -1365,25 +1300,6 @@ def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
     assert registered, "review-targets.txt was created but registered no paths"
 
 
-def test_compose_script_composes_no_review_phase_skips_target_registration(tmp_path):
-    waves = _two_wave_fixture()
-    compose_script(
-        waves,
-        name="wf",
-        description="no review, no registration",
-        repo_root=tmp_path,
-        session_id="22222222-2222-2222-2222-222222222222",
-    )
-    targets_file = (
-        tmp_path
-        / ".git"
-        / "coordinator-sessions"
-        / "22222222-2222-2222-2222-222222222222"
-        / "review-targets.txt"
-    )
-    assert not targets_file.exists()
-
-
 def test_parse_execute_review_raises_on_malformed_fragment():
     waves = _two_wave_fixture()
     with pytest.raises(ReviewRosterFragmentError):
@@ -1451,25 +1367,25 @@ def _large_wave(n: int, prefix: str = "C"):
 
 def test_wave_at_threshold_emits_no_marker_split():
     waves = [_large_wave(10)]
-    script = compose_script(waves, name="wf", description="at threshold")
+    script = compose_script(waves, name="wf", description="at threshold", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
-    assert phase_titles == ["Execute", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
 
 
 def test_wave_over_threshold_still_a_single_execute_phase():
     waves = [_large_wave(12)]
-    script = compose_script(waves, name="wf", description="over threshold")
+    script = compose_script(waves, name="wf", description="over threshold", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
-    assert phase_titles == ["Execute", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
     for i in range(1, 13):
         assert f"work:C{i}'" in script
 
 
 def test_wave_over_threshold_script_passes_run_checks():
     waves = [_large_wave(12)]
-    script = compose_script(waves, name="wf", description="round trip")
+    script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []
@@ -1486,7 +1402,7 @@ def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_re
     docstring for why a constant-level assertion would stay green through a
     refactor that stopped threading the text into the emitted prompt)."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW)
 
     assert "You MUST NOT create or modify any file outside this footprint" in script
     assert "coordinator_core/ops/dispatch_emit/emit.py" in script
@@ -1499,7 +1415,7 @@ def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_au
     calls) -- never the hand-dispatch "the EM" text, which is false on this
     path, and never a retired per-wave commit phase."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW)
 
     assert "leave your changes uncommitted and unstaged" in script
     assert "terminal scoped commit" in script
@@ -1513,7 +1429,7 @@ def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_p
     porcelain changed-path clause must both reach the emitted script,
     scoped to THIS row's own footprint (writes + report path)."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW)
 
     expected_report_path = ".coordinator-local/subagent-share/dispatch-reports/example/C1.md"
     assert f"Reply EXACTLY `<STATUS>: {expected_report_path}`" in script
@@ -1614,7 +1530,7 @@ def test_emitted_script_names_the_rows_own_dispatch_report_path():
     else, and confirm its own dispatch report path reaches the emitted
     script (the terminal commit, not this module, judges divergence now)."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW)
 
     report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
     assert report_path in script
@@ -1630,7 +1546,7 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
     porcelain clause can, via its literal backticked command) must survive
     as a single-quoted JS string literal, not a template literal."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
-    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW)
 
     row_prompt = emit._row_prompt(
         _wave_row("C1", ["coordinator_core/ops/dispatch_emit/emit.py"]),
@@ -1648,7 +1564,7 @@ def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule()
     gives. Why the token exists: `emit._stop_rule_halt_gate`."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
-        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW
     )
 
     assert emit._STOP_RULE_TOKEN in script
@@ -1662,7 +1578,7 @@ def test_withdrawn_and_void_rows_get_their_own_tokens_that_never_halt():
     the emitted halt matcher fires on neither."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
-        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW
     )
 
     assert emit._WITHDRAWN_TOKEN in script
@@ -1683,7 +1599,7 @@ def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper():
     shared `_runRow` helper, not a per-wave halt gate any more."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
-        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW
     )
 
     assert "STOP RULE" in script
@@ -1696,7 +1612,7 @@ def test_a_writeless_row_still_carries_the_stop_rule_gate():
     write-capability."""
     waves = [[_wave_row("C1", [])]]
     script = compose_script(
-        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md", **REVIEW_KW
     )
 
     assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
@@ -1733,7 +1649,7 @@ def test_a_solitary_writes_empty_row_contributes_nothing_to_the_marker():
         [_wave_row("C1", [])],
         [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/emit.py"])],
     ]
-    script = compose_script(waves, name="wf", description="verdict then write")
+    script = compose_script(waves, name="wf", description="verdict then write", **REVIEW_KW)
 
     assert "_rows['C1'] = _runRow('C1', []," in script, "the verdict row must still dispatch"
     request = parse_marker(script)
@@ -1750,7 +1666,7 @@ def test_the_verdict_rows_paths_are_absent_from_the_marker():
         [_wave_row("C1", [])],
         [_wave_row("C2", ["docs/wiki/dispatch-emit.md"])],
     ]
-    script = compose_script(waves, name="wf", description="verdict then write")
+    script = compose_script(waves, name="wf", description="verdict then write", **REVIEW_KW)
     request = parse_marker(script)
     assert request is not None
     assert [c.id for c in request.chunks] == ["C2"]
@@ -1767,7 +1683,7 @@ def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate(
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [[_wave_row("C1", ["coordinator_core/ops/brand_new_thing.py"])]]
-    script = compose_script(waves, name="wf", description="one wave")
+    script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
 
     request = parse_marker(script)
     assert request is not None
@@ -1822,7 +1738,7 @@ def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(emit.DispatchGateViolation) as excinfo:
-        emit.emit_script(plan_path, repo_root=tmp_path)
+        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
     assert "Check B" in str(excinfo.value)
     assert "C1" in str(excinfo.value)
 
@@ -1842,7 +1758,7 @@ def test_blocked_prose_with_a_gate_does_not_raise(tmp_path):
         ),
         encoding="utf-8",
     )
-    emit.emit_script(plan_path, repo_root=tmp_path)
+    emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_already_happened_prose_with_open_disposition_raises(tmp_path):
@@ -1852,7 +1768,7 @@ def test_already_happened_prose_with_open_disposition_raises(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(emit.DispatchGateViolation) as excinfo:
-        emit.emit_script(plan_path, repo_root=tmp_path)
+        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
     assert "Check B" in str(excinfo.value)
 
 
@@ -1869,7 +1785,7 @@ def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(NoWavesError):
-        emit.emit_script(plan_path, repo_root=tmp_path)
+        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_gate_discharge_claim_uncleared_raises(tmp_path):
@@ -1888,7 +1804,7 @@ def test_gate_discharge_claim_uncleared_raises(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(emit.DispatchGateViolation) as excinfo:
-        emit.emit_script(plan_path, repo_root=tmp_path)
+        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
     assert "Check B" in str(excinfo.value)
     assert "gate" in str(excinfo.value).lower()
 
@@ -1909,7 +1825,7 @@ def test_gate_discharge_claim_cleared_does_not_raise(tmp_path):
         _plan_with_row_body("Ordinary body prose.", external_gate=gate),
         encoding="utf-8",
     )
-    emit.emit_script(plan_path, repo_root=tmp_path)
+    emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_ordinary_prose_does_not_raise(tmp_path):
@@ -1923,7 +1839,7 @@ def test_ordinary_prose_does_not_raise(tmp_path):
         ),
         encoding="utf-8",
     )
-    emit.emit_script(plan_path, repo_root=tmp_path)
+    emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 # ---------------------------------------------------------------------------
@@ -1946,7 +1862,7 @@ def _absent_target_plan(tmp_path, *rows: tuple):
 
 def _emit_findings(plan_path, root):
     out: list = []
-    script = emit_script(plan_path, repo_root=root, findings_out=out)
+    script = emit_script(plan_path, repo_root=root, findings_out=out, **REVIEW_KW)
     return script, out
 
 
@@ -2013,7 +1929,7 @@ def test_no_repo_root_or_no_sink_is_a_no_op(tmp_path):
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
 
     assert _emit_findings(plan, None)[1] == []
-    assert emit_script(plan, repo_root=tmp_path)
+    assert emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path):

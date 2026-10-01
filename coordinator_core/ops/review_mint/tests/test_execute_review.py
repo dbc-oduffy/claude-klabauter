@@ -130,6 +130,15 @@ def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
     assert "effort: 'low'" in prep_block
 
 
+def test_prep_phase_fails_closed_on_no_prep_or_no_slices_over_a_non_empty_diff():
+    _, phases = _compose()
+    _, prep_block = phases[0]
+    guard = prep_block.splitlines()[-1]
+    assert guard.startswith("  if (!_reviewPrep || ((_reviewPrep.product_files ?? 0) > 0")
+    assert "!(_reviewPrep.slices ?? []).length" in guard
+    assert "throw new Error(" in guard
+
+
 def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
     _, phases = _compose()
     _, wave_block = phases[1]

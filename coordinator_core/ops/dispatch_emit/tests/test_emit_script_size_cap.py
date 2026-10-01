@@ -7,6 +7,7 @@ script-t-10ad124c7958.yaml.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import pytest
 
@@ -45,7 +46,7 @@ def test_compose_script_refuses_over_the_runner_byte_cap():
     waves = _n_row_waves(1500)
 
     with pytest.raises(NoWavesError) as excinfo:
-        compose_script(waves, name="big", description="oversized inventory")
+        compose_script(waves, name="big", description="oversized inventory", **REVIEW_KW)
 
     message = str(excinfo.value)
     assert str(_WORKFLOW_SCRIPT_BYTE_CAP) in message
@@ -56,7 +57,7 @@ def test_compose_script_refuses_over_the_runner_byte_cap():
 def test_compose_script_emits_fine_under_the_runner_byte_cap():
     waves = _n_row_waves(2)
 
-    script = compose_script(waves, name="small", description="small inventory")
+    script = compose_script(waves, name="small", description="small inventory", **REVIEW_KW)
 
     assert len(script.encode("utf-8")) <= _WORKFLOW_SCRIPT_BYTE_CAP
 

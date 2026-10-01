@@ -110,8 +110,8 @@ A review wave composes ONLY when the caller supplies BOTH a
 injected exactly as the fragment is — this module never resolves either
 cross-repo pointer itself; that resolution lives at the op boundary,
 ``dispatch_emit/op.py``). Either missing, or an earlier schema version,
-composes no review phase at all — just a ``log()`` naming why
-(``_no_review_stages_narration``), never a guessed roster.
+raises ``NoReviewStageError``: an emitted workflow always carries the
+review wave, never a guessed roster.
 
 Parsing and composition are not reimplemented here: ``review_mint.roster.
 parse_execute_review`` (C6) resolves the fragment's ``execute_review``
@@ -2673,17 +2673,10 @@ def derive_review_tier(
     return _TSHIRT_TO_REVIEW_TIER[tshirt]
 
 
-def _no_review_stages_narration(reason: str) -> str:
-    """The line composed INSTEAD of a v5 ``execute_review`` wave when this
-    compose has no roster fragment, no injected stage schemas, or a
-    fragment that is not ``schema_version 5`` (§ Design D6, task C13).
-
-    A ``log()`` call, never an ``agent()`` call and never a phase — the v4
-    tier/stage review path this replaced is deleted outright, not degraded
-    into: see module docstring's now-superseded § Review phases section.
-    """
-    message = f"No review stages composed: {reason}."
-    return f"  log({_js_string_literal(message)});"
+class NoReviewStageError(ValueError):
+    """An execute workflow cannot compose its review wave. An execute workflow
+    without one runs unreviewed and its plan can never be stamped implemented,
+    so emission is refused."""
 
 
 def _unconst(block: str, names: tuple[str, ...]) -> str:
@@ -3039,9 +3032,8 @@ def compose_script(
     The roster-v5 review wave (§ Design D6) composes ONLY when
     ``review_roster_fragment`` is ``schema_version 5`` AND
     ``review_stage_schemas`` is supplied — either absent, or a fragment on
-    an earlier schema version, composes no review phase, just a ``log()``
-    naming why (``_no_review_stages_narration``); the v4 tier/stage review
-    path this superseded is deleted, not degraded into.
+    an earlier schema version, raises ``NoReviewStageError``; the v4
+    tier/stage review path this superseded is deleted, not degraded into.
 
     ``plan_context`` (AC12), when supplied, is forwarded unopened to every
     row's ``agent()`` call so each row's prompt carries the plan-context
@@ -3248,121 +3240,116 @@ def compose_script(
     review_vars: Optional[dict] = None
     judge_expr: Optional[str] = None
     if review_roster_fragment is None or review_stage_schemas is None:
-        guarded_blocks.append(
-            _no_review_stages_narration(
-                "no review roster fragment or stage schemas were supplied"
-            )
+        raise NoReviewStageError(
+            "no review roster fragment or stage schemas were supplied"
         )
-    elif review_roster_fragment.get("schema_version") != 5:
-        guarded_blocks.append(
-            _no_review_stages_narration(
-                "review roster fragment is schema_version "
-                f"{review_roster_fragment.get('schema_version')!r}, not 5"
-            )
+    if review_roster_fragment.get("schema_version") != 5:
+        raise NoReviewStageError(
+            "review roster fragment is schema_version "
+            f"{review_roster_fragment.get('schema_version')!r}, not 5"
         )
+    review = parse_execute_review(review_roster_fragment)
+    declared_paths = sorted(
+        {path for paths in row_pathspecs.values() for path in paths}
+    )
+    # Register this run's declared paths as the EM session's confined-
+    # reviewer review targets (review-findings-ledger targets --add,
+    # `block_confined_agent_write.py` M1 re-scope) BEFORE the composed
+    # script ever dispatches a `coordinator:code-reviewer` identity --
+    # review-wave and integration alike. Without this, the integration
+    # stage's `applies: residue` agent has no registered target and its
+    # Edit on any reviewed file is hard-denied by the sandbox guard,
+    # regardless of what its prompt or agent definition says (the
+    # 2026-09-28 wf_f2892741-12c incident: every reviewer reported
+    # "applied: 0", integration reported it "cannot edit source").
+    # Called here (compose time, in-process, no subagent identity) so
+    # it satisfies the EM-only guard on `targets_add` itself. A missing
+    # repo_root or session_id means the composed script cannot resolve
+    # a session-scoped targets file either, so registration is skipped
+    # rather than failing compose_script outright -- unchanged from
+    # today for any caller not supplying both.
+    if repo_root is not None and session_id:
+        try:
+            targets_add(Path(repo_root), session_id, declared_paths)
+        except LedgerError:
+            pass
+    # plan_id rides in prompt_head (spliced ahead of EVERY composed
+    # review-wave prompt, prep through integration) rather than a new
+    # compose_execute_review parameter -- review_mint/execute_review.py
+    # is out of this fix's scope, and prompt_head is already the
+    # designed seam for caller-supplied preamble text. Only the
+    # integration stage needs to ACT on it (write it into its own
+    # sidecar frontmatter), but a hidden per-stage prompt_head would be
+    # a second seam for one line; harmless no-op for prep/review-wave.
+    review_prompt_head = _BRIEF_PRECEDENCE_CLAUSE
+    if plan_id and review.integration is not None:
+        review_prompt_head += (
+            f"\n\nThis run's plan_id is {plan_id}. The integration stage "
+            "(only) MUST record it verbatim as a top-level `plan_id:` "
+            "frontmatter field in its own run-report sidecar -- "
+            "review_stamp._resolve_terminal_commit keys the terminal-"
+            "commit lookup on this field."
+        )
+    for title, block in compose_execute_review(
+        review,
+        stage_schemas=review_stage_schemas,
+        plan_path=plan_path or "",
+        run_base_sha=run_base_sha or "",
+        declared_paths=declared_paths,
+        prompt_head=review_prompt_head,
+    ):
+        phase_titles.append(title)
+        guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
+    judge_expr = compose_criterion_judge(
+        review,
+        stage_schemas=review_stage_schemas,
+        plan_path=plan_path or "",
+        run_base_sha=run_base_sha or "",
+        falsifier=falsifier,
+        prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+    )
+    if judge_expr:
+        phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
+    if review.integration is not None:
+        review_vars = {
+            "prep": "_reviewPrep",
+            "wave": "_reviewWave",
+            "delivery": "_deliveryVerdict",
+            "integration": "_reviewIntegration",
+            "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
+            "plan_id_literal": _js_string_literal(plan_id or ""),
+        }
     else:
-        review = parse_execute_review(review_roster_fragment)
-        declared_paths = sorted(
-            {path for paths in row_pathspecs.values() for path in paths}
+        # Zero-integration-stage path (2026-09-28 PM order, step b'):
+        # each review-wave reviewer applies its own findings in place --
+        # no `_reviewIntegration` binding exists. `bookkeeping_stem` is
+        # the deterministic (compose-time-known) name of the mechanical
+        # bookkeeping record `review_mint.wave_bookkeeping.bookkeep_wave`
+        # writes post-run; wake_digest's `inline_review` points at it by
+        # this same stem (wake_digest.py's zero-stage `inline_review_expr`
+        # branch). Never derived from a runtime `sidecar_path` -- there is
+        # no agent call left to choose one.
+        # `prep_sidecar` -- DoE's `review-prep-result` $def carries no
+        # `sidecar_path` field of its own (every OTHER wave/integration
+        # $def does), so unlike `wave`'s `sidecar_path` (self-reported,
+        # trusted) this is a DERIVED, DISCLOSED ASSUMPTION: the prep
+        # agent's own sidecar sits at `<its share_dir>/<slug(its own
+        # review: label)>.md`, mirroring the deterministic-naming
+        # convention `_agent_call_literal`'s `label:` already gives every
+        # non-slice review-wave call. If DoE's step (a)/(c) add a real
+        # `sidecar_path` to `review-prep-result`, prefer that field
+        # instead of this derivation.
+        prep_label_stem = re.sub(
+            r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}"
         )
-        # Register this run's declared paths as the EM session's confined-
-        # reviewer review targets (review-findings-ledger targets --add,
-        # `block_confined_agent_write.py` M1 re-scope) BEFORE the composed
-        # script ever dispatches a `coordinator:code-reviewer` identity --
-        # review-wave and integration alike. Without this, the integration
-        # stage's `applies: residue` agent has no registered target and its
-        # Edit on any reviewed file is hard-denied by the sandbox guard,
-        # regardless of what its prompt or agent definition says (the
-        # 2026-09-28 wf_f2892741-12c incident: every reviewer reported
-        # "applied: 0", integration reported it "cannot edit source").
-        # Called here (compose time, in-process, no subagent identity) so
-        # it satisfies the EM-only guard on `targets_add` itself. A missing
-        # repo_root or session_id means the composed script cannot resolve
-        # a session-scoped targets file either, so registration is skipped
-        # rather than failing compose_script outright -- unchanged from
-        # today for any caller not supplying both.
-        if repo_root is not None and session_id:
-            try:
-                targets_add(Path(repo_root), session_id, declared_paths)
-            except LedgerError:
-                pass
-        # plan_id rides in prompt_head (spliced ahead of EVERY composed
-        # review-wave prompt, prep through integration) rather than a new
-        # compose_execute_review parameter -- review_mint/execute_review.py
-        # is out of this fix's scope, and prompt_head is already the
-        # designed seam for caller-supplied preamble text. Only the
-        # integration stage needs to ACT on it (write it into its own
-        # sidecar frontmatter), but a hidden per-stage prompt_head would be
-        # a second seam for one line; harmless no-op for prep/review-wave.
-        review_prompt_head = _BRIEF_PRECEDENCE_CLAUSE
-        if plan_id and review.integration is not None:
-            review_prompt_head += (
-                f"\n\nThis run's plan_id is {plan_id}. The integration stage "
-                "(only) MUST record it verbatim as a top-level `plan_id:` "
-                "frontmatter field in its own run-report sidecar -- "
-                "review_stamp._resolve_terminal_commit keys the terminal-"
-                "commit lookup on this field."
-            )
-        for title, block in compose_execute_review(
-            review,
-            stage_schemas=review_stage_schemas,
-            plan_path=plan_path or "",
-            run_base_sha=run_base_sha or "",
-            declared_paths=declared_paths,
-            prompt_head=review_prompt_head,
-        ):
-            phase_titles.append(title)
-            guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
-        judge_expr = compose_criterion_judge(
-            review,
-            stage_schemas=review_stage_schemas,
-            plan_path=plan_path or "",
-            run_base_sha=run_base_sha or "",
-            falsifier=falsifier,
-            prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
-        )
-        if judge_expr:
-            phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
-        if review.integration is not None:
-            review_vars = {
-                "prep": "_reviewPrep",
-                "wave": "_reviewWave",
-                "delivery": "_deliveryVerdict",
-                "integration": "_reviewIntegration",
-                "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
-                "plan_id_literal": _js_string_literal(plan_id or ""),
-            }
-        else:
-            # Zero-integration-stage path (2026-09-28 PM order, step b'):
-            # each review-wave reviewer applies its own findings in place --
-            # no `_reviewIntegration` binding exists. `bookkeeping_stem` is
-            # the deterministic (compose-time-known) name of the mechanical
-            # bookkeeping record `review_mint.wave_bookkeeping.bookkeep_wave`
-            # writes post-run; wake_digest's `inline_review` points at it by
-            # this same stem (wake_digest.py's zero-stage `inline_review_expr`
-            # branch). Never derived from a runtime `sidecar_path` -- there is
-            # no agent call left to choose one.
-            # `prep_sidecar` -- DoE's `review-prep-result` $def carries no
-            # `sidecar_path` field of its own (every OTHER wave/integration
-            # $def does), so unlike `wave`'s `sidecar_path` (self-reported,
-            # trusted) this is a DERIVED, DISCLOSED ASSUMPTION: the prep
-            # agent's own sidecar sits at `<its share_dir>/<slug(its own
-            # review: label)>.md`, mirroring the deterministic-naming
-            # convention `_agent_call_literal`'s `label:` already gives every
-            # non-slice review-wave call. If DoE's step (a)/(c) add a real
-            # `sidecar_path` to `review-prep-result`, prefer that field
-            # instead of this derivation.
-            prep_label_stem = re.sub(
-                r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}"
-            )
-            review_vars = {
-                "prep": "_reviewPrep",
-                "wave": "_reviewWave",
-                "delivery": "_deliveryVerdict",
-                "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
-                "plan_id_literal": _js_string_literal(plan_id or ""),
-                "prep_label_stem_literal": _js_string_literal(prep_label_stem),
-            }
+        review_vars = {
+            "prep": "_reviewPrep",
+            "wave": "_reviewWave",
+            "delivery": "_deliveryVerdict",
+            "bookkeeping_stem": _js_string_literal(review_wave_bookkeeping_stem(plan_id, session_id)),
+            "plan_id_literal": _js_string_literal(plan_id or ""),
+            "prep_label_stem_literal": _js_string_literal(prep_label_stem),
+        }
 
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None

@@ -28,8 +28,12 @@ def _git(args, cwd: Path) -> str:
     ).stdout
 
 
+# A marked run lands only with review-stage output; tests that aren't about it carry this one.
+_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+
+
 def _call(repo: Path, params: dict) -> dict:
-    return terminal_commit._handler(params, repo_root=repo / ".git")
+    return terminal_commit._handler({"inline_review": _REVIEWED, **params}, repo_root=repo / ".git")
 
 
 @pytest.fixture

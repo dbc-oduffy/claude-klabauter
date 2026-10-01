@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 from coordinator_core.ops.dispatch_emit.emit import (
     _row_return_contract,
@@ -94,7 +95,7 @@ def test_tool_minted_name_row_emits_at_all():
     script = compose_script(
         [[row]],
         name="wf-writes-under",
-        description="tool-minted-name row emits",
+        description="tool-minted-name row emits", **REVIEW_KW,
     )
     assert "cross-repo/outbox/" in script
 
@@ -119,7 +120,7 @@ def test_emitted_executor_prompt_carries_the_prefix_claim_field():
         [[row]],
         name="wf-prefix-commit",
         description="prefix commit derives from report",
-        plan_path="docs/plans/fake-plan.md",
+        plan_path="docs/plans/fake-plan.md", **REVIEW_KW,
     )
     assert "created-under-prefix:" in script
     assert "'state/handoffs/'" not in script

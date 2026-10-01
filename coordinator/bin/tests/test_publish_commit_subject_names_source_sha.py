@@ -65,6 +65,23 @@ def test_round_commit_subject_carries_the_stamp():
     assert subject.startswith("percolate publish: some-row")
 
 
+def test_round_subject_stamps_the_round_start_pin_not_a_later_head():
+    """The commit runs after every row; a peer commit landing mid-round must not
+    be stamped as if the round read it (round 20: pinned 434091831c, stamped
+    6df9bcca397f, 7294c51d76's coordinator/bin bytes absent)."""
+    pinned = "434091831c5650c381ef84e82f39d48bc8de9254"
+    subject = round_mod._build_commit_subject("some-row", [], [], source_sha=pinned)
+    assert subject.endswith(" [source-head 434091831c56]")
+
+
+def test_manifest_carries_the_pin_and_an_old_manifest_reads_empty():
+    from coordinator_core.percolate.manifest import RoundManifest
+
+    m = RoundManifest(round_id="r", source_sha="abc123")
+    assert RoundManifest.from_dict(m.to_dict()).source_sha == "abc123"
+    assert RoundManifest.from_dict({"round_id": "r"}).source_sha == ""
+
+
 def test_stamp_degrades_to_empty_rather_than_raising(monkeypatch):
     """An unborn/unresolvable HEAD must not block a publish.
 

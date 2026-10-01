@@ -1,5 +1,6 @@
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import pytest
 
@@ -36,13 +37,13 @@ def _row(writes, body="", agent_type=None):
 
 def test_the_row_that_halted_is_refused_at_emit():
     with pytest.raises(UnverifiableEnricherRowError) as excinfo:
-        compose_script([[_row([_RECORD], _D16_BODY)]], name="wf", description="d16")
+        compose_script([[_row([_RECORD], _D16_BODY)]], name="wf", description="d16", **REVIEW_KW)
     assert "Split it" in str(excinfo.value)
 
 
 def test_a_plan_body_row_that_verifies_by_reading_still_goes_to_the_enricher():
     body = "Verification: the plan's § Revision history names the struck ACs\n"
-    script = compose_script([[_row([_RECORD], body)]], name="wf", description="read")
+    script = compose_script([[_row([_RECORD], body)]], name="wf", description="read", **REVIEW_KW)
     assert "agentType: 'coordinator:enricher'" in script
 
 
@@ -50,7 +51,7 @@ def test_a_row_with_no_verification_clause_is_not_refused():
     script = compose_script(
         [[_row([_RECORD], "Spec: somewhere\npytest appears outside any clause\n")]],
         name="wf",
-        description="no clause",
+        description="no clause", **REVIEW_KW,
     )
     assert "agentType: 'coordinator:enricher'" in script
 
@@ -59,7 +60,7 @@ def test_an_executor_row_verifying_with_a_run_is_untouched():
     script = compose_script(
         [[_row(["coordinator_core/ops/dispatch_emit/emit.py"], _D16_BODY)]],
         name="wf",
-        description="executor",
+        description="executor", **REVIEW_KW,
     )
     assert "agentType: 'coordinator:executor'" in script
 
@@ -68,7 +69,7 @@ def test_an_explicit_agent_type_is_the_authors_escape():
     script = compose_script(
         [[_row([_RECORD], _D16_BODY, agent_type="coordinator:enricher")]],
         name="wf",
-        description="override",
+        description="override", **REVIEW_KW,
     )
     assert "agentType: 'coordinator:enricher'" in script
 
@@ -111,12 +112,12 @@ def test_the_body_reaches_emit_from_spine_text(tmp_path):
     )
 
     with pytest.raises(UnverifiableEnricherRowError):
-        compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
+        compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e", **REVIEW_KW)
 
 
 def test_a_declared_false_beats_a_body_the_classifier_reads_as_a_run():
     row = _row([_RECORD], _D16_BODY)._replace(verification_runs=False)
-    script = compose_script([[row]], name="wf", description="declared false")
+    script = compose_script([[row]], name="wf", description="declared false", **REVIEW_KW)
     assert "agentType: 'coordinator:enricher'" in script
 
 
@@ -128,7 +129,7 @@ def test_a_declared_true_beats_a_body_the_classifier_reads_as_a_read():
     assert not _verification_requires_a_run(body)
     row = _row([_RECORD], body)._replace(verification_runs=True)
     with pytest.raises(UnverifiableEnricherRowError):
-        compose_script([[row]], name="wf", description="declared true")
+        compose_script([[row]], name="wf", description="declared true", **REVIEW_KW)
 
 
 def test_an_undeclared_row_still_reads_its_prose():
@@ -153,7 +154,7 @@ def test_the_declaration_reaches_emit_from_spine_text(tmp_path):
         encoding="utf-8",
     )
 
-    script = compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
+    script = compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e", **REVIEW_KW)
     assert "agentType: 'coordinator:enricher'" in script
 
 
@@ -197,7 +198,7 @@ def test_verification_runs_true_is_the_escape_for_a_wrapped_clause(tmp_path):
     )
 
     with pytest.raises(UnverifiableEnricherRowError):
-        compose_script(build_waves(read_spine(plan_path)), name="wf", description="wrapped")
+        compose_script(build_waves(read_spine(plan_path)), name="wf", description="wrapped", **REVIEW_KW)
 
 
 def test_a_non_bool_declaration_falls_back_rather_than_meaning_false(tmp_path):
@@ -219,4 +220,4 @@ def test_a_non_bool_declaration_falls_back_rather_than_meaning_false(tmp_path):
     )
 
     with pytest.raises(UnverifiableEnricherRowError):
-        compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
+        compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e", **REVIEW_KW)

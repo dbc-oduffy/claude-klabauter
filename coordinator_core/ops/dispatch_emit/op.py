@@ -189,6 +189,7 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.emit import (
     check_agent_types_resolve,
+    NoReviewStageError,
     emit_script,
     resolve_agent_type_host,
 )
@@ -203,12 +204,6 @@ from coordinator_core.ops._param_alias import aliased_param, spellings
 #: resolved from the SAME pointer ``review_mint.op.load_fragment`` uses,
 #: through ``content_root_for`` so the flat mirror resolves too.
 _REVIEW_STAGE_SCHEMA_RELPATH = "schemas/review-stage.schema.json"
-
-
-class NoReviewStageError(ValueError):
-    """The plan route cannot compose an execute-review stage. An execute workflow
-    without one runs unreviewed and its plan can never be stamped implemented, so
-    emission is refused rather than degraded to emit.py's narration."""
 
 
 def _load_review_roster_and_stage_schemas() -> tuple:

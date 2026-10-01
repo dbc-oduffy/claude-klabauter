@@ -22,6 +22,7 @@ own behavior contract (module docstring narration in ``op.py``).
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import textwrap
 
@@ -102,7 +103,7 @@ def test_marker_unset_with_a_failing_plan_emits_as_today(tmp_path, monkeypatch):
     plan_path = _write_plan(tmp_path, frontmatter=_FAILING_FM, name="marker-unset-failing.md")
     (tmp_path / "coordinator_core").mkdir()
 
-    script = emit.emit_script(plan_path, repo_root=tmp_path)
+    script = emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
     assert script
 
@@ -113,7 +114,7 @@ def test_marker_set_with_a_failing_plan_refuses(tmp_path, monkeypatch):
     (tmp_path / "coordinator_core").mkdir()
 
     with pytest.raises(emit.FidelityBarRefusalError):
-        emit.emit_script(plan_path, repo_root=tmp_path)
+        emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
 def test_marker_set_with_a_passing_plan_emits(tmp_path, monkeypatch):
@@ -121,7 +122,7 @@ def test_marker_set_with_a_passing_plan_emits(tmp_path, monkeypatch):
     plan_path = _write_plan(tmp_path, frontmatter=_PASSING_FM, name="marker-set-passing.md")
     (tmp_path / "coordinator_core").mkdir()
 
-    script = emit.emit_script(plan_path, repo_root=tmp_path)
+    script = emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
     assert script
 

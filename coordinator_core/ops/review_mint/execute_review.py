@@ -141,6 +141,14 @@ def _degrading(call: str) -> str:
     return f"() => {wrapped}" if call.startswith("() => ") else wrapped
 
 
+#: Thrown by the emitted script when review prep yields nothing to review
+#: over a diff that has product files. Fails the run closed before anything lands.
+_NO_SLICES_REFUSAL = (
+    "review prep returned no slices for a non-empty diff (or failed outright); "
+    "refusing to continue unreviewed. Re-run the review prep, then resume."
+)
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -222,7 +230,13 @@ def compose_execute_review(
         (
             prep_phase,
             f"  phase({_js_string_literal(prep_phase)});\n"
-            f"  const _reviewPrep = await {_degrading(prep_call)};",
+            f"  const _reviewPrep = await {_degrading(prep_call)};\n"
+            # A failed prep, or zero slices over a non-empty diff, would
+            # otherwise expand the wave's `?? []` to no sliced reviewer at all
+            # and land the run reviewed by the whole-diff tail alone.
+            f"  if (!_reviewPrep || ((_reviewPrep.product_files ?? 0) > 0 "
+            f"&& !(_reviewPrep.slices ?? []).length)) {{ throw new Error("
+            f"{_js_string_literal(_NO_SLICES_REFUSAL)}); }}",
         )
     )
 

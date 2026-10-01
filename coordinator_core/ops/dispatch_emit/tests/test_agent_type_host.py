@@ -12,6 +12,7 @@ degrade, while every ``model:`` literal is untouched.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW, execute_section
 
 import re
 
@@ -139,7 +140,7 @@ def test_degrade_agent_type_leaves_unregistered_type_unchanged():
 
 def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
     waves = _one_wave_fixture()
-    script = compose_script(waves, name="wf", description="one wave")
+    script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
 
     assert f"agentType: '{_EXECUTOR_AGENT_TYPE}'" in script
     assert "general-purpose" not in script
@@ -148,10 +149,10 @@ def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
 def test_compose_script_degrades_every_emitted_agent_type_on_host():
     waves = _one_wave_fixture()
     script = compose_script(
-        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED
+        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
     )
 
-    agent_types = set(_AGENT_TYPE_LITERAL_RE.findall(script))
+    agent_types = set(_AGENT_TYPE_LITERAL_RE.findall(execute_section(script)))
     assert agent_types == {"general-purpose"}
     assert _EXECUTOR_AGENT_TYPE not in script
 
@@ -159,7 +160,7 @@ def test_compose_script_degrades_every_emitted_agent_type_on_host():
 def test_compose_script_degraded_narrates_the_loss():
     waves = _one_wave_fixture()
     script = compose_script(
-        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED
+        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
     )
 
     assert "Agent-type host degradation" in script
@@ -168,16 +169,16 @@ def test_compose_script_degraded_narrates_the_loss():
 
 def test_compose_script_not_degraded_emits_no_narration():
     waves = _one_wave_fixture()
-    script = compose_script(waves, name="wf", description="one wave")
+    script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
 
     assert "Agent-type host degradation" not in script
 
 
 def test_compose_script_degrade_never_touches_model_literal():
     waves = _one_wave_fixture()
-    baseline = compose_script(waves, name="wf", description="one wave")
+    baseline = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
     degraded = compose_script(
-        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED
+        waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
     )
 
     baseline_models = _MODEL_LITERAL_RE.findall(baseline)

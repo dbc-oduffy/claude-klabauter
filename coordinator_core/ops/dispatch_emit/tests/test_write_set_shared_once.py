@@ -12,6 +12,7 @@ back from.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW, execute_section
 
 from coordinator_core.ops.dispatch_emit.emit import (
     _WORKFLOW_SCRIPT_BYTE_CAP,
@@ -37,7 +38,7 @@ def _mega_row(n: int) -> WaveRow:
 def test_one_mega_row_stays_under_the_runner_byte_cap():
     waves = [[_mega_row(1200)]]
 
-    script = compose_script(waves, name="mega", description="one row, ~1200 writes")
+    script = compose_script(waves, name="mega", description="one row, ~1200 writes", **REVIEW_KW)
 
     assert len(script.encode("utf-8")) <= _WORKFLOW_SCRIPT_BYTE_CAP
 
@@ -45,10 +46,10 @@ def test_one_mega_row_stays_under_the_runner_byte_cap():
 def test_one_mega_row_writes_list_is_serialized_once():
     waves = [[_mega_row(1200)]]
 
-    script = compose_script(waves, name="mega", description="one row, ~1200 writes")
+    script = compose_script(waves, name="mega", description="one row, ~1200 writes", **REVIEW_KW)
 
     sentinel = "mega_row_sentinel_0000.yaml"
-    assert script.count(sentinel) == 1, (
+    assert execute_section(script).count(sentinel) == 1, (
         "the sentinel write path should be serialized exactly once in the "
-        f"emitted script; found {script.count(sentinel)} occurrences"
+        f"emitted script; found {execute_section(script).count(sentinel)} occurrences"
     )

@@ -17,6 +17,7 @@ Shape 2 -- the gate is a row-level sequence of plain strings, not mappings.
 """
 
 from __future__ import annotations
+from .conftest import REVIEW_KW
 
 import textwrap
 
@@ -97,7 +98,7 @@ def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path):
     )
     plan_path = _write_plan(tmp_path, _two_row_body(), extra_frontmatter=extra_frontmatter)
 
-    script = emit_script(plan_path)
+    script = emit_script(plan_path, **REVIEW_KW)
 
     assert "T1b" not in _phase_and_agent_ids(script)
     assert "ROWS THIS SCRIPT DOES NOT RUN" in script
@@ -115,7 +116,7 @@ def test_row_level_plain_string_gate_list_withholds_the_row_from_every_wave(tmp_
     )
     plan_path = _write_plan(tmp_path, _two_row_body(gated_row_extra))
 
-    script = emit_script(plan_path)
+    script = emit_script(plan_path, **REVIEW_KW)
 
     assert "T1b" not in _phase_and_agent_ids(script)
     assert "ROWS THIS SCRIPT DOES NOT RUN" in script

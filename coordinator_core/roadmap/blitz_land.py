@@ -62,6 +62,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.session.claimed_write import create_exclusive
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, remove_fm_field
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
@@ -251,6 +252,47 @@ def pivoting_reviewers(entry: Dict[str, Any]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+#: The reason a plan-blitz fire stamps on a baton it holds while the fire is in flight.
+FIRE_IN_FLIGHT_HOLD_REASON = "plan-blitz fire in flight"
+
+_FIRE_HOLD_KEYS = ("plan_blitz_hold_reason", "plan_blitz_hold_cite", "plan_blitz_hold_until")
+
+
+def _without_fire_hold(text: str) -> str:
+    """`text` with the `plan_blitz_hold_*` keys removed iff the reason is the fire's own.
+
+    Any other reason is a human's hold and comes back byte-identical.
+    """
+    span = _frontmatter_span(text)
+    if span is None:
+        return text
+    fm = text[span[0] : span[1]]
+    if read_fm_field_unquoted(fm, "plan_blitz_hold_reason") != FIRE_IN_FLIGHT_HOLD_REASON:
+        return text
+    try:
+        for key in _FIRE_HOLD_KEYS:
+            fm = remove_fm_field(fm, key)
+    except ValueError as exc:
+        raise LandingRefused(str(exc)) from exc
+    return text[: span[0]] + fm + text[span[1] :]
+
+
+def _clear_fire_hold(worktree_root: Path, baton_path: str) -> bool:
+    """Clear a fire hold from the baton under one `locked_rmw`. True iff it wrote."""
+
+    def _clear(old: str) -> str:
+        new = _without_fire_hold(old)
+        if new == old:
+            raise MutateAbort("no fire hold")
+        return new
+
+    try:
+        locked_rmw(worktree_root / baton_path, _clear, repo_root=worktree_root)
+    except MutateAbort:
+        return False
+    return True
+
+
 def _link_baton_to_plan(
     worktree_root: Path,
     baton_path: str,
@@ -277,6 +319,7 @@ def _link_baton_to_plan(
     baton = next((b for b in report["batons"] if b["path"] == baton_path), None)
     linked = bool(baton and baton.get("plan") and baton["plan"]["path"] == plan_path)
     if linked:
+        _clear_fire_hold(worktree_root, baton_path)
         return False
 
     rel = plan_abs.relative_to(worktree_root).as_posix()
@@ -289,7 +332,7 @@ def _link_baton_to_plan(
                 f"refusing to repoint it at {rel} — a landing adopts an unlinked "
                 f"plan, it never re-owns a linked one"
             )
-        return _set_field(old, "governing_plan", rel)
+        return _without_fire_hold(_set_field(old, "governing_plan", rel))
 
     locked_rmw(baton_abs, _link, repo_root=worktree_root)
     return True
@@ -1158,11 +1201,21 @@ def land_wave(
                 # status exactly where it was; the missing edge is what made the
                 # next gate read it as never-planned, not the status.
                 _link_baton_to_plan(worktree_root, baton_path, plan_path, report)
-            elif not _carries_no_plan(entry.get("route")):
-                pulled_without_plan.append(baton_id)
+            else:
+                _clear_fire_hold(worktree_root, baton_path)
+                if not _carries_no_plan(entry.get("route")):
+                    pulled_without_plan.append(baton_id)
             pulled.append(baton_id)
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": baton_id, "reason": str(exc)})
+
+    # The fire is over for an entry landed in a lane that links no plan.
+    for lane in ("surfacedToPm", "routedElsewhere", "dispatched", "replan"):
+        for entry in wave_result.get(lane) or []:
+            try:
+                _clear_fire_hold(worktree_root, _baton_path_for(entry, report))
+            except (LandingRefused, MutateAbort, OSError):
+                continue
 
     minted: List[Dict[str, Any]] = []
     #: Repo-relative paths of the SOURCE batons whose replan was minted in THIS landing.
