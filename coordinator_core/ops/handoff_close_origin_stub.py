@@ -302,6 +302,23 @@ def _resolve_input_path(
     return contained_path(p, allowed_roots)
 
 
+def _live_or_archived_plan_path(
+    raw_path: str, worktree: Path, plans_dir: Path, archived_specs_dir: Path
+) -> str:
+    """`raw_path` unless it names a plan that close-out already archived, in which
+    case the `archive/specs/**` copy of the same basename."""
+    p = Path(raw_path)
+    if not p.is_absolute():
+        p = worktree / p
+    if p.is_file() or not archived_specs_dir.is_dir():
+        return raw_path
+    try:
+        found = sorted(archived_specs_dir.rglob(p.name))
+    except OSError:
+        return raw_path
+    return str(found[0]) if found else raw_path
+
+
 def _direct_pair(
     raw_path: str, worktree: Path, allowed_roots: List[Path]
 ) -> Optional[Tuple[str, str]]:
@@ -975,6 +992,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     handoffs_dir = worktree / "state" / "handoffs"
     archive_dir = worktree / "archive" / "handoffs"
     plans_dir = worktree / "docs" / "plans"
+    archived_specs_dir = worktree / "archive" / "specs"
+    if plan_path:
+        plan_path = _live_or_archived_plan_path(plan_path, worktree, plans_dir, archived_specs_dir)
 
     session_commits: Optional[List[dict]] = None
     if not sha and session_id:
@@ -1003,10 +1023,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         pairs.append((pair[0], pair[1], join_source))
 
     if plan_path:
-        _record(_direct_pair(plan_path, worktree, [plans_dir]), "direct")
+        _record(_direct_pair(plan_path, worktree, [plans_dir, archived_specs_dir]), "direct")
 
     plan_resolved: Optional[Path] = (
-        _resolve_input_path(plan_path, worktree, [plans_dir]) if plan_path else None
+        _resolve_input_path(plan_path, worktree, [plans_dir, archived_specs_dir]) if plan_path else None
     )
 
     handoff_resolved: Optional[Path] = None

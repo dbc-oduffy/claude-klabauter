@@ -454,7 +454,7 @@ def completion_return_js(
             else "null"
         ),
         "criterion.sidecar": (
-            f"_cap({falsifier_var}?.sidecar_path ?? null, {_maxlength(schema, 'criterion.sidecar')})"
+            f"_cap({falsifier_var}?.sidecar_path || null, {_maxlength(schema, 'criterion.sidecar')})"
             if falsifier_present
             else "null"
         ),

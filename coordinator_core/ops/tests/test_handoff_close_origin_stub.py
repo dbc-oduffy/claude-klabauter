@@ -733,3 +733,29 @@ def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):
     assert result["no_candidates"] is True
     assert result["closed"] == []
     assert result["skipped"] == []
+
+
+def test_handler_closes_the_origin_stub_of_a_plan_already_archived_to_specs(
+    tmp_path, monkeypatch
+):
+    worktree = tmp_path
+    stub_path = _seed_stub(worktree)
+    _fake_git_common_dir(worktree, monkeypatch)
+    archived = worktree / "archive" / "specs" / "2026-10" / "2026-10-02-p.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text(
+        "---\ntitle: p\nstatus: implemented\nroadmap_id: r1\nstub_id: s1\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    async def _fake_guard(params, repo_root):
+        return {"exit_code": 1, "referenced": False, "children": []}
+
+    monkeypatch.setattr(m, "_live_children_guard", _fake_guard)
+
+    result = _run(
+        m._handler({"plan_path": "docs/plans/2026-10-02-p.md", "sha": "deadbeef1234"}, worktree)
+    )
+
+    assert result["exit_code"] == 0
+    assert [c["stub_path"] for c in result["closed"]] == ["state/handoffs/origin-stub.md"]

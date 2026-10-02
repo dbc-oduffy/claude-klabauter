@@ -1,0 +1,234 @@
+"""coordinator_core.ops.review_mint.share_stages -- assemble a run's stage
+returns from the plan-scoped sidecars already on disk in
+``.coordinator-local/subagent-share/<session_id>/``.
+
+``assemble_from_share`` backs ``record-superseding-review --from-share``: it
+reads the prep, reviewer, delivery-verifier, test-runner and criterion-judge
+sidecars bound to one plan and returns what ``supersede.record_superseding_review``
+otherwise takes by hand (``prep_sidecar``, ``wave_sidecar_paths``,
+``stage_returns``) plus a ``used`` map naming every sidecar chosen.
+
+A stage's return is read ONLY from its sidecar's frontmatter, under the field
+names of ``review-stage.schema.json`` (judge: ``status`` in met/not_met/
+indeterminate; delivery: ``verdict`` PASS/FAIL; tests: ``status`` in
+pass/fail/not_run with optional ``run``/``failed``; prep: ``run_base_sha`` and
+``product_files``). A sidecar that carries no such field is not that stage's
+return, and a stage with none raises ``ShareStageMissing`` naming the dispatch
+that produces it. The judge's verdict must also be newer than the HEAD commit.
+Nothing is inferred or defaulted.
+
+Plan binding is positive: a sidecar counts only when it names the plan
+(``plan_id``/``plan``/``target_plan``) or is the plan's ``<stem>.delivery``
+file; ``wave_bookkeeping._belongs_to_plan`` decides the match.
+
+Spawns: one argv-only git call (HEAD commit time).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from coordinator_core.git.run import run_git
+from coordinator_core.ops.review_mint.wave_bookkeeping import (
+    _DELIVERY_SUFFIX,
+    _belongs_to_plan,
+    _load_sidecar_fm,
+    _load_sidecar_text,
+    _stem,
+)
+
+_GIT_TIMEOUT_SECS = 30
+_JUDGE_STATUSES = ("met", "not_met", "indeterminate")
+_TESTS_STATUSES = ("pass", "fail", "not_run")
+_DELIVERY_HEADING_RE = re.compile(r"^#\s*Delivery verdict:.*?\b(PASS|FAIL)\b\s*$", re.MULTILINE)
+
+#: Per stage: the dispatch that produces its sidecar, named in a refusal.
+_DISPATCH = {
+    "prep": "the review prep stage (coordinator:test-runner, review-prep-result) with a frontmatter-bearing sidecar",
+    "reviewer": "a coordinator:code-reviewer (or other review-wave lens) dispatch with plan_path set",
+    "delivery": "coordinator:delivery-verifier (delivery-verdict) over the frozen diff",
+    "tests": "coordinator:test-runner for the plan's tests, recording status pass|fail|not_run",
+    "criterion": "coordinator:exit-criterion-judge (terminal-judge-result) against HEAD",
+}
+
+
+class ShareStageMissing(ValueError):
+    """A required stage has no usable sidecar; ``stage`` names it."""
+
+    def __init__(self, stage: str, detail: str):
+        self.stage = stage
+        super().__init__(f"no {stage} sidecar: {detail}; produced by {_DISPATCH[stage]}")
+
+
+def _rel(path: Path, repo_root: Path) -> str:
+    try:
+        return path.relative_to(repo_root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _claimed_plan(fm: Dict[str, Any]) -> Optional[str]:
+    for key in ("plan_id", "plan", "target_plan"):
+        value = fm.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _binds(path: Path, fm: Dict[str, Any], plan_id: str, plan_stem: Optional[str]) -> bool:
+    claimed = _claimed_plan(fm)
+    if claimed is None:
+        return _stem(path).endswith(_DELIVERY_SUFFIX) and _belongs_to_plan(path, fm, plan_id, plan_stem)
+    return _belongs_to_plan(path, {"plan": claimed}, plan_id, plan_stem)
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _head_commit_time(repo_root: Path, head: str) -> float:
+    proc = run_git(["log", "-1", "--format=%ct", head], cwd=str(repo_root), timeout=_GIT_TIMEOUT_SECS)
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        raise ValueError(f"could not read the commit time of {head}: {proc.stderr.strip()}")
+
+
+def _newest(items: List[Tuple[Path, Any]]) -> Optional[Tuple[Path, Any]]:
+    return max(items, key=lambda it: (it[0].stat().st_mtime, it[0].name)) if items else None
+
+
+def assemble_from_share(
+    *,
+    repo_root: Path,
+    session_id: str,
+    plan_id: str,
+    plan_stem: Optional[str],
+    head: str,
+    judge_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """``{prep_sidecar, wave_sidecar_paths, stage_returns, used}`` from the
+    session share dir. ``used`` maps each stage to its repo-relative sidecar
+    path(s). Raises ``ShareStageMissing`` for the first missing stage, or
+    ``ValueError`` when the newest judge verdict is not ``met``."""
+    share = repo_root / ".coordinator-local" / "subagent-share" / session_id
+    if not share.is_dir():
+        raise ShareStageMissing("prep", f"share dir {_rel(share, repo_root)} does not exist")
+
+    bound: List[Tuple[Path, Dict[str, Any]]] = []
+    for path in sorted(share.glob("*.md")):
+        if path.name.endswith(".blocks.md") or not path.is_file():
+            continue
+        fm = _load_sidecar_fm(path)
+        if fm is None:
+            fm = {}
+        if _stem(path).endswith((".review-wave-bookkeeping", ".superseding")) or fm.get("agent_type") == "engine:review-wave-bookkeeping":
+            continue
+        if _binds(path, fm, plan_id, plan_stem):
+            bound.append((path, fm))
+
+    def kind(fm: Dict[str, Any]) -> str:
+        return str(fm.get("agent_type") or "")
+
+    prep = _newest([(p, fm) for p, fm in bound if "run_base_sha" in fm and _int_or_none(fm.get("product_files")) is not None])
+    if prep is None:
+        raise ShareStageMissing("prep", "no plan-scoped sidecar carries run_base_sha and product_files")
+
+    # The judge is provisioned no sidecar (it cannot write, by design); its verdict is the
+    # terminal-judge-result it returned, passed here. A transcribed sidecar is the fallback.
+    if judge_result is not None:
+        judge_path = None
+        if judge_result.get("status") != "met":
+            raise ValueError(
+                f"judge result is {judge_result.get('status')!r}, not met; "
+                "fix the criterion and re-dispatch coordinator:exit-criterion-judge"
+            )
+        observation = str(judge_result.get("observation") or "").strip()
+        if not observation:
+            raise ShareStageMissing("criterion", "the judge result records no observation")
+    else:
+        judge_cands = [
+            (p, fm) for p, fm in bound
+            if "exit-criterion-judge" in kind(fm) and fm.get("status") in _JUDGE_STATUSES
+        ]
+        if not judge_cands:
+            raise ShareStageMissing("criterion", "no plan-scoped judge sidecar carries a met/not_met/indeterminate status")
+        head_time = _head_commit_time(repo_root, head)
+        fresh = [(p, fm) for p, fm in judge_cands if p.stat().st_mtime >= head_time]
+        judge = _newest(fresh)
+        if judge is None:
+            raise ShareStageMissing("criterion", f"the newest judge verdict predates HEAD commit {head[:10]}")
+        judge_path, judge_fm = judge
+        if judge_fm["status"] != "met":
+            raise ValueError(
+                f"newest judge verdict {_rel(judge_path, repo_root)} is {judge_fm['status']}, not met; "
+                "fix the criterion and re-dispatch coordinator:exit-criterion-judge"
+            )
+        observation = judge_fm.get("observation")
+        if not isinstance(observation, str) or not observation.strip():
+            text = _load_sidecar_text(judge_path) or ""
+            split_at = text.split("\n---\n", 1)
+            observation = (split_at[1] if len(split_at) == 2 else "").strip()
+        if not observation:
+            raise ShareStageMissing("criterion", f"{_rel(judge_path, repo_root)} records no observation")
+
+    delivery_cands: List[Tuple[Path, Dict[str, Any]]] = []
+    for p, fm in bound:
+        if "delivery" not in kind(fm) and not _stem(p).endswith(_DELIVERY_SUFFIX):
+            continue
+        verdict = fm.get("verdict")
+        if verdict not in ("PASS", "FAIL"):
+            m = _DELIVERY_HEADING_RE.search(_load_sidecar_text(p) or "")
+            verdict = m.group(1) if m else None
+        if verdict:
+            delivery_cands.append((p, {**fm, "verdict": verdict}))
+    delivery = _newest(delivery_cands)
+    if delivery is None:
+        raise ShareStageMissing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
+
+    tests = _newest([
+        (p, fm) for p, fm in bound
+        if "test-runner" in kind(fm) and fm.get("status") in _TESTS_STATUSES
+    ])
+    if tests is None:
+        raise ShareStageMissing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status")
+
+    taken = {prep[0], judge_path, delivery[0], tests[0]} - {None}
+    waves = [p for p, fm in bound if p not in taken and "review" in kind(fm) and "exit-criterion" not in kind(fm)]
+    if not waves:
+        raise ShareStageMissing("reviewer", "no plan-scoped reviewer sidecar")
+
+    d_path, d_fm = delivery
+    delivery_ret: Dict[str, Any] = {"verdict": d_fm["verdict"], "sidecar": _rel(d_path, repo_root)}
+    if _int_or_none(d_fm.get("product_files")) is not None:
+        delivery_ret["product_files"] = d_fm["product_files"]
+    if isinstance(d_fm.get("claims_unbacked"), list):
+        delivery_ret["unbacked"] = d_fm["claims_unbacked"]
+    t_path, t_fm = tests
+    tests_ret: Dict[str, Any] = {"status": t_fm["status"], "sidecar": _rel(t_path, repo_root)}
+    for key in ("run", "failed"):
+        if key in t_fm:
+            tests_ret[key] = t_fm[key]
+
+    return {
+        "prep_sidecar": _rel(prep[0], repo_root),
+        "wave_sidecar_paths": waves,
+        "stage_returns": {
+            "delivery": delivery_ret,
+            "tests": tests_ret,
+            "criterion": {
+                "status": "met",
+                "observation": observation.strip(),
+                "sidecar": _rel(judge_path, repo_root) if judge_path else None,
+            },
+        },
+        "used": {
+            "prep": [_rel(prep[0], repo_root)],
+            "reviewer": [_rel(p, repo_root) for p in waves],
+            "delivery": [_rel(d_path, repo_root)],
+            "tests": [_rel(t_path, repo_root)],
+            "criterion": [_rel(judge_path, repo_root)] if judge_path else ["(judge result JSON)"],
+        },
+    }

@@ -39,6 +39,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, assemble_from_share
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
     bookkeep_wave,
     review_wave_bookkeeping_stem,
@@ -98,10 +99,16 @@ def record_superseding_review(
     stage_returns: Optional[Dict[str, Any]],
     session_id: str,
     supersedes: Optional[str] = None,
+    from_share: bool = False,
+    judge_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Write the superseding record; returns ``{record_path, record}`` with
     ``record_path`` repo-root-relative. ``plan`` is a ``pln-`` id or a plan
-    file path. Raises ``SupersedeRefused``."""
+    file path. ``from_share`` assembles ``prep_sidecar``, the wave sidecars
+    and ``stage_returns`` from the session's plan-scoped sidecars
+    (``share_stages``), ignoring the three hand-supplied arguments, and adds
+    ``used`` (stage -> sidecar paths) to the result. Raises
+    ``SupersedeRefused``."""
     plan_stem = None if plan.startswith("pln-") else Path(plan).stem
     plan = _resolve_plan_id(repo_root, plan)
     base = str(commit_range.get("base") or "")
@@ -114,6 +121,20 @@ def record_superseding_review(
         raise SupersedeRefused(f"head {head} is not an ancestor of HEAD")
     if not _is_ancestor(repo_root, base, head):
         raise SupersedeRefused(f"base {base} is not an ancestor of head {head}")
+
+    used = None
+    if from_share:
+        try:
+            assembled = assemble_from_share(
+                repo_root=repo_root, session_id=session_id, plan_id=plan, plan_stem=plan_stem, head=head,
+                judge_result=judge_result,
+            )
+        except (ShareStageMissing, ValueError) as exc:
+            raise SupersedeRefused(str(exc))
+        prep_sidecar = assembled["prep_sidecar"]
+        wave_sidecar_paths = assembled["wave_sidecar_paths"]
+        stage_returns = assembled["stage_returns"]
+        used = assembled["used"]
 
     record_stem = review_wave_bookkeeping_stem(plan, session_id) + ".superseding"
     month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -157,13 +178,18 @@ def record_superseding_review(
     except FileExistsError:
         raise SupersedeRefused(f"superseding record already exists: {rel.as_posix()}")
     declare_write(str(target))
-    return {"record_path": rel.as_posix(), "record": fm}
+    result = {"record_path": rel.as_posix(), "record": fm}
+    if used is not None:
+        result["used"] = used
+    return result
 
 
 @register_op("review_mint.record_superseding_review")
 def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Params: plan, commit_range {base, head}, wave_sidecar_paths,
-    prep_sidecar, stage_returns, session_id, optional supersedes."""
+    prep_sidecar, stage_returns, session_id, optional supersedes, optional
+    from_share (assemble the three from the share dir; refused naming the
+    first missing stage)."""
     root = repo_root or Path(params.get("repo_root") or ".")
     try:
         result = record_superseding_review(
@@ -175,6 +201,8 @@ def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] =
             stage_returns=params.get("stage_returns"),
             session_id=params["session_id"],
             supersedes=params.get("supersedes"),
+            from_share=bool(params.get("from_share")),
+            judge_result=params.get("judge_result"),
         )
     except SupersedeRefused as exc:
         return {"status": "refused", "reason": str(exc)}
@@ -190,15 +218,42 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--wave-sidecar", action="append", default=[])
     parser.add_argument("--prep-sidecar", default=None)
     parser.add_argument("--stage-returns-json", default=None)
+    parser.add_argument(
+        "--from-share", action="store_true",
+        help="assemble prep, reviewer, delivery, tests and judge returns from this session's "
+        "plan-scoped sidecars; excludes --wave-sidecar, --prep-sidecar, --stage-returns-json",
+    )
+    parser.add_argument(
+        "--judge-result", default=None,
+        help="with --from-share: the exit-criterion-judge's returned terminal-judge-result JSON "
+        "(inline or a file path); the judge writes no sidecar",
+    )
     parser.add_argument("--supersedes", default=None)
     parser.add_argument("--repo-root", default=None)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
+    if args.from_share and (args.wave_sidecar or args.prep_sidecar or args.stage_returns_json):
+        print(
+            "record-superseding-review: --from-share excludes --wave-sidecar, --prep-sidecar "
+            "and --stage-returns-json",
+            file=sys.stderr,
+        )
+        return 2
     try:
         stage_returns = json.loads(args.stage_returns_json) if args.stage_returns_json else None
     except json.JSONDecodeError as exc:
         print(f"record-superseding-review: --stage-returns-json is not JSON: {exc}", file=sys.stderr)
         return 2
+    judge_result = None
+    if args.judge_result:
+        raw = args.judge_result
+        try:
+            if not raw.lstrip().startswith("{"):
+                raw = Path(raw).read_text(encoding="utf-8")
+            judge_result = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"record-superseding-review: --judge-result unreadable: {exc}", file=sys.stderr)
+            return 2
 
     repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
     try:
@@ -211,10 +266,14 @@ def main(argv: "list[str] | None" = None) -> int:
             stage_returns=stage_returns,
             session_id=args.session_id,
             supersedes=args.supersedes,
+            from_share=args.from_share,
+            judge_result=judge_result,
         )
     except SupersedeRefused as exc:
         print(f"record-superseding-review: refused: {exc}", file=sys.stderr)
         return 1
+    for stage, paths in (result.get("used") or {}).items():
+        print(f"record-superseding-review: used {stage}: {', '.join(paths)}", file=sys.stderr)
     print(result["record_path"])
     return 0
 

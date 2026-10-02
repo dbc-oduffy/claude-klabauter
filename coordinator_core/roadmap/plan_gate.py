@@ -734,6 +734,21 @@ class PlanIndex:
         # Sizing keys cited by more than one baton; set by `assemble_plan_gate`.
         # A shared sizing object names the roadmap, not any one baton's plan.
         self.shared_sizing: Set[str] = set()
+        # Set by `build_plan_index`; `archived()` builds `archive/specs/**` once,
+        # on the first link that misses every live plan.
+        self.worktree_root: Optional[Path] = None
+        self._archived: Optional["PlanIndex"] = None
+
+    def archived(self) -> "PlanIndex":
+        """Plans under `archive/specs/**`, built lazily and once. Empty without a root."""
+        if self._archived is None:
+            idx = PlanIndex()
+            root = self.worktree_root
+            if root is not None:
+                _index_plans_under(idx, root, ("archive", "specs"))
+            idx.shared_sizing = self.shared_sizing
+            self._archived = idx
+        return self._archived
 
     def add(self, rel_path: str, fm: Dict[str, Any]) -> None:
         status = str(fm.get("status") or "").strip().lower()
@@ -808,7 +823,13 @@ def is_plan_record(fm: Dict[str, Any]) -> bool:
 def build_plan_index(worktree_root: Path) -> PlanIndex:
     """Index the PLANS under `docs/plans/**`. Never raises; unreadable files skipped."""
     index = PlanIndex()
-    for path in _iter_record_paths(worktree_root, ("docs", "plans"), recursive=True):
+    index.worktree_root = worktree_root
+    _index_plans_under(index, worktree_root, ("docs", "plans"))
+    return index
+
+
+def _index_plans_under(index: PlanIndex, worktree_root: Path, subdir: Sequence[str]) -> None:
+    for path in _iter_record_paths(worktree_root, subdir, recursive=True):
         fm = _scan_fields(path, _PLAN_FIELDS)
         if not fm or not is_plan_record(fm):
             continue
@@ -817,7 +838,6 @@ def build_plan_index(worktree_root: Path) -> PlanIndex:
         except ValueError:
             rel = path.as_posix()
         index.add(rel, fm)
-    return index
 
 
 # The order plan links are tried, and the `plan_link_basis` each reports. Fixed,
@@ -837,6 +857,14 @@ _PLAN_LINK_ORDER: Tuple[Tuple[str, str], ...] = (
 
 
 def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Live plans first; only when none link, the archived (`archive/specs/`) ones."""
+    hits, basis = _link_plans_in(fm, plans)
+    if hits or plans.worktree_root is None:
+        return hits, basis
+    return _link_plans_in(fm, plans.archived())
+
+
+def _link_plans_in(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Plans linked to a baton, strongest link first, plus the basis that answered.
 
     Returns `([], None)` when nothing links. Where several plans link, ALL are

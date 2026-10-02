@@ -410,7 +410,7 @@ def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
         record = yaml.safe_load((tmp_path / stub["sizing_object"]).read_text(encoding="utf-8"))
         assert record["estimate"]["tshirt"] == stub["loe"]
         assert record["route"] == reply["folds"]["routes"][stub["stub_id"]]
-        assert record["status"] == "sized"
+        assert record["status"] == "routed"
         assert record["premise"]["provenance"] == "read"
         assert "clusters.md § " + ", ".join(stub["covers"]) in record["premise"]["evidence"]
         assert record["deliverable_id"] == stub["deliverable_id"]

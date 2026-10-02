@@ -1360,3 +1360,32 @@ def test_a_unique_sizing_object_still_links_beside_a_shared_one(tmp_path):
     report = pg.assemble_plan_gate(tmp_path)
     assert _by_id(report, "own-1")["plan"]["link_basis"] == "sizing_object"
     assert [r["sizing_object"] for r in report["shared_sizing_objects"]] == ["szo-road"]
+
+
+def test_an_implemented_plan_archived_to_specs_opens_its_dependents_gates(tmp_path):
+    _baton(tmp_path, "blocker-1", deliverable_id="dlv-a")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+    _write(
+        tmp_path / "archive" / "specs" / "2026-10" / "2026-10-02-a.md",
+        "title: a\nstatus: implemented\ndeliverable_id: dlv-a",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is True
+    assert dependent["execution_gate"]["open"] is True
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_CODED
+
+
+def test_an_archived_plan_that_was_abandoned_does_not_open_the_gate(tmp_path):
+    _baton(tmp_path, "blocker-1", deliverable_id="dlv-a")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+    _write(
+        tmp_path / "archive" / "specs" / "a.md",
+        "title: a\nstatus: abandoned\ndeliverable_id: dlv-a",
+    )
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["execution_gate"]["open"] is False
