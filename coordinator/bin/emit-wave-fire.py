@@ -398,6 +398,20 @@ def _shared_wave_slots(payload: dict, wave_ids: list) -> list:
     return sorted((i, sorted(paths)) for i, paths in collapsed.items())
 
 
+def _renumbered_wave_hint(trail_dir: Path, wave_number: int, waves: list, wave_index: int) -> str:
+    """The re-run line when ANOTHER wave of this report is exactly what the landing handed
+    forward. A report frozen after a landing renumbers from 0, so trail wave 1 is report
+    wave 0; calling that report stale sends the EM to re-freeze a correct one."""
+    for idx, ids in enumerate(waves):
+        if idx != wave_index and ids and not _report_predates_a_landing(trail_dir, wave_number, list(ids)):
+            return (
+                f"report wave {wave_index} is not what the trail's wave {wave_number} landing "
+                f"handed forward, but report wave {idx} is: a fresh report renumbers from 0. "
+                f"Re-run with --wave-index {idx} --wave-number {wave_number}."
+            )
+    return ""
+
+
 def _report_predates_a_landing(trail_dir: Path, wave_number: int, wave_ids: list) -> str:
     """The report is SHAPE-RIGHT and TIME-WRONG: frozen before a landing this run
     has since made, so it proposes batons that landing already advanced.
@@ -1395,6 +1409,9 @@ def main(argv=None) -> int:
 
     stale = _report_predates_a_landing(trail_dir, wave_number, wave_ids)
     if stale:
+        hint = _renumbered_wave_hint(trail_dir, wave_number, waves, args.wave_index)
+        if hint:
+            return refuse(hint)
         return refuse(stale)
 
     if args.exclude:

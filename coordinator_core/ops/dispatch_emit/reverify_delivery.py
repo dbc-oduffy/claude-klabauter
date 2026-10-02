@@ -227,6 +227,32 @@ def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Option
     return best[1] if best else None
 
 
+_BOOKKEEPING_GLOB = ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md"
+
+
+def _plan_id_of(plan_path: str) -> Optional[str]:
+    fm = _frontmatter(Path(plan_path))
+    return str(fm["plan_id"]) if fm and fm.get("plan_id") else None
+
+
+def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Path]:
+    """The newest review-wave bookkeeping record for `plan_id` carrying a delivery FAIL."""
+    if not plan_id:
+        return None
+    share = repo_root / ".coordinator-local" / "subagent-share"
+    candidates = sorted(
+        share.glob(f"*/{plan_id}.review-wave-bookkeeping.md"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        fm = _frontmatter(path)
+        block = _delivery_block(fm) if fm else None
+        if block and block.get("verdict") == "FAIL":
+            return path
+    return None
+
+
 def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path: str) -> dict:
     from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
     from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
@@ -235,6 +261,15 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
     record_file = Path(run_record)
     if not record_file.is_absolute():
         record_file = repo_root / record_file
+    if _frontmatter(record_file) is None:
+        # Not a run record (a task .output, say): resolve the plan's own bookkeeping.
+        found = _bookkeeping_record(repo_root, _plan_id_of(plan_path))
+        if found is None:
+            raise ReverifyRefused(
+                f"reverify-delivery: cannot read run record {record_file}, and no "
+                f"{_BOOKKEEPING_GLOB} carries this plan's delivery FAIL"
+            )
+        record_file = found
     record, claims = prior_unbacked_claims(record_file)
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     prep = record.get("prep") if isinstance(record.get("prep"), dict) else {}
@@ -255,7 +290,12 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
         claims=claims,
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
-    return {"path": out_path, "supersedes": rel, "claims": len(claims)}
+    from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
+
+    receipt = _write_emission_receipt(
+        Path(out_path), plan_path, {}, extras={"route": "reverify-delivery", "supersedes": rel}
+    )
+    return {"path": out_path, "supersedes": rel, "claims": len(claims), "receipt": receipt}
 
 
 def main(argv: "Optional[list[str]]" = None) -> int:

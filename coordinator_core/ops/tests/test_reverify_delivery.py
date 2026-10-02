@@ -81,3 +81,25 @@ def test_prior_claims_refuses_a_non_fail_record(tmp_path):
     record = _record(repo, _git(repo, "rev-parse", "HEAD"))
     with pytest.raises(rd.ReverifyRefused):
         rd.prior_unbacked_claims(record)
+
+
+def test_a_task_output_resolves_to_the_plans_bookkeeping_record_and_emits_a_receipt(tmp_path, monkeypatch):
+    """example-stats-repo passed the task .output; the plan's review-wave bookkeeping is the record,
+    and the emitted script carries the receipt the foreign-emission hook demands."""
+    repo, record, _ = _fail_record(tmp_path)
+    share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
+    share.mkdir(parents=True)
+    bookkeeping = share / "pln-example-abc123.review-wave-bookkeeping.md"
+    bookkeeping.write_bytes(record.read_bytes())
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-example-abc123\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    task_output = tmp_path / "task.output"
+    task_output.write_text("not a run record\n", encoding="utf-8")
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    result = rd.emit_reverify(
+        repo_root=repo, plan_path=str(plan), run_record=str(task_output), out_path=str(out)
+    )
+    assert result["supersedes"].endswith("pln-example-abc123.review-wave-bookkeeping.md")
+    assert result["receipt"] and (out.parent / (out.name + ".emitted.json")).is_file()
