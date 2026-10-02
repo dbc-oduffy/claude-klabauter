@@ -151,3 +151,27 @@ def test_binary_blob_does_not_derail_the_batch(tmp_path, publish):
 
     assert fixed == ["bin/zz-entry"]
     assert _mode_of(repo, "bin/blob.bin") == "100644"
+
+
+def test_commit_round_removes_tracked_egg_info_and_leaves_other_dirs(tmp_path, publish):
+    repo = tmp_path / "mirror"
+    _init_repo(repo)
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _write_tracked(repo, "x.egg-info/PKG-INFO", "Author: someone\n")
+    _write_tracked(repo, "x.egg-info/SOURCES.txt", "a\n")
+    _write_tracked(repo, "docs/keep.md", "keep\n")
+    _write_tracked(repo, "pkg/a.txt", "old\n")
+    _git(repo, "commit", "-q", "-m", "seed")
+    (repo / "pkg" / "a.txt").write_text("new\n", encoding="utf-8")
+
+    ok = publish._commit_published_dests(
+        {repo: {repo / "pkg"}}, succeeded_row_names=["r"], round_pinned_shas={}
+    )
+    assert ok is True
+    assert not (repo / "x.egg-info").exists()
+    assert (repo / "docs" / "keep.md").exists()
+    tracked = _git(repo, "ls-files").split()
+    assert tracked == ["docs/keep.md", "pkg/a.txt"]
+    assert _git(repo, "status", "--porcelain").strip() == ""
+    assert "x.egg-info/PKG-INFO" in _git(repo, "show", "--name-only", "--format=", "HEAD")

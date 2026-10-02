@@ -505,6 +505,14 @@ def mint(
         delivery_data = (_load_sidecar(repo_root / delivery_rel) or {}) if delivery_rel else {}
     if superseding_record is not None:
         delivery_data = superseding_delivery(integration_data, delivery_data)
+    if integration_path is not None:
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import latest_delivery_supersession
+
+        reverified = latest_delivery_supersession(
+            repo_root, integration_path.relative_to(repo_root).as_posix()
+        )
+        if reverified is not None:
+            delivery_data = reverified
     delivery_verdict = delivery_data.get("verdict")
 
     fixes_applied = integration_data.get("fixes_applied")

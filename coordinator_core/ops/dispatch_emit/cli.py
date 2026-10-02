@@ -214,6 +214,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "edges onto landed rows count as satisfied",
     )
     parser.add_argument(
+        "--reverify-delivery",
+        default=None,
+        metavar="RUN_RECORD",
+        help="with --plan: emit a one-stage script re-running only the delivery verifier at HEAD "
+        "over RUN_RECORD's frozen delivery FAIL; record its result with "
+        "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record`",
+    )
+    parser.add_argument(
         "--mark-landed",
         dest="mark_landed_phase",
         default=None,
@@ -538,6 +546,30 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             )
             return EXIT_USAGE
         return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
+
+    if args.reverify_delivery:
+        if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):
+            print(
+                f"emit-dispatch-workflow: ERROR — --reverify-delivery needs --plan and --out "
+                f"ending {_REQUIRED_OUT_SUFFIX!r}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import ReverifyRefused, emit_reverify
+
+        try:
+            result = emit_reverify(
+                repo_root=Path(args.repo_root).resolve() if args.repo_root else Path.cwd(),
+                plan_path=args.plan,
+                run_record=args.reverify_delivery,
+                out_path=args.out_path,
+            )
+        except (ReverifyRefused, *_DATA_ERRORS) as exc:
+            print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        print(json.dumps(result, indent=2, sort_keys=True))
+        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
+        return EXIT_OK
 
     if args.restamp:
         if args.plan or args.inventory or args.out_path or args.fire:

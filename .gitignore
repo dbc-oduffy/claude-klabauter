@@ -14,7 +14,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 # The installer's editable pip install writes this at the repo root.
-/coordinator_core.egg-info/
+*.egg-info/
 /build/
 
 # --- Coordinator working state, never OSS payload ---
