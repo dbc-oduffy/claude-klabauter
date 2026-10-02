@@ -20,7 +20,7 @@ Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
 
 Gate report contract: the BARE ``roadmap.plan_gate`` result, frozen at
 ``state/plan-blitz/<roadmap_id>/wave-1.gate-report.json``, with ``waves`` replaced by
-``[{index, batons: [{id, path, title, sized, planPath, executionOpen}]}]`` (index = dependency
+``[{index, batons: [{id, path, title, sized, planPath, executionOpen, route}]}]`` (index = dependency
 tier, the shape warp's roadmap arm reads) and plan_gate's own id-list ``waves`` kept as
 ``plan_gate_waves``.
 
@@ -53,6 +53,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from coordinator_core.roadmap.plan_gate import effective_sizing_route
 from coordinator_core.roadmap.audit import parse_keep_cluster_ids, run_audit, validate_run_id
 from coordinator_core.roadmap.graph import RoadmapCycleError, topo_number
 from coordinator_core.roadmap.number_stubs import (
@@ -319,7 +320,7 @@ def _fold_report(stubs: List[Dict[str, Any]], fold: Dict[str, Any]) -> Dict[str,
     }
 
 
-def _baton_ref(record: Dict[str, Any]) -> Dict[str, Any]:
+def _baton_ref(record: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     gate = record.get("execution_gate") or {}
     plan = record.get("plan") or {}
     return {
@@ -329,16 +330,19 @@ def _baton_ref(record: Dict[str, Any]) -> Dict[str, Any]:
         "sized": bool(record.get("sized")),
         "planPath": plan.get("path"),
         "executionOpen": bool(gate.get("open")),
+        "route": effective_sizing_route(repo_root, record.get("sizing_objects")) if repo_root else None,
     }
 
 
-def waves_from_tiers(report: Dict[str, Any], stub_tier: Dict[str, int]) -> List[Dict[str, Any]]:
+def waves_from_tiers(
+    report: Dict[str, Any], stub_tier: Dict[str, int], repo_root: Optional[Path] = None
+) -> List[Dict[str, Any]]:
     """``[{index, batons: [...]}]`` ordered by tier; ``stub_tier`` maps baton path to its tier."""
     by_path = {b["path"]: b for b in report.get("batons") or []}
     grouped: Dict[int, List[Dict[str, Any]]] = {}
     for path, tier in sorted(stub_tier.items(), key=lambda kv: (kv[1], kv[0])):
         if path in by_path:
-            grouped.setdefault(tier, []).append(_baton_ref(by_path[path]))
+            grouped.setdefault(tier, []).append(_baton_ref(by_path[path], repo_root))
     return [{"index": t, "batons": grouped[t]} for t in sorted(grouped)]
 
 
@@ -405,7 +409,7 @@ def _freeze_gate_report(
         }
     report.pop("matched_targets", None)
     report["plan_gate_waves"] = report.get("waves")
-    report["waves"] = waves_from_tiers(report, stub_tier)
+    report["waves"] = waves_from_tiers(report, stub_tier, repo_root)
     target.parent.mkdir(parents=True, exist_ok=True)
     create_exclusive(target, json.dumps(report, indent=2, default=str) + "\n")
     os.chmod(target, 0o444)

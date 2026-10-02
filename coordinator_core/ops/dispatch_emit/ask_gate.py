@@ -100,7 +100,11 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
         baton = doc_new.mint_baton_from_sizing(sizing_rel, str(repo_root))
     except doc_new.SizingMintRefused as exc:
         return _halt(HALT_REFUSAL, str(exc))
-    return GateVerdict(arm=arm, halt=None, baton={"id": baton["id"], "path": baton["path"]})
+    # The effective route, so a PM-recorded accept_multi_session plans in the
+    # single-mode wave instead of re-adjudicating the sizing's raw `pm-decision`.
+    return GateVerdict(
+        arm=arm, halt=None, baton={"id": baton["id"], "path": baton["path"], "route": route}
+    )
 
 
 @register_op("dispatch.ask_gate")

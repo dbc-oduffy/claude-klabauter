@@ -952,6 +952,14 @@ def _refuse_from_sizing(msg: str) -> int:
 _MINT_TSHIRTS = frozenset({"M", "L", "XL", "XXL"})
 
 
+def _effective_route(sizing: dict) -> object:
+    """The sizing's route with a PM-recorded `xl_exit` applied (accept_multi_session -> plan)."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_core.ops.dispatch_emit.sizing_fire import effective_route
+
+    return effective_route(sizing)
+
+
 def _collect_sizing_refusals(sizing: dict) -> list[str]:
     """Every failing fire-or-mint input of a sizing, one message each; empty when fireable."""
     out: list[str] = []
@@ -963,7 +971,7 @@ def _collect_sizing_refusals(sizing: dict) -> list[str]:
         out.append("`exit_criterion.accepted` is null — the exit criterion is not accepted yet")
     if not sizing.get("interaction_mode"):
         out.append("`interaction_mode` is absent")
-    route = sizing.get("route")
+    route = _effective_route(sizing)
     if route != "plan":
         out.append(f"`route` is {route!r}, not 'plan' — --from-sizing only fires the single-plan Workflow")
     tshirt = (sizing.get("estimate") or {}).get("tshirt") if isinstance(sizing.get("estimate"), dict) else None
@@ -1093,7 +1101,7 @@ def _emit_single_from_sizing(
         )
     exit_criterion = sizing["exit_criterion"]
     interaction_mode = sizing["interaction_mode"]
-    route = sizing["route"]
+    route = _effective_route(sizing)
     tshirt = (sizing.get("estimate") or {}).get("tshirt")
 
     try:

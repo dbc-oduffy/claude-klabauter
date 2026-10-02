@@ -466,13 +466,12 @@ def check_git_no_optional_locks(
     pieces.append(cmd[prev_end:])
     new_cmd = "".join(pieces)
 
+    # The note is deliberately command-independent: dispatch's per-session
+    # advisory dedupe fingerprints the text, so naming the rewritten segments
+    # (or their count) made every call a "new" shape and re-emitted the line
+    # on every git call. The rewrite itself is visible in updatedInput.
     note = (
-        "Auto-rewritten: %s -> '--no-optional-locks' inserted before the "
-        "subcommand on %d segment(s) -- avoids the shared-tree "
-        "`.git/index.lock` acquisition."
-        % (
-            "; ".join("'%s'" % s for s in rewritten_segments),
-            len(rewritten_segments),
-        )
+        "Auto-rewritten: '--no-optional-locks' inserted before the git "
+        "subcommand -- avoids the shared-tree `.git/index.lock` acquisition."
     ) + " " + operator_override_note("COORDINATOR_ALLOW_OPTIONAL_LOCKS", payload=payload)
     return _allow_rewrite(new_cmd, note)

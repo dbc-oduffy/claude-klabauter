@@ -65,6 +65,7 @@ from coordinator_core.session.claimed_write import create_exclusive
 from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, remove_fm_field
 from coordinator_core.roadmap.plan_gate import (
+    effective_sizing_route,
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
     assemble_plan_gate,
@@ -1651,4 +1652,7 @@ def _fire_arg(baton: Dict[str, Any], worktree_root: Path) -> Dict[str, Any]:
         # EXECUTED here, and a wave that read one gate for both questions would run
         # code against blockers that do not exist yet.
         "executionOpen": baton["execution_gate"]["open"],
+        # Effective route: a PM-recorded `xl_exit: accept_multi_session` reads `plan`,
+        # so the wave plans the baton rather than re-adjudicating a settled exit.
+        "route": effective_sizing_route(worktree_root, baton.get("sizing_objects")),
     }

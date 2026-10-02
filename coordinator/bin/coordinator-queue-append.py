@@ -2345,7 +2345,7 @@ def main(argv: "list[str] | None" = None) -> int:
             print(
                 "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                 "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
             return  # exits 0 via normal return from legacy_fn()
@@ -2406,7 +2406,7 @@ def main(argv: "list[str] | None" = None) -> int:
                 print(
                     "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                     "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                    "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                    "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                     file=sys.stderr,
                 )
                 return 1
@@ -2418,7 +2418,7 @@ def main(argv: "list[str] | None" = None) -> int:
             print(
                 "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
                 "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-                "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+                "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
             return  # exits 0 via normal return from legacy_fn()
@@ -2575,7 +2575,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(
             "  Remediation: run 'machine-local set repos.claude_klabauter /path/to/claude-klabauter'\n"
             "  or set COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter before invoking this CLI.\n"
-            "  Reference: plugins/coordinator/docs/wiki/machine-local-registry.md §4c",
+            "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
         return

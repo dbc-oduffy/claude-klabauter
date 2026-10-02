@@ -351,7 +351,7 @@ def test_report_waves_validate_against_the_warp_roadmap_arm_schema(tmp_path, roa
     assert {s["path"] for s in reply["stubs"] if s["cluster"] in ("C1", "C4")} == tier1
     for wave in payload["waves"]:
         for baton in wave["batons"]:
-            assert set(baton) == {"id", "path", "title", "sized", "planPath", "executionOpen"}
+            assert set(baton) == {"id", "path", "title", "sized", "planPath", "executionOpen", "route"}
 
 
 def test_recycle_check_reads_the_object_waves(tmp_path, roadmap):
@@ -416,3 +416,16 @@ def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
         assert record["deliverable_id"] == stub["deliverable_id"]
         assert f'sizing_object: "{stub["sizing_object"]}"' in _fm(tmp_path / stub["path"])
     assert len({yaml.safe_load((tmp_path / p).read_text(encoding="utf-8"))["deliverable_id"] for p in paths}) == len(paths)
+
+
+def test_wave_baton_route_applies_a_recorded_xl_exit(tmp_path):
+    """An XL sizing whose PM picked accept_multi_session is a plan route in
+    the wave, so plan-blitz plans it instead of re-adjudicating."""
+    sizing = tmp_path / "state" / "sizings" / "x.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("route: pm-decision\nxl_exit: accept_multi_session\n", encoding="utf-8")
+    record = {"id": "b", "path": "state/handoffs/b.md", "sizing_objects": ["state/sizings/x.yaml"]}
+    assert bs._baton_ref(record, tmp_path)["route"] == "plan"
+    sizing.write_text("route: pm-decision\n", encoding="utf-8")
+    assert bs._baton_ref(record, tmp_path)["route"] == "pm-decision"
+    assert bs._baton_ref({**record, "sizing_objects": []}, tmp_path)["route"] is None

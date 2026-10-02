@@ -9213,6 +9213,33 @@ def check_sed_range_read_advise(
     )
 
 
+def _heredoc_target_outside_any_session_repo(
+    target: str, payload: Optional[Dict[str, Any]]
+) -> bool:
+    """True when ``target`` has no enclosing git repo, or its enclosing repo
+    is the user's home directory (a dotfiles-style repo no session commits
+    to). Pure filesystem walk, no git spawn; fails open (False) on any error
+    so the advisory still fires."""
+    try:
+        t = os.path.expanduser(target)
+        if not t or any(c in t for c in "$`*?"):
+            return False
+        cwd = (payload or {}).get("cwd") if isinstance(payload, dict) else None
+        base = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+        path = os.path.realpath(t if os.path.isabs(t) else os.path.join(base, t))
+        home = os.path.realpath(os.path.expanduser("~"))
+        cur = os.path.dirname(path)
+        while True:
+            if os.path.exists(os.path.join(cur, ".git")):
+                return cur == home
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                return True
+            cur = parent
+    except Exception:  # noqa: BLE001 -- fail open: keep the advisory
+        return False
+
+
 def check_cat_heredoc_write_advise(
     cmd: str,
     session_id: str = "",
@@ -9255,14 +9282,17 @@ def check_cat_heredoc_write_advise(
     if redir_idx + 1 >= len(seg_tokens):
         return None
     target = seg_tokens[redir_idx + 1]
+    if _heredoc_target_outside_any_session_repo(target, payload):
+        return None
     _cat_note = operator_override_note(
         "COORDINATOR_ALLOW_CAT_HEREDOC", payload=payload, git_root=git_root
     )
     return _advisory(
         (
-            "Advisory: this heredoc writes `%s`. This write is recorded and "
-            "will be in this session's commit (DR-258 § Amendment "
-            "2026-08-30); a path this command does not name is not."
+            "Advisory: this heredoc writes `%s`. This write is recorded; if "
+            "the path is inside this session's repo it will be in this "
+            "session's commit (DR-258 § Amendment 2026-08-30); a path this "
+            "command does not name is not."
             % target
         )
         + (" %s" % _cat_note if _cat_note else "")

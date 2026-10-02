@@ -37,9 +37,10 @@ that predicate does not, and should not, recognize. Gating an unrelated
 per-repo file against the global CLAUDE.md budget would be asserting a
 constraint that does not apply to it. What exists on the consuming side is
 read-time VISIBILITY, not a write-time refusal: `assert-em-role.py`'s
-`_REPO_SNIPPET_SOFT_CAP_BYTES` (32,768 bytes) banners an oversized
-`em-context.md` at read time, but then delivers the full content into the
-session anyway — it warns and proceeds, it does not block. So nothing stops
+`_REPO_SNIPPET_SOFT_CAP_BYTES` (815 bytes, the `em_context` leg of the EM
+payload budget) banners an over-cap `em-context.md` at read time, but then
+delivers the full content into the session anyway -- it warns and proceeds,
+it does not block. So nothing stops
 an oversized `em-context.md` from being written here, by design — do not
 reintroduce a byte-budget die() here for this target.
 

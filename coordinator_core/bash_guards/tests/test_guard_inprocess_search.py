@@ -305,3 +305,17 @@ class TestSuccessNeverShipsAsError:
             hso = result["hookSpecificOutput"]
             assert hso.get("permissionDecision") != "deny"
             assert "permissionDecisionReason" not in hso
+
+
+class TestLiteralReadsOfANamedFileAreNotIntercepted:
+    @pytest.mark.parametrize(
+        "cmd",
+        ["sed -n 1,2p f.txt", "cat f.txt", "head -n 1 f.txt", "tail -n 1 f.txt"],
+    )
+    def test_bare_read_is_left_to_bash(self, tmp_path, cmd):
+        (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+        assert guard.check(_payload(cmd, str(tmp_path))) is None
+
+    def test_grep_is_still_answered(self, tmp_path):
+        (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+        assert guard.check(_payload("grep b f.txt", str(tmp_path))) is not None

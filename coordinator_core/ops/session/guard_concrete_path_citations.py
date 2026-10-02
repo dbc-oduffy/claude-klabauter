@@ -1191,6 +1191,9 @@ def _is_evidence_artifact(filename: str) -> bool:
         return True
     if filename in _EVIDENCE_ARTIFACT_EXACT_FILES:
         return True
+    # dispatch_emit output: regenerated from its plan, never hand-authored.
+    if filename.startswith("docs/plans/") and filename.endswith(".workflow.mjs"):
+        return True
     if filename.lower().endswith(_COMMENT_SYNTAX_FREE_EXTENSIONS):
         return True
     if filename.startswith(_CAPTURE_DATA_PATH_PREFIXES) and filename.lower().endswith(

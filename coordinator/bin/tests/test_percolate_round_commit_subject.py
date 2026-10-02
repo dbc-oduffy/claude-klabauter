@@ -95,6 +95,23 @@ def test_subject_never_claims_removals_the_commit_does_not_carry():
     assert "67 reported change(s) not carried" in subject
 
 
+def test_subject_leads_with_dest_repo_and_brackets_the_row():
+    subject = _mod._build_commit_subject(
+        "claude-klabauter-coordinator-bin", [], [], dest_name="claude-klabauter"
+    )
+
+    assert subject.startswith(
+        "percolate publish: claude-klabauter [claude-klabauter-coordinator-bin] ("
+    )
+
+
+def test_subject_keeps_bare_row_when_dest_unknown_or_same():
+    assert _mod._build_commit_subject("row", [], []).startswith("percolate publish: row (")
+    assert _mod._build_commit_subject("row", [], [], dest_name="row").startswith(
+        "percolate publish: row ("
+    )
+
+
 def test_subject_matches_when_pathspec_equals_real_changes():
     real_changes = [("NEW", "a.py"), ("NEW", "b.py")]
     pathspec = ["a.py", "b.py"]

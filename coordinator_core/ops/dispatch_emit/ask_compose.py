@@ -357,7 +357,7 @@ def compose_ask_script(
         b.append(
             f"    const _blitz = await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
             f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
-            "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.route, "
+            "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
             "planPath: null, executionOpen: true }] });"
         )
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")

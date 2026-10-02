@@ -1063,7 +1063,7 @@ def test_next_wave_entries_are_shaped_for_the_workflow_and_carry_planPath(tmp_pa
     out = bl.land_wave(root, {"waveIndex": 0, "ready": []})
 
     entry = next(b for b in out["next_wave"]["batons"] if b["id"] == "d-1")
-    assert set(entry) == {"id", "path", "title", "sized", "planPath", "executionOpen"}
+    assert set(entry) == {"id", "path", "title", "sized", "planPath", "executionOpen", "route"}
     assert entry["planPath"].endswith(existing)
     assert Path(entry["path"]).is_absolute()
 

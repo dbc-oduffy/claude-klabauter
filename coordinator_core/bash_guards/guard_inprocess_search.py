@@ -366,6 +366,17 @@ def check(
         from coordinator_core._hook_envelope import rewrite_input
         from coordinator_core.search.answer import answer
 
+        from coordinator_core.search.answer import ReadSource, plan_for
+
+        # A bare literal read of a named file (`sed -n N,Mp f`, `cat f`,
+        # `head`/`tail`) is not a search: diverting its output into
+        # additionalContext leaves the tool result empty and, past ~13KB,
+        # persists the content to a file the agent only sees a preview of.
+        # Read-shaped commands with a pipe stage (a filter) still answer.
+        _plan = plan_for(command)
+        if _plan is not None and isinstance(_plan.source, ReadSource) and not _plan.stages:
+            return None
+
         cwd = payload.get("cwd") or os.getcwd()
         rendered = answer(command, cwd=cwd)
     except Exception:

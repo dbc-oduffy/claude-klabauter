@@ -851,3 +851,20 @@ class TestCrashDenyMessageAccuracy:
         assert "boom" in deny
         assert "coordinator_core/bash_guards/" in deny
         assert "dispatch.py" in deny
+
+
+class TestCatHeredocWriteAdviseOutOfRepo:
+    def test_target_whose_git_root_is_home_gets_no_advisory(self, tmp_path, monkeypatch):
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setenv("HOME", str(tmp_path))
+        cmd = "cat > %s/log.md <<'EOF'\nx\nEOF" % tmp_path
+        assert dispatch_checks.check_cat_heredoc_write_advise(cmd, "s") is None
+
+    def test_target_in_a_non_home_repo_gets_conditional_wording(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        repo = home / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        cmd = "cat > %s/log.md <<'EOF'\nx\nEOF" % repo
+        advisory = _advisory_text(_hso(dispatch_checks.check_cat_heredoc_write_advise(cmd, "s")))
+        assert "if the path is inside this session's repo" in advisory

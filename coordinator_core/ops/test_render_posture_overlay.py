@@ -536,3 +536,18 @@ def test_rerender_with_posture_text_is_idempotent(tmp_path, _isolated_claude_hom
 
     assert target.read_bytes() == first
     assert first.count(b"hand edited posture") == 1
+
+
+def test_shipped_posture_blocks_fit_em_context_soft_cap(tmp_path, _isolated_claude_home):
+    """Each shipped posture, rendered into a fresh em-context.md with no
+    machine posture_text, stays within assert-em-role's soft cap."""
+    from coordinator_core.hooks.assert_em_role import _REPO_SNIPPET_SOFT_CAP_BYTES
+
+    root = Path(__file__).resolve().parents[2] / "coordinator"
+    if not (root / "templates" / "postures").is_dir():
+        pytest.skip("posture templates are not shipped in this checkout")
+    for anchor in ("precision", "default", "substrate-free"):
+        target = tmp_path / anchor / "em-context.md"
+        assert main([anchor, str(target)], coordinator_root=str(root)) == 0
+        size = len(target.read_bytes())
+        assert size <= _REPO_SNIPPET_SOFT_CAP_BYTES, (anchor, size)

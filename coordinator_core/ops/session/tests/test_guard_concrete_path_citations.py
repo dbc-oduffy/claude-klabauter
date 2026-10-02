@@ -279,7 +279,7 @@ def test_dead_registry_rung_flags_home_spelling_too() -> None:
 
 def test_hardcoded_plugin_exec_path_flagged() -> None:
     hits = detect_in_text(
-        'run "~/.claude/plugins/coordinator/bin/foo"\n',
+        'run "~/.claude/plugins/coordinator-claude/coordinator/bin/foo"\n',
         filename="setup.sh",
     )
     assert any(f.rule == "dead-registry-rung" for f in hits)
@@ -528,7 +528,7 @@ def test_dead_registry_rung_yaml_non_prose_key_not_swallowed() -> None:
 
 
 def test_dead_registry_rung_json_description_field_not_flagged() -> None:
-    text = '{\n  "description": "True when ~/.claude/plugins/coordinator/CLAUDE.md exists."\n}\n'
+    text = '{\n  "description": "True when ~/.claude/plugins/coordinator-claude/coordinator/CLAUDE.md exists."\n}\n'
     hits = detect_in_text(text, filename="schema.json")
     assert "dead-registry-rung" not in _rules(hits)
 
@@ -889,3 +889,10 @@ def test_live_plan_stays_gated() -> None:
 def test_terminal_status_outside_plans_stays_gated() -> None:
     text = "---\nstatus: implemented\n---\nthe repo lives at /Users/realperson/X/claude-klabauter\n"
     assert any(f.rule == "posix-home" for f in detect_in_text(text, filename="docs/research/x.md"))
+
+
+def test_emitted_plan_workflow_script_is_exempt() -> None:
+    from coordinator_core.ops.session.guard_concrete_path_citations import _is_evidence_artifact
+    assert _is_evidence_artifact("docs/plans/2026-10-02-x.workflow.mjs")
+    assert not _is_evidence_artifact("docs/plans/2026-10-02-x.md")
+    assert not _is_evidence_artifact("coordinator/bin/x.workflow.mjs")

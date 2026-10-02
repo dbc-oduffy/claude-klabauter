@@ -214,3 +214,11 @@ def test_an_ordinary_diff_is_still_rewritten() -> None:
 
 def test_status_is_unaffected_by_the_diff_only_exclusion() -> None:
     assert _rewrites("git status") is True
+
+
+def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it():
+    a = guard.check_git_no_optional_locks("git status -sb")
+    b = guard.check_git_no_optional_locks("git log --oneline -3 && git diff --stat")
+    ctx_a = a["hookSpecificOutput"]["additionalContext"]
+    ctx_b = b["hookSpecificOutput"]["additionalContext"]
+    assert ctx_a == ctx_b

@@ -667,6 +667,19 @@ def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]
     return None
 
 
+def effective_sizing_route(worktree_root: Path, citations: Optional[Sequence[str]]) -> Optional[str]:
+    """`_sizing_route` over a baton's raw `sizing_objects` citations, live
+    then archived -- what a wave carries so a recorded XL exit reaches it."""
+    if not citations:
+        return None
+    resolved, unresolved = _resolve_sizing_citations(worktree_root, list(citations), {})
+    if unresolved:
+        resolved, _ = _resolve_sizing_citations(
+            worktree_root, list(citations), _archived_sizing_index(worktree_root)
+        )
+    return _sizing_route(worktree_root, resolved)
+
+
 def _archived_sizing_index(worktree_root: Path) -> "Dict[str, str]":
     """`{basename: relpath}` for every archived sizing. Built lazily, once."""
     index: "Dict[str, str]" = {}

@@ -83,7 +83,7 @@ def test_is_sidecar_file_matches_all_suffixes():
 
 
 def test_normalize_prefix_strips_published_prefix():
-    assert _normalize_prefix("plugins/coordinator/bin/x.sh") == "coordinator/bin/x.sh"
+    assert _normalize_prefix("plugins/coordinator-claude/coordinator/bin/x.sh") == "coordinator/bin/x.sh"
     assert _normalize_prefix("coordinator/bin/x.sh") == "coordinator/bin/x.sh"
 
 
@@ -221,7 +221,7 @@ def test_prefix_normalization_resolves_scope_path(tmp_path, monkeypatch):
     _write_plan(
         tmp_path / "plan.md",
         (_TODAY - timedelta(days=20)).isoformat(),
-        scope_lines=["plugins/coordinator/bin/tool.sh"],
+        scope_lines=["plugins/coordinator-claude/coordinator/bin/tool.sh"],
     )
     has_work, err = _has_real_work_or_completion_match("plan.md", frozenset())
     assert err is None

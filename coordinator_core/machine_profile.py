@@ -282,6 +282,10 @@ def apply_guard_level(
     if risk is None:
         reason = str(hso.get("permissionDecisionReason") or "").strip()
         risk = " ".join(reason.split("\n\n", 1)[0].split())
+        # A warn-level advisory never blocked anything; do not let the
+        # embedded deny text claim it did.
+        if risk.startswith("BLOCKED:"):
+            risk = "would be blocked at strict level:" + risk[len("BLOCKED:"):]
     event = hso.get("hookEventName") or "PreToolUse"
     out: Dict[str, Any] = {
         "hookEventName": event,

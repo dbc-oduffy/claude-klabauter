@@ -87,6 +87,16 @@ def test_accepted_m_returns_arm_and_baton(repo):
     assert v.to_json()["baton"]["id"] == v.baton["id"]
 
 
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_accepted_multi_session_xl_baton_carries_the_plan_route(repo):
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, tshirt="XL", route="pm-decision", accepted=ACCEPTED, xl_exit="accept_multi_session")
+    v = gate(repo, REL)
+    assert v.halt is None and v.arm == "m_plus"
+    assert v.baton["route"] == "plan"
+
 def _composed_params(op: str, **values) -> dict:
     """The params object the composed script's agent is told to send to `op`, values filled in."""
     import json

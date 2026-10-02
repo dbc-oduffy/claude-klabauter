@@ -98,7 +98,7 @@ def compose_roadmap_script(
         "Read the frozen gate report at ",
         "js:_rb.gate_report_path",
         " and return its `waves` field verbatim: each wave's `index` and `batons` (id, path, title, "
-        "sized, planPath, executionOpen exactly as recorded). The waves are engine-computed from file "
+        "sized, planPath, executionOpen, route exactly as recorded). The waves are engine-computed from file "
         "overlap: copy, never regroup, reorder or merge.",
     )
     exec_prompt = prompt_of(
