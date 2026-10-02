@@ -102,6 +102,7 @@ def record_superseding_review(
     """Write the superseding record; returns ``{record_path, record}`` with
     ``record_path`` repo-root-relative. ``plan`` is a ``pln-`` id or a plan
     file path. Raises ``SupersedeRefused``."""
+    plan_stem = None if plan.startswith("pln-") else Path(plan).stem
     plan = _resolve_plan_id(repo_root, plan)
     base = str(commit_range.get("base") or "")
     head = str(commit_range.get("head") or "")
@@ -129,6 +130,7 @@ def record_superseding_review(
         prep_sidecar=prep_sidecar,
         record_stem=record_stem,
         stage_returns=stage_returns,
+        plan_stem=plan_stem,
     )
     src = Path(record["sidecar_path"])
     text = src.read_text(encoding="utf-8").replace("\r\n", "\n")

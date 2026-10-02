@@ -65,6 +65,10 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.ops.review_findings_ledger import LedgerError, verify as ledger_verify
+from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
+
+_DATE_TOKEN_RE = re.compile(r"(?:^|-)\d{4}-\d{2}-\d{2}(?=-|$)")
+_DELIVERY_SUFFIX = ".delivery"
 
 
 def review_wave_bookkeeping_stem(plan_id: Optional[str], session_id: Optional[str]) -> str:
@@ -102,6 +106,89 @@ def _load_sidecar_fm(path: Path) -> Optional[Dict[str, Any]]:
 def _stem(path: Path) -> str:
     name = path.name
     return name[:-3] if name.endswith(".md") else name
+
+
+def _slug_without_dates(text: str) -> str:
+    return _DATE_TOKEN_RE.sub("", text).strip("-")
+
+
+def _belongs_to_plan(
+    sidecar_path: Path, fm: Optional[Dict[str, Any]], plan_id: str, plan_stem: Optional[str]
+) -> bool:
+    """False only for a sidecar provably another plan's. A sidecar carrying a
+    ``plan_id``/``plan`` binds iff it names this plan. A ``<stem>.delivery``
+    sidecar (the delivery verifier's output, no plan field) binds iff ``<stem>``
+    is the plan's file stem or, date tokens aside, a prefix of the plan id's
+    slug. Any other sidecar is a reviewer slice the caller named; it binds."""
+    fm = fm or {}
+    for key in ("plan_id", "plan"):
+        claimed = fm.get(key)
+        if isinstance(claimed, str) and claimed:
+            return claimed == plan_id or (plan_stem is not None and Path(claimed).stem == plan_stem)
+    stem = _stem(sidecar_path)
+    if not stem.endswith(_DELIVERY_SUFFIX):
+        return True
+    prefix = stem[: -len(_DELIVERY_SUFFIX)]
+    if plan_stem is not None and prefix == plan_stem:
+        return True
+    slug = _slug_without_dates(prefix)
+    body = plan_id[4:] if plan_id.startswith("pln-") else plan_id
+    return bool(slug) and body.startswith(slug)
+
+
+def resolve_prep_sidecar(
+    prep_sidecar: Optional[str],
+    *,
+    repo_root: Path,
+    session_id: str,
+    tests_sidecar: Optional[str] = None,
+) -> Optional[str]:
+    """The prep sidecar path as it exists on disk, else ``None``. A named path
+    that exists is kept; a phantom one is re-resolved against the sidecars the
+    harness actually writes (``<sanitized agent type>.<agentId>.md``, minted by
+    ``provision_report._provision``): the run's own test-runner sidecar
+    (``tests_sidecar``) first, else the newest ``<label>.*.md`` in the session
+    share dir, ``<label>`` being the phantom's own leaf minus a ``review-``
+    prefix, sanitized by ``provision_report._sanitize_segment``."""
+    def _rel(p: Path) -> str:
+        try:
+            return p.relative_to(repo_root).as_posix()
+        except ValueError:
+            return p.as_posix()
+
+    def _exists(raw: str) -> Optional[Path]:
+        cand = Path(raw)
+        if not cand.is_absolute():
+            cand = repo_root / cand
+        return cand if cand.is_file() else None
+
+    if prep_sidecar:
+        hit = _exists(prep_sidecar)
+        if hit is not None:
+            return prep_sidecar
+    if tests_sidecar:
+        hit = _exists(tests_sidecar)
+        if hit is not None:
+            return _rel(hit)
+    if not prep_sidecar:
+        return None
+    leaf = Path(prep_sidecar).name
+    label = leaf[:-3] if leaf.endswith(".md") else leaf
+    if label.startswith("review-"):
+        label = label[len("review-"):]
+    label = _sanitize_segment(label)
+    if label is None:
+        return None
+    share = repo_root / ".coordinator-local" / "subagent-share" / session_id
+    if not share.is_dir():
+        return None
+    found = [
+        p for p in share.glob(f"{label}.*.md")
+        if not p.name.endswith(".blocks.md") and p.is_file()
+    ]
+    if not found:
+        return None
+    return _rel(max(found, key=lambda p: (p.stat().st_mtime, p.name)))
 
 
 def stamp_plan_id(sidecar_path: Path, plan_id: str) -> bool:
@@ -167,6 +254,7 @@ def bookkeep_wave(
     prep_sidecar: Optional[str],
     record_stem: str,
     stage_returns: Optional[Dict[str, Any]] = None,
+    plan_stem: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the mechanical bookkeeping step and write the ONE bookkeeping
     record. Returns the record dict (also the return value written to
@@ -177,7 +265,11 @@ def bookkeep_wave(
     one-stage path `unresolved`/`confinement_violations`/`fixes_applied`).
     Its keys win over anything derived from a sidecar's frontmatter: a
     structured return is the engine's own data, frontmatter is an agent's
-    copy of it."""
+    copy of it.
+
+    A wave sidecar provably another plan's (``_belongs_to_plan``) is left
+    out of the record and listed under ``excluded_sidecars``; ``prep_sidecar``
+    is re-resolved to a file that exists, else recorded ``None``."""
     ledger_failures: Dict[str, List[str]] = {}
     confinement_notes: List[str] = []
     fixes_applied = 0
@@ -186,10 +278,16 @@ def bookkeep_wave(
     brief_unmet = 0
     em_may_think_differently: List[Dict[str, Any]] = []
     integrated_from: List[str] = []
+    excluded_sidecars: List[str] = []
+    kept: List[Path] = []
 
     for sidecar_path in wave_sidecar_paths:
         sidecar_path = Path(sidecar_path)
         stem = _stem(sidecar_path)
+        if not _belongs_to_plan(sidecar_path, _load_sidecar_fm(sidecar_path), plan_id, plan_stem):
+            excluded_sidecars.append(stem)
+            continue
+        kept.append(sidecar_path)
         integrated_from.append(stem)
 
         try:
@@ -220,11 +318,19 @@ def bookkeep_wave(
 
         stamp_plan_id(sidecar_path, plan_id)
 
+    tests_ret = (stage_returns or {}).get("tests")
+    tests_sidecar = tests_ret.get("sidecar") if isinstance(tests_ret, dict) else None
     record: Dict[str, Any] = {
         "plan_id": plan_id,
-        "prep_sidecar": prep_sidecar,
+        "prep_sidecar": resolve_prep_sidecar(
+            prep_sidecar,
+            repo_root=repo_root,
+            session_id=session_id,
+            tests_sidecar=tests_sidecar if isinstance(tests_sidecar, str) else None,
+        ),
         "integrated_from": integrated_from,
-        "slices": len(wave_sidecar_paths),
+        "excluded_sidecars": excluded_sidecars,
+        "slices": len(kept),
         "fixes_applied": fixes_applied,
         # § module docstring point 2: report-only, never a blocking count.
         "confinement_violations": 0,

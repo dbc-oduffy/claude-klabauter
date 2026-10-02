@@ -92,6 +92,7 @@ def two_wave_sidecars(tmp_path):
 def test_bookkeep_wave_writes_one_record_with_merged_fields(two_wave_sidecars):
     repo_root, sidecars = two_wave_sidecars
     stem = review_wave_bookkeeping_stem("pln-example-a1b2c3", "sess-1")
+    (repo_root / ".coordinator-local/subagent-share/sess-1/prep.md").write_text("x", encoding="utf-8")
 
     record = bookkeep_wave(
         sidecars,
@@ -158,3 +159,95 @@ def test_bookkeep_wave_never_raises_on_ledger_verify_failure(tmp_path):
     )
     assert "bad" in record["ledger_failures"]
     assert record["unresolved"] == []
+
+
+def _plain_sidecar(share, name, fm_lines=()):
+    share.mkdir(parents=True, exist_ok=True)
+    body = "---\n" + "\n".join(fm_lines) + "\n---\nbody\n" if fm_lines else "# Delivery verification\nVerdict PASS.\n"
+    path = share / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_two_plans_share_dir_binds_only_own_delivery(tmp_path):
+    (tmp_path / ".git").mkdir()
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-2"
+    mine = _plain_sidecar(share, "roadmap-blitz-workflow-skill.delivery.md")
+    other = _plain_sidecar(share, "install-dogfood-fixes-2026-10-02.delivery.md")
+    other_plan = _plain_sidecar(
+        share, "coordinator-code-reviewer.a1.md", ["agent_type: review-findings", "plan_id: pln-install-dogfood-fixes-close-ev-e12ab2"]
+    )
+    own_slice = _plain_sidecar(share, "coordinator-code-reviewer.a2.md", ["agent_type: review-findings"])
+
+    record = bookkeep_wave(
+        [mine, other, other_plan, own_slice],
+        repo_root=tmp_path,
+        session_id="sess-2",
+        plan_id="pln-roadmap-blitz-workflow-skill-a-9177a4",
+        prep_sidecar=None,
+        record_stem="rec",
+    )
+
+    assert record["integrated_from"] == [
+        "roadmap-blitz-workflow-skill.delivery",
+        "coordinator-code-reviewer.a2",
+    ]
+    assert sorted(record["excluded_sidecars"]) == [
+        "coordinator-code-reviewer.a1",
+        "install-dogfood-fixes-2026-10-02.delivery",
+    ]
+    assert record["slices"] == 2
+    assert "plan_id" not in other.read_text()
+    assert "pln-roadmap" not in other_plan.read_text()
+
+
+def test_delivery_binds_by_plan_stem(tmp_path):
+    (tmp_path / ".git").mkdir()
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "s"
+    d = _plain_sidecar(share, "2026-10-02-my-plan.delivery.md")
+    record = bookkeep_wave(
+        [d], repo_root=tmp_path, session_id="s", plan_id="pln-zzz-aaaaaa",
+        prep_sidecar=None, record_stem="rec", plan_stem="2026-10-02-my-plan",
+    )
+    assert record["integrated_from"] == ["2026-10-02-my-plan.delivery"]
+
+
+def test_phantom_prep_sidecar_resolves_to_real_runner_sidecar(tmp_path):
+    (tmp_path / ".git").mkdir()
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-3"
+    _plain_sidecar(share, "coordinator-test-runner.aaa.blocks.md")
+    real = _plain_sidecar(share, "coordinator-test-runner.aaa.md", ["status: complete"])
+    phantom = ".coordinator-local/subagent-share/sess-3/review-coordinator-test-runner.md"
+
+    record = bookkeep_wave(
+        [], repo_root=tmp_path, session_id="sess-3", plan_id="pln-p-aaaaaa",
+        prep_sidecar=phantom, record_stem="rec",
+    )
+
+    assert record["prep_sidecar"] == real.relative_to(tmp_path).as_posix()
+    assert (tmp_path / record["prep_sidecar"]).is_file()
+
+
+def test_phantom_prep_sidecar_picks_this_runs_tests_sidecar(tmp_path):
+    (tmp_path / ".git").mkdir()
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-4"
+    _plain_sidecar(share, "coordinator-test-runner.old.md", ["status: complete"])
+    mine = _plain_sidecar(share, "coordinator-test-runner.mine.md", ["status: complete"])
+    rel = mine.relative_to(tmp_path).as_posix()
+    record = bookkeep_wave(
+        [], repo_root=tmp_path, session_id="sess-4", plan_id="pln-p-aaaaaa",
+        prep_sidecar=".coordinator-local/subagent-share/sess-4/review-coordinator-test-runner.md",
+        record_stem="rec", stage_returns={"tests": {"sidecar": rel}},
+    )
+    assert record["prep_sidecar"] == rel
+
+
+def test_phantom_prep_sidecar_with_no_real_file_is_recorded_absent(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".coordinator-local" / "subagent-share" / "sess-5").mkdir(parents=True)
+    record = bookkeep_wave(
+        [], repo_root=tmp_path, session_id="sess-5", plan_id="pln-p-aaaaaa",
+        prep_sidecar=".coordinator-local/subagent-share/sess-5/review-coordinator-test-runner.md",
+        record_stem="rec",
+    )
+    assert record["prep_sidecar"] is None

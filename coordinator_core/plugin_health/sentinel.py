@@ -108,7 +108,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from coordinator_core._settings_home import normalize_native_path, settings_home
+from coordinator_core._settings_home import home_dir, normalize_native_path, settings_home
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root_pointer import read_content_root_pointer_file
@@ -1443,6 +1443,17 @@ def probe_p22(claude_klabauter_root: Path) -> List[ProbeNote]:
     return []
 
 
+def probe_p24(home: Path, ml_dir: Path) -> List[ProbeNote]:
+    """Report registered absolute paths (LaunchAgents, `~/.claude.json`, registered
+    repos' `.mcp.json`, the registry) that no longer exist. Read-only."""
+    from coordinator_core.plugin_health.stale_registered_paths import find_stale
+
+    return [
+        ProbeNote("P-24", "amber", f"stale registered path: {finding.render()}")
+        for finding in find_stale(home, ml_dir)
+    ]
+
+
 def probe_p20() -> List[ProbeNote]:
     """Verify the bash resolved FIRST on PATH is version >= 4 (macOS ships 3.2
     at /bin/bash, ahead of any homebrew bash unless PATH is fixed).
@@ -1911,6 +1922,8 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
             sh_bin,
         ),
     )
+
+    _run_probe("P-24", lambda: probe_p24(home_dir(), ml_dir))
 
     for _unwired in _UNWIRED_PROBE_IDS:
         if _unwired in active:
