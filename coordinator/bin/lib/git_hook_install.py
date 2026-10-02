@@ -96,7 +96,7 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 
 GENERATES = []
 
-_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator-claude/coordinator/bin"
+_MARKETPLACE_SUFFIX = ".claude/plugins/coordinator/bin"
 
 _CONTENT_ROOT_DURABLE_SH = '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.coordinator-content-root'
 _CONTENT_ROOT_LEGACY_SH = '$HOME/.claude/.coordinator-content-root'
@@ -236,7 +236,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
             which defaults to the published mirror by ruling — see this
             function's own docstring, DR-326 axis note, below.
     Rung 5: marketplace path
-            `$HOME/.claude/plugins/coordinator-claude/coordinator/bin` —
+            `$HOME/.claude/plugins/coordinator/bin` —
             unconditional backstop, no isfile probe (matches prior behavior;
             this is the last resort, not a candidate to skip past).
 

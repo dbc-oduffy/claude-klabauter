@@ -5041,13 +5041,13 @@ def run_preflight() -> int:
 def write_environment_import(root: Path, variant: str) -> None:
     """Write `.claude/environment.md` from `docs/claude-md/environment.<variant>.md`.
 
-    The project CLAUDE.md imports this file; a missing source is reported, never fatal.
-    A published mirror ships neither the source nor a CLAUDE.md that imports it, so
-    a root with both absent has nothing to write and says nothing.
+    The project CLAUDE.md imports this file. The source is an optional per-operator
+    file: a missing source is a silent skip (nothing to import), never a WARN. Only a
+    failure to read/write a source that exists is reported, and never fatal.
     """
     src = root / "docs" / "claude-md" / f"environment.{variant}.md"
     dest = root / ".claude" / "environment.md"
-    if not src.exists() and not (root / "CLAUDE.md").exists():
+    if not src.exists():
         return
     try:
         text = src.read_text(encoding="utf-8")

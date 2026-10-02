@@ -6830,9 +6830,9 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/liveness.py:80` | - | `logger.debug("coordinator_core.liveness: _lib_path: CLAUDE_KLABAUTER_ROOT unresolvable: %s", exc)` |
 | `coordinator_core/message_register/_codename_classes.py:124` | - | `"COORDINATOR_CLAUDE_KLABAUTER_DENY_AUTHORITATIVE": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:125` | - | `"COORDINATOR_CLAUDE_KLABAUTER_DOCTOR_STALE_SEC": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:141` | - | `"DOE-CLAUDE-KLABAUTER": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:157` | - | `"Doe-CLAUDE-KLABAUTER": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:158` | - | `"Doe-Claude-Klabauter": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:141` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:157` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:158` | - | `"coordinator-content-repo-Klabauter": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:173` | - | `"MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER_REPO": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:174` | - | `"CLAUDE-KLABAUTER": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:175` | - | `"CLAUDE_KLABAUTER_ROOT": RENAME,` |
@@ -6846,7 +6846,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator_core/message_register/_codename_classes.py:213` | - | `"check-claude-klabauter-doctor-sentinel.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:219` | - | `"coordinator-claude-klabauter-root.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:220` | - | `"coordinator_claude_klabauter_root": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:231` | - | `"doe-CLAUDE-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:231` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:233` | - | `"content-engine": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:251` | - | `"gen-claude-klabauter-live-root-pointer": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:259` | - | `"claude-klabauter": RENAME,` |
@@ -9434,11 +9434,11 @@ Every row below passed the sibling-consumer check (source spelling against coord
 | `coordinator_core/install/test_maximalist.py:1512` | - | `def test_seed_claude_klabauter_check_only_does_not_invoke_machine_local(stub_env, monkeypatch):` |
 | `coordinator_core/install/test_maximalist.py:1544` | - | `def test_seed_claude_klabauter_machine_local_absent_degrades_to_note(stub_env, monkeypatch, capsys):` |
 | `coordinator_core/install/test_maximalist.py:1571` | - | `def test_seed_claude_klabauter_missing_coordinator_core_warns_and_skips(stub_env, monkeypatch, tmp_path, capsys):` |
-| `coordinator_core/message_register/_codename_classes.py:312` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "doeclaude_klabauter", "projectclaude_klabauter"})` |
+| `coordinator_core/message_register/_codename_classes.py:312` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "contentroot_klabauter", "projectclaude_klabauter"})` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:26` | - | `def test_fires_on_claude_klabauter_prose():` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:33` | - | `def test_stays_silent_on_repos_claude_klabauter_functional_identifier():` |
 | `coordinator_core/message_register/tests/test_b7_foreign_identity.py:47` | - | `def test_stays_silent_on_bare_repos_claude_klabauter_only():` |
-| `coordinator_core/message_register/tests/test_codename_classes.py:85` | - | `def test_doe_claude_klabauter_compound_key_classifies_redaction():` |
+| `coordinator_core/message_register/tests/test_codename_classes.py:85` | - | `def test_content_root_klabauter_compound_key_classifies_redaction():` |
 | `coordinator_core/ops/fleet/tests/test_memo_resolver.py:354` | - | `def test_claude_klabauter_em_suggests_claude_klabauter_em(self):` |
 | `coordinator_core/percolate/tests/test_bare_local_var_stem_suffix_syntax.py:132` | - | `def test_bare_claude_klabauter_token_survives_every_stem_rewrite_row(_store: dict) -> None:` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:200` | - | `def test_claude_klabauter_stem_key_present_and_underscore_form():` |
@@ -9448,7 +9448,7 @@ Every row below passed the sibling-consumer check (source spelling against coord
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:587` | - | `fixture = 'python "%~dp0Claude-Klabauter-doctor-probe.py" %*\n'` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:669` | - | `def _claude_klabauter_percolate_store_path() -> Path:` |
 | `coordinator_core/percolate/tests/test_codename_provenance_seed.py:704` | - | `store_path = _claude_klabauter_percolate_store_path()` |
-| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:98` | - | `def test_glued_compound_doe_claude_klabauter_scrubs_claude_klabauter_and_preserves_content_root(` |
+| `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:98` | - | `def test_glued_compound_content_root_klabauter_scrubs_claude_klabauter_and_preserves_content_root(` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:126` | - | `def test_every_target_row_citing_both_doe_family_and_claude_klabauter_substitutes_the_glued_compound(` |
 | `coordinator_core/percolate/tests/test_glued_compound_codename_leak.py:164` | - | `if not (cites_claude_klabauter_family and cites_doe_family):` |
 | `coordinator_core/percolate/tests/test_permit_checker_parity.py:100` | - | `def _claude_klabauter_permits_name_occurrences(` |
