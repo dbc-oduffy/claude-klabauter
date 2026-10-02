@@ -1182,6 +1182,57 @@ def test_restamp_rebinds_sha_and_records_witness(tmp_path: Path) -> None:
     assert "EM correction" in written
 
 
+def test_restamp_rebinds_approved_body_sha_after_mid_run_re_review(tmp_path: Path) -> None:
+    """A mid-run re-review amends an executing plan: restamp binds
+    approved_body_sha to the live body so the plan gate stops refusing."""
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_CHANGED, APPROVED_BODY_OK, check_approved_body, stamp_approved_body_sha,
+    )
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(stamp_approved_body_sha(_PLAN_TEXT), encoding="utf-8")
+    _stamp_then_edit_body(plan_path, tmp_path, "\nAmended at re-review.\n")
+    assert check_approved_body(plan_path.read_text(encoding="utf-8"))[0] == APPROVED_BODY_CHANGED
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "coordinator:eng-director", "re-review", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK and result["applied"] is True
+    assert check_approved_body(plan_path.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+
+def test_restamp_binds_approved_body_sha_when_execution_sha_already_covers(tmp_path: Path) -> None:
+    """A plan restamped before this binding existed already carries the live
+    execution sha; a second restamp still repairs a stale approved_body_sha."""
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_OK, check_approved_body, stamp_approved_body_sha,
+    )
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(stamp_approved_body_sha(_PLAN_TEXT), encoding="utf-8")
+    _stamp_then_edit_body(plan_path, tmp_path, "\nAmended.\n")
+    restamp_execution_authorization(
+        str(plan_path), "coordinator:eng-director", "first", at="2026-07-26", repo_root=tmp_path
+    )
+    text = plan_path.read_text(encoding="utf-8")
+    from coordinator_core.frontmatter.primitives import split_frontmatter, replace_fm_field, rebuild
+    split = split_frontmatter(text)
+    plan_path.write_text(
+        rebuild(split, replace_fm_field(split.fm_text, "approved_body_sha", "0" * 40, numeric_quoting=True)),
+        encoding="utf-8",
+    )
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "coordinator:eng-director", "second", at="2026-07-26", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_OK and result["applied"] is True
+    assert check_approved_body(plan_path.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+
 def test_restamp_chained_keeps_original_from_sha(tmp_path: Path) -> None:
     """AC2: a second edit plus a second restamp leaves _from_sha unchanged
     (the first PM-witnessed sha) and appends the second reason to _note.

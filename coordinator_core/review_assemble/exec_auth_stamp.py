@@ -132,6 +132,7 @@ from coordinator_core.frontmatter.primitives import (
     remove_fm_field,
     replace_fm_field,
     split_frontmatter,
+    stamp_approved_body_sha,
 )
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.pickup_assemble import resolve_repo_root
@@ -608,6 +609,16 @@ def restamp_execution_authorization(
     state: dict[str, Any] = {"applied": False}
 
     def _mutate(old_text: str) -> str:
+        # A restamp is a named reviewer witnessing the live body, so it also
+        # binds approved_body_sha -- else a mid-run re-review leaves the plan
+        # gate refusing "body changed since approval" with no route out.
+        new_text = _rebind(old_text)
+        stamped = stamp_approved_body_sha(new_text)
+        if stamped != new_text:
+            state["applied"] = True
+        return stamped
+
+    def _rebind(old_text: str) -> str:
         split = split_frontmatter(old_text)
         if split is None:
             raise MutateAbort(f"{plan_path}: no parseable frontmatter (race)")
@@ -671,7 +682,7 @@ def restamp_execution_authorization(
         return EXIT_BUSINESS_FAIL, {"error": f"cannot read/write plan file: {exc}"}
 
     message = (
-        f"restamped execution_authorized_sha onto {plan_path} (sha={sha}, by={by})"
+        f"restamped execution_authorized_sha and approved_body_sha onto {plan_path} (sha={sha}, by={by})"
         if state["applied"]
         else f"{plan_path} already covers the live body -- no-op"
     )
