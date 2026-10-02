@@ -144,10 +144,12 @@ def test_wave_phase_carries_executor_agent_type():
     assert "agentType: 'coordinator:executor'" in script
 
 
-def test_no_git_commit_agent_type_anywhere():
+def test_git_commit_agent_appears_only_as_the_serialised_checkpoint_committer():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
-    assert "coordinator:git-commit-agent" not in script
+    assert script.count("agentType: 'coordinator:git-commit-agent'") == 1
+    assert "label: 'commit:wave-' + n" in script
+    assert "Commit wave" not in script
 
 
 def test_terminal_phase_carries_test_runner_agent_type():
@@ -1427,7 +1429,6 @@ def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_au
     assert "terminal scoped commit" in script
     assert "dispatch.terminal_commit" in script
     assert "Only the EM commits, once per wave" not in script
-    assert "coordinator:git-commit-agent" not in script
 
 
 def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain():

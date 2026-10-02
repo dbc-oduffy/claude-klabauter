@@ -41,9 +41,8 @@ Negative-spec (mirrors ``install_machine_identity``'s advisory shape):
       [ADVISORY] and swallowed -- the installer/uninstaller as a whole must
       still succeed even if Task Scheduler is unavailable, denied by policy,
       or ``schtasks.exe`` is missing (non-Windows).
-    - No-op (advisory, not an error) on non-Windows -- Task Scheduler does
-      not exist there; cron wiring is explicitly out of this module's scope
-      until named.
+    - macOS/Linux: plain-file registration (LaunchAgent plist / systemd
+      user timer units), no spawned process; active from next login.
     - Idempotent: ``schtasks /Create ... /F`` overwrites an existing task of
       the same name in place rather than erroring or duplicating it, so
       running the installer twice yields exactly one task, unchanged in
@@ -64,6 +63,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.install.substrate import _refuse_machine_mutation
 from coordinator_core.win_portability import no_console_creationflags
 
 TASK_NAME = "CoordinatorHostSampler"
@@ -181,6 +181,89 @@ def _task_xml(python_exe: str, repo_root: Path) -> str:
     )
 
 
+def _plist_label() -> str:
+    return "com.coordinator.hostsampler"
+
+
+def _launch_agent_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{_plist_label()}.plist"
+
+
+def _systemd_user_dir() -> Path:
+    return Path.home() / ".config" / "systemd" / "user"
+
+
+def _launch_agent_plist(python_exe: str, repo_root: Path) -> bytes:
+    import plistlib
+
+    return plistlib.dumps(
+        {
+            "Label": _plist_label(),
+            "ProgramArguments": [str(python_exe), str(_host_sampler_script_path(repo_root))],
+            "WorkingDirectory": str(repo_root),
+            "StartInterval": _INTERVAL_MINUTES * 60,
+            "RunAtLoad": True,
+            "ProcessType": "Background",
+            "LowPriorityIO": True,
+        }
+    )
+
+
+def _systemd_units(python_exe: str, repo_root: Path) -> "dict[str, str]":
+    script = _host_sampler_script_path(repo_root)
+    return {
+        "coordinator-host-sampler.service": (
+            "[Unit]\nDescription=Coordinator host-resource sampler\n\n"
+            "[Service]\nType=oneshot\n"
+            f"WorkingDirectory={repo_root}\n"
+            f"ExecStart={shlex.quote(str(python_exe))} {shlex.quote(str(script))}\n"
+        ),
+        "coordinator-host-sampler.timer": (
+            "[Unit]\nDescription=Coordinator host-resource sampler cadence\n\n"
+            f"[Timer]\nOnBootSec=2min\nOnUnitActiveSec={_INTERVAL_MINUTES}min\n\n"
+            "[Install]\nWantedBy=timers.target\n"
+        ),
+    }
+
+
+def _register_file_based(repo_root: Path, python_exe: Optional[str]) -> bool:
+    """macOS LaunchAgent / Linux systemd user timer, written as plain files so
+    no ``launchctl``/``systemctl``/``crontab`` process is spawned. Both are
+    picked up at next login; nothing is loaded into the running session."""
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
+        print(f"[ADVISORY] no host-sampler scheduler for platform {sys.platform!r}; skipping.")
+        return False
+    blocked = _refuse_machine_mutation(TASK_NAME, what="register the host-sampler job", check_temp_path=False)
+    if blocked:
+        print(f"[ADVISORY] {blocked}")
+        return False
+    python_exe = python_exe or sys.executable
+    try:
+        if sys.platform == "darwin":
+            target = _launch_agent_path()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(target, _launch_agent_plist(python_exe, repo_root))
+            where = f"LaunchAgent {target}"
+        else:
+            udir = _systemd_user_dir()
+            wants = udir / "timers.target.wants"
+            wants.mkdir(parents=True, exist_ok=True)
+            for name, text in _systemd_units(python_exe, repo_root).items():
+                atomic_write_bytes(udir / name, text.encode("utf-8"))
+            link = wants / "coordinator-host-sampler.timer"
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to("../coordinator-host-sampler.timer")
+            where = f"systemd user timer in {udir}"
+    except OSError as exc:
+        print(f"[ADVISORY] host-sampler registration failed ({exc}); install continues.")
+        return False
+    print(f"PASS [host-sampler] {where} (every {_INTERVAL_MINUTES}m; active from next login).")
+    return True
+
+
 def register_host_sampler_task(
     repo_root: Path, python_exe: Optional[str] = None
 ) -> bool:
@@ -193,20 +276,14 @@ def register_host_sampler_task(
     install on it).
     """
     print()
-    print("--- Install: host-resource sampler scheduled task (Windows Task Scheduler) ---")
+    print("--- Install: host-resource sampler scheduled job ---")
 
     if not _IS_WINDOWS:
-        script = _host_sampler_script_path(repo_root)
-        print(
-            "[ADVISORY] not running on Windows — skipping host-sampler task "
-            "registration (Task Scheduler is Windows-only; cron wiring is "
-            "not yet in scope). Host-resource sampling will not run on this "
-            "box; nothing else in the install depends on it."
-        )
-        print(
-            f"  To sample anyway, every {_INTERVAL_MINUTES}m via cron:\n"
-            f"    */{_INTERVAL_MINUTES} * * * * {shlex.quote(sys.executable)} {shlex.quote(str(script))}"
-        )
+        return _register_file_based(repo_root, python_exe)
+
+    blocked = _refuse_machine_mutation(TASK_NAME, what="register the host-sampler scheduled task", check_temp_path=False)
+    if blocked:
+        print(f"[ADVISORY] {blocked}")
         return False
 
     if python_exe is None:
@@ -252,9 +329,38 @@ def register_host_sampler_task(
     return True
 
 
+def _unregister_file_based() -> bool:
+    blocked = _refuse_machine_mutation(TASK_NAME, what="remove the host-sampler job", check_temp_path=False)
+    if blocked:
+        print(f"[ADVISORY] {blocked}", file=sys.stderr)
+        return False
+    udir = _systemd_user_dir()
+    paths = [
+        _launch_agent_path(),
+        udir / "coordinator-host-sampler.service",
+        udir / "coordinator-host-sampler.timer",
+        udir / "timers.target.wants" / "coordinator-host-sampler.timer",
+    ]
+    ok = True
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"[ADVISORY] could not remove {path}: {exc}", file=sys.stderr)
+            ok = False
+    return ok
+
+
 def unregister_host_sampler_task() -> bool:
     if not _IS_WINDOWS:
-        return True
+        return _unregister_file_based()
+
+    blocked = _refuse_machine_mutation(TASK_NAME, what="remove the host-sampler scheduled task", check_temp_path=False)
+    if blocked:
+        print(f"[ADVISORY] {blocked}", file=sys.stderr)
+        return False
 
     proc = _run_schtasks("/Delete", "/TN", TASK_NAME, "/F")
     if proc is None:

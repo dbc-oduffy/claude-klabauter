@@ -123,16 +123,11 @@ The source hook resolved ``coordinator/schemas/`` and
 ``coordinator-registry.manifest.json`` relative to its own on-disk location
 inside the coordinator-content-repo checkout (schemas are DoE-owned doctrine, not
 Claude-klabauter-owned). Running from inside claude-klabauter, this module resolves the
-Coordinator-content-repo repo root via ``coordinator_core.ops.coordinator_content_root.
-coordinator_content_root()`` — the same ratified full-ladder resolver the
-advisory sibling uses (``REPO_CONTENT_ROOT`` env override, then the
-``machine-local`` registry, then the native clone-root resolver) — rather
-than ``coordinator_core.content_root_pointer.read_content_root_pointer()``, which
-``coordinator_core/testing/content_root.py`` documents as "the wrong layer to
-standardize... call sites on" (it skips the ``REPO_CONTENT_ROOT`` override
-and the ``machine-local``/clone-root rungs entirely). Both split modules
-must resolve through the identical function, or they can silently disagree
-on which coordinator-content-repo checkout is authoritative — exactly the condition the
+content root via ``coordinator_core.content_root.read_content_root()``
+— the same resolver the advisory sibling uses (``repos.content_root``
+registry key, then the pointer files, then the installed plugin root).
+Both split modules must resolve through the identical function, or they
+can silently disagree on which content checkout is authoritative — exactly the condition the
 mutual-exclusivity guarantee above depends on not happening. Unresolvable
 root, missing manifest, or malformed manifest/schema JSON all narrow to
 "this guard produces nothing" (``check()`` returns ``None``), exactly
@@ -168,7 +163,7 @@ from coordinator_core.frontmatter.baton_class import (
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter as _split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.frontmatter.schema_validate import (
@@ -400,7 +395,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
     is a dict assignment (no I/O), so the ``None`` default (every call site
     that doesn't care) costs nothing. See `_capture_guard_forensics` for the
     consumer and the ABSENT-vs-TORN distinction this distinguishes: an
-    unresolvable/absent DoE root is recorded as ``content_root_unresolvable``
+    unresolvable/absent content root is recorded as ``content_root_unresolvable``
     (steady state, e.g. a partial install with no sibling checkout — NOT a
     failure worth capturing on every write on such a machine), while a
     manifest read that found the path present but never got a clean parse
@@ -408,21 +403,21 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
     ``exhausted`` fields are the actual torn-read signature).
     """
     try:
-        content_root = coordinator_content_root()
+        base = read_content_root() or None
     except Exception:  # noqa: BLE001 — degrade-open, never block on infra
-        content_root = None
+        base = None
         if _forensics is not None:
             _forensics["content_root_resolve_raised"] = True
-    if not content_root:
+    if not base:
         if _forensics is not None and "content_root_resolve_raised" not in _forensics:
             _forensics["content_root_unresolvable"] = True
     elif _forensics is not None:
-        _forensics["content_root"] = content_root
+        _forensics["content_root"] = base
 
     # Schema CORPUS resolution is repointed at claude-klabauter's own vendored,
     # version-pinned copy — no longer coordinator-content-repo's live working tree, and no
     # longer coupled to the manifest read below at all. The registry
-    # MANIFEST stays on `content_root`: it is routing/scaffold logic, not a
+    # MANIFEST stays on the content root: it is routing/scaffold logic, not a
     # schema, and is explicitly out of scope for the repoint (plan AC4 +
     # Out of scope).
     schemas_dir = _VENDORED_SCHEMAS_DIR
@@ -430,7 +425,7 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
         _forensics["schemas_dir"] = str(schemas_dir)
 
     manifest: Optional[Dict[str, Any]] = None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(base)
     if content_root is not None:
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         manifest_retry_record: Dict[str, Any] = {}
@@ -869,7 +864,7 @@ def _memo_guard_step(
     repo_root_stripped = repo_root.rstrip("/\\")
     content_root_realpath: Optional[str] = None
     try:
-        content_root_raw = coordinator_content_root() or ""
+        content_root_raw = read_content_root() or ""
     except Exception:  # noqa: BLE001 — fail-open
         content_root_raw = ""
     if content_root_raw:
@@ -1375,7 +1370,7 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
     reaches into a sibling.
     """
     try:
-        content_root = coordinator_content_root()
+        content_root = read_content_root()
         if not content_root:
             return False
         # Casefolded on BOTH sides. Unfolded, a DoE root differing from
@@ -2170,7 +2165,8 @@ def _capture_guard_forensics(
             try:
                 git_result = subprocess.run(
                     ["git", "status", "--porcelain"],
-                    cwd=content_root, capture_output=True, text=True, timeout=2,
+                    cwd=content_root, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=2,
                     **no_console_creationflags(),
                 )
                 if git_result.returncode == 0:

@@ -260,7 +260,7 @@ class TestHoldoutSplitStability:
         def _boom(*a, **k):
             raise AssertionError("split_holdout must not invoke a subprocess")
 
-        monkeypatch.setattr(ad.subprocess, "run", _boom)
+        monkeypatch.setattr(ad, "run_git", _boom)
         split_holdout("docs/plans/example.md")
 
 
@@ -373,7 +373,7 @@ class TestPureLibraryVerdictPath:
         def _boom(*a, **k):
             raise AssertionError("check_artifact must not spawn a subprocess")
 
-        monkeypatch.setattr(ad.subprocess, "run", _boom)
+        monkeypatch.setattr(ad, "run_git", _boom)
         check_artifact(_BOTH_FIRE_PLAN)
         check_artifact(_CLEAN_HANDOFF)
         check_artifact(_NO_FRONTMATTER)

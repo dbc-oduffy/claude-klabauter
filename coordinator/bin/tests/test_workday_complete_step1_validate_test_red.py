@@ -22,9 +22,11 @@ Test coverage:
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -38,6 +40,15 @@ def _load_cli_module():
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
+    # main() takes the machine-wide suite mutex. Under a running suite that
+    # mutex is held by the outer run, so a real acquire blocks MUTEX_WAIT_SECS
+    # and pytest-timeout kills the xdist worker; a same-owner acquire would
+    # release the outer run's lock. The module object is fresh per call, so
+    # swapping its reference needs no restore.
+    mod.suite_mutex = types.SimpleNamespace(
+        held=lambda *a, **k: contextlib.nullcontext(True),
+        holder=lambda: None,
+    )
     return mod
 
 

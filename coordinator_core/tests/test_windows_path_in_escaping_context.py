@@ -81,6 +81,7 @@ Path-type inference.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,9 @@ _SCAN_ROOT = _REPO_ROOT / "coordinator_core"
 _QUOTING_CALL_NAMES = {"quote", "dumps", "repr"}
 _PAYLOAD_NAME_MARKERS = ("cmd", "command", "script", "payload")
 _PATH_BINDING_MARKERS = ("tmp_path", ".resolve(", "Path(")
+_PAYLOAD_ASSIGN_RE = re.compile(
+    r"\w*(?:" + "|".join(_PAYLOAD_NAME_MARKERS) + r")\w*\s*=(?!=)", re.IGNORECASE
+)
 
 
 def _relpath(path: Path, root: Path) -> str:
@@ -144,6 +148,9 @@ def _find_sys_executable_violations(root: Path) -> list[tuple[str, int, str]]:
             continue
         try:
             source = path.read_text(encoding="utf-8")
+            # A hit is a `sys.executable` Attribute, so `executable` is spelled.
+            if "executable" not in source:
+                continue
             tree = ast.parse(source, filename=str(path))
         except (SyntaxError, UnicodeDecodeError, OSError):
             # OSError covers a throwaway probe file that another concurrent
@@ -268,10 +275,35 @@ def _find_tmp_path_fstring_payload_violations(root: Path) -> list[tuple[str, int
             continue
         try:
             source = path.read_text(encoding="utf-8")
+            # A hit needs a payload-named assignment target and a path-bound
+            # name, whose binding segment carries one of `_PATH_BINDING_MARKERS`.
+            if not _PAYLOAD_ASSIGN_RE.search(source) or not any(
+                m in source for m in _PATH_BINDING_MARKERS
+            ):
+                continue
             tree = ast.parse(source, filename=str(path))
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
-        source_lines = source.splitlines()
+        # Only a name interpolated into a payload-named f-string can make a hit,
+        # so binding segments are resolved for those names alone.
+        interpolated: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                continue
+            if not any(m in node.targets[0].id.lower() for m in _PAYLOAD_NAME_MARKERS):
+                continue
+            if not isinstance(node.value, ast.JoinedStr):
+                continue
+            interpolated.update(
+                v.value.id
+                for v in node.value.values
+                if isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name)
+            )
+        if not interpolated:
+            continue
+        joined_source = "\n".join(source.splitlines())
 
         path_bound_names: set[str] = set()
         for node in ast.walk(tree):
@@ -279,8 +311,10 @@ def _find_tmp_path_fstring_payload_violations(root: Path) -> list[tuple[str, int
                 continue
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 continue
+            if node.targets[0].id not in interpolated:
+                continue
             try:
-                segment = ast.get_source_segment("\n".join(source_lines), node.value) or ""
+                segment = ast.get_source_segment(joined_source, node.value) or ""
             except Exception:
                 segment = ""
             if any(marker in segment for marker in _PATH_BINDING_MARKERS):

@@ -117,7 +117,7 @@ def test_dest_is_directory_raises_structured_error(template, target, monkeypatch
 
 
 def test_unresolvable_content_root_raises_structured_error(target, monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(mod, "read_content_root", lambda: "")
     with pytest.raises(mod.TripwireCopyError, match="unresolvable"):
         mod.copy_console_subprocess_tripwire(str(target))
 

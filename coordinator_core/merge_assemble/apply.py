@@ -11,21 +11,15 @@ module supplies only its own closed `_CLI_DISPATCH` table (one handler per
 existing merge CLI the brief names) and the node-ceremony hard-gate's
 `--force` bypass.
 
-POST-C2 SPLIT (chunk C2 of docs/plans/2026-08-26-merges-directives-stop-
-starting-interpreters.md): this table is no longer uniform. Three verbs
-(`check-no-illegal-paths`, `merge-recovery-and-tag-cut`, `portability-sweep`)
-dispatch IN-PROCESS through `coordinator_core.ceremony_common.cli_dispatch`
-— module load + cached reuse + `main()` invocation, no subprocess, ever.
-Three verbs (`merge-gate-and-pr`, `merge-release-notes-derive`,
-`orphan-branch-sweep`) still shell out to an EXISTING atomic `coordinator/
-bin/*.py` script via `_run_py_script`, because none of the three has an
-in-scope argument path for its own repo root (see each handler's own
-docstring for the specific gap, and C2's "record why it does not converge"
-rule this exclusion discharges). `node-ceremony-gate` spawns `node --test`
-— a genuinely external program with no import path, and is never converged.
-`tier-u-grant` was already in-process before this chunk (`_dispatch_tier_u_grant`'s
-own docstring). Every SPAWNING handler still resolves its script from an
-explicit argv list built from this module's own file location — never a
+Seven of the eight verbs dispatch IN-PROCESS through `coordinator_core.
+ceremony_common.cli_dispatch` — module load + cached reuse + `main()`
+invocation, no interpreter spawn, ever. Each takes its repo root as an
+explicit argument (`--repo-root`, or the positional `check-no-illegal-paths`
+reads), never `os.chdir`: cwd is process-global in a shared engine.
+`node-ceremony-gate` spawns `node --test` — a genuinely external program with
+no import path, and is never converged. `tier-u-grant` is in-process through
+`_dispatch_tier_u_grant`. The in-process verbs resolve their script from an
+explicit path built from this module's own file location — never a
 brief-derived import, never a shell string built from `directives[].args`.
 
 Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
@@ -37,7 +31,8 @@ Negative-spec:
       `importlib`, or any brief-derived string — every entry in
       `_CLI_DISPATCH` is a literal key written by hand in this file.
     - Do NOT build a subprocess argv via string interpolation/shell=True —
-      every SPAWNING handler below passes a literal list to `subprocess.run`.
+      the one spawning handler (`node-ceremony-gate`) passes a literal list to
+      `subprocess.run`.
     - Do NOT special-case merge's real divergence from the `apply_base`
       contract at this call site (the DR-092 anti-pattern) — see
       `apply_base`'s own docstring, "PROVISIONAL through W3": feed a real
@@ -99,33 +94,6 @@ _BIN_DIR = resolve_cli_script_root()
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _run_py_script(script_name: str, args: list[str], repo_root: Path) -> subprocess.CompletedProcess:
-    """Runs an EXISTING `coordinator/bin/<script_name>.py` entrypoint via
-    `sys.executable` (the interpreter running THIS process — never a bare
-    `python`/`python3` bareword, which is not portable across platforms),
-    with a literal argv list and `cwd=repo_root`.
-
-    NARROWED, not deleted, by C2 (docs/plans/2026-08-26-merges-directives-
-    stop-starting-interpreters.md): after that chunk this is called only by
-    the three verbs EXCLUDED from in-process conversion — `merge-gate-and-pr`,
-    `merge-release-notes-derive`, `orphan-branch-sweep` — each of which has
-    no in-scope argument path for its own repo root (see each handler's own
-    docstring). The other three (`merge-recovery-and-tag-cut`,
-    `portability-sweep`, `check-no-illegal-paths`) dispatch through
-    `_dispatch_in_process`/`ceremony_common.cli_dispatch` instead and never
-    reach this function. Do not reach for this helper for a new handler
-    without first checking whether the script it targets has a repo-root
-    argument path — if it does, `_dispatch_in_process` is the correct home."""
-    script_path = _BIN_DIR / f"{script_name}.py"
-    return subprocess.run(
-        [sys.executable, str(script_path), *args],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        creationflags=_NO_WINDOW,
-    )
-
-
 def _dispatch_result(cli: str, proc: subprocess.CompletedProcess) -> dict[str, Any]:
     if proc.returncode != 0:
         raise RuntimeError(
@@ -138,13 +106,13 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str]) -> dict[st
     """Shared body for merge_assemble's three IN-PROCESS verbs (C2 AC3):
     resolves `<engine>/coordinator/bin/<script_name>.py` via `_BIN_DIR`
     (`ceremony_common.cli_dispatch.resolve_cli_script_root`), exactly as
-    `_run_py_script` does — the script SHIPS in the engine; `repo_root`
-    names only the repo the CLI OPERATES ON and reaches the CLI through
-    `args`, never through the script path. Never `Path.cwd()` (that
+    the script SHIPS in the engine; `repo_root` names only the repo the CLI
+    OPERATES ON and reaches the CLI through `args`, never through the script
+    path. Never `Path.cwd()` (that
     module's own docstring, "CWD IS A LOAD-BEARING GAP") — loads it once per process via
     `load_cli_module` (cached by module name across calls in this same
     engine process), and invokes its `main()` via `invoke_cli_main`. No
-    subprocess, ever, for the three callers of this function.
+    interpreter subprocess, ever, for the callers of this function.
 
     Absent-producer mapping (C2 AC, named explicitly per the chunk body):
     a missing script raises `UnrecognizedDirective` here — this function's
@@ -217,10 +185,9 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
 
     - `d2` (`cut-tag`) takes an explicit `--repo-root PATH` flag;
       `build_directives`'s own `args` omit it (verified: it falls back to
-      `Path.cwd()` today, masked only because `_run_py_script(cwd=repo_root)`
-      ran the whole interpreter with `repo_root` as its cwd). This handler
-      appends `--repo-root` explicitly so the in-process call — which never
-      chdirs — targets `repo_root`, not the serving engine's own cwd. `d2`
+      `Path.cwd()`). This handler appends `--repo-root` explicitly so the
+      in-process call — which never chdirs — targets `repo_root`, not the
+      serving engine's own cwd. `d2`
       is `cut-tag`, a real branch/tag mutation; this is the verb AC3 names
       by example for exactly this reason.
     - `d1` (`resolve-tag-prefix`) has NO `--repo-root` flag on its own
@@ -253,21 +220,13 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
 
 
 def _dispatch_merge_gate_and_pr(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d4` — STILL SPAWNS. EXCLUDED from C2's conversion (recorded here per
-    this chunk's own "record why it does not converge" rule): neither
-    `merge-gate-and-pr.py` subcommand (`pr-body`, `active-branch-guard`)
-    declares a `--repo-root` flag, and its bare `subprocess.run` calls for
-    `git log`/`gh pr view` pass no `cwd=` at all — verified, they inherit
-    whichever cwd the calling process happens to have. Today that is masked
-    because `_run_py_script(cwd=repo_root)` runs the whole interpreter with
-    `repo_root` as its cwd; `ceremony_common.cli_dispatch.invoke_cli_main`
-    never chdirs (that module's own docstring, "CWD IS A LOAD-BEARING GAP"),
-    and `coordinator/bin/merge-gate-and-pr.py` is in neither this chunk's
-    `writes:` nor the parent plan's frontmatter `scope:` — there is no
-    in-scope way to give this script an argument path for its repo root.
-    Keeps spawning via `_run_py_script` until a future chunk gives it one."""
-    proc = _run_py_script("merge-gate-and-pr", args, repo_root)
-    return _dispatch_result("merge-gate-and-pr", proc)
+    """`d4` — IN-PROCESS. Every `merge-gate-and-pr` subcommand accepts
+    `--repo-root`; it is appended so the call, which never chdirs, runs its
+    `git` and `gh` children in `repo_root` rather than the serving engine's
+    own cwd."""
+    return _dispatch_in_process(
+        "merge-gate-and-pr", "merge-gate-and-pr", [*args, "--repo-root", str(repo_root)]
+    )
 
 
 def _dispatch_portability_sweep(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -288,8 +247,7 @@ def _dispatch_portability_sweep(args: list[str], repo_root: Path) -> dict[str, A
 def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[str, Any]:
     """`d6` — IN-PROCESS (C2 AC3). `check-no-illegal-paths.py main(argv)`
     reads its repo root as the sole POSITIONAL `argv[0]` (`explicit_root =
-    argv[0] if argv else None`); `d6`'s own `args` is `[]` today, relying on
-    `_run_py_script(cwd=repo_root)`'s subprocess working directory. This
+    argv[0] if argv else None`); `d6`'s own `args` is `[]`. This
     handler injects `str(repo_root)` as that positional so the in-process
     call — which never chdirs — targets `repo_root`."""
     return _dispatch_in_process(
@@ -298,36 +256,25 @@ def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[s
 
 
 def _dispatch_merge_release_notes_derive(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d7` — STILL SPAWNS. EXCLUDED from C2's conversion (recorded here per
-    this chunk's own "record why it does not converge" rule): the
-    `flip-tags` subcommand's parser declares only positional
-    `release_tag_cut`/`merge_sha`/`merge_date`/`entry_paths` — no
-    `--repo-root` flag anywhere. Its own `_git()` helper accepts an optional
-    `cwd` keyword, but `cmd_flip_tags` never populates it from an argv value
-    because none exists to populate it from. `coordinator/bin/
-    merge-release-notes-derive.py` is in neither this chunk's `writes:` nor
-    the parent plan's frontmatter `scope:`, so there is no in-scope way to
-    add one. `require_engine_on_path(__file__)` also runs at this script's
-    module level (same "resolves to this engine's own root today" finding
-    as `merge-recovery-and-tag-cut`), but that is moot while this verb keeps
-    spawning. Keeps spawning via `_run_py_script`."""
-    proc = _run_py_script("merge-release-notes-derive", args, repo_root)
-    return _dispatch_result("merge-release-notes-derive", proc)
+    """`d7` — IN-PROCESS. `--repo-root` is appended so the call, which never
+    chdirs, runs its `git` children in `repo_root` and resolves the relative
+    completion-log entry paths in `args` against it."""
+    return _dispatch_in_process(
+        "merge-release-notes-derive",
+        "merge-release-notes-derive",
+        [*args, "--repo-root", str(repo_root)],
+    )
 
 
 def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d8` — STILL SPAWNS. EXCLUDED from C2's conversion (recorded here per
-    this chunk's own "record why it does not converge" rule): this script's
-    `main()` is a ZERO-ARG trampoline (`def main() -> None`) that reads
-    `sys.argv` itself and forwards to `coordinator_core.ops.
-    orphan_branch_sweep.main(argv)`, whose own argv parser recognises only
-    `--format`/`--severity-min`/`--include-remote`/`--no-include-remote`/
-    `--max-age-days` — no `--repo-root` option exists to inject one into.
-    Neither `coordinator/bin/orphan-branch-sweep.py` nor `coordinator_core/
-    ops/orphan_branch_sweep.py` is in this chunk's `writes:` or the parent
-    plan's frontmatter `scope:`. Keeps spawning via `_run_py_script`."""
-    proc = _run_py_script("orphan-branch-sweep", args, repo_root)
-    return _dispatch_result("orphan-branch-sweep", proc)
+    """`d8` — IN-PROCESS. `coordinator/bin/orphan-branch-sweep.py`'s
+    zero-arg `main()` trampoline reads the spliced `sys.argv` and forwards to
+    `coordinator_core.ops.orphan_branch_sweep.main(argv)`; `--repo-root` is
+    appended so every `git`/`gh` child that sweep spawns runs in
+    `repo_root`."""
+    return _dispatch_in_process(
+        "orphan-branch-sweep", "orphan-branch-sweep", [*args, "--repo-root", str(repo_root)]
+    )
 
 
 def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -359,9 +306,9 @@ def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
     `build_directives` in this same repo, i.e. a defect, and RAISES.
 
     Negative-spec: do not "make this consistent" by routing it through
-    `_run_py_script`/`_dispatch_result`. Consistency with the other handlers
-    is not worth two cold spawns, and the raise-on-exit-1 that would come
-    with it reintroduces "a grant that could not be minted takes the
+    `_dispatch_in_process`/`_dispatch_result`. Consistency with the other
+    handlers is not worth the raise-on-exit-1 that would come with it, which
+    reintroduces "a grant that could not be minted takes the
     ceremony down with it" — for `grant`/`revoke` only; `check` already
     raises on denial by design."""
     from coordinator_core.session.grant_directive import EXIT_OK, EXIT_USAGE, run_grant_directive
@@ -453,16 +400,11 @@ _COMPENSATORS: dict[str, Any] = {
 #: directly, so the discriminator's answer is unchanged: not a registered
 #: op under this literal name. `node-ceremony-gate` spawns `node --test`
 #: (a genuinely external program with no import path — never converged).
-#: POST-C2: `merge-recovery-and-tag-cut`, `portability-sweep`, and
-#: `check-no-illegal-paths` dispatch IN-PROCESS via `ceremony_common.
-#: cli_dispatch` (no subprocess, ever); `merge-gate-and-pr`,
-#: `merge-release-notes-derive`, and `orphan-branch-sweep` still spawn an
-#: existing `coordinator/bin/*.py` script via `sys.executable` — each
-#: EXCLUDED from C2's conversion because it has no in-scope argument path
-#: for its own repo root (see each handler's own docstring for the specific
-#: gap). Neither population is `bash`/`sh`, so `docs/reference/
-#: shell-out-carve-outs.md` (scoped to interpreter/shell spawns) does not
-#: apply to any of the eight, and none is a `CONSUMES_MANIFEST`-driven
+#: Every verb except `node-ceremony-gate` dispatches IN-PROCESS via
+#: `ceremony_common.cli_dispatch` (no interpreter spawn, ever), each with an
+#: explicit repo-root argument. `node --test` is not `bash`/`sh`, so
+#: `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
+#: spawns) does not apply to any of the eight, and none is a `CONSUMES_MANIFEST`-driven
 #: script module in the completion-family sense, so no `CONSUMES_MANIFEST`
 #: entry applies either.
 #:

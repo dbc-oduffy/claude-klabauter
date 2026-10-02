@@ -481,7 +481,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         dest="coordinator_root_override",
         default=None,
         help="Override <doe_clone>/coordinator resolution (the claude-author trampoline "
-        "resolves the default via content_root(), NOT its own script-dir "
+        "resolves the default from the upstream clone, NOT its own script-dir "
         "location, since this executable now lives in claude-klabauter while "
         "coordinator/templates/ stayed in the upstream clone).",
     )
@@ -501,8 +501,8 @@ def _usage_text() -> str:
         "  --keep-sandbox           Do not delete the sandbox directory after the run.\n"
         "  --verbose, -v            Print each assertion with context even when passing.\n"
         "  --coordinator-root PATH  Override <doe_clone>/coordinator (normally resolved\n"
-        "                           by the claude-author trampoline via content_root(), not its own\n"
-        "                           script-dir location).\n"
+        "                           by the claude-author trampoline from the upstream clone, not\n"
+        "                           from this script's own location).\n"
         "  -h, --help               Show this usage.\n"
         "\n"
         "Environment:\n"

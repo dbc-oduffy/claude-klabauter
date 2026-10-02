@@ -35,23 +35,19 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.benchmarks.tests.test_warm_door_process_time_gate import (
-    _resolve_stamped_source_root,
-    _candidate_source_roots,
-)
 from coordinator_core.warm.door import build as door_build
+from coordinator_core.warm.tests.door_test_support import (
+    DOOR_WINDOWS_C,
+    FALLBACK_MARKER,
+    ReplyingServer,
+    WINDOWS_ONLY,
+    candidate_source_roots,
+    make_stub_engine_root,
+    pipe_name_for,
+    read,
+    resolve_stamped_source_root,
+)
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _make_stub_engine_root,
-    _pipe_name_for,
-    _FALLBACK_MARKER,
-    _ReplyingServer,
-)
-from coordinator_core.warm.door.tests.test_door_stdin_mode import (
-    _DOOR_WINDOWS_C,
-    _read,
-    _WINDOWS_ONLY,
-)
 
 import subprocess
 
@@ -75,11 +71,11 @@ _BUILT_DOOR: list = []
 
 def _locally_built_door() -> Path:
     if not _BUILT_DOOR:
-        source_root = _resolve_stamped_source_root()
+        source_root = resolve_stamped_source_root()
         if source_root is None:
             pytest.skip(
                 "no candidate engine root carries a valid build stamp among "
-                f"{_candidate_source_roots()!r} -- nothing stamped to build a "
+                f"{candidate_source_roots()!r} -- nothing stamped to build a "
                 "gate-carrying door.exe from, and the committed prebuilt is "
                 "pre-C6 and therefore pre-gate"
             )
@@ -93,19 +89,19 @@ def _locally_built_door() -> Path:
 def _install_door_as(engine_root: Path, basename: str) -> Path:
     """Installs a LOCALLY-BUILT `door.exe` into `engine_root` under
     `basename`, and gives it a matching `coordinator/bin/<basename>.py` cold
-    entrypoint that announces itself -- mirroring `_make_stub_engine_root`'s
+    entrypoint that announces itself -- mirroring `make_stub_engine_root`'s
     own `coordinator-invoke.py`, but keyed to whichever basename this test is
     installing the door under, since `fall_through`'s name-aware cold leg
     (C0) spawns `<engine_root>/coordinator/bin/<basename>.py`.
 
-    See `_locally_built_door` for why this is not `shutil.copy2(_DOOR_EXE)`."""
+    See `_locally_built_door` for why this is not `shutil.copy2(DOOR_EXE)`."""
     installed = engine_root / (basename + ".exe")
     if not installed.exists():
         shutil.copy2(_locally_built_door(), installed)
     script = engine_root / "coordinator" / "bin" / (basename + ".py")
     script.write_text(
         "import sys\n"
-        f"print({_FALLBACK_MARKER!r})\n"
+        f"print({FALLBACK_MARKER!r})\n"
         "raise SystemExit(0)\n",
         encoding="utf-8",
     )
@@ -113,9 +109,9 @@ def _install_door_as(engine_root: Path, basename: str) -> Path:
 
 
 def _release_unconnected_server(root: Path) -> None:
-    """Unblocks a `_ReplyingServer` that no client ever dialled.
+    """Unblocks a `ReplyingServer` that no client ever dialled.
 
-    `_ReplyingServer._serve` sits in `ConnectNamedPipe` until a client
+    `ReplyingServer._serve` sits in `ConnectNamedPipe` until a client
     connects, and its `close()` then calls `CloseHandle` on a handle that
     thread still owns -- which BLOCKS INDEFINITELY when the connection never
     came. Every other user of that fixture has a door that dials, so the
@@ -126,14 +122,14 @@ def _release_unconnected_server(root: Path) -> None:
     return and the serve thread exit. Nothing is written, so `server.request`
     stays empty and the assertion it feeds keeps its meaning.
 
-    Fixed HERE rather than in `_ReplyingServer` itself: that fixture lives in
+    Fixed HERE rather than in `ReplyingServer` itself: that fixture lives in
     `coordinator_core/warm/tests/`, outside this plan's declared scope and
     shared with suites this plan does not touch."""
     import _winapi
 
     try:
         handle = _winapi.CreateFile(
-            _pipe_name_for(root),
+            pipe_name_for(root),
             _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
             0,
             0,
@@ -165,10 +161,19 @@ def _run(door: Path, root: Path) -> subprocess.CompletedProcess:
 
 
 def test_the_wide_predicate_reuses_c2s_shared_table():
-    source = _read(_DOOR_WINDOWS_C)
-    assert "door_basename_declares_stdin_read(" in source, (
-        "door.c does not call door_basename_declares_stdin_read -- it has "
+    source = read(DOOR_WINDOWS_C)
+    assert "door_invocation_declares_stdin_read(" in source, (
+        "door.c does not call door_invocation_declares_stdin_read -- it has "
         "hand-rolled a second table, or the gate was not added"
+    )
+    core = read(DOOR_WINDOWS_C.with_name("door_core.c"))
+    assert re.search(
+        r"door_invocation_declares_stdin_read\([^)]*\)\s*\{\s*"
+        r"if\s*\(\s*!door_basename_declares_stdin_read\(",
+        core,
+    ), (
+        "door_invocation_declares_stdin_read no longer narrows C2's shared "
+        "door_basename_declares_stdin_read table"
     )
     assert "door_basename_declares_stdin_read_w(" in source, (
         "door.c has no wide adapter over the shared predicate -- "
@@ -178,7 +183,7 @@ def test_the_wide_predicate_reuses_c2s_shared_table():
 
 
 def test_the_basename_gate_follows_resolve_own_basename_and_precedes_the_transport():
-    source = _read(_DOOR_WINDOWS_C)
+    source = read(DOOR_WINDOWS_C)
     main_at = source.index("int main")
     resolve_at = source.index("resolve_own_basename();", main_at)
     gate_at = source.index("door_basename_declares_stdin_read_w(", main_at)
@@ -194,9 +199,10 @@ def test_the_basename_gate_follows_resolve_own_basename_and_precedes_the_transpo
 
 
 def test_the_gate_is_excluded_from_hook_mode():
-    source = _read(_DOOR_WINDOWS_C)
+    source = read(DOOR_WINDOWS_C)
     match = re.search(
-        r"door_basename_declares_stdin_read_w\(door_entrypoint_basename\(\)\)",
+        r"door_basename_declares_stdin_read_w\(\s*door_entrypoint_basename\(\)\s*,"
+        r"\s*argc\s*,\s*wargv\s*\)",
         source,
     )
     assert match, "the basename gate call site was not found verbatim"
@@ -209,7 +215,7 @@ def test_the_gate_is_excluded_from_hook_mode():
 
 
 def test_an_unresolved_basename_takes_the_cold_leg_unconditionally():
-    source = _read(_DOOR_WINDOWS_C)
+    source = read(DOOR_WINDOWS_C)
     match = re.search(
         r"if\s*\(\s*!g_door_hook_mode\s*&&\s*\(\s*!g_own_basename_ok\s*\|\|"
         r"\s*door_basename_declares_stdin_read_w\(",
@@ -223,21 +229,21 @@ def test_an_unresolved_basename_takes_the_cold_leg_unconditionally():
 
 
 def test_module_docstring_names_the_new_route():
-    header = _read(_DOOR_WINDOWS_C)[:6000]
+    header = read(DOOR_WINDOWS_C)[:6000]
     assert "door_basename_declares_stdin_read_w" in header, (
         "the module docstring was not extended to mention the new "
         "basename-declared stdin gate"
     )
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_a_declared_basename_takes_the_cold_leg_and_never_reaches_the_server(
     tmp_path: Path,
 ) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     door = _install_door_as(root, _DECLARED_BASENAME)
 
-    server = _ReplyingServer(_pipe_name_for(root), _WARM_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _WARM_REPLY)
     try:
         proc = _run(door, root)
     finally:
@@ -248,16 +254,16 @@ def test_a_declared_basename_takes_the_cold_leg_and_never_reaches_the_server(
         f"a door installed as {_DECLARED_BASENAME!r} reached the server -- "
         "the basename gate did not fire"
     )
-    assert _FALLBACK_MARKER.encode() in proc.stdout
+    assert FALLBACK_MARKER.encode() in proc.stdout
     assert b"-32603" not in proc.stdout
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_an_undeclared_basename_is_still_served_warm(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     door = _install_door_as(root, _UNDECLARED_BASENAME)
 
-    server = _ReplyingServer(_pipe_name_for(root), _WARM_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _WARM_REPLY)
     try:
         proc = _run(door, root)
     finally:
@@ -271,4 +277,23 @@ def test_an_undeclared_basename_is_still_served_warm(tmp_path: Path) -> None:
     request = json.loads(server.request.decode("utf-8").strip())
     assert request["params"]["argv"] == ["ping"]
     assert proc.stdout == b"served-warm\n"
-    assert _FALLBACK_MARKER.encode() not in proc.stdout
+    assert FALLBACK_MARKER.encode() not in proc.stdout
+
+
+def test_the_fall_through_line_names_the_jsonrpc_code_the_server_rejected_with():
+    source = read(DOOR_WINDOWS_C)
+    assert "g_fall_code = error_code;" in source, (
+        "the post-delivery fall-through no longer records the JSON-RPC code "
+        "that proved the request undispatched"
+    )
+    assert re.search(
+        r"server rejected the request, JSON-RPC code %ld\]\\n\",\s*"
+        r"script_path_w,\s*g_fall_code",
+        source,
+    ), (
+        "the fall-through line does not print the JSON-RPC code -- the cause "
+        "of a cold start cannot be read off the symptom"
+    )
+    assert "g_fall_reason" in source, (
+        "pre-delivery fall-throughs no longer name the gate that fired"
+    )

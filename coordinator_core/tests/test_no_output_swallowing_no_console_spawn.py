@@ -43,6 +43,16 @@ TEST TREE EXCLUDED, deliberately: a test that wanted the child's output
 would have captured it, so losing it cannot move an assertion. Partitioned
 via `spawn_policy.is_test_tree_site`, the same seam the sibling gate uses.
 
+POPULATION CROSS-LINK with `test_no_bare_hot_path_spawn.py`: the sibling gate
+decides WHICH spawns are console-suppressed (over `coordinator_core` plus the
+`_UNWALKED_ROOT_BASELINE` roots); this gate decides which suppressed spawns lose
+their output. A suppressed site in a root this gate does not walk is therefore
+green under the sibling and invisible here, so `_SCAN_ROOTS` must cover every
+root the sibling counts -- pinned by `test_scan_roots_cover_the_sibling_gates_population`.
+Both gates skip nothing but the test tree, and only this gate does so by
+design (see TEST TREE EXCLUDED above); the sibling's own test-tree arm is
+`test_no_bare_test_tree_spawn`.
+
 Spec backlink: pln-no-window-subprocess-primitive-750d2d § C6,
 AC5 (this gate closes the property that AC5's gate does not measure).
 """
@@ -58,6 +68,7 @@ from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_sourc
 
 from coordinator_core.tests.test_no_bare_hot_path_spawn import (
     _EXEMPTION_TAG,
+    _UNWALKED_ROOT_BASELINE,
     _SubprocessImportResolver,
     _collect_no_console_names,
     _is_no_console_shaped,
@@ -85,6 +96,7 @@ _SCAN_ROOTS: tuple[str, ...] = (
     "coordinator/scripts",
     "scripts",
     "bin",
+    "dist",
 )
 
 #: Spawn functions that accept std-stream kwargs. `os.system`/`os.popen` are
@@ -421,6 +433,19 @@ def test_no_output_swallowing_no_console_spawn():
         if (site.path, site.lineno) not in _DEFERRED
     ]
     assert violations == [], "\n\n".join(_format(site) for site in violations)
+
+
+def test_scan_roots_cover_the_sibling_gates_population():
+    """Every root the sibling no-console gate counts suppressed/bare spawns in
+    must also be walked here. A root the sibling gate walks but this one does
+    not reads green on both axes while its console-suppressed spawns lose
+    output unobserved."""
+    sibling_roots = {"coordinator_core", *_UNWALKED_ROOT_BASELINE}
+    missing = sorted(sibling_roots - set(_SCAN_ROOTS))
+    assert missing == [], (
+        f"_SCAN_ROOTS lacks root(s) the sibling gate walks: {missing}. Add them "
+        "to _SCAN_ROOTS so output-swallowing spawns there are examined."
+    )
 
 
 def test_deferred_sites_are_still_broken():

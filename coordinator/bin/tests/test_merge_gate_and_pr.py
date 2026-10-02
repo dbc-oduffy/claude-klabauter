@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import datetime
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -444,3 +446,90 @@ def test_sessions_named_in_detail_skips_no_session_id_label(monkeypatch) -> None
     assert _mod._sessions_named_in_detail(detail) == [
         "11112222-3333-4444-5555-666677778888"
     ]
+
+
+# ---------------------------------------------------------------------------
+# --repo-root: the repo a subcommand operates on, with the process cwd elsewhere
+# ---------------------------------------------------------------------------
+
+
+def _record_subprocess_cwds(monkeypatch) -> list:
+    calls: list = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs.get("cwd")))
+        return subprocess.CompletedProcess(cmd, 0, stdout="abc123 fixture commit\n", stderr="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    return calls
+
+
+def test_pr_body_runs_git_log_in_the_named_repo_root_not_the_process_cwd(
+    tmp_path, monkeypatch, capsys
+):
+    fixture_repo = tmp_path / "fixture-repo"
+    unrelated = tmp_path / "unrelated"
+    fixture_repo.mkdir()
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    calls = _record_subprocess_cwds(monkeypatch)
+
+    rc = _mod.main(
+        ["pr-body", "--ship-verdict", "ok", "--release-notes", "n", "--repo-root", str(fixture_repo)]
+    )
+
+    assert rc == 0
+    assert "abc123 fixture commit" in capsys.readouterr().out
+    assert [cwd for cmd, cwd in calls if cmd[:2] == ["git", "log"]] == [str(fixture_repo)]
+    assert os.getcwd() == str(unrelated.resolve())
+    assert _mod._REPO_ROOT.get() is None
+
+
+def test_active_branch_guard_runs_gh_in_the_named_repo_root(tmp_path, monkeypatch):
+    fixture_repo = tmp_path / "fixture-repo"
+    unrelated = tmp_path / "unrelated"
+    fixture_repo.mkdir()
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    calls: list = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs.get("cwd")))
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+
+    rc = _mod.main(["active-branch-guard", "--pr", "7", "--repo-root", str(fixture_repo)])
+
+    assert rc == 1
+    assert [cwd for cmd, cwd in calls if cmd[0] == "gh"] == [str(fixture_repo)]
+
+
+def test_coverage_gate_diffs_and_validates_the_named_repo_root(tmp_path, monkeypatch, capsys):
+    fixture_repo = tmp_path / "fixture-repo"
+    unrelated = tmp_path / "unrelated"
+    fixture_repo.mkdir()
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    calls: list = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs.get("cwd")))
+        return subprocess.CompletedProcess(cmd, 0, stdout="a.py\n", stderr="")
+
+    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
+    validated_roots: list = []
+
+    def _fake_validate(changed_files, diff_base, repo_root):
+        validated_roots.append(repo_root)
+        return {"dimensions": [{"dimension": "review", "verdict": "PASS", "detail": "covered"}]}
+
+    monkeypatch.setattr(_mod, "_run_gate_validate_invocable", _fake_validate)
+
+    rc = _mod.main(["coverage-gate", "--repo-root", str(fixture_repo)])
+
+    assert rc == 0
+    assert [cwd for cmd, cwd in calls if cmd[:2] == ["git", "diff"]] == [str(fixture_repo)]
+    assert validated_roots == [str(fixture_repo)]
+    assert os.getcwd() == str(unrelated.resolve())
+    assert _mod._REPO_ROOT.get() is None

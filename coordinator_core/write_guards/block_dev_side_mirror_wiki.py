@@ -100,25 +100,23 @@ def _claude_home() -> str:
 
 
 def _resolve_default_plugin_root(claude_home: str) -> str:
-    """``<resolved .coordinator-content-root>/coordinator`` (reference hook line 33). A
-    missing/unreadable ``.coordinator-content-root`` yields an empty resolution, so the default
+    """``<resolved content-root pointer>/coordinator`` (reference hook line 33). A
+    missing/unreadable pointer yields an empty resolution, so the default
     degrades to the literal string ``"/coordinator"`` — that degrade is ported
     as-is, not repaired.
 
     Read order is durable-first (DR-071/DR-072), matching every other reader:
-    ``<settings-home>/machine-local/.coordinator-content-root`` then the legacy
-    ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``. The durable rung was added
-    2026-07-28 when the generator stopped writing the legacy target — without it
-    this guard silently degrades to ``"/coordinator"``, fails its
+    ``<settings-home>/machine-local/.coordinator-content-root`` then
+    ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``. Without the
+    durable rung this guard silently degrades to ``"/coordinator"``, fails its
     ``_is_trusted_root`` check, and fail-opens ALLOW on every dev-side mirror
     write.
 
     Kept as a local read rather than routed through
-    ``coordinator_core.content_root_pointer.read_content_root_pointer_file`` (which the
-    other five relocated readers now share): this guard ports a reference hook
-    line-for-line and takes ``claude_home`` as an argument, and its documented
-    degrade-to-``"/coordinator"`` behavior on an absent pointer is load-bearing
-    parity, not an accident to normalize away.
+    ``coordinator_core.content_root.read_pointer_files``: this guard ports a
+    reference hook line-for-line and takes ``claude_home`` as an argument, and
+    its documented degrade-to-``"/coordinator"`` behavior on an absent pointer
+    is load-bearing parity, not an accident to normalize away.
     """
     for candidate in (
         machine_local_dir() / ".coordinator-content-root",

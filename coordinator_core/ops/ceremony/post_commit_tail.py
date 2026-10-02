@@ -225,20 +225,10 @@ def _commit_and_push_origin_stub_close(
     # not a release: releasing under an unknown sid would be a guess at
     # authorship, which is the one thing this whole seam refuses to do.
     # Skipping is the same fail-safe RETAIN direction every other C3 site
-    # takes -- and skipping EXPLICITLY, rather than letting a None fall into
-    # the `except` below, keeps a genuine failure distinguishable from a
-    # caller that simply had no sid to give.
-    try:
-        if sid:
-            session_scope.release_committed_claims(
-                sid, closed_paths, cwd=str(worktree_root)
-            )
-    except Exception:
-        _LOG.debug(
-            "_commit_and_push_origin_stub_close: release_committed_claims "
-            "failed post-commit; claim(s) retained",
-            exc_info=True,
-        )
+    # takes; `release_committed_claims_or_retain` carries both rules.
+    session_scope.release_committed_claims_or_retain(
+        worktree_root, closed_paths, sid, "_commit_and_push_origin_stub_close"
+    )
 
     if push_mode != PUSH_MODE_SYNC:
         return follow_up_sha, None, PUSH_STATUS_NOT_ATTEMPTED, None

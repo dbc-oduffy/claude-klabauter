@@ -23,7 +23,7 @@ carve-out in coordinator-content-repo's coordinator/docs/wiki/bash-on-windows-go
 Carve-out (cross-repo — this wiki lives in the coordinator-content-repo repo, not
 here).
 
-Manual diagnostic only — per docs/wiki/per-project-plugin-gating.md § verify-ue-
+Manual diagnostic only — per coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/per-project-plugin-gating.md § verify-ue-
 overrides.sh, this is NEVER auto-invoked by any ceremony (its peer UE-context
 dirs are specific to the source author's local machine layout). Run manually
 when UE override drift is suspected; also referenced as coordinator-doctor P-9.

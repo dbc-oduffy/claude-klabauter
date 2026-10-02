@@ -127,6 +127,7 @@ def _write_draft(
     [
         ("coordinator_claude", "coordinator-claude", "coordinator-claude-em"),
         ("claude_klabauter", "claude-klabauter", "claude-klabauter-em"),
+        ("claude_klabauter", "klabauter", "claude-klabauter-em"),
     ],
 )
 def test_to_leg_refuses_mirror_regardless_of_registry_state(

@@ -23,7 +23,7 @@ Test coverage:
       (jp_rule5_skip_vs_narrow), no recommendation key value set (structurally
       absent from build_untrusted_gate_judgment_point's output)
   T13-T15 CrossPlatformParityTests — DR-076 invocation-parity guard for this
-      specific assembler (docs/wiki/cross-platform-invocation-parity.md):
+      specific assembler (coordinator-content-repo coordinator/docs/wiki/portability/cross-platform-invocation-parity.md):
       .cmd sibling exists, line-1 shebang is python3, and the .cmd body
       actually invokes THIS entrypoint's filename (not merely that some
       .cmd file exists — the entrypoint predates this suite's
@@ -220,7 +220,7 @@ class GateDecisionTests(unittest.TestCase):
 
 class CrossPlatformParityTests(unittest.TestCase):
     """DR-076 cross-platform invocation-parity guard, scoped to THIS
-    assembler. See docs/wiki/cross-platform-invocation-parity.md — the
+    assembler. See coordinator-content-repo coordinator/docs/wiki/portability/cross-platform-invocation-parity.md — the
     canonical shape is a `#!/usr/bin/env python3`-shebang entrypoint plus a
     co-located `.cmd` sibling, never a bareword-through-a-shell. The
     repo-wide guards (coordinator_core/test_bin_launcher_parity.py,

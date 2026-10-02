@@ -9,7 +9,8 @@ brightline" is explicit that wall clock on this box measures peer load
 another concurrent session can move is the same bug wearing a new name.
 This module is the single shared primitive for measuring it, with a
 three-way platform dispatch: Windows (job object), Darwin (kqueue +
-per-pid wait4), everything else (raises, naming which half is missing).
+per-pid wait4), Linux (subreaper + ptrace fork events), everything else
+(raises, naming which half is missing).
 
 Three traps this module exists to avoid -- each already produced a false
 PASS on this box (see state/handoffs/2026-08-21_103635_reaching-the-warm-
@@ -77,8 +78,8 @@ which take per-call samples and read 0.0 on Windows for any call below the
 ~15.6ms scheduler tick -- a vacuous pass this primitive refuses (RAISE, NEVER
 0.0, below).
 
-LINUX (`batched_process_time_ms` only -- `single_invocation_tree_process_time`
-still raises `NotImplementedError` there, unaddressed by this chunk). The
+LINUX (`batched_process_time_ms`; `single_invocation_tree_process_time` has
+its own whole-tree path, `_linux_tree_one_invocation`, below). The
 getrusage process-time half was already POSIX and verified against Linux's
 own `kernel/exit.c :: wait_task_zombie()` rollup; the spawn-count half uses
 `sys.addaudithook` (CPython 3.8+, stdlib, no new dependency) on the
@@ -138,9 +139,9 @@ second question has a hole this module cannot close:
     caller pointing this primitive at an arbitrary external binary and
     expecting tree-wide descendant visibility gets an undercount of
     anything that binary forks itself. `single_invocation_tree_process_time`
-    remains unimplemented on Linux (`NotImplementedError`), which is
-    itself the honest answer for that function on this platform rather
-    than a silent zero.
+    does not share that gap: it counts forks by ptrace and reaps orphans
+    through `PR_SET_CHILD_SUBREAPER`, so an arbitrary binary's whole tree
+    is measured.
 
 A SIXTH TRAP, and the only one that is not a leak: measuring a WARM-ENGINE
 op through the CLI door measures the DOOR, not the op. The door
@@ -1059,7 +1060,7 @@ def _linux_run_measured_child(
                 "['python', script_path, ...], never sys.executable alone"
             )
         else:
-            completed = subprocess.run(list(cmd))
+            completed = subprocess.run(list(cmd))  # popup-intentional-last-resort: POSIX-only measured child; flags would perturb the measurement
             rc = completed.returncode
     except BaseException:
         traceback.print_exc()
@@ -1182,6 +1183,189 @@ def _linux_batched_process_time_ms(
         "rc": rc,
         "k": k,
     }
+
+
+# ptrace(2) / prctl(2) constants for the Linux whole-tree path. Values are
+# the stable kernel ABI (include/uapi/linux/ptrace.h, prctl.h).
+_PR_SET_CHILD_SUBREAPER = 36
+_PTRACE_CONT = 7
+_PTRACE_SEIZE = 0x4206
+_PTRACE_O_TRACEFORK = 0x2
+_PTRACE_O_TRACEVFORK = 0x4
+_PTRACE_O_EXITKILL = 0x100000
+_PTRACE_EVENT_FORK = 1
+_PTRACE_EVENT_VFORK = 2
+_WALL = 0x40000000
+
+
+def _linux_libc():
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
+    libc.ptrace.restype = ctypes.c_long
+    libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    libc.prctl.restype = ctypes.c_int
+    return libc
+
+
+def _linux_tree_supervise(
+    cmd: Sequence[str],
+    env: dict,
+    cwd: Optional[str],
+    stdout_path: Optional[str],
+    stderr_path: Optional[str],
+    report_fd: int,
+) -> None:
+    """Runs in the forked, single-purpose supervisor. Never returns -- always
+    `os._exit`. Writes one JSON object to `report_fd`: the result dict, or
+    {"error": ..., "exec_errno": ...}.
+
+    Mechanism, all of it per-supervisor so nothing here touches the caller:
+      - `PR_SET_CHILD_SUBREAPER`: a descendant orphaned by its parent
+        re-parents to THIS process, so every process in the tree is reaped
+        here (or by a parent that is itself in the tree) and its CPU rolls
+        into `getrusage(RUSAGE_CHILDREN)`. This is the Linux-only
+        mechanism macOS lacks (module docstring, PER-PLATFORM).
+      - `PTRACE_SEIZE` of the root with `TRACEFORK|TRACEVFORK`: the kernel
+        reports every fork/vfork (glibc `posix_spawn` and CPython's
+        `subprocess` both land in one of the two) of every process in the
+        tree, auto-attaching the new child, so the process count is exact
+        for any binary regardless of language -- unlike the audit-hook
+        count of `_linux_batched_process_time_ms`. `TRACECLONE` is left
+        off on purpose: a `clone()` with a non-SIGCHLD exit signal is a
+        thread, not a process, and is not counted.
+    """
+    libc = _linux_libc()
+    try:
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        if libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+
+        go_r, go_w = os.pipe()
+        err_r, err_w = os.pipe()
+        root = os.fork()
+        if root == 0:
+            try:
+                os.close(go_w)
+                os.close(err_r)
+                os.read(go_r, 1)
+                if cwd is not None:
+                    os.chdir(cwd)
+                if stdout_path:
+                    os.dup2(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666), 1)
+                if stderr_path:
+                    os.dup2(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666), 2)
+                os.execvpe(cmd[0], list(cmd), env)
+            except OSError as exc:
+                os.write(
+                    err_w,
+                    json.dumps(
+                        {"errno": exc.errno, "strerror": exc.strerror, "filename": exc.filename}
+                    ).encode("utf-8"),
+                )
+            finally:
+                os._exit(127)
+        os.close(go_r)
+        os.close(err_w)
+
+        opts = _PTRACE_O_TRACEFORK | _PTRACE_O_TRACEVFORK | _PTRACE_O_EXITKILL
+        if libc.ptrace(_PTRACE_SEIZE, root, None, opts) != 0:
+            errno_ = ctypes.get_errno()
+            os.kill(root, signal.SIGKILL)
+            raise OSError(errno_, "PTRACE_SEIZE of the measured root failed")
+        os.write(go_w, b"x")
+        os.close(go_w)
+
+        forks = 0
+        root_rc = -1
+        while True:
+            try:
+                pid, status, _ru = os.wait4(-1, _WALL)
+            except ChildProcessError:
+                break
+            if os.WIFSTOPPED(status):
+                event = (status >> 16) & 0xFF
+                inject = 0
+                if event in (_PTRACE_EVENT_FORK, _PTRACE_EVENT_VFORK):
+                    forks += 1
+                elif event == 0:
+                    inject = os.WSTOPSIG(status)
+                libc.ptrace(_PTRACE_CONT, pid, None, inject)
+            elif pid == root:
+                root_rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+
+        exec_err = os.read(err_r, 65536)
+        if exec_err:
+            payload = {"exec_error": json.loads(exec_err.decode("utf-8"))}
+        else:
+            import resource
+
+            ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+            payload = {
+                "process_time_ms": (ru.ru_utime + ru.ru_stime) * 1000.0,
+                "procs": forks + 1,
+                "rc": root_rc,
+            }
+    except BaseException:
+        payload = {"error": traceback.format_exc()}
+    try:
+        os.write(report_fd, json.dumps(payload).encode("utf-8"))
+    finally:
+        os._exit(0)
+
+
+def _linux_tree_one_invocation(
+    cmd: Sequence[str],
+    env: dict,
+    cwd: Optional[str],
+    stdout_path: Optional[str],
+    stderr_path: Optional[str],
+) -> dict:
+    """Linux counterpart of `_darwin_one_invocation`: ONE invocation of
+    `cmd`, whole descendant tree, language-agnostic.
+
+    Keyed to a dedicated supervisor process for the same structural reason
+    `_linux_one_invocation` is: `RUSAGE_CHILDREN` is process-wide, so it is
+    read in a process whose only children are this tree. Raises rather than
+    returns a figure when the mechanism cannot run (ptrace denied, e.g. a
+    seccomp profile or `ptrace_scope=3`) -- never an undercount.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+    if pid == 0:
+        os.close(read_fd)
+        _linux_tree_supervise(cmd, env, cwd, stdout_path, stderr_path, write_fd)
+        os._exit(1)  # pragma: no cover - supervise always exits first
+
+    os.close(write_fd)
+    chunks = []
+    while True:
+        chunk = os.read(read_fd, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    os.close(read_fd)
+    os.waitpid(pid, 0)
+
+    if not chunks:
+        raise RuntimeError(
+            "process_time: Linux tree supervisor exited without reporting -- "
+            "no process-time/spawn-count figure exists for this invocation"
+        )
+    result = json.loads(b"".join(chunks).decode("utf-8"))
+    if "exec_error" in result:
+        e = result["exec_error"]
+        raise OSError(e["errno"], e["strerror"], e["filename"])
+    if "error" in result:
+        raise RuntimeError(
+            "process_time: Linux tree measurement failed in the supervisor "
+            f"(ptrace/subreaper unavailable?):\n{result['error']}"
+        )
+    return result
 
 
 def batched_process_time_ms(
@@ -1422,8 +1606,20 @@ def single_invocation_tree_process_time(
     measured command's output lands in the operator's terminal, not in
     evidence. Pass them for anything whose output is being recorded.
 
+    Linux: a supervisor process sets `PR_SET_CHILD_SUBREAPER` (orphans
+    re-parent to it, so every descendant is reaped inside the measured
+    scope) and `PTRACE_SEIZE`s the root to count fork/vfork events across
+    the whole tree; CPU is `getrusage(RUSAGE_CHILDREN)` read in that
+    supervisor. Full language-agnostic tree fidelity, unlike the batched
+    Linux path's audit hook. Limits: the measured tree cannot itself be
+    ptraced by another tracer, a missing exec target raises `OSError`, the
+    call waits for orphaned descendants too (a daemonising command never
+    returns), and ptrace stops add a small kernel-time overhead to the
+    tracees. A host that denies ptrace raises `RuntimeError`, never an
+    undercount.
+
     Raises whatever the underlying platform path raises -- `NotImplementedError`
-    off Windows/Darwin, `OSError`/`ctypes.WinError`/`RuntimeError` on a
+    off Windows/Darwin/Linux, `OSError`/`ctypes.WinError`/`RuntimeError` on a
     measurement-mechanism failure. Never silently degrades to a wrong unit.
     """
     child_env = _env_with_benchmark_origin(env)
@@ -1514,12 +1710,31 @@ def single_invocation_tree_process_time(
             "stderr_path": stderr_path,
         }
 
+    if IS_LINUX:
+        if signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN:
+            raise RuntimeError(
+                "process_time: SIGCHLD is SIG_IGN in this process -- both XNU "
+                "and Linux destroy CPU accounting for auto-reaped children "
+                "under that disposition (module docstring); refusing to "
+                "silently under-report rather than measuring through it"
+            )
+        t0 = time.perf_counter()
+        result = _linux_tree_one_invocation(cmd, child_env, cwd, stdout_path, stderr_path)
+        wall_ms = (time.perf_counter() - t0) * 1000.0
+        return {
+            "process_time_ms": round(result["process_time_ms"], 3),
+            "wall_ms": round(wall_ms, 3),
+            "procs": int(result["procs"]),
+            "rc": result["rc"],
+            "k": 1,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+        }
+
     raise NotImplementedError(
         "single_invocation_tree_process_time: no process-tree accounting "
-        "primitive for this platform. Implemented on win32/darwin only; "
-        "unlike batched_process_time_ms (which now also has a Linux "
-        "primitive via sys.addaudithook, module docstring), this function "
-        "has no Linux implementation in this chunk."
+        f"primitive for platform {sys.platform!r} (only win32/darwin/linux "
+        "are implemented)."
     )
 
 

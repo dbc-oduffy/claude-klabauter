@@ -77,7 +77,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def _scan_content_leakage_tiers(
     """
     target_root_raw = (params.get("target_root") or "").strip()
     if not target_root_raw:
-        raise ValueError(
+        raise CallerFacingValidationError(
             "percolate.scan_content_leakage_tiers: missing required param "
             "'target_root' (the about-to-publish tree to sweep — explicit "
             "caller-supplied, percolate.run precedent)"
@@ -134,7 +134,7 @@ def _scan_content_leakage_tiers(
 
     root = Path(target_root_raw)
     if not root.is_dir():
-        raise ValueError(
+        raise CallerFacingValidationError(
             "percolate.scan_content_leakage_tiers: target_root "
             f"{target_root_raw!r} is not a directory — the about-to-publish "
             "tree must exist; an empty scan over a missing tree would be a "

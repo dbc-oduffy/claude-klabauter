@@ -690,13 +690,21 @@ def record_op_started(
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
     caller: Optional[str] = None,
+    sid_source: Optional[str] = None,
 ) -> None:
     """Append one JSON line marking an op invocation's START, before it runs.
 
     Record shape:
         {"op": str, "t_start": float epoch, "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
-         "kind": "started", "corr_id": str, "caller": str|null}
+         "kind": "started", "corr_id": str, "caller": str|null,
+         "sid_source": "carried"|"env"|"spawner-env"|null}
+
+    ``sid_source``, when provided, says where ``sid`` came from: ``carried``
+    (the warm door's per-request identity), ``env`` (the caller's own
+    environment), or ``spawner-env`` (a warm-served request that carried no
+    identity, so ``sid`` is the engine owner's, not the caller's) -- optional
+    and additive, so a spawner-labelled row is filterable.
 
     ``caller``, when provided, is the invoking module/entry point that
     called through to `coordinator_core.ipc.dispatch_message` for this
@@ -732,6 +740,7 @@ def record_op_started(
         "kind": "started",
         "corr_id": corr_id,
         "caller": caller,
+        "sid_source": sid_source,
     }
     _write_entry(entry, repo_root)
 

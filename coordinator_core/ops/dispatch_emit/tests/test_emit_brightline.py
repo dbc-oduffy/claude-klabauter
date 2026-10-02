@@ -71,3 +71,60 @@ def test_map_written_path_to_test_target_called_at_most_once_per_distinct_path(t
 
     assert len(calls) <= 40
     assert len(calls) == len(set(calls))
+
+
+def _write_two_row_plan(tmp_path, name, surface):
+    plan_path = tmp_path / name
+    plan_path.write_text(
+        "---\n---\n\n# Two-row plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: C1\n  title: Row 1\n  change_kind: script-edit\n"
+        "  surface: pkg/row1.py\n  writes:\n    - pkg/row1.py\n"
+        "- id: C2\n  title: Row 2\n  change_kind: script-edit\n"
+        f"  surface: {surface}\n  writes:\n    - {surface}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+def test_memo_shaped_row_costs_the_same_spawns_and_process_time(tmp_path, monkeypatch):
+    receiver = tmp_path / "receiver-repo"
+    (receiver / ".git").mkdir(parents=True)
+    machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
+    machine_local.mkdir(parents=True)
+    (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
+    (machine_local / "registry.local.toml").write_text(
+        f'"repos.receiver_repo" = "{receiver.as_posix()}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
+
+    outbox = tmp_path / ".coordinator-local" / "memo-outbox"
+    outbox.mkdir(parents=True)
+    memo_surface = ".coordinator-local/memo-outbox/topic.md"
+    (tmp_path / memo_surface).write_text(
+        '---\ntitle: "A test memo"\nfrom: "sender-em"\nto: "receiver-repo-em"\n'
+        "status: draft\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    memo_plan = _write_two_row_plan(tmp_path, "memo-plan.md", memo_surface)
+    plain_plan = _write_two_row_plan(tmp_path, "plain-plan.md", "pkg/other.py")
+
+    real_run = subprocess.run
+    counts = []
+
+    def _counting_run(*args, **kwargs):
+        counts[-1] += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting_run)
+
+    times = []
+    for plan_path in (plain_plan, memo_plan):
+        counts.append(0)
+        start = time.process_time()
+        emit_script(str(plan_path), repo_root=tmp_path, **REVIEW_KW)
+        times.append(time.process_time() - start)
+
+    assert counts[0] == counts[1]
+    assert abs(times[1] - times[0]) < 0.2

@@ -694,6 +694,31 @@ def test_commit_path_darwin_does_not_regress(commit_path_measurement_darwin):
     )
 
 
+def repin_darwin_ratchets(
+    fresh_p90_ms: float, fresh_procs: float,
+    current_ms: float = AC1_DARWIN_PROCESS_TIME_RATCHET_MS,
+    current_procs: float = AC2_DARWIN_SPAWN_COUNT_RATCHET,
+) -> tuple[float, float]:
+    """The downward-only re-pin: `min(current, fresh*1.25)` ms and
+    `min(current, fresh+1)` procs. A fresh figure above the current ratchet
+    never loosens it."""
+    return min(current_ms, fresh_p90_ms * 1.25), min(current_procs, fresh_procs + 1)
+
+
+def test_commit_path_darwin_reports_the_repin_values(commit_path_measurement_darwin):
+    """Run with `-s` on macOS: prints the fresh figures and the re-pinned
+    ratchet pair to paste into the two constants above."""
+    m = commit_path_measurement_darwin
+    ms, procs = repin_darwin_ratchets(m["ac1_p90_ms"], m["ac2_procs"])
+    print(f"DARWIN-REPIN fresh_p90_ms={m['ac1_p90_ms']} fresh_procs={m['ac2_procs']} "
+          f"AC1_DARWIN_PROCESS_TIME_RATCHET_MS={ms} AC2_DARWIN_SPAWN_COUNT_RATCHET={procs}")
+
+
+def test_repin_is_downward_only_and_uses_the_stated_margins():
+    assert repin_darwin_ratchets(100.0, 10.0, 300.0, 24.375) == (125.0, 11.0)
+    assert repin_darwin_ratchets(400.0, 30.0, 300.0, 24.375) == (300.0, 24.375)
+
+
 def test_commit_path_darwin_meets_the_process_time_budget(commit_path_measurement_darwin):
     """macOS's process-time leg against the repo-wide 500ms budget -- GREEN
     on this box (module docstring's REPORTED FINDING): no conhost, no

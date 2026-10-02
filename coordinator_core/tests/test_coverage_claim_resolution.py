@@ -6,10 +6,8 @@ Spec backlink: pln-claim-state-make-the-ledger-th-6641e3
 § Tasks, chunk C2 (AC3).
 
 AC3 requires proving a ledger-only claim (mirror reverted to open) resolves
-correctly through BOTH `_get_handoff_claimed_by` and `_handoff_session_live`
-— the migration lands at the shared leaf `_parse_handoff_claimed_by`, which
-`_handoff_session_live` calls DIRECTLY, bypassing `_get_handoff_claimed_by`
-entirely (verified on disk — see this module's own docstring).
+correctly through `_get_handoff_claimed_by` and the shared leaf
+`_parse_handoff_claimed_by` it calls.
 """
 
 from __future__ import annotations
@@ -74,32 +72,6 @@ def test_get_handoff_claimed_by_ledger_only_mirror_reverted(workspace):
     assert result == "sess-ledger"
 
 
-def test_handoff_session_live_ledger_only_mirror_reverted(workspace):
-    """AC3, path 2: _handoff_session_live calls _parse_handoff_claimed_by
-    DIRECTLY (bypassing _get_handoff_claimed_by) — must also resolve the
-    ledger-only claim, not treat it as unclaimed/conservative-live via a
-    frontmatter-only read."""
-    common_dir, handoff = workspace
-    _write_claim_dir(common_dir, handoff.name, "sess-ledger", "2026-08-07T10:00:00Z")
-    _write_handoff(handoff, status="open")
-
-    with mock.patch("coordinator_core.claim_state.cs_claim_holder_live", return_value=True):
-        is_live, note = coverage._handoff_session_live(
-            str(handoff), frozenset({"sess-ledger"}), common_dir=common_dir
-        )
-
-    assert is_live is True
-    assert note is None
-
-    with mock.patch("coordinator_core.claim_state.cs_claim_holder_live", return_value=True):
-        is_live_other, note_other = coverage._handoff_session_live(
-            str(handoff), frozenset({"some-other-session"}), common_dir=common_dir
-        )
-
-    assert is_live_other is False
-    assert note_other is None
-
-
 def test_get_handoff_claimed_by_mirror_only_still_works(workspace):
     common_dir, handoff = workspace
     _write_handoff(handoff, claimed_by="sess-mirror", status="claimed")
@@ -136,18 +108,6 @@ def test_get_handoff_claimed_by_unclaimed_returns_none(workspace):
     result = coverage._get_handoff_claimed_by(str(handoff), common_dir=common_dir)
 
     assert result is None
-
-
-def test_handoff_session_live_unclaimed_conservative_live(workspace):
-    common_dir, handoff = workspace
-    _write_handoff(handoff, status="open")
-
-    is_live, note = coverage._handoff_session_live(
-        str(handoff), frozenset(), common_dir=common_dir
-    )
-
-    assert is_live is True
-    assert note is None
 
 
 def test_get_handoff_claimed_by_unreadable_returns_none_conservative(tmp_path):

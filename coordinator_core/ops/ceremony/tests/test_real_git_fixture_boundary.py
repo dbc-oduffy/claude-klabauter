@@ -50,6 +50,12 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # NONE of them fires: a mocked git cannot fail that assertion, which is the
 # whole reason the assertion is worth making.
 #
+# Added 2026-10-02: test_commit_leaves_index_agreeing_with_head.py -- the
+# falsifier helper `assert_commit_leaves_index_agreeing_with_head`'s own
+# suite. Index/HEAD divergence is a property of git's on-disk index, which a
+# mocked git cannot exhibit, and the helper exists to be proven red against
+# a real `commit_scoped`.
+#
 # Added 2026-09-06, three reviewed crossings landed by peer work since this
 # set was last edited. Each is here because its oracle is a REAL git side
 # effect, which is exactly the class a mock cannot exhibit:
@@ -70,6 +76,7 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_authored_content_edges.py",
     "test_commit_authored_new_file.py",
     "test_commit_cas_freshness.py",
+    "test_commit_leaves_index_agreeing_with_head.py",
     "test_commit_path_legality.py",
     "test_commit_scoped.py",
     "test_commit_scoped_edges.py",

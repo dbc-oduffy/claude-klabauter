@@ -220,3 +220,20 @@ def test_lazy_reexport_resolves_and_stays_lazy():
         % (result.stdout, result.stderr)
     )
     assert "OK" in result.stdout
+
+
+def test_roster_probe_cwd_is_the_platform_temp_dir(monkeypatch):
+    import tempfile
+
+    from coordinator_core.bash_guards import dispatch, roster
+
+    seen = {}
+    real = dispatch._build_guard_chain
+
+    def spy(**kw):
+        seen["cwd"] = kw["cwd"]
+        return real(**kw)
+
+    monkeypatch.setattr(dispatch, "_build_guard_chain", spy)
+    roster.guard_roster()
+    assert seen["cwd"] == tempfile.gettempdir()

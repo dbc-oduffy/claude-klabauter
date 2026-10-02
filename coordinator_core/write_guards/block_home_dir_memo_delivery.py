@@ -159,19 +159,17 @@ def _receiver_corpus_root_display() -> str:
     only.md: the prior fix attempt for this same drift hand-wrote one host
     path, which is wrong the moment this guard runs on a different box).
 
-    Uses ``coordinator_content_root_in_process`` (rungs 1/2/2.5/2.75 only, never
-    rung 3's ``subprocess.run``) — this function is reached only on the
+    Uses ``read_content_root`` (registry and pointer reads only, no
+    subprocess) — this function is reached only on the
     (rare) DENY path, but the module's own negative-spec still promises the
     ordinary allow path zero subprocess work, and a lazy import here must
     not risk adding one.
     """
     try:
         from coordinator_core.memo_corpus import receiver_inbox_root
-        from coordinator_core.ops.coordinator_content_root import (
-            coordinator_content_root_in_process,
-        )
+        from coordinator_core.content_root import read_content_root
 
-        root, _rung = coordinator_content_root_in_process()
+        root = read_content_root()
         if root:
             corpus_root, _exists = receiver_inbox_root(root)
             return corpus_root.replace("\\", "/")

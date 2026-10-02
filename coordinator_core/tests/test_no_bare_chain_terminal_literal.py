@@ -275,7 +275,11 @@ def find_bare_chain_terminal_literals(
             if is_test and relpath in _TEST_FILE_ALLOWLIST:
                 continue
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                text = path.read_text(encoding="utf-8")
+                # A hit is a string Constant equal to a legacy spelling.
+                if "chain-" not in text and "single-" not in text:
+                    continue
+                tree = ast.parse(text, filename=str(path))
             except (SyntaxError, UnicodeDecodeError):
                 continue
             visitor = _DispositionLiteralVisitor()

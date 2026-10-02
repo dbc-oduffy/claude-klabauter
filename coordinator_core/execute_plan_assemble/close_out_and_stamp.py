@@ -15,7 +15,7 @@ single CLI (`close-out-and-stamp <plan-path>`) instead of hand-sequencing
 
 Full-shipped vs. halted determination: reads the plan's `## Tasks`
 machine-parseable spine (the single fenced ```yaml plan-tasks``` block
-directly under `## Tasks` -- coordinator-content-repo `docs/wiki/writing-plans.md` §
+directly under `## Tasks` -- coordinator-content-repo `coordinator-content-repo coordinator/docs/wiki/planning/writing-plans.md` §
 Machine-Parseable Task Spine), takes every commit-required row (disposition
 `open`/`coded`, `deferred` absent or `false`), and asks whether it has
 verified sha-ancestry evidence of landing -- see § Evidence sources below.
@@ -445,6 +445,13 @@ def _parse_dispatch_ledger_table(
     return rows, None
 
 
+GIT_TIMED_OUT_INDETERMINATE = "git timed out: indeterminate"
+
+
+class _GitIndeterminate(Exception):
+    """A delivery-evidence git call hit its bound; the answer is unknown, not negative."""
+
+
 def _batch_git_cat_file_check(
     shas: Sequence[str], repo_root: Path
 ) -> dict[str, Optional[str]]:
@@ -466,11 +473,10 @@ def _batch_git_cat_file_check(
     which itself requires a commit-ish and would reject a non-commit
     object anyway, so a sha that resolved-but-wasn't-a-commit was already
     guaranteed to end up `missing` under the pre-batch code path too.
-    Never raises -- an empty `shas` short-circuits with no spawn at all,
-    matching this module's existing zero-work-zero-spawn posture.
-
-    Raises `_GitIndeterminate` on a timeout -- "could not tell" must not
-    collapse onto the `None` (= "does not exist") entries."""
+    Raises `_GitIndeterminate` when the spawn timed out -- "could not tell"
+    must not collapse onto the `None` (= "does not exist") entries. An
+    empty `shas` short-circuits with no spawn at all, matching this
+    module's existing zero-work-zero-spawn posture."""
     result: dict[str, Optional[str]] = {sha: None for sha in shas}
     if not shas:
         return result
@@ -482,7 +488,7 @@ def _batch_git_cat_file_check(
         input=("\n".join(shas) + "\n").encode("utf-8"),
     )
     if proc.timed_out:
-        raise _GitIndeterminate("git cat-file --batch-check timed out")
+        raise _GitIndeterminate(GIT_TIMED_OUT_INDETERMINATE)
     out_lines = (proc.stdout or "").splitlines()
     for sha, line in zip(shas, out_lines):
         parts = line.split()
@@ -505,10 +511,11 @@ def _rev_list_ancestor_shas(repo_root: Path) -> Optional[set[str]]:
     other git-query failure in this module already takes -- except a
     timeout, which raises `_GitIndeterminate` -- distinct from
     an empty-but-successful set (a repo with a one-commit `HEAD`, whose
-    ancestor set is genuinely just that commit)."""
+    ancestor set is genuinely just that commit). Raises `_GitIndeterminate`
+    on a timeout, which is neither of those."""
     result = _run_git(["rev-list", "HEAD"], repo_root)
     if result.timed_out:
-        raise _GitIndeterminate("git rev-list HEAD timed out")
+        raise _GitIndeterminate(GIT_TIMED_OUT_INDETERMINATE)
     if result.returncode != 0:
         return None
     return set((result.stdout or "").splitlines())
@@ -573,7 +580,7 @@ def _dispatch_ledger_delivered(
         resolved = _batch_git_cat_file_check(distinct_shas, repo_root)
         ancestor_shas = _rev_list_ancestor_shas(repo_root) if distinct_shas else set()
     except _GitIndeterminate as exc:
-        return False, [], f"delivery indeterminate -- {exc}; re-run close-out"
+        return False, [], str(exc)
 
     missing: list[str] = []
     for idx, row in enumerate(rows):
@@ -1107,6 +1114,54 @@ def _disposition_ref_evidence(
         else:
             verified.add(chunk_id)
     return verified, rejections
+
+
+def _foreign_session_disposition_refs(
+    spine_rows: list, repo_root: Path, closing_sid: Optional[str]
+) -> dict[str, str]:
+    """Maps each `coded` row whose `disposition_ref` commit carries a
+    `Session-Id` trailer naming a session other than `closing_sid` to that
+    session. Ancestry proves a commit landed, never who landed it: a peer's
+    HEAD passes every leg of `_verify_disposition_ref`. Advisory only --
+    "landed under another session" is a legitimate state, so this reports and
+    never refuses. One `git log` spawn; `{}` on any failure or when the
+    closing session is unknown."""
+    if not closing_sid:
+        return {}
+    refs: dict[str, str] = {}
+    for row in spine_rows or []:
+        if not isinstance(row, dict) or row.get("deferred", False):
+            continue
+        if _row_disposition(row) != _CODED or not row.get("id"):
+            continue
+        ref = row.get("disposition_ref")
+        if isinstance(ref, str) and _DISPOSITION_REF_SHA_RE.match(ref.strip()):
+            refs[str(row["id"])] = ref.strip().lower()
+    if not refs:
+        return {}
+    result = _run_git(
+        [
+            "log", "--no-walk=unsorted", "--ignore-missing",
+            "--format=%H%x1f%(trailers:key=Session-Id,valueonly,separator=%x2c)%x1e",
+            *sorted(set(refs.values())),
+        ],
+        repo_root,
+    )
+    if result.returncode != 0:
+        return {}
+    session_by_sha: dict[str, str] = {}
+    for record in (result.stdout or "").split("\x1e"):
+        sha, sep, sessions = record.strip().partition("\x1f")
+        if sep:
+            session_by_sha[sha] = sessions.strip()
+    foreign: dict[str, str] = {}
+    for chunk_id, ref in refs.items():
+        for sha, sessions in session_by_sha.items():
+            if sha.startswith(ref):
+                if sessions and closing_sid not in sessions.split(","):
+                    foreign[chunk_id] = sessions
+                break
+    return foreign
 
 
 # ---------------------------------------------------------------------------
@@ -2740,6 +2795,8 @@ def close_out_and_stamp(
             if chunk_id in missing
         }
 
+    disposition_ref_foreign_sessions = _foreign_session_disposition_refs(rows, root, sid)
+
     # AC7: `implemented` requires BOTH the code oracle (`shipped`) and the
     # resolution oracle (no row still `open`) -- `landed` is the
     # intermediate state where code is in but resolution isn't (D9).
@@ -3305,6 +3362,16 @@ def close_out_and_stamp(
                 f"{rejection_notes}."
             )
 
+    if disposition_ref_foreign_sessions:
+        foreign_notes = ", ".join(
+            f"{chunk_id} ({session})"
+            for chunk_id, session in sorted(disposition_ref_foreign_sessions.items())
+        )
+        message += (
+            f" -- NOTE: disposition_ref names a commit landed by another session: "
+            f"{foreign_notes}; confirm it covers the row."
+        )
+
     if ac_table_desync:
         # Advisory NOTE only (C2 -- this must never gate the stamp decision
         # above, which has already run by this point) -- same additive-
@@ -3331,6 +3398,7 @@ def close_out_and_stamp(
         "partial_evaluation_stamped": partial_evaluation_stamped,
         "missing_chunk_ids": missing,
         "disposition_ref_rejections": disposition_ref_rejections,
+        "disposition_ref_foreign_sessions": disposition_ref_foreign_sessions,
         "open_chunk_ids": open_blocking,
         "ac_table_desync": ac_table_desync,
         "commit": commit_result,

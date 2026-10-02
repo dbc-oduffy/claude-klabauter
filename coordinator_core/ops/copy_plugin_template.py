@@ -33,9 +33,9 @@ shape and that the destination bytes are untouched.
 
 Cross-repo resolution: the template lives in the DoE / coordinator-claude
 tree and is resolved EXCLUSIVELY via the mandated resolver
-`coordinator_core.ops.coordinator_content_root.coordinator_content_root()` (parent
+`coordinator_core.content_root.read_content_root()` (parent
 plan § Mandated resolvers) — never a literal path, never a `parents[n]` walk
-across the repo boundary. Unresolvable DoE root → structured error, fail
+across the repo boundary. Unresolvable content root → structured error, fail
 loud (CC-7).
 
 Fail-loud (CC-7): missing target repo root, unresolvable DoE root, missing
@@ -65,7 +65,7 @@ Negative-spec:
       only write path is dest-absent → copy. There is no --force flag and
       none may be added without a new settlement.
     - Does NOT reimplement the bash oracle's trusted-root preamble
-      (`.coordinator-content-root` cat + prefix trust check) — root resolution delegates
+      (pointer-file cat + prefix trust check) — root resolution delegates
       entirely to the mandated resolver, which owns that discipline.
     - Does NOT parse or edit the template's allowlist; human customization
       is out of scope by the oracle's own note.
@@ -82,7 +82,7 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._pytest_child_env import pytest_child_env
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 
 _TEMPLATE_REL = Path("coordinator") / "tests" / "templates" / "test_no_bare_console_subprocess.py"
 
@@ -96,17 +96,16 @@ class TripwireCopyError(RuntimeError):
 def _resolve_template_path() -> Path:
     """Resolve the tripwire template via the mandated content-root resolver.
 
-    Raises TripwireCopyError when the resolver returns None (rung-4 hard
-    failure) — remediation is the resolver's own documented story
-    (re-run coordinator:install / set REPO_CONTENT_ROOT).
+    Raises TripwireCopyError when the resolver returns nothing — remediation
+    is to re-run coordinator:install.
     """
-    content_root = coordinator_content_root()
+    content_root = read_content_root()
     if not content_root:
         raise TripwireCopyError(
-            "repo_setup.copy_console_subprocess_tripwire: DoE / coordinator-claude "
-            "root unresolvable via coordinator_content_root() — cannot locate the "
+            "repo_setup.copy_console_subprocess_tripwire: coordinator content "
+            "root unresolvable via read_content_root() — cannot locate the "
             f"tripwire template ({_TEMPLATE_REL.as_posix()}). Re-run "
-            "coordinator:install or set REPO_CONTENT_ROOT."
+            "coordinator:install."
         )
     return Path(content_root) / _TEMPLATE_REL
 
@@ -120,7 +119,7 @@ def _run_pytest(dest: Path, cwd: Path) -> bool:
         errors="replace",
         env=pytest_child_env(),
         **no_console_creationflags(),
-    )
+    )  # popup-safe-env-suppressed
     return proc.returncode == 0
 
 

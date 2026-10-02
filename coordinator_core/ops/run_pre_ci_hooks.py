@@ -100,7 +100,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.ipc import register_op
+from coordinator_core.ipc import CallerFacingValidationError, register_op
 
 logger = logging.getLogger(__name__)
 
@@ -120,14 +120,14 @@ def _run_pre_ci_hooks(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     hooks_root_raw = (params.get("hooks_root") or "").strip()
     if not hooks_root_raw:
-        raise ValueError(
+        raise CallerFacingValidationError(
             "percolate.run_pre_ci_hooks: missing required param 'hooks_root' "
             "(explicit caller-supplied percolate hooks root — the op never "
             "resolves it off a worktree)"
         )
     dest = (params.get("dest") or "").strip()
     if not dest:
-        raise ValueError(
+        raise CallerFacingValidationError(
             "percolate.run_pre_ci_hooks: missing required param 'dest' "
             "(publish destination path, handed to each hook as its sole argument)"
         )
@@ -139,7 +139,7 @@ def _run_pre_ci_hooks(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     sh_files = sorted(p.name for p in hooks_dir.glob("*.sh") if p.is_file())
     if sh_files:
-        raise ValueError(
+        raise CallerFacingValidationError(
             "percolate.run_pre_ci_hooks: shell hook(s) present under "
             f"{hooks_dir}: {', '.join(sh_files)} — the pre-ci hook contract "
             "is Python-only (Wave-3 settlement B3; naked-Python mandate). "

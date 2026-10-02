@@ -1,6 +1,6 @@
 """
 coordinator_core.session.tests.test_receiver_state — tests for the receiver-state
-verdict ladder, structural reduction, CPU cursor, and sibling-file writer.
+verdict ladder, structural reduction, and sibling-file writer.
 
 Fixture transcripts are synthesized IN-TEST (never a real session transcript read from
 disk — the plan's C5 body forbids it). Default tier (not cadence/pending_fix/designed_red).
@@ -394,7 +394,7 @@ class TestPrivacyReduction:
         )
         v = rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
         ok = rs.write_receiver_state(
-            "sid-privacy", verdict=v, cpu_cursor=None, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
+            "sid-privacy", verdict=v, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
         )
         assert ok
         written = rs.read_receiver_state("sid-privacy", str(tmp_path))
@@ -514,54 +514,22 @@ class TestFailSoft:
 
 
 # ---------------------------------------------------------------------------
-# CPU cursor — tiebreak-only gating (AC7, AC8 underived-constant discipline)
+# resolve_verdict — the ladder verdict is persisted unchanged
 # ---------------------------------------------------------------------------
 
 
-class TestCpuCursorTiebreakOnly:
-    def test_cpu_leg_disabled_by_default(self) -> None:
-        assert rs._CPU_LEG_ENABLED is False
-        assert rs._CPU_FLOOR_UNDERIVED is None
-
-    def test_cpu_tiebreak_never_fires_while_disabled(self) -> None:
-        assert rs.resolve_cpu_tiebreak(0.99) is None
-        assert rs.resolve_cpu_tiebreak(0.0) is None
-
-    def test_resolve_verdict_never_overturns_confident_paused(self) -> None:
-        confident = rs.Verdict("PAUSED", "turn-ended")
-        resolved = rs.resolve_verdict(confident, cpu_rate=0.99)
-        assert resolved is confident
-
-    def test_resolve_verdict_never_overturns_confident_producing(self) -> None:
-        confident = rs.Verdict("PRODUCING", "mid-turn")
-        resolved = rs.resolve_verdict(confident, cpu_rate=0.0)
-        assert resolved is confident
-
-    def test_resolve_verdict_leaves_unknown_unresolved_while_leg_disabled(self) -> None:
-        unknown = rs.Verdict("UNKNOWN", "unmodelled")
-        resolved = rs.resolve_verdict(unknown, cpu_rate=0.99)
-        assert resolved.verdict == "UNKNOWN"
-
-    def test_cpu_delta_rate_no_previous_cursor(self) -> None:
-        current = rs.CpuCursor(cpu_seconds=1.0, wall_clock_epoch=100.0)
-        assert rs.cpu_delta_rate(None, current) is None
-
-    def test_cpu_delta_rate_non_positive_wall_delta(self) -> None:
-        previous = rs.CpuCursor(cpu_seconds=1.0, wall_clock_epoch=100.0)
-        current = rs.CpuCursor(cpu_seconds=2.0, wall_clock_epoch=100.0)
-        assert rs.cpu_delta_rate(previous, current) is None
-
-    def test_cpu_delta_rate_normal_case(self) -> None:
-        previous = rs.CpuCursor(cpu_seconds=1.0, wall_clock_epoch=100.0)
-        current = rs.CpuCursor(cpu_seconds=3.0, wall_clock_epoch=104.0)
-        assert rs.cpu_delta_rate(previous, current) == pytest.approx(0.5)
-
-    def test_cpu_delta_rate_regression_returns_none(self) -> None:
-        # A CPU-seconds regression (process restart reusing a pid) must not yield a
-        # negative rate.
-        previous = rs.CpuCursor(cpu_seconds=5.0, wall_clock_epoch=100.0)
-        current = rs.CpuCursor(cpu_seconds=1.0, wall_clock_epoch=104.0)
-        assert rs.cpu_delta_rate(previous, current) is None
+class TestResolveVerdictIsTheLadderVerdict:
+    @pytest.mark.parametrize(
+        "verdict",
+        [
+            rs.Verdict("PAUSED", "turn-ended"),
+            rs.Verdict("PRODUCING", "mid-turn"),
+            rs.Verdict("UNKNOWN", "unmodelled"),
+            rs.Verdict("UNKNOWN", "unmodelled", unmodelled_type="x", unmodelled_subtype="y"),
+        ],
+    )
+    def test_returns_the_ladder_verdict_unchanged(self, verdict) -> None:
+        assert rs.resolve_verdict(verdict) is verdict
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +544,7 @@ class TestSiblingFileWriter:
         _fake_session_dir(monkeypatch, tmp_path)
         v = rs.Verdict("PAUSED", "turn-ended")
         ok = rs.write_receiver_state(
-            "sid-1", verdict=v, cpu_cursor=None, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
+            "sid-1", verdict=v, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
         )
         assert ok
         sibling = tmp_path / "coordinator-sessions" / "sid-1" / "receiver-state.json"
@@ -606,22 +574,21 @@ class TestSiblingFileWriter:
     def test_written_record_shape(self, tmp_path: Path, monkeypatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         v = rs.Verdict("UNKNOWN", "unmodelled line type='x'", unmodelled_type="x", unmodelled_subtype="y")
-        cursor = rs.CpuCursor(cpu_seconds=1.5, wall_clock_epoch=100.0)
         ok = rs.write_receiver_state(
-            "sid-2", verdict=v, cpu_cursor=cursor, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
+            "sid-2", verdict=v, stamp_iso="2026-08-14T00:00:00Z", cwd=str(tmp_path)
         )
         assert ok
         record = rs.read_receiver_state("sid-2", str(tmp_path))
         assert record["verdict"] == "UNKNOWN"
         assert record["unmodelled_type"] == "x"
         assert record["unmodelled_subtype"] == "y"
-        assert record["cpu_cursor"]["cpu_seconds"] == 1.5
+        assert "cpu_cursor" not in record
 
     def test_unsafe_sid_rejected(self, tmp_path: Path, monkeypatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         v = rs.Verdict("PAUSED", "turn-ended")
         ok = rs.write_receiver_state(
-            "../escape", verdict=v, cpu_cursor=None, stamp_iso="x", cwd=str(tmp_path)
+            "../escape", verdict=v, stamp_iso="x", cwd=str(tmp_path)
         )
         assert ok is False
 

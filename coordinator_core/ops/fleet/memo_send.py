@@ -12,9 +12,10 @@ machinery, the self-receipt arm and the HTTP/UDS transport gating the old
 three-write requirement:
 
   1. Receiver: write `cross-repo/inbox/<name>.md` (O_EXCL) in the receiver's
-     own repo, then commit it via `git_native.commit_authored_new_file` —
-     ZERO git spawns for the commit itself, one hookless `update-index`
-     refresh, no hook from the receiver's tree ever fires (AC3).
+     own repo, then commit it via `git_native.commit_authored_new_file` and
+     record it in the receiver's index in process
+     (`_record_delivery_in_receiver_index`) — ZERO git spawns on the green
+     path, no hook from the receiver's tree ever fires (AC3).
   2. Sender: move `state/memo-outbox/<topic>.md` -> `sent/`, deriving the
      sent-copy's `status: sent` / `sent_at:` / `delivered_to:` stamp from
      the draft's OWN frontmatter (never re-authored).
@@ -77,14 +78,14 @@ Negative-spec:
     loud (see `_validate_cc`) rather than composing without it.
   - Does NOT stop at stamping `cc:` into the copy already going to `to:`
     (klabauter#46, second half) — each `cc:` name is resolved via the SAME
-    `_resolve_receiver_inbox` `to:` uses (see `_resolve_cc_targets`) and gets
+    `memo_wire.resolve_receiver` `to:` uses (see `_resolve_cc_targets`) and gets
     its OWN receiver-side write + commit + anchor (see `_deliver_cc_copy`),
     in the SAME repo, with the SAME cc-stamped content `to:` receives. An
     unresolvable cc name refuses the WHOLE send loud, before any write —
     mirrors `to:`'s own UNKNOWN RECEIVER refusal exactly, so a cc leg is
     held to the same "resolvable before any byte moves" bar `to:` already
     was. A cc naming a publish mirror or a redirect alias is delivered to
-    its owner, exactly as `to:` is: `_resolve_receiver_inbox` does the
+    its owner, exactly as `to:` is: `memo_wire.resolve_receiver` does the
     rerouting for both. Once every cc name resolves, a PER-RECEIVER write
     failure (collision, declined/unverified commit) after `to:` has already
     landed does NOT undo `to:`'s delivery or fail the whole send — it is
@@ -103,7 +104,7 @@ Negative-spec:
   - Does NOT overwrite an existing receiver-inbox file — refused twice,
     independently: an existence pre-check AND the `O_EXCL` open flag (AC6).
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
-    `_memo_resolver.resolve_receiver_inbox` (registry-enumerated); the
+    `memo_wire.resolve_delivery_target` (registry-enumerated); the
     receiver-side write target is never wire-derived.
   - Does NOT allow a send whose staged body is byte-identical (frontmatter
     stripped, trailing whitespace normalised) to another `*.md` draft
@@ -124,6 +125,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -141,6 +143,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.frontmatter.schema_validate import (
+    fold_flat_scoped_to,
     format_validation_errors,
     parse_frontmatter,
     validate_memo_cross_fields,
@@ -153,8 +156,13 @@ from coordinator_core.git.commit import (
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_objects import _read_object
-from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
+from coordinator_core.git.git_objects import _read_object, write_object
+from coordinator_core.git.index_write import (
+    IndexStaleAfterCommit,
+    IndexWriteError,
+    IndexWriteLockBusy,
+    splice_index,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.machine_profile import feature_refusal
@@ -175,18 +183,14 @@ from coordinator_core.ops.fleet._memo_anchor import (
 from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _compose_memo,
-    _memo_filename,
     _render_extra_field,
     _normalize_in_reply_to,
     body_opens_frontmatter,
 )
-from coordinator_core.ops.fleet._memo_resolver import (
-    AmbiguousReceiverError,
-    RegistryReadError,
-    never_inbox_mirror_refusal as _never_inbox_mirror_refusal,
-    resolve_receiver_inbox as _resolve_receiver_inbox,
-    suggest_nearest_receiver as _suggest_nearest_receiver,
-    undeliverable_checkout_refusal as _undeliverable_checkout_refusal,
+from coordinator_core.ops.fleet.memo_wire import (
+    WireRefusal,
+    resolve_delivery_target,
+    resolve_receiver,
 )
 from coordinator_core.ops.fleet._memo_summary import has_prose_body, is_placeholder_summary
 from coordinator_core.ops.fleet.memo_draft import legacy_outbox_dir, outbox_dir, resolve_outbox_draft_path
@@ -333,8 +337,8 @@ _SENT_LEDGER_MAX_AGE_DAYS = 30
 # `cross-repo/inbox/`, a migrated one to `state/cross-repo/inbox/` — both
 # patterns are named here rather than the stale single legacy literal, since
 # either can be the actual write target depending on the receiver probed.
+MUTATES_APPEND = [f"{MEMO_OUTBOX_RELDIR}/sent-ledger.jsonl"]
 MUTATES = [
-    f"{MEMO_OUTBOX_RELDIR}/sent-ledger.jsonl",
     f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md",
     "cross-repo/inbox/*.md",
     "state/cross-repo/inbox/*.md",
@@ -405,23 +409,29 @@ def _sent_ledger_path(sender_worktree: Path) -> Path:
     return Path(_machinery_paths.memo_outbox_sent_ledger_path(str(sender_worktree)))
 
 
-def _portable_delivered_to_form(receiver_repo_path: Path, delivered_path: Path) -> str:
-    """Render `delivered_path` as the portable form stamped into
-    `delivered_to` — receiver-repo-relative when possible, falling back to a
-    `~/`-prefixed home-relative form, and only then to the absolute string.
+def _portable_delivered_to_form(
+    receiver_repo_path: Path,
+    delivered_path: Path,
+    all_repos: Optional[dict] = None,
+) -> str:
+    """Render `delivered_path` as the `delivered_to` receipt: `<repo-key>:<path>`.
 
-    A machine-absolute path tracked into a sent memo reddens DoE's
-    `test_no_posix_home_path_citations` portability gate; the receiver is
-    already unambiguous from `to:` + `delivery_mode: receiver-repo`, so a
-    receiver-repo-relative path loses no information. Ported verbatim from
-    the deleted original (git show 677d433eb), which this same reasoning
-    motivated. Separators are always normalized to `/`.
+    `<repo-key>` is the canonical `repos.*` registry key that owns
+    `receiver_repo_path` and `<path>` is repo-relative with `/` separators, so
+    the receipt re-resolves after a root moves. Readers that take the basename
+    of the field are unaffected. A receiver with no registry key, or a
+    delivered path outside it, falls back to the repo-relative path, then a
+    `~/` form, then the absolute string: never a key-less guess.
     """
     try:
-        rel = delivered_path.resolve().relative_to(receiver_repo_path.resolve())
-        return rel.as_posix()
+        rel = delivered_path.resolve().relative_to(receiver_repo_path.resolve()).as_posix()
     except (ValueError, OSError):
-        pass
+        rel = None
+    if rel is not None:
+        from coordinator_core.machine_resolver import canonical_repo_key_for_root
+
+        key = canonical_repo_key_for_root(receiver_repo_path, all_repos or {})
+        return f"{key}:{rel}" if key else rel
     try:
         home_rel = delivered_path.resolve().relative_to(Path.home().resolve())
         return "~/" + home_rel.as_posix()
@@ -710,7 +720,7 @@ def _compose_delivered_content(
             summary=summary,
             supersedes=fm.get("supersedes"),
             today=today,
-            scoped_to=fm.get("scoped_to"),
+            scoped_to=fold_flat_scoped_to(fm).get("scoped_to"),
             in_reply_to=fm.get("in_reply_to"),
             space=fm.get("space"),
             sent_by=sent_by,
@@ -832,6 +842,71 @@ def _rollback_unwritten_file(target_file: Path) -> str:
     return " the file this call wrote was removed (tree restored)."
 
 
+#: Bounded wait for a peer's `.git/index.lock` in the receiver -- wall clock
+#: spent sleeping, not process time; past it the delivery reports a stale
+#: index rather than stalling the send.
+_RECEIVER_INDEX_LOCK_ATTEMPTS = 5
+_RECEIVER_INDEX_LOCK_SLEEP_SECS = 0.02
+
+#: Inherited variables that point git at a repository, index or object store
+#: other than the one `cwd` names -- set inside any git hook. The fallback
+#: spawn below strips them so it writes the RECEIVER's own index.
+_REPO_LOCATING_GIT_ENV = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX",
+)
+
+
+def _record_delivery_in_receiver_index(
+    receiver_repo_path: Path, rel_path: str, content: str,
+) -> Optional[str]:
+    """Add the just-committed delivery to the receiver's own `.git/index`, so
+    `git status` there is clean. Returns `None` on success, else a one-line
+    warning for the envelope.
+
+    Without this entry the path is in HEAD and the worktree but not the index
+    -- `D  path` plus `?? path` -- and the receiver's next `git add -A` or
+    `commit -a` deletes the delivered memo in its own history.
+
+    In-process `splice_index`: zero spawns, and the index is located from
+    `receiver_repo_path` itself, never from an inherited `GIT_INDEX_FILE` /
+    `GIT_DIR` (set under any git hook, naming the CALLER's index). A peer's `index.lock` is
+    waited on briefly, never stolen. An index `splice_index` will not write
+    (v3/v4, unmerged) falls back to one hookless `update-index` spawn with
+    the repo-locating variables stripped. Never raises: the commit already
+    landed, and a failed index write must not read as a failed send."""
+    remedy = f"`git -C {receiver_repo_path} reset -q -- {rel_path}` restores it"
+    try:
+        blob_sha = write_object(
+            resolve_git_common_dir(receiver_repo_path), b"blob", content.encode("utf-8")
+        )
+    except OSError as exc:
+        return f"memo.send: receiver index not updated for {rel_path} ({exc}); {remedy}."
+    updates = {rel_path: (0o100644, blob_sha)}
+    for attempt in range(_RECEIVER_INDEX_LOCK_ATTEMPTS):
+        try:
+            splice_index(receiver_repo_path, updates)
+            return None
+        except IndexWriteLockBusy as exc:
+            detail = str(exc)
+            if attempt + 1 < _RECEIVER_INDEX_LOCK_ATTEMPTS:
+                time.sleep(_RECEIVER_INDEX_LOCK_SLEEP_SECS)
+        except IndexStaleAfterCommit as exc:
+            detail = str(exc)
+            break
+        except IndexWriteError:
+            env = {k: v for k, v in os.environ.items() if k not in _REPO_LOCATING_GIT_ENV}
+            refreshed = git_native._git(
+                ["update-index", "--add", "--cacheinfo", f"100644,{blob_sha},{rel_path}"],
+                cwd=receiver_repo_path, env=env,
+            )
+            if refreshed.ok:
+                return None
+            detail = (refreshed.stderr or "").strip()
+            break
+    return f"memo.send: receiver index not updated for {rel_path} ({detail}); {remedy}."
+
+
 def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
     """Resolve every `cc:` name to (name, inbox_dir, receiver_repo_path) the
     same way `to:` is resolved. Returns (targets, error) — exactly one
@@ -847,39 +922,29 @@ def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
         return [], None
     targets = []
     for name in cc_list:
-        try:
-            inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(name)
-        except RegistryReadError as exc:
-            return None, (
-                f"memo.send: cc target {name!r} could not be resolved — "
-                f"machine-local registry could not be read: {exc.reason} "
-                f"(no folder-scan fallback — fix the registry file or "
-                f"re-run machine-local setup)."
-            )
-        except AmbiguousReceiverError as exc:
-            return None, f"memo.send: cc target {name!r}: {exc}"
-        # By-path check: catches an unlisted alias resolving into the
-        # mirror clone anyway (the live-hole shape).
-        mirror_refusal = _never_inbox_mirror_refusal(name, receiver_repo_path)
-        if mirror_refusal is not None:
-            return None, f"memo.send: cc target {name!r}: {mirror_refusal}"
-        # Unregistered names skip this so UNKNOWN CC RECEIVER can suggest one.
-        if receiver_repo_path is not None:
-            checkout_refusal = _undeliverable_checkout_refusal(name, receiver_repo_path)
-            if checkout_refusal is not None:
-                return None, f"memo.send: cc target {name!r}: {checkout_refusal}"
-        if inbox_dir is None:
-            suggestion = _suggest_nearest_receiver(name, all_repos)
-            suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
-            return None, (
-                f"memo.send: UNKNOWN CC RECEIVER — {name!r} does not resolve "
-                f"to any registered receiver on this machine.{suggestion_clause} "
-                f"Register the receiver repo first (machine-local set "
-                f"repos.<name> <abs-path-to-repo>), fix a typo in the draft's "
-                f"`cc:`, or remove that name from `cc:` before sending."
-            )
-        targets.append((name, inbox_dir, receiver_repo_path))
+        receiver = resolve_receiver(name)
+        if isinstance(receiver, WireRefusal):
+            return None, _cc_refusal_text(name, receiver.message)
+        targets.append((name, receiver.inbox_dir, receiver.receiver_repo_path))
     return targets, None
+
+
+def _cc_refusal_text(name: str, message: str) -> str:
+    """Re-voice a `memo_wire` receiver refusal for a `cc:` name."""
+    prefix = "memo.send: "
+    rest = message[len(prefix):] if message.startswith(prefix) else message
+    if rest.startswith("machine-local registry could not be read"):
+        return f"{prefix}cc target {name!r} could not be resolved — {rest}"
+    if rest.startswith("UNKNOWN RECEIVER"):
+        return (
+            prefix
+            + rest.replace("UNKNOWN RECEIVER", "UNKNOWN CC RECEIVER", 1).replace(
+                "or check for a typo in the draft's `to:`.",
+                "fix a typo in the draft's `cc:`, or remove that name from "
+                "`cc:` before sending.",
+            )
+        )
+    return f"{prefix}cc target {name!r}: {rest}"
 
 
 def _deliver_cc_copy(
@@ -940,6 +1005,7 @@ def _deliver_cc_copy(
     try:
         commit_result = git_native.commit_authored_new_file(
             rel_path, content, msg_file, receiver_repo_path,
+            refresh_shared_index=False,
         )
     finally:
         try:
@@ -972,17 +1038,24 @@ def _deliver_cc_copy(
             ),
         }
 
+    index_warning = _record_delivery_in_receiver_index(
+        receiver_repo_path, rel_path, content
+    )
     common_dir = resolve_git_common_dir(receiver_repo_path)
     anchored_bytes = target_file.read_bytes()
     anchor_blob_sha = write_anchor(
         common_dir, filename, delivery_commit_sha, anchored_bytes
     )
-    return {
+    delivered = {
         "ok": True, "id": str(target_file), "to": name,
         "written": True, "committed": True,
         "delivery_commit_sha": delivery_commit_sha,
         "anchored": anchor_blob_sha is not None,
     }
+    if index_warning is not None:
+        _LOG.warning("%s", index_warning)
+        delivered["receiver_index_warning"] = index_warning
+    return delivered
 
 
 class _SenderCommit(NamedTuple):
@@ -1115,25 +1188,36 @@ def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
 
 def _citation_owners(
     paths: list, sender_root: Path, receiver_root: Path,
-    sender_name: str, receiver_name: str,
+    sender_name: str,
 ) -> tuple:
-    """Classify each bare path by which tree holds it: `({path: qualifier},
-    [ambiguous_or_unresolved])`. Sender-only -> sender, receiver-only ->
-    receiver, both or neither -> unresolved (left bare). In-process stats
-    only; a guess is never made.
+    """Classify each bare path: `({path: qualifier}, [unresolved])`. A path
+    absent from the sender's tree still belongs to the sender when a
+    non-top-level ancestor directory exists there, or when the receiver
+    holds it (an absence report is the common cause); the receiver is never
+    credited by existence alone. Held by both trees, or by neither with no
+    sender ancestor -> unresolved (left bare). In-process stats only.
     """
     owners: dict = {}
     unresolved: list = []
     for p in paths:
         in_sender = (sender_root / p).exists()
         in_receiver = (receiver_root / p).exists()
-        if in_sender and not in_receiver:
+        if in_sender and in_receiver:
+            unresolved.append(p)
+        elif in_sender or in_receiver or _sender_has_ancestor(sender_root, p):
             owners[p] = sender_name
-        elif in_receiver and not in_sender:
-            owners[p] = receiver_name
         else:
             unresolved.append(p)
     return owners, unresolved
+
+
+def _sender_has_ancestor(sender_root: Path, rel: str) -> bool:
+    """True when a directory strictly between the repo root's top-level
+    segment (`state/`, `docs/` exist in every fleet repo) and `rel` exists."""
+    parts = rel.split("/")
+    return any(
+        (sender_root.joinpath(*parts[:i])).is_dir() for i in range(len(parts) - 1, 1, -1)
+    )
 
 
 def _citation_lint_notice(paths: list, sender_name: str, owners: Optional[dict] = None) -> str:
@@ -1147,8 +1231,8 @@ def _citation_lint_notice(paths: list, sender_name: str, owners: Optional[dict] 
     listed = "\n".join(f"    {p} -> {owners.get(p, sender_name)}:{p}" for p in shown)
     more_clause = f"\n    ...and {remainder} more" if remainder > 0 else ""
     return (
-        "memo.send: %d body path(s) were not repo-qualified; qualified by "
-        "which repo holds them and delivered as such.\n"
+        "memo.send: %d body path(s) were not repo-qualified; qualified as "
+        "the sender's. Write `repo:path` to cite a peer.\n"
         "%s%s"
         % (len(paths), listed, more_clause)
     )
@@ -1472,21 +1556,15 @@ def _check_ledger_row(row: dict) -> dict:
         candidate["note"] = "row carries no 'to' — cannot resolve a receiver to check"
         return candidate
 
-    try:
-        _inbox_dir, receiver_repo_path, _all_repos = _resolve_receiver_inbox(to)
-    except (RegistryReadError, AmbiguousReceiverError) as exc:
+    receiver = resolve_receiver(to)
+    if isinstance(receiver, WireRefusal):
         candidate["status"] = _VERDICT_NOT_CHECKABLE
-        candidate["note"] = f"receiver {to!r} could not be resolved: {exc}"
-        return candidate
-
-    if receiver_repo_path is None or not receiver_repo_path.is_dir():
-        candidate["status"] = _VERDICT_NOT_CHECKABLE
-        where = f" ({receiver_repo_path})" if receiver_repo_path is not None else ""
         candidate["note"] = (
-            f"receiver {to!r} is not checked out on this machine{where} — a "
+            f"receiver {to!r} could not be resolved: {receiver.message} — a "
             f"peer not checked out here says nothing about delivery"
         )
         return candidate
+    receiver_repo_path = receiver.receiver_repo_path
 
     filename = os.path.basename(delivered_to) if isinstance(delivered_to, str) else None
 
@@ -1705,48 +1783,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
 
     from_id = fm.get("from")
-    filename = _memo_filename(today, from_id, topic)
-
-    try:
-        inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(to)
-    except RegistryReadError as exc:
-        return build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.send: machine-local registry could not be read: {exc.reason} "
-            f"(no folder-scan fallback — fix the registry file or re-run "
-            f"machine-local setup).",
-        )
-    except AmbiguousReceiverError as exc:
-        return build_setup_error_result(_MODE, dry_run, f"memo.send: {exc}")
-
-    # PM ruling 2026-09-23 — checked by the RESOLVED write target's own repo
-    # path, not by the addressed name: a correctly-configured mirror already
-    # reroutes to its owner above (`reroute_owner`, inside
-    # `_resolve_receiver_inbox`) and that owner delivery is fine — this only
-    # fires when the ACTUAL write target is the mirror clone itself (the
-    # live-hole shape: an incompletely-registered mirror falling through to
-    # ordinary repos.* resolution). Still before any write. See
-    # `_memo_resolver.never_inbox_mirror_refusal`.
-    mirror_refusal = _never_inbox_mirror_refusal(to, receiver_repo_path)
-    if mirror_refusal is not None:
-        return build_setup_error_result(_MODE, dry_run, mirror_refusal)
-
-    # Unregistered names skip this so UNKNOWN RECEIVER can suggest one.
-    if receiver_repo_path is not None:
-        checkout_refusal = _undeliverable_checkout_refusal(to, receiver_repo_path)
-        if checkout_refusal is not None:
-            return build_setup_error_result(_MODE, dry_run, checkout_refusal)
-
-    if inbox_dir is None:
-        suggestion = _suggest_nearest_receiver(to, all_repos)
-        suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
-        return build_setup_error_result(
-            _MODE, dry_run,
-            f"memo.send: UNKNOWN RECEIVER — {to!r} does not resolve to any "
-            f"registered receiver on this machine.{suggestion_clause} Register "
-            f"the receiver repo first (machine-local set repos.<name> "
-            f"<abs-path-to-repo>), or check for a typo in the draft's `to:`.",
-        )
+    target = resolve_delivery_target(
+        to, sender_worktree=sender_worktree, from_id=from_id, topic=topic, today=today,
+    )
+    if isinstance(target, WireRefusal):
+        return build_setup_error_result(_MODE, dry_run, target.message)
+    filename = target.filename
+    inbox_dir = target.inbox_dir
+    receiver_repo_path = target.receiver_repo_path
+    all_repos = target.all_repos
+    self_send = target.self_send
 
     # The warn-once gates — all evaluated on the same attempt and refused as
     # one (`_held_once_refusal`). After the UNKNOWN RECEIVER refusal (an
@@ -1775,12 +1821,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # against ITS OWN tree, not this sender's. Skipped entirely when the
     # receiver resolves to the sender's own worktree (D4) — a self-send
     # never crosses a tree boundary.
-    self_send = False
     citations_unresolved: list = []
-    try:
-        self_send = receiver_repo_path.resolve() == sender_worktree.resolve()
-    except OSError:
-        self_send = False
     if not dry_run and not self_send:
         sender_name = sender_worktree.name.lower()
         qualifiers = _repo_qualifier_names(all_repos) | {sender_name}
@@ -1797,7 +1838,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                 sender_name = sender_name[: -len("-em")]
             owners, citations_unresolved = _citation_owners(
                 unqualified, sender_worktree, receiver_repo_path,
-                sender_name, receiver_repo_path.name.lower(),
+                sender_name,
             )
             split = split_frontmatter(content)
             if split is not None and owners:
@@ -1895,6 +1936,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     try:
         commit_result = git_native.commit_authored_new_file(
             rel_path, content, msg_file, receiver_repo_path,
+            refresh_shared_index=False,
         )
     finally:
         try:
@@ -1955,6 +1997,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             ),
         }])
 
+    receiver_index_warning = _record_delivery_in_receiver_index(
+        receiver_repo_path, rel_path, content
+    )
+    if receiver_index_warning is not None:
+        _LOG.warning("%s", receiver_index_warning)
+
     # ── anchor: the durable record (C4) ─────────────────────────────────
     # `target_file`'s bytes on disk are exactly the bytes the commit above
     # hashed -- read them back rather than reuse in-memory `content`, so the
@@ -1988,7 +2036,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             to, delivery_commit_sha, filename,
         )
 
-    delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file)
+    delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file, all_repos)
 
     # ── cc: each cc target gets its OWN write+commit+anchor (klabauter#46,
     # second half) ──────────────────────────────────────────────────────
@@ -2245,6 +2293,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         acted_item["cc_delivered"] = cc_delivered
     if anchor_warning is not None:
         acted_item["anchor_warning"] = anchor_warning
+    if receiver_index_warning is not None:
+        acted_item["receiver_index_warning"] = receiver_index_warning
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the
         # engine's log is not retained, so an operator sees only the CLI's

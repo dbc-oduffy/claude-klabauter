@@ -124,7 +124,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "fff2101265e9f0a296cb811f0d0a0449b57e27a91f9528bb822c2ce12dd46722"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "1fd0e3dcdd46dc6bdf8d78c74003a429d7a5daeb27f3be267d63f8dcba2f9b23"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -247,6 +247,53 @@ def test_append_block_missing_interpreter_and_missing_script_both_warn():
         '"$_PY" "$_T" "$@"',
     )
     assert block.count("[coordinator] WARNING: hook installed but") == 2
+
+
+def _run_resolution_hook(tmp_path, body, *, settings_script: bool):
+    coord_bin = tmp_path / "coord-bin"
+    coord_bin.mkdir()
+    (coord_bin / "tool").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    settings_home = tmp_path / "settings-home"
+    if settings_script:
+        (settings_home / "bin").mkdir(parents=True)
+        (settings_home / "bin" / "tool").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    hook = tmp_path / "hook"
+    hook.write_text(body, encoding="utf-8")
+    env = dict(os.environ)
+    env["COORDINATOR_SETTINGS_HOME"] = settings_home.as_posix()
+    env["HOME"] = (tmp_path / "home").as_posix()
+    return coord_bin, subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
+
+
+def test_shim_body_notices_when_a_fallback_candidate_wins(tmp_path):
+    coord_bin = tmp_path / "coord-bin"
+    body = _shim_body(coord_bin.as_posix(), "tool", "echo ran")
+    _, result = _run_resolution_hook(tmp_path, body, settings_script=False)
+    assert "ran" in result.stdout
+    assert result.stderr.count("tool hook resolved via fallback") == 1
+    assert (coord_bin / "tool").as_posix() in result.stderr
+
+
+def test_shim_body_is_silent_when_the_settings_home_candidate_wins(tmp_path):
+    body = _shim_body((tmp_path / "coord-bin").as_posix(), "tool", "echo ran")
+    _, result = _run_resolution_hook(tmp_path, body, settings_script=True)
+    assert "ran" in result.stdout
+    assert "resolved via fallback" not in result.stderr
+
+
+def test_append_block_notices_when_a_fallback_candidate_wins(tmp_path):
+    coord_bin = tmp_path / "coord-bin"
+    block = _append_block(coord_bin.as_posix(), "tool", "coordinator tool", "echo ran")
+    _, result = _run_resolution_hook(tmp_path, "#!/bin/sh\n" + block + "\n", settings_script=False)
+    assert "ran" in result.stdout
+    assert result.stderr.count("tool hook resolved via fallback") == 1
+
+
+def test_append_block_is_silent_when_the_settings_home_candidate_wins(tmp_path):
+    block = _append_block((tmp_path / "coord-bin").as_posix(), "tool", "coordinator tool", "echo ran")
+    _, result = _run_resolution_hook(tmp_path, "#!/bin/sh\n" + block + "\n", settings_script=True)
+    assert "ran" in result.stdout
+    assert "resolved via fallback" not in result.stderr
 
 
 import pytest
@@ -628,8 +675,8 @@ def test_session_gate_is_generated_from_the_ladder():
     )
     gate = [ln for ln in body.splitlines() if ln.startswith('[ -z "')]
     assert len(gate) == 1, f"expected exactly one no-session gate, got {gate}"
-    expected = '[ -z "' + "".join(f"${v}" for v in SESSION_ENV_PRECEDENCE) + '" ] && exit 0'
-    assert gate[0] == expected, (
+    expected = '[ -z "' + "".join(f"${v}" for v in SESSION_ENV_PRECEDENCE) + '" ] && {'
+    assert gate[0].startswith(expected), (
         f"the emitted no-session gate {gate[0]!r} no longer matches "
         f"SESSION_ENV_PRECEDENCE {tuple(SESSION_ENV_PRECEDENCE)!r}. The ladder moved. "
         "Fix: nothing in this test -- re-emit the hooks (the gate is generated), bump "
@@ -1267,6 +1314,21 @@ def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tm
     assert ghi._hook_gen_stamp_line() in healed
 
 
+def test_no_session_gate_refuses_inside_claude_code_and_passes_a_human_commit():
+    """Inside Claude Code a missing session id is refused and named, never a
+    silent unattributed commit; outside it (no CLAUDECODE) the gate exits 0."""
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+        skip_if_all_unset=SESSION_ENV_PRECEDENCE,
+    )
+    gate = next(ln for ln in body.splitlines() if ln.startswith('[ -z "'))
+    assert '[ -n "$CLAUDECODE" ] && {' in gate
+    assert "Session-Id" in gate and "1>&2; exit 1; }" in gate
+    assert gate.endswith("exit 0; }")
 def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ghi, "_registry_repo_roots", lambda bin_dir: [("repos.clone", str(tmp_path))])
     monkeypatch.setattr(ghi, "_classify_target", lambda r: "mirror")

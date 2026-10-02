@@ -119,7 +119,7 @@ _LEAK_PATTERNS: Dict[str, Pattern[str]] = {
     "guard-override-keys.md doc pointer": re.compile(r"guard-override-keys\.md"),
     "bare unlock statement": re.compile(r"\bunlock\b", re.IGNORECASE),
     "sentinel/marker dotfile path": re.compile(
-        r"\.coordinator-(?!local/subagent-share/)[a-z][a-z0-9-]*"
+        r"\.coordinator-(?!local[\\/]subagent-share[\\/])[a-z][a-z0-9-]*"
     ),
     "touch/export/rm recipe": re.compile(r"\b(?:touch|export|rm)\s+\S"),
     "override env-var name": re.compile(r"\bCOORDINATOR_[A-Z_]+\b"),

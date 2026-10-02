@@ -2550,6 +2550,34 @@ def test_commit_uses_resolved_worktree_root_not_dest(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_OK
 
 
+def test_ci_smoke_runs_the_worktree_root_script_for_a_dest_subdir_row(tmp_path, monkeypatch):
+    """`.github/` lives at the worktree root, never under a `dest_subdir` row's
+    dest: Step 4 runs `<repo_root>/.github/scripts/run-all-checks.py` with
+    cwd=repo_root, and a script present only under `dest` is not consulted."""
+    worktree_root = tmp_path
+    script = worktree_root / ".github" / "scripts" / "run-all-checks.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, ci_exists=False, toplevel_stdout=f"{worktree_root}\n",
+    )
+
+    ci_calls = [
+        (c, kw)
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if "run-all-checks.py" in " ".join(str(x) for x in c)
+    ]
+    assert rc == _mod._EXIT_OK
+    assert len(ci_calls) == 1
+    argv, kwargs = ci_calls[0]
+    assert Path(str(argv[-1])) == script
+    assert str(kwargs.get("cwd")) == str(worktree_root)
+    assert "ci-smoke:  exit 0" in out
+
+
 def test_repo_root_resolution_failure_returns_fail(tmp_path, monkeypatch):
     """`git rev-parse --show-toplevel` failing (e.g. dest not inside a git
     worktree) must fail the round loudly rather than fall back to `dest`

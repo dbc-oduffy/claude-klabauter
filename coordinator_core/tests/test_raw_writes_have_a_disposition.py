@@ -27,33 +27,33 @@ just the pre-filtered hits, before any analysis — over 3.5x this repo's
 500ms brightline before the gate does any work. The bytes-level walk (census
 row 2) measured 297ms for the whole ``coordinator_core`` package. That is
 still over CLAUDE.md's "one process over 200ms needs a fix, not a
-rationale" line, so this gate's own walk (below) is a three-phase
-literal-prefilter over the same vocabulary rather than one alternation
-regex run against every file's full bytes — same population, cheaper to
-compute. Measured at authoring time, three repeated runs:
+rationale" line, so this gate's own walk (below) compiles the same
+vocabulary into one ``(``-anchored regex with a fixed-width lookbehind per
+``(``-terminated literal and for the ``open(`` shape, plus one ``in`` pass
+per remaining literal and the ``mode=`` prefilter — each file is walked by
+three searches instead of one per term, and read with one unbuffered
+``os.read``. ``_is_raw_writer_by_definition`` is the vocabulary read
+literally; two tests pin the compiled form to it, on samples and on the
+live population. Measured (``time.process_time``, ~1570 files, ~35MB):
 
-  - the original single-regex walk (census row 2's exact pattern): ~332ms
-    (mean of 3 runs; range 332-337ms).
-  - this gate's three-phase prefiltered walk (identical vocabulary, same
-    281-module population): ~184ms (mean of 3 runs; range 182-187ms).
+  - census row 2's single alternation regex: ~275ms.
+  - one ``in`` pass per literal plus prefiltered regexes: ~200-240ms.
+  - this gate's anchored walk: ~100-130ms, about half of it the reads.
   - a `git grep --untracked -lE` spawn over the same vocabulary, measured
     for comparison: ~1469ms of child process time with a naive pathspec
     that (unlike the walk) does not exclude ``tests``/``testing``/
     ``benchmarks``/``__pycache__`` or ``test_*.py``/``conftest.py`` — a
     `git grep` variant that replicated the walk's exclusions was not
-    pursued further once the python-side prefilter alone already beat the
-    200ms bar, since census row 3's own finding is that a spawned process
-    is a cost that "justifies itself per use" (CLAUDE.md) and this walk
-    needs no spawn at all. The kept scan is therefore the prefiltered
+    pursued further once the python-side walk alone beat the 200ms bar,
+    since census row 3's own finding is that a spawned process is a cost that "justifies itself per use" (CLAUDE.md) and this walk
+    needs no spawn at all. The kept scan is therefore the anchored
     bytes-level Python walk, never a `git grep` spawn. `git grep` qualifies
     only if its module set equals the walk's; it was not re-measured with
     matching exclusions because the walk already cleared the budget.
 
-The asserted budget is 200ms flat (never the repo's 500ms brightline): the
-measured figure (~184ms) plus a ~16ms stated headroom for host variance,
-landing exactly at the AC6 ceiling ("at or below 200ms"). If a future
-change pushes the live scan over 200ms, the fix is to cut the walk's cost
-further (fewer files touched twice, a cheaper prefilter) — a looser
+The asserted budget is 200ms flat (never the repo's 500ms brightline), the
+AC6 ceiling ("at or below 200ms"). If a future change pushes the live scan
+over 200ms, the fix is to cut the walk's cost further (fewer files touched twice, a cheaper prefilter) — a looser
 assertion is not a fix.
 
 The vocabulary (``_RAW_LITERALS`` / ``_RAW_OPEN_RE`` / ``_RAW_MODE_RE``
@@ -193,6 +193,20 @@ _RAW_LITERALS: Tuple[bytes, ...] = (
 _RAW_OPEN_RE = re.compile(rb"""open\([^)\n]*['"][wax]b?\+?['"]""")
 _RAW_MODE_RE = re.compile(rb"""mode\s*=\s*['"][wax]""")
 
+#: The scan's compiled form of the vocabulary above, identical in what it
+#: matches. Every ``(``-terminated literal and the ``open(`` shape share one
+#: anchor byte, so one regex anchored on ``(`` with a fixed-width lookbehind
+#: per literal replaces one full ``in`` pass per literal: the search walks the
+#: file once, and a literal costs only a lookbehind probe at each ``(``.
+_PAREN_LITERALS: Tuple[bytes, ...] = tuple(lit for lit in _RAW_LITERALS if lit.endswith(b"("))
+_BARE_LITERALS: Tuple[bytes, ...] = tuple(lit for lit in _RAW_LITERALS if not lit.endswith(b"("))
+_PAREN_ANCHORED_RE = re.compile(
+    rb"\((?:"
+    + b"|".join(rb"(?<=" + re.escape(lit) + rb")" for lit in _PAREN_LITERALS)
+    + rb"""|(?<=open\()(?=[^)\n]*['"][wax]b?\+?['"])"""
+    + rb")"
+)
+
 _CLAIM_TOKEN_RE = re.compile(
     rb"declare_write\(|_scope_touch_paths|touch_written_path\(|_SCOPE_TOUCH_PATHS_KEY"
 )
@@ -296,8 +310,16 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/completion_receipts/store.py': ('claims-explicitly', 'exclusive-create receipt under state/completion-receipts/, declared through declare_write: write_receipt'),
+    'coordinator_core/contract/cockpit_schema/entities/completion_receipt.py': ('in-repo-non-state', 'no write: the vocabulary hit is pydantic\'s model_validator(mode="after")'),
+    'coordinator_core/git/hook_dispositions.py': ('git-internal', 'hook backup and in-place hook rewrite under <git-common-dir>/hooks: _write_backup, _replace_file'),
+    'coordinator_core/hooks/postuse_subagent_compaction_warning.py': ('outside-repo', 'per-agent band marker under settings_home()/state/compaction-warned, outside every repo'),
+    'coordinator_core/ops/discover_working_repos.py': ('outside-repo', 'tmp-then-replace of <home>/.claude/working-repos.yaml: write_working_repos_yaml'),
+    'coordinator_core/ops/dispatch_emit/ask_stage.py': ('ignored-target', 'spine, briefs, commit-request marker and manifest under the run dir (state/scratch/warp/..., gitignored scratch/): _write'),
+    'coordinator_core/ops/review_mint/supersede.py': ('claims-explicitly', 'exclusive-create superseding record under state/superseding-reviews/, declared through declare_write: record_superseding_review'),
+    'coordinator_core/percolate/_entrypoint_depth_probe/sitecustomize.py': ('outside-repo', 'per-pid depth record in the env-named dir the percolate gate makes with tempfile.TemporaryDirectory'),
+    'coordinator_core/session/incident_claims.py': ('git-internal', 'incident-claim holder fields under <git-common-dir>/coordinator-sessions: _write_field'),
     'coordinator_core/hooks/guard_manufactured_blocker.py': ('git-internal', 'per-session has-fired marker inside the session dir under <git-common-dir>/coordinator-sessions: _mark_fired_this_session'),
-    'coordinator_core/install/hook_plane_verdict.py': ('outside-repo', 'rule surface files under <claude_home>/rules: write_rule_surface'),
     'coordinator_core/ops/handoff_discharge_landed.py': ('git-internal', 'O_EXCL batch lock under the git common dir: _acquire_lock; the handoff stamp write itself goes through claimed_write.replace_text'),
     'coordinator_core/telemetry/traffic_manifest.py': ('in-repo-non-state', 'operator-named --out file for a generated traffic manifest; no state/ target'),
     'coordinator_core/hooks/flag_em_poll_in_flight.py': ('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
@@ -424,6 +446,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/deliverable_equivalence.py': ('to-fix', "raw-write site(s): _is_immutable_path_local; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/deliverable_ledger_write.py': ('to-fix', 'raw-write site(s): _restore_original_content, upsert_deliverable_ledger_rows; runtime observed=yes (n=93), sample=/tmp/pytest-of-root/pytest-716/test_header_bytes_preserved_ve0/state/deliverable-equivalence.yaml.ledger-write.tmp.24772'),
     'coordinator_core/ops/dev_sync.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _sync_plugin'),
+    'coordinator_core/ops/dispatch_emit/queue_select.py': ('ignored-target', 'raw-write site(s): _materialise_source_rows writes source-op rows under the run dir (state/scratch/..., gitignored scratch/)'),
     'coordinator_core/ops/dispatch_emit/op.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _dispatch_emit, _write_emission_receipt, restamp'),
     'coordinator_core/ops/distill_apply_disposal.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _delete_tracked_and_append_log, _write_denormalizations, write_apply_receipt'),
     'coordinator_core/ops/distill_disposal_manifest.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_disposal_manifest'),
@@ -463,7 +486,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/install_lfs_pre_push_hook.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: install'),
     'coordinator_core/ops/install_meta_repo_precommit_hook.py': ('claims-explicitly', 'claim token in _atomic_write'),
     'coordinator_core/ops/install_publish_repo_precommit_hook.py': ('claims-explicitly', 'claim token in main'),
-    'coordinator_core/ops/install_shell_init_guard_seam.py': ('claims-explicitly', 'claim token in main'),
     'coordinator_core/ops/list_reverse_drift_cmds.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _run'),
     'coordinator_core/ops/memo_fate_partition.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _atomic_write_json'),
     'coordinator_core/ops/memo_transition.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: _commit_terminal_write [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
@@ -486,6 +508,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/release_tagging.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _publish_release'),
     'coordinator_core/ops/render_posture_overlay.py': ('claims-explicitly', 'claim token in run'),
     'coordinator_core/ops/render_template.py': ('claims-explicitly', 'claim token in _render_and_write_in_place, main'),
+    'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'reviewer wave sidecars and the bookkeeping record under .coordinator-local/subagent-share (gitignored): stamp_plan_id, bookkeep_wave'),
     'coordinator_core/ops/review_freeze_diff.py': ('claims-explicitly', 'claim token in freeze_diff'),
     'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'bookkeeping record and plan_id stamp land under .coordinator-local/subagent-share (gitignored) box-local run sidecars'),
     'coordinator_core/ops/rewrite_spec_backlinks.py': ('claims-explicitly', 'claim token in rewrite_file'),
@@ -616,11 +639,24 @@ _SCAN_MS_BUDGET = 200.0
 
 
 def _is_raw_writer(content: bytes) -> bool:
-    if any(lit in content for lit in _RAW_LITERALS):
+    if _PAREN_ANCHORED_RE.search(content) is not None:
         return True
-    if b"open(" in content and _RAW_OPEN_RE.search(content) is not None:
+    if any(lit in content for lit in _BARE_LITERALS):
         return True
     return b"mode" in content and _RAW_MODE_RE.search(content) is not None
+
+
+def _is_raw_writer_by_definition(content: bytes) -> bool:
+    """The vocabulary read literally, one pass per term — the reference
+    ``_is_raw_writer``'s compiled form must agree with."""
+    return (
+        any(lit in content for lit in _RAW_LITERALS)
+        or _RAW_OPEN_RE.search(content) is not None
+        or _RAW_MODE_RE.search(content) is not None
+    )
+
+
+_READ_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)
 
 
 def scan_raw_writers(root: pathlib.Path) -> List[str]:
@@ -632,9 +668,8 @@ def scan_raw_writers(root: pathlib.Path) -> List[str]:
     proof tests can drive it against a synthetic tree.
 
     The inner loop avoids ``pathlib`` per-file overhead (``relative_to``,
-    ``as_posix``) in favour of plain string joins — that alone is the
-    difference between the ~184ms and ~335ms figures in the module
-    docstring's cost section, at identical output."""
+    ``as_posix``) in favour of plain string joins, keeping per-file overhead
+    out of the budgeted walk."""
     scan_root_str = os.path.join(str(root), _SCAN_ROOT)
     if not os.path.isdir(scan_root_str):
         return []
@@ -652,10 +687,16 @@ def scan_raw_writers(root: pathlib.Path) -> List[str]:
                 continue
             full = os.path.join(dirpath, filename)
             try:
-                with open(full, "rb") as fh:
-                    content = fh.read()
+                fd = os.open(full, _READ_FLAGS)
             except OSError:
                 continue
+            try:
+                # One unbuffered read sized past EOF: no file-object setup.
+                content = os.read(fd, os.fstat(fd).st_size + 1)
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
             if _is_raw_writer(content):
                 found.append(full[prefix_len:].replace(os.sep, "/"))
     return sorted(found)
@@ -763,6 +804,28 @@ def test_at_close_out_the_ceiling_is_empty():
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
     assert len(_TO_FIX_CEILING) == 34
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"os.replace(a, b)", b"x.write_text(t)", b"p.write_bytes(b)", b"fd, p = mkstemp()",
+        b"os.fdopen(fd)", b"json.dump(o, fh)", b"os.O_CREAT", b"append_line(p, l)",
+        b"open(p, 'w')", b'open(p, "ab+")', b"open(p, 'x')", b"open(p, mode='w')",
+        b"mode = 'a'", b"model_validator(mode=\"after\")",
+        b"open(p)", b"open(p, 'r')", b"open(\n 'w')", b"json.dumps(o)", b"str.replace(a, b)",
+        b"os.replace (a, b)", b"write_text(t)", b"mode", b"",
+    ],
+)
+def test_the_compiled_scan_matches_the_vocabulary_as_written(content):
+    assert _is_raw_writer(content) is _is_raw_writer_by_definition(content)
+
+
+def test_the_compiled_scan_flags_exactly_the_live_population_the_vocabulary_does():
+    scan_root = _REPO_ROOT / _SCAN_ROOT
+    for path in scan_root.rglob("*.py"):
+        content = path.read_bytes()
+        assert _is_raw_writer(content) is _is_raw_writer_by_definition(content), path
 
 
 def test_scan_cost_is_at_or_below_the_budget():

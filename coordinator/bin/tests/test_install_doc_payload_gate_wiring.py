@@ -31,7 +31,9 @@ Run: python -m pytest coordinator/bin/tests/test_install_doc_payload_gate_wiring
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -193,7 +195,27 @@ def _stub_assembled_mirror_leg(monkeypatch) -> None:
     )
 
 
+def _stub_throwaway_tree(monkeypatch) -> None:
+    """These tests pin gate wiring, not the throwaway clone (covered by its own
+    tests), so the throwaway is a plain copy of the destination tree and its
+    git delta is empty: no `git` spawn, and the destination need not be a
+    committed repo."""
+
+    def _copy_tree(dest_repo_root, overlays, deletions):
+        tree = Path(tempfile.mkdtemp(prefix="claude-klabauter-throwaway-tree-"))
+        if Path(dest_repo_root).is_dir():
+            shutil.copytree(
+                dest_repo_root, tree, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git")
+            )
+        return tree
+
+    publish._bootstrap_engine()
+    monkeypatch.setattr(publish, "build_throwaway_tree", _copy_tree)
+    monkeypatch.setattr(publish, "_throwaway_delta_paths", lambda throwaway_root: ([], []))
+
+
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
+    _stub_throwaway_tree(monkeypatch)
     _stub_dest_refresh(monkeypatch)
     _stub_assembled_mirror_leg(monkeypatch)
     percolate_root = setup_dir.parent

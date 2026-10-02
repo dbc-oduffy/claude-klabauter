@@ -41,7 +41,7 @@ it, which is precisely why an operator-side artifact has to exist.
 
 Why a Stop hook rather than more doctrine: the harness block is delivered as a
 *mid-conversation* system injection, so it sits near the live turn, while
-coordinator's rebuttal (`docs/wiki/harness-directive-conflicts.md`,
+coordinator's rebuttal (`coordinator-content-repo coordinator/docs/wiki/claude-md-surfaces/harness-directive-conflicts.md`,
 `snippets/em-operating-doctrine.md` § Dispatch Is Encouraged, DR-082, DR-108)
 lands once at SessionStart, tens of KB upstream. Recency wins arguments that
 correctness does not. This op restores the balance by speaking at end-of-turn,
@@ -73,7 +73,7 @@ Negative-spec:
       comment for the fuller rationale on why the two paths must not be
       conflated.
 
-Spec backlink: docs/wiki/harness-directive-conflicts.md § Why prose alone has not held
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/claude-md-surfaces/harness-directive-conflicts.md § Why prose alone has not held
 """
 
 from __future__ import annotations

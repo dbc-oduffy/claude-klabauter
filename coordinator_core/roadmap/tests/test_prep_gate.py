@@ -1300,3 +1300,104 @@ def test_a_row_writing_under_archive_via_writes_under_is_refused_in_wave(tmp_pat
     assert report["verdict"] == pg.NOT_PREPPED
     assert report["classes"]["SPINE"]["kind"] == "writes-archive-refused-in-wave"
     assert "writes_under" in report["classes"]["SPINE"]["detail"]
+
+
+def _dr_spine(path: str) -> str:
+    return _CLEAN_SPINE.replace(
+        "  writes: [coordinator_core/roadmap/prep_gate.py]\n", f"  writes: [{path}]\n"
+    ).replace("  surface: coordinator_core/roadmap/prep_gate.py\n", f"  surface: {path}\n")
+
+
+def test_a_row_pinning_a_new_dr_number_is_refused(tmp_path):
+    """Plans that pick a new DR number collide with each other; the number is
+    minted at write time, so the row declares the directory instead."""
+    (tmp_path / "docs" / "decisions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "decisions" / "DR-421-old.md").write_text("x", encoding="utf-8")
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_dr_spine("docs/decisions/DR-422-new.md")))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SPINE"]["kind"] == "dr-number-pinned"
+
+
+def test_a_row_editing_an_existing_dr_is_not_refused(tmp_path):
+    (tmp_path / "docs" / "decisions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "decisions" / "DR-421-old.md").write_text("x", encoding="utf-8")
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_dr_spine("docs/decisions/DR-421-old.md")))
+    assert report["classes"]["SPINE"]["kind"] != "dr-number-pinned"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("../example-retrieval-repo/x.py", "project-rag"),
+        ("..\\example-retrieval-repo\\x.py", "project-rag"),
+        ("./../example-retrieval-repo", "project-rag"),
+        ("example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
+        ("../example-retrieval-repo-ue-addon/x.py", "example-retrieval-repo-ue-addon"),
+        ("example-retrieval-repo@x.py", "project-rag"),
+        ("example-retrieval-repo-other/x.py", None),
+        ("example_retrieval_repo_two/x.py", None),
+    ],
+)
+def test_matched_sibling_normalises_paths_and_matches_names_exactly(value, expected):
+    assert pg._matched_sibling(value, ("project-rag", "example-retrieval-repo-ue-addon")) == expected
+
+
+def test_a_dotdot_sibling_read_is_cleared_by_its_ungated_entry(tmp_path):
+    path = "../example-retrieval-repo-ue-addon/x.py"
+    spine = _reads_spine("", owner="..").replace("../coordinator_core/x.py", path[3:]).replace(
+        f"reads: [{path[3:]}]", f"reads: [{path}]"
+    )
+    entries = (
+        "  external_reads_ungated:\n"
+        f"    - path: {path}\n"
+        "      owner_repo: example-retrieval-repo-ue-addon\n"
+        "      reason: read-only, examined\n"
+    )
+    spine = spine.replace("  queue_scope", entries + "  queue_scope", 1)
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
+
+
+def _workflow_spine(write: str, *, extra: str = "") -> str:
+    return (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        f"  surface: docs/x.md\n  writes: [docs/x.md, {write}]\n{extra}"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "write", [".github/workflows/ci.yml", "./.github/workflows/ci.yml", ".github\\workflows\\ci.yml"]
+)
+def test_a_workflow_write_is_refused_and_its_row_withheld(tmp_path, write):
+    plan = _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_workflow_spine(write))
+    report = _gate(tmp_path, plan)
+    cls = report["classes"]["CI_RETIRED"]
+    assert cls["kind"] == "ci-retired-workflow-write"
+    assert cls["withheld"] == ["C1"]
+    assert "cross-platform-ci-discipline.md" in cls["detail"]
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert "CI_RETIRED" in pg.CLASS_ORDER
+    assert "CI_RETIRED" in report["message"]
+
+
+def test_a_non_workflow_github_write_and_a_closed_workflow_row_pass(tmp_path):
+    spine = _workflow_spine(".github/CODEOWNERS")
+    closed = _workflow_spine(".github/workflows/ci.yml").replace("C1", "C2").replace(
+        "disposition: open", "disposition: wont_do"
+    )
+    plan = _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine + closed)
+    assert _gate(tmp_path, plan)["classes"]["CI_RETIRED"]["status"] == "PASS"
+
+
+def test_a_done_disposition_reads_as_coded(tmp_path):
+    spine = _workflow_spine(".github/workflows/ci.yml").replace("disposition: open", "disposition: done")
+    plan = _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine)
+    assert _gate(tmp_path, plan)["classes"]["CI_RETIRED"]["status"] == "PASS"
+    rows = pg.raw_spine_rows(plan.read_text(encoding="utf-8"))
+    assert [r["disposition"] for r in rows] == ["coded"]
+
+
+def test_the_ue_addon_is_a_fleet_name_distinct_from_example_retrieval_repo():
+    assert "example-retrieval-repo-ue-addon" in pg.FLEET_REPOS
+    assert pg._matched_sibling("example-retrieval-repo-ue-addon/x.py", pg.FLEET_REPOS) == "example-retrieval-repo-ue-addon"

@@ -438,7 +438,7 @@ corpus would trip a naive implementation that conflated lineage with gating.
 
 Negative-spec:
   - Does NOT write any file, git object, frontmatter, or repo state — pure compute.
-  - Does NOT invoke `handoff.ship_and_archive`, `gate-cascade-clear`, or any mutating
+  - Does NOT invoke `gate-cascade-clear` or any mutating
     op/verb — that is C4's/C8's job.
   - Does NOT auto-repair a `blocks`/`blocked_by` asymmetry — always surfaces it.
   - Does NOT flip on partial `blocked_by` satisfaction — narrows instead (tc-4 guard).

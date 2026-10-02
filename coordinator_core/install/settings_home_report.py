@@ -31,7 +31,8 @@ Input, not invention -- state precedence explicitly. Coordinator-content-repo
 - ``coordinator-claude coordinator/docs/wiki/machine-local-registry.md``
   §4e / its settings-home inventory row (line ~837) names the top-level
   namespace: ``machine-local/`` (TOML registry), ``bin/`` (resolver family),
-  ``coordinator-whoami/``, ``.coordinator-venv/``, ``settings-manifest.md``.
+  ``coordinator-whoami/`` (retired here: absent passes, present is residue),
+  ``.coordinator-venv/``, ``settings-manifest.md``.
   Presence is checked for all six; ``.coordinator-venv/`` is DEMANDED only
   while a machine-local interpreter pin still names it -- claude-klabauter installs it
   only under ``--allow-venv-fallback``. See ``_FIXED_MEMBERS``.
@@ -147,7 +148,7 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         # retirement disagree. Deleting the row here would hide that
         # disagreement instead of surfacing it. Memo'd to DoE; delete the row
         # once §4e drops it.
-        "coordinator-whoami/ (RETIRED — no provisioning step creates it)",
+        "coordinator-whoami/ (RETIRED — absent is the pass; the install removes it)",
         "coordinator-whoami",
         "dir",
         "DoE machine-local-registry.md §4e settings-home inventory "
@@ -177,13 +178,18 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        ".percolate-identity (publish audit config)",
+        ".percolate-identity (machine-local rung 2 of publish.resolve_percolate_identity_path; "
+        "a per-repo setup/.percolate-identity wins)",
         ".percolate-identity",
         "file",
         "claude-klabauter scripts/setup.py :: install_percolate_identity (additive, not a DoE member)",
         True,
     ),
 )
+
+
+#: Members whose presence is residue of a retired package, not a pass.
+_RETIRED_MEMBER_RELS = frozenset({"coordinator-whoami"})
 
 
 @dataclass
@@ -194,6 +200,8 @@ class SettingsHomeMember:
     present: bool
     source: str
     required: bool = True
+    #: A retired member: ABSENT is the pass, present is residue.
+    retired: bool = False
 
 
 @dataclass
@@ -265,7 +273,7 @@ def expected_forwarders(claude_klabauter_root: Path) -> dict[str, str]:
     function's behavior for its other, JSON-agnostic caller.
     """
     agent_bin = claude_klabauter_root / "coordinator" / "bin"
-    with contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         return _derive_agent_helper_target_map(agent_bin)
 
 
@@ -501,6 +509,7 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
                 present=present,
                 source=source,
                 required=required,
+                retired=rel in _RETIRED_MEMBER_RELS,
             )
         )
 
@@ -621,6 +630,15 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
     """
     lines: list[str] = []
     for m in report.members:
+        if m.retired:
+            if m.present:
+                lines.append(
+                    f"  RESIDUE [settings-home] {m.label} -> {m.path}: retired directory "
+                    "still present; re-run `python3 scripts/setup.py` to remove it"
+                )
+            else:
+                lines.append(f"  PASS [settings-home] {m.label} -> absent")
+            continue
         if m.present:
             status = "PASS"
         else:

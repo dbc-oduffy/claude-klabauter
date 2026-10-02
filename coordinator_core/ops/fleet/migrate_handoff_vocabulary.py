@@ -221,7 +221,7 @@ _FIELD_RENAMES = (("consumed_at", "claimed_at"), ("consumed_by", "claimed_by"))
 # Succession edges only — mirrors archive_handoffs.py's _HEIR_EDGE_KINDS, PLUS
 # origin_handoff (added 2026-07-23 per example-cockpit-repo's dr084 memo). A
 # `kind: spinoff` handoff carries `predecessor: none` BY DESIGN (coordinator
-# spinoff-handoff schema — see DoE `docs/wiki/spinoff-handoffs.md` §
+# spinoff-handoff schema — see DoE `coordinator-content-repo coordinator/docs/wiki/baton-lifecycle/spinoff-handoffs.md` §
 # "predecessor is none by design") and names its parent in `origin_handoff:`
 # instead, so without this edge every spinoff succession looks like an orphan.
 # origin_handoff is a registered walkable edge in dag.EDGE_KIND_META, so

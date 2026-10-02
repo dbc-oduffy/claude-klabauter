@@ -210,7 +210,7 @@ from typing import Any, Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.session import core as _session_core
 from coordinator_core.ops.ceremony.git_native import check_ignore, commit_authored_new_file
-from coordinator_core.ops.emit._slug import machine_slug
+from coordinator_core.ops.emit._slug import tracker_machine_slug as machine_slug
 from coordinator_core.memo_corpus import receiver_inbox_root
 from coordinator_core.ops.fleet._common import (
     check_repo_root,

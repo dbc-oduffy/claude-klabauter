@@ -239,3 +239,51 @@ def test_repo_root_is_required_keyword(tmp_path):
         door_route_signal.read_door_route(Path("/fake/door"), "ping")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         door_route_signal.run_cold_control_invocation("ping")  # type: ignore[call-arg]
+
+
+def test_control_invocation_writes_a_row_from_an_unstamped_checkout(monkeypatch, tmp_path):
+    """An authoring (unstamped) checkout refuses dispatch at the stamp gate;
+    the control is a deliberate manual dispatch and must still write its row."""
+    from coordinator_core import ipc
+
+    _patch_repo(monkeypatch, tmp_path)
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+    monkeypatch.setattr(ipc, "_engine_stamped_verdict", False)
+
+    result = door_route_signal.run_cold_control_invocation("ping", repo_root=tmp_path)
+    assert result.route == door_route_signal.IN_PROCESS
+    assert ipc.is_unstamped_dispatch_allowed() is False
+
+
+def test_diagnose_names_the_kill_switch_only_when_it_is_set(monkeypatch, tmp_path):
+    _patch_repo(monkeypatch, tmp_path)
+    control = door_route_signal.DoorRouteResult(door_route_signal.UNRESOLVED, None)
+    monkeypatch.setenv("COORDINATOR_OP_LATENCY_DISABLE", "1")
+    cause, remedy = door_route_signal.diagnose_inert_sink(tmp_path, control)
+    assert "COORDINATOR_OP_LATENCY_DISABLE=1" in cause
+    assert remedy == "unset COORDINATOR_OP_LATENCY_DISABLE"
+
+    monkeypatch.delenv("COORDINATOR_OP_LATENCY_DISABLE")
+    cause, remedy = door_route_signal.diagnose_inert_sink(tmp_path, control)
+    assert "COORDINATOR_OP_LATENCY_DISABLE" not in remedy
+    assert "checked" in cause
+
+
+def test_diagnose_names_a_refused_control_dispatch(monkeypatch, tmp_path):
+    _patch_repo(monkeypatch, tmp_path)
+    monkeypatch.delenv("COORDINATOR_OP_LATENCY_DISABLE", raising=False)
+    control = door_route_signal.DoorRouteResult(door_route_signal.UNRESOLVED, None, "no build stamp")
+    cause, _ = door_route_signal.diagnose_inert_sink(tmp_path, control)
+    assert "refused" in cause and "no build stamp" in cause
+
+
+def test_diagnose_names_an_unresolvable_git_common_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("COORDINATOR_OP_LATENCY_DISABLE", raising=False)
+
+    def _boom(repo_root):
+        raise RuntimeError("no .git")
+
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", _boom)
+    control = door_route_signal.DoorRouteResult(door_route_signal.UNRESOLVED, None)
+    cause, _ = door_route_signal.diagnose_inert_sink(tmp_path, control)
+    assert "no git common dir" in cause

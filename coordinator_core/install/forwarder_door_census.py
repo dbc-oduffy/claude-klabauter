@@ -140,6 +140,15 @@ _INTERPRETER_START_SUFFIXES = (".py", ".ps1", ".cmd", ".bat")
 
 
 
+GENERATES = [
+    {
+        "artifact": "coordinator_core/ops/warm_entrypoint_allowlist.json",
+        "stamp_key": "generated_at",
+        "sources": ["coordinator/bin"],
+    },
+]
+UNSTAMPED_BY_DESIGN = ["coordinator_core/ops/warm_entrypoint_allowlist.json"]
+
 # The single write this module performs. STATIC, not shaped: `_write_allowlist`
 # takes `allowlist_path` as a defaulted parameter, but the default IS the
 # constant destination below and no production caller overrides it -- the

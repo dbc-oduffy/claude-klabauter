@@ -558,8 +558,8 @@ def test_cold_import_does_not_wedge_the_op_registry():
     `__init__`, which eagerly imports ~159 op modules — among them
     `handoff_transition`, which imports `resolve_leg` from this module. Held at
     module scope that closes a cycle, and the failure is silent in the worst
-    way: `handoff_transition` and `handoff_ship_archive` fail on a partially
-    initialised `sibling_fact` and never register their ops, so dispatching one
+    way: `handoff_transition` fails on a partially initialised `sibling_fact`
+    and never registers its ops, so dispatching one
     re-raises an ImportError instead of working.
 
     The whole in-process test suite passed while this was broken, because

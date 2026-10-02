@@ -28,7 +28,7 @@ _MSG_WITH_PLUGIN = (
     "  /coordinator:research --mode=structured <spec-path>\n"
     "  Agent subagent_type='Explore'\n"
     "  Agent subagent_type='coordinator:enricher'\n"
-    "  /notebooklm-research\n\n"
+    "{notebooklm}\n"
     "Direct web calls: single URL/fact only, never a generic search Agent."
 )
 
@@ -41,11 +41,16 @@ _MSG_WITHOUT_PLUGIN = (
 )
 
 
-def _has_deep_research_plugin() -> bool:
+def _research_plugins() -> tuple[bool, bool]:
+    """(deep-research present, its notebooklm sub-plugin present).
+
+    The /notebooklm-research suggestion is only actionable when the sub-plugin is
+    installed; the parent pipeline alone does not provide it.
+    """
     plugin_dir = _deep_research_plugin_dir()
-    if plugin_dir is None:
-        return False
-    return os.path.isdir(plugin_dir)
+    if plugin_dir is None or not os.path.isdir(plugin_dir):
+        return False, False
+    return True, os.path.isdir(os.path.join(plugin_dir, "notebooklm"))
 
 
 @register_op("hooks.suggest_sonnet_research")
@@ -58,6 +63,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if resolve_subagent_identity(agent_id, session_id):
         return no_advisory()
 
-    plugin_present = await asyncio.to_thread(_has_deep_research_plugin)
-    msg = _MSG_WITH_PLUGIN if plugin_present else _MSG_WITHOUT_PLUGIN
+    plugin_present, notebooklm_present = await asyncio.to_thread(_research_plugins)
+    if plugin_present:
+        msg = _MSG_WITH_PLUGIN.format(
+            notebooklm="  /notebooklm-research\n" if notebooklm_present else ""
+        )
+    else:
+        msg = _MSG_WITHOUT_PLUGIN
     return allow_advisory("PreToolUse", msg)

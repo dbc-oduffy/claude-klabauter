@@ -6,8 +6,7 @@ with no default on `coordinator_core.archive_stamp.stamp_shipped_in` (the
 single `shipped_in` write choke point), but this CLI trampoline was never
 updated to supply it — EVERY invocation of `stamp-shipped-in` raised
 `TypeError: stamp_shipped_in() missing 1 required keyword-only argument:
-'kind'`, including the live path reached from
-`coordinator/bin/reap-orphaned-in-flight-handoffs.py`.
+'kind'`.
 
 The `_import_module()` seam is monkeypatched (same idiom as
 test_archive_stamp_cli_ship_handoff.py / test_session_claim_cli.py) so this

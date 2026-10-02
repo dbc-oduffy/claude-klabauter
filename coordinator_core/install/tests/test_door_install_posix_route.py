@@ -169,36 +169,16 @@ def test_write_native_door_forwarder_degrades_on_systemexit(tmp_path, monkeypatc
 
 def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, monkeypatch):
     """The per-name loop must not abort the whole run when one name's
-    native-door cutover raises -- every later name must still be attempted
-    and written via its Python-pair fallback (state/bug-backlog/2026-08-30-
-    install-substrate-exits-0-after-failing-45f4d5390b68.yaml's INVERSE
-    failure mode: this pins the direction where a failure must not kill
-    every name after it, while the existing OSError leg keeps the run
-    failing loud rather than exiting 0).
-
-    constructs a path via monkeypatching `_cut_over_to_native_door` itself
-    rather than exercising the real call chain, since
-    `_write_native_door_forwarder` already catches `(DoorInstallError,
-    SystemExit)` one level down and returns `None`. That reading is
-    correct in isolation, but narrowing this loop's own catch to `OSError`
-    flips this plan's own falsifier
-    (`docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about.
-    falsifier.py`) from PASS back to FALSIFIED -- its static check reads a
-    bare `except OSError` around this call chain as the door-build abort
-    bug regardless of the inner catch. Escalated rather than applied; the
-    catch here (and this test) stay as they were pending that call.
-
-    `_cut_over_to_native_door`
-    is monkeypatched to always raise before `_write_agent_forwarder` is ever
-    reached, so this test only proves loop continuation (both names attempted,
-    run still raises); it does NOT exercise the Python-pair fallback landing.
-    See `test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure`
-    below for that, with the real `_cut_over_to_native_door` call chain."""
+    cutover raises `OSError` -- every later name must still be attempted and
+    the run still fails loud. `_cut_over_to_native_door` is monkeypatched to
+    always raise before `_write_agent_forwarder` is reached, so this proves
+    loop continuation only; the Python-pair fallback landing is pinned by
+    `test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure`."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
     def _cut_over_always_raises(name, bin_dst, check_only, *, engine_root, static_family_names=frozenset(), source=None):
-        raise SystemExit(f"door build: compile failed for {name}")
+        raise OSError(f"cutover failed for {name}")
 
     monkeypatch.setattr(substrate, "_cut_over_to_native_door", _cut_over_always_raises)
 

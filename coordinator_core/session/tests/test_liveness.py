@@ -50,10 +50,13 @@ recipe-t4a-coordinator-session-hub.md § liveness.py
 
 from __future__ import annotations
 
+from coordinator_core.tests.git_seed import seeded_repo
 import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -124,13 +127,7 @@ def _reset_registry_snapshot_cache():
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=tmp_path, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs())
-    (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs())
-    return tmp_path
+    return seeded_repo(tmp_path, readme="x")
 
 
 def _write_session(repo, sid, meta: dict):
@@ -728,15 +725,13 @@ class TestLiveSessionIds:
         _write_session(repo, "real", {"pid": "1", "last_activity": core.now_iso()})
         assert liveness.live_session_ids(cwd=str(repo)) == frozenset({"real"})
 
-    def test_negative_elapsed_not_clamped_here_so_not_live(self, tmp_path):
+    def test_negative_elapsed_clamped_so_live(self, tmp_path):
         repo = _make_repo(tmp_path)
-        # last_activity in the FUTURE -> negative elapsed. UNLIKE session_live's
-        # Layer-2 clamp, live_session_ids' non-stable branch does NOT clamp:
-        # is_session_live("-N") fails ^[0-9]+$ -> NOT live. (module negative-spec)
+        # last_activity in the FUTURE -> negative elapsed, clamped to 0 -> live.
         _write_session(
             repo, "future-nostable", {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"}
         )
-        assert liveness.live_session_ids(cwd=str(repo)) == frozenset()
+        assert liveness.live_session_ids(cwd=str(repo)) == frozenset({"future-nostable"})
 
     def test_stable_pid_routes_through_two_layer(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -924,7 +919,7 @@ class TestLiveSessionIdsCorpus:
 
 # ---------------------------------------------------------------------------
 # live_session_verdicts — THE shared per-id seam (C8/AC13/AC-live-verdicts).
-# Pins: both arms exactly, the basis vocabulary, the UNCLAMPED negative-
+# Pins: both arms exactly, the basis vocabulary, the CLAMPED negative-
 # elapsed invariant (the one a naive per-id loop over session_live would
 # silently erase), and live_session_ids' parity with this seam for every
 # fixture including that negative-elapsed case.
@@ -1060,7 +1055,7 @@ class TestLiveSessionVerdicts:
     ):
         # stable_pid present, stable_pid_lstart ABSENT -> A-F1 fallthrough to
         # the CLAMPED Layer-2 arithmetic (matching session_live's own Layer-2
-        # arm), NOT the unclamped non-stable arm below. Future last_activity
+        # arm). Future last_activity
         # -> negative elapsed CLAMPED to 0 -> live, age_sec == 0.
         repo = _make_repo(tmp_path)
         _write_session(
@@ -1090,15 +1085,11 @@ class TestLiveSessionVerdicts:
         assert basis == "recency-window"
         assert isinstance(age_sec, int) and age_sec >= 0
 
-    def test_layer2_negative_elapsed_unclamped_not_live_and_age_negative(
+    def test_layer2_negative_elapsed_clamped_and_agrees_with_session_live(
         self, tmp_path
     ):
-        """THE invariant a naive per-id loop over session_live would erase
-        (module negative-spec): stable_pid ABSENT, last_activity in the
-        FUTURE -> elapsed is negative and UNCLAMPED here (unlike
-        session_live's Layer-2 clamp) -> is_session_live fails the
-        ``^[0-9]+$`` guard -> not live, and age_sec surfaces the RAW
-        negative value, not 0."""
+        """stable_pid ABSENT, last_activity in the FUTURE -> elapsed clamps to
+        0, so the verdict seam and ``session_live`` both read live."""
         repo = _make_repo(tmp_path)
         _write_session(
             repo,
@@ -1107,13 +1098,11 @@ class TestLiveSessionVerdicts:
         )
         verdicts = liveness.live_session_verdicts(cwd=str(repo))
         live, basis, age_sec = verdicts["s-future-nostable"]
-        assert live is False
+        assert live is True
         assert basis == "recency-window"
-        assert isinstance(age_sec, int) and age_sec < 0
-        # session_live's OWN Layer-2 arm clamps the same input to live=True —
-        # the two functions provably disagree on this exact fixture, by
-        # design (module negative-spec).
+        assert age_sec == 0
         assert liveness.session_live("s-future-nostable", cwd=str(repo)) is True
+        assert "s-future-nostable" in liveness.live_session_ids(cwd=str(repo))
 
     def test_meta_less_dir_basis_recency_window_mtime(self, tmp_path):
         repo = _make_repo(tmp_path)
@@ -1504,11 +1493,10 @@ class TestLiveSessionIdsMatchesVerdictsSeam:
         # so its own mtime (which this fixture never even ages) is no longer
         # trusted as recency evidence; see
         # TestLiveSessionVerdicts.test_bare_ghost_dir_no_record_not_live.
-        assert expected == frozenset({"live-recency"})
-        # The negative-elapsed fixture must NOT be live in EITHER function —
-        # the invariant this whole test class exists to pin.
-        assert "future-nostable" not in liveness.live_session_ids(cwd=str(repo))
-        assert "future-nostable" not in expected
+        assert expected == frozenset({"live-recency", "future-nostable"})
+        # The negative-elapsed fixture is live in BOTH (clamped Layer 2).
+        assert "future-nostable" in liveness.live_session_ids(cwd=str(repo))
+        assert "future-nostable" in expected
 
 
 # ---------------------------------------------------------------------------
@@ -2367,7 +2355,9 @@ class TestHarnessRegistryLiveSessionIdsParity:
             "future-nostable",
             {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"},
         )
-        assert liveness.live_session_ids(cwd=str(repo)) == frozenset({"live-one"})
+        assert liveness.live_session_ids(cwd=str(repo)) == frozenset(
+            {"live-one", "future-nostable"}
+        )
 
     def test_registry_hit_extends_live_session_ids(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
@@ -3060,11 +3050,10 @@ class TestSessionLiveWithBasis:
                 "recency-window",
             )
 
-    def test_backward_clock_step_stays_live_where_the_seam_reads_dead(self, tmp_path):
-        """Fail-safe direction: the clamped arithmetic resolves a future
-        `last_activity` LIVE (a peer will not take the session over). Sourcing
-        the verdict from the seam would flip it DEAD, fail-open on an
-        arbitration surface."""
+    def test_backward_clock_step_reads_live_on_both_the_basis_and_the_seam(self, tmp_path):
+        """Fail-safe direction: a future `last_activity` resolves LIVE (a peer
+        will not take the session over) on the basis read AND the seam, since
+        both Layer-2 arms clamp elapsed to max(0, ...)."""
         repo = _make_repo(tmp_path)
         _write_session(
             repo, "s-future", {"pid": "1", "last_activity": "2099-01-01T00:00:00Z"}
@@ -3073,7 +3062,7 @@ class TestSessionLiveWithBasis:
             True,
             "recency-window",
         )
-        assert liveness.live_session_verdicts(cwd=str(repo))["s-future"][0] is False
+        assert liveness.live_session_verdicts(cwd=str(repo))["s-future"][0] is True
 
     @pytest.mark.parametrize(
         "meta",
@@ -3190,3 +3179,64 @@ class TestSessionLiveWithBasis:
             True,
             "harness-registry-elsewhere",
         )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Linux boot-ticks procStart shape"
+)
+class TestCloudResumedSessionStaleRepoMeta:
+    """Managed-remote shape: the claude process was restarted on resume, so a
+    repo's meta.json still names the dead former process, while the harness
+    registry carries procStart as clock ticks since boot. The registry must
+    carry the verdict; a truly dead session stays dead."""
+
+    def _ticks_record(self, registry_dir, sid, pid, epoch):
+        registry_dir.mkdir(parents=True, exist_ok=True)
+        btime = next(
+            int(line.split()[1])
+            for line in open("/proc/stat")
+            if line.startswith("btime ")
+        )
+        ticks = int(round((epoch - btime) * os.sysconf("SC_CLK_TCK")))
+        (registry_dir / "r.json").write_text(
+            json.dumps({"sessionId": sid, "pid": pid, "procStart": str(ticks)}),
+            encoding="utf-8",
+        )
+
+    def test_live_via_ticks_registry_despite_dead_meta_stable_pid(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-resumed",
+            {
+                "pid": "1",
+                "last_activity": core.now_iso(),
+                "stable_pid": "2147483000",
+                "stable_pid_start_epoch": "1700000000",
+            },
+        )
+        assert liveness.session_live("s-resumed", cwd=str(repo)) is False
+        self._ticks_record(registry_dir, "s-resumed", os.getpid(), _self_create_time())
+        monkeypatch.setattr(liveness, "_registry_snapshot_cache", None)
+        assert liveness.session_live("s-resumed", cwd=str(repo)) is True
+
+    def test_ticks_record_for_dead_pid_does_not_revive(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        registry_dir = tmp_path / "registry"
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry_dir)
+        _write_session(
+            repo,
+            "s-dead",
+            {
+                "pid": "1",
+                "last_activity": core.now_iso(),
+                "stable_pid": "2147483000",
+                "stable_pid_start_epoch": "1700000000",
+            },
+        )
+        self._ticks_record(registry_dir, "s-dead", 2147483000, time.time() - 30)
+        assert liveness.session_live("s-dead", cwd=str(repo)) is False

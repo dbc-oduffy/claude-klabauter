@@ -174,14 +174,26 @@ def _install_wrapper_onto_path(params: dict, repo_root: Optional[Path] = None) -
             result["warning"] = _on_path_warning(target_dir)
         return result
 
+    from coordinator_core.install import substrate as _substrate_mod
+
+    blocked = _substrate_mod._refuse_machine_mutation(
+        str(installed_path), what="install the wrapper onto the per-user bin dir", check_temp_path=False
+    )
+    if blocked:
+        return {"error": blocked}
+
     modified = _install_one(src, installed_path)
 
     clause_index = _WINDOWS_CLAUSE_INDEX if os.name == "nt" else _POSIX_CLAUSE_INDEX
+    other_index = _POSIX_CLAUSE_INDEX if os.name == "nt" else _WINDOWS_CLAUSE_INDEX
     resolution_journal.record_resolution(
         "wrapper-onto-path",
         clause_index,
         [WriteSurfaceEntry(kind="file-path", path=str(installed_path))],
     )
+    # The other platform's clause never fires here; without an empty row the
+    # writer reads as unreported on every box.
+    resolution_journal.record_resolution("wrapper-onto-path", other_index, ())
 
     result = {
         "installed_path": str(installed_path),

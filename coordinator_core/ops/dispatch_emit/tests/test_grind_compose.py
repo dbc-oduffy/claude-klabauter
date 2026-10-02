@@ -86,6 +86,23 @@ def test_golden_byte_identical():
     assert script == golden
 
 
+def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent():
+    script = _compose()
+    profile = _fixture_profile()
+    assert f"const ARCHIVE_PATH = {gc._js_string_literal(profile.archive_path)};" in script
+    assert gc.ARCHIVE_DESTINATION_JS in script
+    assert "const _archived = _archiveDestination(row.path);" in script
+    assert "row.touchedFiles.concat([_archived])" in script
+    assert "item.new_path" not in script
+
+
+def test_every_phase_title_is_declared_in_meta_phases():
+    script = _compose()
+    m = re.search(r"export const meta = \{.*?\n\};", script, re.S)
+    findings = wc.check_phase_mismatch(script, m.group(0) if m else None)
+    assert [f.code for f in findings] == []
+
+
 def test_reemit_is_byte_identical():
     a = _compose()
     b = _compose()
@@ -659,6 +676,33 @@ def test_verify_retry_exactly_once_then_undo_rejected_after_retry():
     assert seen.count("verify") == 2
     assert seen.count("undo") == 1
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
+
+
+@pytest.mark.parametrize("undo_result", [None, {}, {"outcome": "undo-failed", "reason": "3 files still modified"}])
+def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo_result):
+    seen = []
+    verdicts = _all_fix_batches(["r0"])
+    script_by_kind = {
+        "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "fail", "reason": "nope"},
+        "undo": lambda rid: (seen.append("undo"), undo_result)[1],
+    }
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
+    assert seen == ["undo"]
+    types = [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
+    assert types == ["stage-dead"]
+    reason = next(h["reason"] for h in result["handed_back"] if h["row"] == "r0")
+    assert reason.startswith("undo-failed:")
+    assert not result["settled"]
+
+
+def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome():
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    stage = golden[golden.index("async function _verifyStage"):golden.index("async function _commitStage")]
+    assert "const _undone = await withLock(lockKeys, async () => _undoCall(row));" in stage
+    assert stage.index("_undone.outcome !== 'undone'") < stage.index("'rejected-after-retry'")
+    assert "'undo-failed: " in stage
 
 
 def test_row_sized_m_or_above_routes_to_baton_never_fix():
@@ -1384,3 +1428,14 @@ def test_fixstage_script_carries_out_of_root_check_before_follow_edge():
     fix_fn = script[script.index("async function _fixStage"): script.index("async function _verifyStage")]
     assert fix_fn.index("_outOfRootPaths(") < fix_fn.index("followEdge(")
     assert "outside repo_root" in fix_fn
+
+
+def test_fix_prompt_withholds_close_when_tradeoff_reported():
+    """A fixer that reports a tradeoff must not archive the row: the
+    adjudicator edits `pm_ruling` on the row in place, and
+    block_subagent_archive_write denies an edit under archive/."""
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    call = grind_stages.compose_fix_call(label="fix", phase_title="Grind", row_id="r")
+    assert "and `has_tradeoff` is false run `" in call
+    assert "When `has_tradeoff` is true, do not run `backlog-grind-assemble grind-row close`" in call

@@ -72,7 +72,7 @@ from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
 from coordinator_core.ops.learn_lessons_cutoff import _claude_home, derive_cutoff
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.data_root import content_root_for
-from coordinator_core.content_root_pointer import read_content_root_pointer_file
+from coordinator_core.content_root import read_pointer_files
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -100,9 +100,9 @@ def _resolve_doe_content_root(claude_home: str) -> str:
     if override:
         return override
 
-    content_root = read_content_root_pointer_file(os.path.expanduser("~"))
-    if content_root:
-        content_root = content_root_for(content_root)
+    pointed_root = read_pointer_files(os.path.expanduser("~"))
+    if pointed_root:
+        content_root = content_root_for(pointed_root)
         if content_root is not None:
             return str(content_root)
 

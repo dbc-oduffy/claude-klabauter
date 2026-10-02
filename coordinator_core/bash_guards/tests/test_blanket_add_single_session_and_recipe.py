@@ -8,18 +8,19 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 
 def _git(repo, *args):
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
     )
 
 
 @pytest.fixture
 def fresh_repo(tmp_path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
@@ -68,5 +69,5 @@ def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch)
         step = step.replace("<dir>", "docs").replace("<subject>", "'init'")
         step = step.replace("git ", "git -c user.name=t -c user.email=t@t ", 1)
         assert guard.check_blanket_git_add(step, "s1") is None
-        subprocess.run(["bash", "-c", step], cwd=fresh_repo, env=env, check=True, capture_output=True)
+        subprocess.run(["bash", "-c", step], cwd=fresh_repo, env=env, check=True, capture_output=True, **no_console_creationflags())
     assert "docs/f0.md" in _git(fresh_repo, "ls-files").stdout

@@ -247,8 +247,7 @@ _PY_CONSOLE_TARGET_RE = re.compile(
 )
 #: LOAD-BEARING (see note above _PY_SUBPROCESS_CALL_RE). Matches BOTH the
 #: canonical kwarg form (``creationflags=getattr(subprocess,
-#: "CREATE_NO_WINDOW", 0)``) and the dict-literal form used by
-#: ``ops/distill_apply_disposal.py::_subprocess_kwargs``
+#: "CREATE_NO_WINDOW", 0)``) and the dict-literal form
 #: (``{"creationflags": 0x08000000}  # CREATE_NO_WINDOW``) — the trailing
 #: ``# CREATE_NO_WINDOW`` comment that form relies on is stripped by
 #: ``_strip_line_comments`` BEFORE this regex runs (comments are stripped

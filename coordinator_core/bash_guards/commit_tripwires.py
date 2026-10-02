@@ -46,9 +46,8 @@ own docstring):
     staged files, independent of which repo's ``git commit`` triggered the
     dispatcher. This port reproduces that same "always the installed
     coordinator-plugin repo, never the commit's own cwd" semantics, but via
-    ``coordinator_core.ops.coordinator_content_root.coordinator_content_root()`` (the
-    canonical, already-adopted-elsewhere content-root resolver with a real
-    machine-local-registry ladder) rather than re-deriving the bash
+    ``coordinator_core.content_root.read_content_root()`` (the canonical
+    content-root resolver with a real machine-local-registry ladder) rather than re-deriving the bash
     originals' fragile ``BASH_SOURCE``-relative walk / ``_find_bin_script``'s
     hardcoded-depth-index walk -- both of which this port's own author
     confirmed are dead on this machine (see module docstring above). Using
@@ -194,7 +193,7 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float
     return result.returncode, result.stdout
 
 
-def _resolve_doe_coordinator_root() -> Optional[str]:
+def _resolve_plugin_content_root() -> Optional[str]:
     """Resolve the installed coordinator plugin's content directory, via the
     canonical content-root resolver and ``content_root_for`` (so a flat published
     mirror resolves as well as the private authoring tree, which is what a
@@ -203,15 +202,15 @@ def _resolve_doe_coordinator_root() -> Optional[str]:
     bash originals' own "not a git repo at PLUGIN_ROOT" -> exit 2 -> no
     warning-appended fail-open shape (see this module's docstring)."""
     try:
-        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+        from coordinator_core.content_root import read_content_root
         from coordinator_core.data_root import content_root_for
     except Exception:
         return None
     try:
-        content_root = coordinator_content_root()
+        base = read_content_root()
     except Exception:
         return None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(base)
     return str(content_root) if content_root is not None else None
 
 
@@ -229,7 +228,7 @@ def check_schema_version_bump() -> Optional[str]:
     ``canonical-structure.yaml`` is staged in the coordinator plugin repo
     without a matching bump to ``coordinator-schema-version``; ``None``
     otherwise (OK, or the guard could not run -- fail open, no warning)."""
-    plugin_root = _resolve_doe_coordinator_root()
+    plugin_root = _resolve_plugin_content_root()
     if plugin_root is None:
         return None
 
@@ -324,7 +323,7 @@ def check_bin_sh_polyglot() -> Optional[str]:
     (has the trampoline within its first 20 lines) but is missing the
     ``#!/bin/sh`` line-1 shebang; ``None`` otherwise (OK, or the guard could
     not run)."""
-    plugin_root = _resolve_doe_coordinator_root()
+    plugin_root = _resolve_plugin_content_root()
     if plugin_root is None:
         return None
     bin_dir = os.path.join(plugin_root, "bin")

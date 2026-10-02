@@ -31,7 +31,7 @@ same contract as `gate._run_declared_command` before it.
 
 Process-group cleanup: the runner child is started in its own session/process
 group (POSIX `start_new_session=True`; Windows
-`CREATE_NEW_PROCESS_GROUP`, via `_popen_group_kwargs()`) so a test that itself
+`CREATE_NEW_PROCESS_GROUP`, via `_no_console_group_popen_kwargs()`) so a test that itself
 spawns a grandchild (a daemon supervisor, a `sleep_forever.py`) is reachable
 for cleanup even after the immediate child exits or is killed. A `finally`
 block always terminates then kills the whole group -- `_terminate_group` sends
@@ -118,7 +118,7 @@ _GROUP_KILL_GRACE_S = 5
 _IS_WINDOWS = os.name == "nt"
 
 
-def _popen_group_kwargs() -> dict:
+def _no_console_group_popen_kwargs() -> dict:
     """Kwargs that start the child in its own session/process group, so its
     own descendants (a daemon supervisor, a `sleep_forever.py` grandchild)
     stay reachable for cleanup as a unit even after the immediate child exits
@@ -130,7 +130,12 @@ def _popen_group_kwargs() -> dict:
     flag is still required for `_terminate_group`'s Windows leg to target the
     right console group)."""
     if _IS_WINDOWS:
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        # One `creationflags` kwarg only: the caller also needs
+        # CREATE_NO_WINDOW, and splatting two dicts that both carry the key
+        # raises TypeError at Popen time.
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        flags |= no_console_creationflags().get("creationflags", 0)
+        return {"creationflags": flags}
     return {"start_new_session": True}
 
 
@@ -251,7 +256,7 @@ def find_runner_root(repo_root: str, test_rel: str) -> tuple:
 
 def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> bool:
     """Runs `argv` as a `Popen` started in its own session/process group
-    (`_popen_group_kwargs`), waits up to `timeout_s`, and ALWAYS terminates
+    (`_no_console_group_popen_kwargs`), waits up to `timeout_s`, and ALWAYS terminates
     the whole group in a `finally` (`_terminate_group`) -- whether the run
     completed, timed out, or raised. Returns `True` on a completed run
     (whatever its exit code -- the caller parses the report file either way,
@@ -263,8 +268,7 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> bool:
         cwd=cwd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        **_popen_group_kwargs(),
-        **no_console_creationflags(),
+        **_no_console_group_popen_kwargs(),
     )
     try:
         proc.wait(timeout=timeout_s)

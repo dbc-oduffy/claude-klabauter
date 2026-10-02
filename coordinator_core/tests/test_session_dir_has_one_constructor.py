@@ -282,7 +282,11 @@ def find_session_dir_mkdirs(root: pathlib.Path, repo_root: pathlib.Path) -> List
         if _is_test_path(rel):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            text = path.read_text(encoding="utf-8")
+            # A hit is a Call whose callee identifier is `mkdir` or `makedirs`.
+            if "mkdir" not in text and "makedirs" not in text:
+                continue
+            tree = ast.parse(text, filename=str(path))
         except (OSError, SyntaxError):
             continue
         visitor = _MkdirVisitor()

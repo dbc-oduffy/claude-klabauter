@@ -183,3 +183,10 @@ def test_double_invocation_identical_result(tmp_path):
 
     assert first == second
     assert first["blocked"] is True
+
+
+def test_param_validation_errors_are_caller_facing() -> None:
+    from coordinator_core.ipc import CallerFacingValidationError
+
+    with pytest.raises(CallerFacingValidationError):
+        _scan_content_leakage_tiers({})

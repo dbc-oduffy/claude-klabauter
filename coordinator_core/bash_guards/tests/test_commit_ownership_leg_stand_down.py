@@ -215,3 +215,9 @@ def test_the_ownership_leg_latches_nothing_across_attempts():
     assert (again, reason_again) == (True, ""), (
         "a successful commit consumed something it must not"
     )
+
+
+def test_unresolvable_repo_root_names_the_dispatching_cwd_as_the_thing_to_change():
+    message = guard._GIT_COMMIT_AGENT_LEG_MESSAGES[guard._LEG_UNRESOLVABLE_GIT_ROOT]
+    assert "dispatching session" in message
+    assert "git -C <abs-root>" in message

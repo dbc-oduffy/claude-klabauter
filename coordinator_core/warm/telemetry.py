@@ -582,6 +582,9 @@ KIND_HOOK_TIMEOUT = "hook_timeout"
 
 KIND_COLD_FAILED = "cold_failed"
 
+# A plane reusing a kind owns a cause prefix and a filtered reader over
+# `degrade_samples` (`_dialect.dialect_degrade_rows`,
+# `door_install.install_door_degrade_rows`); an unfiltered count mixes planes.
 DEGRADE_KINDS = frozenset({KIND_COLD_RUN, KIND_HOOK_TIMEOUT, KIND_COLD_FAILED})
 
 

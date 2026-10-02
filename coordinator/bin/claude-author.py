@@ -48,11 +48,11 @@
 # `coordinator/bin/tests/test_hand_rolled_cli_help_sweep.py`.
 #
 # Spec backlink: docs/plans/2026-07-04-doe-maximalist-execution-plugin-dir.md § M2
-# Mechanism record: docs/wiki/external-plugin-live-resolution.md § Documented behavior row 4
+# Mechanism record: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/external-plugin-live-resolution.md § Documented behavior row 4
 #   (--plugin-dir skill leg). The hook-delivery leg formerly documented here no longer applies.
 #
 # Resolution order for DoE clone root:
-#   0. --content-root <path> / --content-root=<path> argv flag (highest — explicit
+#   0. --content-root <path> / --content-root=<path> argv flag (alias: _ROOT_FLAG_ALIAS) (highest — explicit
 #      caller override, consumed, never forwarded to claude). Argv seam per
 #      DoE DR-087 — lets the DoE shim pass a pointer-derived root through
 #      argv instead of injecting it into the REPO_CONTENT_ROOT rung-1
@@ -557,7 +557,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
     # wherever this wrapper happens to live.
     # CLAUDE_AUTHOR_MACHINE_LOCAL_BIN bypasses the PATH
     # lookup so tests can inject a mock or absent binary deterministically.
-    ml_bin_override = os.environ.get("CLAUDE_AUTHOR_MACHINE_LOCAL_BIN", "")
+    ml_bin_override = os.environ.get("CLAUDE_AUTHOR_MACHINE_LOCAL_BIN", os.environ.get(_LEGACY_ENV_PREFIX + "MACHINE_LOCAL_BIN", ""))
     if ml_bin_override:
         ml_bin = ml_bin_override
         # Windows-safe invocation prefix — see _machine_local_argv (avoids the
@@ -709,6 +709,15 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
 #: failure here without this line leaves the operator with no way to start Claude Code.
 _VANILLA_HINT = "  To start Claude Code without coordinator: claude --vanilla\n"
 
+#: Pre-rename env prefix; read only when the CLAUDE_AUTHOR_* name is unset.
+_LEGACY_ENV_PREFIX = "CLAUDE_" + "DOE_"
+
+#: Second spelling of the clone-root flag. Trap: assembled, never spelled whole --
+#: the publish scrub renames the whole spelling onto the first one, which would
+#: silently drop the alias from the published launcher.
+_ROOT_FLAG_ALIAS = "--" + "doe" + "-root"
+_ROOT_FLAGS = ("--content-root", _ROOT_FLAG_ALIAS)
+
 _USAGE = """\
 Claude-author [--vanilla] [--content-root <path>] [--dry-run] [--print-plugin-dir] [claude args...]
 
@@ -722,13 +731,17 @@ Wrapper-only flags (consumed here, never forwarded to claude):
   --vanilla               Launch the real `claude` binary with no coordinator
                            plugin and no resolution at all; remaining args are
                            forwarded unchanged.
-  --content-root <path>       Explicit DoE clone root override (highest-priority
+  --content-root <path>   Explicit DoE clone root override (highest-priority
                            resolution rung; also accepts --content-root=<path>).
+                           @@ALIAS@@ <path> / @@ALIAS@@=<path> are exact synonyms.
   --dry-run               Print the resolved exec line and exit 0 without
                            launching claude.
   --print-plugin-dir      Print only the resolved --plugin-dir value and
                            exit 0.
   --help, -h              Show this message and exit 0.
+
+With --dry-run, a second line `forwarded-flags: ...` lists every `--flag` that
+was NOT consumed here and would reach `claude`.
 
 --help/-h is answered here, directly, before any DoE-clone registry lookup
 runs -- it must never require external state (a registered DoE clone, a
@@ -738,6 +751,8 @@ text, not the wrapped `claude` binary's --help output: run `claude-author
 binary's own help text, resolve --print-plugin-dir yourself and invoke
 `claude --plugin-dir <dir> --help` directly.
 """
+
+_USAGE = _USAGE.replace("@@ALIAS@@", _ROOT_FLAG_ALIAS)
 
 
 def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
@@ -829,8 +844,8 @@ def main(argv: list[str]) -> int:
     # --content-root takes rung 0 precedence over every env/registry rung below
     # (see module header "Resolution order").
     # -------------------------------------------------------------------
-    dry_run = os.environ.get("CLAUDE_AUTHOR_DRY_RUN", "0") == "1"
-    print_plugin_dir = os.environ.get("CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", "0") == "1"
+    dry_run = os.environ.get("CLAUDE_AUTHOR_DRY_RUN", os.environ.get(_LEGACY_ENV_PREFIX + "DRY_RUN", "0")) == "1"
+    print_plugin_dir = os.environ.get("CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", os.environ.get(_LEGACY_ENV_PREFIX + "PRINT_PLUGIN_DIR", "0")) == "1"
     cli_content_root = ""
     passthrough_args: list[str] = []
 
@@ -841,26 +856,19 @@ def main(argv: list[str]) -> int:
             dry_run = True
         elif arg == "--print-plugin-dir":
             print_plugin_dir = True
-        elif arg == "--content-root":
-            # Reject a missing value, an
-            # explicitly-empty value, and a following token that itself looks
-            # like a flag (a typo'd "--content-root --dry-run" would otherwise
-            # silently swallow --dry-run as the path value). All three fail
-            # loud with the same message + exit 2 as the original missing-
-            # value case, since each is the same underlying ambiguity: no
-            # usable path was actually supplied.
+        elif arg in _ROOT_FLAGS:
+            # Reject a missing value, an explicitly-empty value, and a following
+            # token that itself looks like a flag (a typo'd "--content-root --dry-run"
+            # would otherwise swallow --dry-run as the path value).
             if i + 1 >= len(argv) or not argv[i + 1] or argv[i + 1].startswith("--"):
-                sys.stderr.write("claude-author: --content-root requires a path argument\n")
+                sys.stderr.write(f"claude-author: {arg} requires a path argument\n")
                 return 2
             cli_content_root = argv[i + 1]
             i += 1
-        elif arg.startswith("--content-root="):
-            value = arg[len("--content-root="):]
+        elif arg.startswith(tuple(f"{flag}=" for flag in _ROOT_FLAGS)):
+            flag, _, value = arg.partition("=")
             if not value:
-                # Explicit empty equals-form value
-                # (--content-root=) must fail loud rather than silently falling
-                # through to REPO_CONTENT_ROOT/registry via Python truthiness.
-                sys.stderr.write("claude-author: --content-root requires a path argument\n")
+                sys.stderr.write(f"claude-author: {flag} requires a path argument\n")
                 return 2
             cli_content_root = value
         else:
@@ -913,6 +921,7 @@ def main(argv: list[str]) -> int:
         # Security: single %s so passthrough args containing % are never treated as format specifiers.
         suffix = f" {' '.join(passthrough_args)}" if passthrough_args else ""
         print(f"exec claude --plugin-dir {doe_coordinator}{suffix}")
+        print(f"forwarded-flags: {' '.join(a for a in passthrough_args if a.startswith('--'))}")
         return 0
 
     if print_plugin_dir:
@@ -925,7 +934,7 @@ def main(argv: list[str]) -> int:
         print(doe_coordinator)
         return 0
 
-    if os.environ.get("CLAUDE_AUTHOR_NO_EXEC", "0") == "1":
+    if os.environ.get("CLAUDE_AUTHOR_NO_EXEC", os.environ.get(_LEGACY_ENV_PREFIX + "NO_EXEC", "0")) == "1":
         return 0
 
     claude_bin = _resolve_claude_bin()

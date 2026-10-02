@@ -81,7 +81,7 @@ from pathlib import Path
 
 from coordinator_core import tracker_store
 from coordinator_core.ops.ceremony.completion_entry import _slug_from_title
-from coordinator_core.ops.emit._slug import machine_slug
+from coordinator_core.ops.emit._slug import tracker_machine_slug as machine_slug
 from coordinator_core.tracker_id_grammar import is_item_id
 
 EVENT_KINDS: frozenset[str] = frozenset(

@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -127,7 +128,30 @@ def _reap_stale_clones(scratch: Path) -> None:
         except OSError:
             continue
         reap_processes_under(entry)
-        shutil.rmtree(entry, ignore_errors=True)
+        _rmtree_clearing_readonly(entry)
+
+
+def _rmtree_clearing_readonly(root: Path) -> None:
+    """`shutil.rmtree` that clears the read-only bit and retries once per entry.
+
+    Git writes loose objects read-only, and Windows refuses to unlink a
+    read-only file; a bare `rmtree(ignore_errors=True)` then leaves the clone
+    on disk with no live holder, where every repo-walking test globs it and
+    trips on it vanishing mid-run. Anything still failing after the chmod
+    retry is left for `rmtree_or_raise` to report.
+    """
+
+    def _retry(func, path, _exc):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except OSError:
+            pass
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root, onexc=_retry)
+    else:
+        shutil.rmtree(root, onerror=_retry)
 
 
 def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
@@ -243,7 +267,7 @@ def rmtree_or_raise(root: Path, *, label: str, reaped: Optional[List[int]] = Non
     leak impossible to ship unnoticed. Returns True when the tree is gone, so
     the signature stays usable, but the False path no longer exists.
     """
-    shutil.rmtree(root, ignore_errors=True)
+    _rmtree_clearing_readonly(root)
     if not root.exists():
         return True
 

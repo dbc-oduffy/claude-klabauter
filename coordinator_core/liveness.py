@@ -18,7 +18,7 @@ session that might still be alive. See that function's own docstring for the
 full rationale and the call-site fail-closed contract every current caller
 now implements.
 
-RAW-PID-LIVENESS floor (docs/wiki/coordinator-tripwires.md § RAW-PID-LIVENESS):
+RAW-PID-LIVENESS floor (coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md § RAW-PID-LIVENESS):
 this module still MUST NOT call ps -p, kill -0, or psutil.pid_exists on any
 stored ``pid`` field. The native port it delegates to preserves the two-layer
 model — Layer 1 keys on the separate ``stable_pid`` (POSIX ``ps -o lstart=``,

@@ -84,3 +84,23 @@ def test_powershell_herestring_hides_hash_and_quotes():
     )
     spans = lang_hash.find_comment_spans(text, powershell_block=True)
     assert _spans_text(spans) == ["# real comment"]
+
+
+def test_hash_inside_braced_param_expansion_never_a_comment():
+    # `{` and `]` are word-boundary chars, so `${#a[@]}` and `${a[0]#p}` used to strip from
+    # the `#`, emitting bash that fails `bash -n` while the re-lex proof still passed.
+    text = (
+        "n=${#arr[@]} # one\n"
+        "x=${a[0]#p}\n"
+        "y=${a[@]##*/}\n"
+        "z=${a:-${b#q}} # two\n"
+        'w=${a:-"}#"} # three\n'
+        "{ # four\n}\n"
+    )
+    spans = lang_hash.find_comment_spans(text, shell_heredocs=True)
+    assert _spans_text(spans) == ["# one", "# two", "# three", "# four"]
+
+
+def test_yaml_unclosed_dollar_brace_does_not_hide_later_comments():
+    text = "a: ${oops\nb: 1 # real\n"
+    assert _spans_text(lang_hash.find_comment_spans(text)) == ["# real"]

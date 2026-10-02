@@ -255,9 +255,8 @@ VERDICT_BETWEEN_TURNS = "between-turns"
 #: THE OUTPUT SHAPE"), so it does NOT change here -- a peer EM misread a
 #: rendered "watch" row as a role and filed a false bug report on it (P103-C5,
 #: docs/research/2026-09-11-group-em-watch-drops-named-live-peers.md); the fix
-#: for THAT is the human-facing render annotation in `_render_row`, not a
-#: value rename, which is filed instead at
-#: state/debt-backlog/2026-09-11-verdict-watch-value-reads-as-a-role.yaml.
+#: for THAT is the human-facing render annotation in `_render_row`. The value
+#: stays "watch": it is a wire contract, and the gloss lives in the docs.
 VERDICT_WATCH = "watch"
 VERDICT_ESCALATE = "ESCALATE"
 VERDICT_OUT_OF_WORK = "OUT-OF-WORK"
@@ -394,7 +393,26 @@ def newest_timestamp(raw_text: str) -> Optional[float]:
     return newest
 
 
-def _assistant_text(raw_text: str) -> list:
+_QUOTED_SPAN = re.compile(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d|`[^`\n]*`')
+
+
+def _own_voice(text: str) -> str:
+    """Text with relayed speech removed: fenced blocks, `>` blockquote lines,
+    and quoted spans. A `_NEXT_MOVE` match on what remains is the speaker's
+    own sentence, never a peer's quoted one."""
+    kept = []
+    in_fence = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or line.lstrip().startswith(">"):
+            continue
+        kept.append(_QUOTED_SPAN.sub(" ", line))
+    return " ".join(" ".join(kept).split())
+
+
+def _assistant_text(raw_text: str, own_voice: bool = False) -> list:
     said = []
     for line in raw_text.split("\n")[-_ASSISTANT_SCAN_LINES:]:
         if '"assistant"' not in line:
@@ -413,7 +431,11 @@ def _assistant_text(raw_text: str) -> list:
             for block in content
             if isinstance(block, dict) and block.get("type") == "text"
         ).strip()
-        if text:
+        if own_voice:
+            text = _own_voice(text)
+            if text:
+                said.append(text)
+        elif text:
             said.append(" ".join(text.split()))
     return said
 
@@ -777,7 +799,8 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
 
     said = _assistant_text(raw_text)
     last_said = said[-1][:LAST_SAID_CHARS] if said else None
-    named_move = next((line for line in reversed(said) if _NEXT_MOVE.search(line)), None)
+    own_said = _assistant_text(raw_text, own_voice=True)
+    named_move = next((line for line in reversed(own_said) if _NEXT_MOVE.search(line)), None)
     named_reason = any(_NAMED_REASON.search(line) for line in said[-3:])
     answered, within_cooldown = _group_em_answer(group_em_log, group_em_session_id, session_id, now)
     if verdict == VERDICT_ESCALATE and not suppression_available:

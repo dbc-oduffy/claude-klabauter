@@ -1,14 +1,17 @@
-"""content_root resolution: new names first, legacy names as compat, installed plugin root for consumers."""
+"""Tests for coordinator_core.content_root: resolution and legacy-config migration."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import subprocess
 
 import pytest
 
 from coordinator_core import content_root as cr
-from coordinator_core.hooks import block_unenumerated_agent_type as guard
 from coordinator_core.machine_resolver import registry_get
+
+LEGACY_KEY = "repos.content_root"  # private-name-ok: compat-fallback
+LEGACY_ENGINE_KEY = "engine.working_repos.content_root"  # private-name-ok: compat-fallback
+LEGACY_POINTER = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
 
 @pytest.fixture
@@ -17,71 +20,83 @@ def box(tmp_path, monkeypatch):
     settings = tmp_path / "settings"
     (settings / "machine-local").mkdir(parents=True)
     home.mkdir()
-    for var in ("CLAUDE_PLUGIN_ROOT", "MACHINE_LOCAL_REGISTRY_DIR", "USERPROFILE", "CLAUDE_CONFIG_DIR"):
+    for var in ("MACHINE_LOCAL_REGISTRY_DIR", "CLAUDE_PLUGIN_ROOT", "USERPROFILE"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
-    return home, settings
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    return settings / "machine-local"
 
 
-def _registry(settings: Path, body: str) -> None:
-    (settings / "machine-local" / "registry.local.toml").write_text(body, encoding="utf-8")
+def _registry(box, text: str) -> None:
+    (box / "registry.local.toml").write_text(text, encoding="utf-8")
 
 
-def _plugin(home: Path, names=("executor",)) -> Path:
-    root = home / ".claude" / "plugins" / "coordinator-claude"
-    (root / "agents").mkdir(parents=True)
-    for n in names:
-        (root / "agents" / f"{n}.md").write_text(f"---\nname: {n}\n---\n", encoding="utf-8")
-    (root / "subagent-sandbox-policy.yaml").write_text("report_sidecar: {}\n", encoding="utf-8")
-    return root
+def test_fresh_box_writes_nothing(box):
+    result = cr.migrate_legacy_config()
+    assert not result.migrated
+    assert cr.read_content_root() == ""
+    assert sorted(p.name for p in box.iterdir()) == []
 
 
-def test_new_registry_key_wins_over_legacy(box):
-    _, settings = box
-    _registry(settings, '[repos]\ncontent_root = "/new"\ncontent_root = "/old"\n')
-    assert cr.read_content_root() == "/new"
-
-
-def test_legacy_registry_key_still_resolves(box):
-    _, settings = box
-    _registry(settings, '[repos]\ncontent_root = "/old"\n')
-    assert cr.read_content_root() == "/old"
-
-
-def test_registry_get_aliases_both_directions(box):
-    _, settings = box
-    _registry(settings, '[repos]\ncontent_root = "/new"\n')
-    assert registry_get("repos.content_root") == "/new"
-    _registry(settings, '[repos]\ncontent_root = "/old"\n')
-    assert registry_get("repos.content_root") == "/old"
-
-
-def test_new_pointer_file_beats_legacy_pointer(box):
-    home, settings = box
-    ml = settings / "machine-local"
-    (ml / ".coordinator-content-root").write_text("/legacy\n")
-    (home / ".claude").mkdir()
-    (home / ".claude" / ".coordinator-content-root").write_text("/pointed\n")
-    assert cr.read_content_root() == "/pointed"
-
-
-def test_consumer_resolves_installed_plugin_root_with_no_key(box):
-    home, _ = box
-    root = _plugin(home)
+def test_legacy_pointer_only_is_migrated(box, tmp_path):
+    root = tmp_path / "content"
+    (box / LEGACY_POINTER).write_text(str(root) + "\n", encoding="utf-8")
+    before = cr.read_content_root()
+    result = cr.migrate_legacy_config()
+    assert before == str(root)
+    assert result.migrated and result.value == str(root)
+    assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
+    assert (box / cr.POINTER_NAME).read_text(encoding="utf-8").strip() == str(root)
+    assert (box / LEGACY_POINTER).exists()
     assert cr.read_content_root() == str(root)
 
 
-def test_no_home_context_resolves_empty(monkeypatch, tmp_path):
-    for var in ("CLAUDE_HOME", "HOME", "USERPROFILE", "CLAUDE_PLUGIN_ROOT", "COORDINATOR_SETTINGS_HOME", "MACHINE_LOCAL_REGISTRY_DIR"):
-        monkeypatch.delenv(var, raising=False)
-    assert cr.read_content_root() == ""
+def test_legacy_registry_key_only_is_migrated(box, tmp_path):
+    root = tmp_path / "content"
+    _registry(box, f"\"{LEGACY_KEY}\" = '{root}'\n")
+    result = cr.migrate_legacy_config()
+    assert result.migrated
+    assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
+    assert (box / cr.POINTER_NAME).is_file()
+    assert LEGACY_KEY in (box / "registry.local.toml").read_text(encoding="utf-8")
 
 
-def test_agent_dispatch_roster_resolves_with_no_key(box):
-    home, _ = box
-    _plugin(home, names=("executor", "reviewer"))
-    roster, reason = guard.resolve_roster(home=str(home))
-    assert reason is None, reason
-    assert {"coordinator:executor", "coordinator:reviewer"} <= set(roster)
+def test_engine_twin_is_migrated(box, tmp_path):
+    root = tmp_path / "content"
+    _registry(box, f"\"{LEGACY_ENGINE_KEY}\" = '{root}'\n")
+    result = cr.migrate_legacy_config()
+    assert cr.ENGINE_CONTENT_ROOT_KEY in result.written
+    assert registry_get(cr.ENGINE_CONTENT_ROOT_KEY) == str(root)
+    assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
+
+
+def test_empty_content_root_with_legacy_value_resolves_and_migrates(box, tmp_path):
+    root = tmp_path / "content"
+    _registry(box, f"\"{cr.CONTENT_ROOT_KEY}\" = ''\n\"{LEGACY_KEY}\" = '{root}'\n")
+    assert cr.read_content_root() == str(root)
+    result = cr.migrate_legacy_config()
+    assert result.migrated
+    assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
+
+
+def test_second_run_is_noop(box, tmp_path):
+    (box / LEGACY_POINTER).write_text(str(tmp_path / "content"), encoding="utf-8")
+    assert cr.migrate_legacy_config().migrated
+    snapshot = {p.name: p.read_bytes() for p in box.iterdir()}
+    second = cr.migrate_legacy_config()
+    assert not second.migrated and second.written == ()
+    assert {p.name: p.read_bytes() for p in box.iterdir()} == snapshot
+
+
+def test_migration_spawns_no_process(box, tmp_path, monkeypatch):
+    (box / LEGACY_POINTER).write_text(str(tmp_path / "content"), encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("subprocess spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert cr.migrate_legacy_config().migrated

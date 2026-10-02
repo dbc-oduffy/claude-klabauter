@@ -36,6 +36,9 @@ _DOOR_CORE_H = _DOOR_DIR / "door_core.h"
 _DOOR_CORE_C = _DOOR_DIR / "door_core.c"
 
 _PREDICATE = "door_basename_declares_stdin_read"
+# The door calls the invocation-level form (the basename table narrowed by
+# subcommand scope, `door_core.h`); the basename predicate is its inner step.
+_GATE_CALL = "door_invocation_declares_stdin_read("
 
 
 def _read(path: Path) -> str:
@@ -48,9 +51,10 @@ def test_the_predicate_is_shared_not_reimplemented():
     silently diverge from `door.c`'s."""
     assert f"int {_PREDICATE}(" in _read(_DOOR_CORE_H)
     assert f"int {_PREDICATE}(" in _read(_DOOR_CORE_C)
+    assert f"int {_GATE_CALL}" in _read(_DOOR_CORE_H)
     source = _read(_DOOR_POSIX_C)
-    assert _PREDICATE in source, (
-        "door_posix.c does not consult door_basename_declares_stdin_read -- "
+    assert _GATE_CALL in source, (
+        "door_posix.c does not call door_invocation_declares_stdin_read -- "
         "it will still dispatch a stdin-reading entrypoint warm into a pool "
         "worker whose stdin is None"
     )
@@ -62,10 +66,10 @@ def test_the_gate_precedes_the_transport():
     through."""
     source = _read(_DOOR_POSIX_C)
     main_at = source.index("int main")
-    gate_at = source.index(_PREDICATE + "(", main_at)
+    gate_at = source.index(_GATE_CALL, main_at)
     connect_at = source.index("connect_socket(sock_path)", main_at)
     assert gate_at < connect_at, (
-        "door_posix.c consults door_basename_declares_stdin_read only after "
+        "door_posix.c consults door_invocation_declares_stdin_read only after "
         "dialling the socket -- the request can still be delivered warm"
     )
 
@@ -75,7 +79,7 @@ def test_the_gate_excludes_hook_mode():
     fall-through disposition is a deny envelope, not a cold spawn -- the
     same exclusion the argv-shaped 0a gate applies."""
     source = _read(_DOOR_POSIX_C)
-    gate_at = source.index(_PREDICATE + "(")
+    gate_at = source.index(_GATE_CALL)
     # The nearest enclosing `if` above the call must condition on
     # `!g_door_hook_mode`, matching the 0a gate's own wiring.
     if_at = source.rindex("if (", 0, gate_at)
@@ -93,7 +97,7 @@ def test_the_fail_direction_is_cold_on_unresolved_basename():
     `||` disjunct with the declared-name predicate, both inside the SAME
     `if` that reaches `fall_through`, so neither condition alone decides."""
     source = _read(_DOOR_POSIX_C)
-    gate_at = source.index(_PREDICATE + "(")
+    gate_at = source.index(_GATE_CALL)
     if_at = source.rindex("if (", 0, gate_at)
     # The `if` header runs until the line ending in `{`.
     header_end = source.index("{", gate_at)
@@ -122,7 +126,7 @@ def test_an_undeclared_name_falls_through_the_gate_and_stays_reachable():
     basename) reaches the transport dial instead of a guaranteed
     fall-through."""
     source = _read(_DOOR_POSIX_C)
-    gate_at = source.index(_PREDICATE + "(")
+    gate_at = source.index(_GATE_CALL)
     body_start = source.index("{", gate_at)
     body_end = source.index("}", body_start)
     after_gate = source[body_end + 1 :]

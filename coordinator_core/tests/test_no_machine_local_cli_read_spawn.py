@@ -120,43 +120,30 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/claude-author.py:599",
-        "coordinator/bin/claude-author.py:620",
-        "coordinator/bin/lib/git_hook_install.py:131",
-        "coordinator/lib/resolve-coordinator-clone.py:225",
-        "coordinator_core/engine_root.py:161",
-        "coordinator_core/ops/gen_claude_author_shim.py:365",
-        "coordinator_core/ops/gen_content_root_pointer.py:112",
-        "coordinator_core/ops/new_project_scaffold.py:151",
-        "coordinator_core/ops/render_template_tree.py:60",
-        "coordinator_core/ops/repo_bootstrap.py:123",
-        # 2026-08-20 C3 (resolver-call-indirection widening) -- this file's own
-        # two sites, see "2026-08-20 C3 WIDENING" note below.
-        "coordinator/bin/lib/coordinator_registry.py:137",
-        "coordinator/bin/lib/coordinator_registry.py:349",
-        # 2026-08-20 C3 widening also surfaced the pre-existing `_machine_local_get`
-        # helper family below -- same shape, previously invisible. See note below.
-        "coordinator/bin/coordinator-lesson-add.py:131",
-        "coordinator/bin/fan-out-dispatch.py:322",
-        "coordinator/bin/gen-claude-klabauter-live-root-pointer.py:126",
-        # The shared `_machine_local_get` helper: the per-module copies that
-        # delegate to it are one site here, not one each.
-        "coordinator_core/_claude_klabauter_root.py:100",
-        # `cc_invoke.py:396` moved (not converted) to `engine_bootstrap.py:197`
-        # in the C2 CLI-bootstrap-tax module split -- see the "cc_invoke.py
-        # helper family" note below.
-        "coordinator/bin/lib/engine_bootstrap.py:176",
-        "coordinator/bin/tests/test_claude_machine_local.py:85",
-        "coordinator/bin/workday-start-step0.py:157",
-        # `repos.<key>` resolved via the 4-rung autodiscovery ladder, same
-        # correctness-boundary class as the other `repos.*` rows above (see
-        # "2026-08-16 REPOS.* LADDER-LOSS FIX" below) -- `registry_get` only
-        # ever reaches the last rung, so a flat conversion would silently
-        # drop autodiscovery for a script whose own manifest output is a
-        # ratchet baseline other tooling trusts.
-        "coordinator/bin/classify-legacy-engine-noun-references.py:111",
+        "coordinator/bin/classify-legacy-engine-noun-references.py::_resolve_sibling_root",
+        "coordinator/bin/claude-author.py::_resolve_doe_clone",
+        "coordinator/bin/claude-author.py::_resolve_doe_clone#2",
+        "coordinator/bin/coordinator-lesson-add.py::_machine_local_get",
+        "coordinator/bin/fan-out-dispatch.py::_machine_local_get",
+        "coordinator/bin/lib/coordinator_registry.py::_load_manifest",
+        "coordinator/bin/lib/coordinator_registry.py::_registry_machine_local_get",
+        "coordinator/bin/lib/engine_bootstrap.py::_machine_local_get",
+        "coordinator/bin/lib/git_hook_install.py::_ml_get",
+        "coordinator/bin/tests/test_claude_machine_local.py::_cli_get",
+        "coordinator/bin/workday-start-step0.py::_slug_self_heal",
+        "coordinator/lib/resolve-coordinator-clone.py::_registry_content_root",
+        "coordinator_core/_claude_klabauter_root.py::_machine_local_get",
+        "coordinator_core/engine_root.py::coordinator_engine_root",
+        "coordinator_core/ops/gen_claude_author_shim.py::main",
+        "coordinator_core/ops/gen_content_root_pointer.py::_resolve_content_root",
+        "coordinator_core/ops/new_project_scaffold.py::_resolve_content_root",
+        "coordinator_core/ops/render_template_tree.py::_resolve_content_root",
+        "coordinator_core/ops/repo_bootstrap.py::_machine_local_registry_get",
     }
 )
+# Keys are `path::enclosing.scope` (see `_site_keys`), not line numbers: the
+# prose below cites line numbers from the census it narrates and is history, not
+# the inventory. `gen-claude-klabauter-live-root-pointer.py` is gone from the tree.
 # Burn-down inventory (33 sites, 2026-08-20 census -- 13 carried forward from
 # the 2026-08-16 census below, minus 2 that dropped out (see "2026-08-20 C3
 # WIDENING -- DROPPED ROWS" at the end of this comment), plus 20 newly-visible
@@ -635,17 +622,20 @@ def _resolved_call(call: ast.Call, bindings: dict[str, ast.expr]) -> ast.Call:
 def _scan_scope(
     stmts: list[ast.stmt],
     bindings: dict[str, ast.expr],
-    hits: list[tuple[str, int]],
+    hits: list[tuple[str, int, str]],
     rel_posix: str,
+    scope: str = "<module>",
 ) -> None:
     for stmt in stmts:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             inner_bindings: dict[str, ast.expr] = {}
             _collect_scope_bindings(stmt.body, inner_bindings, set())
-            _scan_scope(stmt.body, inner_bindings, hits, rel_posix)
+            inner = stmt.name if scope == "<module>" else f"{scope}.{stmt.name}"
+            _scan_scope(stmt.body, inner_bindings, hits, rel_posix, inner)
             continue
         if isinstance(stmt, ast.ClassDef):
-            _scan_scope(stmt.body, {}, hits, rel_posix)
+            inner = stmt.name if scope == "<module>" else f"{scope}.{stmt.name}"
+            _scan_scope(stmt.body, {}, hits, rel_posix, inner)
             continue
         collector = _CallCollector()
         collector.visit(stmt)
@@ -660,25 +650,40 @@ def _scan_scope(
             except Exception:
                 continue
             if _names_machine_local(unparsed):
-                hits.append((rel_posix, call.lineno))
+                hits.append((rel_posix, call.lineno, scope))
 
 
-def _scan_file(rel_posix: str, text: str) -> list[tuple[str, int]]:
+def _scan_file(rel_posix: str, text: str) -> list[tuple[str, int, str]]:
     if rel_posix in _SURFACE_MODULES:
         return []
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return []
-    hits: list[tuple[str, int]] = []
+    hits: list[tuple[str, int, str]] = []
     module_bindings: dict[str, ast.expr] = {}
     _collect_scope_bindings(tree.body, module_bindings, set())
     _scan_scope(tree.body, module_bindings, hits, rel_posix)
     return hits
 
 
-def _collect_all_hits() -> list[tuple[str, int]]:
-    hits: list[tuple[str, int]] = []
+def _site_keys(hits: list[tuple[str, int, str]]) -> set[str]:
+    """`path::enclosing.scope` per hit, `#2`, `#3`... for further hits in one scope.
+
+    Keyed off the enclosing scope, never the line number, so an unrelated edit
+    above a site cannot make a live spawn read as converted.
+    """
+    seen: dict[str, int] = {}
+    keys: set[str] = set()
+    for path, _lineno, scope in sorted(hits):
+        base = f"{path}::{scope}"
+        seen[base] = seen.get(base, 0) + 1
+        keys.add(base if seen[base] == 1 else f"{base}#{seen[base]}")
+    return keys
+
+
+def _collect_all_hits() -> list[tuple[str, int, str]]:
+    hits: list[tuple[str, int, str]] = []
     for root in (
         _REPO_ROOT / "coordinator_core",
         _REPO_ROOT / "coordinator" / "bin",
@@ -782,8 +787,20 @@ def test_inventory_is_exhaustive_and_matches_known_sites() -> None:
     longer appears must be removed from the list (burn-down is visible, not
     silently stale). This is the completeness pin beside the ratchet: a new
     row cannot enter below this gate's reach."""
-    hits = {f"{path}:{lineno}" for path, lineno in _collect_all_hits()}
+    hits = _site_keys(_collect_all_hits())
     stale = KNOWN_UNCONVERTED_SITES - hits
     new = hits - KNOWN_UNCONVERTED_SITES
     assert not stale, f"sites converted but still listed -- remove from KNOWN_UNCONVERTED_SITES: {sorted(stale)}"
     assert not new, f"new machine-local read-side shell-out(s) -- convert to machine_resolver, do not add here: {sorted(new)}"
+
+
+def test_site_keys_do_not_move_with_line_numbers() -> None:
+    body = '''
+import subprocess
+
+def _get(key):
+    return subprocess.run(["machine-local", "get", key])
+'''
+    keys = _site_keys(_scan_file("coordinator_core/ops/_fx.py", body))
+    shifted = _site_keys(_scan_file("coordinator_core/ops/_fx.py", "# c\\n# c\\n" + body))
+    assert keys == shifted == {"coordinator_core/ops/_fx.py::_get"}

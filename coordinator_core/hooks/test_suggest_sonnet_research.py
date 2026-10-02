@@ -14,7 +14,7 @@ from coordinator_core.hooks import suggest_sonnet_research as ssr  # noqa: E402
 
 
 def _run(params):
-    with mock.patch.object(ssr, "_has_deep_research_plugin", return_value=False):
+    with mock.patch.object(ssr, "_research_plugins", return_value=(False, False)):
         return asyncio.run(ssr._handler(params))
 
 
@@ -55,3 +55,27 @@ def test_named_teammate_with_short_session_id_not_suppressed():
     )
     hso = result["hookSpecificOutput"]
     assert "DELEGATION REQUIRED" in hso["additionalContext"]
+
+
+def _advisory_with(plugins):
+    with mock.patch.object(ssr, "_research_plugins", return_value=plugins):
+        result = asyncio.run(ssr._handler({"session_id": "abcdefgh"}))
+    return result["hookSpecificOutput"]["additionalContext"]
+
+
+def test_notebooklm_suggested_only_when_sub_plugin_present():
+    assert "/notebooklm-research" in _advisory_with((True, True))
+    without = _advisory_with((True, False))
+    assert "/notebooklm-research" not in without
+    assert "/coordinator:research --mode=web" in without
+
+
+def test_research_plugins_reads_notebooklm_subdir(tmp_path):
+    dr = tmp_path / "pipelines" / "deep-research"
+    dr.mkdir(parents=True)
+    with mock.patch.object(ssr, "_deep_research_plugin_dir", return_value=str(dr)):
+        assert ssr._research_plugins() == (True, False)
+        (dr / "notebooklm").mkdir()
+        assert ssr._research_plugins() == (True, True)
+    with mock.patch.object(ssr, "_deep_research_plugin_dir", return_value=None):
+        assert ssr._research_plugins() == (False, False)

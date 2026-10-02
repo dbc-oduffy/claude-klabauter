@@ -3,7 +3,7 @@ directory ships a Windows `.cmd` twin.
 
 A bare entrypoint (no `.py`/`.sh` suffix) or a `.py`-suffixed one has no
 launcher coverage on stock Windows unless a same-name `.cmd` sibling exists
-(see coordinator/bin/gen-launcher-shim.py and docs/wiki/windows-cmd-shims.md).
+(see coordinator/bin/gen-launcher-shim.py and coordinator-content-repo coordinator/docs/wiki/portability/windows-cmd-shims.md).
 It is easy to add a new entrypoint and forget the Windows twin -- this guard
 fails loud instead of letting that gap ship silently. It caught two real
 violations on 2026-07-25: `claude-author` and `workstream-complete-assemble` were
@@ -1627,3 +1627,15 @@ def test_caret_survives_real_cmd_shim_round_trip(caret_probe_launcher, spawner, 
         assert _pwsh_probe(caret_probe_launcher, invocation) == expected
     else:
         _subprocess_list_probe_refuses(caret_probe_launcher, invocation)
+
+
+def test_cmd_baked_rung_is_screened_for_windowsapps_before_it_is_taken():
+    """The baked `__PYTHON_BIN__` rung must clear a WindowsApps App Execution
+    Alias (a 0-byte stub that passes `if exist`) before `goto :run_baked`."""
+    body = _load_gen_launcher_shim().render_cmd("fake-tool.py")
+    screen = 'set "_pytest=%_py:WindowsApps=%"'
+    baked = 'if not "%_py%"=="" if exist "%_py%" goto :run_baked'
+    assert screen in body and baked in body
+    assert body.index(screen) < body.index(baked)
+    assert 'if not "%_pytest%"=="%_py%" set "_py="' in body
+    assert "findstr" not in body[body.index(screen):body.index(baked)]

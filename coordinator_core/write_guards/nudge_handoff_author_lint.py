@@ -30,15 +30,11 @@ grammars `_handler` already calls, taking the POST-WRITE body this guard
 constructs itself. Importing `lint_text` also means this guard never reaches
 past the op registry for a private `_handler`.
 
-BORROWED, NOT COPIED — path-candidate extraction, path-shape gating, git-root
-containment and post-write body reconstruction are the exact helpers
-`nudge_handoff_ac_shape.py` already owns, imported directly:
-`_extract_candidates`, `_normalize_and_gate`, `_resulting_body`,
-`_MAX_WHOLE_FILE_BYTES`. That sibling's own `_resulting_body` docstring
-declines an unreviewed private cross-import and names a future shared
-`write_guards/_post_write_body.py` extraction as the eventual fix; this
-import is the reviewed one it anticipates, and it adds no fifth copy of that
-logic. Extracting the shared module stays out of this plan's scope.
+BORROWED, NOT COPIED — path-candidate extraction and path-shape gating are
+the exact helpers `nudge_handoff_ac_shape.py` already owns, imported directly:
+`_extract_candidates`, `_normalize_and_gate`. Pre-image read and post-write
+body reconstruction come from the shared `write_guards/_post_write_body.py`
+(`read_pre_image`, `post_write_body`).
 
 NEW-DEFECTS-ONLY, keyed on a MULTISET not a set: when a pre-image exists,
 `lint_text(pre_image)` is counted by `(code, error)` with a `Counter`. Post
@@ -97,11 +93,10 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.write_guards._post_write_body import post_write_body, read_pre_image
 from coordinator_core.write_guards.nudge_handoff_ac_shape import (
-    _MAX_WHOLE_FILE_BYTES,
     _extract_candidates,
     _normalize_and_gate,
-    _resulting_body,
 )
 
 CLASS = "advisory"
@@ -151,15 +146,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if matched is None:
             return None
 
-        try:
-            if matched.stat().st_size > _MAX_WHOLE_FILE_BYTES:
-                pre_image = None
-            else:
-                pre_image = matched.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            pre_image = None
-
-        body = _resulting_body(tool_name, tool_input, pre_image)
+        pre_image = read_pre_image(matched)
+        body = post_write_body(tool_name, tool_input, pre_image, skip_stale=True)
         if body is None:
             return None
 

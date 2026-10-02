@@ -1,7 +1,9 @@
 """
 coordinator_core.orient_assemble.readers_health_reaper — C2d reader port:
-health-probe subcommands (claude-klabauter-bin-sentinel / ceremony-hook) + the
-day-cadence handoff-archival/reaper family; marker-freshness dedup (AC-7).
+health-probe subcommands (claude-klabauter-bin-sentinel / ceremony-hook) and
+marker-freshness dedup (AC-7). The module name keeps "reaper" from the
+day-cadence in_flight-claim reaper reader it once carried; that reader is a
+grave (DR-447) and nothing here reaps.
 
 Purpose, per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md`
 § Reader-in-process port scoping, chunk C2d:
@@ -33,13 +35,11 @@ Purpose, per `docs/plans/2026-07-24-computed-skills-b2-ceremony-start.md`
    `claude-klabauter-bin-sentinel` — see `_read_working_repo_registration`'s own
    docstring for the DR-132 backlink.
 
-2. The day-cadence handoff-archival/reaper family: per
-   `docs/plans/2026-08-26-two-callers-want-two-numbers-not-a-1301-line-cli.md`
-   chunk C2, this reader calls `coordinator_core.ops.reap_in_flight_claims
-   .survey()` directly, in-process — no subprocess, no prose parsing. The
-   fused `coordinator/bin/reap-orphaned-in-flight-handoffs.py` CLI this
-   reader used to spawn is deleted (DR-344 § 6); this reader family now has
-   zero accepted subprocess exceptions.
+2. The day-cadence reader `_read_stale_origin_stubs` reads
+   `origin_stub_staleness.survey()` in-process and surfaces live origin stubs
+   whose pair a shipping record already carries as one `j-stale-origin-stubs`
+   judgment point (report-only; the remedy is re-running
+   `handoff.close_origin_stub`).
 3. Marker-freshness dedup (AC-7): the three cadence-duplicated checks
    (session reads `state/.workday-start-marker`; day owns it and, via the
    `d-workday-marker-write` directive naming the real
@@ -56,15 +56,13 @@ Negative-spec:
     - Does NOT call `observer-sidecar-scan` — not one of the three
       health-probe subcommands the plan's port-scoping table names for this
       chunk.
-    - Does NOT spawn a subprocess anywhere in this module — the reaper's
-      former `--dry-run` subprocess call is gone along with the fused CLI
-      it invoked; this reader family has no accepted subprocess exception
-      left.
-    - Does NOT re-implement the deleted prose-parsing regex contract —
-      `reap_in_flight_claims.survey()` returns integers directly.
-    - Does NOT mutate. This reader calls `survey()`, never
-      `apply_dispositions()` — mutation stays a `directives[]` entry naming
-      the CLI, performed by whoever runs that directive, never here.
+    - Does NOT spawn a subprocess anywhere in this module; this reader
+      family has no accepted subprocess exception.
+    - Does NOT mutate — mutation stays a `directives[]` entry naming a CLI,
+      performed by whoever runs that directive, never here.
+    - Does NOT survey in_flight claims for orphan release/reclaim. That
+      reader cost >1s on the session-start path and is a grave (DR-447); a
+      rebuild is a new spiked plan, never a revert into this module.
     - Does NOT re-implement three independent marker-freshness checks —
       `_read_marker_freshness(cadence)` is the single dedup target AC-7
       requires; a finding that re-splits it back into session/day/week
@@ -90,7 +88,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
 )
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
-from coordinator_core.ops.reap_in_flight_claims import survey as _reap_survey
+from coordinator_core.ops.origin_stub_staleness import survey
 from coordinator_core.orient_assemble.reader_result import ReaderResult
 from coordinator_core.plugin_health import drift as _drift
 from coordinator_core.ops.ceremony.housekeeping_liveness import (
@@ -107,8 +105,8 @@ from coordinator_core.ops import workweek_trail_scope as _workweek_trail_scope
 #: claude-klabauter repo root (mirrors readers_handoff_triage._SOURCE_PATH's same
 #: parents[2]). Deliberately claude-klabauter-pinned — this is the script-location
 #: role (where `workday-start-health-probes.py` lives on disk), never the
-#: scan-scope role (which repo `_reap_survey` walks); the latter is now the
-#: threaded `repo_root` parameter, see `_read_reaper_dry_run`/`collect`.
+#: scan-scope role; the latter is the threaded `repo_root` parameter, see
+#: `collect`.
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 _HEALTH_PROBES_PATH = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "workday-start-health-probes.py"
 
@@ -349,75 +347,58 @@ def _read_ceremony_hook(cadence: str) -> ReaderResult:
     )
 
 
-def _read_reaper_dry_run(repo_root: str | None = None) -> ReaderResult:
-    """Day-cadence handoff-archival/reaper family. Calls
-    `reap_in_flight_claims.survey()` directly, in-process — no subprocess,
-    no prose parsing. `survey()` returns the two integers this reader needs
-    (`would_release`, `would_reclaim`) directly; there is no stdout to
-    regex-match and nothing left to parse.
-
-    `repo_root` is the scan-scope role — the repo `survey()` walks — kept
-    distinct from `_CLAUDE_KLABAUTER_ROOT` (the script-location role: where
-    `workday-start-health-probes.py` lives). Falls back to `_CLAUDE_KLABAUTER_ROOT`
-    when the caller passes no threaded root, preserving prior behaviour for
-    callers that don't supply one.
-
-    Fail-soft on ANY exception, returning an empty result. This is a
-    RESTORATION of the guard the subprocess form carried (`except (OSError,
-    subprocess.TimeoutExpired)`), not a new one, and it is not the fallback
-    escape hatch this rebuild forbids — it never reaches for the deleted CLI
-    or for a second way of getting the answer. It exists because
-    `orient_assemble.__init__` runs `reader.collect(cadence)` in a bare loop
-    with NO per-reader guard, so an exception here takes down the whole
-    orientation assemble for the session. `survey()` walks ~2000 corpus files
-    on a box running dozens of concurrent sessions that write handoffs, so a
-    file vanishing mid-scan is an ordinary event, not a defect. An advisory
-    reader going quiet is the correct failure; orientation dying is not.
-
-    NEGATIVE SPEC -- the clause is `OSError`, not bare `Exception`, and must
-    not widen back. `survey()` no longer spawns, so the vanishing-file race
-    this absorbs surfaces as `OSError` and nothing else; a `TypeError` or an
-    `AttributeError` out of it is a defect in the survey, and swallowing one
-    here reports a broken reader as a clean box for every session on the
-    day-cadence path. A bare clause here already hid
-    `ModuleNotFoundError: No module named 'lib'` -- a real, reproducible
-    bootstrap defect in a sibling reader -- behind a silent empty result."""
-    try:
-        result = _reap_survey(repo_root if repo_root is not None else _CLAUDE_KLABAUTER_ROOT)
-    except OSError:
-        return ReaderResult()
-    would_release = result.would_release
-    would_reclaim = result.would_reclaim
-
-    if would_release == 0 and would_reclaim == 0:
-        return ReaderResult()
-
-    detail_parts = []
-    if would_release:
-        detail_parts.append(f"{would_release} orphaned in_flight handoff(s) would be released")
-    if would_reclaim:
-        detail_parts.append(f"{would_reclaim} orphaned in_flight handoff(s) would be reclaimed as shipped")
-
-    return ReaderResult(
-        directives=[
-            {
-                "id": "d-reaper-orphaned-handoffs",
-                "cli": "reap-orphaned-in-flight-handoffs",
-                "args": [],
-                "depends_on": None,
-                "already_satisfied": False,
-                "detail": "; ".join(detail_parts),
-            }
-        ]
-    )
-
-
 def _cwd_has_workday_standing() -> bool:
     """False when the cwd repo is unregistered or not onboarded: /workday-start has no home there."""
     from coordinator_core.repo_standing import repo_standing
 
     standing = repo_standing(os.getcwd())
     return bool(standing.registered_key) and standing.onboarded
+
+
+def _read_stale_origin_stubs(repo_root: str | None = None) -> ReaderResult:
+    """Day-cadence: surface live origin stubs whose `(roadmap_id, stub_id)`
+    pair a shipping record already carries, as one judgment point. Emits no
+    directive: nothing here mutates; the remedy is re-running
+    `handoff.close_origin_stub` with the evidence record.
+
+    `repo_root` is the scan-scope role, falling back to `_CLAUDE_KLABAUTER_ROOT`.
+
+    NEGATIVE SPEC -- the clause is `OSError`, not bare `Exception`, and must
+    not widen back."""
+    try:
+        result = survey(Path(repo_root) if repo_root is not None else _CLAUDE_KLABAUTER_ROOT)
+    except OSError:
+        return ReaderResult()
+    if not result.stale:
+        return ReaderResult()
+
+    lines = [
+        f"{s.path} (evidence {s.evidence_kind}: {s.evidence_path})"
+        for s in result.stale
+    ]
+    count = len(result.stale)
+    return ReaderResult(
+        judgment_points=[
+            build_judgment_point(
+                {
+                    "disposition": "close_stubs",
+                    "rationale": "a shipping record already carries each stub's pair",
+                },
+                id="j-stale-origin-stubs",
+                question=f"{count} live origin stub(s) already shipped — close them?",
+                dispositions=[
+                    build_disposition("close_stubs"),
+                    build_disposition("leave_as_is"),
+                ],
+                evidence="; ".join(lines),
+                reason=(
+                    "re-run handoff.close_origin_stub per stub with the evidence "
+                    "record as plan/handoff; this brief never flips a stub"
+                ),
+                reportable=True,
+            )
+        ]
+    )
 
 
 def _read_marker_freshness(cadence: str) -> ReaderResult:
@@ -449,7 +430,7 @@ def _read_marker_freshness(cadence: str) -> ReaderResult:
     Carve-out: `check_weekly_staleness._resolve_state_root()` is a THIRD
     resolution path (its own `CWS_TEST_STATE_ROOT` env override plus a
     meta-repo/claude-klabauter ladder) and takes no argument to thread a root
-    through — unlike `_CLAUDE_KLABAUTER_ROOT`/`_read_reaper_dry_run`'s `repo_root`,
+    through — unlike `_CLAUDE_KLABAUTER_ROOT`/`collect`'s `repo_root`,
     there is no parameter here to carry a caller-supplied scope. Threading
     it would mean changing `_resolve_state_root`'s own signature, which
     lives in `coordinator_core/ops/check_weekly_staleness.py` — outside
@@ -687,8 +668,8 @@ def _read_goal_coverage() -> ReaderResult:
     a failed or zero-result records query — see its own docstring: a
     silently-empty enumeration is indistinguishable from a healthy
     all-clear). Caught here and converted to an empty `ReaderResult` rather
-    than letting it kill the whole assemble (the `_read_reaper_dry_run`
-    precedent, applied to this reader's own failure mode)."""
+    than letting it kill the whole assemble — `orient_assemble.__init__`
+    runs each reader's `collect` with no per-reader guard."""
     try:
         _goal_coverage_scan._bootstrap_query_records()
         goals = _goal_coverage_scan._fetch_active_goals()
@@ -781,14 +762,11 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     """Compute this reader family's directives/judgment_points for `cadence`.
 
     Health probes run for every cadence (their detail is not cadence-tuned).
-    The reaper family's survey() call is day-cadence only — the Approach
-    scopes it as "the day-cadence handoff-archival/reaper family", never
-    fired at session/week cadence.
 
-    `repo_root` is keyword-only, threaded into `_read_reaper_dry_run` as the
-    scan-scope role (C3 of the orient-assemble repo-scope plan) — the other
-    readers in this family are unaffected: `_CLAUDE_KLABAUTER_ROOT` (script-location
-    role for `_HEALTH_PROBES_PATH`) stays pinned, and `_read_marker_freshness`
+    `repo_root` is keyword-only, threaded into `_read_git_maintenance_due` as
+    the scan-scope role (C3 of the orient-assemble repo-scope plan) — the
+    other readers in this family are unaffected: `_CLAUDE_KLABAUTER_ROOT`
+    (script-location role for `_HEALTH_PROBES_PATH`) stays pinned, and `_read_marker_freshness`
     reaches its own third resolution path (see that function's carve-out
     note). Falls back to `_CLAUDE_KLABAUTER_ROOT` when `repo_root` is None.
     """
@@ -801,7 +779,7 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
         _read_marker_freshness(cadence),
     ]
     if cadence == "day":
-        results.append(_read_reaper_dry_run(repo_root))
+        results.append(_read_stale_origin_stubs(repo_root))
         results.append(_read_plugin_drift())
         results.append(_read_git_maintenance_due(repo_root or str(_CLAUDE_KLABAUTER_ROOT), cadence))
     if cadence == "week":

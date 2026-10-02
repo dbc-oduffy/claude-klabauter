@@ -29,6 +29,9 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  differently once withheld: ``landed-work`` waits for a peer's
                  landing, ``commit-in-owner-repo`` needs a cross-repo commit
                  dispatched under per-session assent.
+  CI_RETIRED     No schedulable row's ``writes:``/``writes_under:`` names a path
+                 under ``.github/workflows/`` — GitHub Actions is retired
+                 fleet-wide.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
 
@@ -133,7 +136,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
-CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "SCHEMA")
+CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "SCHEMA")
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -167,6 +170,7 @@ FLEET_REPOS = (
     "example-cockpit-repo",
     "example-market-data-repo",
     "coordinator-content-repo",
+    "example-retrieval-repo-ue-addon",
 )
 
 #: Keys every ``census[]`` entry declares. Presence-and-non-blank, never a value
@@ -416,6 +420,9 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     shape_defect = _writes_shape_refused_at_emit(rows, repo_root)
     if shape_defect is not None:
         return shape_defect
+    dr_defect = _new_dr_number_pinned(rows, repo_root)
+    if dr_defect is not None:
+        return dr_defect
     unordered = _consumes_not_after_producer(waves)
     if unordered:
         return _defect(
@@ -432,6 +439,47 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         return _defect(type(first).__name__, str(first).strip()[:300], withheld=unroutable)
     return _pass(f"{len(rows)} dispatchable row(s) across {len(waves)} wave(s)")
 
+
+_NEW_DR_WRITE_RE = re.compile(r"^docs/decisions/(DR-\d+)[-.]")
+
+
+def _new_dr_number_pinned(rows: List[Any], repo_root: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """A row that writes a DR file whose number no existing decision carries
+    has picked that number itself, and two plans picking independently land
+    the same one. The number is allocated at write time
+    (``coordinator-doc-new --type decision``), so the row declares the
+    directory instead."""
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    if repo_root is None:
+        return None
+    decisions = Path(repo_root) / "docs" / "decisions"
+    try:
+        existing = {
+            m.group(1)
+            for entry in decisions.iterdir()
+            for m in [_NEW_DR_WRITE_RE.match(f"docs/decisions/{entry.name}")]
+            if m
+        }
+    except OSError:
+        existing = set()
+    pinned = [
+        f"{row.id} ({value})"
+        for row in rows
+        if row.writes is not UNDECLARED
+        for value in row.writes
+        for match in [_NEW_DR_WRITE_RE.match(str(value).replace("\\", "/"))]
+        if match and match.group(1) not in existing
+    ]
+    if not pinned:
+        return None
+    return _defect(
+        "dr-number-pinned",
+        f"rows pinning a new DR number: {', '.join(pinned)[:260]} — numbers are minted at "
+        "write time, so plans that pick one collide. Fix: declare "
+        "`writes_under: [docs/decisions/]` and create the record with "
+        "`coordinator-doc-new --type decision`.",
+    )
 
 def _consumes_not_after_producer(waves: Sequence[Sequence[Any]]) -> List[str]:
     """``"<consumer> consumes <path> written by <producer>"`` for every ordering
@@ -691,6 +739,26 @@ def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _sibling_named(value: str, siblings: Sequence[str]) -> Optional[str]:
+    """The fleet repo ``value`` begins with, or None.
+
+    Backslashes fold to ``/`` and leading ``./`` / ``../`` segments drop, so
+    ``..\\example-retrieval-repo\\x`` reads as ``example-retrieval-repo/x``. The name must end at a
+    separator or the end of the value; ``-`` and ``_`` are name characters, so
+    ``example-retrieval-repo-ue-addon`` is never ``example-retrieval-repo``.
+    """
+    folded = value.strip().replace("\\", "/").casefold()
+    while folded.startswith(("./", "../")):
+        folded = folded[folded.index("/") + 1 :]
+    for sibling in siblings:
+        key = sibling.casefold()
+        if folded == key or (
+            folded.startswith(key) and not (folded[len(key)].isalnum() or folded[len(key)] in "-_")
+        ):
+            return sibling
+    return None
+
+
 def _path_leaves_repo(
     field: str,
     value: str,
@@ -772,13 +840,9 @@ def _path_leaves_repo(
     stripped = value.strip()
     if not stripped:
         return None
-    folded = stripped.casefold()
-    for sibling in siblings:
-        key = sibling.casefold()
-        if folded == key or (
-            folded.startswith(key) and not folded[len(key)].isalnum()
-        ):
-            return f"names {sibling}"
+    sibling = _sibling_named(stripped, siblings)
+    if sibling is not None:
+        return f"names {sibling}"
     if field == "surface":
         return None
     normalized = stripped.replace("\\", "/")
@@ -1019,15 +1083,7 @@ def _matched_sibling(value: str, siblings: Sequence[str]) -> Optional[str]:
     ``names {sibling}`` reason names — same fold/separator rule, not a second
     independent guess at it.
     """
-    stripped = value.strip()
-    if not stripped:
-        return None
-    folded = stripped.casefold()
-    for sibling in siblings:
-        key = sibling.casefold()
-        if folded == key or (folded.startswith(key) and not folded[len(key)].isalnum()):
-            return sibling
-    return None
+    return _sibling_named(value, siblings)
 
 
 def _gate_covers_reason(value: str, siblings: Sequence[str], gates: List[Dict[str, Any]]) -> bool:
@@ -1052,6 +1108,43 @@ def _gate_covers_reason(value: str, siblings: Sequence[str], gates: List[Dict[st
         return bool(gates)
     target = sibling.casefold()
     return any(str(g.get("owner_repo") or "").strip().casefold() == target for g in gates)
+
+
+_CI_RETIRED_PREFIX = ".github/workflows/"
+CI_RETIRED_RULING = "coordinator/docs/wiki/portability/cross-platform-ci-discipline.md"
+
+
+def _ci_retired(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Refuse a plan whose schedulable rows write under ``.github/workflows/``.
+
+    Reads declared ``writes:``/``writes_under:`` only, never prose. A sibling
+    under ``.github/`` (``CODEOWNERS``) is not a workflow and passes. Twin of
+    coordinator-content-repo ``mise-prep-gate.py :: _ci_retired``.
+    """
+    hits: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        row_id = str(row.get("id") or "<row with no id>")
+        for key in ("writes", "writes_under"):
+            values = row.get(key)
+            for value in values if isinstance(values, list) else []:
+                if not isinstance(value, str):
+                    continue
+                normalized = value.strip().replace("\\", "/")
+                while normalized.startswith("./"):
+                    normalized = normalized[2:]
+                if normalized.startswith(_CI_RETIRED_PREFIX):
+                    hits.append(f"{row_id} ({value})")
+    if not hits:
+        return _pass("no row writes under .github/workflows/")
+    return _defect(
+        "ci-retired-workflow-write",
+        f"rows writing under {_CI_RETIRED_PREFIX}: {', '.join(hits)[:260]} — GitHub Actions "
+        f"is retired fleet-wide ({CI_RETIRED_RULING}). Fix: drop the workflow write; "
+        "verification is local.",
+        withheld=sorted({h.split(" ", 1)[0] for h in hits}),
+    )
 
 
 def _external_deps(
@@ -1621,7 +1714,22 @@ def raw_spine_rows(text: str) -> List[Dict[str, Any]]:
     from coordinator_core.ops.plan_tasks_render import load_rows
 
     result = load_rows(text)
-    return list(result.rows) if result.status is LocateStatus.LOCATED else []
+    if result.status is not LocateStatus.LOCATED:
+        return []
+    return [_with_canonical_disposition(row) for row in result.rows]
+
+
+#: Authored aliases for a canonical disposition, folded where rows are read so
+#: every class sees one spelling. Spines written before ``coded`` was enforced say
+#: ``done``.
+_DISPOSITION_ALIASES = {"done": "coded"}
+
+
+def _with_canonical_disposition(row: Any) -> Any:
+    if not isinstance(row, dict):
+        return row
+    alias = _DISPOSITION_ALIASES.get(str(row.get("disposition") or "").strip())
+    return {**row, "disposition": alias} if alias else row
 
 
 # ---------------------------------------------------------------------------
@@ -1664,6 +1772,7 @@ def evaluate_plan(
                 raw_spine_rows(text), root_names, siblings, nested_names, gitignored_roots
             ),
             "PRIME_EXIT": prime_exit,
+            "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
         }
     except Exception as exc:  # noqa: BLE001 - defense in depth, see ENGINE_ERROR

@@ -159,13 +159,14 @@ def test_introducing_commits_one_spawn_for_three_paths(tmp_path: Path, monkeypat
         ).stdout.strip()
 
     calls = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def counting_run(*a, **kw):
-        calls.append(a[0])
-        return real_run(*a, **kw)
+    class counting_popen(real_popen):
+        def __init__(self, *a, **kw):
+            calls.append(a[0])
+            super().__init__(*a, **kw)
 
-    monkeypatch.setattr(store.subprocess, "run", counting_run)
+    monkeypatch.setattr(subprocess, "Popen", counting_popen)
     got = introducing_commits(tmp_path, ["a.md", "b.md", "c.md", "missing.md"])
     assert len(calls) == 1
     assert got == {**shas, "missing.md": None}

@@ -27,7 +27,7 @@ from coordinator_core.ops.doc_content_verify import (
 # `_BASELINE` is shrink-only pre-existing residue and is explicitly not the route for
 # this file -- coordinator_core/tests/test_no_new_spawning_tests.py Rule 2.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -248,7 +248,7 @@ class TestAC13MotivatingIncident:
 
 
 def _content_root() -> str:
-    return read_content_root_pointer()
+    return read_content_root()
 
 
 def _git_show(repo_root: str, sha: str, path: str) -> str:

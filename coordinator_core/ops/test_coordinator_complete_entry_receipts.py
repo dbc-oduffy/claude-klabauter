@@ -140,12 +140,13 @@ def test_one_git_spawn_for_n_receipts(repo, monkeypatch):
     for i, rid in enumerate(("rcp-demo-aaaaaa", "rcp-demo-bbbbbb", "rcp-demo-cccccc")):
         _commit_receipt(repo, rid, "M")
     calls = []
-    real = subprocess.run
+    real = subprocess.Popen
 
-    def counting(argv, *a, **k):
-        calls.append(argv)
-        return real(argv, *a, **k)
+    class counting(real):
+        def __init__(self, argv, *a, **k):
+            calls.append(argv)
+            super().__init__(argv, *a, **k)
 
-    monkeypatch.setattr(store.subprocess, "run", counting)
+    monkeypatch.setattr(subprocess, "Popen", counting)
     _run()
     assert len([c for c in calls if c and c[0] == "git"]) == 1

@@ -4,7 +4,7 @@ for `--queue state/improvement-queue`, over the SAME generic mechanisms
 every other queue grinds through -- no improvement-queue-specific code
 path. Covers batching by `change_kind` and the profile's own
 `hand_back_types` channel carrying the four queue-terminus outcome classes
-(docs/wiki/queue-terminus-doctrine.md) plus `route-to-learn-lessons`.
+(coordinator-content-repo coordinator/docs/wiki/ceremony-calibration/queue-terminus-doctrine.md) plus `route-to-learn-lessons`.
 
 Item 18's third leg -- "one post-batch index regeneration" -- is NOT
 exercised here: the only index-regenerate hook this repo's composer carries

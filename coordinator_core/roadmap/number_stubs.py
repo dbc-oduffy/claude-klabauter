@@ -66,8 +66,10 @@ than each hand-rolling the check.
 
 Invocation:
     python3 -m coordinator_core.roadmap.number_stubs <edges-file>
-    python3 -m coordinator_core.roadmap.number_stubs --check <run-id>
-    python3 -m coordinator_core.roadmap.number_stubs --state <run-id>
+    python3 -m coordinator_core.roadmap.number_stubs --check <run-id> [--root <path>]
+    python3 -m coordinator_core.roadmap.number_stubs --state <run-id> [--root <path>]
+
+``--root`` targets a repo other than the git toplevel of the cwd.
 
 Exit codes (faithful to the oracle CLI):
     0 -- success (mapping printed, or --check passed / found nothing to check, or
@@ -785,17 +787,18 @@ def _roadmap_state_error_exit(
     return None
 
 
-def run_check_mode(run_id: str) -> int:
+def run_check_mode(run_id: str, root: Optional[str] = None) -> int:
     """Enumerate stubs for *run_id* (live + archived spinoff-roadmap stubs),
     build the stubs array, and call ``check_dependency_order``. Returns the
     process exit code (0 pass / nothing-to-check, 1 violations found).
+    *root* overrides the git-toplevel resolution (``--root`` flag).
     """
     # resolve_root()'s RuntimeError previously
     # propagated uncaught as a raw traceback instead of the clean
     # ERROR:-message + explicit-exit-code contract every other failure path
     # in this module follows.
     try:
-        root = Path(resolve_root())
+        root = Path(root) if root is not None else Path(resolve_root())
     except RuntimeError as err:
         sys.stderr.write(f"ERROR: {err}\n")
         return 2
@@ -923,7 +926,7 @@ def run_check_mode(run_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def run_state_mode(run_id: str) -> int:
+def run_state_mode(run_id: str, root: Optional[str] = None) -> int:
     """Enumerate stubs for *run_id* (live + archived spinoff-roadmap stubs) and
     print each stub's ``deployment_state`` and gate reason (``gate_dependency``,
     falling back to ``blocking_notes`` when absent, when ``awaiting_gate``),
@@ -939,10 +942,11 @@ def run_state_mode(run_id: str) -> int:
     Returns the process exit code: 0 on success (including the empty-set case
     where both queries succeeded), 2 if ``resolve_root()`` fails (not inside a
     git worktree) or roadmap state could not be established (see
-    ``_roadmap_state_error_exit``).
+    ``_roadmap_state_error_exit``). *root* overrides the git-toplevel
+    resolution (``--root`` flag).
     """
     try:
-        root = Path(resolve_root())
+        root = Path(root) if root is not None else Path(resolve_root())
     except RuntimeError as err:
         sys.stderr.write(f"ERROR: {err}\n")
         return 2
@@ -1024,8 +1028,8 @@ def run_state_mode(run_id: str) -> int:
 _USAGE = (
     "Usage:\n"
     "  roadmap-number-stubs <edges-file>      # linearize from edges file\n"
-    "  roadmap-number-stubs --check <run-id>  # verify stubs on disk\n"
-    "  roadmap-number-stubs --state <run-id>  # print per-stub readiness state\n"
+    "  roadmap-number-stubs --check <run-id> [--root <path>]  # verify stubs on disk\n"
+    "  roadmap-number-stubs --state <run-id> [--root <path>]  # print per-stub readiness state\n"
     "\n"
     "Edges-file format (line form, one edge per line):\n"
     "  A <- B                # A blocked_by B (B ships first)\n"
@@ -1036,6 +1040,23 @@ _USAGE = (
     "A JSON array of {\"from\":A,\"to\":B[,\"fromSprint\":N,\"toSprint\":N]} objects "
     "is also accepted.\n"
 )
+
+
+_BAD_ROOT_ARGS: Any = object()
+
+
+def _parse_root_flag(rest: List[str]) -> Any:
+    """Parse the optional ``--root <path>`` tail of ``--check``/``--state``.
+
+    Returns the path, ``None`` when absent, or ``_BAD_ROOT_ARGS`` after writing
+    the usage error (caller exits 2).
+    """
+    if not rest:
+        return None
+    if rest[0] != "--root" or len(rest) != 2 or not rest[1]:
+        sys.stderr.write("ERROR: expected optional trailing `--root <path>` after <run-id>\n")
+        return _BAD_ROOT_ARGS
+    return rest[1]
 
 
 def main(argv: List[str]) -> int:
@@ -1058,24 +1079,30 @@ def main(argv: List[str]) -> int:
         if not run_id:
             sys.stderr.write("ERROR: --check requires a <run-id> argument\n")
             return 2
+        root_override = _parse_root_flag(args[2:])
+        if root_override is _BAD_ROOT_ARGS:
+            return 2
         if not _RUN_ID_RE.match(run_id):
             sys.stderr.write(
                 f'ERROR: <run-id> must match ^[a-z0-9][a-z0-9-]*$ (got: "{run_id}")\n'
             )
             return 2
-        return run_check_mode(run_id)
+        return run_check_mode(run_id, root_override)
 
     if args[0] == "--state":
         run_id = args[1] if len(args) > 1 else None
         if not run_id:
             sys.stderr.write("ERROR: --state requires a <run-id> argument\n")
             return 2
+        root_override = _parse_root_flag(args[2:])
+        if root_override is _BAD_ROOT_ARGS:
+            return 2
         if not _RUN_ID_RE.match(run_id):
             sys.stderr.write(
                 f'ERROR: <run-id> must match ^[a-z0-9][a-z0-9-]*$ (got: "{run_id}")\n'
             )
             return 2
-        return run_state_mode(run_id)
+        return run_state_mode(run_id, root_override)
 
     if args[0].startswith("--"):
         sys.stderr.write(f'ERROR: unknown flag "{args[0]}"\n')

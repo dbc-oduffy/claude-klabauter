@@ -232,11 +232,9 @@ def test_this_repo_is_always_a_root_and_a_missing_doe_is_a_skip(monkeypatch):
     """A box with no DoE clone is a normal box. The second root is reported as
     a skip with its reason, never as a failure, and the first root still
     scans."""
-    import coordinator_core.ops.coordinator_content_root as doe
+    import coordinator_core.content_root as content_root_mod
 
-    monkeypatch.setattr(doe, "coordinator_content_root", lambda: None)
-    monkeypatch.setattr(doe, "_RESOLVED_CONTENT_ROOT", None, raising=False)
-    monkeypatch.setattr(doe, "_CONTENT_ROOT_RESOLVED", False, raising=False)
+    monkeypatch.setattr(content_root_mod, "read_content_root", lambda: "")
 
     roots, skips = guard.resolve_roots()
     assert [label for label, _ in roots] == ["claude-klabauter"]
@@ -264,11 +262,9 @@ def test_cli_exits_zero_on_a_clean_root(tmp_path, capsys, monkeypatch):
     # (`--no-doe` was removed as a dead flag with no caller outside its own
     # test -- overengineering-reviewer, 2026-09-02) so the assertion doesn't
     # depend on whether this box has a coordinator-content-repo clone.
-    import coordinator_core.ops.coordinator_content_root as doe
+    import coordinator_core.content_root as content_root_mod
 
-    monkeypatch.setattr(doe, "coordinator_content_root", lambda: None)
-    monkeypatch.setattr(doe, "_RESOLVED_CONTENT_ROOT", None, raising=False)
-    monkeypatch.setattr(doe, "_CONTENT_ROOT_RESOLVED", False, raising=False)
+    monkeypatch.setattr(content_root_mod, "read_content_root", lambda: "")
 
     empty = tmp_path / "empty"
     empty.mkdir()

@@ -8,8 +8,8 @@ interpreter-floor.md § C15 / AC17, AC18.
 
 WHAT THIS COVERS
     - A write followed by a read with an unchanged composite key (engine
-      build stamp bytes + `_registry_mtime_pair`'s float triple) is a HIT.
-    - Any mutation of the registry mtime triple (a `machine-local set
+      build stamp bytes + `_registry_mtime_pair`'s float pair) is a HIT.
+    - Any mutation of the registry mtime pair (a `machine-local set
       repos.*`-shaped edit) WITHOUT touching the stamp invalidates the
       cache -- HARD CONSTRAINT 2, the whole substance of this row's fork
       (AC17).
@@ -128,7 +128,7 @@ def test_registry_mtime_mutation_without_stamp_change_invalidates(gen, fixture_t
 
 def test_stamp_mutation_without_registry_change_invalidates(gen, fixture_tree, localappdata):
     """DR-328's own invalidation axis: a new engine build stamp alone must
-    also miss, independent of the registry mtime triple."""
+    also miss, independent of the registry mtime pair."""
     engine_root, ml_dir = fixture_tree
     gen.write_dispatch_root_cache(ml_dir, engine_root, str(engine_root), "resolved-engine")
     assert gen.read_dispatch_root_cache(ml_dir, engine_root) is not None
@@ -209,4 +209,4 @@ def test_cache_payload_shape_is_stamp_and_registry_mtime_and_root(gen, fixture_t
 
     assert set(payload) == {"stamp", "registry_mtime", "root", "resolution_class"}
     assert isinstance(payload["registry_mtime"], list)
-    assert len(payload["registry_mtime"]) == 3
+    assert len(payload["registry_mtime"]) == 2

@@ -52,7 +52,7 @@ plan_slug derivation contract (CRITICAL SEMANTIC COUPLING): this module and
 coordinator/bin/fan-out-dispatch.py derive plan_slug via the IDENTICAL idiom — strip
 a leading "YYYY-MM-DD-" date prefix from the plan's basename via regex
 `^[0-9]{4}-[0-9]{2}-[0-9]{2}-`, then strip a trailing ".md" suffix. This equivalence
-is asserted by DoE's coordinator/tests/run-report-provision-key-flattening.bats
+is asserted by this repo's coordinator/tests/test_run_report_provision_key_flattening.py
 (parity test), which greps both scripts for their respective idiom fragments — same
 input MUST yield a byte-identical slug on both sides, or provisioning (write side)
 and folding (read side) silently mislocate each other's sidecars.
@@ -239,7 +239,7 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional
     while i < n:
         arg = argv[i]
         if arg in ("--help", "-h"):
-            sys.stdout.write(f"Usage: {_PROG} --plan <path> [--desc <one-liner>]\n")
+            sys.stdout.write(f"Usage: {_PROG} --plan <path> [--desc <one-liner>] | --read-divergence <sidecar>...\n")
             return None, None, 0
         if arg == "--plan":
             if i + 1 >= n or argv[i + 1] == "":
@@ -270,7 +270,35 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[str], Optional[str], Optional
     return plan_path, desc_flag, None
 
 
+_DIVERGED_TRUE_RE = re.compile(r"""["']?diverged["']?\s*:\s*true\b""", re.IGNORECASE)
+
+
+def _read_divergence(paths: List[str]) -> int:
+    """Print each sidecar's frontmatter; print the whole file when it carries
+    `diverged: true`, so the divergence prose is surfaced before any disposal.
+    Read-only. An unreadable path is named, never skipped silently (exit 1)."""
+    status = 0
+    for path in paths:
+        print(f"=== {path}")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as exc:
+            print(f"UNREADABLE: {exc.__class__.__name__}")
+            status = 1
+            continue
+        lines = text.split("\n")
+        end = next((i for i in range(1, len(lines)) if lines[i] == "---"), len(lines)) if lines and lines[0] == "---" else 0
+        front = "\n".join(lines[1:end]) if end else ""
+        print(f"frontmatter:\n{front}")
+        if _DIVERGED_TRUE_RE.search(front):
+            print("DIVERGED: full record follows\n" + text)
+    return status
+
+
 def main(argv: List[str]) -> int:
+    if argv and argv[0] == "--read-divergence":
+        return _read_divergence(argv[1:])
     plan_path, desc_flag, err = _parse_args(argv)
     if err is not None:
         return err

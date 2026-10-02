@@ -1600,10 +1600,9 @@ def apply_ship_stamps(
       2. `deployment_state -> shipped` (pickup_ready -> false) via
          `handoff.transition`'s `ship` verb — the SAME op
          `archive_stamp._call_handoff_transition` uses for every other
-         transition, called the identical way here. NEVER
-         `handoff.ship_and_archive` (git-mv + its own archival commit — see
-         this module's own top-of-section comment and the chunk body's
-         explicit exclusion).
+         transition, called the identical way here. Never a git-mv or an
+         archival commit of its own — see this module's own top-of-section
+         comment.
 
     Returns `(outcome, backups)` — `backups` is `{relpath: original_text}`,
     captured BEFORE either write, but ONLY for paths that reach full

@@ -14,8 +14,8 @@ _content_root, _doe_present = content_root_and_present()
 def _pin_content_root(monkeypatch):
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
-    monkeypatch.setattr(deny_guard, "coordinator_content_root", lambda: _content_root)
-    monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(deny_guard, "read_content_root", lambda: _content_root)
+    monkeypatch.setattr(advisory_guard, "read_content_root", lambda: _content_root)
 
 
 def _payload(tool_name, file_path, cwd, **tool_input_extra):

@@ -640,3 +640,32 @@ class TestRecordForPid:
         )
         sid, record = hr.self_record()
         assert (sid, record.pid, record.stable_pid_capture) == ("sid-self", 99, "env")
+
+
+@pytest.mark.skipif(
+    not __import__("sys").platform.startswith("linux"), reason="Linux /proc/stat shape"
+)
+class TestLinuxBootTicksProcStart:
+    """Cloud/managed-remote Linux records carry procStart as clock ticks since
+    boot (e.g. "798"); the registry must resolve them or a live session reads
+    as having no registry record."""
+
+    def _ticks_for(self, epoch):
+        btime = next(
+            int(line.split()[1])
+            for line in open("/proc/stat")
+            if line.startswith("btime ")
+        )
+        return int(round((epoch - btime) * os.sysconf("SC_CLK_TCK")))
+
+    def test_ticks_since_boot_string_resolves_to_epoch(self):
+        epoch = time.time() - 60
+        got = hr._proc_start_to_epoch(str(self._ticks_for(epoch)))
+        assert got == pytest.approx(epoch, abs=1.0)
+
+    def test_ticks_record_round_trips_through_lookup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(hr, "registry_dir", lambda: tmp_path)
+        epoch = time.time() - 60
+        _write_record(tmp_path, "9.json", "sid-ticks", 9, str(self._ticks_for(epoch)))
+        rec = hr.lookup("sid-ticks")
+        assert rec is not None and rec.start_epoch == pytest.approx(epoch, abs=1.0)

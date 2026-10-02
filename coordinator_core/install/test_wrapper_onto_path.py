@@ -203,13 +203,13 @@ def test_live_install_journals_the_running_platform_clause(wrapper_src, tmp_path
     journal = rj.read_journal()
     resolutions = journal["wrapper-onto-path"]
     running_idx = _running_platform_clause_index()
-    assert set(resolutions) == {running_idx}
+    assert set(resolutions) == {running_idx, _other_platform_clause_index()}
     entries = resolutions[running_idx].entries
     assert len(entries) == 1
     assert entries[0].kind == "file-path"
     assert entries[0].path == result["installed_path"]
 
-    assert _other_platform_clause_index() not in resolutions
+    assert resolutions[_other_platform_clause_index()].entries == ()
 
 
 def test_check_only_never_journals(wrapper_src, tmp_path, monkeypatch):
@@ -274,3 +274,19 @@ def test_fresh_process_import_does_not_trigger_ops_eager_import_cycle():
     assert result.returncode == 0, result.stderr
     assert "FAILED to import" not in result.stderr
     assert "circular import" not in result.stderr
+
+
+def test_kill_switch_refuses_the_install_write(tmp_path, monkeypatch):
+    src = tmp_path / "wrap"
+    src.write_text("#!/bin/sh\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    from coordinator_core.install import wrapper_onto_path as w
+
+    result = w._install_wrapper_onto_path({"wrapper_src": str(src)})
+    assert "error" in result
+    assert not (w._default_wrapper_bin_dir() / "wrap").exists()

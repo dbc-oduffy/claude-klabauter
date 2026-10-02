@@ -13,6 +13,7 @@ from typing import List, Optional
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -501,5 +502,5 @@ def test_forwarder_target_can_import_bin_lib_modules_from_a_bare_env(tmp_path):
         "PYTHONPATH", "COORDINATOR_ENGINE_ROOT", "MACHINE_LOCAL_REGISTRY_DIR")}
     env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
     result = subprocess.run([sys.executable, str(forwarder)], env=env,
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert result.stdout.strip() == "ok", result.stderr

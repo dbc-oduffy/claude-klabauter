@@ -7,7 +7,7 @@ Requires the sibling coordinator-content-repo checkout (for coordinator/schemas/
 registry manifest) — skipped entirely when absent, mirroring the advisory
 sibling's suite and the coordinator_core.testing.content_root convention.
 
-`coordinator_content_root` is monkeypatched to the resolved sibling root for
+`read_content_root` is monkeypatched to the resolved sibling root for
 every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
@@ -65,8 +65,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _pin_content_root(monkeypatch):
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
-    monkeypatch.setattr(guard, "coordinator_content_root", lambda: _content_root)
-    monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(guard, "read_content_root", lambda: _content_root)
+    monkeypatch.setattr(advisory_guard, "read_content_root", lambda: _content_root)
 
 
 def _payload(tool_name, file_path, cwd, **tool_input_extra):
@@ -116,7 +116,7 @@ class TestGateOnToolAndPayloadShape:
         assert guard.check({"tool_name": "Write", "tool_input": {}, "cwd": str(tmp_path)}) is None
 
     def test_content_root_unresolvable_fails_open(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
         result = guard.check(
             _payload("Write", str(tmp_path / "state" / "handoffs" / "x.md"), str(tmp_path),
                      content="---\ntitle: t\n---\nbody")
@@ -140,7 +140,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
         # Simulate absence via the resolver, never by touching/moving the
         # real sibling checkout — see plan C2's "never by moving the real
         # clone" instruction.
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
 
     def test_schema_shape_violation_still_warns_under_strict_with_sibling_absent(
         self, tmp_path, monkeypatch
@@ -193,7 +193,7 @@ class TestSchemaCorpusSourcePinned:
     test alone would silently pass again the moment DoE's live corpus and
     claude-klabauter's vendored copy happen to agree, exactly the trap the plan names.
     Asserts the guard's resolved schemas directory is the in-repo vendored
-    path and is never derived from `coordinator_content_root()`.
+    path and is never derived from `read_content_root()`.
     """
 
     def test_resolved_schemas_dir_is_the_vendored_in_repo_path(self):
@@ -210,13 +210,13 @@ class TestSchemaCorpusSourcePinned:
         # change the resolved schema corpus -- pinning the SOURCE, not merely
         # today's behavioural agreement between the two corpora.
         fake_content_root = str(tmp_path / "not-a-real-coordinator-content-repo-checkout")
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_content_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: fake_content_root)
         ctx = guard._load_context()
         assert ctx is not None
         assert ctx.schemas_dir == guard._VENDORED_SCHEMAS_DIR
         assert "coordinator" not in ctx.schemas_dir.parts
 
-    def test_resolved_schemas_dir_is_never_derived_from_coordinator_content_root(self):
+    def test_resolved_schemas_dir_is_never_derived_from_read_content_root(self):
         ctx = guard._load_context()
         assert ctx is not None
         # The vendored corpus lives under claude-klabauter's own frontmatter/ tree,
@@ -365,7 +365,7 @@ class TestTornWriteRetry:
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
         fake_root = str(tmp_path / "nonexistent-coordinator-content-repo-root")
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
         )
@@ -452,7 +452,7 @@ class TestOwnInboxCasefoldBypass:
         canonical_content_root = str(tmp_path / "content-root-casefold-proof")
         aliased_repo_root = str(tmp_path / "CONTENT-ROOT-CASEFOLD-PROOF")
 
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: canonical_content_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: canonical_content_root)
 
         repo_rel = "cross-repo/inbox/2099-01-01-fake-casefold-bypass-test.md"
         abs_file_path = f"{aliased_repo_root}/{repo_rel}"
@@ -478,7 +478,7 @@ class TestOwnInboxCasefoldBypass:
         central_id = ctx.central_canonical_id
 
         canonical_content_root = str(tmp_path / "content-root-casefold-proof-control")
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: canonical_content_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: canonical_content_root)
 
         repo_rel = "cross-repo/inbox/2099-01-01-fake-casefold-control-test.md"
         abs_file_path = f"{canonical_content_root}/{repo_rel}"
@@ -745,7 +745,7 @@ class TestDenyForensicsCapture:
         would reintroduce a per-write tax on exactly the machines least able
         to afford one.
         """
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
         fp = tmp_path / "state" / "handoffs" / "x.md"
         fp.parent.mkdir(parents=True, exist_ok=True)
         result = guard.check(_payload("Write", str(fp), str(tmp_path), content="---\ntitle: t\n---\nbody"))
@@ -1161,7 +1161,7 @@ class TestPlanTasksSpineDeny:
             # dispositions. Present so the ONLY variable this test isolates stays the
             # pm_approved-required branch. NOTE: this fixture tracks DoE's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_content_root(), so a DoE-side bump reaches them with no re-vendor.
+            # read_content_root(), so a DoE-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )
@@ -2151,15 +2151,15 @@ class TestQueueDeferralDenyIsClaudeKlabauterScoped:
     def test_a_sibling_repos_ceremony_park_is_not_denied(self, tmp_path, monkeypatch):
         sibling = tmp_path / "coordinator-content-repo"
         (sibling / "state" / "debt-backlog").mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
-        monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "read_content_root", lambda: str(sibling))
+        monkeypatch.setattr(advisory_guard, "read_content_root", lambda: str(sibling))
         assert guard.check(self._payload(sibling)) is None
 
     def test_the_same_payload_is_denied_in_our_own_tree(self, tmp_path, monkeypatch):
         """The other half — scoping must not have disabled the rule at home."""
         sibling = tmp_path / "coordinator-content-repo"
         (sibling / "state" / "debt-backlog").mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "read_content_root", lambda: str(sibling))
         result = guard.check(self._payload(Path.cwd()))
         assert result is not None
         assert "case_against" in _assert_deny_shape(result)
@@ -2167,7 +2167,7 @@ class TestQueueDeferralDenyIsClaudeKlabauterScoped:
     def test_evaluator_declines_on_a_doe_owned_root(self, tmp_path, monkeypatch):
         sibling = tmp_path / "coordinator-content-repo"
         sibling.mkdir(parents=True)
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: str(sibling))
+        monkeypatch.setattr(guard, "read_content_root", lambda: str(sibling))
         fm = {"status": "deferred", "pm_approved": True, "deferred_by": "/debt-triage x",
               "deferred_until": "2026-12-31", "why_blocked": "w"}
         assert guard._evaluate_queue_deferral_grant(
@@ -2180,7 +2180,7 @@ class TestQueueDeferralDenyIsClaudeKlabauterScoped:
         sibling is not, and neither is a rule that quietly stops working."""
         def _boom():
             raise RuntimeError("registry unavailable")
-        monkeypatch.setattr(guard, "coordinator_content_root", _boom)
+        monkeypatch.setattr(guard, "read_content_root", _boom)
         assert guard._is_doe_owned_repo(str(Path.cwd())) is False
         result = guard.check(self._payload(Path.cwd()))
         assert result is not None, "guard stopped enforcing when DoE root was unresolvable"

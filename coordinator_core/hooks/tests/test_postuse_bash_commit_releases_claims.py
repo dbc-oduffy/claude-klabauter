@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -37,14 +38,14 @@ SESSION = "sess-r03-bash-commit"
 def _init_repo(repo_root: Path) -> None:
     import subprocess
 
-    subprocess.run(["git", "init", "-q"], cwd=str(repo_root), check=True)
+    subprocess.run(["git", "init", "-q"], cwd=str(repo_root), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
         cwd=str(repo_root),
-        check=True,
+        check=True, **no_console_passthrough_kwargs(),
     )
     subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=str(repo_root), check=True
+        ["git", "config", "user.name", "Test"], cwd=str(repo_root), check=True, **no_console_passthrough_kwargs(),
     )
 
 
@@ -90,7 +91,7 @@ def test_not_landed_via_explicit_exit_code_nonzero(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_landed_via_git_state_fallback_when_committed(tmp_path):
+def test_landed_via_git_state_fallback_when_committed(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -98,11 +99,20 @@ def test_landed_via_git_state_fallback_when_committed(tmp_path):
     target.write_text("x = 1\n", encoding="utf-8")
     import subprocess
 
-    subprocess.run(["git", "add", "foo.py"], cwd=str(repo), check=True)
+    subprocess.run(["git", "add", "foo.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
     subprocess.run(
-        ["git", "commit", "-m", "msg", "--", "foo.py"], cwd=str(repo), check=True
+        ["git", "commit", "-m", "msg", "--", "foo.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs(),
     )
+    spawns = []
+    real_popen = subprocess.Popen
+
+    def _counting(*a, **k):
+        spawns.append(a)
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", _counting)
     assert pad._bash_commit_landed("", ["foo.py"], str(repo)) is True
+    assert spawns == []
 
 
 @pytest.mark.spawns_process
@@ -115,9 +125,23 @@ def test_not_landed_via_git_state_fallback_when_still_staged(tmp_path):
     target.write_text("x = 1\n", encoding="utf-8")
     import subprocess
 
-    subprocess.run(["git", "add", "foo.py"], cwd=str(repo), check=True)
+    subprocess.run(["git", "add", "foo.py"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
     # No commit landed -- the path is still staged (diverges from HEAD).
     assert pad._bash_commit_landed("", ["foo.py"], str(repo)) is False
+
+
+def test_directory_pathspec_is_not_landed(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "d").mkdir()
+    (repo / "d" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "d"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-m", "msg"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+    assert pad._bash_commit_landed("", ["d"], str(repo)) is False
+    assert pad._bash_commit_landed("", ["foo.py"], str(repo / "d")) is True
 
 
 def test_not_landed_via_git_state_fallback_with_no_paths(tmp_path):

@@ -44,7 +44,7 @@ no longer has a stop-event trigger, so it cannot catch the session that dies
 without committing — `/workday-complete`'s dirty-tree sweep
 (`coordinator_core/ops/workday_complete_step2_5_dirty_tree.py`) is the named
 backstop for that case, and retiring the unattended trigger was accepted on
-exactly that basis. See `docs/wiki/scoped-safety-commits.md` § 3b.
+exactly that basis. See `coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md` § 3b.
 `coordinator/hooks/scripts/sessionend-auto-commit.py` (coordinator-content-repo side) still
 exists on disk but is NO LONGER REGISTERED and no longer calls this module —
 do not read it as a live caller.
@@ -1734,13 +1734,10 @@ async def _commit_group(
             "declared_absent_from_head": absent_from_head,
         }
     # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
-    if session_id and outcome.sha is not None:
-        try:
-            scope_module.release_committed_claims(
-                session_id, list(group["paths"]), cwd=str(worktree_root)
-            )
-        except Exception:  # noqa: BLE001 -- see NEGATIVE SPEC above
-            pass
+    if outcome.sha is not None:
+        scope_module.release_committed_claims_or_retain(
+            worktree_root, group["paths"], session_id, "safe_commit_offer"
+        )
 
     return {
         "paths": group["paths"],

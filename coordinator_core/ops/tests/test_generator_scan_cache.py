@@ -144,7 +144,9 @@ def _write_fixture_module(root: Path, name: str, body: str) -> Path:
     sweep_dir = root / "coordinator_core"
     sweep_dir.mkdir(parents=True, exist_ok=True)
     module_path = sweep_dir / name
-    module_path.write_text(body, encoding="utf-8")
+    # Bytes, not write_text: text mode translates LF to CRLF on Windows, so the
+    # on-disk bytes would stop matching the content hash the tests compute.
+    module_path.write_bytes(body.encode("utf-8"))
     return module_path
 
 
@@ -417,7 +419,7 @@ def test_load_content_cache_missing_file_returns_empty(tmp_path: Path, monkeypat
 def test_load_content_cache_wrong_schema_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "generator-content-cache.json"
     monkeypatch.setattr(cache, "_content_cache_path", lambda: path)
-    path.write_text(json.dumps({"schema": cache._SCHEMA_VERSION - 1, "entries": {}}), encoding="utf-8")
+    path.write_text(json.dumps({"schema": f"{cache._SCHEMA_VERSION}-stale", "entries": {}}), encoding="utf-8")
     assert cache.load_content_cache() == {}
 
 

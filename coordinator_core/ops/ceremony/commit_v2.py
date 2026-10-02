@@ -102,9 +102,6 @@ from coordinator_core.write_guards.guard_class_relay import (
     detect_class_transition,
     stage_class_transition_memo,
 )
-import logging
-
-_LOG = logging.getLogger(__name__)
 
 #: Prefix filter for the guard-class-relay step below. ONLY paths under this
 #: directory can carry a `write_guards` CLASS constant -- this string compare
@@ -278,20 +275,37 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
     """
     if not released:
         return
-    try:
-        sid = session_core.resolve_session_id(str(worktree_root))
-        if sid:
-            session_scope.release_committed_claims(
-                sid, released, cwd=str(worktree_root)
-            )
-    except Exception:
-        _LOG.debug(
-            "commit_v2: release_committed_claims failed post-commit; "
-            "claim(s) retained", exc_info=True,
-        )
+    session_scope.release_committed_claims_or_retain(
+        worktree_root,
+        released,
+        session_core.resolve_session_id(str(worktree_root)),
+        "commit_v2",
+    )
 
 
-def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
+#: Body line naming a live peer's write-claimed path this commit carried. The
+#: harmed party is the peer, not the committer: the warning reaches only the
+#: committer's response, so history carries the fact where the peer and any later
+#: audit can grep it. A body line, not a trailer: a new trailer key is a contract
+#: bump (commit-trailer-producer-contract.md section 5.2, widen-before-flip).
+ABSORBED_PEER_CLAIM_PREFIX = "Absorbed-Peer-Claim"
+
+
+def _disclose_peer_holds(message: str, peer_holds: list) -> str:
+    """Insert one disclosure line per live peer hold after the subject
+    paragraph, so any trailer block stays last."""
+    if not peer_holds:
+        return message
+    lines = "\n".join(f"{ABSORBED_PEER_CLAIM_PREFIX} {sid} {path}" for path, sid in peer_holds)
+    head, sep, rest = message.partition("\n\n")
+    if not sep:
+        return f"{message.rstrip(chr(10))}\n\n{lines}\n"
+    return f"{head}\n\n{lines}\n\n{rest}"
+
+
+def _peer_claim_warnings(
+    worktree_root: Path, paths: list, peer_holds: Optional[list] = None
+) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant,
     before ``commit_paths`` runs. Reports a live peer's hold; never refuses, never spawns, never raises:
     a lookup failure or ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning.
@@ -329,6 +343,8 @@ def _peer_claim_warnings(worktree_root: Path, paths: list) -> list:
                 warnings.append(f"claim state indeterminate for {path!r}")
                 continue
             if live:
+                if peer_holds is not None:
+                    peer_holds.append((path, sid))
                 if sid not in live_peers:
                     live_peers.append(sid)
                 warnings.append(
@@ -369,8 +385,7 @@ def _pre_commit_gates(
     `op_scope_coverage_gate` judge the tree this commit lands, never the worktree
     or the index. Of the Bash path's checks only 7, 11 and 12 move here
     (the three newest gates); 5, 13 and 14 are subsumed by construction, 8 is
-    advisory, and 9, 10 and 15 do not apply to this route. The per-check matrix
-    is docs/plans/2026-09-30-commit-tripwires-on-engine-commit-path.md.
+    advisory, and 9, 10 and 15 do not apply to this route.
 
     `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
     which ran none, and the resulting capability drop was filed as a P1
@@ -675,8 +690,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
 
     # A live peer holding a named path is reported, never refused.
+    peer_holds: list = []
     peer_claim_warnings = _peer_claim_warnings(
-        worktree_root, list(raw_paths) + raw_removed
+        worktree_root, list(raw_paths) + raw_removed, peer_holds
     )
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
@@ -720,6 +736,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     #
     # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
     # `outcome.sign_warning` is surfaced into `warnings` below.
+    message = _disclose_peer_holds(message, peer_holds)
     message = apply_missing_trailers(
         message,
         worktree_root,

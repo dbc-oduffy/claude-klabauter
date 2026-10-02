@@ -800,3 +800,55 @@ def git_blob_sha1(text: str) -> Optional[str]:
 
 def canonical_body_sha(file_text: str) -> Optional[str]:
     return git_blob_sha1(frontmatter_body_text(file_text))
+
+
+APPROVED_BODY_OK = "ok"
+APPROVED_BODY_CHANGED = "changed"
+APPROVED_BODY_UNVERIFIABLE = "unverifiable"
+APPROVED_BODY_NOT_APPLICABLE = "n/a"
+
+
+def stamp_approved_body_sha(file_text: str) -> str:
+    """`file_text` with `approved_body_sha` set to its current body sha.
+
+    Frontmatter is excluded from the hash, so the stamp does not move it.
+    Returns the text unchanged when it has no parseable frontmatter."""
+    sha = canonical_body_sha(file_text)
+    split = split_frontmatter(file_text)
+    if sha is None or split is None:
+        return file_text
+    if read_fm_field(split.fm_text, 'approved_body_sha') is not None:
+        fm = replace_fm_field(split.fm_text, 'approved_body_sha', sha, numeric_quoting=True)
+    else:
+        fm = insert_fm_field(
+            split.fm_text, 'approved_body_sha', sha, after_key='status', numeric_quoting=True
+        )
+    return rebuild(split, fm)
+
+
+def check_approved_body(file_text: str) -> tuple[str, str]:
+    """`(state, message)` for a plan's body against its `approved_body_sha`.
+
+    The one predicate every execution gate calls. `changed` is a refusal
+    (body edited after plan review); `unverifiable` is a warning (an
+    approved/executing plan with no stamp); `ok` and `n/a` are silent."""
+    split = split_frontmatter(file_text)
+    if split is None:
+        return APPROVED_BODY_NOT_APPLICABLE, ''
+    stamped = read_fm_field_unquoted(split.fm_text, 'approved_body_sha')
+    if not stamped:
+        status = (read_fm_field_unquoted(split.fm_text, 'status') or '').lower()
+        if status in ('approved', 'executing'):
+            return (
+                APPROVED_BODY_UNVERIFIABLE,
+                'approved_body_sha absent: body unchanged-since-review is unverifiable',
+            )
+        return APPROVED_BODY_NOT_APPLICABLE, ''
+    current = canonical_body_sha(file_text)
+    if current == stamped.lower():
+        return APPROVED_BODY_OK, ''
+    return (
+        APPROVED_BODY_CHANGED,
+        f'plan body changed since approval (approved_body_sha {stamped[:12]}, now '
+        f'{(current or "?")[:12]}): re-run plan review to re-approve',
+    )

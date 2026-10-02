@@ -70,13 +70,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.doctrine_surface_tiers import admission_cap_for, tier_boundaries_for
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks.claude_md_ledger import (
     GOVERNED_AUTHORING_SURFACES,
     admission_check_for_surface,
@@ -111,9 +111,6 @@ _ACCUMULATOR_KEY_BY_SCOPE = {
     CREDIT_SCOPE_FILE: "sub_floor_accumulator_file",
 }
 
-_NO_CONSOLE_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
 def _load_split_recognizer():
     repo_root = _resolve_doctrine_repo_root()
     if repo_root is None:
@@ -127,15 +124,11 @@ def _load_split_recognizer():
     return module.is_sanctioned_split
 
 
-def _run_git(args: "list[str]") -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        check=True,
-        creationflags=_NO_CONSOLE_WINDOW,
-    )
-    return result.stdout.decode("utf-8", errors="replace")
+def _git_stdout(args: "list[str]") -> str:
+    result = run_git(args, cwd=str(REPO_ROOT), binary=True)
+    if not result.ok:
+        raise RuntimeError(f"git {args[0]} rc={result.returncode}")
+    return result.stdout_bytes.decode("utf-8", errors="replace")
 
 
 def _blob_sizes_batch(oids: "set[str]") -> "dict[str, int]":
@@ -148,13 +141,10 @@ def _blob_sizes_batch(oids: "set[str]") -> "dict[str, int]":
             real_oids.append(oid)
     if not real_oids:
         return sizes
-    result = subprocess.run(
-        ["git", "cat-file", "--batch-check"],
+    result = run_git(
+        ["cat-file", "--batch-check"],
         cwd=str(REPO_ROOT),
-        input="\n".join(real_oids) + "\n",
-        capture_output=True,
-        text=True,
-        creationflags=_NO_CONSOLE_WINDOW,
+        input=("\n".join(real_oids) + "\n").encode("utf-8"),
     )
     for line in result.stdout.splitlines():
         parts = line.split(" ")
@@ -218,14 +208,12 @@ def _cat_file_contents_batch(oids: "set[str]") -> "dict[str, bytes]":
             real_oids.append(oid)
     if not real_oids:
         return contents
-    result = subprocess.run(
-        ["git", "cat-file", "--batch"],
+    result = run_git(
+        ["cat-file", "--batch"],
         cwd=str(REPO_ROOT),
         input=("\n".join(real_oids) + "\n").encode("utf-8"),
-        capture_output=True,
-        creationflags=_NO_CONSOLE_WINDOW,
     )
-    data = result.stdout
+    data = result.stdout_bytes
     pos = 0
     for oid in real_oids:
         nl = data.index(b"\n", pos)
@@ -478,7 +466,7 @@ def _emit_governed_admission_denials(governed_admission_denials: "list[str]") ->
 
 def main() -> int:
     try:
-        raw = _run_git(["diff", "--cached", "--raw", "-z", "-M"])
+        raw = _git_stdout(["diff", "--cached", "--raw", "-z", "-M"])
     except Exception:
         return 0
 

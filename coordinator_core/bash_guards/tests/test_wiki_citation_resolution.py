@@ -37,7 +37,7 @@ pinned criterion, whatever that regex currently is.
 Opt-in on the coordinator-content-repo sibling checkout, same shape as
 `test_folded_guard_transport_parity.py`: every case importing the cold
 resolver skips (never silently passes) on an install with no sibling repo
-resolved by `coordinator_content_root()`.
+resolved by `resolve_content_root()`.
 """
 from __future__ import annotations
 
@@ -50,22 +50,22 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as _guard
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.testing.content_root import resolve_content_root
 
-_CONTENT_ROOT = coordinator_content_root()
-_DOE_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
+_CONTENT_ROOT = resolve_content_root() or None
+_CONTENT_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
 
 _SKIP_REASON = (
     "opt-in fixture: no coordinator-content-repo sibling checkout resolved by "
-    "coordinator_content_root() -- this file compares the warm resolver's "
+    "resolve_content_root() -- this file compares the warm resolver's "
     "output against cold's own `_message_envelope.resolve_wiki_citation()`, "
     "which lives only in that sibling repo."
 )
 
 
 def _load_cold_message_envelope() -> Any:
-    assert _DOE_HOOKS_DIR is not None
-    module_path = _DOE_HOOKS_DIR / "_message_envelope.py"
+    assert _CONTENT_HOOKS_DIR is not None
+    module_path = _CONTENT_HOOKS_DIR / "_message_envelope.py"
     spec = importlib.util.spec_from_file_location(
         "_doe_message_envelope_for_parity_test", module_path
     )

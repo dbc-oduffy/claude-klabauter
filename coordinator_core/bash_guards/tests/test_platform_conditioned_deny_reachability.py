@@ -44,10 +44,15 @@ Spec backlink (governing decision): docs/decisions/DR-280-unreachable-deny-legs-
 from __future__ import annotations
 
 import json
+import tempfile
+import uuid
+from pathlib import Path
 
 import pytest
 
+from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
+from coordinator_core.bash_guards.tests import guard_message_corpus as corpus
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -64,11 +69,15 @@ _MULTIPROBE_UNRECOGNIZED_CMD = (
 
 _PLUMBING_CONFIRMED_CMD = "find . -type f | head -n 5"
 
-#: `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped, but
-#: `docker` is not a recognized upstream generator for
-#: `check_head_tail_plumbing_rewrite`, so that seam returns a bare
-#: advisory (no `updatedInput`) -- exercises the "unrecognized shape" case.
-_PLUMBING_UNRECOGNIZED_CMD = "docker ps | head -n 20"
+#: `xargs -n1 stat | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped, but
+#: `xargs` is not a recognized upstream generator for
+#: `check_head_tail_plumbing_rewrite`, so that seam yields no `updatedInput`
+#: -- exercises the "unrecognized shape" case. `xargs` is multi-spawn, so the
+#: guard's generic advisory still fires.
+_PLUMBING_UNRECOGNIZED_CMD = "xargs -n1 stat | head -n 20"
+
+#: A single-process upstream: no outlet is cheaper than the command itself.
+_PLUMBING_SINGLE_PROCESS_CMD = "docker ps | head -n 20"
 
 
 def _payload(command):
@@ -181,8 +190,109 @@ class TestPlumbingAndLoopsChainReachability:
         assert _decision(out) == "allow"
         assert "additionalContext" in out["hookSpecificOutput"]
 
+    @pytest.mark.parametrize("host_is_windows", [True, False])
+    def test_single_process_upstream_stays_silent(self, host_is_windows):
+        out = evaluate_payload_json(
+            _payload(_PLUMBING_SINGLE_PROCESS_CMD), host_is_windows=host_is_windows
+        )
+        assert out is None
+
     def test_macos_leg_never_denies(self):
         out = evaluate_payload_json(
             _payload(_PLUMBING_CONFIRMED_CMD), host_is_windows=False
         )
         assert out is None or _decision(out) != "deny"
+
+
+#: Fail-closed guards with no `-fire` corpus row. Shrink-only: an entry leaves
+#: when its row lands, and a new fail-closed guard may not join.
+_NO_FIRE_ROW_YET = frozenset(
+    {
+        "block-disarm-marker-sentinel-creation",
+        "block-stash-destruction",
+        "block-subagent-stash-creation",
+    }
+)
+
+#: Fail-closed guards whose isolated deny the real chain intercepts with a
+#: rewrite or advisory first (DR-280); the classes above characterize them.
+_CHAIN_SHADOWED = frozenset({"multiprobe-banner", "plumbing-and-loops"})
+
+
+def _fail_closed_entries():
+    chain = dispatch._build_guard_chain(
+        cmd="echo reachability-probe",
+        session_id="reachability-probe",
+        cwd="/tmp",
+        payload={"tool_name": "Bash", "tool_input": {"command": "echo x"}},
+        policy_file=None,
+        host_is_windows=None,
+    )
+    return [e for e in chain if e.fail_closed]
+
+
+def _fire_rows():
+    rows = corpus.CONFINEMENT_ROWS + corpus.PLATFORM_CONDITIONED_ROWS
+    return {r.guard: r for r in rows if r.expected_speaker and r.row_id.endswith("-fire")}
+
+
+def _verdict(out):
+    if isinstance(out, dict):
+        return out.get("hookSpecificOutput", {}).get("permissionDecision")
+    return None
+
+
+def _fire(row):
+    """Return (isolated verdict, chain verdict) for one corpus fire row."""
+    sid = "reachability-%s" % uuid.uuid4().hex
+    with tempfile.TemporaryDirectory(dir=corpus._neutral_scratch_parent()) as scratch:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("CLAUDE_CODE_SESSION_ID", sid)
+            extra = dict(row.setup(Path(scratch), mp)) if row.setup else {}
+            cmd = extra.pop(corpus._CMD_OVERRIDE_KEY, row.input)
+            cwd = extra.pop(corpus._CWD_OVERRIDE_KEY, scratch)
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": cmd},
+                "session_id": sid,
+                "cwd": cwd,
+            }
+            payload.update(extra)
+            isolated = corpus.capture_one_guard(
+                row.guard, cmd, sid, cwd, payload, host_is_windows=row.host_is_windows
+            )
+            chain_out = evaluate_payload_json(
+                json.dumps(payload), host_is_windows=row.host_is_windows
+            )
+    return _verdict(isolated.envelope), _verdict(chain_out)
+
+
+def test_fail_closed_enumeration_is_non_empty():
+    assert _fail_closed_entries()
+
+
+def test_every_fail_closed_guard_has_a_fire_row_or_a_ledger_entry():
+    rows = _fire_rows()
+    missing = {e.name for e in _fail_closed_entries() if e.name not in rows}
+    assert missing == _NO_FIRE_ROW_YET
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(
+        e.name
+        for e in _fail_closed_entries()
+        if e.name not in _NO_FIRE_ROW_YET and e.name not in _CHAIN_SHADOWED
+    ),
+)
+def test_a_deny_the_guard_issues_survives_the_chain(name):
+    isolated, via_chain = _fire(_fire_rows()[name])
+    if isolated != "deny":
+        assert via_chain != "deny"
+        return
+    assert via_chain == "deny", f"{name} denies in isolation but the chain returned {via_chain!r}"
+
+
+def test_shadowed_ledger_names_only_live_fail_closed_guards():
+    live = {e.name for e in _fail_closed_entries()}
+    assert _CHAIN_SHADOWED <= live

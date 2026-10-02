@@ -105,7 +105,12 @@ def _code_references(path: Path) -> list[int]:
     negative-specs that explain this rule do not trip it.
     """
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        text = path.read_text(encoding="utf-8")
+        # Every hit spells `_FORBIDDEN` in the source (attribute, identifier,
+        # or getattr key).
+        if _FORBIDDEN not in text:
+            return []
+        tree = ast.parse(text, filename=str(path))
     except (OSError, SyntaxError):
         return []
 

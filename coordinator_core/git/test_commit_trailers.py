@@ -1108,19 +1108,19 @@ def test_host_trailers_set_twice_keeps_order(tmp_path):
     assert commit_trailers.read_host_commit_trailers(repo) == ["Zed: 1", "Alpha: 2"]
 
 
-def test_host_trailers_exactly_one_git_spawn(tmp_path, monkeypatch):
+def test_host_trailers_zero_spawns(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     _git(["config", "coordinator.commitTrailer", "Ticket: ABC-1"], repo)
-    calls = []
-    real = commit_trailers._git_run.run_git
+    spawns = []
+    real_popen = subprocess.Popen
 
-    def counting(args, **kw):
-        calls.append(list(args))
-        return real(args, **kw)
+    def counting(*args, **kw):
+        spawns.append(args)
+        return real_popen(*args, **kw)
 
-    monkeypatch.setattr(commit_trailers._git_run, "run_git", counting)
-    commit_trailers.read_host_commit_trailers(repo)
-    assert len(calls) == 1
+    monkeypatch.setattr(subprocess, "Popen", counting)
+    assert commit_trailers.read_host_commit_trailers(repo) == ["Ticket: ABC-1"]
+    assert spawns == []
 
 
 def test_single_held_pickup_unchanged(tmp_path, monkeypatch, _live_session):

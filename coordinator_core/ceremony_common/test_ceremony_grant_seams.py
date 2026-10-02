@@ -129,7 +129,6 @@ def test_merge_grant_dispatch_tolerates_exit_1_but_not_usage_or_transport():
     from coordinator_core.session import grant_directive
 
     original = grant_directive.run_grant_directive
-    merge_apply_original = getattr(merge_apply, "_run_py_script", None)
     try:
         grant_directive.run_grant_directive = lambda args, repo_root=None: (1, "session id unresolvable")
         result = merge_apply._dispatch_tier_u_grant(["grant"], Path("."))
@@ -141,7 +140,6 @@ def test_merge_grant_dispatch_tolerates_exit_1_but_not_usage_or_transport():
             merge_apply._dispatch_tier_u_grant(["grant"], Path("."))
     finally:
         grant_directive.run_grant_directive = original
-        assert merge_apply_original is merge_apply._run_py_script
 
 
 def test_merge_grant_dispatch_spawns_no_subprocess():

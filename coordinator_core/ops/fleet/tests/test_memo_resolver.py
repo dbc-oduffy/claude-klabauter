@@ -80,15 +80,13 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
 
 
 def _install_doe_manifest(claude_home: Path, content_root: Path, manifest: dict) -> None:
-    """Install a DoE registry manifest at `content_root`, reachable via the DR-071 ladder.
+    """Install a DoE registry manifest at `content_root`, reachable via the content-root ladder.
 
     Points the ladder's durable rung (`<settings-home>/machine-local/.coordinator-content-root`)
-    at `content_root`. The pre-2026-07-28 fixture wrote `<CLAUDE_HOME>/.coordinator-content-root` —
-    a location no writer has written since `ops.gen_content_root_pointer` moved the
-    pointer under the settings home, and which `coordinator_core.content_root_pointer`
-    (the canonical resolver `_memo_resolver` consumes) has never read.
+    at `content_root`, the location `coordinator_core.content_root` (the canonical
+    resolver `_memo_resolver` consumes) reads.
 
-    Callers whose registry fixture registers `repos.content_root` must pass that
+    Callers whose registry fixture registers the doctrine repo must pass that
     same path as `content_root`: the registry rung outranks this file rung, exactly
     as on a real machine, where the two agree.
     """
@@ -322,7 +320,7 @@ class TestAmbiguousCentralReceiver:
         """Two distinct central ids both registered to DIFFERENT repos → fail loud.
 
         Manifest declares centralReceiverIds = ['central-em', 'coordinator-content-repo-em']; if the
-        machine-local registry has BOTH 'repos.central' and 'repos.content_root' populated
+        machine-local registry has BOTH 'repos.central' and the doctrine repo's key populated
         (a genuine misconfiguration/disagreement), the pre-C3 implementation picked one
         arbitrarily via unordered set iteration. Post-C3: raise, don't guess.
         """
@@ -349,7 +347,7 @@ class TestAmbiguousCentralReceiver:
         with pytest.raises(AmbiguousReceiverError) as exc_info:
             resolve_receiver_inbox("central-em")
         assert "repos.central" in exc_info.value.candidate_keys
-        assert "repos.content_root" in exc_info.value.candidate_keys
+        assert convention_repo_key("coordinator-content-repo-em") in exc_info.value.candidate_keys
 
     def test_single_central_id_registered_resolves_cleanly(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(
@@ -799,3 +797,48 @@ class TestUnregisteredSelfIdentityIsItsOwnLowercaseName:
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {})))
 
         assert resolve_self_em_id(repo) == "machine-c-em"
+
+
+class TestTwoKeysOneCloneAreOneReceiver:
+    _IDS = ["coordinator-content-repo-em", "content-root-em"]
+
+    def test_symlinked_and_trailing_slash_spellings_dedupe(self, tmp_path, monkeypatch):
+        doe = tmp_path / "coordinator-content-repo-repo"
+        doe.mkdir()
+        link = tmp_path / "doe-link"
+        link.symlink_to(doe)
+        claude_home = _make_claude_home(tmp_path, {"content_root": doe, "content_root": link})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _install_doe_manifest(
+            claude_home, doe,
+            {"identity": {"centralReceiverIds": self._IDS, "repoAliases": []}},
+        )
+        _, repo, _ = resolve_receiver_inbox("coordinator-content-repo-em")
+        assert repo is not None and same_repo_path(repo, doe)
+
+
+class TestPublishedSpellingOfCentralReceiver:
+    """The published engine scrubs `coordinator-content-repo` to `content-root`, so a published
+    install registers `repos.content_root`; the DoE manifest lists both central ids."""
+
+    _IDS = ["coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"]
+
+    def _setup(self, tmp_path, monkeypatch, keys):
+        doe = tmp_path / "coordinator-content-repo-repo"
+        claude_home = _make_claude_home(tmp_path, {k: doe for k in keys})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _install_doe_manifest(
+            claude_home, doe,
+            {"identity": {"centralReceiverIds": self._IDS, "repoAliases": []}},
+        )
+        return doe
+
+    @pytest.mark.parametrize("keys", [
+        ["content_root"], ["content_root"], ["coordinator_content_repo"],
+        ["content_root", "content_root"],
+    ])
+    def test_both_spellings_resolve(self, tmp_path, monkeypatch, keys):
+        doe = self._setup(tmp_path, monkeypatch, keys)
+        for rid in self._IDS:
+            _, repo, _ = resolve_receiver_inbox(rid)
+            assert repo == doe, (rid, keys)

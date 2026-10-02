@@ -87,7 +87,6 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.content_root_pointer import read_content_root_pointer_file
 from coordinator_core.git import repo_root as _repo_root_seam
-from coordinator_core.git import run as _git_run
 from coordinator_core.session import core as _session_core
 
 _UUID_RE = re.compile(
@@ -550,7 +549,7 @@ def _held_pickup_deliverable_ids(git_dir: str, session_id: str) -> List[str]:
             if not cs_claim_holder_live(str(claim_dir)):
                 continue
             holder = (claim_dir / "session_id").read_text(encoding="utf-8").strip()
-        except Exception:
+        except (OSError, UnicodeDecodeError, ValueError):
             continue
         if holder != session_id:
             continue
@@ -955,7 +954,7 @@ def read_trailer_value(
     try:
         with open(commit_msg_file, encoding="utf-8") as fh:
             text = fh.read()
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
     for line in _extract_trailer_block(text):
         if line.startswith(prefix):
@@ -964,19 +963,65 @@ def read_trailer_value(
     return None
 
 
+def _host_trailer_config_files(repo_root: Union[str, Path]) -> List[Path]:
+    """System, global, then the repo's common-dir config -- git's precedence order."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    files: List[Path] = [Path("/etc/gitconfig")]
+    global_override = os.environ.get("GIT_CONFIG_GLOBAL")
+    if global_override:
+        files.append(Path(global_override))
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        home = Path(os.path.expanduser("~"))
+        files.append(Path(xdg) / "git" / "config" if xdg else home / ".config" / "git" / "config")
+        files.append(home / ".gitconfig")
+    try:
+        files.append(resolve_git_common_dir(repo_root) / "config")
+    except Exception:
+        files.append(Path(repo_root) / ".git" / "config")
+    return files
+
+
 def read_host_commit_trailers(repo_root: Union[str, Path]) -> List[str]:
     """Trailer lines the emitting repo declares via the multi-valued git key
     `coordinator.commitTrailer`, in config order.
 
     Each value is a whole trailer line (`Key: value`) copied verbatim, never
-    parsed or rewritten. Absent key, or any git failure, means no trailers:
-    `[]`. One git spawn."""
-    result = _git_run.run_git(
-        ["-C", str(repo_root), "config", "--get-all", "coordinator.commitTrailer"]
-    )
-    if not result.ok:
+    parsed or rewritten. Absent key or any read failure means no trailers:
+    `[]`. Zero spawns: parsed from the config files directly.
+
+    Negative spec: `include`/`includeIf` targets are not followed and `-c` /
+    `GIT_CONFIG_*` overrides are not seen."""
+    from coordinator_core.git.commit_signing import _strip_inline_comment
+
+    values: List[str] = []
+    try:
+        files = _host_trailer_config_files(repo_root)
+    except Exception:
         return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    for config_path in files:
+        try:
+            text = config_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        in_section = False
+        for raw in text.splitlines():
+            line = _strip_inline_comment(raw).strip()
+            if line.startswith("["):
+                in_section = line.lower().startswith("[coordinator]")
+                continue
+            if not in_section or not line:
+                continue
+            key, sep, value = line.partition("=")
+            if not sep or key.strip().lower() != "committrailer":
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                value = value[1:-1]
+            if value:
+                values.append(value)
+    return values
 
 
 _CLOSES_LINE_RE = re.compile(r"^Closes:\s*(.+?)\s*$")

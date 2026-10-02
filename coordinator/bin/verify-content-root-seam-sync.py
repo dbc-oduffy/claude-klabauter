@@ -15,7 +15,7 @@ trusted prefix) — this script verifies the `.coordinator-content-root` POINTER
 Mirrors that retired script's --list/--dry-run/--fix CLI contract and
 corpus-wide grep-discovery shape (dynamic-discovery, not registry-enrolled —
 see
-docs/wiki/coordinator-tripwires.md § CLAUDE-PLUGIN-ROOT-SOURCE-GUARD for the
+the coordinator content repo's coordinator/docs/wiki/coordinator-tripwires.md § CLAUDE-PLUGIN-ROOT-SOURCE-GUARD for the
 established rationale, which applies equally here).
 
 TWO POPULATIONS (Review: the Director of Engineering F1, docs/plans/2026-07-21-durable-coordinator-

@@ -430,16 +430,7 @@ class TestNoUnlockExistsStatement:
         assert result is None
 
 
-def _fired_route(monkeypatch, repo_root: Path, new_strings: list[str]) -> str:
-    """Which deny branch of check() fired: "close" or "continuation".
-
-    Read off sentinel reason builders, never off the operator-facing prose,
-    so re-wording either message cannot masquerade as a predicate change.
-    """
-    monkeypatch.setattr(guard, "_close_route_reason", lambda *_: "ROUTE:close")
-    monkeypatch.setattr(
-        guard, "_continuation_route_reason", lambda *_: "ROUTE:continuation"
-    )
+def _payload_for(repo_root: Path, new_strings: list[str]) -> dict:
     rel = "state/handoffs/2026-07-20_120000_abc.md"
     if len(new_strings) == 1:
         tool_input = {"file_path": rel, "old_string": "x", "new_string": new_strings[0]}
@@ -452,9 +443,20 @@ def _fired_route(monkeypatch, repo_root: Path, new_strings: list[str]) -> str:
             ]
         }
         tool_name = "MultiEdit"
-    result = guard.check(
-        {"tool_name": tool_name, "tool_input": tool_input, "cwd": str(repo_root)}
+    return {"tool_name": tool_name, "tool_input": tool_input, "cwd": str(repo_root)}
+
+
+def _fired_route(monkeypatch, repo_root: Path, new_strings: list[str]) -> str:
+    """Which deny branch of check() fired: "close" or "continuation".
+
+    Read off sentinel reason builders, never off the operator-facing prose,
+    so re-wording either message cannot masquerade as a predicate change.
+    """
+    monkeypatch.setattr(guard, "_close_route_reason", lambda *_: "ROUTE:close")
+    monkeypatch.setattr(
+        guard, "_continuation_route_reason", lambda *_: "ROUTE:continuation"
     )
+    result = guard.check(_payload_for(repo_root, new_strings))
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason.startswith("ROUTE:")

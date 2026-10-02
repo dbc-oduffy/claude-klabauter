@@ -251,19 +251,13 @@ CANONICAL_LOG_RELPATH: str = "state/distillation-log.md"
 # rows to state/distillation-log.md, and rewrites surviving parents'
 # disposed_successors frontmatter under state/handoffs/.
 #
-# `state/distillation-log.md` stays a concrete `MUTATES` path, not a
-# `GENERATES` entry, by design: this module appends rows to it
-# (`_delete_tracked_and_append_log` -> `log_append.append_rows`), it does not
-# emit the file. Its head is a `# Columns:` comment, not a stamp field, so
-# there is no fixed artifact to stamp. `generator_provenance.py ::
-# _build_record` therefore scores this module UNDECLARED
-# (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md, P012-C5)
-# -- an accepted outcome, not a gap: an append-only ledger has no honest
-# declaration under the checker's current vocabulary. Filed to C6's
-# checker-vocabulary finding. Do not add `GENERATES = []` (the module
-# writes) and do not rewrite this path as a glob to dodge
-# `_mutates_concrete_patterns`.
-MUTATES = ["state/distillation-log.md", "state/handoffs/**/*.md", "docs/wiki/**/*.md"]
+# `state/distillation-log.md` is `MUTATES_APPEND`, not a `GENERATES` entry: this
+# module appends rows to it (`_delete_tracked_and_append_log` ->
+# `log_append.append_rows`), it does not emit the file, and its head is a
+# `# Columns:` comment, not a stamp field. Do not add `GENERATES = []` (the
+# module writes).
+MUTATES_APPEND = ["state/distillation-log.md"]
+MUTATES = ["state/handoffs/**/*.md", "docs/wiki/**/*.md"]
 
 #: Wiki-tree path prefix (forward-slash) — the OTHER acceptable containment
 #: target for drain-ordering (a harvest commit may touch wiki guides instead
@@ -277,17 +271,6 @@ class ApplyDisposalError(Exception):
     Callers (the op handler) translate this to a JSON-RPC error."""
 
 
-def _subprocess_kwargs() -> dict[str, Any]:
-    """Extra kwargs for every asyncio.create_subprocess_exec call in this
-    module — CREATE_NO_WINDOW on win32 (Windows first-class: a console-
-    spawning git subprocess on every apply_disposal call is a visible,
-    avoidable regression), no-op on POSIX (creationflags is a Windows-only
-    subprocess kwarg; passing it on POSIX raises). Routed through the
-    canonical coordinator_core.win_portability.no_console_creationflags()
-    primitive rather than a hardcoded flag literal."""
-    return no_console_creationflags()
-
-
 async def _run_git(
     *args: str, cwd: Path, env: dict[str, str]
 ) -> tuple[int, bytes, bytes]:
@@ -299,7 +282,7 @@ async def _run_git(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        **_subprocess_kwargs(),
+        **no_console_creationflags(),
     )
     out, err = await proc.communicate()
     return proc.returncode, out, err
@@ -1226,20 +1209,13 @@ async def _delete_tracked_and_append_log(
         # `release_committed_claims` issues a synchronous `git status
         # --porcelain` subprocess, so it must not be called in place on
         # this coroutine's event-loop turn.
-        try:
-            release_paths = [rel_id(Path(p), worktree_root) for p in commit_paths]
-            await asyncio.to_thread(
-                session_scope.release_committed_claims,
-                session_core.resolve_session_id(str(worktree_root)),
-                release_paths,
-                str(worktree_root),
-            )
-        except Exception:
-            _LOG.debug(
-                "distill.apply_disposal: release_committed_claims failed "
-                "post-commit; claim(s) retained",
-                exc_info=True,
-            )
+        await asyncio.to_thread(
+            session_scope.release_committed_claims_or_retain,
+            worktree_root,
+            (rel_id(Path(p), worktree_root) for p in commit_paths),
+            session_core.resolve_session_id(str(worktree_root)),
+            "distill.apply_disposal",
+        )
 
         return (
             [rel_id(p, worktree_root) for p in reaped],

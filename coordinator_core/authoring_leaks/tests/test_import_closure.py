@@ -8,12 +8,13 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.authoring_leaks import import_closure, leak_gate
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
-        cwd=root, check=True, capture_output=True,
+        cwd=root, check=True, capture_output=True, **no_console_creationflags(),
     )
 
 

@@ -2,8 +2,7 @@
 
 `_unclaim` stamps `ready_to_fire` unconditionally and never reads `blocked_by`,
 so a claimed+blocked node whose holder died aborted on
-`_cf_ready_to_fire_no_unresolved_blocked_by`: the claim stood, and
-`reap-orphaned-in-flight-handoffs` re-reported rc=1 on it every morning with
+`_cf_ready_to_fire_no_unresolved_blocked_by`: the claim stood with
 nothing able to clear it. It now routes through `_apply_derived_readiness`, the
 TIGHTEN-ONLY seam that already parks exactly this shape.
 

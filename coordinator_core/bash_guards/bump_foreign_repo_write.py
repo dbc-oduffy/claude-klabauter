@@ -847,7 +847,7 @@ def _target_is_lessons_outbox_write(file_path: str) -> bool:
     module docstring section there, "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN
     THOUGH IT IS A FOREIGN REPO"). `coordinator-lesson-promote`
     (`ops/queue_promote.py`) writes a universal lesson's durable home to
-    `<content_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- coordinator-content-repo is
+    `<content_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- the content repo is
     the central lessons repo, there is no in-repo alternative, and a foreign-
     repo bump on that write is a false positive on both surfaces alike.
     Callers treat `True` as "never bump".

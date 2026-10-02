@@ -4,7 +4,7 @@ receipt reader/writer at ~/.claude/coordinator-setup-state.yaml.
 
 Purpose: durable, per-machine evidence that coordinator setup concluded and
 (optionally) that the operator started/completed the guided orientation. This
-is a RECEIPT in the sense of docs/wiki/plugin-identity-and-health-sentinels.md
+is a RECEIPT in the sense of coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/plugin-identity-and-health-sentinels.md
 — written by the actor whose action it witnesses, stale = signal not lie. It
 is the cross-repo chaining contract: sibling (branch/leaf) repos read it to
 confirm coordinator is bootstrapped before chaining their own
@@ -14,7 +14,7 @@ Idempotent and enduring: each milestone timestamp is set ONCE (first
 occurrence wins) and never overwritten on re-run, so re-running /setup or
 re-taking the tour does not rewrite history.
 
-Spec backlink: docs/wiki/coordinator-setup-state-receipt.md (coordinator-content-repo)
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/coordinator-setup-state-receipt.md (coordinator-content-repo)
 Port of: coordinator-setup-state.sh (DoE b5a4192c, 2026-07-20)
 Spec backlink: coordinator-content-repo:pln-bash-polyglot-clean-slate-full-5c71ee
 

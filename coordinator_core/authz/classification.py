@@ -1001,38 +1001,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md § D1/D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.normalize": OpClass.MUTATING,
-    # handoff.ship_and_archive — MUTATING: event-driven single-handoff composite that
-    # (1) stamps shipped_in (handoff.stamp) + deployment_state:shipped (handoff.transition
-    # ship verb), then (2) git-mv's the handoff into archive/handoffs/YYYY-MM/ via the
-    # fleet.archive_shipped_handoffs act path. Unlike the pure-frontmatter handoff.* ops,
-    # this op DOES issue a git commit (through the archival step).
-    # DR-208 five-question affirmation (citing ops/handoff_ship_archive.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Frontmatter write (via handoff.stamp/ship internals) + archive_and_commit()
-    #      git-mv + git-commit into archive/handoffs/YYYY-MM/.
-    #   2. Writes into rag's relational store?                                 No.
-    #      Writes only state/handoffs/*.md frontmatter, archive/handoffs/ tree, and git
-    #      commit objects. Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      Frontmatter write + git-mv destination write.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      state/handoffs/*.md and the git commit are coordinator substrate shared across
-    #      EM sessions and all git clients.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The stamped frontmatter, moved file, and git commit are observable after return.
-    # DR-211 D2 five-bound affirmed (archival-writer sub-category, inherited from the
-    # fleet.archive_shipped_handoffs act path it delegates to):
-    #   D2-1 (idempotent): already-shipped ship is a no-op; already-archived replay →
-    #         terminal already-archived result; already-stamped shipped_in → no-op.
-    #   D2-2 (commutative): single-candidate archival; ordering-independent.
-    #   D2-3 (git-reversible): archive/ is git-tracked; git revert recovers the handoff.
-    #   D2-4 (act-time re-verify): the archival internal re-checks deployment_state +
-    #         shipped_in reachability at act time (graceful skip when shipped_in absent).
-    #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
-    #     no HTTP route was ever added, negative-spec in handoff_ship_archive.py.
-    # Authority: docs/decisions/DR-211-fleet-op-substrate-write-boundary.md § D2
-    #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "handoff.ship_and_archive": OpClass.MUTATING,
     # handoff.discharge_landed — MUTATING: stamps shipped_in/deployment_state on every baton of
     # the landed target plans and git-mvs them to archive/handoffs/ in one commit.
     "handoff.discharge_landed": OpClass.MUTATING,
@@ -2421,6 +2389,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.
     "groupem.idle_report": OpClass.COMPUTE_ONLY,
+    # groupem.standing -- COMPUTE_ONLY: reads the nomination record and the
+    # session registry; claims and writes nothing.
+    "groupem.standing": OpClass.COMPUTE_ONLY,
     # session.work_state — COMPUTE_ONLY: reads state/handoffs/*.md and the
     # claim-state ledger via build_work_state() (coordinator_core.session.
     # work_state), which itself only reads disk (frontmatter, claim ledger,

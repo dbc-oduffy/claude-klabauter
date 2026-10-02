@@ -45,13 +45,12 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from pathlib import Path, PureWindowsPath
 
 from coordinator_core.git.repo_root import git_dir as _git_dir, show_toplevel
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
-from coordinator_core.win_portability import no_console_creationflags
 
 _SHIM_MARKER = "coordinator coordinator-prepare-commit-msg hook"
 _SCRIPT_RELATIVE = "coordinator/bin/coordinator-prepare-commit-msg"
@@ -64,17 +63,7 @@ def _git_hooks_dir(cwd: str) -> str:
         gd = None
     if gd:
         return str(Path(gd) / "hooks")
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-path", "hooks"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            **no_console_creationflags(),
-        )
-    except Exception:
-        return ""
+    result = run_git(["rev-parse", "--git-path", "hooks"], cwd=cwd)
     if result.returncode != 0:
         return ""
     out = result.stdout.strip()
@@ -89,13 +78,15 @@ def _git_hooks_dir(cwd: str) -> str:
 def _candidate_script_paths(repo_root: str) -> "list[str]":
     candidates = [str(Path(repo_root) / _SCRIPT_RELATIVE)]
 
-    content_root_pointer = Path.home() / ".claude" / ".coordinator-content-root"
     try:
-        content_root = content_root_pointer.read_text(encoding="utf-8").strip()
+        from coordinator_core.content_root import read_content_root
+        from coordinator_core.data_root import content_root_for
+
+        content_root = content_root_for(read_content_root())
     except Exception:
-        content_root = ""
-    if content_root:
-        candidates.append(str(Path(content_root) / _SCRIPT_RELATIVE))
+        content_root = None
+    if content_root is not None:
+        candidates.append(str(content_root / Path(_SCRIPT_RELATIVE).relative_to("coordinator")))
 
     try:
         from coordinator_core.engine_root import coordinator_engine_root

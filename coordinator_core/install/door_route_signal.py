@@ -107,11 +107,13 @@ class DoorRouteResult(NamedTuple):
 
     `route` is one of `WARM_SERVER`, `IN_PROCESS`, or `UNRESOLVED`.
     `entry` is the raw sink row this classification was read from, or
-    `None` when `route` is `UNRESOLVED` (no row was found).
+    `None` when `route` is `UNRESOLVED` (no row was found). `detail` is the
+    dispatch refusal message when a control invocation was refused, else `None`.
     """
 
     route: str
     entry: Optional[dict]
+    detail: Optional[str] = None
 
 
 def _newest_matching_row(op: str, *, repo_root: Path, since: float) -> Optional[dict]:
@@ -232,7 +234,7 @@ def run_cold_control_invocation(op: str, *, repo_root: Path, params: Optional[di
     """
     import asyncio
 
-    from coordinator_core.ipc import dispatch_message
+    from coordinator_core import ipc
 
     since = time.time()
     msg = {
@@ -242,11 +244,60 @@ def run_cold_control_invocation(op: str, *, repo_root: Path, params: Optional[di
         "params": params or {},
         "_origin_worktree": str(repo_root),
     }
-    asyncio.run(
-        dispatch_message(msg, caller="coordinator_core.install.door_route_signal")
-    )
+    # The control is a deliberate manual dispatch: an unstamped (authoring)
+    # checkout would otherwise refuse it at the stamp gate and write no row.
+    prior = ipc.is_unstamped_dispatch_allowed()
+    ipc.allow_unstamped_dispatch()
+    try:
+        response = asyncio.run(
+            ipc.dispatch_message(msg, caller="coordinator_core.install.door_route_signal")
+        )
+    finally:
+        ipc._unstamped_dispatch_allowed = prior
+
+    detail: Optional[str] = None
+    if isinstance(response, dict) and isinstance(response.get("error"), dict):
+        detail = str(response["error"].get("message"))
 
     row = _newest_matching_row(op, repo_root=repo_root, since=since)
     if row is None:
-        return DoorRouteResult(UNRESOLVED, None)
+        return DoorRouteResult(UNRESOLVED, None, detail)
     return DoorRouteResult(row.get("route") or IN_PROCESS, row)
+
+
+def diagnose_inert_sink(repo_root: Path, control: DoorRouteResult) -> "tuple[str, str]":
+    """The one cause (and a remedy that applies to it) for a control
+    invocation that wrote no sink row: `(cause, remedy)`.
+
+    Checks, in order: the kill-switch env value, a refused control dispatch,
+    an unresolvable git common dir, an unwritable sink directory. When none
+    holds, the cause names what was checked and the remedy is empty.
+    """
+    import os
+
+    from coordinator_core import lifecycle
+
+    if os.environ.get(op_latency._DISABLE_ENV) == "1":
+        return (
+            f"{op_latency._DISABLE_ENV}=1 is set",
+            f"unset {op_latency._DISABLE_ENV}",
+        )
+    if control.detail:
+        return (f"the control dispatch was refused: {control.detail}", "")
+    try:
+        common_dir = lifecycle.git_common_dir(repo_root)
+    except (RuntimeError, OSError) as exc:
+        return (f"no git common dir resolves from {repo_root} ({exc})", f"run from a git checkout, not {repo_root}")
+    sink_dir = op_latency._sink_path(common_dir).parent
+    try:
+        sink_dir.mkdir(parents=True, exist_ok=True)
+        probe_ok = os.access(sink_dir, os.W_OK)
+    except OSError:
+        probe_ok = False
+    if not probe_ok:
+        return (f"sink directory {sink_dir} is not writable", f"make {sink_dir} writable")
+    return (
+        f"no row was written; checked {op_latency._DISABLE_ENV}, the control dispatch result, "
+        f"git common dir {common_dir}, and sink directory {sink_dir}",
+        "",
+    )

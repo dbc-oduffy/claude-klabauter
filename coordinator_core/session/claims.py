@@ -1941,6 +1941,24 @@ def claim_plan(
             release_artifact("plan", slug, cwd=cwd)
             return False
         plan_path = str(Path(root) / rel)
+        from coordinator_core.frontmatter.primitives import (
+            APPROVED_BODY_CHANGED,
+            APPROVED_BODY_UNVERIFIABLE,
+            check_approved_body,
+        )
+
+        try:
+            approved_state, approved_msg = check_approved_body(
+                Path(plan_path).read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError:
+            approved_state, approved_msg = "n/a", ""
+        if approved_state == APPROVED_BODY_CHANGED:
+            print(f"cs_claim_plan: {slug}: {approved_msg} — claim refused", file=sys.stderr)
+            release_artifact("plan", slug, cwd=cwd)
+            return False
+        if approved_state == APPROVED_BODY_UNVERIFIABLE:
+            print(f"cs_claim_plan: {slug}: {approved_msg}", file=sys.stderr)
         from coordinator_core.ops import plan_status_transition
 
         rc = plan_status_transition.main(["stamp-executing", "--plan", plan_path])
@@ -3517,10 +3535,9 @@ def backfill_reaped_from_session(worktree: Path) -> dict:
     IDEMPOTENT: a baton already carrying ``reaped_from_session`` is skipped
     (counted in ``skipped``), and a second full run is byte-identical.
 
-    UNVERIFIED BEYOND ONE RUN: re-run behaviour against a corpus that has
-    since grown additional pre-C2 notes has not been exercised — only the
-    single observed invocation against the live corpus at C5 time has been
-    checked.
+    RE-RUN ON A GROWN CORPUS: a later run writes only the newly eligible
+    batons and leaves every earlier-touched file byte-identical; pinned by
+    ``tests/test_backfill_reaped_from_session_rerun.py``.
 
     FAIL-CLOSED PER BATON: an unparseable/absent/wrong-shape ``park_note``
     (including the archived, quoted, truncated-8-char-sid note class that an
@@ -3668,8 +3685,8 @@ def list_claims_by_session_checked(
           ``_commit_orchestration_sequence`` (PipelineContext + commit-outcome
           plumbing), assessed as disproportionate scaffolding for a unit test
           (Review: code-reviewer slice 2, 2026-07-27, Finding 1).
-        - archive (``coordinator_core/ops/handoff_ship_archive.py`` ->
-          ``handoff_transition._ship``): SURVIVES.
+        - ship (``handoff_transition._ship``, the ``ship`` verb the
+          archive-side ops compose): SURVIVES.
           Neither function imports or calls ``release_artifact``/``claims.``
           anywhere. The ``_ship`` mutator itself IS exercised directly by
           ``coordinator_core/session/tests/test_claims.py::

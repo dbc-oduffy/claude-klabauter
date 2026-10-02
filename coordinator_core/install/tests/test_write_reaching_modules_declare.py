@@ -783,7 +783,7 @@ def test_allowlist_has_no_stale_entries() -> None:
 
 _SWITCH_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 _SWITCH_GUARD_NAME = "_refuse_machine_mutation"
-_GAP_CEILING = 3
+_GAP_CEILING = 0
 
 
 def _consults_kill_switch(module_path: Path) -> bool:

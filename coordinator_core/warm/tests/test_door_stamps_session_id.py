@@ -38,11 +38,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _ReplyingServer,
-    _door_under_default_name,
-    _make_stub_engine_root,
-    _pipe_name_for,
+from coordinator_core.warm.tests.door_test_support import (
+    ReplyingServer,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -113,10 +113,10 @@ def _exchange(root: Path, session_env: "dict[str, str] | None"):
         env.pop(var, None)
     env.update(session_env or {})
 
-    server = _ReplyingServer(_pipe_name_for(root), _OK_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _OK_REPLY)
     try:
         proc = subprocess.run(
-            [str(_door_under_default_name(root)), "ping"],
+            [str(door_under_default_name(root)), "ping"],
             capture_output=True,
             text=True,
             env=env,
@@ -132,7 +132,7 @@ def _exchange(root: Path, session_env: "dict[str, str] | None"):
 
 
 def test_the_door_stamps_the_session_its_caller_is(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
@@ -140,7 +140,7 @@ def test_the_door_stamps_the_session_its_caller_is(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_the_callers_id_and_never_the_servers(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
@@ -154,7 +154,7 @@ def test_precedence_matches_the_resolver_the_door_stands_in_for(tmp_path: Path) 
     substitutes for -- the precise defect that constant's own comment records
     (slice D, F1: a guard reading only COORDINATOR_SESSION_ID told a real
     session that had only CLAUDE_CODE_SESSION_ID set "Not your claim")."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(
         root,
@@ -172,7 +172,7 @@ def test_a_lower_rung_is_read_when_the_higher_ones_are_unset(tmp_path: Path) -> 
     """The rung the reported defect actually ran down: the harness injects
     `CLAUDE_CODE_SESSION_ID` and neither override above it is set, which is the
     ordinary condition of every session on the box."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
@@ -180,7 +180,7 @@ def test_a_lower_rung_is_read_when_the_higher_ones_are_unset(tmp_path: Path) -> 
 
 
 def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(
         root,
@@ -191,7 +191,7 @@ def test_an_empty_value_falls_through_to_the_next_rung(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
@@ -199,7 +199,7 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_no_resolvable_identity_stamps_nothing_and_still_serves(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
 

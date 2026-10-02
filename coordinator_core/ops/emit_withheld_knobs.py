@@ -60,7 +60,7 @@ from typing import Dict, List, Optional
 
 from coordinator_core.data_root import content_root_for
 from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 from coordinator_core.session.declared_writes import declare_write
 
 #: Bumped only when an EXISTING field changes meaning or leaves. Adding a field, or adding
@@ -204,13 +204,13 @@ def _out_dir() -> Optional[str]:
     override = os.environ.get(OUT_DIR_ENV)
     if override:
         return os.path.abspath(override)
-    content_root = coordinator_content_root()
-    if not content_root:
+    resolved_root = read_content_root()
+    if not resolved_root:
         return None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(resolved_root)
     if content_root is not None:
         return str(content_root)
-    return os.path.join(content_root, "coordinator")
+    return os.path.join(resolved_root, "coordinator")
 
 
 _USAGE = (

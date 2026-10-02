@@ -59,6 +59,24 @@ this rule exists to close, which is exactly the shape of floor.py's own former
 violation. Every library-body `declare_benchmark_origin()` call, anywhere,
 stays red.
 
+REACHABILITY, NOT PRESENCE. A subject passes only when `declare_benchmark_origin()`
+is reached from its `__main__` block (following same-module calls) and no
+detectable spawn call precedes it. A declare in a helper nothing calls, or after
+the first spawn, stamps nothing. Ceiling: branches are read linearly, and a spawn
+hidden behind an imported library helper is invisible to the ordering check.
+
+WIDENED SUBJECT SET. Every `__main__`-bearing module under coordinator_core/,
+coordinator/bin/, bin/ and scripts/ that spawns the invoke CLI by a raw route
+(a spawn call plus a `coordinator_core.invoke` argv literal) is a subject too.
+Modules going through `coordinator/bin/lib/cc_invoke.py` are the sanctioned
+production route and are out of the set. `PRODUCTION_INVOKE_SPAWNERS` carries
+the adjudicated exemptions, one reason each:
+  - bin/claude-klabauter-doctor-probe.py: health probes; the ping is real production use.
+  - bin/claude-klabauter-commit-anchors.py: commit-anchor tool; production traffic.
+  - coordinator/bin/survey-consume-gate.py: survey gate; production traffic.
+  - coordinator_core/ops/setup_chain_walker.py: setup chain walker; production traffic.
+Every `__main__`-bearing module under benchmarks/ passes the reachability model unchanged.
+
 POPULATION IS GREEN (chunk C1c, after C2). Every subject/inverse case in the
 current population passes with the allowlist, carve-out, and third-class set
 below applied -- the parametrized subject/inverse tests carry no
@@ -246,21 +264,76 @@ def _declare_origin_local_names(tree: ast.Module) -> frozenset[str]:
     return frozenset(names)
 
 
-def module_calls_declare_origin(tree: ast.Module) -> bool:
-    """True if `declare_benchmark_origin()` is called anywhere in `tree` --
-    module level or inside any function body (see module docstring's inverse
-    rule: omission-only checking blesses the shape the contract prohibits),
-    under its bound local name (see _declare_origin_local_names)."""
-    local_names = _declare_origin_local_names(tree)
+def _spawn_local_names(tree: ast.Module) -> frozenset[str]:
+    names: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+        if isinstance(node, ast.ImportFrom) and node.module in _SPAWN_IMPORTABLE_NAMES:
+            wanted = _SPAWN_IMPORTABLE_NAMES[node.module]
+            names.update(a.asname or a.name for a in node.names if a.name in wanted)
+    return frozenset(names)
+
+
+class _EntryEvents(ast.NodeVisitor):
+    """Ordered "declare"/"spawn" events reached from a module's `__main__` block,
+    following calls to same-module top-level functions (arguments evaluate before
+    the call; nested defs, lambdas and classes are not entered)."""
+
+    def __init__(self, tree: ast.Module) -> None:
+        self._funcs = {
+            n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self._declare_names = _declare_origin_local_names(tree)
+        self._spawn_names = _spawn_local_names(tree)
+        self._active: set[str] = set()
+        self.events: list[str] = []
+
+    def visit_FunctionDef(self, node: ast.AST) -> None:
+        return None
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_Lambda = visit_FunctionDef
+    visit_ClassDef = visit_FunctionDef
+
+    def visit_Call(self, node: ast.Call) -> None:
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
         func = node.func
-        if isinstance(func, ast.Name) and func.id in local_names:
-            return True
-        if isinstance(func, ast.Attribute) and func.attr == DECLARE_ORIGIN_NAME:
-            return True
-    return False
+        if (isinstance(func, ast.Name) and func.id in self._declare_names) or (
+            isinstance(func, ast.Attribute) and func.attr == DECLARE_ORIGIN_NAME
+        ):
+            self.events.append("declare")
+        elif (
+            (isinstance(func, ast.Name) and (func.id in _SPAWN_BARE_NAMES or func.id in self._spawn_names))
+            or (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and (func.value.id, func.attr) in _SPAWN_QUALIFIED_CALLS
+            )
+        ):
+            self.events.append("spawn")
+        elif isinstance(func, ast.Name) and func.id in self._funcs and func.id not in self._active:
+            self._active.add(func.id)
+            for stmt in self._funcs[func.id].body:
+                self.visit(stmt)
+            self._active.discard(func.id)
+
+    def run(self, tree: ast.Module) -> list[str]:
+        for node in tree.body:
+            if isinstance(node, ast.If) and _is_main_guard(node):
+                for stmt in node.body:
+                    self.visit(stmt)
+        return self.events
+
+
+def _is_main_guard(node: ast.If) -> bool:
+    return module_has_main_entry(ast.Module(body=[node], type_ignores=[]))
+
+
+def module_calls_declare_origin(tree: ast.Module) -> bool:
+    """True if `declare_benchmark_origin()` is reached from the module's `__main__`
+    block (same-module calls followed) before any detectable spawn call."""
+    events = _EntryEvents(tree).run(tree)
+    return "declare" in events and ("spawn" not in events or events.index("declare") < events.index("spawn"))
 
 
 class _DeclareOriginCallSites(ast.NodeVisitor):
@@ -332,6 +405,127 @@ def _subject_paths() -> list[pathlib.Path]:
         if module_has_main_entry(_parse(path)):
             subjects.append(path)
     return subjects
+
+
+PRODUCTION_INVOKE_SPAWNERS: dict[str, str] = {
+    "bin/claude-klabauter-doctor-probe.py": "health probes; the cold ping is real production use, not benchmark traffic.",
+    "bin/claude-klabauter-commit-anchors.py": "commit-anchor tool; its invoke calls are production traffic.",
+    "coordinator/bin/survey-consume-gate.py": "survey consume gate; its invoke calls are production traffic.",
+    "coordinator_core/ops/setup_chain_walker.py": "setup chain walker; its invoke calls are production traffic.",
+}
+
+_WIDENED_ROOTS = ("coordinator_core", "coordinator/bin", "bin", "scripts")
+_INVOKE_ARGV_LITERAL = "coordinator_core.invoke"
+_REPO_ROOT = BENCHMARKS_DIR.parents[1]
+
+
+def _names_invoke_cli(tree: ast.Module) -> bool:
+    return any(
+        isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith(_INVOKE_ARGV_LITERAL) and len(n.value) < 80
+        for n in ast.walk(tree)
+    )
+
+
+def _widened_subject_paths(repo_root: pathlib.Path = _REPO_ROOT) -> list[pathlib.Path]:
+    """`__main__`-bearing modules outside the benchmarks package that spawn the
+    invoke CLI by a raw route, minus PRODUCTION_INVOKE_SPAWNERS."""
+    subjects = []
+    for root in _WIDENED_ROOTS:
+        base = repo_root / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            rel = path.relative_to(repo_root).as_posix()
+            parts = path.relative_to(base).parts
+            if not path.is_file() or "__pycache__" in parts or "tests" in parts or "fixtures" in parts:
+                continue
+            if rel.startswith("coordinator_core/benchmarks/") or rel in PRODUCTION_INVOKE_SPAWNERS:
+                continue
+            if path.name.startswith("test_") or not (path.suffix == ".py" or (path.suffix == "" and root == "coordinator/bin")):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if _INVOKE_ARGV_LITERAL not in text:
+                continue
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                continue
+            if module_has_main_entry(tree) and _module_has_spawn_shape(tree) and _names_invoke_cli(tree):
+                subjects.append(path)
+    return subjects
+
+
+@pytest.mark.parametrize("path", _widened_subject_paths(), ids=lambda p: p.relative_to(_REPO_ROOT).as_posix())
+def test_every_raw_invoke_spawner_outside_benchmarks_declares_origin(path: pathlib.Path) -> None:
+    assert module_calls_declare_origin(_parse(path)), (
+        f"{path.relative_to(_REPO_ROOT).as_posix()} spawns the invoke CLI from its __main__ without "
+        f"declaring origin ahead of the spawn -- declare it, or add it to PRODUCTION_INVOKE_SPAWNERS "
+        f"with a one-line reason if its traffic is production use."
+    )
+
+
+def test_production_invoke_spawner_entries_are_still_subjects_by_shape() -> None:
+    """An exemption must stay earned: each entry still spawns the invoke CLI from a __main__."""
+    for rel in PRODUCTION_INVOKE_SPAWNERS:
+        tree = _parse(_REPO_ROOT / rel)
+        assert module_has_main_entry(tree) and _module_has_spawn_shape(tree) and _names_invoke_cli(tree), (
+            f"{rel} no longer matches the raw-spawner shape; drop its PRODUCTION_INVOKE_SPAWNERS entry."
+        )
+
+
+def _plant(tmp_path: pathlib.Path, body: str) -> ast.Module:
+    f = tmp_path / "planted.py"
+    f.write_text(
+        "import subprocess\n"
+        "from coordinator_core.benchmarks import declare_benchmark_origin\n" + body,
+        encoding="utf-8",
+    )
+    return _parse(f)
+
+
+def test_declare_in_never_called_helper_is_caught(tmp_path: pathlib.Path) -> None:
+    tree = _plant(
+        tmp_path,
+        "def helper():\n    declare_benchmark_origin()\n"
+        "def main():\n    subprocess.run(['x'])\n"
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    assert not module_calls_declare_origin(tree)
+
+
+def test_declare_after_the_spawn_is_caught(tmp_path: pathlib.Path) -> None:
+    tree = _plant(
+        tmp_path,
+        "def main():\n    subprocess.run(['x'])\n    declare_benchmark_origin()\n"
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    assert not module_calls_declare_origin(tree)
+
+
+def test_declare_in_called_helper_before_spawn_passes(tmp_path: pathlib.Path) -> None:
+    tree = _plant(
+        tmp_path,
+        "def setup():\n    declare_benchmark_origin()\n"
+        "def main():\n    setup()\n    subprocess.run(['x'])\n"
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    assert module_calls_declare_origin(tree)
+
+
+def test_raw_spawning_driver_in_bin_is_a_subject_and_fails(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "bin").mkdir()
+    driver = tmp_path / "bin" / "raw_driver.py"
+    driver.write_text(
+        "import subprocess\n"
+        "if __name__ == '__main__':\n"
+        "    subprocess.run(['python', '-m', 'coordinator_core.invoke', 'ping', '{}'])\n",
+        encoding="utf-8",
+    )
+    assert _widened_subject_paths(tmp_path) == [driver]
+    assert not module_calls_declare_origin(_parse(driver))
 
 
 def _non_main_paths() -> list[pathlib.Path]:

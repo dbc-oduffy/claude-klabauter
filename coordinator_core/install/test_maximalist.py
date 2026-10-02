@@ -252,6 +252,7 @@ def _make_stub_substrate_run(settings_bin_dir: Path):
 
 @pytest.fixture
 def stub_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     paths = _build_stub_tree(tmp_path)
     call_log = tmp_path / "call.log"
     call_log.write_text("")
@@ -650,7 +651,7 @@ def test_compileall_runs_under_each_resolved_interpreter(stub_env, monkeypatch):
     "(0o666) regardless of os.chmod(..., 0o111), so there is no "
     "platform-appropriate substitute assertion to make here (A5/C2).",
 )
-def test_claude_author_wrapper_symlinks_to_settings_bin_target(stub_env):
+def test_claude_author_wrapper_symlinks_to_settings_bin_target(stub_env, monkeypatch):
     """C2 invariant: on POSIX, ``~/.local/bin/claude-author`` is a SYMLINK onto
     ``<settings_bin>/claude-author`` (the file the real ``_install_bin_resolvers``
     -- invoked earlier in the same install pass via ``substrate.run`` --
@@ -685,7 +686,8 @@ def test_claude_author_wrapper_symlinks_to_settings_bin_target(stub_env):
 # ---------------------------------------------------------------------------
 
 
-def _run_install_claude_author_wrapper(stub_env):
+def _run_install_claude_author_wrapper(stub_env, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     orch = maximalist._Orchestrator()
     settings_bin = str(stub_env["settings_bin"])
     maximalist._install_claude_author_wrapper(
@@ -701,7 +703,7 @@ def _run_install_claude_author_wrapper(stub_env):
 
 # AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
-def test_claude_author_wrapper_symlink_noops_when_already_correct(stub_env):
+def test_claude_author_wrapper_symlink_noops_when_already_correct(stub_env, monkeypatch):
     """Directly re-running the install step against an already-correct
     symlink must not unlink/relink it -- the existing inode identity (and
     mtime) is preserved."""
@@ -712,11 +714,11 @@ def test_claude_author_wrapper_symlink_noops_when_already_correct(stub_env):
     target.write_text("#!/bin/sh\necho fake\n")
     target.chmod(0o755)
 
-    dst = _run_install_claude_author_wrapper(stub_env)
+    dst = _run_install_claude_author_wrapper(stub_env, monkeypatch)
     assert dst.is_symlink()
     before_inode = dst.lstat().st_ino
 
-    dst2 = _run_install_claude_author_wrapper(stub_env)
+    dst2 = _run_install_claude_author_wrapper(stub_env, monkeypatch)
     assert dst2.is_symlink()
     assert dst2.lstat().st_ino == before_inode
     assert Path(os.readlink(dst2)) == target
@@ -724,7 +726,7 @@ def test_claude_author_wrapper_symlink_noops_when_already_correct(stub_env):
 
 # AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
-def test_claude_author_wrapper_symlink_replaces_stale_regular_file(stub_env):
+def test_claude_author_wrapper_symlink_replaces_stale_regular_file(stub_env, monkeypatch):
     """The live-machine state right now: `~/.local/bin/claude-author` is a
     stale REGULAR FILE left over from the pre-C2 shutil.copy2 install. The
     install step must replace it with a symlink onto <settings_bin>/claude-author,
@@ -741,14 +743,14 @@ def test_claude_author_wrapper_symlink_replaces_stale_regular_file(stub_env):
     dst.chmod(0o755)
     assert dst.is_file() and not dst.is_symlink()
 
-    result = _run_install_claude_author_wrapper(stub_env)
+    result = _run_install_claude_author_wrapper(stub_env, monkeypatch)
     assert result.is_symlink(), "stale regular file must be replaced with a symlink"
     assert Path(os.readlink(result)) == target
 
 
 # AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
-def test_claude_author_wrapper_symlink_replaces_broken_link(stub_env):
+def test_claude_author_wrapper_symlink_replaces_broken_link(stub_env, monkeypatch):
     """A dangling symlink (target since deleted) must be replaced, not left
     broken or treated as fatal."""
     settings_bin = stub_env["settings_bin"]
@@ -762,7 +764,7 @@ def test_claude_author_wrapper_symlink_replaces_broken_link(stub_env):
     dst.symlink_to(settings_bin / "nonexistent-target")
     assert os.path.islink(dst) and not dst.exists()
 
-    result = _run_install_claude_author_wrapper(stub_env)
+    result = _run_install_claude_author_wrapper(stub_env, monkeypatch)
     assert result.is_symlink()
     assert Path(os.readlink(result)) == target
     assert result.resolve().is_file()
@@ -770,7 +772,7 @@ def test_claude_author_wrapper_symlink_replaces_broken_link(stub_env):
 
 # AC6 (docs/plans/2026-08-13-one-shared-symlink-capability-guard.md): gates a POSIX-only C2 symlink CONTRACT, not host symlink capability -- leave as os.name, do not swap for the shared probe.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
-def test_claude_author_wrapper_symlink_replaces_wrong_target_link(stub_env):
+def test_claude_author_wrapper_symlink_replaces_wrong_target_link(stub_env, monkeypatch):
     """A symlink pointing at the WRONG target (e.g. a stale settings-home
     path) must be re-pointed at the current <settings_bin>/claude-author."""
     settings_bin = stub_env["settings_bin"]
@@ -790,7 +792,7 @@ def test_claude_author_wrapper_symlink_replaces_wrong_target_link(stub_env):
     dst.symlink_to(wrong_target)
     assert Path(os.readlink(dst)) == wrong_target
 
-    result = _run_install_claude_author_wrapper(stub_env)
+    result = _run_install_claude_author_wrapper(stub_env, monkeypatch)
     assert result.is_symlink()
     assert Path(os.readlink(result)) == target
 
@@ -836,6 +838,7 @@ def test_defender_offer_batches_single_add_mppreference_call(monkeypatch):
     assertion and the single-batched-`-Command`-string assertion below
     would fail on it.
     """
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(maximalist, "_is_windows_host", lambda: True)
 
     def fake_which(name):
@@ -2446,9 +2449,10 @@ def test_install_global_doctrine_check_only_writes_nothing(tmp_path):
     assert not (home / ".claude" / "rules" / "context7.md").exists()
 
 
-def test_legacy_launcher_list_never_names_the_current_launcher(tmp_path):
+def test_legacy_launcher_list_never_names_the_current_launcher(tmp_path, monkeypatch):
     """The publish de-naming once rewrote this list into the current names, so
     every install deleted the launcher it had just rendered."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     from coordinator_core.install.maximalist import LEGACY_DOE_LAUNCHERS, retire_legacy_doe_launchers
 
     assert not any(n.startswith("claude-author") for n in LEGACY_DOE_LAUNCHERS)
@@ -2458,3 +2462,139 @@ def test_legacy_launcher_list_never_names_the_current_launcher(tmp_path):
         (local_bin / name).write_text("x")
     retire_legacy_doe_launchers(str(tmp_path), str(tmp_path / "settings-bin"), check_only=False)
     assert sorted(p.name for p in local_bin.iterdir()) == ["claude-author", "claude-author.cmd", "claude-author.ps1"]
+
+def test_kill_switch_refuses_the_claude_author_wrapper_write(stub_env, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    dst = stub_env["claude_home"] / ".local" / "bin" / "claude-author"
+    maximalist._install_claude_author_wrapper(
+        str(stub_env["coord_root"]),
+        str(stub_env["claude_home"]),
+        False,
+        maximalist._Orchestrator(),
+        str(stub_env["claude_klabauter_root"]),
+        str(stub_env["settings_bin"]),
+    )
+    assert not os.path.lexists(dst)
+
+
+def test_kill_switch_refuses_legacy_launcher_retirement(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    legacy = local_bin / maximalist.LEGACY_DOE_LAUNCHERS[0]
+    legacy.write_text("x", encoding="utf-8")
+    maximalist.retire_legacy_doe_launchers(str(tmp_path), str(tmp_path / "bin"), False)
+    assert legacy.exists()
+
+
+_STEM = "claude-" + "doe"
+
+
+def _legacy_box(tmp_path):
+    home = tmp_path / "home"
+    shell = home / ".claude" / "shell"
+    shell.mkdir(parents=True)
+    for n in (f"{_STEM}-shim.sh", f"{_STEM}-shim.ps1", "claude-author-shim.sh"):
+        (shell / n).write_text("claude() { :; }\n")
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / _STEM).write_text("x")
+    (local_bin / "claude-author").write_text("x")
+    rc = home / ".bashrc"
+    rc.write_text(
+        "export A=1\n"
+        f"# --- coordinator {_STEM} shim [generated] ---\n"
+        f'[ -f "$HOME/.claude/shell/{_STEM}-shim.sh" ] && source "$HOME/.claude/shell/{_STEM}-shim.sh"\n'
+        f"# --- end coordinator {_STEM} shim ---\n"
+        "# --- coordinator maximalist launch (old) ----\n"
+        f'claude() {{ command {_STEM} "$@"; }}\n'
+        "# --- end coordinator maximalist launch ----\n"
+        "export B=2\n"
+    )
+    return home, shell, rc
+
+
+def test_retiring_the_legacy_launcher_retires_its_shims_and_rc_blocks(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home, shell, rc = _legacy_box(tmp_path)
+
+    maximalist.retire_legacy_doe_launchers(str(home), str(tmp_path / "settings-bin"), check_only=False)
+
+    assert sorted(p.name for p in shell.iterdir()) == ["claude-author-shim.sh"]
+    assert rc.read_text() == "export A=1\nexport B=2\n"
+    out = capsys.readouterr().out
+    assert out.count("legacy_doe_callers: retired") == 4
+    assert _STEM not in "".join(p.name for p in (home / ".local" / "bin").iterdir())
+
+
+def test_callers_are_retired_when_the_legacy_binary_is_already_absent(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home, shell, rc = _legacy_box(tmp_path)
+    (home / ".local" / "bin" / _STEM).unlink()
+
+    maximalist.retire_legacy_doe_launchers(str(home), str(tmp_path / "settings-bin"), check_only=False)
+
+    assert not (shell / f"{_STEM}-shim.sh").exists()
+    assert _STEM not in rc.read_text()
+
+
+def test_callers_stay_while_a_legacy_binary_survives(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home, shell, rc = _legacy_box(tmp_path)
+
+    assert maximalist.retire_legacy_doe_callers(str(home), str(tmp_path / "settings-bin"), False) == []
+    assert (shell / f"{_STEM}-shim.sh").exists()
+
+
+def test_hand_written_legacy_call_outside_sentinels_is_advised_not_edited(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".zshrc"
+    text = f'# mine\nclaude() {{ command {_STEM} "$@"; }}\nexport C=3\n'
+    rc.write_text(text)
+
+    maximalist.retire_legacy_doe_launchers(str(home), str(tmp_path / "settings-bin"), check_only=False)
+
+    assert rc.read_text() == text
+    assert f"{rc}:2" in capsys.readouterr().err
+
+
+def test_a_maximalist_block_not_calling_the_legacy_name_is_left_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    text = (
+        "# --- coordinator maximalist launch ---\n"
+        'claude() { command claude-author "$@"; }\n'
+        "# --- end coordinator maximalist launch ---\n"
+    )
+    rc.write_text(text)
+
+    maximalist.retire_legacy_doe_launchers(str(home), str(tmp_path / "settings-bin"), check_only=False)
+
+    assert rc.read_text() == text
+
+
+def test_kill_switch_refuses_legacy_caller_retirement(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    home, shell, rc = _legacy_box(tmp_path)
+    (home / ".local" / "bin" / _STEM).unlink()
+    before = rc.read_text()
+
+    maximalist.retire_legacy_doe_callers(str(home), str(tmp_path / "settings-bin"), False)
+
+    assert (shell / f"{_STEM}-shim.sh").exists()
+    assert rc.read_text() == before
+
+
+def test_check_only_retires_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    home, shell, rc = _legacy_box(tmp_path)
+    before = rc.read_text()
+
+    maximalist.retire_legacy_doe_launchers(str(home), str(tmp_path / "settings-bin"), check_only=True)
+
+    assert rc.read_text() == before
+    assert (shell / f"{_STEM}-shim.sh").exists()

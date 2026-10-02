@@ -53,7 +53,7 @@ def test_m_plus_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
     _put(repo, tshirt="M", route="plan")
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "touchpoint"
-    assert "sizing.accept_exit_criterion" in v.halt["touchpoint"] and REL in v.halt["touchpoint"]
+    assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]  # C2/C9: launcher line and REL in v.halt["touchpoint"]
 
 
 def test_refusals_halt_all_named_at_once(repo):

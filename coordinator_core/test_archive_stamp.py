@@ -22,6 +22,7 @@ from typing import Optional
 
 import pytest
 
+from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
 
 # Import guards — fire @register_op side effects before any handler is invoked
@@ -129,12 +130,7 @@ def _default_caller_session_id(monkeypatch):
 
 
 def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init")
-    _git(repo, "config", "commit.gpgsign", "false")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+    seeded_repo(repo, email="t@t", name="test")
 
 
 def _seed_handoff(repo: Path, name: str, status: str, deployment_state: str, extra: str = "") -> Path:
@@ -209,8 +205,7 @@ def _assert_shipped_in(path: Path, expected_sha: str) -> None:
     quoted value — asymmetric with its serialize_yaml_scalar write counterpart.
 
     2026-07-21: the product-side asymmetry is fixed — read_fm_field_unquoted is
-    the shared comparison-safe reader (frontmatter/primitives.py), and
-    handoff_ship_archive.py's replay check now uses it. The explicit local
+    the shared comparison-safe reader (frontmatter/primitives.py). The explicit local
     unquote workaround is retired in favour of that primitive. The assertion
     itself is unchanged and remains exact-equality — it is NOT loosened.
     """

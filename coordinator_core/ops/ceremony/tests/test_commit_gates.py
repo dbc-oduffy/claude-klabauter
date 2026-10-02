@@ -892,6 +892,23 @@ def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path, shape, path):
     assert live.diagnostics == oracle.diagnostics
 
 
+def test_deletion_gates_match_a_backslash_spelled_path(tmp_path):
+    """Both deletion gates normalize caller paths to the index's forward-slash
+    keys, so a Windows-spelled path still matches its own staged deletion."""
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "a/gone.md", "x")
+    _git(["add", "--", "a/gone.md"], repo)
+    _git(["commit", "-q", "-m", "seed"], repo)
+    _git(["rm", "-q", "a/gone.md"], repo)
+
+    blocked = deletion_block_gate("subject only\n", gate_paths=["a\\gone.md"], cwd=repo)
+    assert blocked.passed is False
+    assert any("no Step 2.67 block" in d for d in blocked.diagnostics)
+
+    undeclared = _cg.declared_deletion_gate(repo, ["a\\gone.md"], [])
+    assert undeclared.passed is False
+    declared = _cg.declared_deletion_gate(repo, ["a\\gone.md"], ["a\\gone.md"])
+    assert declared.passed is True
 # --- post-commit-reader gates -------------------------------------------------
 
 _QUAD_FILES = {

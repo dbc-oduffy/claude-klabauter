@@ -296,6 +296,39 @@ def _route_from_sizing_object(
     return None
 
 
+def _lane_from_sizing_object(
+    sizing_object_path: Optional[Union[str, Path]]
+) -> Optional[str]:
+    """The `estimate.tshirt` lane a sizing object states, or `None`.
+
+    `None` covers every not-a-usable-answer case (no object, unreadable,
+    unparseable, no string `estimate.tshirt`); a caller then admits every
+    segment regardless of its `lane:`."""
+    if sizing_object_path is None:
+        return None
+    try:
+        parsed = parse_yaml(Path(sizing_object_path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    estimate = parsed.get("estimate")
+    if not isinstance(estimate, dict):
+        return None
+    tshirt = estimate.get("tshirt")
+    return tshirt if isinstance(tshirt, str) and tshirt else None
+
+
+def _admit_by_lane(
+    segments: list[dict[str, Any]], lane: Optional[str]
+) -> list[dict[str, Any]]:
+    """Keep a segment iff it declares no `lane`, no lane was resolved, or the
+    lanes are equal."""
+    if lane is None:
+        return segments
+    return [s for s in segments if s.get("lane") is None or s["lane"] == lane]
+
+
 def _resolve_route(explicit_route: Optional[str]) -> str:
     """Resolve the active route per the `--route RESOLUTION CONTRACT` in
     the module docstring — ONE step, not a ladder, and no disk access.
@@ -691,8 +724,11 @@ def brief(
             filter_key="route",
             legal_values=SEGMENT_ROUTES,
         )
-        selected = select_segments(
-            segments, filter_key="route", active_values={resolved_route, "shared"}
+        selected = _admit_by_lane(
+            select_segments(
+                segments, filter_key="route", active_values={resolved_route, "shared"}
+            ),
+            _lane_from_sizing_object(sizing_object_path),
         )
         if not selected:
             residue_error = ResidueAssembleError(

@@ -68,7 +68,6 @@ disposition residue)
 
 from __future__ import annotations
 
-import logging
 import subprocess
 import time
 from pathlib import Path
@@ -85,7 +84,6 @@ from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 
 _NO_WINDOW = no_console_creationflags()
-_LOG = logging.getLogger(__name__)
 
 
 def _run_git(args, cwd: Path) -> subprocess.CompletedProcess:
@@ -147,22 +145,19 @@ def commit_own_artifact(
             return False
 
         if commit_result.returncode == 0:
-            try:
-                release_path = (
+            # Generator: a `relative_to` ValueError is consumed inside the
+            # helper's guard, so it retains the claim instead of failing the
+            # landed commit.
+            session_scope.release_committed_claims_or_retain(
+                root,
+                (
                     rel_path if not Path(rel_path).is_absolute()
                     else Path(rel_path).resolve().relative_to(root.resolve()).as_posix()
-                )
-                session_scope.release_committed_claims(
-                    session_core.resolve_session_id(str(root)),
-                    [release_path],
-                    cwd=str(root),
-                )
-            except Exception:
-                _LOG.debug(
-                    "commit_own_artifact: release_committed_claims failed "
-                    "post-commit; claim(s) retained",
-                    exc_info=True,
-                )
+                    for _ in (0,)
+                ),
+                session_core.resolve_session_id(str(root)),
+                "commit_own_artifact",
+            )
             return True
 
         last_stderr = commit_result.stderr.strip()

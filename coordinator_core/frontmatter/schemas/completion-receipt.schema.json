@@ -4,7 +4,7 @@
   "x-schema-name": "completion-receipt",
   "x-schema-version": "1.0.0",
   "x-bump-class": "major",
-  "x-bump-note": "1.0.0 initial. Per-baton run-end completion receipt, written by the engine at the run's terminal commit and never hand-authored. DR-097 push-side duty: ATTACHES (claude-klabauter vendors this schema and emits the matching CompletionReceipt cockpit entity); the hold is HOLDING until claude-klabauter vendors it, tracked by the memo thread 2026-10-01-coordinator-content-repo-em-completion-receipts. Spec backlink: pln-run-end-completion-receipts-69aeb1 § C0.",
+  "x-bump-note": "1.0.0 initial. Per-baton run-end completion receipt, written by the engine at the run's terminal commit and never hand-authored. DR-097 push-side duty: ATTACHES (the engine repo vendors this schema and emits the matching CompletionReceipt cockpit entity); the hold is HOLDING until the engine repo vendors it, tracked by the memo thread 2026-10-01-coordinator-content-repo-em-completion-receipts. Spec backlink: pln-run-end-completion-receipts-69aeb1 § C0.",
   "applies_to": "state/completion-receipts/**/*.md",
   "description": "What one execute-plan or mise-en-place run concluded for one baton, and who vouched for it. Stored as state/completion-receipts/<YYYY-MM>/<receipt_id>.md: this frontmatter, then a prose body (what concluded, what was observed, what remains). Append-only: a receipt is never edited after its commit; human approval is a new human-approved receipt whose supersedes names the agent-delivered one. `superseded` is never written into a file; a reader derives it from a later receipt's supersedes. The verdict lives here and never on the baton (DR-176). Spec backlink: pln-run-end-completion-receipts-69aeb1 § Pinned interfaces.",
   "type": "object",

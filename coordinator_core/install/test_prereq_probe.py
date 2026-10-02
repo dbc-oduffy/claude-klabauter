@@ -141,8 +141,8 @@ def test_probe_gh_pass_no_probe_repo(monkeypatch):
         calls["n"] += 1
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
-        if argv == ["gh", "auth", "status"]:
-            return _cp(0, "")
+        if argv == ["gh", "api", "user", "--jq", ".login"]:
+            return _cp(0, "octocat\n")
         raise AssertionError(f"unexpected call: {argv}")
 
     with mock.patch.object(pp, "_run", side_effect=fake_run):
@@ -155,7 +155,7 @@ def test_probe_gh_unauthenticated():
     def fake_run(argv, **kw):
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
-        if argv == ["gh", "auth", "status"]:
+        if argv == ["gh", "api", "user", "--jq", ".login"]:
             return _cp(1, "", "not logged in")
         raise AssertionError(argv)
 
@@ -171,9 +171,9 @@ def test_probe_gh_repo_subprobe_runs_when_env_set(monkeypatch):
     def fake_run(argv, **kw):
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
-        if argv == ["gh", "auth", "status"]:
-            return _cp(0, "")
-        if argv == ["gh", "repo", "view", "owner/repo"]:
+        if argv == ["gh", "api", "user", "--jq", ".login"]:
+            return _cp(0, "octocat\n")
+        if argv == ["gh", "api", "repos/owner/repo", "--jq", ".full_name"]:
             return _cp(0, "")
         raise AssertionError(argv)
 
@@ -213,7 +213,7 @@ def test_probe_ue_not_found_on_path(monkeypatch):
 
 def test_probe_clone_auth_gh_wins(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
-    with mock.patch.object(pp, "_run", return_value=_cp(0, "")):
+    with mock.patch.object(pp, "_run", return_value=_cp(0, "octocat\n")):
         rec = _parse(pp.probe_clone_auth())
     assert rec["status"] == "pass"
     assert "GitHub CLI" in rec["detail"]
@@ -223,7 +223,7 @@ def test_probe_clone_auth_ssh_success(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
-        if argv[:2] == ["gh", "auth"] or argv[:2] == ["glab", "auth"]:
+        if argv[:2] == ["gh", "api"] or argv[:2] == ["glab", "auth"]:
             return _cp(1, "", "not authenticated")
         if argv[0] == "ssh":
             return _cp(1, "", "Hi user! You've successfully authenticated")
@@ -239,7 +239,7 @@ def test_probe_clone_auth_offline_is_inconclusive(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
-        if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
+        if argv[:2] in (["gh", "api"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
             return _cp(1, "", "ssh: connect to host github.com port 22: Network is unreachable")
@@ -259,7 +259,7 @@ def test_probe_clone_auth_no_method_found_is_semi_hard(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
-        if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
+        if argv[:2] in (["gh", "api"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
             return _cp(1, "", "Permission denied (publickey).")
@@ -279,7 +279,7 @@ def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch):
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
-        if argv[:2] in (["gh", "auth"], ["glab", "auth"]):
+        if argv[:2] in (["gh", "api"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
             return None
@@ -684,3 +684,21 @@ def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeyp
     assert fresh.register_op.__module__ != "coordinator_core.ipc"
     marker = object()
     assert fresh.register_op("some.op")(marker) is marker
+
+
+def test_probe_gh_never_consults_gh_auth_status(monkeypatch):
+    """Cloud GH_TOKEN is a proxy placeholder: `gh auth status` fails while the API works."""
+    monkeypatch.delenv("COORDINATOR_GH_PROBE_REPO", raising=False)
+
+    def fake_run(argv, **kw):
+        if argv == ["gh", "--version"]:
+            return _cp(0, "gh version 2.40.0\n")
+        if argv[:3] == ["gh", "auth", "status"]:
+            return _cp(1, "", "The token in GH_TOKEN is invalid")
+        if argv == ["gh", "api", "user", "--jq", ".login"]:
+            return _cp(0, "octocat\n")
+        raise AssertionError(f"unexpected call: {argv}")
+
+    with mock.patch.object(pp, "_run", side_effect=fake_run):
+        assert _parse(pp.probe_gh())["status"] == "pass"
+        assert _parse(pp.probe_clone_auth())["status"] == "pass"

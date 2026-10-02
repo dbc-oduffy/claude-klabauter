@@ -57,6 +57,7 @@ Test coverage:
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -478,6 +479,53 @@ class ProcessGroupTeardownTest(unittest.TestCase):
 
         exit_code = mod._run_resolved_command("this-binary-does-not-exist-anywhere-12345")
         self.assertEqual(exit_code, 127)
+
+
+class TeardownHelperParityTest(unittest.TestCase):
+    """The two ceremony runners carry the process-group teardown helpers as
+    independent copies (each script must stay loadable on its own). Nothing
+    else asserts the copies agree, so a fix to the unproven Windows Job
+    Object leg applied to one runner would pass silently. Docstrings and
+    comments may differ; executable structure may not."""
+
+    _HELPERS = (
+        "_add_process_group_spawn_kwargs",
+        "_teardown_process_group",
+        "_install_group_teardown",
+        "_assign_windows_job_object",
+        "_close_windows_job_object",
+    )
+    _SIBLING = os.path.join(_BIN_DIR, "workday-complete-step1-validate.py")
+
+    @staticmethod
+    def _helper_structures(path: str) -> dict[str, str]:
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        out: dict[str, str] = {}
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in TeardownHelperParityTest._HELPERS:
+                body = node.body
+                if (
+                    body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    node.body = body[1:] or [ast.Pass()]
+                out[node.name] = ast.dump(node)
+        return out
+
+    def test_teardown_helpers_are_structurally_identical_across_runners(self) -> None:
+        a = self._helper_structures(_CLI)
+        b = self._helper_structures(self._SIBLING)
+        self.assertEqual(sorted(a), sorted(self._HELPERS), "helper missing from validate-fast-and-packageability.py")
+        self.assertEqual(sorted(b), sorted(self._HELPERS), "helper missing from workday-complete-step1-validate.py")
+        for name in self._HELPERS:
+            self.assertEqual(
+                a[name],
+                b[name],
+                f"{name} drifted between the two ceremony runners -- apply the change to both copies",
+            )
 
 
 if __name__ == "__main__":

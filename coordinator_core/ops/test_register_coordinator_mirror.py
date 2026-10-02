@@ -1,7 +1,7 @@
 """Characterization + parity tests for coordinator_core.ops.register_coordinator_mirror.
 
 Port of: register-coordinator-mirror.sh (DoE 6fb5fb37, 2026-07-22).
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7 [DEAD-CITATION: plan file never committed to this repo]
+Spec backlink: example-retrieval-repo archive/specs/2026-05/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7
 """
 from __future__ import annotations
 

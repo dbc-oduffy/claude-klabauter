@@ -328,7 +328,7 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
         text=True,
         cwd=str(pathlib.Path(__file__).resolve().parents[3]),
         timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
     )
     assert completed.returncode == 0, (
         "fresh-process live-violation-check run failed: stdout=%r stderr=%r"

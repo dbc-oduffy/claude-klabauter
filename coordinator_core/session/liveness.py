@@ -39,7 +39,7 @@ branch below sits in FRONT of the two-layer model, not inside it):
       unchanged path for non-harness runs, legacy meta.json without
       ``stable_pid``, and Guard-1 comm-miss.
 
-RAW-PID-LIVENESS floor (load-bearing invariant, docs/wiki/coordinator-tripwires.md):
+RAW-PID-LIVENESS floor (load-bearing invariant, coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md):
     Do NOT call ``ps -p`` / ``kill -0`` / ``psutil.pid_exists`` on the meta
     ``pid`` field for a LIVENESS decision — that field is a dead
     per-hook-subshell ``$$``, not the long-lived session process. Process-
@@ -82,20 +82,11 @@ Negative-spec:
     - Do NOT reintroduce a ``pid_alive`` gate on the ``pid`` field anywhere in
       the enumeration/liveness path — it silently zeroes the live set
       in-harness (the 2026-06-23 regression).
-    - Do NOT clamp negative elapsed in ``live_session_ids`` (the non-stable
-      branch) — bash routes it through ``_cs_is_session_live`` UNCLAMPED, whose
-      ``^[0-9]+$`` guard rejects a negative string -> not-live. This DIFFERS
-      from ``session_live``'s Layer-2 arm and ``active_sessions``, which DO
-      clamp. Honest accounting (Review: staff-eng-review D, 2026-08-10): the
-      bash originals this ported are gone, so "faithful to the bash
-      originals" is no longer a live rationale — this arm fails DEAD under
-      backward clock skew, contrary to this module's own fail-open-never-
-      fail-dead bias elsewhere. The behaviour is preserved anyway because
-      changing it changes ``live_session_ids``, which feeds
-      ``compute_scope`` and ``_rm_peer_claim_of`` — a separate blast radius
-      that must not ride along with this pass. Tracked as its own
-      debt-backlog entry pending a dedicated assessment of
-      ``live_session_ids``' hot consumers.
+    - Do NOT leave negative elapsed unclamped on any Layer-2 arm: backward
+      clock skew would read a live session DEAD, against this module's
+      fail-open bias, and ``live_session_ids`` feeds ``compute_scope`` and
+      ``_rm_peer_claim_of``. Both Layer-2 arms clamp ``elapsed`` to ``max(0, ...)``,
+      as ``session_live`` and ``active_sessions`` do.
     - Do NOT let a meta-less/unparseable-meta session dir read confirmed-DEAD
       by defaulting its recency to epoch-0 — that let a peer wrongfully take
       over a session that was merely mid-write (DoE 642195ba, follow-up
@@ -125,7 +116,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -521,9 +511,8 @@ def session_live_with_basis(
     describe different instants or different arithmetic (the TOCTOU and the
     clamp divergence a separate ``session_verdict`` read had against
     ``session_live``). Do not source ``live`` from ``live_session_verdicts`` /
-    ``session_verdict`` instead: their stable_pid-absent Layer 2 is UNCLAMPED
-    and resolves a backward clock step DEAD, which would flip an arbitration
-    surface fail-open (module negative-spec).
+    ``session_verdict`` instead: that is a second read at a different instant
+    (TOCTOU), and the verdict and basis must come from one decision.
 
     Vocabulary is ``holder_evidence.liveness_basis``'s minus ``"no-record"``
     (a verdict ``session_live`` does not produce: an evidence-free dir falls to
@@ -883,8 +872,6 @@ def _read_relinquishment_marker(
     )
 
 
-#: Hard ceiling on the single `git cat-file -e` spawn (brightline: 500ms).
-_HANDOFF_LANDED_TIMEOUT_S = 0.5
 
 
 def _handoff_landed(handoff_path: str, worktree: Path) -> bool:
@@ -900,26 +887,15 @@ def _handoff_landed(handoff_path: str, worktree: Path) -> bool:
         )
     except (OSError, ValueError):
         return False
-    from coordinator_core.win_portability import leaf_spawn_creationflags
+    from coordinator_core.git.run import run_git
 
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "-e", f"HEAD:{rel}"],
-            cwd=str(worktree),
-            capture_output=True,
-            text=True,
-            timeout=_HANDOFF_LANDED_TIMEOUT_S,
-            **leaf_spawn_creationflags(),
-        )
-    except subprocess.TimeoutExpired:
+    result = run_git(["cat-file", "-e", f"HEAD:{rel}"], cwd=str(worktree))
+    if result.timed_out:
         print(
-            f"liveness: git cat-file for {rel} exceeded {_HANDOFF_LANDED_TIMEOUT_S}s; "
+            f"liveness: git cat-file for {rel} timed out; "
             "treating the handoff as not landed (no relinquishment evidence)",
             file=sys.stderr,
         )
-        return False
-    except OSError:
-        return False
     return result.returncode == 0
 
 
@@ -1417,8 +1393,7 @@ def _verdict_for_sdir(
             elapsed = 0
         return (is_session_live(pid, elapsed), basis, elapsed)
 
-    # stable_pid absent -- live_session_ids' own Layer-2 arm: UNCLAMPED
-    # elapsed (module negative-spec — do NOT clamp here).
+    # stable_pid absent -- Layer-2 arm, CLAMPED elapsed like the arm above.
     pid = core.read_meta_field(sdir, "pid")
     last_iso = core.read_meta_field(sdir, "last_activity")
     last_epoch = core.iso_to_epoch(last_iso)
@@ -1429,7 +1404,7 @@ def _verdict_for_sdir(
         basis = "recency-window-mtime"
     else:
         basis = "recency-window"
-    elapsed = now_epoch - last_epoch  # UNCLAMPED — see module negative-spec
+    elapsed = max(0, now_epoch - last_epoch)
     return (is_session_live(pid, elapsed), basis, elapsed)
 
 
@@ -1448,14 +1423,7 @@ def live_session_verdicts(
     over this same function, so there is exactly one per-id liveness
     computation left in the module.
 
-    **This is NOT a per-id loop over ``session_live``, reproduced as a
-    wrapper.** That natural-looking implementation would CLAMP negative
-    elapsed on the Layer-2 arm taken when ``stable_pid`` is absent, silently
-    ERASING this module's own negative spec: "Do NOT clamp negative elapsed in
-    ``live_session_ids`` (the non-stable branch) ... This DIFFERS from
-    ``session_live``'s Layer-2 arm ... the divergence is faithful to the bash
-    originals." So this function reproduces BOTH arms exactly as they exist
-    today, per id:
+    Per id, the arms are:
       - ``stable_pid`` present AND (``stable_pid_lstart`` OR
         ``stable_pid_start_epoch``) present -> Layer 1
         (``core.stable_pid_alive``, matching ``session_live``'s own Layer-1
@@ -1472,13 +1440,11 @@ def live_session_verdicts(
         meta-less/mid-write recency-SOURCE substitution
         (``_dir_recency_fallback_epoch``, DoE 642195ba/88929bea) when
         ``last_activity`` is empty/unparseable.
-      - ``stable_pid`` absent -> ``live_session_ids``'s OWN Layer-2 arm, using
-        the SAME UNCLAMPED ``elapsed = now - last_epoch`` it uses today (the
-        module negative-spec divergence above), with the identical
-        meta-less/mid-write recency-SOURCE substitution.
-    ``age_sec`` on both Layer-2 arms is that arm's own ``elapsed`` value
-    (clamped or unclamped as appropriate) — evidence-only, never re-derived a
-    second way.
+      - ``stable_pid`` absent -> Layer-2 arm with the same CLAMPED
+        ``elapsed`` and the identical meta-less/mid-write recency-SOURCE
+        substitution.
+    ``age_sec`` on both Layer-2 arms is that arm's own clamped ``elapsed`` —
+    evidence-only, never re-derived a second way.
 
     **The seam stays PER-ID ONLY.** A call-level "no sessions dir" vs "all
     peers dead" distinction cannot be carried inside an ``id -> verdict``
@@ -1643,11 +1609,8 @@ def live_session_ids(cwd: Optional[str] = None) -> FrozenSet[str]:
     Return the frozenset of currently-live session ids. THIN DERIVED WRAPPER
     over ``live_session_verdicts()`` (the ONE shared per-id liveness seam) —
     existing callers are untouched, and the output is set-identical to before
-    this wrapping for every fixture, including the negative-elapsed/
-    clock-skew case (``live_session_verdicts`` reproduces this function's own
-    UNCLAMPED Layer-2 arm exactly; see that function's docstring for why a
-    naive per-id loop over ``session_live`` would have silently clamped it
-    away). This is the NATIVE replacement for the ``coordinator_core.liveness``
+    this wrapping, and a negative-elapsed/clock-skew session reads live (the
+    Layer-2 arms clamp). This is the NATIVE replacement for the ``coordinator_core.liveness``
     bash bridge.
 
     Directory iteration order is UNSORTED (the frozenset return makes order

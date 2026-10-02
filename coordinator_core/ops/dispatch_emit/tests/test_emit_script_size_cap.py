@@ -66,7 +66,7 @@ def test_inventory_over_max_rows_is_refused_before_compose(tmp_path, monkeypatch
     from coordinator_core.ops.dispatch_emit import inventory_mint
 
     monkeypatch.setattr(inventory_mint, "parse_chunk_table", lambda text: [])
-    monkeypatch.setattr(inventory_mint, "mint_rows", lambda rows, inventory_path=None: [{}] * 3)
+    monkeypatch.setattr(inventory_mint, "mint_rows", lambda rows, inventory_path=None, **_kw: [{}] * 3)
     inv = tmp_path / "inv.md"
     inv.write_text("---\nrun_id: r\n---\n", encoding="utf-8")
 

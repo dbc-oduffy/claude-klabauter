@@ -76,17 +76,12 @@ from __future__ import annotations
 
 import glob
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
-
-#: Bounded well under memo.transition's op-level budget (mirrors dag.py's
-#: single bounded git-log read, `_EVER_TRACKED_CACHE` leg: timeout=3).
-_GIT_TIMEOUT_S = 3.0
 
 VERDICTS = (
     "no-declared-surface",
@@ -128,20 +123,14 @@ def declared_surface(frontmatter: Mapping[str, Any]) -> list[str]:
 
 
 def _touched_paths(sha: str, git_root: Path) -> tuple[list[str] | None, str | None]:
-    try:
-        result = subprocess.run(
-            [
-                "git", "log", "-1", "--root", "--diff-merges=first-parent",
-                "--name-only", "--format=", f"{sha}^{{commit}}",
-            ],
-            cwd=str(git_root),
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=_GIT_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except Exception:
+    result = run_git(
+        [
+            "log", "-1", "--root", "--diff-merges=first-parent",
+            "--name-only", "--format=", f"{sha}^{{commit}}",
+        ],
+        cwd=str(git_root),
+    )
+    if result.timed_out or result.returncode == 127:
         return None, "advisory-failed"
     if result.returncode != 0:
         return None, "not-a-commit-here"

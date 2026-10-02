@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from pathlib import Path
 
 from coordinator_core.install.substrate import _derive_agent_helper_target_map
@@ -88,10 +87,6 @@ def _fully_stubbed_brief(monkeypatch, cadence: str, tmp_path: Path) -> dict:
 
     monkeypatch.setattr(rhr, "_cmd_claude_klabauter_bin_sentinel", _fake_claude_klabauter_bin_sentinel)
     monkeypatch.setattr(rhr, "_cmd_ceremony_hook", _fake_ceremony_hook)
-
-    monkeypatch.setattr(
-        rhr, "_reap_survey", lambda _root: SimpleNamespace(would_release=1, would_reclaim=0)
-    )
 
     from coordinator_core.ops import check_weekly_staleness
 

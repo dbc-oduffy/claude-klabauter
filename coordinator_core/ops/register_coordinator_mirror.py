@@ -8,7 +8,7 @@ install IS the canonical source (~/.claude/) — no inward propagation step is n
 Registering this structural fact lets bin/check-plugin-drift.sh surface it as
 `n/a-by-design` rather than treating it as an unchecked entry.
 
-Spec: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7
+Spec: example-retrieval-repo archive/specs/2026-05/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 5 / AC-7
 Port of: register-coordinator-mirror.sh (DoE 6fb5fb37, 2026-07-22)
 
 Division of labor (DR-047 — DoE owns contract, claude-klabauter owns engine): the DoE-side

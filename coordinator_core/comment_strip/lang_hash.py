@@ -18,9 +18,10 @@ _WORD_BOUNDARY_CHARS = " \t\n;|&()<>{}[]!﻿"
 
 def _is_comment_start(s: str, i: int) -> bool:
     """`#` starts a comment only at a word boundary — preceded by whitespace, a shell/PS
-    metacharacter, or start-of-text. Excludes `${#x}`/`$#` (preceded by `$`/`{`) and a mid-word
+    metacharacter, or start-of-text. Excludes `$#` (preceded by `$`) and a mid-word
     `#` like `foo#bar` or a YAML/TOML unquoted scalar `http://x#frag`, none of which are
-    comments in bash, PowerShell, YAML, or TOML."""
+    comments in bash, PowerShell, YAML, or TOML. A `#` inside `${...}` is excluded by the
+    caller's expansion-depth tracking, not here."""
     return i == 0 or s[i - 1] in _WORD_BOUNDARY_CHARS
 
 
@@ -31,6 +32,11 @@ def find_comment_spans(s: str, *, shell_heredocs: bool = False,
     n = len(s)
     in_str: str | None = None
     pending_heredocs: list[str] = []
+    # Open `${...}` depth: a `#` inside a parameter expansion (`${#a[@]}`, `${a[0]#p}`) is an
+    # operator, never a comment, whatever precedes it. Shell/PowerShell only — YAML/TOML have
+    # no such construct and an unclosed `${` there must not swallow later comments.
+    param_depth = 0
+    track_params = shell_heredocs or powershell_block
     while i < n:
         c = s[i]
         if in_str is not None:
@@ -68,6 +74,16 @@ def find_comment_spans(s: str, *, shell_heredocs: bool = False,
             if m and s[i + 2:i + 3] == "\n":
                 in_str = "ps-here-dq" if m.group(1) == '"' else "ps-here-sq"
                 i += 3
+                continue
+        if track_params:
+            if c == "$" and s.startswith("{", i + 1):
+                param_depth += 1
+                i += 2
+                continue
+            if param_depth and c != "'" and c != '"':
+                if c == "}":
+                    param_depth -= 1
+                i += 1
                 continue
         if c in ("'", '"'):
             in_str = c

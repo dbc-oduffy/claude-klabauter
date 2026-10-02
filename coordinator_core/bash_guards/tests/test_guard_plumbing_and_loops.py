@@ -102,7 +102,20 @@ def _payload(command):
 
 
 _HEAD_TAIL_CMD = "find . -type f | head -n 5"
-_HEAD_TAIL_UNSERVED_CMD = "docker ps | head -n 5"
+
+# A single-process upstream (`docker`, `git log`) feeding head/tail: the only
+# alternative on offer is python3 + sh + generator, more spawns than the
+# command itself, so the guard stays silent.
+_HEAD_TAIL_SINGLE_PROCESS_CMDS = (
+    "docker ps | head -n 5",
+    "git log --oneline | head -5",
+    "docker ps | tail -n 3",
+    "cd /tmp && git log --oneline | head -3",
+)
+
+# `xargs` fans out one spawn per batch -- the generator is itself multi-spawn,
+# so the head/tail advisory still fires, with the verbatim python3 offer.
+_HEAD_TAIL_UNSERVED_CMD = "xargs -n1 stat | head -n 5"
 
 # A genuine for-loop (FOR_LOOP is the shape-classifier's primary match)
 # immediately followed by a literal top-level `find ... -exec rm {} \;`
@@ -120,13 +133,13 @@ _FOR_LOOP_FIND_EXEC_CMD = (
 # `find -exec` anywhere, so `check_find_exec_rewrite` returns `None`.
 _FOR_LOOP_BARE_GLOB_CMD = 'for f in *.txt; do rm "$f"; done'
 
-# `docker ps | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped (a
-# two-segment `generator | head` pipeline), but `docker` is not one of
+# `xargs -n1 stat | head -n 20` -- genuinely HEAD_TAIL_PLUMBING-shaped (a
+# two-segment `generator | head` pipeline), but `xargs` is not one of
 # `check_head_tail_plumbing_rewrite`'s recognized upstream generators
-# (find/ls/grep), so that seam returns a BARE ADVISORY (no `updatedInput`)
-# saying the rewrite is "not offered automatically" -- NOT a confirmed
-# outlet. This is a common, entirely benign command that must never deny.
-_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD = "docker ps | head -n 20"
+# (find/ls/grep), so that seam yields no `updatedInput` -- NOT a confirmed
+# outlet. `xargs` is multi-spawn, so the advisory still fires; it must never
+# deny.
+_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD = "xargs -n1 stat | head -n 20"
 
 # A three-segment pipeline into `tail` -- HEAD_TAIL_PLUMBING-shaped, but
 # `check_head_tail_plumbing_rewrite`'s own two-segment-only shape means this
@@ -186,6 +199,30 @@ class TestHeadTailPlumbing:
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
         assert guard._pl_python3_invocation() in ctx
+
+    @pytest.mark.parametrize("host_is_windows", [True, False])
+    @pytest.mark.parametrize("cmd", _HEAD_TAIL_SINGLE_PROCESS_CMDS)
+    def test_single_process_upstream_is_silent(self, cmd, host_is_windows):
+        assert guard.check(_payload(cmd), host_is_windows=host_is_windows) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "xargs -n1 stat | head -n 5",
+            'find . -name "*.log" -exec stat {} \\; | tail -n 3',
+            "for f in *.txt; do echo $f; done | head -3",
+            "cat file.txt | tail -n +2 | sort | uniq -c",
+        ],
+    )
+    def test_multi_spawn_generator_still_advises(self, cmd):
+        assert guard.check(_payload(cmd)) is not None
+
+    def test_single_process_upstream_keeps_label_echo_advisory(self):
+        ctx = _advisory_context(
+            guard.check(_payload('git log | head -3; echo "--- done ---"'))
+        )
+        assert "label-or-exit-echo" in ctx
+        assert "head-tail-plumbing" not in ctx
 
     def test_advisory_message_names_its_escape_hatch(self):
         # RETARGETED (DR-280, 2026-08-07): was
@@ -478,6 +515,7 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
 
     def _run(self, cmd):
         return subprocess.run(
+            # popup-intentional-last-resort: shell=True spawns a
             # cmd.exe intermediary that CREATE_NO_WINDOW does not suppress; the
             # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
             cmd, shell=True, capture_output=True, text=True, check=True
@@ -767,7 +805,7 @@ class TestLabelOrExitEcho:
 
     _LABEL_ONLY = 'echo "--- status ---"; pwd; git status'
     _EXIT_READOUT = "make build; echo $?"
-    _HEAD_TAIL_PLUS_LABEL = 'find . -type f | head -n 5; echo "--- done ---"'
+    _HEAD_TAIL_PLUS_LABEL = 'xargs -n1 stat | head -n 5; echo "--- done ---"'
     _BANNER_PLUS_LABEL = 'echo "=== a ==="; grep foo f.txt; git status; echo "--- b"'
 
     def test_label_only_fires_own_advisory(self):

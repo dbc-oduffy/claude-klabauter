@@ -80,11 +80,15 @@ def _resolvers() -> list[tuple[Path, ast.FunctionDef]]:
     found: list[tuple[Path, ast.FunctionDef]] = []
     for path in sorted(_CORE_ROOT.rglob("*.py")):
         try:
+            text = path.read_text(encoding="utf-8")
+            # A hit is a FunctionDef whose name is one of `_TARGET_NAMES`.
+            if not any(name in text for name in _TARGET_NAMES):
+                continue
             # Unrelated modules in the tree carry invalid-escape SyntaxWarnings;
             # they are not this gate's subject and must not surface as its noise.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(path.read_text(encoding="utf-8"))
+                tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
         for node in ast.walk(tree):

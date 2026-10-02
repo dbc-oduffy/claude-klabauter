@@ -229,3 +229,38 @@ def test_generator_refuses_a_new_renameable_local_row_outside_the_slice_list(
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+@pytest.mark.parametrize(
+    "rel,line,expected",
+    [
+        ("coordinator_core/tests/test_x.py", 'p.write_text("claude_klabauter_helper = 1\\n")', "FIXTURE-LITERAL"),
+        ("coordinator_core/tests/test_x.py", 'f = d / "new_claude_klabauter_thing.py"', "FIXTURE-LITERAL"),
+        ("coordinator_core/tests/test_x.py", 'x = f"{claude_klabauter_root}/a"', "RENAMEABLE-LOCAL"),
+        ("coordinator_core/tests/test_x.py", "claude_klabauter_helper = 1", "RENAMEABLE-LOCAL"),
+        ("coordinator_core/x.py", 'p.write_text("claude_klabauter_helper = 1\\n")', "RENAMEABLE-LOCAL"),
+        ("coordinator_core/tests/test_x.py", "def test_claude_klabauter_em_suggests_it(self):", "FIXTURE-LITERAL"),
+        ("coordinator_core/tests/test_x.py", "def test_expected_claude_klabauter_spelling(tmp_path):", "FIXTURE-LITERAL"),
+        ("coordinator_core/tests/test_x.py", "def test_a(claude_klabauter_root):", "RENAMEABLE-LOCAL"),
+        ("coordinator_core/tests/test_x.py", "def helper_claude_klabauter(x):", "RENAMEABLE-LOCAL"),
+        ("coordinator_core/x.py", "def test_claude_klabauter_thing():", "RENAMEABLE-LOCAL"),
+    ],
+)
+def test_a_tests_own_fixture_literal_is_not_a_renameable_row(rel, line, expected):
+    gen = _load_generator_module()
+    assert gen._classify_line(rel, line, False)[0] == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("def test_to_claude_klabauter_memo_is_engine():", True),
+        ('    registry_value = _registry_key(d, "claude-klabauter")', True),
+        ('    env_override = os.environ.get("CLAUDE_KLABAUTER_TEST_CONTENT_ROOT")', True),
+        ("def test_claude_klabauter_em_suggests_claude_klabauter_em(self):", False),
+        ("def test_expected_claude_klabauter_spelling(tmp_path):", False),
+        ("x = 1", False),
+    ],
+)
+def test_a_line_whose_noun_is_only_a_repo_key_or_env_var_is_a_real_identifier(text, expected):
+    assert _load_generator_module()._is_real_identifier_line(text) is expected

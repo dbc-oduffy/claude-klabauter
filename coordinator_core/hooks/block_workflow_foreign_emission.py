@@ -54,7 +54,7 @@ REMEDIATION STRING NAMES THE S1-SHIPPED LAUNCHER (per this row's own body):
 (S1-C7) invoked through its settings-home launcher, not run directly with
 `python3 <plugin-root>/bin/emit-dispatch-workflow.py` — the source script's
 own `_emitter_invocation`/`_emitter_root_candidates` (a `CLAUDE_PLUGIN_ROOT`/
-`.coordinator-content-root`-probing `python3 <path>` prefix) is REPLACED with
+pointer-probing `python3 <path>` prefix) is REPLACED with
 `_emitter_launcher_invocation`, which names
 `<settings-home>/bin/emit-dispatch-workflow` — the launcher
 `scripts/setup.py` writes for every warm-allowlisted entrypoint (this

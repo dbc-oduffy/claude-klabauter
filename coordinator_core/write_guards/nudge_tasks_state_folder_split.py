@@ -37,7 +37,7 @@ path-segment boundary, not a bare substring — mirrors
 ``nudge_baton_body_bar._matches_baton_path``'s anchoring discipline so a
 coincidental substring like ``vendor/mytasks/lessons.md`` does not
 false-positive) is tested against the literal STEMS+GLOBS array below, taken
-verbatim from ``docs/wiki/coordinator-tripwires.md`` § tasks-state-folder-
+verbatim from ``coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md`` § tasks-state-folder-
 split's "Always-on `state/` substrate (enumerated allowlist)" line:
 orientation_cache, lessons, handoffs/, trackers, queues, ledgers, memos/,
 review-trail/, week-changelog/, audits/, recovery/, scratch/*,
@@ -104,7 +104,7 @@ always-on. C14z should keep that one explanatory clause in the always-on
 file (or fold it into the advisory text itself) rather than treating this
 guard as a full discharge of the whole paragraph.
 
-Spec backlink: docs/wiki/coordinator-tripwires.md § tasks-state-folder-split
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md § tasks-state-folder-split
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 140
 
 #: STEMS+GLOBS — transcribed verbatim (order and wording) from
-#: docs/wiki/coordinator-tripwires.md § tasks-state-folder-split's
+#: coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md § tasks-state-folder-split's
 #: "Always-on `state/` substrate (enumerated allowlist)" line. Each entry is
 #: (label-as-written-in-the-wiki, is_directory_form, is_category_word).
 #: is_directory_form mirrors the wiki's own trailing "/" spelling for

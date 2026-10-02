@@ -466,6 +466,73 @@ class TestCliSmoke:
 # ---------------------------------------------------------------------------
 
 
+class TestStandingGrant:
+    """A PM authorization the EM passes explicitly answers its asks in
+    `decisions`; it is never re-raised and never inferred."""
+
+    def _blitz_jps(self):
+        from coordinator_core.backlog_grind_assemble import readers_blitz as rb
+        from coordinator_core.backlog_grind_assemble.directives import (
+            build_commit_readiness_gate,
+            build_tier_u_grant_flow,
+        )
+
+        commit = build_commit_readiness_gate(
+            id=rb.COMMIT_READINESS_JP_ID, question="commit?", evidence="e",
+            reason="insufficient-evidence", resolves=[],
+        )
+        tier_u, _ = build_tier_u_grant_flow(
+            jp_id="j-bug-blitz-tier-u-grant", write_directive_id="d-w",
+            subject="s", evidence="e", reason="insufficient-evidence", note="n",
+        )
+        other = build_untrusted_gate_judgment_point(
+            id="j-other", question="q?",
+            dispositions=[build_disposition("proceed", resolves=[])],
+            evidence="e", reason="insufficient-evidence",
+        )
+        return [commit, tier_u, other]
+
+    def _patch(self, monkeypatch):
+        jps = self._blitz_jps()
+        for cadence in _CADENCES:
+            reader = getattr(bga, f"readers_{cadence.replace('-', '_')}")
+            own = cadence == "bug-blitz"
+            monkeypatch.setattr(
+                reader, "collect",
+                lambda c, *, run_id=None, own=own: SimpleNamespace(
+                    directives=[], judgment_points=list(jps) if own else []
+                ),
+            )
+
+    def test_grants_answer_their_asks_and_record_the_basis(self, monkeypatch):
+        self._patch(monkeypatch)
+        out = bga.brief("bug-blitz", standing_grants=("commit", "tests")).decision_object
+        assert [jp["id"] for jp in out["judgment_points"]] == ["j-other"]
+        assert out["decisions"]["j-bug-blitz-commit-readiness"]["disposition"] == "ready-to-commit"
+        assert out["decisions"]["j-bug-blitz-tier-u-grant"]["basis"] == "standing-grant:tests"
+        assert out["artifact"]["standing_grants"] == ["commit", "tests"]
+
+    def test_no_grant_raises_every_ask(self, monkeypatch):
+        self._patch(monkeypatch)
+        out = bga.brief("bug-blitz").decision_object
+        assert len(out["judgment_points"]) == 3
+        assert not out["decisions"]
+
+    def test_unknown_grant_is_a_usage_error(self):
+        assert bga.main(["brief", "bug-blitz", "--standing-grant", "merge"]) == bga.EXIT_USAGE
+
+    def test_cli_forwards_the_grant(self, monkeypatch):
+        seen = {}
+
+        def _fake(cadence_arg, *, run_id=None, repo_root=None, standing_grants=()):
+            seen["g"] = standing_grants
+            return bga.BriefResult(decision_object={}, cadence=cadence_arg)
+
+        monkeypatch.setattr(bga, "brief", _fake)
+        assert bga.main(["brief", "bug-blitz", "--standing-grant", "commit,tests"]) == bga.EXIT_OK
+        assert seen["g"] == ("commit", "tests")
+
+
 class TestApplyRunIdPassthrough:
     def test_supplied_run_id_reaches_the_recomputed_brief(self, monkeypatch):
         seen: dict = {}
@@ -1636,36 +1703,6 @@ class TestHaikuVerifierDispatchEndToEndThroughApply:
         assert matches, "expected a dispatch-haiku-verifier directive to dispatch for mise-en-place"
         spec = matches[0]["spec"]
         assert spec["enum_set"] == list(bga_verifier.MISE_VERIFIER_ENUM)
-
-    def test_bug_blitz_cadence_verifier_dispatch_carries_bug_blitz_enum_via_extra_directives(
-        self, tmp_path
-    ):
-        # readers_blitz.build_verifier_dispatch is called at wave-verify
-        # time (once a DONE summary exists), never from collect() -- reach
-        # it the same sanctioned way the spinoff-handoff test above does.
-        verifier_directive = bga.readers_bug_blitz.build_verifier_dispatch(
-            id="d-verifier-f3-test", run_id="run-f3-test", item_id="x-1"
-        )
-
-        exit_code, report = bga_apply.apply(
-            "bug-blitz",
-            session_id="sess-f3-blitz",
-            repo_root=tmp_path,
-            extra_directives=[verifier_directive],
-        )
-
-        # bug-blitz's Tier-U grant is an unanswered judgment point here, so the
-        # run halts at it; every directive not gated on it still lands.
-        assert exit_code == bga_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
-        assert report["unresolved_judgment_points"] == ["j-bug-blitz-tier-u-grant"]
-        results = report.get("results", [])
-        matches = [
-            r["detail"] for r in results
-            if r.get("detail", {}).get("cli") == bga_verifier.HAIKU_VERIFIER_CLI
-        ]
-        assert matches, "expected a dispatch-haiku-verifier directive to dispatch for bug-blitz"
-        spec = matches[0]["spec"]
-        assert spec["enum_set"] == list(bga_verifier.BUG_BLITZ_VERIFIER_ENUM)
 
     def test_bug_blitz_and_mise_verifier_enums_are_not_the_same_set(self):
         # The no-merge negative-spec (verifier.py's own docstring: "Do NOT
@@ -3312,6 +3349,32 @@ class TestMintRunIdUniquenessAC4:
         )
         assert minted.run_id != "collide-1234abcd"
         assert calls["n"] >= 2
+
+    @pytest.mark.parametrize("max_attempts", [1, 3])
+    def test_exhausted_attempts_raise_naming_the_edited_cap(self, tmp_path, monkeypatch, max_attempts):
+        # Pins the exhaustion leg against an edited `_MINT_MAX_ATTEMPTS`:
+        # exactly that many draws, then a refusal, never a colliding mint.
+        inventory_dir = tmp_path / "state" / "mise-inventory"
+        inventory_dir.mkdir(parents=True)
+        (inventory_dir / "collide-1234abcd.md").write_text("taken")
+        calls = {"n": 0}
+
+        def _always_collide():
+            calls["n"] += 1
+            return "collide-1234abcd"
+
+        mod = bga.readers_mise_en_place
+        monkeypatch.setattr(mod, "_MINT_MAX_ATTEMPTS", max_attempts)
+        monkeypatch.setattr(mod, "_generate_candidate_run_id", _always_collide)
+        with pytest.raises(RuntimeError, match=f"{max_attempts} consecutive collisions"):
+            mod.mint_run_id("mise-en-place", repo_root=tmp_path)
+        assert calls["n"] == max_attempts
+
+    def test_candidate_failing_its_own_shape_raises_assertion(self, tmp_path, monkeypatch):
+        mod = bga.readers_mise_en_place
+        monkeypatch.setattr(mod, "_generate_candidate_run_id", lambda: "not a run id!")
+        with pytest.raises(AssertionError, match="fails its own _RUN_ID_ARG_RE"):
+            mod.mint_run_id("mise-en-place", repo_root=tmp_path)
 
 
 class TestMintRunIdCadenceDispatchAC5:

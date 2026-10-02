@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,13 +35,14 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
     bookkeep_wave,
     review_wave_bookkeeping_stem,
 )
-from coordinator_core.win_portability import leaf_spawn_creationflags
 
 
 _GIT_TIMEOUT_SECS = 30
@@ -53,14 +53,10 @@ class SupersedeRefused(ValueError):
 
 
 def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
-    proc = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+    proc = run_git(
+        ["merge-base", "--is-ancestor", ancestor, descendant],
         cwd=str(repo_root),
-        capture_output=True,
-        text=True,
         timeout=_GIT_TIMEOUT_SECS,
-        stdin=subprocess.DEVNULL,
-        **leaf_spawn_creationflags(),
     )
     if proc.returncode not in (0, 1):
         raise SupersedeRefused(
@@ -68,6 +64,28 @@ def _is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
             f"{proc.stderr.strip()}"
         )
     return proc.returncode == 0
+
+
+def _resolve_plan_id(repo_root: Path, plan: str) -> str:
+    """``plan`` as a ``pln-`` id: a ``pln-`` string passes through; anything
+    else is a plan file path (repo-root-relative or absolute) whose
+    frontmatter ``plan_id`` is returned. ``review_stamp.mint`` matches the
+    record's ``plan_id`` against the plan's own, so a path stored verbatim
+    leaves the run unstampable."""
+    if plan.startswith("pln-"):
+        return plan
+    plan_path = Path(plan)
+    if not plan_path.is_absolute():
+        plan_path = repo_root / plan_path
+    try:
+        text = plan_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    except OSError as exc:
+        raise SupersedeRefused(f"plan {plan!r} is neither a pln- id nor a readable plan file: {exc}")
+    split = split_frontmatter(text)
+    plan_id = read_fm_field_unquoted(split.fm_text, "plan_id") if split is not None else None
+    if not plan_id or not str(plan_id).startswith("pln-"):
+        raise SupersedeRefused(f"plan file {plan!r} carries no pln- plan_id in its frontmatter")
+    return str(plan_id)
 
 
 def record_superseding_review(
@@ -82,7 +100,9 @@ def record_superseding_review(
     supersedes: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Write the superseding record; returns ``{record_path, record}`` with
-    ``record_path`` repo-root-relative. Raises ``SupersedeRefused``."""
+    ``record_path`` repo-root-relative. ``plan`` is a ``pln-`` id or a plan
+    file path. Raises ``SupersedeRefused``."""
+    plan = _resolve_plan_id(repo_root, plan)
     base = str(commit_range.get("base") or "")
     head = str(commit_range.get("head") or "")
     if not base or not head:
@@ -134,6 +154,7 @@ def record_superseding_review(
             fh.write(out)
     except FileExistsError:
         raise SupersedeRefused(f"superseding record already exists: {rel.as_posix()}")
+    declare_write(str(target))
     return {"record_path": rel.as_posix(), "record": fm}
 
 

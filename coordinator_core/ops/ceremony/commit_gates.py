@@ -362,6 +362,8 @@ def deletion_block_gate(
                       Assertion-3 inverse check.
     """
     has_block = has_step267_block(msg_text)
+    # Index/HEAD keys are forward-slash; normalize once here, as commit_paths does.
+    gate_paths = [p.replace("\\", "/") for p in gate_paths]
     gate_scope: Set[str] = set(gate_paths)
 
     if not whole_index and not gate_paths and not has_block:
@@ -480,15 +482,10 @@ def declared_deletion_gate(
 ) -> GateOutcome:
     """Every IN-SCOPE staged deletion must be declared in `declared_deletions`.
 
-    SIBLING to `deletion_block_gate`, not a replacement.
-    `deletion_block_gate`'s Assertion-3 requires a "Step 2.67"
-    commit-body block, a `workstream-complete` ceremony convention the
-    general committer (`ceremony.commit_v2`) cannot assume -- measured, it
-    would refuse ~86% of this repo's commits. This gate replaces the prose
-    oracle with a structural one: `ceremony.commit_v2` receives
-    `params.deleted_paths`, an explicit declaration of what the commit
-    removes, so accountability becomes "does staged reality match the
-    declaration" with no commit-message parsing at all.
+    SIBLING to `deletion_block_gate`, not a replacement: its Assertion-3 needs a
+    "Step 2.67" commit-body block, a convention `ceremony.commit_v2` cannot assume
+    (it would refuse ~86% of this repo's commits). This gate checks staged reality
+    against `params.deleted_paths`, with no commit-message parsing.
 
     Predicate: every path in `gate_paths` STAGED FOR DELETION must appear in
     `declared_deletions`. A declared path that is NOT staged for deletion is
@@ -505,10 +502,8 @@ def declared_deletion_gate(
     A sibling session's own staged deletion outside `gate_paths` is not
     this caller's business and can never trip this gate.
 
-    Skip-when-empty: an empty `gate_paths` has no bounded candidate set to
-    check and is a legitimate no-deletions-in-scope call -- skipped, not
-    scored as an ambiguous pass (mirrors `deletion_block_gate`'s own
-    skip-gate-when-empty rule).
+    Skip-when-empty: an empty `gate_paths` has no bounded candidate set --
+    skipped, not scored as an ambiguous pass.
 
     Raises no exception: `_staged_deletions_and_renames_in_process`'s
     `IndexParseError` (an unmerged, mid-merge-conflict index) is caught and
@@ -516,20 +511,11 @@ def declared_deletion_gate(
     gate cannot answer is a refusal, never a silent pass (same posture as
     `deletion_block_gate`'s own Kept-claim read above).
 
-    CANDIDATE PRE-FILTER, so the index is read only when we are about to
-    refuse. `_staged_deletions_and_renames_in_process` reads the WHOLE index
-    internally (`read_index(cwd)` has no scoping parameter), so calling it
-    unconditionally costs a process budget this gate does not need to spend:
-    the gate's actual job is to catch an UNDECLARED deletion, and an ordinary
-    commit -- including every commit that declares its deletions correctly
-    -- has no candidate for that at all. A `gate_paths` member that is
-    either already declared, or still present on disk, cannot possibly be an
-    undeclared deletion, and both are answerable with no index read
-    whatsoever (`declared_deletions` is an in-memory set; `os.path.exists`
-    is a stat, not a git read). Only a path that survives BOTH filters --
-    undeclared AND absent from the worktree -- might be a genuine undeclared
-    staged deletion, and only then is `_staged_deletions_and_renames_in_process`
-    called, scoped to that narrowed candidate set.
+    CANDIDATE PRE-FILTER: `_staged_deletions_and_renames_in_process` reads the
+    WHOLE index, so it runs only for a path that is both undeclared AND absent
+    from the worktree -- a declared or still-present path cannot be an undeclared
+    deletion, and both are answered by a set lookup or a stat. The call is scoped
+    to that narrowed candidate set.
 
     Ordering is load-bearing: `declared_deletions` membership is checked
     BEFORE `os.path.exists`, so a correct N-path deletion commit that
@@ -549,11 +535,12 @@ def declared_deletion_gate(
     `paths`, so nothing is silently removed in that shape -- there is no
     deletion for the caller to have failed to declare.
 
-    Zero `git` spawns on every reachable branch -- `_staged_deletions_and_
-    renames_in_process` is itself spawn-free for a non-empty `gate_scope`,
-    and the pre-filter above is a set membership test plus a stat, neither
-    of which spawns.
+    Zero `git` spawns on every reachable branch: the helper is spawn-free for a
+    non-empty `gate_scope`, and the pre-filter is a set lookup plus a stat.
     """
+    # Index/HEAD keys are forward-slash; normalize once here, as commit_paths does.
+    gate_paths = [p.replace("\\", "/") for p in gate_paths]
+    declared_deletions = [p.replace("\\", "/") for p in declared_deletions]
     gate_scope: Set[str] = set(gate_paths)
     if not gate_scope:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
@@ -948,9 +935,8 @@ def op_scope_coverage_gate(
     """Refuse a commit staging `_registry_map.py` that would register an op with no
     matching `_OP_KEY_SCOPE` entry.
 
-    With `read_source` (the post-commit reader) both tables are read from the tree the
-    commit lands, so an `op_scopes.py` edit left out of the commit's paths is judged as
-    HEAD's bytes; a None answer is the absence classes below. Without it, the worktree.
+    With `read_source` both tables are read from the tree the commit lands; without it,
+    the worktree.
 
     Purpose: `_registry_map.OP_MODULE_MAP` and `op_scopes._OP_KEY_SCOPE` are maintained independently,
     and an op omitted from the latter silently defaults to `"none"` scope rather than failing loud
@@ -1136,11 +1122,9 @@ def claude_md_budget_gate(
     gate_paths: Sequence[str],
     read_source: Callable[[str], Optional[bytes]],
 ) -> GateOutcome:
-    """Refuse a commit that lands a governed CLAUDE.md-class surface over its hard limit or watermark.
+    """Refuse a commit landing a governed CLAUDE.md-class surface over its hard limit or watermark.
 
-    Soft-limit findings do not refuse. Skips unless some path could be a governed surface
-    (a `.md` file).
-    """
+    Soft-limit findings do not refuse; skips unless a path is a `.md` file."""
     if not any(p.endswith(".md") for p in gate_paths):
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
 
@@ -1177,9 +1161,7 @@ def machine_path_leak_gate(
 ) -> GateOutcome:
     """Refuse a commit landing a settings.json that holds a machine-absolute path leaf.
 
-    Filter-first on the file name. A `tests/fixtures/` file is exempt only from the
-    unparseable-JSON finding.
-    """
+    Filter-first on file name; a `tests/fixtures/` file is exempt only from the unparseable-JSON finding."""
     candidates = [p for p in gate_paths if machine_path_leak.is_settings_json(p)]
     if not candidates:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])

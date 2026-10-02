@@ -61,8 +61,8 @@ def check_rag_state() -> Tuple[str, int]:
     if _skip_on_consumer():
         return ("", 1)
     claude_home = _claude_home()
-    content_root = _read_content_root(claude_home)
-    content_root = content_root_for(content_root)
+    pointed_root = _read_content_root(claude_home)
+    content_root = content_root_for(pointed_root)
     if content_root is None:
         return ("", 1)
 
@@ -97,8 +97,8 @@ def check_rag_state() -> Tuple[str, int]:
     return ("unknown", 1)
 
 
-def _content_root_error(content_root: str) -> Optional[str]:
-    if content_root_for(content_root) is not None:
+def _content_root_error(pointed_root: str) -> Optional[str]:
+    if content_root_for(pointed_root) is not None:
         return None
     return (
         "ERROR: ~/.claude/.coordinator-content-root missing/invalid — re-run "
@@ -118,14 +118,14 @@ def main(argv) -> int:  # noqa: ARG001 — takes no arguments, mirrors bash orac
     if _skip_on_consumer():
         return 1
     claude_home = _claude_home()
-    content_root = _read_content_root(claude_home)
+    pointed_root = _read_content_root(claude_home)
 
-    err = _content_root_error(content_root)
+    err = _content_root_error(pointed_root)
     if err is not None:
         print(err, file=sys.stderr)
         return 1
 
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root_for(content_root))
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root_for(pointed_root))
     if not _is_trusted_root(plugin_root):
         print(_trust_error(plugin_root), file=sys.stderr)
         return 1

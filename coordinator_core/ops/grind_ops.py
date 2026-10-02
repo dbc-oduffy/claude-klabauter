@@ -1,69 +1,33 @@
-"""coordinator_core.ops.grind_ops — the queue-grind engine's closed op
-list: `lessons.extract` (source), `lessons.verify_extraction` (verify) and
-`doctrine.surface_split_regenerate` (regenerate) — the three op names the
-vocabulary (`coordinator_core.contract.grind_vocab`'s `SOURCE_OPS` /
-`VERIFY_OPS` / `REGENERATE_OPS`, C1) pins closed.
+"""coordinator_core.ops.grind_ops — the queue-grind engine's closed op list:
+`lessons.extract` (source), `lessons.verify_extraction` (verify) and
+`doctrine.surface_split_regenerate` (regenerate), the three names
+`coordinator_core.contract.grind_vocab` pins closed.
 
-Purpose: each op is a thin `(params, repo_root) -> dict` adapter, in-process
-and NEVER a subprocess, over an existing backing function:
+Purpose: thin in-process `(params, repo_root) -> dict` adapters over
+`coordinator/bin/extract-lessons.py::extract()` / `verify()` and
+`coordinator/bin/generate-doctrine-surface-split.py::regenerate_split_dir()`.
+`lessons.verify_extraction` takes `{manifest, records}` and returns
+`{ok, failing_ids}`; `records` is spilled to a throwaway tempfile because
+`verify()` reads from disk. The bin scripts are engine-provisioned
+(`resolve_cli_script_root()`), never joined against `repo_root`.
 
-    - `lessons.extract` wraps `coordinator/bin/extract-lessons.py::extract()`.
-    - `lessons.verify_extraction` wraps `coordinator/bin/extract-lessons.py::
-      verify()`, translated into the DR-404 verify-op wire contract this
-      row's own spec pins: params `{manifest, records}`, return
-      `{ok, failing_ids}` (exit 0 means ok). `records` arrives as an
-      already-materialised list of routing-record dicts (the per-batch
-      record the engine holds in memory, never a caller-supplied file);
-      this adapter spills it to a throwaway JSON tempfile so it can reuse
-      `verify()`'s existing disk-based grounding logic unchanged, and
-      removes the tempfile in a `finally` before returning.
-    - `doctrine.surface_split_regenerate` wraps `coordinator/bin/
-      generate-doctrine-surface-split.py::regenerate_split_dir()`.
-
-None of the three re-derives its backing function's decision logic — this
-module is a registration/adapter seam only, mirroring
-`coordinator_core.learn_lessons_pipeline.ops` (C5, the precedent commit is
-c4528ac83a), whose own docstring states the identical posture. Registration
-follows that same precedent's three registries: `_registry_map.py`'s
-`OP_MODULE_MAP` (this module's dotted path), `authz/classification.py`'s
-`OP_CLASSIFICATION` (DR-208 five-question affirmation per op) and
-`op_scopes.py`'s `OP_KEY_SCOPE` (`"show_top"` for all three — each handler's
-own `repo_root` arg is the already-resolved worktree root, forwarded
-straight through to the backing function's own path arguments; the
-`coordinator/bin` scripts these adapters load are ENGINE-provisioned and
-resolved via `resolve_cli_script_root()`, never joined against `repo_root`).
-
-Measured process time (this op's own handler body, warm interpreter, in
-isolation — see `test_grind_ops.py::test_measured_under_budget`; a fixture
-directory of 3 lesson files / a 3-record extraction+routing pair / a
-2-section split source): `lessons.extract` ~8ms (includes the one-time
-`load_cli_module` cost of the first call in a process), `lessons.
-verify_extraction` <1ms, `doctrine.surface_split_regenerate` ~18ms
-(`check_mode`, first call). All three are comfortably under the 500ms
-"source op absorbed into emit" ceiling this row's body sets.
+Measured process time (`test_grind_ops.py::test_measured_under_budget`):
+`lessons.extract` ~8ms, `lessons.verify_extraction` <1ms,
+`doctrine.surface_split_regenerate` ~18ms.
 
 Negative-spec:
-    - Do NOT re-derive `extract()`/`verify()`/`regenerate_split_dir()`'s own
-      decision logic here — thin adapters only.
-    - Do NOT spawn a subprocess in `lessons.extract` or `lessons.
-      verify_extraction` — both load their backing script via
-      `cli_dispatch.load_cli_module` and call its Python functions directly,
-      never `main(argv)` via a spawned process and never `subprocess.run`/
-      `Popen`. `doctrine.surface_split_regenerate` is the one exception:
-      load-bearing — its default call path (both `check_mode` and
-      `allow_dirty` false/omitted) runs `regenerate_split_dir()` ->
-      `dirty_bodies()` -> `git_native._git(["status", "--porcelain", ...])`,
-      exactly ONE real `subprocess.run` per call. This is what stops the op
-      silently overwriting a peer's uncommitted doctrine body — see
-      `dirty_bodies()`'s own docstring in `generate-doctrine-surface-
-      split.py`. Pinned at exactly 1 spawn by `test_grind_ops.py::
+    - No re-deriving the backing functions' decision logic.
+    - No subprocess in `lessons.extract` / `lessons.verify_extraction`; no
+      redirecting the process-global stdout/stderr (the daemon is async) —
+      `verify()` takes its own `err`/`out` streams.
+    - `doctrine.surface_split_regenerate` spawns exactly one `git status` on
+      its default path (`dirty_bodies()` guards a peer's uncommitted body);
+      pinned by `test_grind_ops.py::
       test_doctrine_surface_split_regenerate_default_path_spawns_exactly_once`.
-    - Do NOT resolve a repo path via `Path.cwd()`/`Path(__file__)` in any
-      handler — the per-request resolved `repo_root` parameter is the only
-      source for a params path that is not already absolute.
-    - Do NOT add a `coordinator/bin/grind-*.py` front door — no bin door
-      exists or is wanted for these ops; the op registry is the only
-      caller (§ C9 body / D1 precedent).
+    - No `Path.cwd()` / `Path(__file__)` repo resolution: `repo_root` is the
+      only base for a relative params path.
+    - No `coordinator/bin/grind-*.py` front door; the op registry is the only
+      caller.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § C9
 """
@@ -72,7 +36,6 @@ from __future__ import annotations
 import json
 import re
 import tempfile
-from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
@@ -161,8 +124,9 @@ def _lessons_verify_extraction(
         tmp.close()
         routing_path = Path(tmp.name)
         stderr_buf = StringIO()
-        with redirect_stderr(stderr_buf):
-            exit_code = module.verify(extraction_path, routing_path)
+        exit_code = module.verify(
+            extraction_path, routing_path, err=stderr_buf, out=StringIO()
+        )
     finally:
         tmp.close()
         Path(tmp.name).unlink(missing_ok=True)

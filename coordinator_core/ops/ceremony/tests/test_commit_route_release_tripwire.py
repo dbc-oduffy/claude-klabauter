@@ -85,6 +85,7 @@ alone is match enough -- no string constant to require. See
 from __future__ import annotations
 
 import ast
+import functools
 import os
 from pathlib import Path
 
@@ -237,12 +238,19 @@ def _iter_tracked_calls():
             yield rel, func_name, mechanism
 
 
-def _enumerate_commit_sites():
+@functools.cache
+def _tracked_calls_once() -> tuple[tuple[str, str, str], ...]:
+    # The tree is static for a test process; one walk serves every test that
+    # only reads the result. The no-subprocess test walks uncached on purpose.
+    return tuple(_iter_tracked_calls())
+
+
+def _enumerate_commit_sites(calls=None):
     """Return {"module::function": mechanism} for every commit-argv site
     under coordinator_core/, excluding test modules (see _EXCLUDED_DIR_SEGMENTS).
     """
     sites: dict[str, str] = {}
-    for rel, func_name, mechanism in _iter_tracked_calls():
+    for rel, func_name, mechanism in (_iter_tracked_calls() if calls is None else calls):
         key = f"{rel}::{func_name}"
         sites.setdefault(key, mechanism)
     return sites
@@ -537,9 +545,9 @@ def test_enumerator_walks_a_sane_file_count_with_no_subprocess():
 
 
 def test_enumerator_catches_all_four_mechanisms():
-    sites = _enumerate_commit_sites()
+    sites = _enumerate_commit_sites(_tracked_calls_once())
     by_mechanism: dict[str, list[str]] = {}
-    for rel, func_name, mechanism in _iter_tracked_calls():
+    for rel, func_name, mechanism in _tracked_calls_once():
         by_mechanism.setdefault(mechanism, []).append(f"{rel}::{func_name}")
 
     # `asyncio_create_subprocess_exec` is deliberately NOT in this set as of
@@ -580,7 +588,7 @@ def test_no_unlisted_commit_site():
     "release"), or add an allowlist entry with a stated ineligibility
     reason.
     """
-    sites = _enumerate_commit_sites()
+    sites = _enumerate_commit_sites(_tracked_calls_once())
     unlisted = sorted(set(sites) - set(ALLOWLIST))
     assert not unlisted, (
         "New git-commit argv construction site(s) found outside the "
@@ -601,7 +609,7 @@ _SOURCE_TREE_ONLY_SITES = frozenset({"percolate/round.py::step_commit"})
 
 
 def test_no_stale_allowlist_entry():
-    sites = _enumerate_commit_sites()
+    sites = _enumerate_commit_sites(_tracked_calls_once())
     absent_modules = {
         key
         for key in _SOURCE_TREE_ONLY_SITES

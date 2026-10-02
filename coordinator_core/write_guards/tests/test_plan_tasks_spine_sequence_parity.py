@@ -31,8 +31,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 def _pin_content_root(monkeypatch):
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
-    monkeypatch.setattr(deny_guard, "coordinator_content_root", lambda: _content_root)
-    monkeypatch.setattr(advisory_guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(deny_guard, "read_content_root", lambda: _content_root)
+    monkeypatch.setattr(advisory_guard, "read_content_root", lambda: _content_root)
 
 
 _FRONTMATTER = (

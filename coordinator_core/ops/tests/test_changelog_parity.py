@@ -6,7 +6,7 @@ produce byte-identical file content to their DoE oracle CLIs
 (workday-complete-step9-append-changelog.py / backfill-week-changelog-gaps.py)
 for the same inputs.
 
-When DoE oracle scripts are absent (~/.claude/.coordinator-content-root not set or scripts missing), all
+When DoE oracle scripts are absent (content root not set or scripts missing), all
 oracle-comparison tests are skipped with an informative message. The tests still run the
 native op in isolation to verify basic smoke behavior.
 
@@ -44,6 +44,7 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY from existing 
 import coordinator_core.ops.changelog_ops  # noqa: F401 — registers changelog.{append_day,backfill_gaps,inject_anchor}
 
 from coordinator_core.ipc import _REGISTRY
+from coordinator_core.testing.content_root import resolve_content_root
 
 assert len(_REGISTRY) > 0, (
     "registry is empty after import — "
@@ -76,24 +77,18 @@ from coordinator_core.ops.changelog_ops import (  # noqa: E402
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# Oracle path resolution (reads ~/.claude/.coordinator-content-root sentinel)
+# Oracle path resolution (reads the content-root pointer)
 # ---------------------------------------------------------------------------
 
-_CONTENT_ROOT_SENTINEL = Path.home() / ".claude" / ".coordinator-content-root"
-_CONTENT_ROOT: Optional[str] = None
+_CONTENT_ROOT: Optional[str] = resolve_content_root() or None
 
 _DOE_APPEND_ORACLE: Optional[Path] = None
 _DOE_BACKFILL_ORACLE: Optional[Path] = None
 
-if _CONTENT_ROOT_SENTINEL.exists():
-    try:
-        _CONTENT_ROOT = _CONTENT_ROOT_SENTINEL.read_text(encoding="utf-8").strip()
-        _doe = Path(_CONTENT_ROOT) / "coordinator" / "bin"
-        _DOE_APPEND_ORACLE = _doe / "workday-complete-step9-append-changelog.py"
-        _DOE_BACKFILL_ORACLE = _doe / "backfill-week-changelog-gaps.py"
-    except OSError:
-        print(f"skip: <module>: _CONTENT_ROOT = _CONTENT_ROOT_SENTINEL.read_text(encoding=\"utf-8\").strip() failed: {sys.exc_info()[1]}", file=sys.stderr)
-        pass
+if _CONTENT_ROOT:
+    _doe = Path(_CONTENT_ROOT) / "coordinator" / "bin"
+    _DOE_APPEND_ORACLE = _doe / "workday-complete-step9-append-changelog.py"
+    _DOE_BACKFILL_ORACLE = _doe / "backfill-week-changelog-gaps.py"
 
 _ORACLE_APPEND_AVAILABLE = bool(
     _DOE_APPEND_ORACLE and _DOE_APPEND_ORACLE.is_file()
@@ -105,7 +100,7 @@ _ORACLE_BACKFILL_AVAILABLE = bool(
 # ---------------------------------------------------------------------------
 # inject_anchor oracle resolution — this oracle is a claude-klabauter-owned in-repo CLI
 # (coordinator/bin/workday-complete-backfill-inject-anchor.py), NOT a DoE
-# artifact behind the ~/.claude/.coordinator-content-root sentinel used above. Resolved
+# artifact behind the content-root pointer used above. Resolved
 # directly relative to this repo; skipped gracefully (not failed hard) if the
 # file is ever moved/absent, per the strang-10 handoff's dispatch note.
 # ---------------------------------------------------------------------------
@@ -1063,7 +1058,7 @@ class TestInjectAnchorByteParity:
 
     Unlike append_day/backfill_gaps, this oracle is a claude-klabauter-owned CLI resolved
     directly at coordinator/bin/ in this repo, not a DoE artifact behind the
-    ~/.claude/.coordinator-content-root sentinel (see the module-level oracle-resolution
+    content-root pointer (see the module-level oracle-resolution
     comment above `_requires_inject_anchor_oracle`).
     """
 

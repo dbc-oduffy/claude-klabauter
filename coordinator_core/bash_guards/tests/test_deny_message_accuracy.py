@@ -104,6 +104,15 @@ def _advisory_text(hso):
     return hso["additionalContext"]
 
 
+def _assert_only_label_echo_advisory(result):
+    """The plumbing guard's head-tail/loop legs stay silent on a banner-led
+    command; its membership-keyed LABEL_OR_EXIT_ECHO leg still speaks for the
+    banner echo, and names only that shape."""
+    text = _advisory_text(_hso(result))
+    assert "label-or-exit-echo" in text
+    assert "head-tail-plumbing" not in text
+
+
 def _rewrite_command(hso):
     assert hso["permissionDecision"] == "allow", hso
     updated = hso.get("updatedInput")
@@ -298,19 +307,28 @@ class TestPlumbingAndLoopsMessageAccuracy:
         assert "for-loop" not in advisory
 
     def test_unconfirmed_seam_outlet_degrades_to_generic_advisory_not_a_deny(self):
-        """`docker ps | head` -- classifier matches HEAD_TAIL_PLUMBING, but
-        the seam recognizes no upstream generator for `docker`, so
+        """`xargs -n1 stat | head` -- classifier matches HEAD_TAIL_PLUMBING,
+        but the seam recognizes no upstream generator for `xargs`, so
         `_seam_confirmed_rewrite` must be False and this must NOT deny
         toward the seam's own disclaimer text (the exact hazard this
         guard's own docstring documents as previously shipped and reverted).
         """
-        cmd = "docker ps | head -n 20"
+        cmd = "xargs -n1 stat | head -n 20"
         advisory = _advisory_text(
             _hso(guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True))
         )
         assert "BASH-SPAWN ADVISORY" in advisory
         assert "auto-rewritten single-process equivalent" not in advisory
-        assert "docker ps | head -n 20" in advisory
+        assert "xargs -n1 stat | head -n 20" in advisory
+
+    def test_single_process_upstream_never_offers_the_costlier_python_alternative(self):
+        """`docker ps | head` is 2 spawns; every python3 offer is 3 plus an
+        interpreter start, so the guard says nothing."""
+        cmd = "docker ps | head -n 20"
+        assert (
+            guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True)
+            is None
+        )
 
     def test_while_read_advisory_names_that_shape_not_for_loop(self):
         cmd = 'cat items.txt | while read x; do echo "$x"; done'
@@ -420,7 +438,9 @@ class TestShapeOverlapPrecedenceInMessages:
         assert Shape.HEAD_TAIL_PLUMBING in residue_shapes
 
         assert guard_multiprobe_banner.check(_payload(cmd), host_is_windows=True) is None
-        assert guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True) is None
+        _assert_only_label_echo_advisory(
+            guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True)
+        )
         grep_result = guard_grep_via_bash.check(_payload(cmd), host_is_windows=True)
         assert grep_result is not None
 
@@ -438,7 +458,8 @@ class TestShapeOverlapPrecedenceInMessages:
         # `pwd`/`whoami`/`git status` template regardless of the real command,
         # so it satisfied "names the right shape" while still misdescribing the
         # command it fired on -- and offered a subagent no action it could take.
-        # That branch is now silent. Neither guard speaks for this command, and
+        # That branch is now silent. Neither shape guard speaks for this command
+        # (only the plumbing guard's label-echo leg, asserted below), and
         # a message that does not exist cannot misname anything; the
         # names-banner-not-headtail contract is asserted where the guard DOES
         # speak (the seam-confirmed advisory in
@@ -451,7 +472,9 @@ class TestShapeOverlapPrecedenceInMessages:
         assert Shape.HEAD_TAIL_PLUMBING in {m.shape for m in classification.residue}
 
         assert guard_multiprobe_banner.check(_payload(cmd), host_is_windows=True) is None
-        assert guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True) is None
+        _assert_only_label_echo_advisory(
+            guard_plumbing_and_loops.check(_payload(cmd), host_is_windows=True)
+        )
 
 
 class TestFindExecRewriteMessageAccuracy:

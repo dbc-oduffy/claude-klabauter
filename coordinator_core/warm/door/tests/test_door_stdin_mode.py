@@ -42,57 +42,47 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _door_default_entrypoint,
-    _make_stub_engine_root,
-    _pipe_name_for,
-    _FALLBACK_MARKER,
-    _ReplyingServer,
+from coordinator_core.warm.tests.door_test_support import (
+    DOOR_CORE_C,
+    DOOR_CORE_H,
+    DOOR_POSIX_C,
+    DOOR_WINDOWS_C,
+    FALLBACK_MARKER,
+    ReplyingServer,
+    WINDOWS_ONLY,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
+    read,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.warm_tier,
 ]
 
-_DOOR_DIR = Path(__file__).resolve().parents[1]
-_DOOR_CORE_H = _DOOR_DIR / "door_core.h"
-_DOOR_CORE_C = _DOOR_DIR / "door_core.c"
-_DOOR_WINDOWS_C = _DOOR_DIR / "door.c"
-_DOOR_POSIX_C = _DOOR_DIR / "door_posix.c"
-_DOOR_EXE = _DOOR_DIR / "door.exe"
-
-_WINDOWS_ONLY = pytest.mark.skipif(
-    os.name != "nt", reason="door.exe is a Windows binary"
-)
-
-
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
 
 def _header_define(macro: str) -> str:
     """Reads a `#define <macro> "<value>"` string literal out of
     `door_core.h`, so this file's assertions track the source they are
     about rather than a literal that can silently drift away from it."""
-    source = _read(_DOOR_CORE_H)
+    source = read(DOOR_CORE_H)
     match = re.search(rf'^#define\s+{macro}\s+"([^"]*)"\s*$', source, re.MULTILINE)
-    assert match, f"{macro} not found in {_DOOR_CORE_H} -- renamed or removed"
+    assert match, f"{macro} not found in {DOOR_CORE_H} -- renamed or removed"
     return match.group(1)
 
 
 def _header_int_define(macro: str) -> int:
-    source = _read(_DOOR_CORE_H)
+    source = read(DOOR_CORE_H)
     match = re.search(rf"^#define\s+{macro}\s+\(?([0-9u* ]+)\)?\s*$", source, re.MULTILINE)
-    assert match, f"{macro} not found in {_DOOR_CORE_H} -- renamed or removed"
+    assert match, f"{macro} not found in {DOOR_CORE_H} -- renamed or removed"
     expr = match.group(1).replace("u", "").replace(" ", "")
     value = 1
     for part in expr.split("*"):
@@ -104,18 +94,6 @@ _STDIN_MODE_ENV = _header_define("DOOR_STDIN_MODE_ENV_NAME")
 _STDIN_MODE_HOOK_VALUE = _header_define("DOOR_STDIN_MODE_HOOK_VALUE")
 _STDIN_MAX_BYTES = _header_int_define("DOOR_STDIN_MAX_BYTES")
 _STDIN_READ_CHUNK_BYTES = _header_int_define("DOOR_STDIN_READ_CHUNK_BYTES")
-
-
-def _door_under_default_name(engine_root: Path) -> Path:
-    """Same reasoning as `test_door_read_deadline.py`'s own helper: the
-    build artifact is `door.exe`, but `fall_through`'s name-aware cold leg
-    and the stub fixture's `coordinator-invoke.py` are both keyed on the
-    door's DEFAULT entrypoint name, so the binary must be installed under
-    that name to exercise either."""
-    installed = engine_root / (_door_default_entrypoint() + ".exe")
-    if not installed.exists():
-        shutil.copy2(_DOOR_EXE, installed)
-    return installed
 
 
 def _run_door(
@@ -137,7 +115,7 @@ def _run_door(
     else:
         env.pop(_STDIN_MODE_ENV, None)
     return subprocess.run(
-        [str(_door_under_default_name(engine_root)), "ping"],
+        [str(door_under_default_name(engine_root)), "ping"],
         input=stdin_payload,
         capture_output=True,
         env=env,
@@ -159,14 +137,14 @@ def _run_door(
 
 
 def test_stdin_mode_env_name_and_hook_value_are_defined_once_in_shared_core():
-    header_source = _read(_DOOR_CORE_H)
+    header_source = read(DOOR_CORE_H)
     assert header_source.count("#define DOOR_STDIN_MODE_ENV_NAME") == 1
     assert header_source.count("#define DOOR_STDIN_MODE_HOOK_VALUE") == 1
     assert header_source.count("#define DOOR_STDIN_MAX_BYTES") == 1
     assert header_source.count("#define DOOR_STDIN_READ_CHUNK_BYTES") == 1
 
-    for source_path in (_DOOR_CORE_C, _DOOR_WINDOWS_C, _DOOR_POSIX_C):
-        source = _read(source_path)
+    for source_path in (DOOR_CORE_C, DOOR_WINDOWS_C, DOOR_POSIX_C):
+        source = read(source_path)
         assert "#define DOOR_STDIN_MODE_ENV_NAME" not in source, (
             f"{source_path.name} redefines DOOR_STDIN_MODE_ENV_NAME -- it must "
             "come from door_core.h alone, or the two doors can recognise "
@@ -182,8 +160,8 @@ def test_both_doors_include_shared_core_and_neither_defines_its_own_drain_loop()
     """`door_drain_stdin_bounded` and `build_hook_deny_envelope` are shared
     verbatim -- a door that defined its own body for either could refuse at
     a different bound or emit a different deny shape than its sibling."""
-    for source_path in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
-        source = _read(source_path)
+    for source_path in (DOOR_WINDOWS_C, DOOR_POSIX_C):
+        source = read(source_path)
         assert '#include "door_core.h"' in source
         assert not re.search(
             r"door_stdin_status_t\s+door_drain_stdin_bounded\s*\([^)]*\)\s*\{",
@@ -203,8 +181,8 @@ def test_both_doors_gate_fall_through_on_the_same_flag_name():
     rather than being reachable only by threading a parameter through every
     call site by hand, which is how a future call site could be added
     without it."""
-    for source_path in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
-        source = _read(source_path)
+    for source_path in (DOOR_WINDOWS_C, DOOR_POSIX_C):
+        source = read(source_path)
         match = re.search(
             r"static int fall_through\([^)]*\)\s*\{(.{0,1500})", source, re.DOTALL
         )
@@ -222,7 +200,7 @@ def test_stdin_max_bytes_is_not_a_this_box_measurement():
     discusses the real (and separately withdrawn) 15.6ms scheduler-tick
     figure elsewhere, for the unrelated read-deadline mechanism; only the
     NEW bound must not cite it."""
-    header_source = _read(_DOOR_CORE_H)
+    header_source = read(DOOR_CORE_H)
     match = re.search(
         r"#define DOOR_STDIN_MAX_BYTES.*?(?=#define DOOR_STDIN_READ_CHUNK_BYTES)",
         header_source,
@@ -275,7 +253,7 @@ def test_try_warm_dispatch_inner_forwards_params_verbatim():
 # =============================================================================
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_declared_mode_with_a_piped_payload_surfaces_it_as_params_stdin(
     tmp_path: Path,
 ) -> None:
@@ -283,14 +261,14 @@ def test_declared_mode_with_a_piped_payload_surfaces_it_as_params_stdin(
     payload gets a request whose `params.stdin` carries that payload
     byte-for-byte, and the door relays a decided verdict from the server's
     reply rather than any fall-through shape."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     payload = b'{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}'
     reply = (
         '{"jsonrpc":"2.0","id":1,"result":'
         '{"stdout":"decided\\n","stderr":"","exit_code":0}}\n'
     ).encode("utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = _run_door(root, timeout=60, hook_mode=True, stdin_payload=payload)
     finally:
@@ -302,10 +280,10 @@ def test_declared_mode_with_a_piped_payload_surfaces_it_as_params_stdin(
 
     assert proc.returncode == 0
     assert proc.stdout == b"decided\n"
-    assert _FALLBACK_MARKER.encode() not in proc.stdout
+    assert FALLBACK_MARKER.encode() not in proc.stdout
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 @pytest.mark.deliberate_wall_clock(
     reason="never-reads-stdin: with no mode declared and a writer that never closes, the door "
     "must fall through promptly rather than block on an inherited stdin pipe -- a behaviour "
@@ -320,13 +298,13 @@ def test_no_declared_mode_never_reads_stdin_and_returns_promptly(
     unconditional read). The door must not touch stdin at all: it falls
     through immediately, well under the falsifier's 2s bar, having read
     nothing."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     env = dict(os.environ)
     env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(root)
     env.pop(_STDIN_MODE_ENV, None)
 
     proc = subprocess.Popen(
-        [str(_door_under_default_name(root)), "ping"],
+        [str(door_under_default_name(root)), "ping"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -349,19 +327,19 @@ def test_no_declared_mode_never_reads_stdin_and_returns_promptly(
     # No mode declared, so this reached the ordinary pre-delivery
     # fall-through (no server is listening) -- the fixture's marker proves
     # it ran, and NOT the -32004 shape.
-    assert _FALLBACK_MARKER.encode() in out
+    assert FALLBACK_MARKER.encode() in out
     assert b"-32004" not in out
     assert elapsed < 2.0, f"door.exe took {elapsed:.2f}s -- see falsifier leg B"
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_a_payload_exceeding_the_bound_is_refused_not_truncated(
     tmp_path: Path,
 ) -> None:
     """(c) A payload one byte over `DOOR_STDIN_MAX_BYTES` is refused --
     hook mode's fail-closed deny, naming the bound -- never silently
     truncated to the bound and forwarded as if it were the whole payload."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     payload = b"x" * (_STDIN_MAX_BYTES + 1)
 
     proc = _run_door(root, timeout=30, hook_mode=True, stdin_payload=payload)
@@ -373,13 +351,13 @@ def test_a_payload_exceeding_the_bound_is_refused_not_truncated(
     assert "exceeded the bound" in reason
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_a_payload_spanning_multiple_reads_arrives_intact(tmp_path: Path) -> None:
     """(d) A payload comfortably larger than one incremental read chunk
     (`DOOR_STDIN_READ_CHUNK_BYTES`) but under the bound must arrive at the
     server whole and byte-identical -- the drain loop reassembles it
     correctly rather than delivering only its first chunk."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     payload_len = _STDIN_READ_CHUNK_BYTES * 6 + 37  # deliberately not a multiple
     # Printable ASCII, deliberately -- the wire is a JSON string, and this
     # leg's job is proving the drain loop reassembles multiple chunks
@@ -392,7 +370,7 @@ def test_a_payload_spanning_multiple_reads_arrives_intact(tmp_path: Path) -> Non
         '{"stdout":"ok\\n","stderr":"","exit_code":0}}\n'
     ).encode("utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = _run_door(root, timeout=60, hook_mode=True, stdin_payload=payload)
     finally:
@@ -405,13 +383,13 @@ def test_a_payload_spanning_multiple_reads_arrives_intact(tmp_path: Path) -> Non
     assert proc.returncode == 0
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_hook_mode_passes_loudly_when_the_cold_guard_does_not_answer(tmp_path: Path) -> None:
     """(f) No server is listening and hook mode is declared, so the door runs
     the cold entrypoint. This stub's cold entrypoint prints a non-verdict and
     exits nonzero -- a guard that did not answer -- so the door passes
     loudly, and must not relay the stub's output as if it were a verdict."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     payload = (
         b'{"hook_event_name":"PreToolUse","tool_name":"Bash",'
         b'"tool_input":{"command":"echo hi"}}'
@@ -420,7 +398,7 @@ def test_hook_mode_passes_loudly_when_the_cold_guard_does_not_answer(tmp_path: P
     proc = _run_door(root, timeout=30, hook_mode=True, stdin_payload=payload)
 
     assert proc.returncode == 0
-    assert _FALLBACK_MARKER.encode() not in proc.stdout
+    assert FALLBACK_MARKER.encode() not in proc.stdout
     body = json.loads(proc.stdout.decode("utf-8").strip())
     assert "permissionDecision" not in body["hookSpecificOutput"]
     assert "cold guard" in body["systemMessage"]

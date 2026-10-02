@@ -175,7 +175,11 @@ def _iter_sites() -> Iterator[_Site]:
     for path in sorted(_ENGINE_PKG.rglob("*.py")):
         relpath = path.relative_to(_ENGINE_PKG.parent).as_posix()
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            # A site is a call to a `_SINKS` name carrying the `dir=` keyword.
+            if not any(sink in text for sink in _SINKS):
+                continue
+            tree = ast.parse(text)
         except (SyntaxError, UnicodeDecodeError):
             # A file this gate cannot parse is not silently clean -- but it is
             # also not this gate's business to fail on; the suite has its own

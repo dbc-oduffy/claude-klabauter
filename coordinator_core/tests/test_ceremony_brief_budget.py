@@ -78,7 +78,7 @@ from typing import Any, Callable
 import pytest
 
 import coordinator_core.baton_assemble as ba
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 import coordinator_core.workstream_complete as wsc
 
 # Real-git spawn in the pickup fixture (git init/add/commit) — `pa.brief()`'s
@@ -328,16 +328,8 @@ def _ratchet_check(op_name: str, axis: str, measured: float, frozen: float) -> N
 # refusal in a suite whose whole value is that a refusal means something):
 #   baton-assemble brief:       p50 2.595ms, p90 2.745ms (n=10) -> 55.0ms
 #   workstream-complete brief:  p50 7.431ms, p90 7.942ms (n=10) -> 160.0ms
-#   pickup-assemble brief:      NOT RE-MEASURED. This module's own
-#     `pa.brief(...)` call (line ~403) raises `AttributeError`: module
-#     `coordinator_core.pickup_assemble` has no attribute `brief` (the
-#     computation lives at `coordinator_core/pickup_brief.py :: brief`
-#     per docs/research/2026-09-06-three-assembler-brief-requirements-and-
-#     dispositions.md's own citation) — a pre-existing defect in this test
-#     module unrelated to process time, present at this row's own
-#     merge-base, out of this row's scope (C6 lowers constants "where
-#     measurement permits"; it does not). Left at its prior 200.0ms
-#     value, unmeasured, not lowered. No constant here is ever raised.
+#   pickup-assemble brief:      not re-measured; left at its prior 200.0ms.
+#     No constant here is ever raised.
 # ---------------------------------------------------------------------------
 
 FROZEN_HIGH_WATER_PICKUP_OPEN_COUNT: int = 30

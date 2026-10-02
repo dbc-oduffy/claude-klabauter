@@ -154,7 +154,6 @@ class TestPython3InvocationImportErrorFallback:
         out = dc.check_multiprobe_banner_rewrite(cmd)
         assert out is None
 
-    @pytest.mark.pending_fix
     def test_bare_facts_equivalence(self, tmp_path):
         cmd = 'echo "=== FACTS ==="; pwd; whoami'
         out = dc.check_multiprobe_banner_rewrite(cmd)

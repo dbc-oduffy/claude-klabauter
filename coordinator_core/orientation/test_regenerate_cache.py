@@ -369,17 +369,15 @@ def test_archive_sweeps_failure_reports_the_failure_and_invents_no_remedy(tmp_pa
 def test_remedy_sub_bullets_render_when_a_class_has_commands(monkeypatch):
     """The sub-bullet renderer, exercised without naming a real command.
 
-    Every entry in `REMEDY_COMMANDS` is an empty tuple today, so nothing in the
-    live map can prove this formatting still works — and the two tests that used
-    to prove it were doing so against a script that has since been deleted. A
-    supplied command keeps the mechanism covered without re-asserting a dead one.
+    A supplied command for a class with no shipped CLI keeps the formatting
+    covered without re-asserting a live one.
     """
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 
     monkeypatch.setitem(mod.REMEDY_COMMANDS, hl.ARCHIVE_SWEEPS, ("python3 some/cli.py",))
 
     assert mod._remedy_sub_bullets(hl.ARCHIVE_SWEEPS) == ["  - `python3 some/cli.py`"]
-    assert mod._remedy_sub_bullets(hl.ROADMAP_CALLOUT) == []
+    assert mod._remedy_sub_bullets(hl.EOL_SWEEP) == []
 
 
 def test_unrelated_failure_does_not_surface_archive_sweeps_remedy(tmp_path):

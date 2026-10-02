@@ -54,6 +54,7 @@ from coordinator_core.install._shared import (
 from coordinator_core.install.shell_rc_guard import (
     _resolve_rc_path,
     _sentinel_markers,
+    superseded_marker_pairs,
     _strip_block_text,
     applicable_rc_files,
 )
@@ -999,21 +1000,22 @@ def uninstall_remove_shim() -> bool:
         ("CLAUDE_CLI_PATH", applicable_rc_files(Path(claude_home))),
         ("SETTINGS_HOME_BIN", applicable_rc_files(Path(claude_home))),
     ):
-        begin_marker, end_marker = _sentinel_markers(sentinel_id)
+        marker_pairs = [_sentinel_markers(sentinel_id), *superseded_marker_pairs(sentinel_id)]
         for rc_file in candidate_files:
             if not rc_file.is_file():
                 continue
-            text = rc_file.read_text(encoding="utf-8", errors="replace")
-            if begin_marker not in text.split("\n"):
-                continue
-            try:
-                _strip_sentinel_block(rc_file, begin_marker, end_marker)
-            except OSError as exc:
-                print(
-                    f"uninstall_remove_shim: failed to strip {sentinel_id} guard block from {rc_file}: {exc}",
-                    file=sys.stderr,
-                )
-                overall_ok = False
+            for begin_marker, end_marker in marker_pairs:
+                text = rc_file.read_text(encoding="utf-8", errors="replace")
+                if begin_marker not in text.split("\n"):
+                    continue
+                try:
+                    _strip_sentinel_block(rc_file, begin_marker, end_marker)
+                except OSError as exc:
+                    print(
+                        f"uninstall_remove_shim: failed to strip {sentinel_id} guard block from {rc_file}: {exc}",
+                        file=sys.stderr,
+                    )
+                    overall_ok = False
 
     return overall_ok
 
@@ -1058,9 +1060,10 @@ def uninstall_strip_cmd_autorun() -> bool:
 
 
 def uninstall_strip_host_sampler_task() -> bool:
-    """Reverses the host-sampler Windows Task Scheduler registration leg
-    (``coordinator_core.install.host_sampler_scheduler``) — closes the
-    uninstall gap that a scheduled task, once registered, would otherwise
+    """Reverses the host-sampler scheduler registration leg
+    (``coordinator_core.install.host_sampler_scheduler``: Windows scheduled
+    task, macOS LaunchAgent, Linux systemd user units) — closes the
+    uninstall gap that a scheduled job, once registered, would otherwise
     survive a full-remove uninstall forever (the residue this repo's
     uninstall surface exists to prevent).
 
@@ -1068,12 +1071,12 @@ def uninstall_strip_host_sampler_task() -> bool:
     immediately after it): both reverse an OS-level scheduling/interception
     surface with no dependency on `plugin_root` or the substrate registry.
 
-    Idempotent (a no-op on an absent task — see
+    Idempotent (a no-op on an absent registration — see
     ``unregister_host_sampler_task``'s own already-absent-is-success
-    handling) and self-gates to a no-op on non-Windows.
+    handling).
 
-    Returns True on success (including the absent-task no-op case), False
-    only on an unexpected `schtasks.exe` failure (fail-loud, matches every
+    Returns True on success (including the already-absent no-op case), False
+    only on an unexpected scheduler failure (fail-loud, matches every
     other leg's bool contract)."""
     from coordinator_core.install.host_sampler_scheduler import (
         unregister_host_sampler_task,
@@ -1084,7 +1087,7 @@ def uninstall_strip_host_sampler_task() -> bool:
     except Exception as exc:
         print(
             f"uninstall_strip_host_sampler_task: failed to remove host-sampler "
-            f"scheduled task: {exc}",
+            f"scheduler registration: {exc}",
             file=sys.stderr,
         )
         return False
@@ -2027,7 +2030,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     print("  1. strip settings.json generated hooks (resolves coordinator-root)")
     print("  2. remove shell shim + wrapper (#4a/#4b/#4c/#10)")
     print("  3. strip cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)")
-    print("  4. remove host-sampler scheduled task (Windows Task Scheduler)")
+    print("  4. remove host-sampler scheduler registration (scheduled task / LaunchAgent / systemd units)")
     print(
         "  5. remove substrate (registry keys, whoami/venv, .coordinator-content-root, "
         "~/.claude/bin forwarders, settings-home tree)"
@@ -2087,10 +2090,10 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
 
     if not uninstall_strip_host_sampler_task():
         return fail_loud(
-            "host-sampler scheduled task (Windows Task Scheduler)",
-            "Check stderr above for the specific schtasks.exe error; this leg is "
-            "idempotent (re-running after a manual fix is safe), and non-Windows/"
-            "already-absent-task are always clean no-ops, never a failure source.",
+            "host-sampler scheduler registration",
+            "Check stderr above for the specific scheduler error; this leg is "
+            "idempotent (re-running after a manual fix is safe), and an "
+            "already-absent registration is always a clean no-op, never a failure source.",
         )
 
     if not uninstall_remove_substrate(

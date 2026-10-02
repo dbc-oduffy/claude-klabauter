@@ -159,28 +159,11 @@ def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
     stub = bin_dir / "gh"
     stub.write_text(
         "#!/usr/bin/env bash\n"
-        "BRANCH=\"\"\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in\n"
-        "    --head) BRANCH=\"$2\"; shift 2 ;;\n"
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
         "python3 -c 'import json,sys\n"
-        "m=json.load(open(sys.argv[2]))\n"
-        "branch=sys.argv[1]\n"
-        "if branch:\n"
-        "    pr=m.get(branch)\n"
-        "    print(json.dumps([pr]) if pr else \"[]\")\n"
-        "else:\n"
-        "    out=[]\n"
-        "    for b, pr in m.items():\n"
-        "        entry=dict(pr)\n"
-        "        entry[\"headRefName\"]=b\n"
-        "        out.append(entry)\n"
-        "    print(json.dumps(out))\n"
+        "m=json.load(open(sys.argv[1]))\n"
+        "print(json.dumps([dict(pr, headRefName=b) for b, pr in m.items()]))\n"
         "' "
-        f"\"$BRANCH\" \"{map_file}\"\n"
+        f"\"{map_file}\"\n"
     )
     stub.chmod(0o755)
 
@@ -247,7 +230,7 @@ def test_end_to_end_critical_warning_ok(tmp_path, monkeypatch, capsys):
 # --head <branch>`) are now each folded into ONE batched call outside the
 # per-branch loop (`git for-each-ref --format=%(ahead-behind:<main>)` and one
 # unscoped `gh pr list --json ...,headRefName`) — see the amplification gate
-# keys ('main', '_git') / ('main', '_run') in
+# key ('main', '_git') in
 # coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py::_KNOWN_SITES.
 # This pins PROCESS COUNT DOES NOT GROW WITH N: each batch primitive must
 # fire exactly once for the whole sweep, whatever the branch count, mirroring
@@ -765,28 +748,11 @@ def _write_multi_pr_gh_stub(bin_dir: Path, pr_map: dict) -> None:
     stub = bin_dir / "gh"
     stub.write_text(
         "#!/usr/bin/env bash\n"
-        "BRANCH=\"\"\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  case \"$1\" in\n"
-        "    --head) BRANCH=\"$2\"; shift 2 ;;\n"
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
         "python3 -c 'import json,sys\n"
-        "m=json.load(open(sys.argv[2]))\n"
-        "branch=sys.argv[1]\n"
-        "if branch:\n"
-        "    print(json.dumps(m.get(branch, [])))\n"
-        "else:\n"
-        "    out=[]\n"
-        "    for b, prs in m.items():\n"
-        "        for pr in prs:\n"
-        "            entry=dict(pr)\n"
-        "            entry[\"headRefName\"]=b\n"
-        "            out.append(entry)\n"
-        "    print(json.dumps(out))\n"
+        "m=json.load(open(sys.argv[1]))\n"
+        "print(json.dumps([dict(pr, headRefName=b) for b, prs in m.items() for pr in prs]))\n"
         "' "
-        f"\"$BRANCH\" \"{map_file}\"\n"
+        f"\"{map_file}\"\n"
     )
     stub.chmod(0o755)
 
@@ -825,3 +791,93 @@ def test_newest_pr_wins_over_an_older_merged_one(tmp_path, monkeypatch, capsys):
         "an open PR tracking the post-merge commits must clear CRITICAL -- "
         "otherwise the classification cannot be discharged by its own remedy"
     )
+
+
+def test_repo_root_argument_sweeps_that_repo_not_the_process_cwd(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "work/test/aheadbranch")
+    _commit(repo, "ahead.txt", "ahead")
+    _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(obs.shutil, "which", lambda name: None)
+
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    rc = main(
+        ["--format", "json", "--max-age-days", "365", "--repo-root", str(repo)]
+    )
+
+    assert rc == 0
+    rows = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert [r["branch"] for r in rows] == ["work/test/aheadbranch"]
+    assert rows[0]["ahead"] == 1
+
+
+def test_batched_pr_listing_selects_each_branchs_newest_pr(tmp_path, monkeypatch, capsys):
+    """Equivalence of the one unscoped listing with a per-branch lookup, on two branches:
+    each branch's row carries the highest-numbered PR among those the listing groups under
+    its `headRefName`."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    for name in ("work/test/one", "work/test/two"):
+        _git(repo, "checkout", "-q", "-b", name)
+        _commit(repo, name.split("/")[-1] + ".txt", name)
+        _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(obs.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+
+    listing = [
+        {"number": 4, "state": "MERGED", "mergedAt": "2026-01-01T00:00:00Z", "headRefName": "work/test/one"},
+        {"number": 9, "state": "OPEN", "mergedAt": None, "headRefName": "work/test/one"},
+        {"number": 6, "state": "OPEN", "mergedAt": None, "headRefName": "work/test/two"},
+        {"number": 99, "state": "OPEN", "mergedAt": None, "headRefName": "work/test/unrelated"},
+    ]
+    real_run = obs._run
+
+    def stub_gh(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
+        if cmd[:1] == ["gh"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(listing), stderr="")
+        return real_run(cmd, timeout=timeout, cwd=cwd)
+
+    monkeypatch.setattr(obs, "_run", stub_gh)
+
+    rc = main(["--format", "json", "--max-age-days", "365"])
+
+    assert rc == 0
+    rows = {
+        r["branch"]: r
+        for r in (json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.strip())
+    }
+    assert rows["work/test/one"]["pr"]["number"] == 9
+    assert rows["work/test/two"]["pr"]["number"] == 6
+
+
+def test_failed_pr_listing_does_not_fan_out_per_branch(tmp_path, monkeypatch, capsys):
+    """A failed `gh pr list` degrades every branch to "no PR data" with that one spawn --
+    never a per-branch `gh` retry, which would fail the same way N times over."""
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    for i in range(3):
+        _git(repo, "checkout", "-q", "-b", f"work/test/b{i}")
+        _commit(repo, f"b{i}.txt", f"b{i}")
+        _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(obs.shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None)
+
+    gh_calls = []
+    real_run = obs._run
+
+    def failing_gh(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
+        if cmd[:1] == ["gh"]:
+            gh_calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="gh: not authenticated")
+        return real_run(cmd, timeout=timeout, cwd=cwd)
+
+    monkeypatch.setattr(obs, "_run", failing_gh)
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+
+    assert rc == 0
+    assert len(gh_calls) == 1, gh_calls
+    rows = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert sorted(r["branch"] for r in rows) == [f"work/test/b{i}" for i in range(3)]
+    assert all(r["pr"] is None for r in rows)

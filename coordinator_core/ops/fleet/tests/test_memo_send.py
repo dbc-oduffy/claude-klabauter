@@ -8,7 +8,8 @@ C2 test surface (docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.
   - missing/malformed staged draft -> setup error
   - end-to-end delivery: receiver-inbox write+commit, sent/ stamp, ledger row,
     original draft removed, sender-side commit — AC1, AC2
-  - AC3: receiver-side commit runs no hook, exactly one git spawn (update-index)
+  - AC3: receiver-side commit runs no hook and no git spawn; the receiver's
+    index records the delivery (`git status --porcelain` clean)
   - AC4: a declining commit_authored_new_file fails loud, no sender-side
     receipt written (never falls back to a spawning/hook-running commit)
   - AC6: inbox collision refused on both legs (pre-check AND O_EXCL) independently
@@ -1024,8 +1025,8 @@ class TestDeliveryIsAnchored:
 
         real_commit = git_native.commit_authored_new_file
 
-        def _commit_then_lock_the_anchor(rel_path, content, msg_file, repo_path):
-            result = real_commit(rel_path, content, msg_file, repo_path)
+        def _commit_then_lock_the_anchor(rel_path, content, msg_file, repo_path, **kwargs):
+            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
             if result.ok:
                 sha = result.stdout.strip()
                 filename = Path(rel_path).name
@@ -1074,8 +1075,8 @@ class TestDeliveryIsAnchored:
 
         real_commit = git_native.commit_authored_new_file
 
-        def _commit_then_preanchor_and_force_a_loss(rel_path, content, msg_file, repo_path):
-            result = real_commit(rel_path, content, msg_file, repo_path)
+        def _commit_then_preanchor_and_force_a_loss(rel_path, content, msg_file, repo_path, **kwargs):
+            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
             if result.ok:
                 sha = result.stdout.strip()
                 filename = Path(rel_path).name
@@ -1151,11 +1152,10 @@ class TestDeliveryIsAnchored:
         """The anchor write (`_memo_anchor`, in-process per its own module
         docstring) and the sender-side receipt commit (`commit_paths`, zero
         spawns per this module's own docstring) must add no git spawn to the
-        send path. The receiver-side commit's own hookless `update-index`
-        refresh (AC3) is the one spawn already accounted for elsewhere and
-        runs normally; `subprocess.run` is disabled only from the moment
-        that commit returns, so any spawn from the anchor write or the
-        sender receipt raises loud instead of passing silently.
+        send path. `subprocess.run` is disabled from the moment the
+        receiver-side commit returns, so any spawn from the receiver index
+        write, the anchor write or the sender receipt raises loud instead of
+        passing silently.
         """
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
@@ -1165,8 +1165,8 @@ class TestDeliveryIsAnchored:
 
         real_commit = git_native.commit_authored_new_file
 
-        def _commit_then_disable_spawns(rel_path, content, msg_file, repo_path):
-            result = real_commit(rel_path, content, msg_file, repo_path)
+        def _commit_then_disable_spawns(rel_path, content, msg_file, repo_path, **kwargs):
+            result = real_commit(rel_path, content, msg_file, repo_path, **kwargs)
 
             def _forbidden(*a, **k):
                 raise AssertionError(
@@ -1194,6 +1194,92 @@ class TestDeliveryIsAnchored:
 
 
 # ---------------------------------------------------------------------------
+# The receiver's index records the delivery: `git status` there stays clean
+# ---------------------------------------------------------------------------
+
+def _receiver_status(receiver_repo: Path) -> str:
+    return _git(receiver_repo, "status", "--porcelain").stdout.decode("utf-8")
+
+
+class TestReceiverIndexRecordsTheDelivery:
+    """A delivery committed into the receiver but absent from its index reads
+    as `D  <path>` plus `?? <path>` -- and the receiver's next `git add -A`
+    deletes the memo in its own history."""
+
+    def _send(self, tmp_path, monkeypatch, topic, *, prepare=None, env=None):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, topic)
+        if prepare is not None:
+            prepare(receiver_repo)
+        for key, value in (env or {}).items():
+            monkeypatch.setenv(key, value)
+        result = _memo_send({"dry_run": False, "topic": topic}, repo_root=sender_repo)
+        for key in (env or {}):
+            monkeypatch.delenv(key)
+        return result, receiver_repo
+
+    def test_receiver_status_is_clean_after_a_send(self, tmp_path, monkeypatch):
+        result, receiver_repo = self._send(tmp_path, monkeypatch, "index-clean-topic")
+
+        assert result["exit_code"] == 0, result
+        assert "receiver_index_warning" not in result["acted"][0]
+        assert _receiver_status(receiver_repo) == ""
+
+    def test_an_inherited_git_index_file_does_not_redirect_the_index_write(
+        self, tmp_path, monkeypatch
+    ):
+        """Inside a git hook `GIT_INDEX_FILE` names the CALLER's index; the
+        receiver's index must still be the one written."""
+        foreign_index = tmp_path / "foreign.index"
+        result, receiver_repo = self._send(
+            tmp_path, monkeypatch, "inherited-index-topic",
+            env={"GIT_INDEX_FILE": str(foreign_index)},
+        )
+
+        assert result["exit_code"] == 0, result
+        assert _receiver_status(receiver_repo) == ""
+        assert not foreign_index.exists()
+
+    def test_an_index_the_splice_refuses_falls_back_and_stays_clean(
+        self, tmp_path, monkeypatch
+    ):
+        """A v4 index is refused by the in-process writer; the hookless
+        fallback must still record the delivery."""
+        result, receiver_repo = self._send(
+            tmp_path, monkeypatch, "v4-index-topic",
+            prepare=lambda repo: _git(repo, "update-index", "--index-version", "4"),
+        )
+
+        assert result["exit_code"] == 0, result
+        assert "receiver_index_warning" not in result["acted"][0]
+        assert _receiver_status(receiver_repo) == ""
+
+    def test_a_held_index_lock_is_reported_not_stolen(self, tmp_path, monkeypatch):
+        """A peer holding `index.lock` past the bounded wait leaves the
+        delivery landed and says how to restore the index -- never a failed
+        send, never a stolen lock."""
+        monkeypatch.setattr(memo_send_module, "_RECEIVER_INDEX_LOCK_SLEEP_SECS", 0)
+        from coordinator_core.git import index_write
+        monkeypatch.setattr(index_write, "preflight_reap_stale_lock", lambda *_: None)
+
+        def _hold_lock(repo: Path) -> None:
+            (repo / ".git" / "index.lock").write_bytes(b"")
+
+        result, receiver_repo = self._send(
+            tmp_path, monkeypatch, "held-lock-topic", prepare=_hold_lock
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["committed"] is True
+        assert "reset -q --" in acted["receiver_index_warning"]
+        assert (receiver_repo / ".git" / "index.lock").exists()
+
+
+# ---------------------------------------------------------------------------
 # AC8: reachable through the door
 # ---------------------------------------------------------------------------
 
@@ -1209,8 +1295,13 @@ class TestRegistration:
         assert _REGISTRY["memo.send"] is memo_send_module._memo_send
 
     def test_mutates_declaration_matches_deleted_originals_contract(self):
-        assert memo_send_module.MUTATES == [
+        """The append-only sent-ledger is a concrete `MUTATES_APPEND` path
+        (generator_provenance's wildcard-free class); the globbed writes stay
+        in `MUTATES`."""
+        assert memo_send_module.MUTATES_APPEND == [
             ".coordinator-local/memo-outbox/sent-ledger.jsonl",
+        ]
+        assert memo_send_module.MUTATES == [
             "state/memo-outbox/*.md",
             "cross-repo/inbox/*.md",
             "state/cross-repo/inbox/*.md",

@@ -80,9 +80,9 @@ Negative caching: a failed WALK (no `.git` found) is NEVER memoized in
 successful resolution is cached there, and `None` is reserved EXCLUSIVELY
 for "failed" -- a successful spawn that legitimately emits empty stdout
 (`--show-prefix` at the toplevel itself) is memoized as the empty string,
-never coerced to `None`. `_spawn_rev_parse` returns `(succeeded, value)`
+never coerced to `None`. `_spawn_rev_parse` returns `(ok, value, reason)`
 precisely so this distinction survives the boundary into `_spawn_cached`,
-which branches on `succeeded` (not on `value is None`) to decide whether to
+which branches on `ok` (not on `value is None`) to decide whether to
 memoize -- a prior version of this module collapsed a successful empty
 result to `None` before that boundary, which made `show_prefix()` (and
 `absolute_git_dir()`) indistinguishable between "you are at the repo
@@ -155,7 +155,7 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 
@@ -174,9 +174,37 @@ _memo: Dict[str, _MemoEntry] = {}
 # at all, so the type is `str`, not `Optional[str]`.
 _spawn_memo: Dict[Tuple[str, str], str] = {}
 
+# (resolved-cwd, form) -> why the last spawn of that form failed. A diagnostic
+# side-table, never a cache: nothing reads it to skip a walk or a spawn, so the
+# no-negative-caching rule above is untouched. Cleared for a key on its next
+# success.
+_failure_reasons: Dict[Tuple[str, str], str] = {}
+
+FORM_TOPLEVEL = "show-toplevel"
+FORM_GIT_DIR = "git-dir"
+FORM_GIT_COMMON_DIR = "git-common-dir"
+FORM_ABSOLUTE_GIT_DIR = "absolute-git-dir"
+FORM_SHOW_PREFIX = "show-prefix"
+FORM_IS_INSIDE_WORK_TREE = "is-inside-work-tree"
+
+_WALK_FORMS = frozenset(
+    {FORM_TOPLEVEL, FORM_GIT_DIR, FORM_GIT_COMMON_DIR, FORM_ABSOLUTE_GIT_DIR}
+)
+
+
+class _SpawnResult(NamedTuple):
+    """`ok` is False only for an actual resolution failure; `value` is None
+    iff `ok` is False; `reason` is None iff `ok` is True."""
+
+    ok: bool
+    value: Optional[str]
+    reason: Optional[str]
+
+
 def clear_memo() -> None:
     _memo.clear()
     _spawn_memo.clear()
+    _failure_reasons.clear()
 
 
 def _resolve_cwd(cwd: Optional[str]) -> str:
@@ -227,24 +255,21 @@ def _walk_for_repo(start: Path) -> Optional[Tuple[str, Path]]:
         current = current.parent
 
 
-def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
-    """Returns `(succeeded, value)`. `succeeded` is False only for an
+def _spawn_rev_parse(args: list, cwd: str) -> _SpawnResult:
+    """Spawn `git rev-parse <args>` under `cwd`. `ok` is False only for an
     actual resolution failure (spawn error, timeout, non-zero exit) --
     distinct from a SUCCESSFUL spawn that legitimately emits empty stdout
-    (e.g. `--show-prefix` at the toplevel itself), which is `(True, "")`
-    and DOES get memoized. `value` is `None` iff `succeeded` is False, so a
-    caller can tell "you are at the repo root" apart from "resolution
-    failed" without the two collapsing into the same `None` at the public
-    API boundary.
+    (e.g. `--show-prefix` at the toplevel itself), which is
+    `(True, "", None)` and DOES get memoized. `value` is `None` iff `ok` is
+    False, so a caller can tell "you are at the repo root" apart from
+    "resolution failed" without the two collapsing into the same `None` at the
+    public API boundary. On failure `reason` is one of `spawn-error: ...`,
+    `timeout after <n>s`, or `exit-<n>: <first stderr line>`.
 
     Reached only by `show_prefix()` and `is_inside_work_tree()` -- the two
-    forms with no walk-derived answer at all. It briefly distinguished exit
-    128 from a timeout so the deterministic failure could be negatively
-    cached; that split had exactly one consumer, the walk-backed forms'
-    spawn fallbacks, and those are gone. Both remaining callers spawn
-    unconditionally, and for THEM a cached failure would survive a `git
-    init` at the same cwd -- so there is nothing here to cache and nothing
-    the split would serve.
+    forms with no walk-derived answer at all. Both spawn unconditionally, and
+    for THEM a cached failure would survive a `git init` at the same cwd, so
+    failures are reported, never memoized.
     """
     # Function-local: this is the spawn FALLBACK — the walk answers the ordinary
     # case without it, so on the common path `subprocess` and its ~10 transitive
@@ -264,11 +289,15 @@ def _spawn_rev_parse(args: list, cwd: str) -> Tuple[bool, Optional[str]]:
             timeout=_TIMEOUT_SECS,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False, None
+    except subprocess.TimeoutExpired:
+        return _SpawnResult(False, None, f"timeout after {_TIMEOUT_SECS:g}s")
+    except OSError as exc:
+        return _SpawnResult(False, None, f"spawn-error: {type(exc).__name__}: {exc}")
     if result.returncode != 0:
-        return False, None
-    return True, result.stdout.strip()
+        stderr_lines = result.stderr.strip().splitlines()
+        first = stderr_lines[0] if stderr_lines else ""
+        return _SpawnResult(False, None, f"exit-{result.returncode}: {first}")
+    return _SpawnResult(True, result.stdout.strip(), None)
 
 
 def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
@@ -301,8 +330,11 @@ def _spawn_cached(resolved: str, form: str, args: list) -> Optional[str]:
     key = (resolved, form)
     if key in _spawn_memo:
         return _spawn_memo[key]
-    succeeded, value = _spawn_rev_parse(args, resolved)
-    if succeeded:
+    succeeded, value, reason = _spawn_rev_parse(args, resolved)
+    if not succeeded:
+        _failure_reasons[key] = reason or "unknown"
+    else:
+        _failure_reasons.pop(key, None)
         # Only a SUCCESSFUL spawn is memoized -- see "Negative caching" in
         # the module docstring. Both callers of this helper spawn
         # unconditionally, so a memoized failure would outlive a `git init`
@@ -310,6 +342,24 @@ def _spawn_cached(resolved: str, form: str, args: list) -> Optional[str]:
         # `--show-prefix` at the toplevel) is still memoized here.
         _spawn_memo[key] = value
     return value
+
+
+def last_failure_reason(
+    cwd: Optional[str] = None, form: str = FORM_TOPLEVEL
+) -> Optional[str]:
+    """Why `form` last failed at `cwd`, or None when it has not failed.
+
+    The four walk-backed forms fail only when no `.git` entry (or bare-repo
+    marker) exists from `cwd` upward, which is re-derived here by walking; the
+    two spawning forms report the reason their last spawn recorded. A reason
+    is never a cached verdict: asking never skips a walk or a spawn.
+    """
+    resolved = _resolve_cwd(cwd)
+    if form in _WALK_FORMS:
+        if _walk_for_repo(Path(resolved)) is not None:
+            return None
+        return f"no .git found walking up from {resolved}"
+    return _failure_reasons.get((resolved, form))
 
 
 def show_toplevel(cwd: Optional[str] = None) -> Optional[str]:
@@ -394,7 +444,7 @@ def absolute_git_dir(cwd: Optional[str] = None) -> Optional[str]:
 
 def show_prefix(cwd: Optional[str] = None) -> Optional[str]:
     resolved, _ = _memo_entry(cwd)
-    return _spawn_cached(resolved, "show-prefix", ["--show-prefix"])
+    return _spawn_cached(resolved, FORM_SHOW_PREFIX, ["--show-prefix"])
 
 
 def is_inside_work_tree(cwd: Optional[str] = None) -> bool:
@@ -414,5 +464,7 @@ def is_inside_work_tree(cwd: Optional[str] = None) -> bool:
     docstring warns against.
     """
     resolved, _ = _memo_entry(cwd)
-    out = _spawn_cached(resolved, "is-inside-work-tree", ["--is-inside-work-tree"])
+    out = _spawn_cached(
+        resolved, FORM_IS_INSIDE_WORK_TREE, ["--is-inside-work-tree"]
+    )
     return out == "true"

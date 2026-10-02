@@ -1,17 +1,5 @@
 [
  [
-  "coordinator/bin/archive-paper-trail.py",
-  "sweep-actioned-memos.py"
- ],
- [
-  "coordinator/bin/archive-paper-trail.py",
-  "sweep-terminal-plans.py"
- ],
- [
-  "coordinator/bin/assert-no-terminal-plans-in-live.py",
-  "sweep-terminal-plans.py"
- ],
- [
   "coordinator/bin/coordinator-complete-entry.py",
   "reconcile-completion-commits.py"
  ],
@@ -26,18 +14,6 @@
  [
   "coordinator/bin/day-coverage-sweep.py",
   "reconcile-completion-commits.py"
- ],
- [
-  "coordinator/bin/lib/op_trampoline.py",
-  "query-file-attribution.py"
- ],
- [
-  "coordinator/bin/lib/sweep_argv.py",
-  "sweep-actioned-memos.py"
- ],
- [
-  "coordinator/bin/lib/sweep_argv.py",
-  "sweep-terminal-plans.py"
  ],
  [
   "coordinator/bin/prune-closed-bugs.py",
@@ -60,10 +36,6 @@
   "sweep-shipped-handoffs.py"
  ],
  [
-  "coordinator/bin/record-platform-outcome.py",
-  "migrate-central-improvement-queue.py"
- ],
- [
   "coordinator/bin/sweep-terminal-handoffs.py",
   "sweep-shipped-handoffs.py"
  ],
@@ -78,14 +50,6 @@
  [
   "coordinator/bin/write-identity-file.py",
   "backfill-initiative-fk.py"
- ],
- [
-  "coordinator/bin/archive-session-scope.py",
-  "wsc-tail.py"
- ],
- [
-  "coordinator_core/bash_guards/block_subagent_commit.py",
-  "sweep-actioned-memos.py"
  ],
  [
   "coordinator_core/ceremony_common/cli_rejection.py",

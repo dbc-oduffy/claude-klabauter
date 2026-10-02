@@ -19,6 +19,7 @@ import jsonschema
 import pytest
 
 from coordinator_core.ops.dispatch_emit import wake_digest as wd
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _schema():
@@ -171,7 +172,7 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     node = _find_node()
     if node is None:
         pytest.skip("node unavailable to execute the generated script")
-    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert result.returncode == 0, result.stderr
     digest = json.loads(result.stdout)
     assert wd.validate_digest(digest) == []
@@ -212,7 +213,7 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
     node = _find_node()
     if node is None:
         pytest.skip("node unavailable to execute the generated script")
-    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert result.returncode == 0, result.stderr
     digest = json.loads(result.stdout)
     assert digest["outcome"] == "halted"
@@ -246,7 +247,7 @@ def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **override
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
     )
-    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 

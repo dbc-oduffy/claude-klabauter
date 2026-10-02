@@ -60,7 +60,7 @@ whole safety argument -- this is a no-write exemption, not an escape hatch.
 
 CLAUDE HOME RESOLUTION -- never ``os.path.expanduser`` naively, which
 ignores a monkeypatched ``HOME`` in a way that has clobbered a real
-``.coordinator-content-root`` in this repo family's own install history. Resolution order,
+Content-root pointer in this repo family's own install history. Resolution order,
 explicit and testable via an injected env mapping: ``CLAUDE_CONFIG_DIR``
 (if set, IS the Claude Home) -> ``HOME`` (POSIX) -> ``USERPROFILE``
 (Windows), each joined with ``.claude`` for the latter two. No fallback to

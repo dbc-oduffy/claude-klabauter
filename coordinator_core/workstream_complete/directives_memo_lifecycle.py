@@ -311,6 +311,9 @@ def memo_flip_resolves_ids(dispositions: list[dict[str, Any]]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+_LIVE_HANDOFF_PREFIX = "state/handoffs/"
+
+
 def build_consumed_handoff_ship_directives(
     consumed_handoff_paths: list[str], sha: Optional[str] = None
 ) -> list[dict[str, Any]]:
@@ -350,6 +353,11 @@ def build_consumed_handoff_ship_directives(
     `test_close_ships_the_consumed_predecessor.py`'s ordering assertion is
     the actual enforcement, not this sentence.
 
+    A path already under an archive root (the resolver follows a boot sweep's
+    move) is skipped: only a terminal record is ever swept, and `ship-handoff`
+    refuses any path outside live `state/handoffs/` (exit 4), so re-firing on
+    an archived predecessor would fail the close.
+
     `path` is expected repo-relative and forward-slashed (`PurePosixPath`/
     `.as_posix()`) already, by the caller's own resolution — this function
     does not itself normalise a separator, matching `build_memo_disposition_
@@ -357,6 +365,8 @@ def build_consumed_handoff_ship_directives(
     """
     directives: list[dict[str, Any]] = []
     for path in consumed_handoff_paths:
+        if not path.startswith(_LIVE_HANDOFF_PREFIX):
+            continue
         basename = Path(path).name
         args = ["ship-handoff", path]
         if sha:
@@ -618,13 +628,14 @@ def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
     of that fuzziness, not a guess invented here from nothing.
     """
     common_dir = _git_common_dir(repo_root)
-    if common_dir is not None:
-        claim_dir = common_dir / "coordinator-sessions" / sid
-        if claim_dir.is_dir():
-            try:
-                return datetime.fromtimestamp(claim_dir.stat().st_mtime, tz=timezone.utc)
-            except OSError:
-                pass
+    if common_dir is None:
+        return None
+    claim_dir = common_dir / "coordinator-sessions" / sid
+    if claim_dir.is_dir():
+        try:
+            return datetime.fromtimestamp(claim_dir.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            pass
 
     for base in ("@{upstream}", "origin/main", "origin/master", "main", "master"):
         proc = _run_git(repo_root, ["merge-base", "HEAD", base])

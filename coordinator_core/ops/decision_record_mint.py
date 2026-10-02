@@ -27,17 +27,14 @@ number a call gets is not known until the scan below picks a candidate. An
 `O_CREAT|O_EXCL` race on the candidate PATH itself is exactly a
 non-blocking, per-number "first writer wins" primitive, no lock file, no
 holder to time out waiting for, no separate lock namespace to keep in sync.
-The reservation record lives entirely inside `state/`, this repo's own
-authoritative disk-truth per CLAUDE.md § Architecture — never inside
-`docs/decisions/` itself, so a caller's `ls docs/decisions/*.md` (the exact
-scan this op replaces) never sees reservation bookkeeping mixed into the
-DR corpus.
-
-Reservations are UNTRACKED (`.gitignore`'s new `state/decision-record-
-reservations/` entry): every session on this box shares ONE working tree
-(CLAUDE.md § Engineering Defaults — "parallel agents share one tree"), so a
-plain on-disk marker is visible to every concurrent mint call without any
-git round-trip, and nothing outside this tree needs to see it.
+The reservation record lives under the repo's own `.git/coordinator-dr-
+reservations/` (a tree with no `.git` directory falls back to
+`state/decision-record-reservations/`) — never inside `docs/decisions/`, so a
+caller's `ls docs/decisions/*.md` never sees reservation bookkeeping, and
+never in the working tree, so a consumer repo that has not gitignored the
+path is not left dirty. Every session on this box shares ONE working tree and
+its `.git`, so a plain on-disk marker is visible to every concurrent mint
+call without any git round-trip.
 
 No process spawn: the whole algorithm is `Path.iterdir()`/`os.open`/
 `os.unlink` — no `git`, matching the brightline's "process creation is the
@@ -148,6 +145,12 @@ def _decisions_dir(worktree_root: Path) -> Path:
 
 
 def _reservations_dir(worktree_root: Path) -> Path:
+    """Under the repo's own ``.git`` when it has one: a reservation is box-local
+    bookkeeping, and a working-tree location dirties every repo that has not
+    gitignored it. A tree without a ``.git`` directory keeps the ``state/`` path."""
+    git_dir = worktree_root / ".git"
+    if git_dir.is_dir():
+        return git_dir / "coordinator-dr-reservations"
     return worktree_root / _RESERVATIONS_RELDIR
 
 

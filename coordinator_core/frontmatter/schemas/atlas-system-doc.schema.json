@@ -4,14 +4,14 @@
   "x-schema-name": "atlas-system-doc",
   "x-schema-version": "1.0.0",
   "applies_to": "docs/architecture/systems/*.md",
-  "description": "Per-system architecture atlas document — one file per tracked system boundary, authored inside docs/architecture/systems/. Carries two distinct clocks per the two-clock split (atlas-watch-script-convention.md): last_mapped (survey clock, full bootstrap only) and last_attested (targeted audit clock, on-diff passes). Produced by /architecture-survey (both clocks) and /architecture-audit (last_attested only). Spec backlink: coordinator/docs/wiki/canonical-artifact-shapes.md § Atlas documents.",
+  "description": "Per-system architecture atlas document — one file per tracked system boundary, authored inside docs/architecture/systems/. Carries two distinct clocks per the two-clock split (atlas-watch-script-convention.md): last_mapped (most recent body rewrite) and last_attested (targeted audit clock, on-diff passes). /architecture-survey writes last_mapped only and carries an existing last_attested forward verbatim; /architecture-audit writes last_attested (Branch A bumps both clocks, Branch B bumps last_attested only). A page never targeted by /architecture-audit has no last_attested. Spec backlink: coordinator/docs/wiki/schema-and-validation-contracts/canonical-artifact-shapes.md § Atlas documents.",
   "type": "object",
   "required": [],
   "properties": {
     "last_mapped": {
       "type": "string",
       "format": "date",
-      "description": "Date of the last full atlas re-bootstrap that wrote this file (YYYY-MM-DD). Survey clock — updated only by full /architecture-survey passes, never by targeted audits."
+      "description": "Date of the last full atlas re-bootstrap that wrote this file (YYYY-MM-DD). Survey clock — updated by every /architecture-survey pass (full or refresh) that rewrites the page, and by an /architecture-audit Branch A rotation. Branch B never bumps it."
     },
     "mode": {
       "type": "string",
@@ -20,7 +20,7 @@
     "last_attested": {
       "type": "string",
       "format": "date",
-      "description": "Date of the last targeted on-diff audit for this system (YYYY-MM-DD). Targeted-audit clock — updated by /architecture-audit but NOT by full /architecture-survey passes. Absent on files never targeted. Distinct from last_mapped — do NOT conflate."
+      "description": "Date of the last targeted on-diff audit for this system (YYYY-MM-DD). Targeted-audit clock — updated by /architecture-audit but NOT by /architecture-survey, full or refresh; a survey carries an existing value forward verbatim. Absent on pages never audited. Distinct from last_mapped — do NOT conflate."
     },
     "system": {
       "type": "string",

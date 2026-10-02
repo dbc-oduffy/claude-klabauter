@@ -11,13 +11,29 @@ from .patterns import PATTERNS
 #: of the cost of even attempting the family's own regex against that line.
 _MARKER_LITERALS = ("#", "//", "/*", "*", "<!--")
 
+#: The detector's own source and fixtures, plus the sweep op's tests: their
+#: string literals hold banned comment shapes on purpose, so scanning them
+#: reports the detector's own test data as debt.
+_FIXTURE_PATHS = (
+    "coordinator_core/commenting/",
+    "coordinator_core/ops/tests/test_run_commenting_sweep.py",
+)
+
+
+def _is_fixture_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.startswith(_FIXTURE_PATHS)
+
 
 def scan_text(text: str, path: str) -> list[Match]:
     """Does this text, at this path, carry a comment shape the commenting
     standard bans (changelog, attribution, task-ref, narration, or grep-bait)?
 
     Exemption is `attribution.is_exempt_path`, reused rather than copied, so
-    the two detectors never drift on which paths are exempt.
+    the two detectors never drift on which paths are exempt, plus this
+    detector's own fixture paths (`_FIXTURE_PATHS`).
 
     Matched per line, not against the whole blob: every PATTERNS family is
     already bounded to a single line (`[^\\n]`-scoped), so this changes
@@ -37,7 +53,7 @@ def scan_text(text: str, path: str) -> list[Match]:
     family's own documented invariant (anchored to a marker AND a
     single-line shape) rather than a deliberate loosening of it.
     """
-    if is_exempt_path(path):
+    if is_exempt_path(path) or _is_fixture_path(path):
         return []
     matches: list[Match] = []
     offset = 0

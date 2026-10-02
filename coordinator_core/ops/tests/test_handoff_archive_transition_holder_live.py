@@ -24,8 +24,7 @@ Covers:
     session holding the predecessor's claim on that path (ship-then-
     archive in one call).
 
-Fixture idiom: a real throwaway git repo (mirrors
-`test_handoff_ship_archive.py`'s `_Repo` fixture), a claim dir at
+Fixture idiom: a real throwaway git repo (`_Repo`), a claim dir at
 `<common_dir>/coordinator-sessions/handoff-claims/<basename>/`, and
 `cs_claim_holder_live` monkeypatched at THIS module's own import site
 (`coordinator_core.ops.handoff_archive_transition.cs_claim_holder_live`) to
@@ -55,7 +54,7 @@ from coordinator_core.ops.handoff_archive_transition import _handler as _archive
 # Declared, not excused: this file spawns a real process (git) because AC5's
 # property under test — the retained flip landing COMMITTED, not merely on
 # disk — is git's own status-vs-HEAD behaviour, which no fixture stands in
-# for. See test_handoff_ship_archive.py's identical pytestmark and reasoning.
+# for.
 pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,

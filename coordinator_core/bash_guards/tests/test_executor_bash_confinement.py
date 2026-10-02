@@ -106,7 +106,7 @@ def _fake_is_confined_by_roster_absence(effective_type: str) -> bool:
     ``coordinator_core/conftest.py``'s autouse ``_quarantine_real_home``
     fixture repoints ``HOME``/``USERPROFILE`` at a throwaway tmp dir for
     every test in the suite, which -- absent a ``COORDINATOR_SETTINGS_HOME``
-    override surviving that quarantine -- makes ``read_content_root_pointer()``
+    override surviving that quarantine -- makes ``read_content_root()``
     resolve to ``""`` and ``resolve_roster()`` fail closed (``roster is
     None``), which makes ``is_confined_by_roster_absence`` return ``True``
     for EVERY non-empty ``effective_type`` -- including

@@ -126,6 +126,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
 import pathlib
 
 import pytest
@@ -167,11 +168,29 @@ _PRIMITIVE_MODULE = "coordinator_core/git/run.py"
 #: commit.md` C1, DR-359). Importing `git.run` to satisfy this gate would
 #: hand the remover the dependency whose absence is its reason to exist.
 #:
+#: The other rows are stdlib-only `coordinator/bin` CLIs that import nothing
+#: from the engine and run with no engine-root bootstrap. Taking the engine
+#: for one git call would add that bootstrap (and its `_RESOLVER_FAMILY_BY_FILE`
+#: row) to a script that has none; a bin that already imports the engine
+#: migrates instead. The ruling and its per-script split live in
+#: `docs/plans/2026-10-01-migrate-post-freeze-private-git-runners.md`.
+#:
 #: An entry here is NOT free: `test_contract_exempt_modules_still_declare_
 #: their_standalone_contract` fails the moment the docstring stops saying so,
 #: which is what stops this from becoming a second, softer register.
 _CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
-    {"coordinator/bin/remove-claude-klabauter-precommit-hook.py"}
+    {
+        "coordinator/bin/check-anchor-freshness.py",
+        "coordinator/bin/check-watch-state-gitignore-fleet.py",
+        "coordinator/bin/classify-legacy-engine-noun-references.py",
+        "coordinator/bin/frontmatter-parse-check.py",
+        "coordinator/bin/klabauter-reconcile.py",
+        "coordinator/bin/memo-outbox-tracking-guard.py",
+        "coordinator/bin/plan-reversibility-eligibility.py",
+        "coordinator/bin/pre_commit_corpus_artifact_guard.py",
+        "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
+        "coordinator/bin/tier-last-run.py",
+    }
 )
 
 #: Same roots the amplification gate scans, plus `coordinator/lib`: the G7
@@ -241,6 +260,17 @@ class GitSpawnSite:
     enclosing: str
 
 
+def _walk(tree: ast.Module) -> list:
+    """`ast.walk(tree)` materialised once per parsed module. Each collector
+    pass sweeps the whole module; re-running the generator for each pass
+    was most of this gate's cost."""
+    nodes = getattr(tree, "_g7_nodes", None)
+    if nodes is None:
+        nodes = list(ast.walk(tree))
+        tree._g7_nodes = nodes
+    return nodes
+
+
 def _leaf_name(func: ast.expr) -> "str | None":
     if isinstance(func, ast.Attribute):
         return func.attr
@@ -268,7 +298,6 @@ def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
     carries no literal `"git"` head, so the head-matching below saw nothing
     and the module spawned git entirely outside this gate's inventory. Five
     modules were in that state when it was found (`git/ls_files.py`,
-    `git/ls_files_bytes.py`,
     `ops/normalize_env.py`), all since migrated onto `run_git` -- which is
     why no register row was needed for any of them, and why this detector
     must stay: nothing else would have said so.
@@ -278,14 +307,16 @@ def _resolved_git_names(tree: ast.Module) -> "frozenset[str]":
     that wraps one (`auto_push.git_exe()`'s shape). Deliberately NOT a
     name-pattern match on `git_bin`/`git_exe` -- a register this gate freezes
     must key on what a module DOES, not on what it named a variable."""
+    if not any(_is_which_git(n) for n in _walk(tree)):
+        return frozenset()
     resolver_funcs = {
         fn.name
-        for fn in ast.walk(tree)
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(_is_which_git(c) for c in ast.walk(fn))
+        for node in _walk(tree)
+        if _is_which_git(node)
+        for fn in _containing_funcs(tree, node)
     }
     names: set = set()
-    for node in ast.walk(tree):
+    for node in _walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -318,7 +349,7 @@ def _git_argv_names(tree: ast.Module) -> "frozenset[str]":
     `AugAssign` case: the initial literal `Assign` is what binds the name
     here, and the later re-bind stays git-headed."""
     names: set = set()
-    for node in ast.walk(tree):
+    for node in _walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -372,22 +403,49 @@ def _argv_exprs(call: ast.Call) -> list:
     return out
 
 
+def _scopes(tree: ast.Module) -> "tuple[dict, dict]":
+    """`(func_of, outer_of)`: every node's id to its nearest enclosing
+    function node (None at module scope), and every function node's id to
+    ITS enclosing function. Built once per module by an explicit descent,
+    because `ast.walk` loses the parent relationship; every "which functions
+    contain X" question below is answered from it instead of re-walking each
+    function's subtree."""
+    cached = getattr(tree, "_g7_scopes", None)
+    if cached is not None:
+        return cached
+    func_of: dict = {}
+    outer_of: dict = {}
+    stack = [(tree, None)]
+    while stack:
+        node, fn = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            func_of[id(child)] = fn
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                outer_of[id(child)] = fn
+                stack.append((child, child))
+            else:
+                stack.append((child, fn))
+    tree._g7_scopes = (func_of, outer_of)
+    return tree._g7_scopes
+
+
+def _containing_funcs(tree: ast.Module, node: ast.AST) -> list:
+    """Every function whose body contains `node`, innermost first -- the
+    set `ast.walk(fn)` over each function would have found it in."""
+    func_of, outer_of = _scopes(tree)
+    out = []
+    fn = func_of.get(id(node))
+    while fn is not None:
+        out.append(fn)
+        fn = outer_of.get(id(fn))
+    return out
+
+
 def _enclosing_names(tree: ast.Module) -> dict:
     """Map every AST node's id to the name of its nearest enclosing function
-    (`"<module>"` at module scope). Built by an explicit descent rather than
-    `ast.walk`, because `walk` loses the parent relationship this needs."""
-    out: dict = {}
-
-    def descend(node: ast.AST, name: str) -> None:
-        for child in ast.iter_child_nodes(node):
-            out[id(child)] = name
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                descend(child, child.name)
-            else:
-                descend(child, name)
-
-    descend(tree, "<module>")
-    return out
+    (`"<module>"` at module scope)."""
+    func_of, _outer_of = _scopes(tree)
+    return {key: (fn.name if fn is not None else "<module>") for key, fn in func_of.items()}
 
 
 def _func_param_names(fn) -> set:
@@ -408,17 +466,28 @@ def _generic_runner_names(tree: ast.Module) -> set:
     and `bash_guards/_branch_set.py` shipped exactly that pair until the G7
     migration. Without this, the module is invisible to the gate."""
     out: set = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    for call in _walk(tree):
+        if not isinstance(call, ast.Call) or _leaf_name(call.func) not in _SPAWN_API_NAMES:
             continue
-        params = _func_param_names(node)
-        for call in ast.walk(node):
-            if not isinstance(call, ast.Call) or _leaf_name(call.func) not in _SPAWN_API_NAMES:
-                continue
-            for argv in _argv_exprs(call):
-                if any(isinstance(n, ast.Name) and n.id in params for n in ast.walk(argv)):
-                    out.add(node.name)
+        argv_names = {
+            n.id for argv in _argv_exprs(call) for n in ast.walk(argv) if isinstance(n, ast.Name)
+        }
+        if not argv_names:
+            continue
+        for fn in _containing_funcs(tree, call):
+            if argv_names & _func_param_names(fn):
+                out.add(fn.name)
     return out
+
+
+def _call_leaf_names(tree: ast.Module) -> set:
+    """Leaf names of every call in the module, in one walk -- the early-exit
+    both collectors take before their per-function passes."""
+    return {
+        name
+        for node in _walk(tree)
+        if isinstance(node, ast.Call) and (name := _leaf_name(node.func)) is not None
+    }
 
 
 def _module_level_numeric_names(tree: ast.Module) -> set:
@@ -445,6 +514,10 @@ def _module_level_numeric_names(tree: ast.Module) -> set:
 def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
     """Return `(git_spawn_sites, dial_keys)` for one module's source."""
     tree = ast.parse(source)
+    if not _call_leaf_names(tree) & _SPAWN_API_NAMES:
+        # No spawn call at all means no direct site and no generic runner,
+        # so the costlier passes below cannot find anything.
+        return [], []
     enclosing = _enclosing_names(tree)
     generics = _generic_runner_names(tree)
     resolved_names = _resolved_git_names(tree)
@@ -460,7 +533,7 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
 
     sites = {
         GitSpawnSite(module=relpath, enclosing=enclosing.get(id(node), "<module>"))
-        for node in ast.walk(tree)
+        for node in _walk(tree)
         if isinstance(node, ast.Call) and is_git_spawn(node)
     }
     if not sites:
@@ -470,15 +543,15 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
         return [], []
 
     git_funcs = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(isinstance(c, ast.Call) and is_git_spawn(c) for c in ast.walk(node))
+        fn.name
+        for node in _walk(tree)
+        if isinstance(node, ast.Call) and is_git_spawn(node)
+        for fn in _containing_funcs(tree, node)
     }
     numeric_names = _module_level_numeric_names(tree)
     dials: set = set()
 
-    for node in ast.walk(tree):
+    for node in _walk(tree):
         if not isinstance(node, ast.Call):
             continue
         if not (is_git_spawn(node) or _leaf_name(node.func) in git_funcs):
@@ -490,7 +563,7 @@ def _collect_module(relpath: str, source: str) -> "tuple[list, list]":
                 if isinstance(name, ast.Name) and name.id in numeric_names:
                     dials.add((relpath, name.id))
 
-    for node in ast.walk(tree):
+    for node in _walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if node.name not in git_funcs:
@@ -553,25 +626,42 @@ def _scope_files(roots: "tuple[str, ...]" = None) -> list:
     return out
 
 
-def collect_private_git_runners() -> "tuple[list, list]":
+def _may_carry_git_literal(source: str) -> bool:
+    """Cheap text prefilter, sound for `_collect_module`: every detector it
+    runs keys on an `ast.Constant` whose value is exactly `"git"` (the argv
+    head, or `which("git")`), and no such constant can be spelled without
+    one of these two quoted substrings appearing in the source. Skipping the
+    parse for the ~85% of modules without one is what keeps this gate under
+    the brightline -- the per-module AST walks, not the traversal, were the
+    whole cost."""
+    return '"git"' in source or "'git'" in source
+
+
+@functools.lru_cache(maxsize=None)
+def collect_private_git_runners() -> "tuple[tuple, tuple]":
     """Sweep the gate's scope. Returns `(git_spawn_sites, dial_keys)`.
 
     A module that fails to parse is SKIPPED, not raised on: this scope holds
     extensionless shebang scripts and, on a shared tree, files a peer session
     is mid-write. A parse error here is not a finding about git runners, and
     turning one into a gate failure would make the gate fail for reasons it
-    has no opinion about."""
+    has no opinion about.
+
+    Memoized per process: five tests read the same sweep, and re-walking the
+    tree for each multiplied the gate's cost fivefold."""
     sites: list = []
     dials: list = []
     for relpath, path in _scope_files():
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
+            if not _may_carry_git_literal(source):
+                continue
             module_sites, module_dials = _collect_module(relpath, source)
         except (SyntaxError, ValueError, OSError):
             continue
         sites.extend(module_sites)
         dials.extend(module_dials)
-    return sites, dials
+    return tuple(sites), tuple(dials)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -622,11 +712,13 @@ def _collect_verb_sites(relpath: str, source: str) -> list:
     WHAT VERB (migrating does not clear it, and must not). One
     parameterised walk would blur that distinction into a flag."""
     tree = ast.parse(source)
+    if not _call_leaf_names(tree) & (_SPAWN_API_NAMES | _RUN_GIT_LEAF_NAMES):
+        return []
     enclosing = _enclosing_names(tree)
     resolved_names = _resolved_git_names(tree)
     generics = _generic_runner_names(tree)
     sites: set = set()
-    for node in ast.walk(tree):
+    for node in _walk(tree):
         if not isinstance(node, ast.Call):
             continue
         name = _leaf_name(node.func)
@@ -652,7 +744,8 @@ def _collect_verb_sites(relpath: str, source: str) -> list:
     return sorted(sites, key=lambda s: (s.module, s.enclosing, s.verb))
 
 
-def collect_destructive_verb_sites() -> list:
+@functools.lru_cache(maxsize=None)
+def collect_destructive_verb_sites() -> tuple:
     """Sweep `_VERB_GATE_SCOPE_ROOTS`. Same skip-on-parse-error rule as
     `collect_private_git_runners`, for the identical reason -- a shared tree
     carries a peer session's mid-write file, and this gate has no opinion
@@ -663,11 +756,15 @@ def collect_destructive_verb_sites() -> list:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        # Sound prefilter: a site needs either a `"git"` constant or a
+        # `run_git`/`_run_git` call.
+        if not (_may_carry_git_literal(source) or "run_git" in source):
+            continue
         try:
             sites.extend(_collect_verb_sites(relpath, source))
         except (SyntaxError, ValueError):
             continue
-    return sites
+    return tuple(sites)
 
 
 #: Frozen inventory of modules that spawn git without going through
@@ -795,7 +892,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/ceremony/branch_resolution.py",
         "coordinator_core/ops/ceremony/detached_render_commit.py",
         "coordinator_core/ops/ceremony/git_native.py",
-        "coordinator_core/ops/ceremony/resolver.py",
         "coordinator_core/ops/ceremony/update_docs_scan.py",
         "coordinator_core/ops/changelog_ops.py",
         "coordinator_core/ops/check_import_budget_staleness.py",
@@ -812,7 +908,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/detect_changed_dependency_manifests.py",
         "coordinator_core/ops/detect_project_runtime.py",
         "coordinator_core/ops/dirty_tree_gate.py",
-        "coordinator_core/ops/doc_staleness.py",
         "coordinator_core/ops/dod_floor_ratchet.py",
         "coordinator_core/ops/draft_plan_aging.py",
         "coordinator_core/ops/emit/context.py",
@@ -821,7 +916,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/emit/resolvers.py",
         "coordinator_core/ops/emit/lma_cache.py",
         "coordinator_core/ops/emit/sections/_shared.py",
-        "coordinator_core/ops/emit/sections/handoff_columns.py",
         "coordinator_core/ops/ensure_doe_clone.py",
         "coordinator_core/ops/gate_dimension_review.py",
         "coordinator_core/ops/generate_exec_summary.py",
@@ -840,7 +934,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/platform_outcome_records.py",
         "coordinator_core/ops/promote_shipped_in_flight_stubs.py",
         "coordinator_core/ops/propagate_body.py",
-        "coordinator_core/ops/reap_in_flight_claims.py",
         "coordinator_core/ops/record_history.py",
         "coordinator_core/ops/release_tagging.py",
         "coordinator_core/ops/renormalize_index.py",
@@ -857,7 +950,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/session/safe_commit_offer.py",
         "coordinator_core/ops/staleness_git.py",
         "coordinator_core/ops/strategic/version_highlights.py",
-        "coordinator_core/ops/sync_main.py",
         "coordinator_core/ops/verify_arch_audit_atlas_refresh.py",
         "coordinator_core/ops/verify_fix_files_changed.py",
         "coordinator_core/ops/verify_orientation_cache_sync.py",
@@ -977,7 +1069,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 191
+_PINNED_RUNNER_CEILING = 186
 _PINNED_DIAL_CEILING = 68
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN

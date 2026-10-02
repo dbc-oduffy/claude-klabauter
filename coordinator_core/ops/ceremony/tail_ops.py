@@ -179,7 +179,6 @@ def fleet_result_to_tail(result: dict, op_label: str) -> TailResult:
 # call site; this module registers no call site of its own for it any more.
 # ---------------------------------------------------------------------------
 # refresh-roadmap-callout -- disposable sibling render
-# (STEP_2_75, C9 wiring-gap fix, 2026-07-22 -- see wsc_tail.py module docstring)
 # ---------------------------------------------------------------------------
 
 #: Native-port op label (not a JSON-RPC op key -- never goes through get_op_handler),

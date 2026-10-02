@@ -11,7 +11,10 @@ remembers to re-run the installer by hand — which nobody does. Ten CLIs
 (`percolate-push` among them) drifted this way with nothing catching it.
 
 This module is the narrow fix: a cheap, silent, best-effort check — call it
-every session boot — that closes ONLY the missing-forwarder gap, using the
+every session boot — that closes ONLY the missing-forwarder gap and rewrites a
+Python forwarder whose bytes differ from the current generator output
+(`substrate._agent_forwarder_content`, rendered in process; native door images
+are never compared), using the
 exact same writer (`_write_agent_forwarder`, or `_cut_over_to_native_door`
 for a door-eligible name) `substrate.py`'s own install path uses, so there
 is no second, drift-prone forwarder-body implementation.
@@ -235,11 +238,14 @@ def _self_heal_forwarders_inner() -> None:
     door_root = claude_klabauter_root if is_engine_root(claude_klabauter_root) else None
 
     missing: "dict[str, str]" = {}
+    stale: "dict[str, str]" = {}
     for name, target in target_map.items():
         if not _installed_forwarder_present(bin_dst, name):
             missing[name] = target
+        elif _python_forwarder_is_stale(bin_dst / name, name, target):
+            stale[name] = target
 
-    if not missing:
+    if not missing and not stale:
         return
 
     native_written: "set[str]" = set()
@@ -258,9 +264,33 @@ def _self_heal_forwarders_inner() -> None:
                         native_written.add(name)
                         continue
                 _write_agent_forwarder(name, bin_dst / name, False, target=target)
+            for name, target in sorted(stale.items()):
+                if _python_forwarder_is_stale(bin_dst / name, name, target):
+                    _write_agent_forwarder(name, bin_dst / name, False, target=target)
             _union_native_forwarder_manifest(bin_dst, native_written)
     except LockTimeout:
         return
+
+
+_FORWARDER_HEADER = b"#!/usr/bin/env python3\n# coordinator-claude bin forwarder for "
+
+
+def _python_forwarder_is_stale(path: Path, name: str, target: str) -> bool:
+    """True iff `path` is a Python forwarder this installer wrote whose bytes
+    differ from what `_agent_forwarder_content` renders today. A file that does
+    not carry the forwarder header (a native door image, a foreign file) is
+    never stale. Reads at most one byte past the expected length."""
+    from coordinator_core.install.substrate import _agent_forwarder_content
+
+    expected = _agent_forwarder_content(name, target).encode("utf-8")
+    try:
+        with path.open("rb") as fh:
+            actual = fh.read(len(expected) + 1)
+    except OSError:
+        return False
+    if actual == expected:
+        return False
+    return actual.startswith(_FORWARDER_HEADER)
 
 
 def _installed_forwarder_present(bin_dst: Path, name: str) -> bool:

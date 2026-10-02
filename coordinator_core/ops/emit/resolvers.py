@@ -95,6 +95,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
+from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.content_root import read_content_root
 from coordinator_core.git.run import (
     LOCAL_PLUMBING_BUDGET_SECS,
     git_ok,
@@ -581,7 +583,7 @@ def _registry_coordinator_root() -> Optional[Path]:
     (``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps —
     matches ``machine_resolver.registry_get``; the ``.local``-only read
     predated that pattern), key-major rung order preserved (``live_path``
-    before ``repos.content_root``). Direct file reads only — bootstrap-safety
+    before the content-root rung). Direct file reads only — bootstrap-safety
     invariant, no CLI/subprocess (see ``resolve_coordinator_root``'s
     docstring)."""
     reg_dir = machine_local_dir()
@@ -611,7 +613,6 @@ def _registry_coordinator_root() -> Optional[Path]:
 
     for key_path, suffix in (
         (["plugin", "mirrors", "coordinator-claude", "live_path"], ""),
-        (["repos", "content_root"], "/coordinator"),
     ):
         flat_key = ".".join(key_path)
         for data, text in files:
@@ -649,6 +650,12 @@ def _registry_coordinator_root() -> Optional[Path]:
                     # Flat-key value could not be normalized into a path -- try the
                     # next registry file / key_path candidate.
                     pass
+
+    registered_root = read_content_root()
+    if registered_root:
+        content_dir = content_root_for(registered_root)
+        if content_dir is not None and (content_dir / "bin" / "query-records.py").exists():
+            return content_dir
     return None
 
 
@@ -685,8 +692,8 @@ def resolve_coordinator_root() -> Path:
          still points at a valid DoE mirror). Per-key file precedence:
          ``registry.local.toml`` wins, tracked ``registry.toml`` fills gaps
          (``machine_resolver.registry_get`` semantics; see ``_registry_coordinator_root``).
-      4. Machine-local registry key ``repos.content_root`` + ``/coordinator`` suffix
-         (same two-file per-key precedence).
+      4. ``content_root.read_content_root()`` (registry ``repos.content_root`` and its
+         compat read-through), joined to its content layout.
       5. ``resolve-coordinator-clone --for-content`` subprocess (survivor CLI at
          ``~/.claude/bin/resolve-coordinator-clone``) — replaces the pre-repoint legacy
          plugin dir read, which was stale/empty post-W4.2 cutover.

@@ -301,6 +301,49 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
 #: (verified: 0 newly-undeclared site keys), so `test_unenrolled_spawn_bearing_ops_are_declared_
 #: in_the_frozen_inventory` needed no new entries for them. 185 -> 145 enrolled rows.
 _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Re-enrolled 2026-10-02. dispatch.emit: host-trailer read now parses the git config
+    # files; its one remaining spawn (the batched check-ignore) is legitimized below.
+    # postuse_advisory_dispatch: commit-landed check now compares the index to HEAD's tree spine.
+    "ceremony.init_anchor_injection_state": (
+        "coordinator_core/ops/init_anchor_injection_state.py",
+        ("_handler",),
+    ),
+    "dispatch.emit": (
+        "coordinator_core/ops/dispatch_emit/op.py",
+        ("_dispatch_emit",),
+    ),
+    "hooks.postuse_advisory_dispatch": (
+        "coordinator_core/hooks/postuse_advisory_dispatch.py",
+        ("_handler",),
+    ),
+    # Re-enrolled 2026-10-02 with the one spawn each reaches legitimized in `_LEGITIMIZED_SITES`
+    # below (counted by an exact-equality test against a `spawn_count_budget` manifest key).
+    "hooks.stop_dispatch": (
+        "coordinator_core/hooks/stop_dispatch.py",
+        ("_handler",),
+    ),
+    "roadmap.blitz_land": (
+        "coordinator_core/ops/roadmap_blitz_land.py",
+        ("_handler",),
+    ),
+    "session.reap": (
+        "coordinator_core/ops/session/reap.py",
+        ("_handler",),
+    ),
+    # Enrolled 2026-10-02, EM-adjudication step 2: new ops, each measured an
+    # EMPTY function-granular reachable spawn set.
+    "dispatch.ask_gate": (
+        "coordinator_core/ops/dispatch_emit/ask_gate.py",
+        ("_handler",),
+    ),
+    "dispatch.ask_stage": (
+        "coordinator_core/ops/dispatch_emit/ask_stage.py",
+        ("_handler",),
+    ),
+    "sizing.resize": (
+        "coordinator_core/ops/sizing_resize.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-01, EM-adjudication step 2: each measured an EMPTY
     # function-granular reachable spawn set, so none needs legitimization.
     "engine.registration_completeness": (
@@ -327,9 +370,9 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     # Enrolled 2026-09-03, same EM-adjudication step 2 as the 2026-08-30 four
     # below: each resolves to a function-granular reachable spawn set that is
-    # EMPTY, so it needs no legitimization and no static pin. Three of them
-    # (`hooks.stop_dispatch`, `hooks.watchdog_undischarged_next_move`,
-    # and the `groupem.*` trio's shared reader) reach nothing precisely BECAUSE
+    # EMPTY, so it needs no legitimization and no static pin. Two of them
+    # (`hooks.watchdog_undischarged_next_move` and the `groupem.*` trio's
+    # shared reader) reach nothing precisely BECAUSE
     # the machinery relocation repointed them onto `session.machinery_paths` and
     # took a git spawn off a per-turn hook path. Left in the residual they read
     # as unaccounted-for; enrolled, a spawn site appearing at any of them is a
@@ -364,10 +407,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "hooks.sessionend_archive_session": (
         "coordinator_core/hooks/sessionend_archive_session.py",
-        ("_handler",),
-    ),
-    "hooks.stop_dispatch": (
-        "coordinator_core/hooks/stop_dispatch.py",
         ("_handler",),
     ),
     "hooks.watchdog_undischarged_next_move": (
@@ -555,10 +594,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/diagnostics_probes.py",
         ("_always_succeeds",),
     ),
-    "dispatch.emit": (
-        "coordinator_core/ops/dispatch_emit/op.py",
-        ("_dispatch_emit",),
-    ),
     "distill.curate_clusters": (
         "coordinator_core/ops/distill_curate_clusters.py",
         ("_handler",),
@@ -689,10 +724,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "hooks.nudge_unauthorized_handoff": (
         "coordinator_core/hooks/nudge_unauthorized_handoff.py",
-        ("_handler",),
-    ),
-    "hooks.postuse_advisory_dispatch": (
-        "coordinator_core/hooks/postuse_advisory_dispatch.py",
         ("_handler",),
     ),
     "hooks.receiver_state_sensor": (
@@ -895,10 +926,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/session_peer_roster.py",
         ("_session_peer_roster",),
     ),
-    "session.reap": (
-        "coordinator_core/ops/session/reap.py",
-        ("_handler",),
-    ),
     "session.record_pickup": (
         "coordinator_core/ops/session/record_pickup.py",
         ("_handler",),
@@ -1015,15 +1042,8 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # -- 2026-08-25 widening: 2 more live registry ops MEASURED to have an EMPTY
     # function-granular reachable spawn set (`test_registry_divergence_and_residual_stay_
     # accounted`'s completeness guard), same EM adjudication step 2 as the C2a widening
-    # above -- an op reaching no spawn site needs zero legitimization. `handoff.
-    # ship_and_archive` was previously carried as a `_STATIC_SPAWN_COUNT_PINS` residual
-    # row and moved here once its reachable set went empty (its pin is removed in the
-    # same change); `memo.reconcile_outbox` is new to both routes.
+    # above -- an op reaching no spawn site needs zero legitimization.
     #
-    "handoff.ship_and_archive": (
-        "coordinator_core/ops/handoff_ship_archive.py",
-        ("_handler",),
-    ),
     "memo.reconcile_outbox": (
         "coordinator_core/ops/fleet/memo_reconcile_outbox.py",
         ("_memo_reconcile_outbox",),
@@ -1418,10 +1438,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/campaign_enumerate.py",
         ("_handler",),
     ),
-    "roadmap.blitz_land": (
-        "coordinator_core/ops/roadmap_blitz_land.py",
-        ("_handler",),
-    ),
     "roadmap.plan_gate": (
         "coordinator_core/ops/roadmap_plan_gate.py",
         ("_handler",),
@@ -1690,8 +1706,9 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
     ),
     # `memo.send` (2026-09-24, docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
-    # gate.md, C2). Green-path shape: the receiver-side commit's hookless `update-index`
-    # refresh, executed by `test_green_path_spawn_count_matches_budget_and_is_attributed`.
+    # gate.md, C2). The receiver index fallback: a hookless `update-index` when the receiver's
+    # index is one `splice_index` refuses (v4), executed by
+    # `test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invoke`.
     (
         "memo.send",
         "coordinator_core/ops/ceremony/git_native.py",
@@ -1701,10 +1718,11 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
     ): _Legitimation(
         counter=_GLOBAL_SUBPROCESS_SPAWN,
         counted_by="coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py",
-        executed="Measured 2026-09-24: attributed by stack to git_native.py::_git._invoke under "
-        "`test_green_path_spawn_count_matches_budget_and_is_attributed` (`assert len(spawns) == "
-        "budgeted`, budgeted read from the manifest's memo.send `green_path`); the attribution "
-        "is itself asserted on every run.",
+        executed="Attributed by stack to git_native.py::_git._invoke under "
+        "`test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invoke` "
+        "(`assert len(spawns) == budgeted`, budgeted read from the manifest's memo.send "
+        "`receiver_index_unspliceable`); the attribution is itself asserted on every run. "
+        "Natural precondition: the receiver's index at v4.",
     ),
     # `run_git`'s ls-tree fallback reached via `commit_authored_new_file`'s `_head_entry_for`
     # -> `git_state.head_blobs` route, on a PLANTED refusal precondition (`git_native.
@@ -1746,6 +1764,77 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "memo.send `receiver_signing_enabled`); the attribution is itself asserted on every run. "
         "Natural precondition: receiver repo's commit.gpgsign set true (git commit-tree -S "
         "attempted, counted as the spawn attempt regardless of DR-308's no-secret-key fallthrough).",
+    ),
+    (
+        "hooks.stop_dispatch",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/hooks/tests/test_stop_dispatch_spawn_count.py",
+        executed="Measured 2026-10-02: attributed by stack to git/run.py::run_git under "
+        "`test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log` "
+        "(`assert len(spawns) == budget`, read from the manifest's hooks.stop_dispatch "
+        "`terminal_review_session_walk`); the attribution is itself asserted on every run.",
+    ),
+    (
+        "roadmap.blitz_land",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_roadmap_blitz_land_spawn_count.py",
+        executed="Measured 2026-10-02: attributed by stack to git/run.py::run_git under "
+        "`test_a_four_baton_wave_spawns_one_rev_list_in_total` (`assert len(spawns) == "
+        "budget`, read from the manifest's roadmap.blitz_land `shipped_in_reachability`); "
+        "the attribution is itself asserted on every run.",
+    ),
+    (
+        "session.reap",
+        "coordinator_core/ops/ceremony/git_native.py",
+        "_git._invoke",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/session/tests/test_reap_spawn_count.py",
+        executed="Measured 2026-10-02: attributed by stack to git_native.py::_git._invoke under "
+        "`test_two_stale_agents_with_touched_paths_spawn_one_status_in_total` (`assert "
+        "len(spawns) == budget`, read from the manifest's session.reap "
+        "`dirty_touched_path_refusal`); the attribution is itself asserted on every run.",
+    ),
+    (
+        "dispatch.emit",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py",
+        executed="Measured 2026-10-02: attributed by stack to git/run.py::run_git under "
+        "`test_plan_route_spawns_exactly_the_budgeted_check_ignore` (`assert len(spawns) == "
+        "budget`, read from the manifest's dispatch.emit `plan_route_gitignore_filter`); the "
+        "attribution is itself asserted on every run.",
+    ),
+    (
+        "hooks.postuse_advisory_dispatch",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/hooks/tests/test_postuse_advisory_dispatch_spawn_count.py",
+        executed="Measured 2026-10-02: attributed by stack to git/run.py::run_git under "
+        "`test_non_ascii_write_touch_spawns_exactly_the_budgeted_ls_files` (`assert "
+        "len(spawns) == budget`, read from the manifest's hooks.postuse_advisory_dispatch "
+        "`non_ascii_write_touch`); the attribution is itself asserted on every run. "
+        "Natural precondition: a non-ASCII Write path, which the zero-spawn normalizer declines.",
     ),
 }
 
@@ -1926,7 +2015,7 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
 #: D3 (2026-08-23, this chunk's own dispatch brief -- `state/dispatch-briefs/2026-08-22-
 #: the-composition-gate-counts-processes-across-the-op-graph/D3.md`): the OPEN half of the
 #: session-and-git-core cluster (`session/scope.py`, `session/core.py`,
-#: `ops/ceremony/git_native.py`, `git/run.py`, `git/ls_files_bytes.py`, `git/divergence.py`,
+#: `ops/ceremony/git_native.py`, `git/run.py`, `git/divergence.py`,
 #: `git/repo_root.py`, `git_scope.py`, `dag.py`). Two of this cluster's sites are already
 #: legitimized above in `_LEGITIMIZED_SITES` for the two ops that ARE enrolled in
 #: `_BUDGETED_ENTRYPOINTS` and reach them (`ceremony.scoped_git_commit`: `git_native.py`,
@@ -1987,10 +2076,7 @@ def test_cluster_d2_open_disposition_matches_live_measurement():
 #: cluster the SAME way as every other op rather than widening the module-granular inventory to
 #: follow import hops. It closes no (op, site) pair recorded here -- the reasoning below stays live.
 _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "deliverable.cascade_backstop_sweep": (),
-    "deliverable.cascade_divergence_report": (),
     "handoff.has_live_children": (),
-    "session.reap_claims_for_repos": (),
     "baton.resolve_path_and_repo": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -2130,6 +2216,7 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
     ),
     "tracker.push_suggestion": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
 }
@@ -2145,11 +2232,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "commit.exec_bit_change": ("coordinator_core/ops/ceremony/commit_exec_bit.py", "_handler"),
     "commit_ledger.join_divergence_report": (
         "coordinator_core/ops/commit_join_divergence_report.py",
-        "_handler",
-    ),
-    "deliverable.cascade_backstop_sweep": ("coordinator_core/ops/cascade_backstop_sweep.py", "_handler"),
-    "deliverable.cascade_divergence_report": (
-        "coordinator_core/ops/cascade_divergence_report.py",
         "_handler",
     ),
     "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
@@ -2181,7 +2263,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
-    "session.reap_claims_for_repos": ("coordinator_core/ops/session/reap.py", "_handler_reap_claims_for_repos"),
     "session_ledger.aggregate_chain_loe": (
         "coordinator_core/session_ledger/aggregate_chain_loe.py", "_session_ledger_aggregate_chain_loe",
     ),
@@ -2189,9 +2270,9 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
 }
 _CLUSTER_D3_OPEN_ENTRYPOINTS__SUBJECT_CLASS = "op-name"
 
-#: The nine cluster files this D3 disposition is scoped to -- matches the chunk's own dispatch
+#: The eight cluster files this D3 disposition is scoped to -- matches the chunk's own dispatch
 #: brief's file list (`session/scope.py`, `session/core.py`, `ops/ceremony/git_native.py`,
-#: `git/run.py`, `git/ls_files_bytes.py`, `git/divergence.py`, `git/repo_root.py`,
+#: `git/run.py`, `git/divergence.py`, `git/repo_root.py`,
 #: `git_scope.py`, `dag.py`).
 _CLUSTER_D3_TARGET_FILES = frozenset(
     {
@@ -2199,7 +2280,6 @@ _CLUSTER_D3_TARGET_FILES = frozenset(
         "coordinator_core/session/core.py",
         "coordinator_core/ops/ceremony/git_native.py",
         "coordinator_core/git/run.py",
-        "coordinator_core/git/ls_files_bytes.py",
         "coordinator_core/git/divergence.py",
         "coordinator_core/git/repo_root.py",
         "coordinator_core/git_scope.py",
@@ -2210,7 +2290,7 @@ _CLUSTER_D3_TARGET_FILES = frozenset(
 
 def test_cluster_d3_open_disposition_matches_live_measurement():
     """Ratchet for `_CLUSTER_D3_OPEN_DISPOSITION`: re-derives, from the live tree, exactly which
-    cluster sites (the nine D3 files above) each of the 47 D3-open ops' own function-granular
+    cluster sites (the eight D3 files above) each of the 47 D3-open ops' own function-granular
     reachable set contains -- seeded from each op's own live-registry-resolved entrypoint, not a
     hand-picked one -- and asserts it against the frozen disposition, byte for byte, per op.
     A site the live tree adds or drops without this dict being updated in the SAME change fails
@@ -2269,9 +2349,18 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # enrolled, mirroring its nearest spawning sibling `fleet.archive_completed_handoffs` --
     # it reaches the same two cluster sites (`git/run.py::run_git`,
     # `ops/ceremony/git_native.py::_git._invoke`) via `archive_and_commit`, +2 pairs.
-    assert total_pairs == 60, (
+    # 60 -> 57 (2026-10-02, measured). 1f70141246 took `dag.py::_git_path_ever_tracked` off
+    # seven ops (rows emptied: deliverable.cascade_backstop_sweep, deliverable.cascade_
+    # divergence_report, handoff.has_live_children, session.reap_claims_for_repos; -1 each on
+    # deliverable.cascade_terminal, fleet.migrate_handoff_vocabulary, handoff.transition) and
+    # commit_ledger.join_divergence_report entered at one pair, neither moving this constant;
+    # the dict held 62 on the other side of merge 2168587a99, so 62 - 7 + 1 = 56 after it. Then
+    # `tracker.push_suggestion` gained
+    # `git/run.py::run_git` via `git_native.commit_authored_new_file` -> `_head_entry_for` ->
+    # `git_state.head_blobs` (the ls-tree fallback memo.send's legitimation names): 56 + 1 = 57.
+    assert total_pairs == 57, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "57 measured 2026-10-02 (see the comment above). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -2320,29 +2409,31 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
 #: carrying ~31 (op, site) pairs") within the brief's own stated tolerance (a scope statement, not
 #: an oracle). `completion.reconcile_commits` (1 pair) was killed and deleted 2026-08-23 (PM
 #: ruling, code gone); its row is removed rather than left pointing at a dead entrypoint, leaving
-#: 14 ops / 33 pairs (enumerated in `_CLUSTER_D4_OPEN_DISPOSITION` below). `release_currency.py`
+#: 14 ops / 33 pairs (enumerated in `_CLUSTER_D4_OPEN_DISPOSITION` below). 2026-10-02:
+#: `ceremony.init_anchor_injection_state` left the list, now 13 ops -- 8e979f0826 took it to zero
+#: reachable spawns and it is enrolled in `_BUDGETED_ENTRYPOINTS`. `release_currency.py`
 #: alone accounts for 13 of the 20 distinct sites and all 13 of `plugin_health.sentinel`'s own
 #: pairs on that file -- nearly one-to-one, matching the brief's own characterization of this file
 #: as per-site work rather than shared machinery.
 #:
 #: DISPOSITION, NAMED HONESTLY PER AC19C (not silence, not a fabricated legitimation, not "a
-#: sibling op reaches it"): NONE of these 14 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
+#: sibling op reaches it"): NONE of these 13 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
 #: their cluster sites is added to `_LEGITIMIZED_SITES`. A `_Legitimation` requires an EXISTING
 #: companion test that asserts the op's OWN spawn count by exact equality (leg 2) AND was measured
-#: to actually execute the site (leg 3). Checked for all 14: no file under
+#: to actually execute the site (leg 3). Checked for all 13: no file under
 #: `coordinator_core/**/tests/*spawn_budget*.py` (the full, enumerated live list of every such file
-#: in the repo) matches any of these 14 ops' own handler modules or op names --
-#: `ceremony.init_anchor_injection_state`, `goal.append`,
+#: in the repo) matches any of these 13 ops' own handler modules or op names --
+#: `goal.append`,
 #: `goal.close_day`, `goal.close_day_apply`, `install.probe_skill_frontmatter_valid`,
 #: `plugin_health.forwarder_drift`, `plugin_health.sentinel`, `priority.drain`, `priority.set`,
 #: `queue.promote`, `repo_setup.copy_console_subprocess_tripwire`,
 #: `session.guard_hooks_kill_switch_detail`, `session.guard_settings_integrity`, `workflow.fire`
 #: have no exact-equality spawn-count-asserting companion at all -- leg 2 is undischarged for all
-#: 14, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
-#: turned up here: none of these 14 ops has ANY same-named `*_spawn_budget.py` file on disk, not
+#: 13, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
+#: turned up here: none of these 13 ops has ANY same-named `*_spawn_budget.py` file on disk, not
 #: even one that asserts a narrower or monkeypatched shape.
 #:
-#: Building the missing companion fixture(s) for any of the 14 means writing to test files this
+#: Building the missing companion fixture(s) for any of the 13 means writing to test files this
 #: chunk's `writes:` scope does NOT include (`coordinator_core/tests/test_no_uncounted_spawn_on_
 #: budgeted_path.py` is the only path in scope). Enrolling these ops into `_BUDGETED_ENTRYPOINTS`
 #: without that legitimation would turn this currently-green gate red for a completeness gap this
@@ -2356,7 +2447,6 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
 #: to a permanent non-reach disposition if further tracing shows a site is not actually live on
 #: that op's path.
 _CLUSTER_D4_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
-    "ceremony.init_anchor_injection_state": ("coordinator_core/ops/init_anchor_injection_state.py", "_handler"),
     "goal.append": ("coordinator_core/ops/goal_append.py", "_goal_append"),
     "goal.close_day": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day"),
     "goal.close_day_apply": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day_apply"),
@@ -2392,7 +2482,6 @@ _CLUSTER_D4_TARGET_FILES = frozenset(
 #: per-site legitimation. It closes no (op, site) pair recorded here -- the reasoning below
 #: stays live, matching D2/D3's own precedent above.
 _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] = {
-    "ceremony.init_anchor_injection_state": (),
     "goal.append": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
     ),
@@ -2681,9 +2770,7 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "handoff.author_fork": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
     ),
-    "handoff.columns": (
-        ("coordinator_core/ops/emit/sections/handoff_columns.py", "_resolve_shipped_in_dates", "git", 0),
-    ),
+    "handoff.columns": (),
     "handoff.scaffold_from_queue": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
     ),
@@ -2775,9 +2862,11 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     )
     # 38 -> 37 on 2026-09-03: the machinery relocation (`5a9bb6c5ba`) took
     # `_resolve_git_root_uncached` off `hooks.cater_subagent_start`'s reachable set.
-    assert total_pairs == 34, (
+    # 34 -> 33 on 2026-10-02: 7835b34367 routed `handoff_columns.py::_resolve_shipped_in_dates`
+    # onto `git/run.py::run_git` (a D3 file), so `handoff.columns` reaches no D5 site.
+    assert total_pairs == 33, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
+        "33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -3454,21 +3543,14 @@ def test_orphaned_function_literals_detects_renamed_and_deleted_subjects():
 #: Pre-existing orphaned literals this check's own first run (2026-09-21) surfaced, both from a
 #: whole-FILE deletion rather than the in-file rename the row this check closes was filed against
 #: -- same defect class, one level down from `_BUDGETED_ENTRYPOINTS`/`_LEGITIMIZED_SITES`, just
-#: undiscovered until this resolution check existed to look. `coordinator_core/ops/review_trail_
-#: write.py`'s 5 entries are an ALREADY-DOCUMENTED, deliberate deferral -- see
-#: `_NAMED_ARGV0_DISPOSITIONS_C`'s own `len(...) == 25` assertion below: "Draining it properly is
-#: 8+ coupled edits across the op map, the inventory, both disposition dicts and their pins;
-#: queued rather than half-done inside an unrelated close." `coordinator_core/ops/cartography_
-#: churn.py`'s 2 entries (deleted under the 2026-08-27 fourteen-ops kill-bar sweep) have no such
-#: record and are the same shape of residual, named here rather than silently left passing.
+#: undiscovered until this resolution check existed to look. `coordinator_core/ops/cartography_
+#: churn.py`'s 2 entries (deleted under the 2026-08-27 fourteen-ops kill-bar sweep) are the same
+#: shape of residual, named here rather than silently left passing.
 #: Deliberately a named-literal set, not a file-glob or a "deleted file" carve-out: a FUTURE
 #: orphaned literal -- the rot this check exists to catch -- still fails loudly here.
 _KNOWN_ORPHANED_FUNCTION_LITERALS: frozenset[tuple[str, str]] = frozenset({
     ("coordinator_core/ops/cartography_churn.py", "_git_ls_files"),
     ("coordinator_core/ops/cartography_churn.py", "_git_name_only"),
-    ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair"),
-    ("coordinator_core/ops/review_trail_write.py", "_git_runner"),
-    ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha"),
 })
 
 
@@ -4256,9 +4338,6 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/ops/release_tagging.py", "_run", "<dynamic>", 0),
         ("coordinator_core/ops/repo_bootstrap.py", "_machine_local_set", "<dynamic>", 0),
         ("coordinator_core/ops/resolve_swept_baton.py", "_archiving_commit", "git", 0),
-        ("coordinator_core/ops/review_trail_write.py", "_batch_resolve_ref_pair", "git", 0),
-        ("coordinator_core/ops/review_trail_write.py", "_git_runner", "<dynamic>", 0),
-        ("coordinator_core/ops/review_trail_write.py", "_resolve_ref_to_sha", "git", 0),
         ("coordinator_core/ops/run_pip_audit.py", "_run_pip_audit", "<dynamic>", 0),
         ("coordinator_core/ops/run_pre_ci_hooks.py", "_run_pre_ci_hooks", "<dynamic>", 0),
         ("coordinator_core/ops/run_semgrep_scan.py", "_diff_scoped_files", "git", 0),
@@ -4330,7 +4409,8 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
 #: its body makes no `subprocess.run`/`Popen` call (confirmed by direct
 #: read of the function, corroborated by its own docstring), so the site
 #: this entry named no longer exists to be enrolled or legitimized. Net -1.
-_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 136
+#: 136 -> 133: `ops/review_trail_write.py`'s 3 sites drained with the deleted module.
+_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 133
 
 
 def _op_keyed_uncovered_pairs():
@@ -4728,17 +4808,6 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "`_machine_local_get` above."
     ),
     (
-        "coordinator_core/ops/review_trail_write.py",
-        "_git_runner",
-        "<dynamic>",
-        0,
-    ): (
-        "2026-08-23 resolves to 'git' on a one-hop read -- `_git_runner`'s own "
-        "docstring pins its contract: `args` always includes the leading "
-        "\"git\" token, matching `session_attribution.GitRunner`'s injected-"
-        "callback contract every one of this module's call sites honours."
-    ),
-    (
         "coordinator_core/ops/run_pip_audit.py",
         "_run_pip_audit",
         "<dynamic>",
@@ -4849,9 +4918,9 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 32, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 31, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 32 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "entries, not the 31 <dynamic>-argv0 sites tranche dyn's inventory now "
         "names -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
@@ -4859,7 +4928,7 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "taking the count from 43 to 42, and the 2026-09-22 drain of "
         "`plugin_health/sentinel.py::probe_p3` (no longer a spawn site at all) "
         "took it from 42 to 41, and the later removal of nine orphaned "
-        "`_machine_local_get`/`sentinel.py` probe sites took it from 41 to 32 -- a count drift here means either a site was "
+        "`_machine_local_get`/`sentinel.py` probe sites took it from 41 to 32, and the drain of the deleted `ops/review_trail_write.py`'s `_git_runner` site took it to 31 -- a count drift here means either a site was "
         "missed or one was double-counted."
     )
 
@@ -5792,7 +5861,7 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
 #: (`changelog.append_day`/`changelog.cited_in_range_count` ->
 #: changelog_ops.py; `plan.list_orphaned` -> draft_plan_aging.py;
 #: `repo.create_and_push_remote` -> create_github_remote.py;
-#: `review_trail.write` -> review_trail_write.py; `tracker.push_suggestion`
+#: `tracker.push_suggestion`
 #: -> push_suggestion.py; `branch.merge_into_workstream` ->
 #: merge_branch_into_workstream.py; `baton.resolve_swept_in_archive` ->
 #: resolve_swept_baton.py), the entrypoint function's own body was read for
@@ -5803,7 +5872,7 @@ def test_named_argv0_sites_in_tranche_b_are_dispositioned_on_their_own_terms():
 #: and are exempted as reachable-anyway, same as tranche a's
 #: `release_tagging.py`/`guard_settings_integrity.py` entries.
 #: `merge_branch_into_workstream.py::_git`, `create_github_remote.py`'s two
-#: sites, `review_trail_write.py`'s two sites, and `push_suggestion.py`'s
+#: sites, and `push_suggestion.py`'s
 #: two sites all show the SAME `asyncio.to_thread(<module_fn>, ...)`
 #: discrepancy tranche a/b already flagged: the handler's own body calls
 #: `asyncio.to_thread(<module-level fn>, ...)` directly (one hop), and that
@@ -5994,35 +6063,6 @@ _NAMED_ARGV0_DISPOSITIONS_C: dict[tuple[str, str, str, int], str] = {
         "pathspec; same non-budgeted scope as this file's other site."
     ),
     (
-        "coordinator_core/ops/review_trail_write.py",
-        "_batch_resolve_ref_pair",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- reachable via `_review_trail_write_"
-        "handler`'s `asyncio.to_thread(write_review_trail_entry, ...)` "
-        "(direct one-hop call) -> `write_review_trail_entry`'s direct "
-        "call to `_resolve_symbolic_range` -> this function (a "
-        "hand-confirmed third hop); `review_trail.write` is also listed "
-        "among the C2a widening's 175 measured-empty rows, same "
-        "`asyncio.to_thread` non-resolution discrepancy tranche a/b's own "
-        "entries name -- flagged in this sub-chunk's own run-report "
-        "sidecar; one batched ref-pair resolution per `sha_range`, "
-        "preferred over the two-call fallback below it."
-    ),
-    (
-        "coordinator_core/ops/review_trail_write.py",
-        "_resolve_ref_to_sha",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- same three-hop reachable chain and C2a-"
-        "widening discrepancy as this file's `_batch_resolve_ref_pair` "
-        "site above; the per-endpoint fallback `_resolve_symbolic_range` "
-        "falls back to only when the batched form returns None, at most "
-        "two calls per `sha_range`."
-    ),
-    (
         "coordinator_core/ops/tracker/push_suggestion.py",
         "_commit_envelope",
         "git",
@@ -6145,7 +6185,6 @@ _TRANCHE_C_FILES: frozenset = frozenset({
     "coordinator_core/ops/changelog_ops.py",
     "coordinator_core/ops/create_github_remote.py",
     "coordinator_core/ops/record_history.py",
-    "coordinator_core/ops/review_trail_write.py",
     "coordinator_core/ops/tracker/push_suggestion.py",
     "coordinator_core/ops/cascade_retract.py",
     "coordinator_core/ops/detect_changed_dependency_manifests.py",
@@ -6186,24 +6225,16 @@ def test_named_argv0_sites_in_tranche_c_are_dispositioned_on_their_own_terms():
         "reaches outside tranche c's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS_C) == 25, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS_C) == 23, (
         f"_NAMED_ARGV0_DISPOSITIONS_C carries "
-        f"{len(_NAMED_ARGV0_DISPOSITIONS_C)} entries, not the 25 "
+        f"{len(_NAMED_ARGV0_DISPOSITIONS_C)} entries, not the 23 "
         "still-frozen named-argv0 sites tranche c's own file list names "
         "now that C6 (2026-08-23) drained the 2 dead "
         "`_commit_delivered_memo` ordinals, C10 (2026-08-23) enrolled "
         "`memo.send`, draining its own remaining 5 sites out of "
-        "_FROZEN_UNENROLLED_SPAWN_SITES, and the 2026-08-29 gravestone plan "
-        "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md) "
-        "deleted `coordinator_core/ops/review_trail_write.py` outright, taking its "
-        "3 tranche-c sites with it and this count from 28 to 25. Its path is "
-        "STILL LISTED in `_TRANCHE_C_FILES` and that is a known residual, not a "
-        "considered retention -- the module's 3 sites are still in "
-        "_FROZEN_UNENROLLED_SPAWN_SITES, so dropping only the scope member would "
-        "orphan the 2 dispositions naming them and fail the stale check above. "
-        "Draining it properly is 8+ coupled edits across the op map, the "
-        "inventory, both disposition dicts and their pins; queued rather than "
-        "half-done inside an unrelated close. A count drift here means either "
+        "_FROZEN_UNENROLLED_SPAWN_SITES, and the deleted "
+        "`ops/review_trail_write.py`'s 2 sites were drained. A count drift "
+        "here means either "
         "a site was missed or one was double-counted."
     )
 
@@ -6515,6 +6546,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # that test's own instruction ("lower each pin to the live number"); the
     # instrumented-invocation settle above is still outstanding and this is
     # not it.
+    # Settled: the static ceiling stays 9 (live reach, unchanged). The runtime
+    # count is now constant in N -- `rm_and_commit` batches its `git rm` into
+    # one stdin-pathspec spawn (live: 7 spawns for any N, was 6+N).
     "fleet.reap_review_trail_rest": 9,
     # Added 2026-09-03: one dynamic site, `invoke_coordinator_doc_new`. Pre-dates
     # this pass; it surfaced only because the file's other failures were cleared.
@@ -6544,14 +6578,14 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # per-plan/baton) plus `archive_and_commit`'s four (`run_git`, `write_signed_commit_
     # object`, `_git._invoke`, `_machine_local_get`). Fresh `_measure_static_spawn_counts`
     # read against the live tree, not a guess.
-    "handoff.discharge_landed": 4,
+    "handoff.discharge_landed": 3,
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
     "fleet.archive_terminal_sizings": 3,
-    "warm_guard.evaluate": 9,
+    "warm_guard.evaluate": 8,
     "distill.apply_disposal": 9,
-    "memo.transition": 3,
+    "memo.transition": 4,
     "merge_assemble.apply": 1,
     "cruft_sweep.run": 8,
     # "memo.send": 2, removed 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-
@@ -6574,7 +6608,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # `subprocess.Popen` for any p4 argv0 and asserts `coordinator_core.p4`
     # never lands in `sys.modules`. Do not read this 5 as a git-only repo
     # paying for Perforce — it does not.
-    "push.outstanding": 5,
+    "push.outstanding": 6,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
     # 3 -> 4, 2026-09-06: same `_existing_origin_url` site as
@@ -6583,7 +6617,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
     "cartography.file_index": 2,
-    "ceremony.update_docs_scan": 2,
+    "ceremony.update_docs_scan": 3,
     "changelog.backfill_gaps": 2,
     #: Lowered 2 -> 1 on 2026-09-03. The machinery relocation (`5a9bb6c5ba`)
     #: repointed this hook onto `session.machinery_paths` and took
@@ -6607,12 +6641,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "goal.close_day": 2,
     "goal.close_day_apply": 2,
     "handoff.close_origin_stub": 2,
-    "handoff.propagate": 2,
+    "handoff.propagate": 3,
     "install.probe_windows_terminal_presence": 2,
-    "plan.propagate": 2,
+    "plan.propagate": 3,
     "plugin_health.forwarder_drift": 2,
     "release.cut_tag": 2,
-    "repo_setup.copy_console_subprocess_tripwire": 2,
+    # Lowered 2 -> 1 2026-10-02: 8e979f0826 swapped the content-root resolver for read_content_root.
+    "repo_setup.copy_console_subprocess_tripwire": 1,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,
     "commit_ledger.join_divergence_report": 1,
@@ -6624,7 +6659,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "research.restructure_for_repeat_topic": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
-    "ceremony.init_anchor_injection_state": 1,
     "changelog.compute_day_fields": 1,
     "ci.run_pip_audit": 1,
     "commit.exec_bit_change": 1,
@@ -6727,7 +6761,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "workflow.fire_status": 1,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,
-    "dispatch.terminal_commit": 7,
+    "dispatch.terminal_commit": 5,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,
     "fleet.prune_closed_bugs": 3,
@@ -6736,12 +6770,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.handoff_segment_inject": 2,
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
-    "hooks.preuse_bash_dispatch": 9,
+    "hooks.preuse_bash_dispatch": 8,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     "hooks.sessionend_auto_commit": 2,
-    "hooks.sessionstart_async_dispatch": 3,
-    "hooks.sessionstart_dispatch": 2,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
     "hooks.sweep_boot": 10,
@@ -6750,10 +6782,21 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "memo.correct_note": 4,
     "memo.heal_inbox": 3,
     "p4.register_workspace": 1,
-    "review_mint.bookkeep_wave": 7,
-    "review_mint.record_superseding_review": 8,
-    "review_stamp.check": 2,
-    "review_stamp.mint": 7,
+    "review_mint.bookkeep_wave": 5,
+    # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site.
+    "review_mint.record_superseding_review": 5,
+    "review_stamp.check": 1,
+    "review_stamp.mint": 5,
+    # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
+    # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
+    # shared `git/run.py::run_git` site, so the same physical call is now one site key for every
+    # op reaching it. Slack pins above are ops whose module-local sites collapsed into a run_git
+    # they already reached. Raised pins, each traced to the newly counted site:
+    #   ceremony.update_docs_scan 2->3: close_out_and_stamp._batch_git_cat_file_check -> run_git
+    #   handoff.propagate, plan.propagate 2->3: _target_is_dirty -> session_facts._dirty_paths ->
+    #     git_native.status_porcelain -> _git._invoke
+    #   memo.transition 3->4: _attach_surface_advisory -> surface_advisory._touched_paths -> run_git
+    #   push.outstanding 5->6: _range_touches_lfs_paths -> _run_git -> run_git
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

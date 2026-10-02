@@ -77,7 +77,7 @@ def portability_sweep_entrypoint() -> Path:
     (confirmed via `git log --all -- coordinator/bin/portability-sweep.py`)
     — presence is checked so an absent producer can be reported as an
     explicit `unavailable` gate verdict rather than surfacing as a
-    `RuntimeError` from `_run_py_script` that reads identically to any other
+    `RuntimeError` from `_dispatch_in_process` that reads identically to any other
     dispatch failure (D5's defect: a missing producer currently reads as a
     clean sweep once a caller stops treating "exited 2" as fatal).
 
@@ -457,7 +457,7 @@ def build_directives(
     **`d5` is presence-conditional on `portability_sweep_entrypoint()`
     (D5 fix).** `coordinator/bin/portability-sweep.py` has never existed in
     this repo (confirmed via git history) — dispatching it unconditionally
-    raises `RuntimeError` from `_run_py_script`/`_dispatch_result`, which
+    raises `RuntimeError` from `_dispatch_in_process`/`_dispatch_result`, which
     reads identically to "the sweep ran and found something," silently
     passing a gate nothing actually checked. Absence lands `d5` as
     `already_satisfied` with `skipped_reason` naming the missing CLI, the

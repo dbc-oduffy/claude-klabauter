@@ -262,6 +262,43 @@ def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     assert "HIGH" in out and "(none)" in out
 
 
+def test_scan_secrets_json_emits_tier_counts_and_redacted_hits(tmp_path):
+    import json
+
+    target_file = tmp_path / "mixed.md"
+    token = "sk" + "-" + "abcdefghijklmnopqrstuvwx"
+    target_file.write_text(
+        f"token: {token}\nSee ~/.claude/tasks/3f9c2a7e-task-list for details.\n", encoding="utf-8"
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list), "--json"])
+    payload = json.loads(out)
+
+    assert rc == 2
+    assert (payload["high"], payload["medium"], payload["medium_covered"]) == (1, 1, 0)
+    assert payload["hits"]["high"][0]["text"] == "token: sk-a..."
+    assert token not in out
+    assert payload["hits"]["medium"][0]["line"] == 2
+
+
+def test_scan_secrets_json_is_clean_json_when_notes_fire(tmp_path):
+    import json
+
+    target_file = tmp_path / "clean.md"
+    target_file.write_text("nothing here\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(
+        ["scan-secrets", "--files", str(file_list), "--target", "alpha", "--json"]
+    )
+
+    assert rc == 0
+    assert json.loads(out)["high"] == 0
+
+
 _IDENTITY_FIXTURE = (
     'PERSONAL_EXPECTED_PATTERNS=("codename-alpha")\n'
     'PERSONAL_REVIEW_PATTERNS=("codename-alpha")\n'

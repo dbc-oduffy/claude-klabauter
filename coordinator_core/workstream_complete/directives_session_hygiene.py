@@ -165,8 +165,9 @@ stays internally consistent and reviewable in one read:
          `reconcile-completion-commits.py`'s Steps 1-2 client-side
          validation for a re-run-safe append guard.
   M3 hardcoded `already_satisfied: False` dict literal, emitted
-     unconditionally once the builder fires — re-fires on every pass,
-     unverified whether the dispatched CLI itself tolerates that. This is
+     unconditionally once the builder fires — re-fires on every pass;
+     each dispatched CLI's re-fire tolerance is settled in the "Re-fire
+     tolerance audit" paragraph at the end of this docstring. This is
      every OTHER directive across the five sibling modules this chunk
      does not own: `d-close-tail-args`, `d-run-wsc-tail`, `d-emit-
      cadence` (directives_commit_tail.py); `d-fold-execution-
@@ -256,6 +257,45 @@ by the plan's own residual-defect section). After this chunk:
     real `already_satisfied` check can exist for it; re-firing is
     unconditionally safe because the directive performs no mutation at
     all, which is a stronger property than idempotence, not a gap in it.
+
+Re-fire tolerance audit (M3 residual), settled 2026-10-02 by reading each
+dispatched CLI's own write/dedup path; the fold CLI additionally by a
+scratch-tree re-fire. "Tolerant" = no second mutation AND exit 0 on re-fire.
+  - GONE (builders removed per the snapshot addendum, nothing to re-fire):
+    `d-close-tail-args`, `d-run-wsc-tail`, `d-emit-cadence`.
+  - TOLERANT, `coordinator-fold-execution-record` (`d-fold-execution-
+    observations`): the op (`ops/fold_execution_record.py`) opens plan and
+    sidecars read-only and writes only stdout; three consecutive fires
+    exited 0 with byte-identical stdout and an unchanged file-tree hash.
+  - TOLERANT, this module's own CLIs: `sweep-terminal-handoffs` /
+    `sweep-terminal-sizings` print "no terminal ... archived" and move
+    nothing once the terminal record is archived;
+    `check-machine-local-regeneratability` is read-only;
+    `regenerate-orientation-cache --pinboard-only` is a whole-section
+    regex replace (see `patch_pinboard_only` above). The hardcoded
+    `already_satisfied: False` there costs one no-op spawn per pass.
+  - SAFE BUT NOT EXIT-0 TOLERANT, lesson capture (`d-add-lesson-<n>` ->
+    `coordinator-lesson-add`): `_dedup_check` matches the title against
+    existing `state/lessons/*.yaml` (>=0.60 token overlap or substring)
+    and returns 1 "possible duplicate" BEFORE delegating, so a re-fire
+    writes nothing and fails; the dependent `d-queue-append-lesson-<n>`
+    (`coordinator-queue-append`) therefore never re-fires behind it. Were
+    it fired, `queue.append`'s `<date>-<slug>-<digest12>` name is
+    content-keyed: an identical same-day entry overwrites itself, a
+    cross-day one lands as a second file. Tracked as
+    `state/improvement-queue/2026-10-02-lesson-add-re-fire-exits-1-possible-dupl-170a1e1732b9.yaml`.
+  - SAFE BUT NOT EXIT-0 TOLERANT, memo disposition (`d-claim-memo-stamp:
+    <basename>` / `d-flip-memo-status:<basename>` -> `archive-stamp-cli`,
+    `ops/memo_transition.py`): `action-memo` re-fired with the same
+    decision is a no-op exit 0 (`_handle_already_actioned` ->
+    `_disposition_matches`), and `claim` by the holding session on an
+    `in_progress` memo is a no-op exit 0, but `claim` on a memo already
+    `actioned` aborts with `unexpected current status ... expected open or
+    delivered` (exit 1, nothing written), so a full second pass of the pair
+    reports a failed claim and gates the flip behind it. Tracked as
+    `state/improvement-queue/2026-10-02-claim-memo-stamp-re-fire-on-an-actioned-d11ce87ca8db.yaml`.
+No dispatched CLI named here double-mutates on re-fire; the two non-tolerant
+cases fail closed.
 """
 
 from __future__ import annotations

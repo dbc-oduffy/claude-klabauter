@@ -23,7 +23,7 @@ exist to author a new ``.sh`` file (the two irreducible legs below, a CI
 entry point the harness itself requires, etc.); a hard block here would be
 wrong on the merits and would earn a bypass, after which it protects
 nothing. Per design-as-offers (global CLAUDE.md § Implementation Standards;
-``docs/wiki/hook-best-practices.md`` § nag->action), the offer leads with
+``coordinator-content-repo coordinator/docs/wiki/hook-best-practices.md`` § nag->action), the offer leads with
 the alternative and names a concrete landing spot, not a bare "don't write
 bash."
 

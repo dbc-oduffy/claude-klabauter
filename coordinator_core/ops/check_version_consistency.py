@@ -7,7 +7,7 @@ surfaces — the plugin manifest, the marketplace catalog manifest, the CHANGELO
 and the git tag. They drifted apart historically (plugin.json 2.7.1 / marketplace
 2.1.1 / CHANGELOG 2.8.1 on 2026-06-22) because the cut ceremony only stamped the
 CHANGELOG and nothing asserted cross-surface agreement. This gate is that
-assertion. It is the mechanical enforcer of docs/wiki/versioning-convention.md.
+assertion. It is the mechanical enforcer of coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/versioning-convention.md.
 
 Invariant (steady-state, holds BETWEEN releases too):
   plugin.json .version
@@ -46,7 +46,7 @@ Exit codes (parity-critical — the trampoline and callers branch on these):
   2 — unrecognised CLI argument
 
 Port of: check-version-consistency.sh (DoE 894d4bc6, 2026-07-22)
-Spec backlink: docs/wiki/versioning-convention.md (coordinator-content-repo)
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/versioning-convention.md (coordinator-content-repo)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 Caller-identity backlink: docs/plans/2026-09-12-ceremony-gates-read-their-caller-before-they-fail-it.md (C1)
 

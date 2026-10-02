@@ -311,7 +311,7 @@ def _write_stub(
 
 def test_check_mode_no_stubs_found_exits_0(tmp_path, capsys):
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
-    rc = run_check_mode("nonexistent-roadmap")
+    rc = run_check_mode("nonexistent-roadmap", root=str(tmp_path))
     out = capsys.readouterr().out
     assert rc == 0
     assert "No roadmap-baton (spinoff-roadmap) stubs found" in out
@@ -921,3 +921,42 @@ def test_state_mode_one_query_fails_but_other_returns_results_proceeds_with_warn
     assert "ERROR: could not establish roadmap state" not in err
     assert "stub-x-1" in out
     assert "1 stub(s): 0 ready_to_fire, 0 awaiting_gate." in out
+
+
+def test_check_mode_root_flag_targets_another_root(tmp_path, monkeypatch, capsys):
+    handoffs = tmp_path / "state" / "handoffs"
+    handoffs.mkdir(parents=True)
+    _write_stub(handoffs / "stub-a-1.md", "rm-root", "stub-a-1", 1, 1, 1)
+    _write_stub(
+        handoffs / "stub-b-2.md", "rm-root", "stub-b-2", 2, 1, 1, blocked_by=["stub-a-1"]
+    )
+
+    import coordinator_core.roadmap.number_stubs as mod
+
+    def _boom():
+        raise AssertionError("resolve_root must not be consulted when --root is given")
+
+    monkeypatch.setattr(mod, "resolve_root", _boom)
+
+    rc = main(["--check", "rm-root", "--root", str(tmp_path)])
+    capsys.readouterr()
+    assert rc == 1
+
+
+def test_state_mode_root_flag_targets_another_root(tmp_path, monkeypatch, capsys):
+    (tmp_path / "state" / "handoffs").mkdir(parents=True)
+
+    import coordinator_core.roadmap.number_stubs as mod
+
+    monkeypatch.setattr(mod, "resolve_root", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    rc = main(["--state", "rm-none", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "No roadmap-baton (spinoff-roadmap) stubs found for roadmap_id=rm-none" in out
+
+
+def test_main_check_malformed_root_tail_exits_2(capsys):
+    assert main(["--check", "rm-x", "--root"]) == 2
+    assert main(["--check", "rm-x", "--bogus", "x"]) == 2
+    assert "--root" in capsys.readouterr().err

@@ -21,6 +21,7 @@ remaining gap; that comparison is out of this chunk's reach today.
 
 from __future__ import annotations
 
+from coordinator_core.tests.git_seed import seeded_repo
 import os
 import subprocess
 import tempfile
@@ -44,15 +45,7 @@ def _git(root: str, *args: str) -> None:
 
 
 def _init_repo(tmp_path: Path, name: str) -> Path:
-    root = tmp_path / name
-    root.mkdir()
-    _git(str(root), "init", "-q")
-    _git(str(root), "config", "user.email", "t@example.com")
-    _git(str(root), "config", "user.name", "Test")
-    (root / "README.md").write_text("init\n", encoding="utf-8")
-    _git(str(root), "add", "README.md")
-    _git(str(root), "commit", "-q", "-m", "init")
-    return root
+    return seeded_repo(tmp_path / name, name="Test")
 
 
 def _write_registry(reg_dir: Path, **repos: str) -> None:

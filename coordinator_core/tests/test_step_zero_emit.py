@@ -5,7 +5,7 @@ coordinator/tests/fixtures/step-zero-conformance.json, base64-encoded
 expected bytes) against this module's emit_line(), plus direct unit checks
 of json_escape()'s five-escape ordering.
 
-Spec backlink: docs/wiki/step-zero-emitter-contract.md
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/hook-best-practices/step-zero-emitter-contract.md
 Port of: step_zero_emit.sh (DoE 290997c7, 2026-07-22)
 """
 from __future__ import annotations

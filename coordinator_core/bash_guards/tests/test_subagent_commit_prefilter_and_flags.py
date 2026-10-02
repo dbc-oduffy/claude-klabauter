@@ -299,7 +299,6 @@ _NEWLY_ADDED_COMMITTING_OPS = (
     # assert membership for once the real set drops them. See
     # `block_subagent_commit.py`'s own allowlist comment for the removal
     # record.
-    "handoff.ship_and_archive",
 )
 _NEWLY_ADDED_COMMITTING_OPS__SUBJECT_CLASS = "op-name"
 
@@ -336,11 +335,11 @@ def test_newly_added_committing_ops_all_members_of_the_set():
 # STATED LIMIT (see the module docstring's 2026-08-02 part-8 entry): this is
 # a single-module static source scan for a DIRECT call to a known sink
 # helper. It does NOT catch an op that reaches a commit only by delegating
-# to another op module's handler function (e.g. ``handoff.ship_and_archive``
-# routes through ``fleet.archive_shipped_handoffs``'s own ``_handle_act``,
-# which this scan cannot see without also statically tracing call graphs
-# across modules) -- that class of gap needs a human re-grep, same as the
-# one that found this op by hand. An honest partial guard, not a full one.
+# to another op module's handler function (e.g. a route through
+# ``fleet.archive_shipped_handoffs``'s own ``_handle_act``, which this scan
+# cannot see without also statically tracing call graphs across modules) --
+# that class of gap needs a human re-grep. An honest partial guard, not a
+# full one.
 #
 # AST, not substring (coordinator:code-reviewer, 2026-08-17): the scan used
 # to be ``any(marker in source for marker in _COMMIT_SINK_CALL_MARKERS)`` --
@@ -399,7 +398,7 @@ _COMMIT_SINK_CALL_NAMES = frozenset(
     marker[:-1] for marker in _COMMIT_SINK_CALL_MARKERS
 )
 
-_KNOWN_DELEGATION_ONLY_COMMITTING_OPS = frozenset({"handoff.ship_and_archive"})
+_KNOWN_DELEGATION_ONLY_COMMITTING_OPS = frozenset()
 
 
 # Keep decision, ceremony.scoped_git_commit (C3(c)): see

@@ -219,3 +219,10 @@ def test_double_invocation_identical_result(tmp_path):
         "exit_code": 0,
     }
     assert (dest / "sentinel.txt").read_text(encoding="utf-8") == "ok"
+
+
+def test_param_validation_errors_are_caller_facing(tmp_path) -> None:
+    from coordinator_core.ipc import CallerFacingValidationError
+
+    with pytest.raises(CallerFacingValidationError):
+        _run_pre_ci_hooks({"dest": str(tmp_path)})

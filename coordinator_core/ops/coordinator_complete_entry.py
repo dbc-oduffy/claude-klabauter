@@ -297,7 +297,14 @@ def resolve_entry_path(
     reaches this derivation. Callers that need the path `main()` actually
     uses — including that stand-down case — must call
     `resolve_effective_entry_path`, not this function directly. Never
-    re-derived a second time — see module Negative-spec."""
+    re-derived a second time — see module Negative-spec.
+
+    `adhoc` is a deliberate no-chain marker, not a fallback to improve: a
+    plan-less close is not a completion chain, and an empty `chain_slug` is
+    what makes the idempotency guard, the `chain=` records query and the
+    foreign-holder refusal no-op. Deriving a slug from the consumed handoff
+    would make two sessions closing off one predecessor collide. The work
+    identity of such a close lives in the entry body (`--consumed-handoff`)."""
     # `for_date` is the BACKFILL date (--for-date), defaulting to today for
     # every ordinary close. Threaded as a parameter rather than re-read from
     # `date.today()` here: `main()` and `resolve_effective_entry_path` must
@@ -324,9 +331,9 @@ def _refuse_if_live_foreign_entry_holder(entry_path: str, repo_root: str, closin
     shape resolves the SAME `chain_slug` a live peer session already holds
     an in-progress completion entry for, `resolve_effective_entry_path`
     stands down onto that PEER's entry, `main()` still prints the foreign
-    path to stdout and returns 0, and `d-reconcile-completion-commits`
-    threads that path via `{d-complete-entry.entry_path}` and writes the
-    CLOSING session's commit SHAs into the PEER's live entry.
+    path to stdout and returns 0, and every downstream directive that
+    threads `{d-complete-entry.entry_path}` then writes the CLOSING
+    session's facts into the PEER's live entry.
 
     The discriminator is OWNERSHIP of the existing entry (its
     `authored_by` frontmatter field — the session id `_write_entry` stamps
@@ -403,7 +410,7 @@ def resolve_effective_entry_path(
         — `entry_path` is the FOREIGN entry's path for diagnostics only;
         `main()` treats this marker as a hard error and must NOT print it
         to stdout (that print is precisely what would hand the path
-        downstream to `d-reconcile-completion-commits`).
+        downstream via `{d-complete-entry.entry_path}`).
       - ``marker is None``: `entry_path` is the freshly-derived canonical
         path for `for_date` (default today) — either `chain_slug` is empty,
         or no existing entry was found — the path `main()` will write to.
@@ -689,7 +696,7 @@ def _query_records_existing_path(repo_root: str, chain_slug: str) -> Optional[st
 
     Was: a ``node query-records.js --type completion --where chain=<slug>``
     subprocess spawned against coordinator-content-repo's ``coordinator/bin/`` (resolved via
-    ``coordinator_content_root``). Repointed 2026-07-22 onto claude-klabauter's own
+    ``read_content_root``). Repointed 2026-07-22 onto claude-klabauter's own
     ``ceremony.records_query.query_records`` seam — no DoE coupling, no node.
 
     Reproduces the oracle's markdown-list ``completion`` rendering
@@ -1493,8 +1500,8 @@ def main(argv: List[str]) -> int:
         return 1
     if stand_down_marker == "FOREIGN-LIVE":
         # Deliberately NOT printed to stdout — printing the foreign path is
-        # exactly what would hand it downstream to
-        # d-reconcile-completion-commits via {d-complete-entry.entry_path}
+        # exactly what would hand it downstream via
+        # {d-complete-entry.entry_path}
         # (see resolve_effective_entry_path's own docstring on this marker).
         print(
             f"ERROR: existing entry for chain '{chain_slug}' is owned by a "

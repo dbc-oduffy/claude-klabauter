@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,8 +12,6 @@ _DEPLOYMENT_RECOGNIZED = {
 }
 
 PREDECESSOR_DEFAULT = "none"
-
-_GIT_TIMEOUT_SECS = 30
 
 
 def _coerce_legacy_abandoned(fm: dict) -> tuple[str, Optional[str], Optional[str]]:
@@ -50,23 +47,18 @@ def _resolve_shipped_in_dates(repo_root: Path, raw_shas: list[str]) -> dict[str,
     if not raw_shas:
         return {}
     ordered = sorted(set(raw_shas))
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.git.run import run_git
 
-        proc = subprocess.run(
+    try:
+        proc = run_git(
             [
-                "git", "-C", str(repo_root), "log",
+                "-C", str(repo_root), "log",
                 "--no-walk=unsorted", "--ignore-missing",
                 "--format=%H %ad", "--date=format:%Y-%m-%d",
                 *ordered,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_GIT_TIMEOUT_SECS,
-            **no_console_creationflags(),
+            ]
         )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except ValueError:
         return {}
     if proc.returncode != 0 or not proc.stdout.strip():
         return {}

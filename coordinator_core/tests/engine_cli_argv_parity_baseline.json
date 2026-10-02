@@ -500,14 +500,6 @@
     },
     {
       "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-reaper-orphaned-handoffs",
-      "cli": "reap-orphaned-in-flight-handoffs",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
       "directive_id": "d-workday-marker-write",
       "cli": "write-workday-start-marker",
       "unresolved": true,
@@ -822,6 +814,14 @@
       "module": "coordinator_core/workstream_complete/directives_review.py",
       "directive_id": "d-mint-superseding-stamp",
       "cli": "review-stamp",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_review.py",
+      "directive_id": "d-record-superseding-review",
+      "cli": "record-superseding-review",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

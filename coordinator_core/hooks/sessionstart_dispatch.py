@@ -191,7 +191,7 @@ def _unmatched_breadcrumb(source: str) -> str:
 
 @register_op("hooks.sessionstart_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    payload = dict(payload_of(params))
+    payload = payload_of(params)
     source = payload.get("source")
     if not isinstance(source, str) or not source:
         return no_advisory()

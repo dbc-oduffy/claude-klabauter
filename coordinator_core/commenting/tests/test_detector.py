@@ -24,8 +24,65 @@ def test_task_ref_chunk_detected():
 
 
 def test_narration_detected():
-    text = "# used to retry twice, no longer does"
+    text = "# we used to retry twice, no longer does"
     assert scan_text(text, "engine/foo.py")
+
+
+def test_narration_with_date_subject_detected():
+    text = "# no longer retried (dropped 2026-09-01)"
+    assert scan_text(text, "engine/foo.py")
+
+
+def test_narration_with_commit_subject_detected():
+    text = "# the old loop used to retry; see 72fe048a6b"
+    assert scan_text(text, "engine/foo.py")
+
+
+def test_narration_previously_past_verb_detected():
+    text = "# previously returned None on a miss"
+    assert scan_text(text, "engine/foo.py")
+
+
+def test_narration_was_now_detected():
+    text = "# was 3, now 5"
+    assert scan_text(text, "engine/foo.py")
+
+
+def test_authored_by_with_history_subject_detected():
+    text = "# written by the Game Dev Reviewer on 2026-09-01"
+    assert scan_text(text, "engine/foo.py")
+
+
+def test_true_negative_present_tense_no_longer():
+    text = "# the cache no longer holds stale entries once flushed"
+    assert scan_text(text, "engine/foo.py") == []
+
+
+def test_true_negative_present_tense_used_to():
+    text = "# the sentinel is used to mark a retired row"
+    assert scan_text(text, "engine/foo.py") == []
+
+
+def test_true_negative_previously_without_past_verb():
+    text = "# previously registered ops are skipped"
+    assert scan_text(text, "engine/foo.py") == []
+
+
+def test_true_negative_written_by_describes_mechanism():
+    text = "# the manifest written by setup lists every surface"
+    assert scan_text(text, "engine/foo.py") == []
+
+
+def test_true_negative_per_request_is_a_cardinality():
+    text = "# one lock per request"
+    assert scan_text(text, "engine/foo.py") == []
+
+
+def test_true_negative_detector_fixture_paths_exempt():
+    text = 'text = "# added by the Game Dev Reviewer, per the PM"'
+    assert scan_text(text, "coordinator_core/commenting/tests/test_detector.py") == []
+    assert scan_text(text, "coordinator_core/ops/tests/test_run_commenting_sweep.py") == []
+    assert scan_text(text, "./coordinator_core\\commenting\\detector.py") == []
 
 
 def test_grep_bait_token_detected():

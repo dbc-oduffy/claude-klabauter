@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 import subprocess
 from pathlib import Path
@@ -354,6 +355,7 @@ def test_session_id_untrailered_commits_block_a_permissive_verdict(
     assert "VERDICT=indeterminate" in captured.out
     assert "VERDICT=single-reviewer-ok" not in captured.out
     assert "filtered_to=1" in captured.out
+    assert re.search(r"\bshas=[0-9a-f]{12} ", captured.out)
     assert "no Session-Id" in captured.err
 
 

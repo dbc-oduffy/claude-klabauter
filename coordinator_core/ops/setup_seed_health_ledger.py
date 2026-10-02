@@ -17,7 +17,7 @@ Usage:
     REPO_ROOT — path to the target repo root; defaults to current working
     directory.
 
-Schema source: docs/wiki/daily-summary-procedure.md § "Health Ledger Entry
+Schema source: coordinator-content-repo coordinator/docs/wiki/ceremony-calibration/daily-summary-procedure.md § "Health Ledger Entry
 Schema" — two audit clocks above a per-system table; all system grades start
 at "?".
 

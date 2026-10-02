@@ -247,10 +247,6 @@ from coordinator_core.bash_guards._dialect import (
     Dialect as _Dialect,
     dialect_from_tool_name as _dialect_from_tool_name,
 )
-from coordinator_core.machine_profile import (
-    apply_guard_level as _apply_guard_level,
-    is_deny_envelope as _is_deny_envelope,
-)
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.session.guard_unlock_sentinel import (
     annotate_deny as _annotate_unlock,
@@ -825,7 +821,7 @@ def resolve_plugin_root_loud(
             "bash_guards.dispatch: plugin_root could not be resolved for this "
             "call (the per-call payload carried none, and the ambient "
             "fallback rungs -- CLAUDE_PLUGIN_ROOT, the coordinator-claude "
-            "plugin directory, the .coordinator-content-root pointer -- all missed); any "
+            "plugin directory, the content-root pointer -- all missed); any "
             "guard whose detection depends on a plugin-root-rooted manifest "
             "degrades to its own no-manifest fail-open for this call.",
             file=sys.stderr,
@@ -1457,6 +1453,12 @@ def evaluate_payload_json(
     return result
 
 
+def _apply_guard_level(name: str, envelope: Any) -> Any:
+    from coordinator_core.machine_profile import apply_guard_level
+
+    return apply_guard_level(name, envelope)
+
+
 def _evaluate_payload_json_budgeted(
     raw: str,
     policy_file: Optional[str] = None,
@@ -1752,6 +1754,9 @@ def _evaluate_payload_json_budgeted(
     # coordinator_core.bash_guards.dispatch import GuardBand` resolves
     # cleanly against the now-complete module in `sys.modules`.
     from coordinator_core.bash_guards._blanket_disarm import disarm_status as _disarm_status
+    # Deferred for the hot-path eager-import ratchet; `_apply_guard_level` is a
+    # module-level shim because tests reach it as `dispatch._apply_guard_level`.
+    from coordinator_core.machine_profile import is_deny_envelope as _is_deny_envelope
 
     _disarm = _disarm_status(payload)
 

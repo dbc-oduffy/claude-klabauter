@@ -52,8 +52,24 @@ def test_raw_ask_emits_the_full_phase_chain_with_both_verbs(repo):
 def test_sizing_entry_omits_the_size_phase(repo):
     rel = "state/sizings/s-job.yaml"
     (repo / rel).write_text(
-        yaml.safe_dump({"estimate": {"tshirt": "S"}, "route": "spec-dispatch"}), encoding="utf-8"
-    )
+        yaml.safe_dump(
+            {
+                "schema": "sizing-object",
+                "name": "s job",
+                "intent": "route fixture",
+                "estimate": {"tshirt": "S"},
+                "route": "spec-dispatch",
+                "status": "sized",
+                "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+                "interaction_mode": "pm",
+                "exit_criterion": {
+                    "statement": "done",
+                    "accepted": {"pm_quote": "yes", "on": "2026-10-01", "mode": "pm"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )  # C5: emit runs the gate, so the sizing must be fireable
     reply = op._dispatch_emit({"ask": True, "sizing_path": rel}, repo_root=repo)
     text = Path(reply["path"]).read_text(encoding="utf-8")
     assert "phase('size')" not in text

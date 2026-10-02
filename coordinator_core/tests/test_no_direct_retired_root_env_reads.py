@@ -190,6 +190,12 @@ def _family_modules(repo_root: Path, prefixes: tuple[str, ...]) -> list[Path]:
     return sorted(out)
 
 
+def _spells_any(text: str, names: frozenset[str]) -> bool:
+    """Every hit is a string Constant equal to one of `names`, whose spelling is
+    literally in the source; a file without any needs no parse."""
+    return any(name in text for name in names)
+
+
 def _is_environ(node: ast.AST) -> bool:
     return (
         isinstance(node, ast.Attribute)
@@ -203,7 +209,10 @@ def _env_reads(path: Path, names: frozenset[str]) -> list[tuple[int, str]]:
     """(lineno, env_name) for every direct `os.environ.get/pop/[...]` read of a
     literal in `names`. Leg 1 -- the bare read.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if not _spells_any(text, names):
+        return []
+    tree = ast.parse(text)
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if (
@@ -233,7 +242,10 @@ def _env_name_constants(path: Path, names: frozenset[str]) -> list[tuple[int, st
     shape) that a later `os.environ.get(<the name>)` reads without the literal
     ever appearing at the read site, so leg 1 alone would miss it.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if not _spells_any(text, names):
+        return []
+    tree = ast.parse(text)
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -258,7 +270,10 @@ def _bare_literal_hits(path: Path, names: frozenset[str]) -> list[tuple[int, str
     messages that merely mention the name do not trip this -- see module
     docstring § "WORD BOUNDARIES".
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if not _spells_any(text, names):
+        return []
+    tree = ast.parse(text)
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in names:

@@ -8,6 +8,7 @@ import re
 import pytest
 
 from coordinator_core.ops.dispatch_emit import emit
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.pathspec import (
     DirectoryShapedWriteError,
@@ -262,13 +263,12 @@ def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path)
 
     repo = tmp_path / "r"
     repo.mkdir()
-    nowin = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
     def _git(*args, check=True):
         return _subprocess.run(
-            ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **nowin
+            ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **no_console_creationflags()
         )
 
     _git("init", "-q", "-b", "work/z")

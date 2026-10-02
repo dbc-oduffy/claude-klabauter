@@ -175,7 +175,8 @@ from hashlib import blake2b
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core._settings_home import claude_config_dir
+from coordinator_core.content_root import read_content_root
 from coordinator_core.data_root import content_root_for
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core._hook_envelope import payload_of
@@ -568,7 +569,7 @@ def _resolve_role_append_snippet_path() -> Optional[Path]:
     THIRD rung ADDED to the two shapes this function already probed --
     `<claude_config_dir>/plugins/coordinator-claude` in both known shapes
     (DoE dev-clone nested under `coordinator/`, marketplace/OSS-mirror at
-    that root directly), then the fleet's own `.coordinator-content-root` pointer file (the
+    that root directly), then the fleet's own content-root pointer file (the
     rung this defect's fleet-box case needs: a plugin root whose live clone
     sits OUTSIDE `.claude` entirely, where `<claude_config_dir>/plugins/
     coordinator-claude` holds only `coordinator/bin`). Does NOT add
@@ -610,12 +611,11 @@ def _resolve_role_append_snippet_path() -> Optional[Path]:
             return found
 
     try:
-        pointer = machine_local_dir() / ".coordinator-content-root"
-        content_root = pointer.read_text(encoding="utf-8").strip()
+        base = read_content_root()
     except OSError:
-        content_root = ""
-    if content_root:
-        content_root = content_root_for(content_root)
+        base = ""
+    if base:
+        content_root = content_root_for(base)
         if content_root is not None:
             found = _artifact_at(content_root)
             if found is not None:

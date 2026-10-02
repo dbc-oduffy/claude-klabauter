@@ -287,6 +287,75 @@ EXPECTED_READERS = (
     "coordinator_core.plan_assemble.test_scaffold_directive_parity",
     "coordinator_core.sizing_assemble.test_scaffold_directive_parity",
     "coordinator_core.test_sizing_assemble",
+    # --- new-module cluster (marker-parity/allowlist sweep, bb-20261002a C38) ---
+    #
+    # Each group reaches the record through an edge measured by
+    # `reader_closure`, not assumed.
+    #
+    # (a) `sizing_assemble` importers. `ops.sizing_resize` and
+    # `ops.dispatch_emit.ask_gate` each import `sizing_assemble` (a function-
+    # local `route` import) to compute a sizing route; `sizing_assemble`
+    # reaches the record through its own lazy `mode_resolution` import and is
+    # already allowlisted above as advisory. Every `dispatch_emit` module
+    # (`op`, `cli`, `ask_compose`, `mark_landed`), `workflow_fire.op`, and
+    # their tests reach it only by importing `ask_gate` / `op` -- ONE edge,
+    # counted per module by the transitive walk. None of them is under
+    # `write_guards/`/`bash_guards/`, none gates a tool call: they compute and
+    # emit a dispatch script or a sizing arm, so no mode value reaches a
+    # denial. Restructure alternative (move `route` behind a leaf that does
+    # not import `mode_resolution`) edits `sizing_assemble`, which is another
+    # owner's surface; allowlisting is the available disposition here.
+    "coordinator_core.ops.dispatch_emit.ask_compose",
+    "coordinator_core.ops.dispatch_emit.ask_gate",
+    "coordinator_core.ops.dispatch_emit.cli",
+    "coordinator_core.ops.dispatch_emit.mark_landed",
+    "coordinator_core.ops.dispatch_emit.op",
+    "coordinator_core.ops.dispatch_emit.tests.test_agent_type_resolution",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_blitz_args",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_single_exit",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_zero_headless",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_admission",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_mark_landed",
+    "coordinator_core.ops.dispatch_emit.tests.test_cloud_spawn_brief",
+    "coordinator_core.ops.dispatch_emit.tests.test_doe_port_fidelity_and_scope",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_spawn_count",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest",
+    "coordinator_core.ops.dispatch_emit.tests.test_emitted_script_states_node_check_does_not_apply",
+    "coordinator_core.ops.dispatch_emit.tests.test_every_emit_route_composes_review",
+    "coordinator_core.ops.dispatch_emit.tests.test_inventory_mint",
+    "coordinator_core.ops.dispatch_emit.tests.test_mark_landed",
+    "coordinator_core.ops.dispatch_emit.tests.test_new_module_importer_window",
+    "coordinator_core.ops.dispatch_emit.tests.test_op",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_emission_receipt",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_returns_fire_args",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_sizing_emit",
+    "coordinator_core.ops.dispatch_emit.tests.test_queue_emit",
+    "coordinator_core.ops.dispatch_emit.tests.test_queue_emit_composes_review",
+    "coordinator_core.ops.dispatch_emit.tests.test_restamp",
+    "coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_routes",
+    "coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_wiring",
+    "coordinator_core.ops.sizing_resize",
+    "coordinator_core.ops.tests.test_sizing_resize",
+    "coordinator_core.ops.workflow_fire.op",
+    "coordinator_core.ops.workflow_fire.tests.test_end_to_end_fire",
+    "coordinator_core.ops.workflow_fire.tests.test_fired_drift_guard",
+    # (b) New test modules importing an already-allowlisted dispatcher or
+    # corpus module (`stop_dispatch`, `sessionstart_dispatch`,
+    # `postuse_advisory_dispatch`, `guard_message_corpus`,
+    # `test_guard_message_size`). Tests consume these as data or measure their
+    # spawn count; they are the same class as the test modules listed above.
+    "coordinator_core.bash_guards.tests.test_guard_message_size_claude_klabauter_corpus",
+    "coordinator_core.bash_guards.tests.test_platform_conditioned_deny_reachability",
+    "coordinator_core.hooks.tests.test_guard_policy_stop_legs",
+    "coordinator_core.hooks.tests.test_postuse_advisory_dispatch_spawn_count",
+    "coordinator_core.hooks.tests.test_sessionstart_dispatch_leg_parity",
+    "coordinator_core.hooks.tests.test_stop_dispatch_spawn_count",
+    # (c) `sizing_assemble`'s own write-back test.
+    "coordinator_core.sizing_assemble.test_write_back",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

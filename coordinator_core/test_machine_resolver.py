@@ -518,3 +518,74 @@ def test_registry_set_to_a_file_with_no_table_still_appends(monkeypatch, tmp_pat
 
     assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"
     assert (reg_dir / "registry.local.toml").read_text(encoding="utf-8").startswith("schema = 1")
+
+
+# ---------------------------------------------------------------------------
+# One registry key per repo: the content-root pair
+# ---------------------------------------------------------------------------
+
+_PAIR = list(mr._CONTENT_ROOT_KEY_PAIR.items())[0]
+
+
+def _clone(tmp_path):
+    clone = tmp_path / "content-clone"
+    clone.mkdir()
+    return str(clone)
+
+
+def test_setting_one_spelling_retires_the_other_when_both_name_one_clone(monkeypatch, tmp_path):
+    new, old = _PAIR
+    reg = tmp_path / "reg"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    clone = _clone(tmp_path)
+    mr.registry_set(old, clone)
+
+    mr.registry_set(new, clone)
+
+    text = (reg / "registry.local.toml").read_text(encoding="utf-8")
+    assert f'"{new}"' in text and f'"{old}"' not in text
+    assert mr.registry_get(old) == clone and mr.registry_get(new) == clone
+
+
+def test_an_idempotent_set_still_retires_the_stale_pair(monkeypatch, tmp_path):
+    new, old = _PAIR
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    clone = _clone(tmp_path)
+    (reg / "registry.local.toml").write_text(f"schema = 1\n\"{new}\" = '{clone}'\n\"{old}\" = '{clone}'\n")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+
+    mr.registry_set(new, clone)
+
+    assert f'"{old}"' not in (reg / "registry.local.toml").read_text(encoding="utf-8")
+
+
+def test_a_pair_naming_a_different_clone_is_left_alone(monkeypatch, tmp_path):
+    new, old = _PAIR
+    reg = tmp_path / "reg"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    other = tmp_path / "other"
+    other.mkdir()
+    mr.registry_set(old, str(other))
+
+    mr.registry_set(new, _clone(tmp_path))
+
+    text = (reg / "registry.local.toml").read_text(encoding="utf-8")
+    assert f'"{old}"' in text and f'"{new}"' in text
+
+
+def test_retirement_leaves_other_keys_and_tables_intact(monkeypatch, tmp_path):
+    new, old = _PAIR
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    clone = _clone(tmp_path)
+    (reg / "registry.local.toml").write_text(
+        f"schema = 1\n\"{old}\" = '{clone}'\n\"repos.claude_klabauter\" = '/m'\n\n[plugin]\nx = 1\n"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+
+    mr.registry_set(new, clone)
+
+    text = (reg / "registry.local.toml").read_text(encoding="utf-8")
+    assert "\"repos.claude_klabauter\" = '/m'" in text and "[plugin]\nx = 1" in text
+    assert f'"{old}"' not in text

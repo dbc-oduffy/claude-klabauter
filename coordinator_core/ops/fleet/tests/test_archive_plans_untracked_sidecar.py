@@ -217,3 +217,27 @@ def test_fire_script_alone_after_primary_already_archived_moves_with_zero_commit
 
     after_log = _git(["log", "--oneline"], root).stdout.strip().splitlines()
     assert after_log == before_log
+
+
+def test_sibling_dest_exists_rolls_back_the_sidecar_already_moved(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    script, receipt = _write_fire_script(root, "2026-08-24-split")
+    dest_dir = root / "archive" / "specs" / "2026-08"
+    dest_dir.mkdir(parents=True)
+    first = m.Move(
+        src=script, dst=dest_dir / script.name, candidate_id="docs/plans/2026-08-24-split.workflow.mjs"
+    )
+    blocked_dst = dest_dir / receipt.name
+    blocked_dst.write_text("already here\n", encoding="utf-8")
+    second = m.Move(
+        src=receipt, dst=blocked_dst, candidate_id="docs/plans/2026-08-24-split.workflow.mjs.emitted.json"
+    )
+
+    acted, failed = m._apply_untracked_sidecar_moves([first, second])
+
+    assert acted == []
+    assert {f["id"] for f in failed} == {first.candidate_id, second.candidate_id}
+    assert script.is_file() and receipt.is_file()
+    assert not first.dst.exists()
+    assert blocked_dst.read_text(encoding="utf-8") == "already here\n"

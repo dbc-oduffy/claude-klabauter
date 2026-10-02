@@ -1508,6 +1508,14 @@ def _consumed_handoff_ship_paths(
             continue
         if resolved.name in own_shipped_basenames:
             continue
+        # A boot sweep only archives a terminal record, and `ship-handoff`
+        # refuses any path outside state/handoffs/ (exit 4): an archived
+        # predecessor has nothing left to ship.
+        live = Path(raw_path)
+        if not live.is_absolute():
+            live = repo_root / live
+        if resolved != live:
+            continue
         paths.append(resolved.relative_to(repo_root).as_posix())
     return paths
 
@@ -2048,6 +2056,54 @@ def build_review_scale_judgment_point(
 # (ceremony.wsc_tail kill, 2026-08-23): both existed solely to gate
 # `d-run-wsc-tail`, which no longer exists — see
 # `directives_commit_tail.py`'s module docstring.
+
+
+_JP_SPEC_DISPATCH_PLAN_UNRECONCILED_ID = "jp-spec-dispatch-plan-unreconciled"
+
+
+def find_unreconciled_spec_dispatch_plan(root: Path) -> Optional[str]:
+    """Repo-relative path of a plan this session holds a claim on whose
+    frontmatter says `scope_mode: spec-dispatch` and whose `status` is not
+    terminal, else `None`.
+
+    Reads the claim set through `claimed_plan.list_held_plan_claims`. Never
+    raises: an unreadable claim or plan reads as "none found".
+    """
+    try:
+        from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS
+        from coordinator_core.session import claimed_plan
+
+        for claimed, _claimed_at in claimed_plan.list_held_plan_claims(root):
+            plan_path = Path(claimed)
+            if not plan_path.is_absolute():
+                plan_path = root / plan_path
+            fm = parse_frontmatter(plan_path.read_text(encoding="utf-8")).get("frontmatter") or {}
+            if fm.get("scope_mode") == "spec-dispatch" and fm.get("status") not in PLAN_TERMINAL_STATUS:
+                try:
+                    return plan_path.resolve().relative_to(Path(root).resolve()).as_posix()
+                except ValueError:
+                    return plan_path.as_posix()
+    except Exception:  # noqa: BLE001 -- advisory only
+        return None
+    return None
+
+
+def build_spec_dispatch_plan_unreconciled_judgment_point(plan_rel: str) -> dict[str, Any]:
+    """Names a claimed spec-dispatch plan that no governing-plan resolution
+    reached, so closing would leave it non-terminal. Gates no directive."""
+    return build_untrusted_gate_judgment_point(
+        id=_JP_SPEC_DISPATCH_PLAN_UNRECONCILED_ID,
+        question=(
+            f"This session claimed {plan_rel} (scope_mode: spec-dispatch, non-terminal) but no "
+            "governing plan resolved, so this close does not reconcile it."
+        ),
+        dispositions=[build_disposition("plan-reconciled-or-left-open", resolves=[])],
+        evidence=f"plan-claim held by this session: {plan_rel}",
+        reason=(
+            f"Run `archive-stamp-cli stamp-plan-implemented {plan_rel}` if the plan shipped; "
+            "otherwise leave it open."
+        ),
+    )
 
 
 def build_open_spine_rows_block_stamp_judgment_point(gate: "directives_spine_worklist.OpenSpineRowGate") -> dict[str, Any]:
@@ -4118,9 +4174,11 @@ def _batch_resolve_commit_refs(root: Path, refs: list[str]) -> dict[str, str]:
     return resolved
 
 
-def _batch_session_id_trailers(root: Path, shas: list[str]) -> dict[str, str]:
-    """`{sha: Session-Id}` for every sha carrying its own `Session-Id`
-    trailer, via batched `git log --no-walk` over BARE SHA positionals
+def _batch_session_id_trailers(
+    root: Path, shas: list[str], key: str = "Session-Id"
+) -> dict[str, str]:
+    """`{sha: value}` for every sha carrying its own `key` trailer
+    (default `Session-Id`), via batched `git log --no-walk` over BARE SHA positionals
     instead of one `git log -1` per sha.
 
     Bare shas have no exclusion semantics, so batching them cannot silently
@@ -4144,7 +4202,7 @@ def _batch_session_id_trailers(root: Path, shas: list[str]) -> dict[str, str]:
             [
                 "log",
                 "--no-walk",
-                "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+                f"--format=%H%x1f%(trailers:key={key},valueonly)",
                 *chunk,
             ],
             root,
@@ -4798,7 +4856,9 @@ def _dispatched_chunk_shas_missing_from_slices(
     - `recoverable` -- missing shas that exist and carry NO `Session-Id`
       trailer. Unattributed is exactly the dispatched-committer signature,
       and folding them in widens review scope, which is the safe direction.
-    - `conflicting` -- missing shas carrying a DIFFERENT session's trailer.
+    - `conflicting` -- missing shas carrying a DIFFERENT session's trailer
+      and no `Deliverable-Id` trailer equal to the governing plan's (that
+      match is `recoverable`: the deliverable is the unit of review).
       Never folded in: `disposition_ref` is hand-written and the
       anti-self-attestation gate cannot catch a row pointing at a peer's
       commit, so this is surfaced for a human rather than swept into scope
@@ -4851,8 +4911,19 @@ def _dispatched_chunk_shas_missing_from_slices(
         return [], []
 
     owner_by_sha = _batch_session_id_trailers(root, [sha for _chunk, sha in candidates])
+    # A foreign Session-Id names who typed the commit; an exact Deliverable-Id
+    # match to the governing plan names what it delivered, and overrides it.
+    from coordinator_core.ops.dispatch_emit.commit_request import plan_deliverable_id
+
+    plan_dlv = plan_deliverable_id(source)
+    delivered_by_plan: set[str] = set()
+    if plan_dlv and owner_by_sha:
+        dlv_by_sha = _batch_session_id_trailers(
+            root, list(owner_by_sha), key="Deliverable-Id"
+        )
+        delivered_by_plan = {sha for sha, dlv in dlv_by_sha.items() if dlv == plan_dlv}
     for chunk_id, full in candidates:
-        owner = owner_by_sha.get(full, "")
+        owner = "" if full in delivered_by_plan else owner_by_sha.get(full, "")
         entry = {"chunk": chunk_id, "sha": full}
         if owner:
             entry["committed_by"] = owner
@@ -6109,6 +6180,13 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # into `narration` instead, via `_narration_and_next_move` below. This
     # is narration-demotion only: no `decisions=` pre-population, no 9th
     # envelope key -- see the plan's "Forked out of this plan" section.
+    if governing_plan is None:
+        _unreconciled_plan = find_unreconciled_spec_dispatch_plan(root)
+        if _unreconciled_plan is not None:
+            judgment_points.append(
+                build_spec_dispatch_plan_unreconciled_judgment_point(_unreconciled_plan)
+            )
+
     _asked_judgment_points, _reported_judgment_points = partition_reportable(judgment_points, directives)
     # `partition_reportable` classifies by directive-membership alone, with
     # no opinion on `recommendation` presence -- an untrusted-gate point

@@ -248,6 +248,12 @@ def test_fix_locus_bare_path_without_locator_fails(tmp_path: Path):
     assert result["citation"] is None
 
 
+def test_fix_locus_bare_path_is_not_a_citation(tmp_path: Path):
+    body = "## Fix Locus\nSomewhere in coordinator_core/foo.py.\n"
+    result = ss._fix_locus(_ctx(repo_root=tmp_path, plan_body=body))
+    assert result["citation_present"] is False
+
+
 def test_fix_locus_undetermined_without_section(tmp_path: Path):
     ctx = _ctx(repo_root=tmp_path, plan_body="No relevant section here.")
     _assert_undetermined(ss._fix_locus(ctx))

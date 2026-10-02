@@ -414,7 +414,6 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         "prune-closed-improvements.py",
         "query-handoff-columns.py",
         "reap-integrated-review-findings.py",
-        "reap-orphaned-in-flight-handoffs.py",
         "reap-stale-subagent-sidecars.py",
         "reconcile-completion-commits.py",
         "review-coverage-gate.py",

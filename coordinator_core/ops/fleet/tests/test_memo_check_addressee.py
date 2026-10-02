@@ -63,6 +63,10 @@ def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
     return claude_home
 
 
+#: Registry suffix the receiver-id convention derives for `coordinator-content-repo-em`.
+_CENTRAL_REPO_SUFFIX = "content_root"
+
+
 def _registered_content_root(machine_local: Path) -> Path | None:
     import tomllib
 
@@ -75,7 +79,9 @@ def _registered_content_root(machine_local: Path) -> Path | None:
                 data = tomllib.load(f)
         except Exception:
             continue
-        value = data.get("repos.content_root") or (data.get("repos") or {}).get("content_root")
+        value = data.get(f"repos.{_CENTRAL_REPO_SUFFIX}") or (data.get("repos") or {}).get(
+            _CENTRAL_REPO_SUFFIX
+        )
         if value:
             return Path(str(value))
     return None

@@ -26,9 +26,9 @@ if/echo wrapper into this module (M3/D9 pattern,
 docs/plans/2026-07-23-skills-carry-no-code-extirpation.md).
 
 Negative-spec:
-    - Does NOT strip or update a previously-written block — append-only,
-      sentinel-guarded idempotency (a second run with the sentinel already
-      present is a silent no-op), matching the doc block's own contract.
+    - Replaces a previously-written block whose text differs from the one
+      rendered for the resolved engine (a different clone's path, or the
+      pre-C6 `-x` form); a block that already matches is a silent no-op.
     - Does NOT itself invoke/import `shell-init-guard.py` — only checks that
       the file is present and readable, and bakes its path into the written
       rc snippet;
@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core.install.write_surface import (
@@ -71,14 +72,11 @@ _PROG = "install-shell-init-guard-seam"
 
 SENTINEL = "# coordinator-install: interactive-shell resource-cap guard (runaway-file backstop, DR-047 split)"
 SENTINEL_END = "# end coordinator-install: interactive-shell resource-cap guard"
-"""Closes the `SENTINEL`-opened block, added fresh installs only (chunk C6,
-docs/plans/2026-08-06-writer-declared-write-surface-manifest.md). Never
-retrofitted onto an already-installed rc file's BEGIN-only block -- a
-machine with the legacy form keeps it permanently; `end_marker` on that
-declaration reads `write_surface.ABSENT_ON_LEGACY_INSTALLS`, not this
-literal. `_rc_has_sentinel` still detects by `SENTINEL` line-membership
-alone, so this addition changes nothing about install-time idempotency
-detection."""
+"""Closes the `SENTINEL`-opened block, added by chunk C6
+(docs/plans/2026-08-06-writer-declared-write-surface-manifest.md). A
+BEGIN-only legacy block is replaced by the closed form on the next install;
+`end_marker` on the legacy declaration reads
+`write_surface.ABSENT_ON_LEGACY_INSTALLS`, not this literal."""
 
 WRITE_SURFACE = WriteSurfaceDeclaration(
     writer_id="install-shell-init-guard-seam",
@@ -94,8 +92,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     begin_marker=SENTINEL,
                     end_marker=SENTINEL_END,
                     reason=(
-                        "the fresh-install form of the block written by main() "
-                        "when _rc_has_sentinel() is False -- both markers present, "
+                        "the form of the block main() writes -- both markers present, "
                         "SENTINEL_END added by chunk C6 of this same plan."
                     ),
                 ),
@@ -108,12 +105,9 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     end_marker=ABSENT_ON_LEGACY_INSTALLS,
                     reason=(
                         "the pre-C6 legacy form of the same block: BEGIN marker "
-                        "only, no END marker. Never written by this writer's "
-                        "current code (_rc_has_sentinel() detects it via SENTINEL "
-                        "line-membership alone and main() short-circuits to the "
-                        "no-op path) -- declared so an uninstall/audit consumer "
-                        "knows this on-disk shape is possible and legitimate, not "
-                        "a defect to retrofit."
+                        "only, no END marker. Replaced by main() on the next "
+                        "install -- declared so an uninstall/audit consumer "
+                        "knows this on-disk shape can still exist."
                     ),
                 ),
             ),
@@ -127,8 +121,18 @@ See spec backlink:
 docs/plans/2026-08-06-writer-declared-write-surface-manifest.md, chunk C3f."""
 
 
+def _running_engine_root() -> str:
+    """The engine tree this module executes from, when it carries the guard.
+
+    Outranks the registry so an install run from a published engine bakes that
+    engine's guard, not whichever clone `repos.claude_klabauter` still names."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return root if os.path.isfile(os.path.join(root, "bin", "shell-init-guard.py")) else ""
+
+
 def resolve_claude_klabauter_clone() -> str:
-    """Tier 1: REPO_CLAUDE_KLABAUTER env. Tier 2: the direct-registry reader
+    """Tier 1: REPO_CLAUDE_KLABAUTER env. Tier 2: the running engine tree.
+    Tier 3: the direct-registry reader
     (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
 
     Converted 2026-08-16 (C7b): the module's own test suite
@@ -141,6 +145,9 @@ def resolve_claude_klabauter_clone() -> str:
     env_override = os.environ.get("REPO_CLAUDE_KLABAUTER", "")
     if env_override:
         return env_override
+    running = _running_engine_root()
+    if running:
+        return running
     value = _machine_resolver.registry_get("repos.claude_klabauter")
     return value or ""
 
@@ -164,14 +171,50 @@ def _resolve_rc_path(override: Optional[str]) -> str:
     return os.path.join(home, ".bashrc")
 
 
-def _rc_has_sentinel(rc_path: str) -> bool:
+_LEGACY_BLOCK_END = "unset _cc_fsize_guard"
+
+
+def _existing_block(rc_path: str) -> Optional[str]:
+    """The block text currently in `rc_path` (BEGIN..END inclusive), or None.
+
+    The pre-C6 form has no END marker and closes at its `unset` line."""
     if not os.path.isfile(rc_path):
-        return False
+        return None
     try:
         with open(rc_path, "r", encoding="utf-8", errors="replace") as fh:
-            return SENTINEL in fh.read().split("\n")
+            lines = fh.read().split("\n")
     except OSError:
-        return False
+        return None
+    if SENTINEL not in lines:
+        return None
+    start = lines.index(SENTINEL)
+    for end_marker in (SENTINEL_END, _LEGACY_BLOCK_END):
+        if end_marker in lines[start:]:
+            end = lines.index(end_marker, start)
+            return "\n".join(lines[start : end + 1])
+    return "\n".join(lines[start:])
+
+
+def _render_block(guard_src: str) -> str:
+    return (
+        f"{SENTINEL}\n"
+        "# Graceful no-op if claude-klabauter absent or python3 missing: the -f check + eval's 2>/dev/null +\n"
+        "# the emitter's own fail-open behavior combine to make this safe to source unconditionally.\n"
+        "# -f, not -x: the guard is interpreter-invoked and ships 100644 like the rest of claude-klabauter's bin/.\n"
+        f'_cc_fsize_guard="{guard_src}"\n'
+        'if [ -f "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
+        "unset _cc_fsize_guard\n"
+        f"{SENTINEL_END}"
+    )
+
+
+def _strip_existing_block(text: str) -> str:
+    from coordinator_core.install.shell_rc_guard import _strip_block_text
+
+    lines = text.split("\n")
+    start = lines.index(SENTINEL)
+    end_marker = SENTINEL_END if SENTINEL_END in lines[start:] else _LEGACY_BLOCK_END
+    return _strip_block_text(text, SENTINEL, end_marker)
 
 
 def main(argv: List[str]) -> int:
@@ -210,38 +253,51 @@ def main(argv: List[str]) -> int:
 
     rc_path = _resolve_rc_path(rc_override)
 
-    if _rc_has_sentinel(rc_path):
+    desired = _render_block(guard_src)
+    existing = _existing_block(rc_path)
+
+    if existing == desired:
         print(f"shell_init_guard: ready (no-op) ({rc_path}{_shell_coverage_note()})")
         return 0
 
     if check_only:
-        print(f"shell_init_guard: check failed: sentinel absent in {rc_path} (would install)")
+        if existing is None:
+            print(f"shell_init_guard: check failed: sentinel absent in {rc_path} (would install)")
+        else:
+            print(f"shell_init_guard: check failed: block in {rc_path} differs from the resolved engine's (would update)")
         return 1
 
-    block = (
-        f"\n{SENTINEL}\n"
-        "# Graceful no-op if claude-klabauter absent or python3 missing: the -f check + eval's 2>/dev/null +\n"
-        "# the emitter's own fail-open behavior combine to make this safe to source unconditionally.\n"
-        "# -f, not -x: the guard is interpreter-invoked and ships 100644 like the rest of claude-klabauter's bin/.\n"
-        f'_cc_fsize_guard="{guard_src}"\n'
-        'if [ -f "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
-        "unset _cc_fsize_guard\n"
-        f"{SENTINEL_END}\n"
+    from coordinator_core.install import substrate as _substrate_mod
+    from coordinator_core.install.uninstall_legs import _atomic_write_text
+
+    blocked = _substrate_mod._refuse_machine_mutation(
+        rc_path, what=f"write the shell-init guard block into {rc_path}", check_temp_path=False,
     )
+    if blocked:
+        print(f"shell_init_guard: failed ({blocked})")
+        return 1
+
     try:
-        with open(rc_path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(block)
+        text = ""
+        if os.path.isfile(rc_path):
+            with open(rc_path, "r", encoding="utf-8", errors="replace", newline="") as fh:
+                text = fh.read()
+        if existing is not None:
+            text = _strip_existing_block(text)
+        separator = "" if not text or text.endswith("\n") else "\n"
+        _atomic_write_text(Path(rc_path), f"{text}{separator}\n{desired}\n")
     except OSError as exc:
         print(f"{_PROG}: failed to write rc block: {exc}", file=sys.stderr)
         print(f"shell_init_guard: failed ({exc})")
         return 1
 
+    verb = "installed" if existing is None else "updated"
     # DR-276: declared AFTER the write lands, matching the append-integrator-
     # dispositions reference — the contract is a report of what was ACTUALLY
     # written, not of an intended surface.
     declare_write(rc_path)
 
-    print(f"shell_init_guard: installed ({rc_path}{_shell_coverage_note()})")
+    print(f"shell_init_guard: {verb} ({rc_path}{_shell_coverage_note()})")
     return 0
 
 

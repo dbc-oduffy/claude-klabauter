@@ -885,7 +885,7 @@ def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
 - id: C1
   title: reconciled with a plausible but invalid word
   surface: some/surface
-  disposition: done
+  disposition: shipped
 - id: C2
   title: live row
   surface: some/surface
@@ -895,7 +895,7 @@ def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
         read_spine(plan_path)
     message = str(excinfo.value)
     assert "'C1'" in message
-    assert "'done'" in message
+    assert "'shipped'" in message
     assert "coded" in message
 
 
@@ -972,6 +972,7 @@ def test_an_excluded_row_is_reported_not_silently_dropped():
     assert "C7" in out
     assert "DOES NOT RUN" in out
     assert "OWED WORK, not skipped work" in out
+    assert "physically do" in out and "waiting on a human" not in out
 
 
 def test_operator_rows_are_called_out_separately_from_other_exclusions():

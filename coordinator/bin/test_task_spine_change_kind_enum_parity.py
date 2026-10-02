@@ -30,11 +30,11 @@ SCOPE: three assertions, each parsed directly from its own on-disk source
      value the queue schema itself would reject on write.
   3. Both vendored schemas' `change_kind` property descriptions must still
      carry the literal SSOT citation
-     (`docs/wiki/lessons-outbox-schema.md § Change-kind enum`) rather than
+     (`coordinator-content-repo coordinator/docs/wiki/schema-and-validation-contracts/lessons-outbox-schema.md § Change-kind enum`) rather than
      silently re-hosting the enum as if this repo owned it.
 
 The `change_kind` enum's true SSOT is coordinator-content-repo's
-`docs/wiki/lessons-outbox-schema.md`, resolved only via
+`coordinator-content-repo coordinator/docs/wiki/schema-and-validation-contracts/lessons-outbox-schema.md`, resolved only via
 `coordinator_registry.content_root()` elsewhere in this suite (see
 `test_pickup_kind_enum_parity.py`'s third leg) when a value must be read FROM
 it. This test never needs to: both slices it compares are already vendored

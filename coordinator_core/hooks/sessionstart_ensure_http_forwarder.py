@@ -82,17 +82,16 @@ _ADDR_IN_USE_ERRNOS = frozenset(
 )
 
 
-def _forwarder_module_path() -> "Optional[Path]":
-    """`<plugin_root>/hooks/http_hook_forwarder.py`, or None -- see module
-    docstring ADAPTATION."""
+def _forwarder_module_path() -> Path:
+    """`<plugin_root>/hooks/http_hook_forwarder.py` when it exists, else this
+    engine's own `warm/http_hook_forwarder.py` (stdlib-only, runs standalone), so a
+    box whose plugin root is unset or lacks the file still gets a listener."""
     raw = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if not raw:
-        return None
-    try:
+    if raw:
         candidate = Path(raw) / "hooks" / "http_hook_forwarder.py"
-    except Exception:
-        return None
-    return candidate
+        if candidate.is_file():
+            return candidate
+    return Path(__file__).resolve().parents[1] / "warm" / "http_hook_forwarder.py"
 
 
 def _probe_bind_wins(port: int = _FIXED_PORT) -> "Optional[bool]":
@@ -319,8 +318,8 @@ def _disclose(reason: str) -> dict:
 def _handler(params: dict, repo_root=None) -> dict:
     try:
         forwarder_path = _forwarder_module_path()
-        if forwarder_path is None:
-            return no_advisory()
+        if forwarder_path is None or not forwarder_path.is_file():
+            return _disclose("no forwarder file resolves")
 
         result = _probe_bind_wins()
         if result is False:

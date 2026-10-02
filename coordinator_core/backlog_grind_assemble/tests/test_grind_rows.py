@@ -47,7 +47,7 @@ def _write_row(path: Path, *, status: str = "open") -> str:
         "Body text describing the bug. Untouched by close.\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
     return text
 
 
@@ -304,7 +304,7 @@ class TestCrashWindowReconciliation:
 
         # Simulate the crash window: os.replace landed, unlink did not --
         # restore the source row so both copies exist simultaneously.
-        close_fixture["row_path"].write_text(close_fixture["row_text"], encoding="utf-8")
+        close_fixture["row_path"].write_text(close_fixture["row_text"], encoding="utf-8", newline="\n")
         assert close_fixture["row_path"].is_file()
 
         second = grind_rows.main(
@@ -711,6 +711,22 @@ class TestRunRecordVerb:
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000001Z.json"
         assert json.loads(target.read_text(encoding="utf-8")) == {"x": 1}
 
+    def test_reads_from_stdin_when_record_file_is_absent(self, tmp_path, monkeypatch, capsys):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"y": 2})))
+        exit_code = grind_rows.main(
+            [
+                "run-record",
+                "--profile", "bug",
+                "--run-id", "20260922T000004Z",
+                "--repo-root", str(tmp_path),
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_OK
+        target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000004Z.json"
+        assert json.loads(target.read_text(encoding="utf-8")) == {"y": 2}
+
     def test_run_id_escaping_the_runs_directory_is_a_usage_error(self, tmp_path):
         record_file = tmp_path / "record.json"
         record_file.write_text("{}", encoding="utf-8")
@@ -797,3 +813,28 @@ class TestSweepSettlesOrphanedLedgers:
         )
         assert rc == grind_rows.EXIT_USAGE
         assert ledger.is_file()
+
+
+class TestArchiveDestinationIsTheMoversPath:
+    def test_close_writes_exactly_the_path_archive_destination_names(self, close_fixture, tmp_path, capsys):
+        stamp = "20261002T010203Z"
+        exit_code = grind_rows.main(
+            [
+                "close",
+                "--profile-dir", str(close_fixture["profile_dir"]),
+                "--profile", "bug",
+                "--row", close_fixture["row_rel"],
+                "--digest", close_fixture["digest"],
+                "--verdict", "fix",
+                "--evidence-file", str(close_fixture["evidence_file"]),
+                "--closed-by", "test-session",
+                "--run-stamp", stamp,
+                "--repo-root", str(tmp_path),
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_OK
+        dest = grind_rows.archive_destination("archive/bug-backlog", stamp, "bug-1.yaml")
+        assert dest == "archive/bug-backlog/2026-10/bug-1.yaml"
+        assert (tmp_path / dest).is_file()
+        printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert Path(printed["new"]) == tmp_path / dest

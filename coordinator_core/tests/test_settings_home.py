@@ -445,6 +445,7 @@ def test_settings_home_refuses_the_forbidden_real_path(tmp_path, monkeypatch):
     lands on exactly that path must refuse rather than return it."""
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(tmp_path / ".coordinator-claude-settings"))
     with pytest.raises(RealSettingsHomeLeakError) as excinfo:
         settings_home()
@@ -456,6 +457,7 @@ def test_settings_home_allows_a_path_distinct_from_the_forbidden_one(tmp_path, m
     quarantine.mkdir()
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("HOME", str(quarantine))
+    monkeypatch.setenv("USERPROFILE", str(quarantine))
     monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(tmp_path / "real-home" / ".coordinator-claude-settings"))
     assert settings_home() == quarantine / ".coordinator-claude-settings"
 
@@ -464,4 +466,5 @@ def test_settings_home_ignores_an_unset_forbid_env(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv(FORBID_REAL_SETTINGS_HOME_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert settings_home() == tmp_path / ".coordinator-claude-settings"

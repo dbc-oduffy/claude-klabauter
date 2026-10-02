@@ -73,6 +73,70 @@ class TestMissingForwarderGetsWritten:
         assert _AGENT_FORWARDER_MARKER in py_dst.read_text(encoding="utf-8")
 
 
+class TestStaleForwarderIsRewritten:
+    def _setup(self, tmp_path, monkeypatch):
+        claude_klabauter_root = tmp_path / "claude-klabauter"
+        _write_cli(claude_klabauter_root / "coordinator" / "bin", "percolate-push.py")
+        bin_dst = tmp_path / "settings-home" / "bin"
+        bin_dst.mkdir(parents=True)
+        _patch_env(
+            monkeypatch, claude_klabauter_root=claude_klabauter_root, settings_home=bin_dst.parent, lock_root=tmp_path / "locks",
+        )
+        return bin_dst
+
+    def _current(self):
+        from coordinator_core.install.substrate import _agent_forwarder_content
+
+        return _agent_forwarder_content("percolate-push", "percolate-push.py")
+
+    def test_forwarder_older_than_the_generator_is_rewritten(self, tmp_path, monkeypatch):
+        bin_dst = self._setup(tmp_path, monkeypatch)
+        dst = bin_dst / "percolate-push"
+        dst.write_text(self._current().replace("exec_cli(", "old_exec_cli("), encoding="utf-8")
+        dst.chmod(0o755)
+
+        forwarder_self_heal.self_heal_forwarders()
+
+        assert dst.read_text(encoding="utf-8") == self._current()
+        if sys.platform != "win32":
+            assert dst.stat().st_mode & 0o111
+
+    def test_current_forwarder_is_not_rewritten(self, tmp_path, monkeypatch):
+        bin_dst = self._setup(tmp_path, monkeypatch)
+        dst = bin_dst / "percolate-push"
+        dst.write_text(self._current(), encoding="utf-8")
+        before = dst.stat().st_mtime_ns
+
+        forwarder_self_heal.self_heal_forwarders()
+
+        assert dst.stat().st_mtime_ns == before
+
+    def test_a_file_without_the_forwarder_header_is_left_alone(self, tmp_path, monkeypatch):
+        bin_dst = self._setup(tmp_path, monkeypatch)
+        dst = bin_dst / "percolate-push"
+        dst.write_bytes(b"\x7fELF native door image stand-in")
+
+        forwarder_self_heal.self_heal_forwarders()
+
+        assert dst.read_bytes() == b"\x7fELF native door image stand-in"
+
+    def test_rewrite_never_enters_the_venv_or_installer_phases(self, tmp_path, monkeypatch):
+        bin_dst = self._setup(tmp_path, monkeypatch)
+        (bin_dst / "percolate-push").write_text(
+            self._current().replace("exec_cli(", "old_exec_cli("), encoding="utf-8"
+        )
+
+        def _forbidden(*args, **kwargs):
+            raise AssertionError("self-heal entered the venv/installer path")
+
+        monkeypatch.setattr("coordinator_core.install.ensure_venv.ensure_coordinator_venv", _forbidden)
+        monkeypatch.setattr("coordinator_core.install.substrate.run", _forbidden)
+
+        forwarder_self_heal.self_heal_forwarders()
+
+        assert (bin_dst / "percolate-push").read_text(encoding="utf-8") == self._current()
+
+
 class TestCleanStateWritesNothing:
     def test_clean_tree_is_a_true_noop(self, tmp_path, monkeypatch):
         claude_klabauter_root = tmp_path / "claude-klabauter"

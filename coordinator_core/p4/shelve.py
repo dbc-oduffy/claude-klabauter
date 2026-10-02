@@ -158,9 +158,15 @@ def _fstat_records(stdout: str) -> List[Dict[str, str]]:
                 records.append(current)
                 current = {}
             continue
-        if not line.startswith("... "):
+        for prefix in ("... ", "info1: "):
+            if line.startswith(prefix):
+                break
+        else:
             continue
-        name, _, value = line[4:].partition(" ")
+        name, _, value = line[len(prefix):].partition(" ")
+        if name == "clientFile" and current:
+            records.append(current)
+            current = {}
         if name:
             current[name] = value
     if current:
@@ -171,19 +177,31 @@ def _fstat_records(stdout: str) -> List[Dict[str, str]]:
 _CLIENT_FILE_PREFIX_RE = re.compile(r"^//[^/]+/(.+)$")
 
 
+def _client_file_rel(client_file: str, repo_root: str) -> Optional[str]:
+    """Repo-relative forward-slash path for a `clientFile`, in client syntax
+    (`//client/rel`) or in the local syntax a `-d <root>` fstat reports."""
+    match = _CLIENT_FILE_PREFIX_RE.match(client_file)
+    if match:
+        return match.group(1)
+    root = os.path.normcase(os.path.normpath(repo_root))
+    local = os.path.normcase(os.path.normpath(client_file))
+    if local.startswith(root + os.sep):
+        return os.path.relpath(client_file, repo_root).replace(os.sep, "/")
+    return None
+
+
 def _key_fstat_records_by_path(
-    records: List[Dict[str, str]], paths: List[str]
+    records: List[Dict[str, str]], paths: List[str], repo_root: str
 ) -> "tuple[Dict[str, Optional[Dict[str, str]]], List[str]]":
     path_set = set(paths)
     per_path: Dict[str, Optional[Dict[str, str]]] = {p: None for p in paths}
     unreconciled: List[str] = []
     for rec in records:
         client_file = rec.get("clientFile")
-        match = _CLIENT_FILE_PREFIX_RE.match(client_file) if client_file else None
-        if not match:
+        rel = _client_file_rel(client_file, repo_root) if client_file else None
+        if rel is None:
             unreconciled.append(client_file or "<missing clientFile>")
             continue
-        rel = match.group(1)
         if rel not in path_set:
             unreconciled.append(client_file)
             continue
@@ -289,7 +307,7 @@ def shelve_outstanding(
         )
 
     records = _fstat_records(fstat_result.stdout)
-    per_path, unreconciled = _key_fstat_records_by_path(records, paths)
+    per_path, unreconciled = _key_fstat_records_by_path(records, paths, repo_root)
     if unreconciled:
         return ShelveOutcome(
             ok=False,

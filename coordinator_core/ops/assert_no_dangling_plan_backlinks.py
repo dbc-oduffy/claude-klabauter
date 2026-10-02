@@ -161,8 +161,8 @@ from coordinator_core.ops.backfill_deliverable_spine import (
     extract_plan_id,
     is_sidecar_plan as _backfill_is_sidecar_plan,
 )
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.spec_backlink_resolve import (
-    _content_root_path,
     peer_repo_name,
     build_index as _build_backlink_index,
     resolve_id as _resolve_id,
@@ -172,6 +172,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.session import record_homes
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id, resolve_plan_pointer
 from coordinator_core.win_portability import leaf_spawn_creationflags
@@ -189,6 +190,9 @@ _LOG = logging.getLogger(__name__)
 _PLAN_STEM_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9.-]+$")
 _BACKLINK_LINE_RE = re.compile(r"spec.?backlink", re.IGNORECASE)
 _PLAN_PATH_RE = re.compile(r"docs/plans/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9.-]+\.md")
+_ARCHIVE_SPEC_PATH_RE = re.compile(
+    r"archive/specs/[0-9]{4}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9.-]+\.md"
+)
 _ID_TOKEN_RE = re.compile(
     r"(?:[A-Za-z0-9_.-]+:)?(?:pln|dlv)-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",
     re.IGNORECASE,
@@ -399,7 +403,8 @@ def scan_id_form_citations(
                 if _repo != peer_repo_name():
                     outcome = {"outcome": "miss"}
                 else:
-                    peer_root = _content_root_path()
+                    peer_root_raw = read_content_root()
+                    peer_root = Path(peer_root_raw) if peer_root_raw else None
                     if peer_root is None or not peer_root.is_dir():
                         outcome = {"outcome": "miss"}
                     else:
@@ -417,7 +422,8 @@ def scan_path_form_ungrandfathered(
     root: str, worktree_root: Path, local_index
 ) -> List[Tuple[str, str, str]]:
     """Return [(rel_file, cited_path, outcome), ...] for every path-form
-    (`docs/plans/...`) citation on a spec_backlink line whose target
+    (`docs/plans/...` or the `archive/specs/YYYY-MM/...` form `--fix` heals
+    a citation into) citation on a spec_backlink line whose target
     RESOLVES locally (HIT -- should have been id-form) or is AMBIGUOUS
     (multiple local candidates share the basename). A citation resolving to
     MISS is grandfathered (C7 cross-repo or C8 unresolvable/disposed -- no
@@ -426,9 +432,9 @@ def scan_path_form_ungrandfathered(
     results: List[Tuple[str, str, str]] = []
     seen = set()
     for rel_file, line in _iter_backlink_lines(root):
-        if "docs/plans/" not in line:
+        if "docs/plans/" not in line and "archive/specs/" not in line:
             continue
-        for match in _PLAN_PATH_RE.findall(line):
+        for match in (*_PLAN_PATH_RE.findall(line), *_ARCHIVE_SPEC_PATH_RE.findall(line)):
             key = (rel_file, match)
             if key in seen:
                 continue
@@ -486,7 +492,7 @@ def scan_handoff_governing_plan_pointers(
     resolves to no plan, live or archived. An unreadable baton is appended to
     `unreadable` (fail-closed), never skipped silently."""
     base = Path(root)
-    handoffs = base / "state" / "handoffs"
+    handoffs = Path(record_homes.home_dir(str(base), "handoffs"))
     results: List[Tuple[str, str]] = []
     if not handoffs.is_dir():
         return results

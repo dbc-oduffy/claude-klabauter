@@ -206,5 +206,5 @@ def test_nothing_to_commit_writes_no_receipt(repo, claims):
     )
     script = _script(repo, request)
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
-    assert out == {"committed": False, "nothing_to_commit": True}
+    assert out == {"committed": False, "nothing_to_commit": True, "stranded": {}}
     assert _receipt_files(repo) == []

@@ -68,6 +68,33 @@ def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monke
     assert result["exit_code"] == 0, result
     budget = _budget()
     assert len(spawns) == budget["green_path"], [s.origin for s in spawns]
+
+
+def test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invoke(
+    tmp_path, monkeypatch
+):
+    """A v4 receiver index (a NATURAL fixture precondition) is refused by the
+    in-process splice, so the delivery's index entry falls back to one hookless
+    `update-index` through `git_native._git`."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    subprocess.run(
+        ["git", "update-index", "--index-version", "4"],
+        cwd=str(receiver_repo), check=True, capture_output=True,
+        **no_console_creationflags(),
+    )
+    claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    _write_draft(sender_repo, "receiver-index-v4-topic")
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        result = _memo_send(
+            {"dry_run": False, "topic": "receiver-index-v4-topic"}, repo_root=sender_repo
+        )
+
+    assert result["exit_code"] == 0, result
+    budget = _budget()
+    assert len(spawns) == budget["receiver_index_unspliceable"], [s.origin for s in spawns]
     origins = [s.origin for s in spawns]
     assert "unattributed" not in origins, origins
     assert "_git._invoke" in origins, origins

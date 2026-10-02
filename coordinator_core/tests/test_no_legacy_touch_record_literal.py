@@ -260,7 +260,12 @@ def find_legacy_touch_record_literals(
             continue
         relpath = _relpath(path, effective_root)
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            text = path.read_text(encoding="utf-8")
+            # A hit is a string Constant equal to "touched.txt"; "touched" is
+            # the part an implicit concatenation cannot plausibly split.
+            if "touched" not in text:
+                continue
+            tree = ast.parse(text, filename=str(path))
         except (SyntaxError, UnicodeDecodeError):
             continue
         visitor = _TouchedTxtLiteralVisitor()

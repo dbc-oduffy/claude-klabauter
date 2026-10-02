@@ -259,7 +259,12 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 #: (ratified problem-sets) — see module docstring. Deliberately does NOT
 #: match docs/wiki/** or docs/decisions/** (excluded executor authoring
 #: targets).
-_PLAN_BODY_RE = re.compile(r"(^|/)docs/(plans|problems)/.+\.md$")
+#: ``evidence/`` directly under ``docs/plans/``/``docs/problems/`` is the
+#: measurement-record convention, not a body: nothing ratifies it and no
+#: spine names it. Only that literal segment is carved out -- a body moved
+#: into any other subdirectory stays protected. ``dispatch_emit.emit``
+#: imports this regex, so the emitter's immutable-body test follows it.
+_PLAN_BODY_RE = re.compile(r"(^|/)docs/(plans|problems)/(?!evidence/).+\.md$")
 
 #: Reference hook — test-fixture exemption. ``_PLAN_BODY_RE`` matches
 #: ``docs/plans/`` at ANY depth, so a static parity fixture living at

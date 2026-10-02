@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/mise-lane-map.schema.json",
+  "x-schema-version": "1.0.0",
+  "title": "Mise lane map",
+  "description": "Write-disjoint lanes and size-bounded sequential parts of one mise inventory, pinned on disk at first --lanes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "source_inventory", "start_sha", "params", "hot_files", "lanes", "falsifier_review_part"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "source_inventory": { "type": "string", "minLength": 1 },
+    "start_sha": { "type": ["string", "null"] },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lanes", "hot_files", "byte_cap", "headroom"],
+      "properties": {
+        "lanes": { "type": "integer", "minimum": 1 },
+        "hot_files": { "type": "integer", "minimum": 0 },
+        "byte_cap": { "type": "integer", "minimum": 1 },
+        "headroom": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "hot_files": { "type": "array", "items": { "type": "string" } },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "parts"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^([a-z]+|hub)$" },
+          "kind": { "type": "string", "enum": ["component", "hub"] },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "after", "rows", "inventory", "script", "bytes"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^([a-z]+|hub)(-p[0-9]+)?$" },
+                "after": {
+                  "type": "array",
+                  "items": { "type": "string", "pattern": "^([a-z]+|hub)(-p[0-9]+)?$" }
+                },
+                "rows": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                "inventory": { "type": "string", "minLength": 1 },
+                "script": { "type": ["string", "null"] },
+                "bytes": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "falsifier_review_part": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^([a-z]+|hub)(-p[0-9]+)?$" }
+    }
+  }
+}

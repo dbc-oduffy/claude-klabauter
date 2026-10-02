@@ -105,14 +105,7 @@ class TestDriftGuard:
             "leaving _REGISTRY empty and making drift assertions vacuously green."
         )
 
-    # The strict-xfail marker that stood here recorded 65 ops registered without an
-    # OP_CLASSIFICATION entry (debt-backlog
-    # state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-52137f1ff6b9.yaml,
-    # PM-ratified under DR-208 § "Fail-closed runtime semantic"). Its own exit
-    # condition was "draining the 65 XPASSes this test and forces removal of the
-    # marker" — C17 of docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md drained the
-    # last of them, so the marker is removed rather than left to XPASS-fail. The
-    # predicate below was never rewritten and is unchanged; it is now simply green.
+    # Plain assertion; the unclassified-op baseline it once xfailed against is empty.
     def test_all_registered_ops_are_classified(self) -> None:
         """Every op name in the live _REGISTRY has an entry in OP_CLASSIFICATION.
 
@@ -190,20 +183,12 @@ class TestDriftGuard:
 #    to the eager-import fallback rather than breaking dispatch, which is why the
 #    live system stayed correct while the map itself lagged.
 #
-#  * The live-_REGISTRY-vs-OP_CLASSIFICATION gap (254 vs 245, 9 unclassified at C3
-#    time) is the SAME gap test_all_registered_ops_are_classified below already
-#    covers via a strict xfail against coordinator_core.authz.registration_quad's
-#    frozen `_KNOWN_UNCLASSIFIED_OPS_DEBT` baseline (65 entries recorded
-#    2026-07-25; most have since been individually classified without the debt
-#    entry being pruned, which is a known-shrinking-not-growing direction the
-#    baseline's own never-grows guard in test_registration_quad.py enforces — that
-#    guard, and pruning the now-stale entries, is registration_quad.py's file, not
-#    this chunk's writable scope). test_all_registered_ops_are_classified itself
-#    is NOT a hole: it is a strict xfail with a named owning debt-backlog entry
-#    (state/debt-backlog/2026-07-23-authz-drift-guard-ops-registered-without-
-#    52137f1ff6b9.yaml) and it xfails (not xpasses) at C3 HEAD — see
-#    `test_registry_is_non_empty`'s sibling assertions above for the vacuous-pass
-#    guard that would catch a silently-empty registry masking this.
+#  * The live-_REGISTRY-vs-OP_CLASSIFICATION gap is closed:
+#    coordinator_core.authz.registration_quad's frozen
+#    `_KNOWN_UNCLASSIFIED_OPS_DEBT` baseline is empty, and
+#    test_registration_quad.py::test_unclassified_baseline_never_grows fails on
+#    any op outside it. test_all_registered_ops_are_classified below is a plain
+#    assertion.
 #
 #  * The remaining _REGISTRY vs OP_MODULE_MAP/_OP_KEY_SCOPE parity (254 == 254 for
 #    _OP_KEY_SCOPE; 254 == 254 for OP_MODULE_MAP once the peer_notice.* fix above

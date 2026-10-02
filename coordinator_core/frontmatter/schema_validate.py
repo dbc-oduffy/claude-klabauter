@@ -4739,6 +4739,61 @@ def _memo_cf_distill_fate(fm: dict) -> ErrorDict | None:
     return None
 
 
+_MEMO_SCOPED_TO_RULE_CUTOVER = '2026-10-02'
+_MEMO_FLAT_SCOPED_TO_KEYS = ('artifact', 'version', 'sha', 'seam')
+
+
+def fold_flat_scoped_to(fm: dict) -> dict:
+    """Return fm with legacy flat ``scoped_to_<key>`` keys folded into a nested ``scoped_to``.
+
+    Folds only when ``scoped_to`` is absent and at least one flat key is present; the result is a
+    shallow copy, never written back to disk.
+    """
+    if fm.get('scoped_to') is not None:
+        return fm
+    flat = {
+        key: fm[f'scoped_to_{key}']
+        for key in _MEMO_FLAT_SCOPED_TO_KEYS
+        if fm.get(f'scoped_to_{key}') is not None
+    }
+    if not flat:
+        return fm
+    folded = dict(fm)
+    folded['scoped_to'] = flat
+    return folded
+
+
+def _memo_cf_scoped_to_well_formed(fm: dict) -> ErrorDict | None:
+    """A present ``scoped_to`` (nested, or folded from legacy flat keys) must be the complete triple.
+
+    Needs artifact, exactly one of version or sha (sha 7-40 hex), and seam. Memos created before
+    ``_MEMO_SCOPED_TO_RULE_CUTOVER`` are exempt: 53 archived memos carry incomplete or malformed
+    pins and must stay transitionable.
+    """
+    if str(fm.get('created') or '') < _MEMO_SCOPED_TO_RULE_CUTOVER:
+        return None
+    scoped_to = fold_flat_scoped_to(fm).get('scoped_to')
+    if scoped_to is None:
+        return None
+    from coordinator_core.ops.fleet._outbox_frontmatter_rules import scoped_to_errors
+
+    if not isinstance(scoped_to, dict):
+        problems = ['scoped_to must be a mapping']
+    else:
+        problems = scoped_to_errors(
+            fm.get('kind'),
+            {key: str(scoped_to[key]) if scoped_to.get(key) is not None else None
+             for key in _MEMO_FLAT_SCOPED_TO_KEYS},
+        )
+    if not problems:
+        return None
+    return {
+        'field': 'scoped_to',
+        'error': problems[0],
+        'hint': 'Give artifact, exactly one of version|sha (sha is 7-40 hex), and seam, or omit scoped_to.',
+    }
+
+
 # Ordered list of cross-field rule functions for the "cross-repo-memo" schema.
 # Grandfather rule MUST be first — returns {'__skip__': True} to short-circuit all
 # remaining rules when created < 2026-05-22.
@@ -4755,6 +4810,7 @@ _MEMO_CROSS_FIELD_RULES = [
     _memo_cf_kind_enum,
     _memo_cf_distill_fate,
     _memo_cf_disposition_superseded_requires_companions,
+    _memo_cf_scoped_to_well_formed,
 ]
 
 # ---------------------------------------------------------------------------
@@ -5152,8 +5208,9 @@ def check_schema_drift(
     """Tamper-check: prove the vendored schema still equals what claude-klabauter PINNED at ref.
 
     Reads the vendored schema at schema_path and compares it byte-for-byte against
-    the corresponding file in the DoE repo at the given ref (default HEAD) via:
-        git -C doe_repo_path show <ref>:coordinator/schemas/<schema_filename>
+    the corresponding file in the DoE repo at the given ref (default HEAD):
+        <ref>:coordinator/schemas/<schema_filename>
+    The one-element call of `check_schema_drift_batch`; a caller holding a SET uses that.
 
     This is a TAMPER-check, not a staleness check: called with ref pinned to the
     landing SHA the vendored copy was cut from, it is expected to be ALWAYS GREEN —
@@ -5172,10 +5229,10 @@ def check_schema_drift(
     Negative-spec (git scoping): `doe_repo_path` is a DIFFERENT repository from the
     one this process runs in, and `git -C` alone does not scope to it — an inherited
     `GIT_DIR` (git exports one to every hook it runs, often as a relative `"."`)
-    still wins over discovery. Unscoped, this `git show` reads whichever schema the
+    still wins over discovery. Unscoped, this read takes whichever schema the
     LOCAL repo happens to have at that path and reports the byte difference as DoE
     drift, with a direction inferred from the wrong side. The read therefore runs
-    with `git_scope.scoped_git_env()` and is preceded by
+    with `git_scope.scoped_git_env()` (inside `scoped_cat_file_batch`) and is preceded by
     `foreign_repo_unusable_reason`, so "could not reach the DoE clone" raises as
     exactly that rather than as a tamper finding.
     """
@@ -5372,6 +5429,23 @@ _AHEAD_RETENTION_EXEMPT_PATHS: frozenset[tuple] = frozenset(
 # never reaches this retention check at all (D1's ruling: `$comment`
 # carries no schema semantics).
 _PROSE_ANNOTATION_LEAF_KEYS: frozenset[str] = frozenset({"description", "x-bump-note"})
+
+# Position scoping for the carve-out: a leaf is the annotation KEYWORD only
+# when its parent is a schema object. Under a property-name map the key names a
+# domain property; under `const`/`enum` it is instance data the validator
+# compares against. Either way the value is validation-bearing.
+_SCHEMA_NAME_MAP_KEYS: frozenset[str] = frozenset(
+    {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
+)
+_INSTANCE_DATA_KEYS: frozenset[str] = frozenset({"const", "enum"})
+
+
+def _is_prose_annotation_path(path: tuple) -> bool:
+    if not path or path[-1] not in _PROSE_ANNOTATION_LEAF_KEYS:
+        return False
+    if len(path) >= 2 and path[-2] in _SCHEMA_NAME_MAP_KEYS:
+        return False
+    return not any(seg in _INSTANCE_DATA_KEYS for seg in path[:-1])
 
 
 def check_schema_ahead_of_doe(
@@ -5584,7 +5658,7 @@ def check_schema_ahead_of_doe(
         local_value = local_flat[path]
         if local_value == doe_value:
             continue
-        is_prose_annotation_path = bool(path) and path[-1] in _PROSE_ANNOTATION_LEAF_KEYS
+        is_prose_annotation_path = _is_prose_annotation_path(path)
         if (
             is_prose_annotation_path
             and isinstance(local_value, str)
@@ -6692,6 +6766,17 @@ def _parse_inline_list(text: str) -> list:
     return items
 
 
+def _unquote_key(key: str) -> str:
+    """A fully single- or double-quoted mapping key as its bare text.
+
+    Writers quote YAML 1.1 boolean-looking keys (`'on': ...`) so PyYAML keeps
+    them strings; read raw, the quotes would make the key a different string.
+    """
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in ('"', "'"):
+        return key[1:-1]
+    return key
+
+
 def _parse_yaml_lines(
     lines: list[str], start: int, base_indent: int, *, dup_keys: list[str] | None = None
 ) -> tuple[Any, int]:
@@ -6736,11 +6821,7 @@ def _parse_yaml_lines(
             i += 1
             continue
 
-        key = trimmed[:colon_idx].strip()
-        # A quoted key names the bare string: writers quote `'on'`/`'yes'` to
-        # dodge YAML 1.1's boolean reading, and the quotes are not the key.
-        if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
-            key = key[1:-1]
+        key = _unquote_key(trimmed[:colon_idx].strip())
         if dup_keys is not None and key in result:
             dup_keys.append(key)
         rest = trimmed[colon_idx + 1:].strip()

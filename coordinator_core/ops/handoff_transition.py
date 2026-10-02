@@ -220,8 +220,8 @@ Verb contracts (mirrored from the JS spec):
       whose stub_id/handoff_id matches. Never trusts the caller-supplied shipped
       claim as write-authoritative. Fails loud (exit_code=1, no write) if any id
       in the removal set does not currently resolve to deployment_state==shipped
-      (stale claim, unresolvable id, or regressed state) — mirrors
-      ship_and_archive's act-time terminality re-verification and guards the
+      (stale claim, unresolvable id, or regressed state) — an act-time
+      terminality re-verification that guards the
       shared-worktree carry-forward-laundering race
       (state/lessons-outbox — wsc-phase2-carryforward-laundering-guarded).
     - NARROW-OR-FLIP: ONLY IF blocked_by becomes empty after removal → flips
@@ -1023,7 +1023,7 @@ def build_ship_mutate(handoff_path: str) -> "tuple[Any, dict]":
     inside the SAME lock hold can wrap this mutate in its own composite
     callable instead of duplicating the deployment_state-flip logic. `_ship`
     itself is just the thinnest possible caller of this function; every
-    other existing caller (`handoff_ship_archive.py`, `handoff_close_origin_stub.py`,
+    other existing caller (`handoff_close_origin_stub.py`,
     `handoff_archive_transition.py`, this module's own `transition` verb
     dispatch) is unaffected.
 
@@ -1469,17 +1469,10 @@ def build_implemented_plan_index(worktree: Path) -> dict:
 
     The single join between a handoff's ``deliverable_id`` and the plan that
     governs it — ``_find_implemented_governing_plan`` below is a lookup over
-    this index and owns no scan of its own, so the reaper
-    (``coordinator/bin/reap-orphaned-in-flight-handoffs.py``) and the
-    ``_unclaim`` refusal cannot drift apart on what "governed by an
-    implemented plan" means.
-
-    Exists as a separate entry point because the two callers have opposite
-    shapes: ``_unclaim`` resolves ONE handoff per process, where a scan per
-    call is free, while the reaper resolves one per orphan in a single
-    process — measured at 406ms of process time for 16 orphans against a
-    533-plan corpus when each lookup rescanned, against a 500ms end-to-end
-    budget for the whole run. Deliberately NOT memoized at module scope: the
+    this index and owns no scan of its own, so every caller agrees on what
+    "governed by an implemented plan" means. A caller resolving many handoffs
+    in one process builds the index once and looks each one up, rather than
+    rescanning per handoff. Deliberately NOT memoized at module scope: the
     warm engine is a long-lived process and a cached index would answer from
     a corpus that has since moved on.
 
@@ -1930,10 +1923,8 @@ def _unclaim(
         # above is unconditional and never reads `blocked_by`, so unclaiming a
         # blocked node wrote `ready_to_fire` straight into
         # `_cf_ready_to_fire_no_unresolved_blocked_by`, which refuses it: the
-        # transition aborted, the dead holder's claim stood, and
-        # `reap-orphaned-in-flight-handoffs` re-reported rc=1 on that node every
-        # morning with nothing able to clear it. Reported by coordinator-content-repo-em
-        # 2026-08-31; routed through the small-items baton.
+        # transition aborted and the dead holder's claim stood with nothing
+        # able to clear it.
         #
         # Routing through the TIGHTEN-ONLY seam rather than adding a second
         # readiness rule here: `_apply_derived_readiness` already parks exactly

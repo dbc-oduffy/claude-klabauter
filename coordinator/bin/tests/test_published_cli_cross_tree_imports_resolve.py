@@ -54,7 +54,8 @@ def _exported_names(path: pathlib.Path) -> set[str]:
 
     The re-export leg is load-bearing: `records_query` offers `route_mutation`
     only by importing it from `cc_invoke`, and a scan without this leg reports a
-    working import as broken.
+    working import as broken. Names a module serves through PEP 562
+    `__getattr__` are declared in its `_LAZY_NAMES` set and count as exported.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
@@ -68,6 +69,12 @@ def _exported_names(path: pathlib.Path) -> set[str]:
             for t in node.targets:
                 if isinstance(t, ast.Name):
                     names.add(t.id)
+                    if t.id == "_LAZY_NAMES":
+                        names.update(
+                            c.value
+                            for c in ast.walk(node.value)
+                            if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                        )
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):

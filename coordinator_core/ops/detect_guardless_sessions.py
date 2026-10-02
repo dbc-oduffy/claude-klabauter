@@ -162,13 +162,13 @@ def _plugin_dir_value(command_line: str) -> Optional[str]:
 
 def _resolved_coordinator_plugin_dir() -> Optional[str]:
     try:
-        from coordinator_core.resolution.facade import resolve_operator_config
+        from coordinator_core.content_root import read_content_root
         from coordinator_core.data_root import content_root_for
 
-        content_root = resolve_operator_config()["content_root"]
+        resolved_root = read_content_root()
     except Exception:
         return None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(resolved_root)
     if content_root is None:
         return None
     return os.path.normcase(os.path.normpath(str(content_root)))

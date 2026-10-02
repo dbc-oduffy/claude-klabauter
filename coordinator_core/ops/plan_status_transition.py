@@ -134,11 +134,9 @@ Negative-spec:
 
 Commit ownership (2026-08-05): a real (non-no-op) flip is committed by THIS op,
 scoped to exactly the plan path it just wrote, immediately after the write lands
-(``_commit_plan_flip``, called from ``_stamp_implemented``). Follows the
-writer-commits shape ``coordinator_core.ops.handoff_ship_archive`` already
-proves: the write and its commit land together so the op never exits with the
-stamp left as an unswept dirty working-tree edit -- this op mirrors that, not
-a second invented shape. Only fires on the
+(``_commit_plan_flip``, called from ``_stamp_implemented``). Writer-commits
+shape: the write and its commit land together so the op never exits with the
+stamp left as an unswept dirty working-tree edit. Only fires on the
 fallback-plain-write branch's/``locked_rmw`` branch's real flip
 (``_state["flipped"]``) AND when a git repo was resolved for the plan path
 (``git_common_dir``/``worktree_root`` both non-None) -- the dry-run
@@ -305,6 +303,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_nested_field,
     rebuild,
     remove_fm_field,
+    stamp_approved_body_sha,
     replace_fm_field,
     split_frontmatter,
     unquote_yaml_scalar,
@@ -3157,7 +3156,10 @@ def _stamp_rung(
         fm_text = replace_fm_field(split.fm_text, "status", target_status)
         _state["flipped"] = True
         _state["prior_status"] = status
-        return rebuild(split, fm_text)
+        flipped_text = rebuild(split, fm_text)
+        if target_status == "approved":
+            return stamp_approved_body_sha(flipped_text)
+        return flipped_text
 
     written_text: Optional[str] = None
     if git_common_dir is not None:

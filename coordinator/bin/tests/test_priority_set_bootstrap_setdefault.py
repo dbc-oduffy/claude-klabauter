@@ -16,8 +16,7 @@ branch and the rebind branch did not distinguish "already bound" from
 This module asserts the fixed behaviour on `priority-set.py`, used here as
 one representative door for the whole `_bootstrap_imports()` family
 (`goal-close-day.py`, `set-goal-kr-status.py`, `query-handoff-columns.py`,
-`reap-integrated-review-findings.py`, `reap-orphaned-in-flight-handoffs.py`,
-`reap-sessions.py` share the identical shape and were fixed identically,
+`reap-integrated-review-findings.py`, `reap-sessions.py` share the identical shape and were fixed identically,
 each via a `globals().setdefault(...)` publish loop instead of a bare
 `global` rebind).
 

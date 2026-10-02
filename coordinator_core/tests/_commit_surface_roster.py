@@ -59,6 +59,8 @@ EXCLUDED_MODULES = {
         "the peer's active rewrite surface under external_gate[0]; no deletion row here.",
     "coordinator_core/git/commit_context.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/correction_note.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_signing.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_delta.py":
@@ -78,11 +80,11 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/git_objects.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/hook_dispositions.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/index_write.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/ls_files.py":
-        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
-    "coordinator_core/git/ls_files_bytes.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/published_tree_classification.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
@@ -108,6 +110,8 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_admission.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/commit_companion.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_exec_bit.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_path_legality.py":
@@ -115,6 +119,8 @@ EXCLUDED_MODULES = {
     "coordinator_core/ops/ceremony/commit_message.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/commit_reconcile.py":
+        "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
+    "coordinator_core/ops/ceremony/commit_source.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/completion_entry.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",

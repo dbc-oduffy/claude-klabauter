@@ -34,9 +34,9 @@ import-time graph that actually executes when ``dispatch`` is imported and
 becomes callable, which is what "reachable from evaluate_payload_json"
 means for a spawn-timeout audit. A few guard modules also carry FUNCTION-
 LOCAL imports for unrelated (non-subprocess) call-time resolution (e.g.
-``commit_tripwires._resolve_doe_coordinator_root``'s deferred
-``coordinator_core.ops.coordinator_content_root`` import) -- those are a
-separate lazy-reachability question this test does not attempt to answer,
+``commit_tripwires._resolve_plugin_content_root``'s deferred
+``coordinator_core.content_root`` import) -- those are a
+distinct lazy-reachability question this test does not attempt to answer,
 and none of the actual subprocess call sites found during this hardening
 pass were hidden behind one. ``if TYPE_CHECKING:`` blocks are skipped
 (never execute at runtime).

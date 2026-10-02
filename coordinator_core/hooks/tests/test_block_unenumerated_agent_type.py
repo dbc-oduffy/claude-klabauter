@@ -8,7 +8,6 @@ import pytest
 
 import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
-from coordinator_core.content_root_pointer import read_content_root_pointer
 
 
 def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -460,7 +459,7 @@ def test_fixture_roster_allows_harness_builtins_and_regression_plugin_types(
 def test_fixture_roster_allows_via_check_not_just_resolve_roster(
     monkeypatch: pytest.MonkeyPatch, content_root: Path, plugin_home: Path
 ) -> None:
-    monkeypatch.setattr(mod, "read_content_root_pointer", lambda: str(content_root))
+    monkeypatch.setattr(mod, "read_content_root", lambda: str(content_root))
     monkeypatch.setattr(mod, "_home_dir", lambda: str(plugin_home))
     _patch_opus_gate_noop(monkeypatch)
     for subagent_type in (

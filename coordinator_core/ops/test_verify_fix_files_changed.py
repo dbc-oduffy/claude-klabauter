@@ -22,7 +22,7 @@ def _git(repo, *args):
         check=True,
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    )  # popup-safe-env-suppressed
 
 
 @pytest.fixture

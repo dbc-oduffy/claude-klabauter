@@ -123,8 +123,7 @@ the five legs behaving differently from the others on the same trust
 question would itself be the defect; a caller must not be able to tell
 which leg resolved a stub from close-precision alone.
 
-Compose, don't reimplement (mirrors ``handoff_ship_archive.py``'s composition
-shape exactly — same three primitives, same in-process call convention):
+Compose, don't reimplement — three primitives, each called in-process:
   1. ``handoff.has_live_children`` guard (``handoff_children._handoff_has_live_children``,
      called in-process, not a second JSON-RPC round trip) — the live-children
      guard runs UNCONDITIONALLY before any stamp is attempted. Tri-state:
@@ -135,8 +134,8 @@ shape exactly — same three primitives, same in-process call convention):
   2. ``handoff.stamp`` (``handoff_stamp._handler``) — stamps ``shipped_in:
      <sha>`` when an optional ``sha`` param is supplied and the field is
      absent (idempotent). Skipped entirely when no ``sha`` is supplied
-     (graceful partial, same choice ``handoff_ship_archive.py`` makes — see
-     its negative-spec "Does NOT fall back to a branch-tip SHA").
+     (graceful partial — see this module's negative-spec "Does NOT fall
+     back to a branch-tip SHA").
   3. ``handoff.transition`` ``ship`` verb (``handoff_transition._ship``) —
      deployment_state → shipped, in place, NO git mv (mirrors the bash's
      ``coordinator-handoff-archive.sh <stub> --stamp-only`` contract exactly:
@@ -163,16 +162,16 @@ pattern in this codebase (see ``_repair_archived_shipped_in_handler`` in
 is missing is weak evidence in either direction; check the registries.
 
 Negative-spec (hard-won):
-  - Does NOT implement roll-up/derivation logic — that is the separate
-    deferred lvv-09 cadence-sweep backstop. This is the exact-pair-join
-    proactive path only (bash's own negative-spec, preserved).
+  - Does NOT implement roll-up/derivation logic. The backstop for a missed
+    close event is ``origin_stub_staleness.survey``, which reports on the
+    day-cadence orient brief and never flips; its remedy is re-running this
+    op with the evidence record. This is the exact-pair-join proactive path
+    only (bash's own negative-spec, preserved).
   - Does NOT git mv / archive the closed stub — stamp-only, mirrors
     ``coordinator-handoff-archive.sh --stamp-only`` exactly. Archival is a
     separate, later concern (fleet.archive_shipped_handoffs / boot_sweep).
   - Does NOT fall back to a branch-tip SHA when no ``sha`` param is supplied
-    and no session-derived sha resolves — mirrors ``handoff_ship_archive.py``'s
-    explicit choice (its negative-spec: "Does NOT fall back to a branch-tip
-    SHA"). Absence of evidence is not a fallback: a session-derived sha is
+    and no session-derived sha resolves. Absence of evidence is not a fallback: a session-derived sha is
     used ONLY when the session's own commit set (via
     ``ops.session_commits :: resolve_session_commits``, C4/C5,
     docs/plans/2026-08-18-a-session-always-has-a-baton.md) contains a commit
@@ -180,13 +179,12 @@ Negative-spec (hard-won):
     commit that merely postdates the session. When ``session_id`` is
     supplied but resolves no such commit for a given stub, ``shipped_in`` is
     left unstamped for that stub exactly as it was before this leg existed
-    (graceful partial, same choice ``handoff_ship_archive.py`` makes). An
+    (graceful partial). An
     explicit ``sha`` param, when supplied, always wins over the
     session-derived resolution — it is a stronger, caller-asserted claim.
     ``session_id`` therefore is USED now (see ``_session_derived_sha``),
-    closing the gap the port proposal's param contract left open (mirrors
-    ``handoff.ship_and_archive``'s caller contract, not ``handoff.stamp``'s —
-    ``handoff.stamp`` has no ``session_id`` param at all).
+    closing the gap the port proposal's param contract left open
+    (``handoff.stamp`` has no ``session_id`` param at all).
   - Does NOT walk the baton-walk leg off ``plan_path`` — plans
     (``docs/plans/*.md``) are not part of the handoff DAG (``walk_forward``
     only knows ``state/handoffs/`` + ``archive/handoffs/`` nodes). A
@@ -240,7 +238,6 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
 from coordinator_core.dag import _read_meta, walk_forward
-from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live
 from coordinator_core.ops._path_guard import contained_path
@@ -251,6 +248,11 @@ from coordinator_core.ops.handoff_children import (
 )
 from coordinator_core.ops.handoff_stamp import _handler as _stamp_handler
 from coordinator_core.ops.handoff_transition import _ship
+from coordinator_core.ops.origin_stub_staleness import (
+    is_baton_kind,
+    read_closes_stubs,
+    read_pair,
+)
 from coordinator_core.ops.session_commits import (
     resolve_session_commits as _resolve_session_commits_primitive,
 )
@@ -258,43 +260,6 @@ from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
 
-
-# Membership is EXPLICIT, not derived from `baton_class()`, and that is a
-# finding rather than a shortcut. This set's members do not share one
-# `baton_class`: `spinoff` derives `deflection` while `spinoff-roadmap` /
-# `roadmap-baton` derive `intention`. A `baton_class()`-based predicate here
-# would both WIDEN the set (pulling in every other `deflection` kind) and
-# NARROW it (dropping `roadmap-baton`, which is what the migrated live
-# records actually carry) -- so it would silently change behaviour in two
-# directions at once. Preserving the membership beats deriving it.
-#
-# Legacy values are retained PERMANENTLY, not time-boxed: sibling repos still
-# carry pre-rename values on disk after this repo's records have migrated, and
-# a half-migrated fleet is the normal state of a fleet vocabulary change.
-#
-# The retired/successor pair is sourced from the canonical `_PRE_RENAME_ALIASES`
-# table via `kind_values_for_canonical()` instead of being spelled as a literal
-# collection here (AC4 -- see `test_baton_class_is_the_only_membership_set.py`).
-_BATON_KINDS = frozenset(
-    {"spinoff"} | set(kind_values_for_canonical("roadmap-baton"))
-)
-
-def _is_baton_kind(kind: str | None) -> bool:
-    """Origin-stub kinds this op is allowed to close (mirrors the bash's
-    `spinoff|spinoff-roadmap` case match).
-
-    C3 (baton-kind-vocabulary migration): retires the former
-    `_BATON_KINDS = {"spinoff", "spinoff-roadmap"}` set in favor of the
-    canonical `baton_class()` derivation (C2/D2) plus one explicit
-    compatibility literal.
-
-    FINDING — the original two-member set does not correspond to one
-    `baton_class`: `spinoff` derives `deflection`, but `spinoff-roadmap`
-    (D1's still-live pre-rename source name for `roadmap-baton`) derives
-    `intention`. Preserved verbatim, not silently narrowed — report only,
-    per this chunk's brief.
-    """
-    return kind in _BATON_KINDS
 
 #: Deployment_state values UNCONDITIONALLY eligible for closure — no
 #: liveness check needed (mirrors the bash's `ready_to_fire|awaiting_gate`
@@ -326,16 +291,6 @@ def _err(msg: str) -> dict:
     }
 
 
-def _read_pair(meta: dict) -> Optional[Tuple[str, str]]:
-    rid = meta.get("roadmap_id")
-    sid = meta.get("stub_id")
-    rid_s = rid.strip() if isinstance(rid, str) else ""
-    sid_s = sid.strip() if isinstance(sid, str) else ""
-    if rid_s and sid_s:
-        return (rid_s, sid_s)
-    return None
-
-
 def _resolve_input_path(
     raw_path: str, worktree: Path, allowed_roots: List[Path]
 ) -> Optional[Path]:
@@ -353,7 +308,7 @@ def _direct_pair(
     resolved = _resolve_input_path(raw_path, worktree, allowed_roots)
     if resolved is None or not resolved.is_file():
         return None
-    return _read_pair(_read_meta(str(resolved)))
+    return read_pair(_read_meta(str(resolved)))
 
 
 def _baton_walk_pair(
@@ -369,9 +324,9 @@ def _baton_walk_pair(
         if abs_path == start_abs:
             continue
         meta = walk["nodes"].get(abs_path, {})
-        if not _is_baton_kind(meta.get("kind")):
+        if not is_baton_kind(meta.get("kind")):
             continue
-        pair = _read_pair(meta)
+        pair = read_pair(meta)
         if pair is not None:
             return pair
     return None
@@ -451,28 +406,14 @@ def _deliverable_id_pair(
         if not p.is_file():
             continue
         meta = _read_meta(str(p))
-        if not _is_baton_kind(meta.get("kind")):
+        if not is_baton_kind(meta.get("kind")):
             continue
         if _read_deliverable_id(meta) != target:
             continue
-        pair = _read_pair(meta)
+        pair = read_pair(meta)
         if pair is not None:
             return pair
     return None
-
-
-def _read_closes_stubs(meta: dict) -> List[Tuple[str, str]]:
-    raw = meta.get("closes_stubs")
-    if not isinstance(raw, list):
-        return []
-    pairs: List[Tuple[str, str]] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        pair = _read_pair(entry)
-        if pair is not None:
-            pairs.append(pair)
-    return pairs
 
 
 def _read_predecessor_handoff(meta: dict) -> Optional[str]:
@@ -513,7 +454,7 @@ async def _predecessor_handoff_stub(
 
     Returns:
       - ``(stub_path, None)`` — resolved to a readable, baton-kind
-        (``_is_baton_kind``) stub that is state-eligible per
+        (``is_baton_kind``) stub that is state-eligible per
         ``_stub_state_eligibility`` (the SAME eligibility ladder
         ``_scan_matches`` uses — see that function's own docstring for why a
         second literal of the ladder is refused).
@@ -533,7 +474,7 @@ async def _predecessor_handoff_stub(
     if resolved is None or not resolved.is_file():
         return None, None
     meta = _read_meta(str(resolved))
-    if not _is_baton_kind(meta.get("kind")):
+    if not is_baton_kind(meta.get("kind")):
         return None, None
     eligible, deployment_state, exclusion_reason = await _stub_state_eligibility(
         resolved, meta, common_dir
@@ -644,9 +585,9 @@ async def _scan_matches(
         if not p.is_file():
             continue
         meta = _read_meta(str(p))
-        if not _is_baton_kind(meta.get("kind")):
+        if not is_baton_kind(meta.get("kind")):
             continue
-        pair = _read_pair(meta)
+        pair = read_pair(meta)
         if pair != (roadmap_id, stub_id):
             continue
         eligible, deployment_state, exclusion_reason = await _stub_state_eligibility(
@@ -880,8 +821,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                      absent (idempotent). Takes precedence over any
                      session_id-derived sha. Absent (and no session-derived
                      sha resolves) -> shipped_in stamp is skipped (graceful
-                     partial, mirrors handoff.ship_and_archive's
-                     negative-spec).
+                     partial, module negative-spec).
         delivery_proof (dict, optional) — a completed delivery proof for the
                      CLOSING plan, letting a positive, complete delivery
                      proof close the origin stub directly instead of relying
@@ -1075,7 +1015,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             handoff_path, worktree, [handoffs_dir, archive_dir]
         )
         if handoff_resolved is not None and handoff_resolved.is_file():
-            _record(_read_pair(_read_meta(str(handoff_resolved))), "direct")
+            _record(read_pair(_read_meta(str(handoff_resolved))), "direct")
 
     if handoff_resolved is not None and handoff_resolved.is_file():
         _record(_baton_walk_pair(handoff_resolved, handoffs_dir), "baton_walk")
@@ -1089,7 +1029,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _record(_deliverable_id_pair(deliverable_id, handoffs_dir, worktree), "deliverable_id")
 
     if plan_resolved is not None and plan_resolved.is_file():
-        for pair in _read_closes_stubs(_read_meta(str(plan_resolved))):
+        for pair in read_closes_stubs(_read_meta(str(plan_resolved))):
             _record(pair, "closes_stubs")
 
     direct_stubs: List[Tuple[Path, str]] = []
@@ -1146,7 +1086,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if (
                 isinstance(raw_closes, list)
                 and raw_closes
-                and not _read_closes_stubs(meta)
+                and not read_closes_stubs(meta)
             ):
                 contradictory.append(rel_id(resolved, worktree))
 

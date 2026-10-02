@@ -1757,6 +1757,43 @@ def remove_superseded_python_forwarders(
     return removed
 
 
+#: Cause prefix distinguishing this plane's `cold_failed` rows in the shared
+#: `warm.telemetry` degrade sink from every other plane's.
+INSTALL_DOOR_DEGRADE_CAUSE_PREFIX = "install-door:"
+
+
+def record_install_door_degrade(name: str, exc: BaseException, engine_root: Optional[Path] = None) -> None:
+    """Durably record that `name` was left on its Python forwarder because its
+    native door build failed. Never raises into the install."""
+    try:
+        from coordinator_core.warm.telemetry import KIND_COLD_FAILED, record_degrade
+
+        record_degrade(
+            kind=KIND_COLD_FAILED,
+            cause=f"{INSTALL_DOOR_DEGRADE_CAUSE_PREFIX}{name}: {exc}",
+            engine_root=engine_root,
+        )
+    except Exception:  # noqa: BLE001 -- the record may never fail the install
+        pass
+
+
+def install_door_degrade_rows(engine_root: Optional[Path] = None) -> list:
+    """The `degrade_samples` rows written by `record_install_door_degrade`.
+    Never raises: an unreadable or absent sink reads as `[]`."""
+    try:
+        from coordinator_core.warm.telemetry import KIND_COLD_FAILED, degrade_samples
+
+        rows = degrade_samples(engine_root)
+    except Exception:  # noqa: BLE001 -- advisory reader
+        return []
+    return [
+        row
+        for row in rows
+        if row.get("kind") == KIND_COLD_FAILED
+        and str(row.get("cause", "")).startswith(INSTALL_DOOR_DEGRADE_CAUSE_PREFIX)
+    ]
+
+
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(

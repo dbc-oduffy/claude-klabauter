@@ -37,7 +37,7 @@ def test_no_commit_agent_no_preflight_no_commit_wave_phase_no_parallel_wrap():
     waves = [[_write_row("C1"), _write_row("C2")]]
     script = compose_script(waves, name="wf", description="two rows", **REVIEW_KW)
 
-    assert "coordinator:git-commit-agent" not in script
+    assert script.count("agentType: 'coordinator:git-commit-agent'") == 1
     assert "Preflight" not in script
     assert "Commit wave" not in script
     assert "parallel(" not in execute_section(script)

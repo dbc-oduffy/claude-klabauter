@@ -263,8 +263,8 @@ class TestKnownIncompleteRegistrationsLedger:
             f"{[(v.op_key, v.surfaces_missing) for v in filtered]}"
         )
 
-    def test_incomplete_registrations_ledger_never_grows(self) -> None:
-        assert len(_KNOWN_INCOMPLETE_REGISTRATIONS) <= 6
+    def test_incomplete_registrations_ledger_stays_drained(self) -> None:
+        assert _KNOWN_INCOMPLETE_REGISTRATIONS == {}
 
     def test_ledger_forgives_only_the_recorded_surface_not_the_whole_op(self) -> None:
         v = QuadViolation(
@@ -276,9 +276,9 @@ class TestKnownIncompleteRegistrationsLedger:
                 ("_EAGER_OP_MODULES", "coordinator_core/ops/__init__.py"),
             ),
         )
-        # The ledger only records OP_MODULE_MAP for this op -- _EAGER_OP_MODULES is a
+        # The baseline only records OP_MODULE_MAP for this op -- _EAGER_OP_MODULES is a
         # NEW, unrecorded gap and must survive pruning.
-        pruned = prune_known_incomplete(v)
+        pruned = prune_known_incomplete(v, {"distill.curate_clusters": ("OP_MODULE_MAP",)})
         assert pruned is not None
         assert pruned.surfaces_missing == ("_EAGER_OP_MODULES",)
 
@@ -299,4 +299,5 @@ class TestKnownIncompleteRegistrationsLedger:
             surfaces_missing=("OP_MODULE_MAP",),
             missing_surface_files=(("OP_MODULE_MAP", "coordinator_core/ops/_registry_map.py"),),
         )
-        assert filter_known_violations([v]) == []
+        baseline = {"memo.fate_backfill": ("OP_MODULE_MAP",)}
+        assert filter_known_violations([v], incomplete_baseline=baseline, suspended=frozenset()) == []

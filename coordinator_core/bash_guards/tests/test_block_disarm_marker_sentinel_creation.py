@@ -256,14 +256,13 @@ class TestReasonClassSpecificMessages:
     def test_indirection_deny_does_not_assert_creation(self):
         reason = _reason(guard.check(_payload("bash bin/some-script.sh")))
         assert "this command would create or modify the file" not in reason
-        assert "cannot examine" in reason
-        assert "NOT because the payload was found" in reason
+        assert "unreadable payload" in reason
         assert SENTINEL not in reason
 
     def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
         reason = _reason(guard.check(_payload('bash -c "touch %s"' % SENTINEL)))
         assert SENTINEL not in reason
-        assert "cannot examine" in reason
+        assert "unreadable payload" in reason
 
 
 class TestIndirectionWrapperShapesDeny:

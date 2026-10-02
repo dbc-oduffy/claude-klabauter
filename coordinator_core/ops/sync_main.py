@@ -3,25 +3,12 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import GitResult, run_git
 
-_GIT_TIMEOUT_SECS = 30
-
-
-def _git(*args: str) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(args=["git", *args], returncode=1, stdout="", stderr="timed out")
+def _git(*args: str, remote: bool = False) -> GitResult:
+    return run_git(list(args), remote=remote)
 
 
 def _is_git_repo() -> bool:
@@ -46,7 +33,7 @@ def _rev_list_count(range_spec: str) -> int:
 
 
 def _origin_main_reachable() -> bool:
-    r = _git("ls-remote", "--exit-code", "origin", "main")
+    r = _git("ls-remote", "--exit-code", "origin", "main", remote=True)
     return r.returncode == 0
 
 
@@ -92,7 +79,7 @@ def main(argv: list[str]) -> int:
 
     if current_branch == "main":
         info("On main — fetching and fast-forwarding...")
-        _git("fetch", "origin", "main")
+        _git("fetch", "origin", "main", remote=True)
 
         local_ahead = _rev_list_count("origin/main..HEAD")
         if local_ahead > 0:
@@ -102,7 +89,7 @@ def main(argv: list[str]) -> int:
                 "(Did a previous operation commit directly to main?)"
             )
 
-        pull = _git("pull", "--ff-only", "origin", "main")
+        pull = _git("pull", "--ff-only", "origin", "main", remote=True)
         if pull.returncode != 0:
             return die(
                 "Fast-forward pull failed. Local main has diverged from "
@@ -114,9 +101,9 @@ def main(argv: list[str]) -> int:
 
     else:
         info(f"On branch '{current_branch}' — updating local main ref from origin...")
-        refspec_fetch = _git("fetch", "origin", "main:main")
+        refspec_fetch = _git("fetch", "origin", "main:main", remote=True)
         if refspec_fetch.returncode != 0:
-            _git("fetch", "origin", "main")
+            _git("fetch", "origin", "main", remote=True)
             local_ahead = _rev_list_count(
                 "refs/remotes/origin/main..refs/heads/main"
             )

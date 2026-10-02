@@ -10,8 +10,8 @@ resolve-coordinator-clone) stay byte-identical between the live install copy
 the source-of-truth template copy shipped under coordinator/templates/bin/
 — so `coordinator/bin/publish.py` ships an up-to-date mirror to consumer
 projects, and so a live install never silently drifts from the fix DoE
-shipped in the template. See docs/wiki/portable-code-substrate.md and
-docs/wiki/eager-agent-calibration.md § Template mirrors.
+shipped in the template. See coordinator-content-repo coordinator/docs/wiki/portability/portable-code-substrate.md and
+Coordinator-content-repo coordinator/docs/wiki/dispatching-parallel-agents/eager-agent-calibration.md § Template mirrors.
 
 Modes:
     verify (default) — diff each pair; print one status line per pair;

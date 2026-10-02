@@ -57,7 +57,7 @@ Negative-spec:
     a directory/path-shape exemption.
 
 Spec backlink: docs/plans/2026-06-30-cross-platform-file-naming-helper.md § D1
-Tripwire entry: docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
+Tripwire entry: coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
 Ported from the retired DoE bash guard ``block-illegal-filename.sh``
   (deleted 2026-07-20, DoE ``e91827a7``); csn_check ported from DoE
   coordinator/bin/lib/coordinator-safe-name.sh (DoE ``721a71f4``, 2026-07-21)

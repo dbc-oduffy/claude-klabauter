@@ -242,3 +242,15 @@ def test_new_name_winning_records_nothing(sink, monkeypatch):
 
     assert engine_root.coordinator_engine_root_env("test.site") == "C:/new"
     assert recorded == []
+
+
+def test_a_code_defect_is_reported_once_not_swallowed(tmp_path, monkeypatch, capsys):
+    import coordinator_core.engine_root_census as census_mod
+
+    monkeypatch.setattr(census_mod, "_DEFECT_REPORTED", False)
+    monkeypatch.setattr(census_mod, "series_path", lambda _root: (_ for _ in ()).throw(TypeError("boom")))
+    census_mod.record_fallback_read("site-a", sink_root=tmp_path)
+    census_mod.record_fallback_read("site-b", sink_root=tmp_path)
+    err = capsys.readouterr().err
+    assert err.count("record_fallback_read defect") == 1
+    assert "boom" in err

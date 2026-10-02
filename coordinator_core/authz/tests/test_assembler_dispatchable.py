@@ -245,3 +245,32 @@ class TestAC7RegistryAndClassificationBacking:
         assert ASSEMBLER_DISPATCHABLE["learn_lessons_pipeline"] == (
             frozenset(CONSUMES_MANIFEST) | {STAMP_RUN_COMPLETE_OP}
         )
+
+
+@pytest.mark.parametrize("assembler_name", sorted(_BAREWORD_ASSEMBLERS))
+def test_every_bareword_assembler_member_resolves_by_its_own_unit(assembler_name) -> None:
+    """Per MEMBER, not per assembler: a bareword resolves through the
+    package's `_CLI_DISPATCH`, an op verb through its `_OP_DISPATCH` adapter or
+    the live `_REGISTRY` (with a classification). A mixed entry gets both halves
+    checked; no member is exempt because its siblings are barewords."""
+    import importlib
+
+    apply_mod = importlib.import_module(f"coordinator_core.{assembler_name}.apply")
+    cli_table = getattr(apply_mod, "_CLI_DISPATCH", None)
+    op_table = getattr(apply_mod, "_OP_DISPATCH", {})
+    if cli_table is None:
+        pytest.skip(f"{assembler_name}.apply has no _CLI_DISPATCH table to resolve against")
+    _discover_all_ops()
+    registry = _live_registry()
+    classification = _live_classification()
+    unresolved = sorted(
+        m
+        for m in ASSEMBLER_DISPATCHABLE.get(assembler_name, ())
+        if m not in cli_table
+        and m not in op_table
+        and not (m in registry and m in classification)
+    )
+    assert unresolved == [], (
+        f"{assembler_name} members that resolve to no CLI handler, no op adapter, "
+        f"and no registered+classified op: {unresolved!r}"
+    )

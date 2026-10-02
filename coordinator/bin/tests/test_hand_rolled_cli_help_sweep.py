@@ -13,7 +13,7 @@ exit code changed.
 Full failing-entrypoint capture: state/audits/2026-08-14-klabauter-publish-
 round-final4.txt (grep `(rc=`).
 
-`claude-author` is covered separately below (`TestClaudeDoeHelp`), not via the
+`claude-author` is covered separately below (`TestClaudeAuthorHelp`), not via the
 `_SWEPT_HELP_ENTRYPOINTS` sweep -- its 2026-08-14 gate failure was a
 publish-mirror registry-resolution failure (`repos.example_doctrine_repo`
 unset in that sandbox, resolving to nothing), not an unrecognized-`--help`
@@ -80,6 +80,17 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "staff-session-assemble.py",
     "sweep-terminal-handoffs.py",
     "workstream-complete-assemble.py",
+    "app-session.py",
+    "check-sidecar-fill.py",
+    "classify-engine-root-residue.py",
+    "coordinator-cockpit-emit-schema.py",
+    "coordinator-install.py",
+    "coordinator-invoke.py",
+    "percolate-liveops-preflight.py",
+    "query-work-state.py",
+    "quick-wrap-assemble.py",
+    "roadmap-planning-assemble.py",
+    "sprint-planning-assemble.py",
 )
 
 
@@ -108,7 +119,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
 # caught by `test_candidate_population_has_no_untracked_entrypoints` below,
 # forcing an explicit disposition instead of silent non-coverage.
 _SEPARATELY_TESTED_ENTRYPOINTS = frozenset({
-    "claude-author.py",  # TestClaudeDoeHelp, whole-argv scan, its own env staging
+    "claude-author.py",  # TestClaudeAuthorHelp, whole-argv scan, its own env staging
     "coordinator-safe-commit.py",  # exercised via exported main/usage, not a bare subprocess spawn
 })
 
@@ -354,6 +365,38 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "workweek-complete-reverse-drift-gate.py",
     "workweek-trail-scope.py",
     "write-workday-start-marker.py",
+    # Population drift found when the 11 entrypoints above were dispositioned: --help
+    # behaviour not verified here (some treat the flag as a positional argument).
+    "_hook_cost_probe.py",
+    "_validate-code-comparison-record-checker.py",
+    "archive-auto-memory-rows.py",
+    "check-launch-shape.py",
+    "check-provisional-expiry.py",
+    "claude-home.py",
+    "coordinator-delegation.py",
+    "coordinator-git-maintenance.py",
+    "doc-index.py",
+    "door-serving-census.py",
+    "emit-dispatch-workflow.py",
+    "emit-effective-delivery.py",
+    "execute-plan-assemble.py",
+    "expired-plan-gates.py",
+    "generate-doctrine-surface-split.py",
+    "group-em-watch.py",
+    "handoff-housekeeping.py",
+    "hollow-completion-record-sweep.py",
+    "hook-run.py",
+    "host-gpu-probe.py",
+    "mise-prep-gate.py",
+    "reap-claims-for-repos.py",
+    "review-findings-ledger.py",
+    "review-stamp.py",
+    "subagent-statusline.py",
+    "survey-consume-gate.py",
+    "sweep-terminal-sizings.py",
+    "validate-code-comparison-record.py",
+    "warm-serve-partition.py",
+    "workflow-watch.py",
 })
 
 
@@ -485,7 +528,7 @@ class TestHandRolledCliHelpSweep(unittest.TestCase):
             )
 
 
-class TestClaudeDoeHelp(unittest.TestCase):
+class TestClaudeAuthorHelp(unittest.TestCase):
     """`claude-author --help`/`-h` must exit 0 WITHOUT touching DoE-clone
     registry resolution -- see claude-author.py's `_USAGE` / module header.
     """

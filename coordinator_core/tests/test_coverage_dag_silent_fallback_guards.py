@@ -18,7 +18,7 @@ two tests that pinned ITS Guard-2 behaviour directly —
 `test_fixpoint_propagates_handoff_read_failure_to_indeterminate` (the
 end-to-end blocker-read-failure site) — retire with it, along with their
 now-unused `_make_closing_only_repo`/`_git`/`_init_repo` fixture scaffolding.
-The remaining tests below pin `_handoff_session_live` and
+The remaining tests below pin
 `_get_handoff_claimed_by`/`_parse_handoff_claimed_by` directly — those
 helpers have live production consumers outside this module (see
 `_get_handoff_claimed_by`'s own docstring) and are unaffected by the cut.
@@ -42,17 +42,6 @@ def clear_frontmatter_cache():
     dag._FRONTMATTER_CACHE.clear()
     yield
     dag._FRONTMATTER_CACHE.clear()
-
-
-def test_handoff_session_live_surfaces_note_on_read_failure(tmp_path: Path) -> None:
-    missing_path = str(tmp_path / "does-not-exist.md")
-
-    is_live, note = cov._handoff_session_live(missing_path, frozenset())
-
-    assert is_live is True, "must stay conservative-live on read failure"
-    assert note is not None, "must surface a note distinguishing this from a clean None"
-    assert "_get_handoff_claimed_by raised" in note
-    assert "FileNotFoundError" in note
 
 
 def test_get_handoff_claimed_by_contract_unchanged_on_read_failure(

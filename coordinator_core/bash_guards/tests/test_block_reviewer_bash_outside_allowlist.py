@@ -101,6 +101,33 @@ def test_confined_type_arg_at_end_of_command_allows(monkeypatch):
     assert guard.check(payload) is None
 
 
+def test_confined_review_probe_scaffold_allows(monkeypatch):
+    _confine(monkeypatch)
+    for cmd in (
+        f"{_CLAUDE_KLABAUTER_ABS_PATH} --type review-probe",
+        f"python3 {_CLAUDE_KLABAUTER_ABS_PATH} --type review-probe",
+    ):
+        assert guard.check(_payload(cmd, agent_type=_CONFINED_TYPE)) is None
+
+
+@pytest.mark.parametrize("out_form", ["--out /tmp/x.py", "--out=/tmp/x.py"])
+def test_confined_review_probe_with_out_denies(monkeypatch, out_form):
+    _confine(monkeypatch)
+    cmd = f"{_CLAUDE_KLABAUTER_ABS_PATH} --type review-probe {out_form}"
+    result = guard.check(_payload(cmd, agent_type=_CONFINED_TYPE))
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "--out" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_confined_review_probe_word_boundary_denies(monkeypatch):
+    _confine(monkeypatch)
+    cmd = f"{_CLAUDE_KLABAUTER_ABS_PATH} --type review-probeXYZ"
+    result = guard.check(_payload(cmd, agent_type=_CONFINED_TYPE))
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_bash_prefixed_invocation_now_denies(monkeypatch):
     _confine(monkeypatch)
     cmd = f"bash {_CLAUDE_KLABAUTER_ABS_PATH} --type review-findings"

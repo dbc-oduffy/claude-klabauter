@@ -6,7 +6,7 @@ Purpose: checks that super-skill SKILL.md `§ <section>` anchor citations
 resolve — **path-directed**. Each citation names its own target file:
 
     `coordinator/snippets/em-operating-doctrine.md` § How to Plan and Hand Off
-    docs/wiki/scoped-safety-commits.md § Current Doctrine
+    coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md § Current Doctrine
     ~/.claude/CLAUDE.md § Engineering Defaults
 
 For each citation the gate resolves the path THAT citation names, reads THAT

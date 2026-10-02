@@ -498,6 +498,7 @@ def _parked_line(
     who = f"{name} [{session_id}]" if name else str(session_id)
     return (
         f"PARKED session={who} reason={reason} "
+        f"at={watch_heartbeat.iso_instant(now.timestamp())} "
         f"stamped_age={_fmt_seconds(stamped_age)} "
         f"transcript_idle={_fmt_seconds(transcript_idle)} "
         f"obligations={obligations_summary} "

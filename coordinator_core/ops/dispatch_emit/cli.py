@@ -87,6 +87,9 @@ from coordinator_core.ops.dispatch_emit.op import (
     _dispatch_emit,
     restamp,
 )
+from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
+from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
@@ -180,10 +183,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="existing sizing under state/sizings/; the same entry as --ask --sizing",
     )
     parser.add_argument(
+        "--writes",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="a file in the ask's footprint (repeatable; --ask/--sizing only); "
+        "a path outside the repo root is refused at emit",
+    )
+    parser.add_argument(
         "--restamp",
         default=None,
         metavar="SCRIPT",
         help="re-stamp an emission receipt's sha256 over SCRIPT after a deliberate edit",
+    )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        metavar="CONTINUANCE",
+        help="re-emit every lane inventory beside a mise continuance record "
+        "(state/mise-inventory/<run-id>-continuance.md), leaving out each row whose "
+        "plan spine row is already coded; --out is the base, each lane writes "
+        "<base>-<lane>.workflow.mjs",
     )
     parser.add_argument(
         "--mark-landed",
@@ -379,6 +399,124 @@ def _print_workflow_invocation(
             )
 
 
+def _part_out_path(out_path: str, index: int) -> str:
+    out = Path(out_path)
+    stem = out.name[: -len(_REQUIRED_OUT_SUFFIX)]
+    return str(out.with_name(f"{stem}-p{index}{_REQUIRED_OUT_SUFFIX}"))
+
+
+def _emit_inventory_parts(
+    params: dict,
+    repo_root: "Optional[Path]",
+    over: ScriptOverCapError,
+    fire: bool,
+    admission_record: dict,
+) -> int:
+    """Cut an over-cap inventory into whole-plan parts, each its own
+    `<run_id>-pN` spine and `-pN.workflow.mjs` script. The part count grows
+    until every part composes under the cap; parts are fired in order."""
+    count = max(2, -(-over.script_size * 11 // (_emit._WORKFLOW_SCRIPT_BYTE_CAP * 10)))
+    while True:
+        results: list = []
+        try:
+            for index in range(1, count + 1):
+                part_params = {
+                    **params,
+                    "inventory_part": [index, count],
+                    "output_path": _part_out_path(params["output_path"], index),
+                }
+                part_result = _dispatch_emit(part_params, repo_root=repo_root)
+                part_result["part"] = f"{index}/{count}"
+                results.append(part_result)
+            break
+        except ScriptOverCapError:
+            count += 1
+    print(
+        f"emit-dispatch-workflow: inventory over the {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte "
+        f"Workflow script cap ({over.row_count} rows); emitted {count} parts. "
+        "Fire them in order, each only after the previous run has landed.",
+        file=sys.stderr,
+    )
+    print(json.dumps({"parts": results, "admission": admission_record}, indent=2, sort_keys=True))
+    for part_result in results:
+        _print_workflow_invocation(part_result, is_queue_route=False, repo_root=repo_root)
+    if fire:
+        print(
+            "emit-dispatch-workflow: ERROR — --fire fires one script; the inventory was "
+            f"emitted as {count} parts, none fired",
+            file=sys.stderr,
+        )
+        return EXIT_DATA_ERROR
+    return EXIT_OK if all(r["ok"] for r in results) else EXIT_DATA_ERROR
+
+
+def _lane_inventories(record: Path) -> "list[Path]":
+    """The inventory records beside a continuance record: every `<run-id>*.md`
+    in its directory carrying a `## Chunk table`, minus the record itself and
+    the minted `.spine.md` files."""
+    from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+
+    run_id = read_frontmatter_field(str(record), "run_id") or record.name.removesuffix(
+        "-continuance.md"
+    )
+    lanes = []
+    for candidate in sorted(record.parent.glob(f"{run_id}*.md")):
+        if candidate == record or candidate.name.endswith(".spine.md"):
+            continue
+        try:
+            if "## Chunk table" in candidate.read_text(encoding="utf-8"):
+                lanes.append(candidate)
+        except OSError:
+            continue
+    return lanes
+
+
+def _do_resume(args: argparse.Namespace) -> int:
+    record = Path(args.resume_from)
+    if not record.is_file():
+        print(f"emit-dispatch-workflow: ERROR — --resume-from {args.resume_from!r} is not a file", file=sys.stderr)
+        return EXIT_DATA_ERROR
+    lanes = _lane_inventories(record)
+    if not lanes:
+        print(
+            f"emit-dispatch-workflow: ERROR — no lane inventory with a `## Chunk table` "
+            f"beside {record.name}",
+            file=sys.stderr,
+        )
+        return EXIT_DATA_ERROR
+    repo_root = Path(args.repo_root).resolve() if args.repo_root else _default_repo_root_from_cwd()
+    out = Path(args.out_path)
+    base = out.name[: -len(_REQUIRED_OUT_SUFFIX)]
+    run_prefix = record.name.removesuffix("-continuance.md")
+    results = []
+    for lane_path in lanes:
+        lane = lane_path.stem.removeprefix(run_prefix).lstrip("-") or "main"
+        lane_out = out.with_name(f"{base}-{lane}{_REQUIRED_OUT_SUFFIX}")
+        params: dict = {
+            "inventory_path": str(lane_path),
+            "output_path": str(lane_out),
+            "skip_landed": True,
+            "force": args.force,
+        }
+        if repo_root is not None:
+            params["inventory_repo_root"] = str(repo_root)
+        try:
+            result = _dispatch_emit(params, repo_root=repo_root)
+        except NothingUnlandedError:
+            results.append({"lane": lane, "nothing_unlanded": True})
+            continue
+        except _DATA_ERRORS as exc:
+            print(f"emit-dispatch-workflow: ERROR — lane {lane}: {exc}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        result["lane"] = lane
+        results.append(result)
+    print(json.dumps({"lanes": results}, indent=2, sort_keys=True))
+    for result in results:
+        if "path" in result:
+            _print_workflow_invocation(result, is_queue_route=False, repo_root=repo_root)
+    return EXIT_OK if all(r.get("ok", True) for r in results) else EXIT_DATA_ERROR
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -403,9 +541,32 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_USAGE
         return _do_restamp(args.restamp)
 
+    if args.resume_from:
+        if args.plan or args.inventory or args.queue or args.profile or args.ask is not None or args.sizing or args.fire:
+            print(
+                "emit-dispatch-workflow: ERROR — --resume-from is exclusive of "
+                "--plan/--inventory/--queue/--profile/--ask/--sizing/--fire",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if not args.out_path or not Path(args.out_path).name.endswith(_REQUIRED_OUT_SUFFIX):
+            print(
+                f"emit-dispatch-workflow: ERROR — --resume-from needs --out ending {_REQUIRED_OUT_SUFFIX!r}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        return _do_resume(args)
+
     is_queue_route = bool(args.queue) or bool(args.profile)
 
     is_ask_route = args.ask is not None or bool(args.sizing)
+
+    if args.writes and not is_ask_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --writes is accepted only with --ask/--sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
 
     if is_ask_route and args.fire:
         print(
@@ -560,6 +721,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["ask"] = args.ask if args.ask is not None else True
         if args.sizing:
             params["sizing_path"] = args.sizing
+        if args.writes:
+            params["writes"] = list(args.writes)
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:
@@ -568,6 +731,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:
             params["max_rows"] = args.max_rows
+        inventory_root = repo_root or _default_repo_root_from_cwd()
+        if inventory_root is not None:
+            params["inventory_repo_root"] = str(inventory_root)
     if preamble_text is not None:
         params["preamble"] = preamble_text
         params["preamble_path"] = args.preamble_path
@@ -621,7 +787,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
 
     try:
-        result = _dispatch_emit(params, repo_root=repo_root)
+        try:
+            result = _dispatch_emit(params, repo_root=repo_root)
+        except ScriptOverCapError as over:
+            if not args.inventory:
+                raise
+            return _emit_inventory_parts(params, repo_root, over, args.fire, admission_record)
     except _DATA_ERRORS as exc:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
@@ -631,6 +802,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     _print_workflow_invocation(
         result, is_queue_route=is_queue_route, profile_dir=args.profile_dir, repo_root=repo_root
     )
+
+    for key in ("batons", "uncommitted"):
+        if key in result:
+            print(f"emit-dispatch-workflow: {key}: {json.dumps(result[key])}", file=sys.stderr)
 
     if not result["ok"]:
         return EXIT_DATA_ERROR

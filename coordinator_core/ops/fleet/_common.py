@@ -186,10 +186,10 @@ _SESSION_ID_ENV_KEYS: tuple = (
 # below requires before relaxing the perimeter — see also
 # _make_git_env's docstring.
 #
-# - COORDINATOR_SETTINGS_HOME: coordinator-prepare-commit-msg (_resolve_content_root)
+# - COORDINATOR_SETTINGS_HOME: coordinator-prepare-commit-msg (its content-root resolver)
 #   and the live post-commit hook both read
 #   ${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.coordinator-content-root;
-#   without it they silently resolve the wrong .coordinator-content-root.
+#   without it they silently resolve the wrong content root.
 # - USERPROFILE, HOMEDRIVE, HOMEPATH: on native Windows HOME is normally
 #   unset, so without these git-for-Windows cannot find global .gitconfig
 #   (no user.email) and `git commit` fails outright.
@@ -2593,24 +2593,16 @@ async def archive_and_commit(
         # asyncio.create_subprocess_exec + await, DR-211 D4 async mandate")
         # applies to this call too — `release_committed_claims` issues a
         # synchronous `git status --porcelain` subprocess.
-        try:
-            release_paths = [
+        await asyncio.to_thread(
+            session_scope.release_committed_claims_or_retain,
+            worktree_root,
+            (
                 rel_id(p, worktree_root) for m in moves if m.candidate_id in acted_ids
                 for p in (m.src, m.dst)
-            ]
-            if release_paths:
-                await asyncio.to_thread(
-                    session_scope.release_committed_claims,
-                    session_core.resolve_session_id(str(worktree_root)),
-                    release_paths,
-                    str(worktree_root),
-                )
-        except Exception:
-            _LOG.debug(
-                "archive_and_commit: release_committed_claims failed "
-                "post-commit; claim(s) retained",
-                exc_info=True,
-            )
+            ),
+            session_core.resolve_session_id(str(worktree_root)),
+            "archive_and_commit",
+        )
 
         return acted, failed
 
@@ -2862,34 +2854,42 @@ async def rm_and_commit(
         reaped: List[dict] = []
         failed: List[dict] = list(pre_failed)
 
-        for path in paths:
-            candidate_id = _rel_id(path)
-
-            # Plain `git rm` — NEVER -f. This refuses (no delete) when the
-            # worktree file differs from HEAD, which is the desired
-            # fail-closed-on-concurrent-modification safety property on a
-            # shared tree: a concurrently-modified sidecar is retained in
-            # failed[], not force-deleted.
+        # Plain `git rm` — NEVER -f. This refuses (no delete) when the
+        # worktree file differs from HEAD, which is the desired
+        # fail-closed-on-concurrent-modification safety property on a
+        # shared tree: a concurrently-modified sidecar is retained in
+        # failed[], not force-deleted.
+        async def _git_rm(targets: List[Path]) -> Tuple[int, str]:
+            # Pathspecs travel NUL-separated on stdin: no argv-length limit.
             proc = await asyncio.create_subprocess_exec(
-                "git", "rm", "--", str(path),
+                "git", "rm", "--pathspec-from-file=-", "--pathspec-file-nul",
                 cwd=str(worktree_root),
                 env=base_env,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 **no_console_creationflags(),
             )
-            _out, stderr = await proc.communicate()
+            payload = b"".join(os.fsencode(str(t)) + b"\0" for t in targets)
+            _out, stderr = await proc.communicate(payload)
+            return proc.returncode, stderr.decode(errors="replace").strip()
 
-            if proc.returncode != 0:
-                err_msg = stderr.decode(errors="replace").strip()
-                # Plain git rm refuses BEFORE deleting on failure — the file
-                # was not touched; nothing to reverse.
-                failed.append({
-                    "id": candidate_id,
-                    "reason": err_msg if err_msg else "git-rm-failed",
-                })
-            else:
-                reaped.append({"id": candidate_id, "reaped": True})
+        # ONE spawn for the whole batch. `git rm` is atomic across its
+        # pathspec (a refusal removes nothing), so a failed batch is retried
+        # per item to attribute the refusal; the happy path is O(1) spawns.
+        batch_rc, _batch_err = await _git_rm(paths)
+        if batch_rc == 0:
+            reaped.extend({"id": _rel_id(p), "reaped": True} for p in paths)
+        else:
+            for path in paths:
+                item_rc, err_msg = await _git_rm([path])
+                if item_rc != 0:
+                    failed.append({
+                        "id": _rel_id(path),
+                        "reason": err_msg if err_msg else "git-rm-failed",
+                    })
+                else:
+                    reaped.append({"id": _rel_id(path), "reaped": True})
 
         if not reaped:
             return reaped, failed
@@ -3053,25 +3053,17 @@ async def rm_and_commit(
         # no-trailing-pathspec-but-bounded-scope rationale; offloaded via
         # `asyncio.to_thread` for the same D4 (never-blocking-subprocess)
         # reason given there.
-        try:
-            release_paths = [
+        await asyncio.to_thread(
+            session_scope.release_committed_claims_or_retain,
+            worktree_root,
+            (
                 rid for p in paths
                 for rid in [_rel_id(p)]
                 if rid is not None and rid in reaped_ids
-            ]
-            if release_paths:
-                await asyncio.to_thread(
-                    session_scope.release_committed_claims,
-                    session_core.resolve_session_id(str(worktree_root)),
-                    release_paths,
-                    str(worktree_root),
-                )
-        except Exception:
-            _LOG.debug(
-                "rm_and_commit: release_committed_claims failed post-commit; "
-                "claim(s) retained",
-                exc_info=True,
-            )
+            ),
+            session_core.resolve_session_id(str(worktree_root)),
+            "rm_and_commit",
+        )
 
         return reaped, failed
 

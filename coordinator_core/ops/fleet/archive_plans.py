@@ -473,6 +473,21 @@ def _scan_terminal(
     return results
 
 
+def _split_at_cap(ids: List[str], worktree_root: Path, cap: int) -> Tuple[set, set]:
+    """Split ``ids`` (oldest first) into (allowed, deferred) at ``cap`` UNITS.
+
+    A unit is a primary plan plus every sidecar of it, so the cap can never
+    archive a sidecar while deferring the primary it follows (or vice versa).
+    """
+    unit_of = {
+        cid: (_primary_for_sidecar(worktree_root / cid) if _is_sidecar(Path(cid)) else worktree_root / cid)
+        for cid in ids
+    }
+    allowed_units = set(list(dict.fromkeys(unit_of[cid] for cid in ids))[:cap])
+    allowed = {cid for cid in ids if unit_of[cid] in allowed_units}
+    return allowed, set(ids) - allowed
+
+
 def plan_sweep(
     worktree_root: Path,
     common_dir: Path,
@@ -511,7 +526,7 @@ def plan_sweep(
 
     if candidate_ids is None:
         ordered_ids = list(terminal_by_id.keys())
-        deferred_ids = set(ordered_ids[cap:])
+        _allowed, deferred_ids = _split_at_cap(ordered_ids, worktree_root, cap)
         for cid in ordered_ids:
             if cid in deferred_ids:
                 skipped.append({"id": cid, "reason": f"deferred-cap: invocation cap ({cap}) reached"})
@@ -521,8 +536,7 @@ def plan_sweep(
 
     requested_set = set(candidate_ids)
     oldest_first_requested = [cid for cid in terminal_by_id if cid in requested_set]
-    allowed_ids = set(oldest_first_requested[:cap])
-    deferred_ids = set(oldest_first_requested[cap:])
+    allowed_ids, deferred_ids = _split_at_cap(oldest_first_requested, worktree_root, cap)
 
     for cid in candidate_ids:
         if cid not in terminal_by_id:
@@ -629,33 +643,39 @@ def _apply_untracked_sidecar_moves(moves: List[Move]) -> Tuple[List[dict], List[
         completed: List[Move] = []
         group_failed: List[dict] = []
         for move in group:
+            cause: Optional[str] = None
             if move.dst.exists():
-                group_failed.append({"id": move.candidate_id, "reason": _REASON_SIDECAR_DEST_EXISTS})
-                break
-            try:
-                move.dst.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(str(move.src), str(move.dst))
-            except OSError as exc:
-                for done in reversed(completed):
-                    try:
-                        os.replace(str(done.dst), str(done.src))
-                    except OSError as rollback_exc:
-                        _LOG.warning(
-                            "archive_plans: rollback of sidecar %s -> %s failed after "
-                            "sibling sidecar move for primary=%s failed (%s): %s",
-                            done.dst, done.src, primary, exc, rollback_exc,
-                        )
-                group_failed.extend(
-                    {
-                        "id": m.candidate_id,
-                        "reason": f"sidecar-set-rolled-back: sibling sidecar move failed: {exc}",
-                    }
-                    for m in completed
-                )
-                group_failed.append({"id": move.candidate_id, "reason": f"sidecar-replace-failed: {exc}"})
-                completed = []
-                break
-            completed.append(move)
+                cause = _REASON_SIDECAR_DEST_EXISTS
+                this_failure = {"id": move.candidate_id, "reason": _REASON_SIDECAR_DEST_EXISTS}
+            else:
+                try:
+                    move.dst.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(str(move.src), str(move.dst))
+                except OSError as exc:
+                    cause = str(exc)
+                    this_failure = {"id": move.candidate_id, "reason": f"sidecar-replace-failed: {exc}"}
+            if cause is None:
+                completed.append(move)
+                continue
+            for done in reversed(completed):
+                try:
+                    os.replace(str(done.dst), str(done.src))
+                except OSError as rollback_exc:
+                    _LOG.warning(
+                        "archive_plans: rollback of sidecar %s -> %s failed after "
+                        "sibling sidecar move for primary=%s failed (%s): %s",
+                        done.dst, done.src, primary, cause, rollback_exc,
+                    )
+            group_failed.extend(
+                {
+                    "id": m.candidate_id,
+                    "reason": f"sidecar-set-rolled-back: sibling sidecar move failed: {cause}",
+                }
+                for m in completed
+            )
+            group_failed.append(this_failure)
+            completed = []
+            break
         if group_failed:
             failed.extend(group_failed)
         else:

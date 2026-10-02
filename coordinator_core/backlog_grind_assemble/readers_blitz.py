@@ -69,14 +69,7 @@ Four things live in this module, not one:
    single place): this reader renders the full body text into the
    directive's `fields`; `apply.py`'s `spinoff-handoff-template` handler
    is a pure pass-through and does no further assembly.
-4. `build_verifier_dispatch` — wraps `verifier.build_haiku_verifier_dispatch`
-   with `BUG_BLITZ_VERIFIER_ENUM` and this surface's evidence/output-path
-   shape (`coordinator/commands/bug-blitz.md` Phase 3 step 3: DONE
-   summary + unstaged diff for the item's files + cited code;
-   `state/scratch/bug-blitz/{run-id}/{item-id}.verify.md`). Called AT
-   WAVE-VERIFY TIME (Phase 3 step 3), once a DONE summary exists — never
-   from `collect()`.
-5. `_tier_u_grant_flow` — bug-blitz's own Tier-U (full-suite) grant ask
+4. `_tier_u_grant_flow` — bug-blitz's own Tier-U (full-suite) grant ask
    (`commands/bug-blitz.md:54-55`, Phase 0.6) plus the confirm-green
    `check` recheck the same lines say the grant already covers with no
    second ask. Called FROM `collect()`, self-gated on `_CADENCE ==
@@ -116,14 +109,10 @@ Negative-spec:
       `check` directive, and does NOT mark it `already_satisfied` — it
       consumes the token the grant judgment point already gated
       (commands/bug-blitz.md:54-55's "no second ask").
-    - Does NOT call `build_spinoff_handoff` or `build_verifier_dispatch`
-      from `collect()` — both need per-item data (`collect()` is a boot-
-      time, cadence-only call with no item in scope) and both are called
-      live by the wave-authoring/wave-verify caller, exactly like
+    - Does NOT call `build_spinoff_handoff` from `collect()` — it needs
+      per-item data (`collect()` is a boot-time, cadence-only call with no
+      item in scope) and is called live by the wave-authoring caller, exactly like
       `build_commit_per_item`/`build_commit_per_wave`.
-    - Does NOT widen or merge `BUG_BLITZ_VERIFIER_ENUM` with
-      `MISE_VERIFIER_ENUM` — `verifier.py`'s own negative-spec forbids
-      it; this module passes `BUG_BLITZ_VERIFIER_ENUM` through unchanged.
     - Does NOT invent judgment content (acceptance criteria, "what this
       covers" narrative) for the spinoff-handoff body beyond the fields
       the caller supplies — every section is either the backlog entry's
@@ -145,10 +134,6 @@ from coordinator_core.backlog_grind_assemble.directives import (
     build_stage_and_commit,
     build_tier_u_grant_check,
     build_tier_u_grant_flow,
-)
-from coordinator_core.backlog_grind_assemble.verifier import (
-    BUG_BLITZ_VERIFIER_ENUM,
-    build_haiku_verifier_dispatch,
 )
 from coordinator_core import executor_return_contract
 from coordinator_core.git.repo_root import show_toplevel
@@ -497,32 +482,6 @@ def build_spinoff_handoff(
     return build_spinoff_handoff_template_emission(
         id=id,
         fields={"content": content},
-        depends_on=depends_on,
-    )
-
-
-def build_verifier_dispatch(
-    *,
-    id: str,
-    run_id: str,
-    item_id: str,
-    depends_on: Optional[str] = None,
-) -> dict[str, Any]:
-    """Build the Phase 3 step 3 Haiku-verifier dispatch directive for one
-    bug-blitz item, wrapping `verifier.build_haiku_verifier_dispatch` with
-    this surface's fixed evidence shape (DONE summary + the item's
-    unstaged diff + cited code) and verdict vocabulary
-    (`BUG_BLITZ_VERIFIER_ENUM`) per `commands/bug-blitz.md` Phase 3 step
-    3. `output_path` is this reader's own computed string — verifier.py's
-    negative-spec forbids hardcoding either call site's path pattern
-    there. Called AT WAVE-VERIFY TIME, once a DONE summary exists for
-    `item_id` — never from `collect()`.
-    """
-    return build_haiku_verifier_dispatch(
-        id=id,
-        evidence_source=["done-summary", "diff:files", "cited-code"],
-        enum_set=BUG_BLITZ_VERIFIER_ENUM,
-        output_path=f"state/scratch/bug-blitz/{run_id}/{item_id}.verify.md",
         depends_on=depends_on,
     )
 

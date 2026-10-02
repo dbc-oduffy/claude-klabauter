@@ -115,7 +115,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_coverage_core import (
@@ -295,10 +295,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     weekly_diff_shas: Set[str] = set(weekly_raw.splitlines()) if weekly_raw else set()
     unreviewed_set = weekly_diff_shas - reviewed_set
 
-    cross_segment_seams: Set[str] = set()
-    for i in range(len(segment_files)):
-        for j in range(i + 1, len(segment_files)):
-            cross_segment_seams |= segment_files[i] & segment_files[j]
+    # A seam is a file present in two or more segments. Counted in one pass: the
+    # pairwise-intersection form is quadratic in segments (~170ms at 1267).
+    segments_touching: Dict[str, int] = {}
+    for fset in segment_files:
+        for path in fset:
+            segments_touching[path] = segments_touching.get(path, 0) + 1
+    cross_segment_seams: Set[str] = {p for p, n in segments_touching.items() if n >= 2}
 
     seam_shas: Set[str] = set()
     for k, fset in enumerate(segment_files):

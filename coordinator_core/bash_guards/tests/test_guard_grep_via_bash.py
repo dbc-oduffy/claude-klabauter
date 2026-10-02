@@ -515,6 +515,16 @@ class TestPowerShellTokenizesOnce:
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
+    def test_heredoc_body_select_string_is_data_not_a_decline(self):
+        """A Select-String inside a heredoc body is stdin data, so the grep
+        invocation is judged on its own and is not declared SILENT."""
+        from coordinator_core.bash_guards._verdict import collecting, was_silent
+
+        cmd = "grep -rn TODO src <<EOF\ndata | Select-String x\nEOF"
+        with collecting() as silences:
+            guard.check(self._ps(cmd))
+        assert not was_silent("guard_grep_via_bash", silences)
+
 
 class TestClassifyCommandPreTokenizedInput:
     def test_tokens_kwarg_matches_self_tokenized_classification(self):

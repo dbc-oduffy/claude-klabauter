@@ -140,7 +140,7 @@
       "  surface: path/to/primary/target  # single path or subsystem, not the full write-files set",
       "  writes: [path/to/file/this/chunk/writes.py]  # REQUIRED on a non-deferred row —",
       "              # dispatch.emit cannot fire without it. Replace with the real repo-relative",
-      "              # FILE paths this chunk writes (never a directory; see `writes_under`). An empty `writes: []` is a POSITIVE claim that",
+      "              # FILE paths this chunk writes (never a directory; use `writes_under`). An empty `writes: []` is a POSITIVE claim that",
       "              # it writes nothing — NOT 'not known yet'. If the surface is not knowable,",
       "              # omit this key entirely (UNDECLARED), which is legal only on a row gated",
       "              # epistemic-premise; see spine_read's AC2 for why they differ.",

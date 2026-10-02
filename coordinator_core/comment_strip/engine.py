@@ -16,8 +16,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.git.run import run_git
 from coordinator_core.source_edit_gate.gate import run_gate
-from coordinator_core.win_portability import no_console_creationflags
 
 from . import lang_clike, lang_hash, lang_python
 from .keep_rules import extract_marker_tokens, is_tooling_comment
@@ -721,13 +721,16 @@ def _find_ts_pkg() -> str | None:
     return None
 
 
+def _git_checked(repo_root: Path, args: list[str]) -> str:
+    argv = ["-C", str(repo_root), *args]
+    result = run_git(argv)
+    if not result.ok:
+        raise subprocess.CalledProcessError(result.returncode, argv, result.stdout, result.stderr)
+    return result.stdout
+
+
 def _git_status_porcelain(repo_root: Path) -> str:
-    out = subprocess.run(
-        ["git", "-C", str(repo_root), "status", "--porcelain"],
-        capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    )
-    return out.stdout
+    return _git_checked(repo_root, ["status", "--porcelain"])
 
 
 def _refused_apply_summary(repo_root: Path, gate: str) -> dict:
@@ -777,11 +780,7 @@ def strip_repo(
         if dirty.strip():
             return _refused_apply_summary(repo_root, "refused-dirty-tree")
 
-    out = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files"], capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    )
-    all_files = [f for f in out.stdout.splitlines() if f]
+    all_files = [f for f in _git_checked(repo_root, ["ls-files"]).splitlines() if f]
     candidates = [f for f in all_files if not is_exempt_path(f) and not is_excluded_path(f)]
     candidates = [f for f in candidates if Path(f).suffix.lower() in LANG_BY_SUFFIX]
 

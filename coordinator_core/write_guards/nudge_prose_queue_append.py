@@ -38,11 +38,10 @@ drift into two. Unlike that sibling guard (which only counts entries on the
 ``Edit`` tool's own ``old_string``/``new_string`` fragments, and skips the
 gate entirely for ``Write``/``MultiEdit``), this guard needs the delta to
 hold across ALL THREE matchers, so it reconstructs the POST-write whole file
-the same way ``nudge_baton_body_bar`` does for its own Edit/MultiEdit
-handling: ``Write`` already carries the whole new file; ``Edit``/
-``MultiEdit`` read the on-disk PRE-write content (best-effort, capped) and
-re-apply the same old_string -> new_string substitution(s) to get the
-POST-write content. The entry count is then taken over the on-disk PRE
+through ``_post_write_body``: ``Write`` already carries the whole new
+file; ``Edit``/``MultiEdit`` re-apply the same old_string -> new_string
+substitution(s) to the on-disk PRE-write content (best-effort, capped) to
+get the POST-write content. The entry count is then taken over the on-disk PRE
 content vs the reconstructed POST content. Any reconstruction failure
 (oversized file, ``old_string`` not found, read error) skips the advisory
 silently — never falls back to a weaker fragment-scoped count, since a
@@ -59,7 +58,7 @@ every touch of a 192-line backlog would be bypassed inside a day and would
 then protect nothing (DR-115 § PM direction (A)).
 
 Text leads with the transformer, per design-as-offers
-(``docs/wiki/hook-best-practices.md`` § nag->action / design-as-offers):
+(``coordinator-content-repo coordinator/docs/wiki/hook-best-practices.md`` § nag->action / design-as-offers):
 the fleet migration op is named as FORTHCOMING (verified absent from disk
 at authoring time — ``coordinator_core/ops/fleet/migrate_prose_queue.py``
 does not exist yet; DR-115 § PM direction (C) authorizes it but it has not
@@ -97,6 +96,7 @@ from coordinator_core.bash_guards._helpers import (
     is_trivial_reason as _is_trivial_reason,
     operator_override_note,
 )
+from coordinator_core.write_guards._post_write_body import post_write_body, read_pre_image
 from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.write_guards.nudge_improvement_queue_write import _ENTRY_LINE_RE
 from coordinator_core.write_guards.nudge_prose_queue_creation import (
@@ -108,8 +108,6 @@ CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 170
 
-_MAX_WHOLE_FILE_BYTES = 1024 * 1024
-
 #: Reason-shaped punt, following the COORDINATOR_QUEUE_PUNT /
 #: COORDINATOR_BATON_BODY_PUNT convention for advisory/deny-offer guards in
 #: this package -- a non-trivial reason (>= 12 chars) set BEFORE launch
@@ -118,83 +116,6 @@ _MAX_WHOLE_FILE_BYTES = 1024 * 1024
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_PROSE_QUEUE_APPEND_PUNT"
 
 _TRANSFORMER_PATH = "coordinator_core/ops/fleet/migrate_prose_queue.py"
-
-
-def _extract_str(tool_input: Dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = tool_input.get(key)
-        if value:
-            return str(value)
-    return ""
-
-
-def _read_file_safely(file_path: str) -> Optional[str]:
-    try:
-        if os.path.getsize(file_path) > _MAX_WHOLE_FILE_BYTES:
-            return None
-        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read()
-    except OSError:
-        return None
-
-
-def _apply_one_edit(
-    content: str, old_string: Any, new_string: Any, replace_all: Any
-) -> Optional[str]:
-    if not isinstance(old_string, str) or not old_string:
-        return None
-    if old_string not in content:
-        return None
-    new_string = new_string if isinstance(new_string, str) else ""
-    if replace_all:
-        return content.replace(old_string, new_string)
-    return content.replace(old_string, new_string, 1)
-
-
-def _reconstruct_pre_and_post(
-    tool_name: str, tool_input: Dict[str, Any], resolved_path: str
-) -> Optional[tuple]:
-    if tool_name == "Write":
-        pre = _read_file_safely(resolved_path)
-        if pre is None:
-            return None
-        post = _extract_str(tool_input, "content")
-        return (pre, post)
-
-    pre = _read_file_safely(resolved_path)
-    if pre is None:
-        return None
-
-    if tool_name == "Edit":
-        post = _apply_one_edit(
-            pre,
-            tool_input.get("old_string"),
-            tool_input.get("new_string"),
-            tool_input.get("replace_all"),
-        )
-        if post is None:
-            return None
-        return (pre, post)
-
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits")
-        if not isinstance(edits, list) or not edits:
-            return None
-        post = pre
-        for edit in edits:
-            if not isinstance(edit, dict):
-                return None
-            post = _apply_one_edit(
-                post,
-                edit.get("old_string"),
-                edit.get("new_string"),
-                edit.get("replace_all"),
-            )
-            if post is None:
-                return None
-        return (pre, post)
-
-    return None
 
 
 _REASON_TEMPLATE = """Legacy queue. Append instead: `coordinator-queue-append --schema {family}`. Read instead: `records_query`. Migrate instead: `{transformer}`.{override_block}"""
@@ -249,10 +170,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(tool_input, dict):
             return None
 
-        reconstructed = _reconstruct_pre_and_post(tool_name, tool_input, resolved)
-        if reconstructed is None:
+        pre_content = read_pre_image(resolved)
+        if pre_content is None:
             return None
-        pre_content, post_content = reconstructed
+        post_content = post_write_body(tool_name, tool_input, pre_content)
+        if post_content is None:
+            return None
 
         pre_entries = len(_ENTRY_LINE_RE.findall(pre_content))
         post_entries = len(_ENTRY_LINE_RE.findall(post_content))

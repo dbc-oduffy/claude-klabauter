@@ -6,11 +6,10 @@ whose claiming session is no longer live.
 Purpose, per `docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-table.md`
 chunk C6: a memo `cs_claim_memo_stamp` moved to ``in_progress`` is never
 returned to ``open`` once the session named in its ``picked_up_by`` dies.
-Built on the shape of `coordinator_core.ops.reap_in_flight_claims` (the
-handoff reaper) and much smaller — a memo has no live-children check, no
-ship-detection, and no governed-plan arm.
+A memo has no live-children check, no ship-detection, and no governed-plan
+arm.
 
-Liveness is decided by the SAME shared key the handoff reaper uses,
+Liveness is decided by the shared key
 `coordinator_core.session.liveness.session_live`, and the deciding arm is
 recorded on every release via `session_verdict` — the same
 `_release_liveness_basis` shape — carrying forward the lesson of the
@@ -19,16 +18,13 @@ with no record of which liveness arm produced the verdict.
 
 Negative-spec:
     - Does NOT register a JSON-RPC op, and does NOT add an
-      `authz/classification.py` row. `reap_in_flight_claims.py`, the shape
-      this module mirrors, deliberately has neither — both callers import
-      it in-process. Widening either surface here would contradict the
-      mirror this module names.
+      `authz/classification.py` row — callers import it in-process.
     - Does NOT walk `state/cross-repo/archive/` — a memo already archived
       is historical evidence, never a reap candidate. Only
       `state/cross-repo/inbox/*.md` and `state/cross-repo/outbox/*.md` are
       read.
-    - Does NOT port the ship-detection, governed-plan, or completion-index
-      arms from `reap_in_flight_claims.py`. A memo that was acted on is
+    - Does NOT carry ship-detection, governed-plan, or completion-index
+      arms. A memo that was acted on is
       `actioned`, not `in_progress`, so none of those arms has a
       memo-side question to answer here.
     - Does NOT guess at a malformed record. An `in_progress` memo with an
@@ -40,10 +36,7 @@ Negative-spec:
       candidates — `survey()` never shells out at all; only
       `apply_dispositions()`'s delegated call can write, and it is called
       only for `_VERDICT_RELEASE` rows.
-    - Does NOT carry `reap_in_flight_claims.py`'s `_VERDICT_UNDETERMINED`
-      posture. That arm exists there because a candidate sha can fail to
-      resolve, leaving "no resolvable evidence" as a distinct outcome from
-      "resolved evidence says dead". A memo's only evidence source is
+    - Does NOT carry an undetermined verdict. A memo's only evidence source is
       `session_live`/`session_verdict`, which always returns a determinate
       True/False — there is no analogous "didn't resolve" case here, so
       `_survey_dir` releases unconditionally on `session_live() is False`

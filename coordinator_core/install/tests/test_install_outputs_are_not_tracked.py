@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from coordinator_core.win_portability import no_console_creationflags
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -19,7 +20,7 @@ GENERATED = [
 
 
 def _git(*argv: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(REPO_ROOT), *argv], capture_output=True, text=True, check=False)
+    return subprocess.run(["git", "-C", str(REPO_ROOT), *argv], capture_output=True, text=True, check=False, **no_console_creationflags())
 
 
 @pytest.fixture(scope="module", autouse=True)

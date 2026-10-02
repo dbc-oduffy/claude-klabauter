@@ -22,7 +22,9 @@ Profile:
     ``vocab.STAGE_OUTCOMES`` — a stray outcome outside that set is refused,
     naming the node and the outcome;
   - the graph is acyclic apart from ``on_fail``, a single optional back-edge
-    per node the engine bounds to one traversal per path; an ``on_fail`` (like
+    per node the engine bounds to one traversal per path (re-reaching the node
+    whose ``on_fail`` was spent ends that path in stage-dead, so retry-once
+    loops are legal; a second, distinct ``on_fail`` hop is refused); an ``on_fail`` (like
     any edge) may instead name a hand-back type, ending the path there;
   - edge targets are graph nodes, universal hand-back types, or the
     profile's own ``hand_back_types`` (DR-404 § 3), which must be disjoint
@@ -582,7 +584,7 @@ def _check_paths(profile: Profile) -> None:
         _walk(
             profile,
             start,
-            on_fail_used=False,
+            spent_on_fail=None,
             since_fix_verified=True,
             saw_fix=False,
             saw_refute_close=False,
@@ -594,7 +596,7 @@ def _walk(
     profile: Profile,
     node_id: str,
     *,
-    on_fail_used: bool,
+    spent_on_fail: str | None,
     since_fix_verified: bool,
     saw_fix: bool,
     saw_refute_close: bool,
@@ -635,7 +637,7 @@ def _walk(
         _walk(
             profile,
             target,
-            on_fail_used=on_fail_used,
+            spent_on_fail=spent_on_fail,
             since_fix_verified=step_since_verified,
             saw_fix=next_saw_fix,
             saw_refute_close=next_saw_refute_close,
@@ -643,14 +645,21 @@ def _walk(
         )
 
     if node.on_fail is not None and node.on_fail in profile.graph:
-        if on_fail_used:
+        # The runtime spends one on_fail per row (`follow_edge` hands back
+        # stage-dead once `row.on_fail_used` is set). Re-reaching the node whose
+        # on_fail was spent is a retry-once loop closing: that path ends in
+        # stage-dead, a legal termination. A DIFFERENT node's on_fail on the
+        # same path can never fire, so the author wrote dead routing: refuse.
+        if spent_on_fail == node_id:
+            return
+        if spent_on_fail is not None:
             raise ProfileError(
                 "graph_on_fail_traversal", node=node_id, detail=f"second on_fail traversal on path {path!r}"
             )
         _walk(
             profile,
             node.on_fail,
-            on_fail_used=True,
+            spent_on_fail=node_id,
             since_fix_verified=next_since_fix_verified,
             saw_fix=next_saw_fix,
             saw_refute_close=next_saw_refute_close,

@@ -101,6 +101,13 @@ def test_regular_file_older_than_window_denies_expired(scratch_repo):
     assert guard._sentinel_state(str(scratch_repo)) == "deny-expired"
 
 
+def test_future_dated_sentinel_denies_expired(scratch_repo):
+    sentinel = scratch_repo / _SENTINEL_NAME
+    _fresh(sentinel)
+    _age(sentinel, -3600)
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-expired"
+
+
 def test_absent_sentinel_denies(scratch_repo):
     assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
 
@@ -485,7 +492,7 @@ def two_roots(tmp_path, monkeypatch):
     session_repo.mkdir()
 
     guard._content_root_memo.clear()
-    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: str(doe))
+    monkeypatch.setattr(guard, "read_content_root", lambda: str(doe))
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
     yield doe, session_repo
     guard._content_root_memo.clear()
@@ -532,7 +539,7 @@ def test_unresolvable_doe_pointer_lands_on_the_pre_fix_protected_set(
     """
     doe, session_repo = two_roots
     guard._content_root_memo.clear()
-    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
 
     paths = [path for path, _ in guard._protected_entries(str(session_repo))]
     assert guard._norm(str(doe.joinpath(*_DOE_ONLY_RELATIVES[0]))) not in paths
@@ -581,7 +588,7 @@ def foreign_third_repo(tmp_path, monkeypatch):
     _make_repo(third_repo)
 
     guard._content_root_memo.clear()
-    monkeypatch.setattr(guard, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(guard, "read_content_root", lambda: "")
     monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
     yield session_repo, third_repo
     guard._content_root_memo.clear()
@@ -699,7 +706,7 @@ def test_content_root_is_resolved_once_per_process(two_roots, monkeypatch):
         calls.append(1)
         return str(doe)
 
-    monkeypatch.setattr(guard, "read_content_root_pointer", _counted)
+    monkeypatch.setattr(guard, "read_content_root", _counted)
     for _ in range(4):
         guard._protected_entries(str(session_repo))
     assert len(calls) == 1

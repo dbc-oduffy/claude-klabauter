@@ -11,7 +11,7 @@ from coordinator_core.ops import init_anchor_injection_state as mod
 
 
 def test_happy_path(monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_content_root", lambda: "/fake/content-root")
+    monkeypatch.setattr(mod, "read_content_root", lambda: "/fake/content-root")
 
     result = mod._handler({})
 
@@ -22,7 +22,7 @@ def test_happy_path(monkeypatch):
 
 
 def test_double_invocation_is_idempotent(monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_content_root", lambda: "/fake/content-root")
+    monkeypatch.setattr(mod, "read_content_root", lambda: "/fake/content-root")
 
     first = mod._handler({})
     second = mod._handler({})
@@ -33,14 +33,14 @@ def test_double_invocation_is_idempotent(monkeypatch):
 
 
 def test_unresolvable_content_root_fails_loud(monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(mod, "read_content_root", lambda: None)
 
     with pytest.raises(RuntimeError, match="cannot resolve the coordinator root"):
         mod._handler({})
 
 
 def test_params_argument_ignored(monkeypatch):
-    monkeypatch.setattr(mod, "coordinator_content_root", lambda: "/fake/content-root")
+    monkeypatch.setattr(mod, "read_content_root", lambda: "/fake/content-root")
 
     result = mod._handler({"unexpected": "value"})
 

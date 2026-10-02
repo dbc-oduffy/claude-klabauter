@@ -2,11 +2,9 @@
 coordinator_core.merge_assemble.tests.test_no_interpreter_spawn — C3 AC6, a
 static AST regression guard on the CONVERGED handlers' source shape only.
 
-Purpose: C2 moved four of `merge_assemble.apply`'s eight `_CLI_DISPATCH`
-handlers in-process (`_dispatch_merge_recovery_and_tag_cut`,
-`_dispatch_portability_sweep`, `_dispatch_check_no_illegal_paths`,
-`_dispatch_tier_u_grant` — the module's own decision comment above
-`_CLI_DISPATCH` names all four). This test asserts, by walking each
+Purpose: seven of `merge_assemble.apply`'s eight `_CLI_DISPATCH` handlers
+run in-process (the module's own decision comment above `_CLI_DISPATCH` names
+them). This test asserts, by walking each
 converged handler's own `ast.FunctionDef` body, that no `sys.executable`
 or `subprocess` reference remains inside it — a future edit that
 re-introduces a spawn into one of these four bodies fails this test.
@@ -32,12 +30,9 @@ bare-name checks alone could not see — a materially easier evasion than
 the transitive-spawn gap above, so it is named here rather than left
 implicit.
 
-The three EXCLUDED handlers (`_dispatch_merge_gate_and_pr`,
-`_dispatch_merge_release_notes_derive`, `_dispatch_orphan_branch_sweep`) and
 `_dispatch_node_ceremony_gate` (a genuine external-program spawn, `node
---test`) are deliberately NOT scanned here — each still spawns by design
-(each handler's own docstring in `merge_assemble/apply.py` records why),
-and asserting a subprocess-free body on them would be a false claim, not a
+--test`) is deliberately NOT scanned here — it spawns by design, and
+asserting a subprocess-free body on it would be a false claim, not a
 regression guard.
 
 No process spawn, no git — fast tier.
@@ -58,22 +53,19 @@ from coordinator_core.merge_assemble import apply as ma_apply
 #: not re-derived here.
 _CONVERGED_HANDLER_NAMES = (
     "_dispatch_merge_recovery_and_tag_cut",
+    "_dispatch_merge_gate_and_pr",
     "_dispatch_portability_sweep",
     "_dispatch_check_no_illegal_paths",
+    "_dispatch_merge_release_notes_derive",
+    "_dispatch_orphan_branch_sweep",
     "_dispatch_tier_u_grant",
 )
 
-#: Handlers that still spawn by design (each with a docstring naming why it
-#: was excluded from C2's conversion) or that spawn a genuine external
-#: program with no import path. Listed here only so a future edit that
-#: mislabels one as "converged" is caught: this set and
-#: `_CONVERGED_HANDLER_NAMES` must partition `_CLI_DISPATCH`'s handler set.
-_STILL_SPAWNING_HANDLER_NAMES = (
-    "_dispatch_node_ceremony_gate",
-    "_dispatch_merge_gate_and_pr",
-    "_dispatch_merge_release_notes_derive",
-    "_dispatch_orphan_branch_sweep",
-)
+#: The one handler that spawns a genuine external program with no import
+#: path. Listed here only so a future edit that mislabels it as "converged"
+#: is caught: this set and `_CONVERGED_HANDLER_NAMES` must partition
+#: `_CLI_DISPATCH`'s handler set.
+_STILL_SPAWNING_HANDLER_NAMES = ("_dispatch_node_ceremony_gate",)
 
 
 def _names_referenced(node: ast.AST) -> set[str]:
@@ -201,21 +193,15 @@ def test_converged_handler_body_has_no_interpreter_spawn_reference(
 def test_still_spawning_handlers_are_unchanged_by_this_guard(
     _handler_defs: dict[str, ast.FunctionDef],
 ) -> None:
-    """Sanity check on the guard itself: the three EXCLUDED handlers plus
-    the genuine external-program spawn still reference either
-    `_run_py_script` or `subprocess` directly, so this test module is
-    exercising a real distinction rather than a guard that would pass on
-    everything regardless of source shape."""
+    """Sanity check on the guard itself: the genuine external-program spawn
+    still references `subprocess` directly, so this test module is exercising
+    a real distinction rather than a guard that would pass on everything
+    regardless of source shape."""
     for handler_name in _STILL_SPAWNING_HANDLER_NAMES:
         fn = _handler_defs[handler_name]
         root_names = _names_referenced(fn)
-        called_names = {
-            child.func.id
-            for child in ast.walk(fn)
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
-        }
-        assert "subprocess" in root_names or "_run_py_script" in called_names, (
-            f"{handler_name}: expected to still spawn (via subprocess or "
-            "_run_py_script) — if this now passes clean, the handler was "
-            "converged and belongs in _CONVERGED_HANDLER_NAMES instead"
+        assert "subprocess" in root_names, (
+            f"{handler_name}: expected to still spawn via subprocess — if "
+            "this now passes clean, the handler was converged and belongs in "
+            "_CONVERGED_HANDLER_NAMES instead"
         )

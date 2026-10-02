@@ -77,7 +77,9 @@ from coordinator_core.ops.fleet._memo_summary import (
 )
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
+    PR_COMMENT_FALLBACK,
     RegistryReadError,
+    never_inbox_mirror_refusal as _never_inbox_mirror_refusal,
     reroute_owner as _reroute_owner,
     resolve_receiver_inbox as _resolve_receiver_inbox,
     suggest_nearest_receiver as _suggest_nearest_receiver,
@@ -320,6 +322,7 @@ def owner_name_advisory(op: str, names: list) -> Optional[str]:
 REJECTION_CLASS_UNKNOWN_RECEIVER = "unknown_receiver"
 REJECTION_CLASS_REGISTRY_ERROR = "registry_error"
 REJECTION_CLASS_AMBIGUOUS_RECEIVER = "ambiguous_receiver"
+REJECTION_CLASS_PUBLISH_TARGET = "publish_target_rejected"
 
 
 def _classify_receiver_for_draft(to: str, dry_run: bool):
@@ -395,6 +398,12 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         result["rejection_class"] = REJECTION_CLASS_AMBIGUOUS_RECEIVER
         return result
 
+    mirror_refusal = _never_inbox_mirror_refusal(to, receiver_repo_path)
+    if mirror_refusal is not None:
+        result = build_setup_error_result(_MODE, dry_run, f"memo.draft: {mirror_refusal}")
+        result["rejection_class"] = REJECTION_CLASS_PUBLISH_TARGET
+        return result
+
     if inbox_dir is not None:
         return None
 
@@ -409,7 +418,7 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
         f"memo.draft: UNKNOWN RECEIVER — {to!r} does not resolve to any "
         f"registered receiver on this machine.{suggestion_clause} Register "
         f"the receiver repo first (machine-local set repos.<name> "
-        f"<abs-path-to-repo>), or check for a typo in `to`.",
+        f"<abs-path-to-repo>), or check for a typo in `to`. {PR_COMMENT_FALLBACK}",
     )
     result["rejection_class"] = REJECTION_CLASS_UNKNOWN_RECEIVER
     return result

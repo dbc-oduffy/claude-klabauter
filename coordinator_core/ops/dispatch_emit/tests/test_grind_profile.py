@@ -267,6 +267,31 @@ def test_validate_graph_second_on_fail_traversal_refused(tmp_path):
     assert exc_info.value.rule == "graph_on_fail_traversal"
 
 
+def test_validate_graph_retry_once_on_fail_loop_accepted(tmp_path):
+    # verify(on_fail: fix) -> fix -> verify: the second visit to verify re-reaches
+    # the spent on_fail, which the runtime hands back as stage-dead.
+    doc = _minimal_doc(
+        {
+            "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
+            "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "fix"}},
+            "fix": {
+                "kind": "fix",
+                "edges": {"done": "verify", "NOT_REPRODUCED": "needs-judgment"},
+                "on_fail": "needs-judgment",
+            },
+            "verify": {
+                "kind": "verify",
+                "verify": {"default": "agent"},
+                "edges": {"pass": "commit"},
+                "on_fail": "fix",
+            },
+            "commit": {"kind": "commit", "edges": {}},
+        }
+    )
+    profile = _profile_from_doc(tmp_path, "retry-once", doc)
+    gp.validate_graph(profile)
+
+
 def test_validate_graph_stray_outcome_outside_stage_outcomes_refused(tmp_path):
     doc = _minimal_doc(
         {
@@ -417,11 +442,10 @@ def test_fixture_refuted_and_not_reproduced_route_legally():
 def test_doe_queue_profiles_pass_validate_graph():
     # census row 1: all six DoE profiles at coordinator-content-repo 15e42950 already pass
     # both new refusals unchanged. Resolved through the fleet's existing
-    # `repos.content_root` machine-local registry key (the same resolution
-    # `session_start_register_content_root_root.py` maintains).
-    from coordinator_core.machine_resolver import registry_get
+    # `repos.content_root` machine-local registry key.
+    from coordinator_core.content_root import read_content_root
 
-    content_root = registry_get("repos.content_root")
+    content_root = read_content_root()
     if not content_root or not Path(content_root).is_dir():
         pytest.skip("repos.content_root unresolved")
     profile_dir = Path(content_root) / "coordinator" / "queue-profiles"

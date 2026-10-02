@@ -359,3 +359,9 @@ def test_an_unexpected_exception_still_yields_a_reason(tmp_path, monkeypatch):
 
     assert result["exit_code"] == 1
     assert "disk on fire" in result["error"]
+
+
+def test_missing_sizing_refusal_names_every_accepted_param():
+    msg = _handler({"sizing_path": "state/sizings/x.yaml", "pm_quote": "q"})["error"]
+    for name in ("sizing", "pm_quote", "statement", "mode", "supersede"):
+        assert name in msg

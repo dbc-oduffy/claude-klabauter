@@ -188,6 +188,10 @@ _EXEMPT: dict[tuple[str, str], str] = {
         "write-surface declaration module, resolved at runtime from whatever "
         "the discovery scan finds"
     ),
+    ("coordinator_core/install/door_install.py", "rebuild_door_for_mirror"): (
+        "target is not a coordinator/bin script — it is the mirror's "
+        "coordinator_core/warm/door/build.py"
+    ),
     ("coordinator_core/install/sandbox_check.py", "_tier1d_registry_manifest_integrity"): (
         "target is not a coordinator/bin script — it is coordinator/bin/lib/"
         "coordinator_registry.py itself, loaded after the probe puts its own "
@@ -365,7 +369,7 @@ def test_no_bin_script_path_load_skips_the_bind():
             except SyntaxError:
                 continue
             _add_parents(tree)
-            relpath = str(path.relative_to(REPO_ROOT))
+            relpath = path.relative_to(REPO_ROOT).as_posix()
             is_repo_root_bin = path.parent == REPO_ROOT / "bin"
             for node in ast.walk(tree):
                 if not _is_spec_from_file_location(node):

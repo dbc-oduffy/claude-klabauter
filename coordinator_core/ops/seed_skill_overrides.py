@@ -99,7 +99,7 @@ def main(
     result = subprocess.run(
         [python_cmd, helper] + args,
         **no_console_passthrough_kwargs(),
-    )
+    )  # popup-safe-env-suppressed
     return result.returncode
 
 

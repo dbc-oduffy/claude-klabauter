@@ -222,15 +222,15 @@ def test_spawn_count_flat_in_n_batons(tmp_path):
     _commit_all(repo, "seed plan+batons")
     _flip_plan_status(repo, "docs/plans/x.md", "implemented")
 
-    real_run = subprocess.run
+    real_run_git = mod.run_git
     log_s_calls = []
 
     def _spy(argv, *a, **kw):
-        if len(argv) >= 2 and argv[0] == "git" and argv[1] == "log":
+        if argv and argv[0] == "log":
             log_s_calls.append(argv)
-        return real_run(argv, *a, **kw)
+        return real_run_git(argv, *a, **kw)
 
-    with patch("subprocess.run", side_effect=_spy):
+    with patch.object(mod, "run_git", side_effect=_spy):
         result = mod._handler({"plan_ids": ["docs/plans/x.md"]}, repo_root=repo / ".git")
 
     assert len(result["discharged"]) == 10
@@ -241,7 +241,7 @@ def _discharge_n_distinct_plans(tmp_path: Path, n: int) -> int:
     """Seeds N DISTINCT landed plans, each with exactly one baton, runs the
     handler over the whole batch, and returns the number of `git log`
     spawns observed (`_plan_landing_shas`'s own site, spied via
-    `subprocess.run`). Returns the spawn count, not the result, so the
+    the module's `run_git`). Returns the spawn count, not the result, so the
     caller compares counts across batch sizes directly."""
     repo = _init_repo(tmp_path)
     plan_ids = []
@@ -257,15 +257,15 @@ def _discharge_n_distinct_plans(tmp_path: Path, n: int) -> int:
     for plan_rel in plan_ids:
         _flip_plan_status(repo, plan_rel, "implemented")
 
-    real_run = subprocess.run
+    real_run_git = mod.run_git
     log_calls = []
 
     def _spy(argv, *a, **kw):
-        if len(argv) >= 2 and argv[0] == "git" and argv[1] == "log":
+        if argv and argv[0] == "log":
             log_calls.append(argv)
-        return real_run(argv, *a, **kw)
+        return real_run_git(argv, *a, **kw)
 
-    with patch("subprocess.run", side_effect=_spy):
+    with patch.object(mod, "run_git", side_effect=_spy):
         result = mod._handler({"plan_ids": plan_ids}, repo_root=repo / ".git")
 
     assert len(result["discharged"]) == n

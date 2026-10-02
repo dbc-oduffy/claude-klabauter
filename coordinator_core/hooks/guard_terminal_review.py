@@ -88,19 +88,18 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.coverage import _is_bookkeeping_path
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.review_trail.receipt_credit import receipt_credited_shas
 from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
-from coordinator_core.win_portability import no_console_creationflags
 
 GUARD_NAME = "guard-terminal-review"
 
@@ -125,8 +124,6 @@ _GATE_LOCAL_NONCODE_PREFIXES = ("docs/plans/", ".coordinator-local/")
 #: gated (§ Design condition 2).
 _DOC_ONLY_SUFFIXES = (".md", ".yaml", ".yml")
 
-_GIT_TIMEOUT_SECS = 30
-_CREATIONFLAGS = no_console_creationflags()
 
 _HEADER_SENTINEL = "\x02"
 _FIELD_SEP = "\x1f"
@@ -200,18 +197,9 @@ def _repo_root(payload: dict) -> Optional[str]:
 
 
 def _run_git(args: List[str], cwd: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _GitUnavailable(str(exc)) from exc
+    result = run_git(args, cwd=cwd)
+    if result.timed_out:
+        raise _GitUnavailable("git timed out")
     if result.returncode != 0:
         raise _GitUnavailable(result.stderr.strip() or "git log failed")
     return result.stdout

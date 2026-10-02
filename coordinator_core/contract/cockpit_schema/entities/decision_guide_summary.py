@@ -11,7 +11,7 @@ entity surfaces the document-level metadata for that container.
 Spec backlinks:
   - schemas/decision-guide.yaml
   - docs/plans/2026-06-27-cockpit-emission-decision-guide-4th-type.md § C1
-  - docs/wiki/canonical-artifact-shapes.md § decision-guide
+  - coordinator-content-repo coordinator/docs/wiki/schema-and-validation-contracts/canonical-artifact-shapes.md § decision-guide
   - docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
 
 SINGLE AXIS — this entity has only a lifecycle axis (active | archived). There

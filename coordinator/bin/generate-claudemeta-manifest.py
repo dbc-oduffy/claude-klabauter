@@ -20,19 +20,19 @@ directly.
 Negative spec: this does NOT rank or re-decide tiers. The index is the ruling; this file
 is its executable projection. Changing what gets indexed means editing the index first.
 
-Arrived from coordinator-content-repo state/reference/generate-claudemeta-manifest.py
+Arrived from the coordinator content repo's state/reference/generate-claudemeta-manifest.py
 (docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C7). Published commands (workday-complete)
 cite this row by name.
 
 PATH RESOLUTION — "session repo" class (§ Path resolution), not "engine": this CLI's repo root is
 whichever repo the caller stands in when it invokes `workday-complete`, which is any consumer repo
-running the ceremony, never claude-klabauter's own tree in the general case. DoE's copy derived its
+running the ceremony, never the engine repo's own tree in the general case. DoE's copy derived its
 `REPO_ROOT` from `Path(__file__).resolve().parents[2]`, which was correct there only because the
-script's own tree WAS the repo it indexed — exactly the coordinator-content-repo@b644d5a9 lesson this move must
+script's own tree WAS the repo it indexed — exactly the content-repo b644d5a9 lesson this move must
 not repeat. `_repo_root()` below resolves through the caller's cwd
 (`coordinator_core.git.repo_root.show_toplevel`) instead, called fresh on every `main()` call
 (never memoized at module import) so a long-lived warm-door process serving one call from
-Claude-klabauter's own cwd and the next from a different consumer repo's cwd resolves each
+the engine repo's own cwd and the next from a different consumer repo's cwd resolves each
 correctly. `REPO_ROOT`/`P_INDEX_PATH` remain module-level names — a test seam only, `None` in
 production — so the ported DoE tests' `monkeypatch.setattr(mod, "REPO_ROOT", root)` idiom still
 overrides them exactly as it did in DoE.
@@ -77,6 +77,19 @@ def _repo_root() -> Path:
         print("ERROR: not inside a git work tree", file=sys.stderr)
         raise SystemExit(2)
     return Path(resolved)
+
+
+def _git_stdout(args: list[str]) -> str:
+    if str(_ENGINE_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ENGINE_ROOT))
+    from coordinator_core.git.run import run_git
+
+    result = run_git(args, cwd=str(_repo_root()))
+    if not result.ok:
+        # A manifest built from a failed read is silently wrong; refuse instead.
+        print(f"ERROR: git {args[0]} failed (rc={result.returncode})", file=sys.stderr)
+        raise SystemExit(2)
+    return result.stdout
 
 
 def _p_index_path() -> Path:
@@ -162,14 +175,7 @@ def read_status(path: Path) -> str | None:
 
 def last_commit_times() -> dict[str, int]:
     """One `git log` pass — per-file spawns would be ~200 processes on a shared machine."""
-    out = subprocess.run(
-        ["git", "log", "--no-merges", "--name-only", "--format=@%ct"],
-        cwd=_repo_root(),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        **_no_console_creationflags(),
-    ).stdout
+    out = _git_stdout(["log", "--no-merges", "--name-only", "--format=@%ct"])
     times: dict[str, int] = {}
     stamp = 0
     for line in out.splitlines():
@@ -181,25 +187,11 @@ def last_commit_times() -> dict[str, int]:
 
 
 def git_head() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_repo_root(),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        **_no_console_creationflags(),
-    ).stdout.strip()
+    return _git_stdout(["rev-parse", "HEAD"]).strip()
 
 
 def p_index_sha() -> str:
-    return subprocess.run(
-        ["git", "hash-object", str(_p_index_path())],
-        cwd=_repo_root(),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        **_no_console_creationflags(),
-    ).stdout.strip()
+    return _git_stdout(["hash-object", str(_p_index_path())]).strip()
 
 
 def derive_keep_set(

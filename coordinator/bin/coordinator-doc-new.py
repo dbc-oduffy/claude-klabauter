@@ -59,6 +59,9 @@ Supported types:
                        outputs to .coordinator-local/subagent-share/<session-id>/YYYY-MM-DD-codereview-slice<ID>-<SLUG>.md
                        (the DR-091 home -- same session-scoped root provision_report uses; SLUG is
                        sanitized from --scope; the <!-- FINDINGS --> sentinel is the Edit anchor)
+  review-probe       — empty pytest probe file a reviewer fills via Edit, then runs with
+                       python3 -m pytest <path>::test_probe -q; prints the computed
+                       .coordinator-local/subagent-share/<session-id>/review-probe-<nonce>.py; --out refused
   findings-sidecar   — findings sidecar for a plan-less, slice-less agent  requires --agent-type <type> --title <subject>
                        delegates to provision_report._provision (no agent_id); prints the minted
                        .coordinator-local/subagent-share/<session-id>/<agent-type>-<nonce>.md; --out refused
@@ -122,9 +125,11 @@ import json
 import os
 import random
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
@@ -390,7 +395,7 @@ def _bootstrap_engine() -> None:
         # --type findings-sidecar — LOCAL shim, same shape as the run-report one above.
         # DoE's manifest docTypes entry is requested; once it lands the union is
         # idempotent (harmless to keep), not conflicting.
-        _KNOWN_TYPES = _KNOWN_TYPES | frozenset({"findings-sidecar"})
+        _KNOWN_TYPES = _KNOWN_TYPES | frozenset({"findings-sidecar", "review-probe"})
 
         # Canonical Session Ledger block, shared verbatim by every handoff-family scaffolder
         # (_scaffold_handoff/_scaffold_recovery/_scaffold_spinoff/_scaffold_roadmap_baton/
@@ -2168,10 +2173,22 @@ def _delegate_to_queue_append(doc_type: str) -> None:
     required per schema, and now reaches the caller intact; inventing a default
     here would be a product decision (e.g. "open" is not universally correct)
     this scaffold has no authority to make.
+    Refusal: --summary/--summary-file are handoff-only and the delegate does not
+    know them; refused here, before any spawn, naming the queue's own text flags.
     """
+    passthrough = _argv_without_type()
+    for arg in passthrough:
+        flag = arg.split("=", 1)[0]
+        if flag in ("--summary", "--summary-file"):
+            print(
+                f"error: {flag} is handoff-only; a {doc_type} entry takes its text as "
+                "--title and --body (or --body-file). Required flags: "
+                f"coordinator-doc-new --type {doc_type} --help",
+                file=sys.stderr,
+            )
+            sys.exit(2)
     _bootstrap_engine()
     delegate = _find_sibling_binary("coordinator-queue-append.py")
-    passthrough = _argv_without_type()
     interpreter = _resolve_console_python()
     if interpreter is None:
         print("error: no console Python interpreter could be resolved.", file=sys.stderr)
@@ -3005,12 +3022,14 @@ def _scaffold_spinoff(
     sizing_object: str | None = None,
     summary: str | None = None,
     what_this_covers: str | None = None,
+    reference_materials: Sequence[str] = (),
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
 
     summary / what_this_covers, when supplied, replace the placeholder
     `summary:` line and the `## What this covers` comment; absent, the
-    placeholder skeleton is byte-identical to before.
+    placeholder skeleton is byte-identical to before. reference_materials
+    (ready-made bullet lines) replace the `## Reference materials` comment.
 
     Produces a conformant spinoff (kind: spinoff) against the handoff schema.
     Spinoffs use the same schema as session-handoffs; kind discriminates the body dialect.
@@ -3228,7 +3247,10 @@ def _scaffold_spinoff(
         "",
         "## Reference materials (read first)",
         "",
-        "<!-- List file paths the picking-up EM will need, each with a one-line annotation. -->",
+        *(
+            reference_materials
+            or ["<!-- List file paths the picking-up EM will need, each with a one-line annotation. -->"]
+        ),
         "",
         "## Specification",
         "",
@@ -4712,6 +4734,36 @@ def _write_baton_file(out_abs: str, content: str) -> None:
             fh.write("\n")
 
 
+def _fit_summary(one_line: str) -> str:
+    """Cut ``one_line`` (ellipsis kept) until its YAML-quoted inner length fits ``_SUMMARY_LIMIT``.
+
+    The handoff validator counts the escaped form (``\\`` and ``"`` cost two), not the raw characters.
+    """
+    _bootstrap_engine()
+
+    def _cost(text: str) -> int:
+        return len(_yaml_quote(text)) - 2
+
+    if _cost(one_line) <= _SUMMARY_LIMIT:
+        return one_line
+    cut = min(len(one_line), _SUMMARY_LIMIT)
+    while cut > 0 and _cost(one_line[:cut].rstrip() + "…") > _SUMMARY_LIMIT:
+        cut -= 1
+    return one_line[:cut].rstrip() + "…"
+
+
+def _evidence_bullets(scout_evidence: object) -> list[str]:
+    """Render a sizing's ``scout_evidence`` as bullet lines: strings verbatim, objects as ``finding``."""
+    if not isinstance(scout_evidence, list):
+        return []
+    bullets: list[str] = []
+    for item in scout_evidence:
+        text = item.get("finding") if isinstance(item, dict) else item
+        if isinstance(text, str) and text.strip():
+            bullets.append("- " + " ".join(text.split()))
+    return bullets
+
+
 def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
     """Mint the baton for an M+ sizing, or return the one its `baton:` edge already names.
 
@@ -4771,7 +4823,7 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
 
     title = " ".join(str(meta.get("name") or intent).split())
     one_line = " ".join(intent.split())
-    summary = one_line if len(one_line) <= _SUMMARY_LIMIT else one_line[: _SUMMARY_LIMIT - 1] + "…"
+    summary = _fit_summary(one_line)
     dlv_source = meta.get("deliverable_id")
     if dlv_source:
         deliverable_id = _mint_deliverable_id(
@@ -4794,9 +4846,15 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
         sizing_object=sizing_rel,
         summary=summary,
         what_this_covers=intent,
+        reference_materials=_evidence_bullets(meta.get("scout_evidence")),
     )
     _assert_no_archived_handoff_twin(out_abs, handoff_id, repo_root)
-    _assert_scaffold_content_valid(content, out_abs, repo_root)
+    try:
+        _assert_scaffold_content_valid(content, out_abs, repo_root)
+    except SystemExit as exc:
+        raise SizingMintRefused(
+            ["intent"], f"--from-sizing refused for {sizing_rel}: baton scaffold failed validation ({exc})"
+        ) from exc
 
     old_text = _write_sizing_baton_edge(sizing_abs, out_rel, repo_root)
     try:
@@ -5323,6 +5381,10 @@ def _scaffold_sizing(
     Edit tool can record a real sizing at birth. Values arrive already
     validated against the sizing schema by `_validate_sizing_flags`; each
     omitted one leaves its default line byte-identical.
+
+    `status` is `sized` when both `tshirt` and `route` are supplied (estimate
+    set, route chosen, not yet handed off); `routed` is stamped later by the
+    plan reverse edge. Otherwise `draft`.
     """
     _bootstrap_engine()
     intent_placeholder = title if title else "PLACEHOLDER — replace with the PM's ask, verbatim"
@@ -5345,7 +5407,7 @@ def _scaffold_sizing(
         f"detents: [{', '.join(detents or [])}]  # boundary detents crossed while sizing (e.g. appetite_exceeded); [] if none",
         "fork: null  # cut_to_fit | raise_appetite | null — set ONLY on genuine appetite/estimate divergence; never auto-resolved",
         "xl_exit: null  # split | shape | roadmap | accept_multi_session | null — the PM's pick at a pm-decision route; null means NOT YET CHOSEN, never 'accepted'",
-        "status: draft  # draft | sized | routed | shipped | declined | superseded",
+        f"status: {'sized' if tshirt and route else 'draft'}  # draft | sized | routed | shipped | declined | superseded",
         "premise:",
         f"  provenance: {premise or 'unrecorded'}  # executed | read | not-applicable | unrecorded — how the premise was verified; ADVISORY, never blocks a route",
         (
@@ -6081,6 +6143,30 @@ def _assert_output_safe(out_path: str) -> None:
     sys.exit(1)
 
 
+def _scaffold_review_probe(session_id: str) -> int:
+    """Create an empty ``test_probe`` stub under subagent-share and print its path.
+
+    Contract: the path is ``<SHARE_RELDIR>/<session-id>/review-probe-<nonce>.py``,
+    repo-relative when a repo root resolves; never caller-chosen, never overwritten.
+    """
+    _ensure_engine_on_path()
+    from coordinator_core.session.machinery_paths import SHARE_RELDIR
+
+    rel = os.path.join(
+        *SHARE_RELDIR.split("/"),
+        _sanitize_session_segment(session_id),
+        f"review-probe-{secrets.token_hex(4)}.py",
+    )
+    repo_root = _current_repo_root()
+    abs_path = os.path.join(repo_root, rel) if repo_root else rel
+    _assert_output_safe(abs_path)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "x", encoding="utf-8", newline="\n") as fh:
+        fh.write("def test_probe():\n    raise NotImplementedError\n")
+    print(rel.replace(os.sep, "/") if repo_root else abs_path)
+    return 0
+
+
 def _provision_findings_sidecar(
     agent_type: str,
     title: str,
@@ -6359,6 +6445,11 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             "Bypasses _slug_from_title's own sanitization/truncation — pass an "
             "already filesystem-safe slug."
         ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace the file at the output path when it already exists (default: refuse).",
     )
     parser.add_argument(
         "--out",
@@ -7283,6 +7374,17 @@ def main(argv: "list[str] | None" = None) -> int:
         if _fs_rc == 0:
             print(_fs_path)
         return _fs_rc
+
+    # review-probe writes only to a path it computes under subagent-share; --out is refused
+    # so the scaffolder is never a caller-chosen-path write primitive.
+    if doc_type == "review-probe":
+        if args.out:
+            print(
+                "error: --out is not accepted for --type review-probe; the path is computed.",
+                file=sys.stderr,
+            )
+            return 1
+        return _scaffold_review_probe(_resolve_session_id())
 
     # A sizing-object is the one scaffold with no useful untitled form: its title
     # IS the PM's ask, verbatim, and a placeholder one mints a durable record into
@@ -8599,16 +8701,14 @@ def main(argv: "list[str] | None" = None) -> int:
     # outweighs the negligible performance gain on a review-time tool.
     _assert_output_safe(out_path)
 
-    # B4a: refuse to overwrite an existing sizing object. A truncated-slug
-    # collision (two titles hashing to the same slug prefix) must never
-    # silently replace a ratified sizing object with a fresh scaffold — the
-    # loss is a routing-lobby record, not a regenerable file. Scoped to
-    # --type sizing-object only: other doc types rely on conform-in-place
-    # re-invocation, which this check would break.
-    if doc_type == "sizing-object" and os.path.exists(out_path):
+    # Refuse to overwrite an existing doc: a re-run at the same slug would
+    # replace a filled body with a fresh scaffold and a new deliverable_id
+    # (a ratified sizing object or a written handoff is not regenerable).
+    # --force is the explicit opt-in to replace.
+    if not args.force and os.path.exists(out_path):
         print(
-            f"error: refusing to overwrite existing sizing object at {out_path}. "
-            "Pass --out PATH to write to a different location.",
+            f"error: refusing to overwrite existing {doc_type} at {out_path}. "
+            "Pass --out PATH to write elsewhere, or --force to replace it.",
             file=sys.stderr,
         )
         sys.exit(1)

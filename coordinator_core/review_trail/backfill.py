@@ -30,10 +30,11 @@ it imports them from `coordinator_core.coverage`:
     1. `_verdict_counts`                  — verdict filter.
     2. `_record_range_has_stored_head`    — HEAD-anchored exclusion.
     3. `_classify_bookkeeping_shas`       — the planning-artifact classifier
-                                             `_credit_from_kind_partition`
-                                             filters a `scope_kind="plan"`
-                                             record's resolved range
-                                             against; `scope_kind=
+                                             `_resolve_special` filters a
+                                             `scope_kind="plan"` record's
+                                             resolved range against (the
+                                             rule's one definition);
+                                             `scope_kind=
                                              "integration"` is excluded
                                              outright, never resolved.
     4. `_narrow_foreign_session_scope` (+ `_FOREIGN_STRIPPED_SCOPES`) —

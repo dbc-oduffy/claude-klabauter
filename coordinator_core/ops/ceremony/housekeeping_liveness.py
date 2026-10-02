@@ -99,18 +99,15 @@ KNOWN_CLASSES: tuple = (
     GIT_MAINTENANCE,
 )
 
-# Per-class on-demand remedy commands (C21 leg 2) -- see module negative-spec above: this
-# is a "here's the manual escape hatch" list, not a claim about automatic call sites.
-#
-# GIT_MAINTENANCE is the FIRST class with a real, shipped CLI behind it. The negative-spec's
-# "do not invent commands for classes with no CLI yet" is precisely what makes this entry
-# legitimate rather than an exception to it: `coordinator-git-maintenance` exists on disk
-# before this entry names it. Every other known class still maps to an empty tuple and MUST
-# render nothing.
+# Per-class on-demand remedy commands -- a manual escape hatch, not a claim about automatic
+# call sites. Two classes have a shipped CLI (GIT_MAINTENANCE, ROADMAP_CALLOUT); every class in
+# `_NO_REMEDY_CLI_YET` maps to an empty tuple and renders nothing.
+_NO_REMEDY_CLI_YET = frozenset({ARCHIVE_SWEEPS, COMPLETION_SCAFFOLD, EOL_SWEEP})
+
 REMEDY_COMMANDS: Dict[str, Tuple[str, ...]] = {
     ARCHIVE_SWEEPS: (),
     COMPLETION_SCAFFOLD: (),
-    ROADMAP_CALLOUT: (),
+    ROADMAP_CALLOUT: ("python coordinator/bin/refresh-roadmap-callout.py <roadmap_id>",),
     EOL_SWEEP: (),
     # By runnable path, never the bareword: the forwarder pair is not resolvable
     # until the next install-chain run stamps it, so a report rendered before

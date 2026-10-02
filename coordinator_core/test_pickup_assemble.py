@@ -11,6 +11,7 @@ Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordina
 """
 from __future__ import annotations
 
+from coordinator_core.tests.git_seed import seeded_repo
 import json
 import os
 import subprocess
@@ -81,14 +82,7 @@ def _git_commit_backdated(repo: Path, message: str, iso_date: str) -> subprocess
 
 
 def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "work/test/2026-01-01")
-    _git(repo, "config", "commit.gpgsign", "false")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+    seeded_repo(repo, branch="work/test/2026-01-01", email="test@example.com", name="Test")
 
 
 def _seed_handoff(repo: Path, name: str, status: str = "open", deployment_state: str = "active", kind: str = "", scope: list[str] | None = None) -> Path:
@@ -7589,6 +7583,31 @@ class TestStaleBookkeepingPromotesNoRestamp:
         assert gate["verdict"] == "stale-bookkeeping"
         assert "WITHOUT re-stamping" in gate["next_move"]
 
+    def test_terminal_plan_close_out_is_not_stale_substantive(self, tmp_path):
+        """Regression for state/bug-backlog/2026-08-18-stamp-check-reports-
+        stale-substantive-on-ec0e724947a0.yaml: a plan recording its own
+        completion (frontmatter `status:` flip, AC status cells open -> met)
+        must not read as a re-scope that surfaces to the PM."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        path, plan_path = _seed_self_stamped_handoff(repo, "h-terminal.md")
+        text = plan_path.read_text(encoding="utf-8")
+        text = text.replace("created: 2026-01-01\n", "created: 2026-01-01\nstatus: implemented\n", 1)
+        text += "\n| AC | Criterion | Status |\n|---|---|---|\n| AC1 | does the thing | met |\n"
+        plan_path.write_text(text, encoding="utf-8")
+        _git(repo, "add", str(plan_path.relative_to(repo)))
+        _git(repo, "commit", "-m", "close-out")
+
+        rel = path.relative_to(repo).as_posix()
+        fm = pa._parse_fm_dict(pa.split_frontmatter(path.read_text(encoding="utf-8")).fm_text)
+        hit = pb.compute_execution_stamp_match(repo, fm, rel)
+
+        assert hit is not None
+        gate, _target = hit
+        assert gate["verdict"] == "stale-bookkeeping"
+        assert gate["delta_class"] == "terminal"
+        assert "Surface to the PM" not in gate["next_move"]
+
     def test_unstampable_still_emits_the_restamp_directive(self, tmp_path, monkeypatch):
         """The negative control: `unstampable` is a recorded value that never
         reproduced at all — a broken record a re-stamp repairs — and keeps
@@ -7649,3 +7668,39 @@ class TestBuildShippedStateJudgmentPointThirdDisposition:
             d for d in jp["dispositions"] if d["value"] == "confirm-shipped-stand-down"
         )
         assert stand_down["resolves"] == []
+
+
+class TestPlanFrontmatterIdFallback:
+    """A bare id that names no file but equals a `docs/plans/` frontmatter
+    `stub_id`/`plan_id`/`deliverable_id` resolves to that plan."""
+
+    def _seed_plan(self, repo, name, fm_extra):
+        path = repo / "docs" / "plans" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '---\ntitle: "Plan"\nstatus: in_progress\n' + fm_extra + "---\n\nbody\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_bare_stub_id_resolves_to_plan(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        self._seed_plan(repo, "2026-07-25-some-plan.md", "stub_id: recs-04\n")
+
+        result = pb.brief("recs-04", repo_root=repo)
+
+        artifact = result.decision_object["artifact"]
+        assert artifact["path"] == "docs/plans/2026-07-25-some-plan.md"
+        assert artifact["plan_id_resolution"]["passed"] == "recs-04"
+        assert "plan frontmatter id" in result.decision_object["narration"]
+
+    def test_unmatched_id_still_not_found_and_names_the_tier(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        self._seed_plan(repo, "2026-07-25-some-plan.md", "stub_id: recs-05\n")
+
+        result = pb.brief("recs-04", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "stub_id/plan_id/deliverable_id" in result.decision_object["error"]

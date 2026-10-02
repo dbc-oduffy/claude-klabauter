@@ -1098,11 +1098,48 @@ async def _handler(
         "handoff.correct_body: applied correction to %s (session %s via %s)",
         p, session_id, session_source,
     )
+    holder_notice = _notify_holder(
+        holder=(resolved_holder or claimed_by or "").strip(),
+        corrector=session_id,
+        handoff_path_raw=handoff_path_raw,
+        new_string=new_string,
+        repo_root=repo_root,
+    )
     return {
         "exit_code": 0,
         "applied": True,
         "session_id": session_id,
         "session_source": session_source,
         "ownership_basis": basis,
+        "holder_notice": holder_notice,
         "message": f"applied body correction to {handoff_path_raw}",
     }
+
+
+def _notify_holder(
+    *, holder: str, corrector: str, handoff_path_raw: str, new_string: str, repo_root: Optional[Path]
+) -> Optional[str]:
+    """A claimed body is the holder's working spec: a correction by anyone
+    else lands a peer notice in the holder's inbox, so "read at claim time"
+    is not silently stale. Returns the notice path, or None when the holder
+    is the corrector or no addressable holder exists. Never fails the
+    correction, which has already landed."""
+    if not holder or holder == corrector or _is_sentinel_or_malformed_session(holder):
+        return None
+    from coordinator_core.ops.peer_notice_send import _peer_notice_send
+
+    excerpt = new_string if len(new_string) <= 400 else new_string[:400] + "..."
+    try:
+        result = _peer_notice_send(
+            {
+                "target_session_id": holder,
+                "artifact_path": handoff_path_raw,
+                "message": f"Baton you hold was body-corrected by {corrector}. Re-read it. New text: {excerpt}",
+                "from_session_id": corrector,
+            },
+            repo_root=repo_root,
+        )
+    except (OSError, ValueError) as exc:
+        _LOG.warning("handoff.correct_body: holder notice to %s failed: %s", holder, exc)
+        return None
+    return result.get("notice_path")

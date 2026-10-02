@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dis
+import tempfile
 import types
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -123,7 +124,7 @@ def guard_roster() -> Tuple[GuardRosterEntry, ...]:
     chain = _dispatch._build_guard_chain(
         cmd="echo coordinator-guard-roster-probe",
         session_id="guard-roster-probe",
-        cwd="/tmp",
+        cwd=tempfile.gettempdir(),
         payload={"tool_name": "Bash", "tool_input": {"command": "echo x"}},
         policy_file=None,
         host_is_windows=None,

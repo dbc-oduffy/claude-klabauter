@@ -157,7 +157,7 @@ def _evaluate(payload: dict) -> str | None:
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         _reap_old_markers(marker.parent)
-        marker.write_text("1", encoding="utf-8")
+        marker.write_text("1", encoding="utf-8", newline="\n")
     except OSError:
         return None
     return MESSAGE.format(pct=min(100, round(ratio * 100)), tokens=f"{tokens / 1000:.0f}k")
@@ -165,8 +165,8 @@ def _evaluate(payload: dict) -> str | None:
 
 @register_op("hooks.postuse_subagent_compaction_warning")
 def _handler(params: dict, repo_root=None) -> dict:
+    payload = payload_of(params)
     try:
-        payload = payload_of(params)
         if not field(payload, "agent_id"):
             return no_advisory()
         text = _evaluate(payload)

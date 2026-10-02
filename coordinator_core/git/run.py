@@ -327,7 +327,7 @@ def run_git(
     back as U+FFFD. For a caller whose entire predicate is "are these bytes
     what the declaration says they are" (`ops/eol/census.py`, deleted with the eol family at K-064 — kept as the clearest worked example of the shape, not as a file to open), that
     substitution IS the bug it is looking for, and for
-    `git/ls_files_bytes.py` it is the reason that module exists at all. Text
+    a corpus-wide byte probe it is the reason such a helper exists. Text
     mode would also universal-newline-translate a `
 ` inside a blob,
     which is precisely the difference `ops/eol/repair.py` reads `cat-file

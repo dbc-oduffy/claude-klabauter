@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _ReplyingServer,
-    _door_under_default_name,
-    _make_stub_engine_root,
-    _pipe_name_for,
+from coordinator_core.warm.tests.door_test_support import (
+    ReplyingServer,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -65,10 +65,10 @@ def _exchange(root: Path, env_overrides: "dict[str, str] | None"):
         env.pop(name, None)
     env.update(env_overrides or {})
 
-    server = _ReplyingServer(_pipe_name_for(root), _OK_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _OK_REPLY)
     try:
         proc = subprocess.run(
-            [str(_door_under_default_name(root)), "ping"],
+            [str(door_under_default_name(root)), "ping"],
             capture_output=True,
             text=True,
             env=env,
@@ -84,7 +84,7 @@ def _exchange(root: Path, env_overrides: "dict[str, str] | None"):
 
 
 def test_a_resolved_name_is_stamped_by_its_own_key(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     named_home = str(tmp_path / "an-overridden-settings-home")
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": named_home})
@@ -93,7 +93,7 @@ def test_a_resolved_name_is_stamped_by_its_own_key(tmp_path: Path) -> None:
 
 
 def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(
         root,
@@ -113,7 +113,7 @@ def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
 
 
 def test_an_unresolved_name_is_omitted_never_an_empty_string(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
 
@@ -123,7 +123,7 @@ def test_an_unresolved_name_is_omitted_never_an_empty_string(tmp_path: Path) -> 
 
 
 def test_no_declared_name_resolved_omits_env_entirely(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
 
@@ -133,7 +133,7 @@ def test_no_declared_name_resolved_omits_env_entirely(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
 
@@ -141,7 +141,7 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_the_legacy_settings_home_field_is_no_longer_stamped(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")})
 
@@ -149,7 +149,7 @@ def test_the_legacy_settings_home_field_is_no_longer_stamped(tmp_path: Path) -> 
 
 
 def test_the_legacy_caller_session_id_field_is_no_longer_stamped(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"})
 
@@ -157,7 +157,7 @@ def test_the_legacy_caller_session_id_field_is_no_longer_stamped(tmp_path: Path)
 
 
 def test_caller_pid_is_still_stamped_unconditionally(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
 
@@ -174,7 +174,7 @@ def test_a_value_too_long_for_its_probed_buffer_is_omitted(tmp_path: Path) -> No
     actual truncation ceiling could be exercised without a multi-KB fixture,
     so this asserts the shape (present-when-it-fits) rather than the ceiling
     itself."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     named_home = str(tmp_path / "home")
 
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": named_home})

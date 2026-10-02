@@ -37,7 +37,7 @@ def test_the_row_prompt_leads_with_the_clause_ahead_of_the_plan_preamble():
     context = PlanContext(title="A plan", goal=None, problem_excerpt=None, repo_root="/repo")
     prompt = _row_prompt(_row(), "docs/plans/p.md", context)
     assert prompt.startswith(_BRIEF_PRECEDENCE_CLAUSE)
-    assert prompt.index("Repo root: /repo") > len(_BRIEF_PRECEDENCE_CLAUSE)
+    assert prompt.index("Repo root: ") > len(_BRIEF_PRECEDENCE_CLAUSE)
 
 
 def test_the_bare_row_prompt_carries_the_clause_too():

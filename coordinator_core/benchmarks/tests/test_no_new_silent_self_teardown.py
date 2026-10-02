@@ -131,7 +131,11 @@ def _iter_self_teardown_sites() -> Iterator[_Site]:
     for path in sorted(_ENGINE_PKG.rglob("*.py")):
         relpath = path.relative_to(_ENGINE_PKG.parent).as_posix()
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            # A site is an `rmtree(..., ignore_errors=True)` call.
+            if "rmtree" not in text or "ignore_errors" not in text:
+                continue
+            tree = ast.parse(text)
         except (SyntaxError, UnicodeDecodeError):
             continue
         for fn in ast.walk(tree):

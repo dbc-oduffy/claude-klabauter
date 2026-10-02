@@ -15,8 +15,7 @@ that used to require reproducing the deleted orchestration end-to-end.
 
 What survives here, and is what this file now tests directly rather than
 through the deleted orchestrator: bookkeeping classification
-(`_classify_bookkeeping_shas`), the kind-aware plan-vs-code credit collapse
-(`_credit_from_kind_partition`), the stored-literal-HEAD read-side exclusion
+(`_classify_bookkeeping_shas`), the stored-literal-HEAD read-side exclusion
 (`_record_range_has_stored_head`), the verdict filter (`_verdict_counts`), the
 unrecognized-scope_kind WARN aggregation (`emit_unrecognized_kind_warning`),
 and the foreign-session scope set (`_FOREIGN_STRIPPED_SCOPES`).
@@ -65,19 +64,6 @@ def _init_repo(path: Path) -> None:
     _git(["init", "-b", "main"], path)
     _git(["config", "user.email", "test@example.com"], path)
     _git(["config", "user.name", "Test"], path)
-
-
-def _make_path_commit(repo: Path, rel_path: str, message: str) -> str:
-    full = repo / rel_path
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(f"{message}\n", encoding="utf-8")
-    _git(["add", rel_path], repo)
-    _git(["commit", "-m", message], repo)
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo),
-        capture_output=True, encoding="utf-8", check=True,
-    **no_console_creationflags(),
-).stdout.strip()
 
 
 def _write_trail_record(path: Path, sha: str) -> None:
@@ -193,126 +179,3 @@ def test_emit_unrecognized_kind_warning_aggregates_one_line(
         f"expected exactly one aggregated WARN line, got {len(warn_lines)}: {warn_lines}"
     )
     assert "4" in warn_lines[0] and "chunk" in warn_lines[0] and "inline" in warn_lines[0]
-
-
-def test_credit_from_kind_partition_plan_credits_planning_artifact_commit(
-    tmp_path: Path,
-) -> None:
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "C0: initial")
-    plan_sha = _make_path_commit(repo, "docs/plans/2026-08-06-example.md", "author plan")
-
-    credited = _credit_from_kind_partition({"plan": {plan_sha}}, str(repo))
-
-    assert plan_sha in credited, (
-        "a plan-kind bucket crediting a planning-artifact-only commit must "
-        "surface it (AC5)"
-    )
-
-
-def test_credit_from_kind_partition_plan_never_credits_code_commit(tmp_path: Path) -> None:
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "C0: initial")
-    plan_sha = _make_path_commit(repo, "docs/plans/2026-08-06-example.md", "author plan")
-    code_sha = _make_path_commit(repo, "src/example.py", "code change")
-
-    credited = _credit_from_kind_partition({"plan": {plan_sha, code_sha}}, str(repo))
-
-    assert plan_sha in credited, "the planning-artifact commit must still be credited"
-    assert code_sha not in credited, (
-        "AC6: a plan-kind bucket must NEVER credit a code commit, even when "
-        "it shares the bucket with a genuinely planning commit"
-    )
-
-
-def test_credit_from_kind_partition_plan_bookkeeping_only_commit_uncredited(
-    tmp_path: Path,
-) -> None:
-    """A "plan"-kind bucket may also contain a BOOKKEEPING-only commit (not
-    code, not planning) — e.g. a state/ ceremony-exhaust commit. EXHAUST wins
-    on overlap (see `_classify_bookkeeping_shas`), so this commit is neither
-    exhaust-credited (only "diff"-kind buckets get unconditional credit) nor
-    planning-credited (it touches no planning-artifact path at all) — it must
-    simply not appear in the credited set.
-    """
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "C0: initial")
-    plan_sha = _make_path_commit(repo, "docs/plans/2026-08-06-example.md", "author plan")
-    bookkeeping_sha = _make_path_commit(
-        repo, "state/some-ledger.jsonl", "bookkeeping-only commit"
-    )
-
-    credited = _credit_from_kind_partition(
-        {"plan": {plan_sha, bookkeeping_sha}}, str(repo)
-    )
-
-    assert plan_sha in credited, "the planning-artifact commit must still be credited"
-    assert bookkeeping_sha not in credited, (
-        "a bookkeeping-only commit within a plan bucket must not be credited "
-        "— it is neither planning nor unconditionally-credited diff"
-    )
-
-
-def test_credit_from_kind_partition_planning_commit_uncredited_without_a_plan_bucket(
-    tmp_path: Path,
-) -> None:
-    """AC9 (non-vacuous): a planning-artifact commit is NOT auto-credited just
-    because it is classifiable PLANNING — it must actually appear in a
-    "plan"-kind bucket. Absent one, it stays uncredited, exactly like any
-    other unreviewed commit.
-    """
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "C0: initial")
-    plan_sha = _make_path_commit(repo, "docs/plans/2026-08-06-example.md", "author plan")
-
-    credited = _credit_from_kind_partition({}, str(repo))
-
-    assert plan_sha not in credited, (
-        "AC9: a planning-artifact commit with no plan-kind bucket crediting "
-        "it must remain uncovered — planning status is not itself credit"
-    )
-
-
-def test_credit_from_kind_partition_diff_kind_credits_unconditionally(
-    tmp_path: Path,
-) -> None:
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    _make_commit(repo, "C0: initial")
-    code_sha = _make_path_commit(repo, "src/example.py", "code change")
-
-    credited = _credit_from_kind_partition({"diff": {code_sha}}, str(repo))
-
-    assert code_sha in credited
-
-
-def test_credit_from_kind_partition_integration_kind_credits_nothing() -> None:
-    """Anti-scope: "integration" is not an unrestricted-credit kind and has no
-    planning-classification path either — any kind outside
-    `_UNRESTRICTED_CREDIT_KINDS`/"plan" credits nothing, fail-closed.
-    """
-    from coordinator_core.coverage import _credit_from_kind_partition
-
-    credited = _credit_from_kind_partition(
-        {"integration": {"deadbeef00000000000000000000000000000000"}}, "."
-    )
-    assert credited == set()

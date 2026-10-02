@@ -533,11 +533,8 @@ def test_cluster_r27_stale_baseline_entry_and_four_bypassing_entrypoints_fixed()
     a stale baseline row named a deleted trampoline, and four live entrypoints
     reached an op in-process without routing through the declare-write seam.
 
-    `reap-orphaned-in-flight-handoffs.py` is the one real defect among the
-    four — `apply_dispositions()` mutates handoff frontmatter through
-    `archive_stamp`'s verbs, which never call `declare_write` themselves, so
-    its CLI shell now wraps the call in `recording_declared_writes` and
-    declares each applied path itself. The other three
+    The one real defect among the four lived in the in_flight orphan reaper
+    CLI, since deleted (DR-447). The other three
     (`percolate-mirror.py`, `render-ceremony-receipt.py`,
     `workday-complete-step3-consolidate.py`) have no write for the seam to
     claim — a pure message composer, a read-only renderer, and a git-ref-only
@@ -546,16 +543,9 @@ def test_cluster_r27_stale_baseline_entry_and_four_bypassing_entrypoints_fixed()
     """
     assert "coordinator/bin/safe-commit-offer.py" not in _baseline()
 
-    src = (REPO_ROOT / "coordinator/bin/reap-orphaned-in-flight-handoffs.py").read_text(
-        encoding="utf-8"
-    )
-    assert _imports_an_op_in_process(src)
-    assert _uses_the_seam(src)
-
     new = set(_bypassing()) - _baseline()
     for p in (
         "coordinator/bin/percolate-mirror.py",
-        "coordinator/bin/reap-orphaned-in-flight-handoffs.py",
         "coordinator/bin/render-ceremony-receipt.py",
         "coordinator/bin/workday-complete-step3-consolidate.py",
     ):

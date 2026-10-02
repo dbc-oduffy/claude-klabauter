@@ -24,9 +24,6 @@ Spec backlink: docs/plans/2026-09-11-…, chunk C10.
 """
 from __future__ import annotations
 
-import os
-import shutil
-import stat
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -142,24 +139,6 @@ def fixture_repo(tmp_path_factory):
 
     yield dest
 
-    # Pre-existing Windows defect (observed on this box, not introduced by
-    # this row): `git` writes loose objects read-only, and a bare bare-repo
-    # remote (`materialize_fixture_repo`'s `.bench-origin.git`) leaves
-    # read-only object files `rmtree_or_raise`'s own `shutil.rmtree(...,
-    # ignore_errors=True)` silently cannot remove, which then loudly
-    # `CloneTeardownLeak`s over a permission bit, not a live holder. Other
-    # `scratch/benchmark-clones/*` directories pre-dating this row's own
-    # test run (c9-probe-*, crlf-fallback-probe-*) exhibit the identical
-    # `WinError 5` on the identical path shape, confirming this is not
-    # specific to this fixture. Clearing the read-only bit first is a
-    # test-local workaround, not a fix to the shared `isolated_clone`
-    # module (out of this row's footprint).
-    for root, _dirs, files in os.walk(clone_parent):
-        for name in files:
-            try:
-                os.chmod(os.path.join(root, name), stat.S_IWRITE)
-            except OSError:
-                pass
     reaped = reap_processes_under(clone_parent)
     rmtree_or_raise(clone_parent, label="pickup-brief-req-fixture", reaped=reaped)
 
@@ -184,6 +163,7 @@ _KEPT_TOP_KEYS = {
     "next_move",
     "sizing_disposition",
     "preflight",
+    "decisions",
 }
 _DELETED_KEYS = {
     "closure_signals",
@@ -211,6 +191,15 @@ def _assert_kept_shape(decision_object: dict[str, Any]) -> None:
         chain = decision_object["artifact"]["chain"]
         if chain is not None:
             assert set(chain.keys()) == {"ancestor_count"}
+
+
+def test_every_brief_carries_decisions_key(fixture_repo):
+    from coordinator_core import pickup_brief as pb
+
+    bare = pb._emit({"narration": "n", "next_move": "m", "judgment_points": []}, 0)
+    assert bare.decision_object["decisions"] == {}
+    kept = pb._emit({"narration": "n", "next_move": "m", "decisions": {"j": {"disposition": "x"}}}, 0)
+    assert kept.decision_object["decisions"] == {"j": {"disposition": "x"}}
 
 
 def test_chained_handoff_ancestor_count_and_kept_shape(fixture_repo):
@@ -370,3 +359,43 @@ def test_split_artifact_args_and_survey_never_claims(fixture_repo):
         basename = Path(path).name
         claims_dir = fixture_repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
         assert not claims_dir.is_dir()
+
+
+def test_revision_sha_resolves_to_moved_memo(fixture_repo):
+    """A delivery-commit SHA resolves to the memo's CURRENT path after it moved
+    from inbox to archive (the commit-time path is stale), and an unknown SHA is
+    a business failure, never a wrong artifact."""
+    basename = "2026-08-06-peer-em-moved-memo.md"
+    inbox = fixture_repo / "cross-repo" / "inbox" / basename
+    _write(
+        inbox,
+        (
+            "---\n"
+            'title: "moved memo"\n'
+            "created: 2026-08-06\n"
+            'from: "peer-em"\n'
+            'to: "self-em"\n'
+            "status: open\n"
+            'kind: "fyi"\n'
+            "---\n\n"
+            "Moved memo body.\n"
+        ),
+    )
+    _git(fixture_repo, "add", "-A")
+    _git(fixture_repo, "commit", "-q", "-m", "deliver memo")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(fixture_repo), check=True, capture_output=True,
+        text=True, **_NO_CONSOLE,
+    ).stdout.strip()
+
+    archive = fixture_repo / "cross-repo" / "archive" / basename
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    _git(fixture_repo, "mv", "--", str(inbox), str(archive))
+    _git(fixture_repo, "commit", "-q", "-m", "archive memo")
+
+    obj = pb.brief(sha, repo_root=fixture_repo, claim_at_brief=False).decision_object
+    assert obj["artifact"]["resolution"]["status"] == "archived"
+    assert obj["artifact"]["revision_resolution"]["resolved"] == f"cross-repo/archive/{basename}"
+
+    missing = pb.brief("0" * 40, repo_root=fixture_repo, claim_at_brief=False)
+    assert missing.exit_code == pb.EXIT_BUSINESS_FAIL

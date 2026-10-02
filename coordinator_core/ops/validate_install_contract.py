@@ -2,7 +2,7 @@
 coordinator_core.ops.validate_install_contract — packageability contract validator.
 
 Purpose: reads a repo's agent-install-manifest.json and validates it against the
-packageability contract (docs/wiki/agent-install-contract.md § Packageability) —
+packageability contract (coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/agent-install-contract.md § Packageability) —
 the per-point completeness rules that JSON-schema `required`/`type` shape alone
 can't express: functional-probe present per system_prerequisites/direct_deps
 entry, required_env_vars present-even-if-empty, entry-point contract properties

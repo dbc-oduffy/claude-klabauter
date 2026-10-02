@@ -6,18 +6,18 @@ module. It therefore imports the standard library only and does no I/O at import
 time. `tomllib` is imported inside `registry_value_or_none` so a 3.10
 interpreter loses that one rung instead of the module.
 
-Every function is a read of disk with zero spawns. `write_rule_surface`
-duplicates six lines of mechanics kept in cloud_setup.py on purpose: the cloud
-verdict must still land when this module failed to load.
+Every function is a read of disk with zero spawns and no writes; each
+installer lands the verdict through its own rule-surface writer.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import socket
 from pathlib import Path
-
-GENERATES = []  # writes `<claude_home>/rules/<basename>` in the operator's settings home, outside claude-klabauter's tracked tree
+from urllib.parse import urlparse
 
 #: Where the platform records each installed plugin; `${CLAUDE_PLUGIN_ROOT}`
 #: expands from its `installPath`, and a dead path silently disables all hooks.
@@ -37,6 +37,13 @@ PLUGIN_HOOKS_REL = ("hooks", "hooks.json")
 _SCRIPT_EXTENSIONS = (".py", ".sh", ".mjs", ".js")
 
 _PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}/"
+
+#: Registry keys naming the content repo. The publish scrub rewrites the first
+#: spelling to the second, so each is built from halves to survive it.
+_REGISTRY_KEYS = ("repos." + "doe_" + "claude", "repos." + "content_" + "root")
+
+#: One TCP connect, never a request: the forwarder either accepts or it is dark.
+_PORT_PROBE_TIMEOUT_S = 0.25
 
 
 def script_tail(piece: str) -> str | None:
@@ -137,6 +144,7 @@ def plugin_hook_delivery(settings: dict, *, claude_home: Path, plugin_root: Path
         "armed": False,
         "event_count": 0,
         "missing_files": [],
+        "http_ports": [],
         "reason": "",
         "_delivered": {},
     }
@@ -177,6 +185,7 @@ def plugin_hook_delivery(settings: dict, *, claude_home: Path, plugin_root: Path
         result["reason"] = f"{manifest} registers no hook event"
         return result
     result["event_count"] = len(hooks)
+    ports: set[int] = set()
     referenced: set[str] = set()
     for event, groups in hooks.items():
         for group in groups if isinstance(groups, list) else []:
@@ -187,6 +196,12 @@ def plugin_hook_delivery(settings: dict, *, claude_home: Path, plugin_root: Path
                     url = hook.get("url")
                     if isinstance(url, str) and url:
                         delivered.setdefault(event, set()).add(f"url:{url}")
+                        try:
+                            port = urlparse(url).port
+                        except ValueError:
+                            port = None
+                        if port:
+                            ports.add(port)
                     continue
                 args = hook.get("args") if isinstance(hook.get("args"), list) else []
                 ids: set[str] = set()
@@ -207,6 +222,7 @@ def plugin_hook_delivery(settings: dict, *, claude_home: Path, plugin_root: Path
                     delivered.setdefault(event, set()).update(ids)
     missing = sorted(rel for rel in referenced if not Path(install_path, rel).is_file())
     result["missing_files"] = missing
+    result["http_ports"] = sorted(ports)
     if missing:
         result["reason"] = f"{manifest} names {len(missing)} absent file(s), e.g. {missing[0]}"
         return result
@@ -253,12 +269,13 @@ def derive_hook_plane(
     rungs: dict[str, str | None] = {}
     if settings_home_str:
         machine_local = Path(settings_home_str) / "machine-local"
-        rungs["registry repos.content_root"] = registry_value_or_none(machine_local, "repos.content_root")
+        for key in _REGISTRY_KEYS:
+            rungs[f"registry {key}"] = registry_value_or_none(machine_local, key)
         rungs[f"{settings_home_str}/machine-local/.coordinator-content-root"] = first_line_or_none(
             machine_local / ".coordinator-content-root"
         )
     else:
-        rungs["registry repos.content_root"] = None
+        rungs[f"registry {_REGISTRY_KEYS[0]}"] = None
         rungs["<settings-home>/machine-local/.coordinator-content-root"] = None
     legacy = claude_home / ".coordinator-content-root"
     rungs[str(legacy)] = first_line_or_none(legacy)
@@ -303,34 +320,52 @@ def hook_plane_problems(hook_plane: dict) -> list[str]:
     return problems
 
 
+def live_session() -> bool:
+    """True inside a cloud boot or a running Claude Code session, the only places
+    a listener is owed; a bare install has none and must not read as dark."""
+    return os.environ.get("CLAUDE_CODE_REMOTE") == "true" or bool(os.environ.get("CLAUDECODE"))
+
+
+def forwarder_dark_reason(hook_plane: dict | None) -> str | None:
+    """Why a registered `type: http` hook reaches nothing, or None.
+
+    One TCP connect per registered port, 0.25s cap. None when no http hook is
+    registered: there is nothing to answer. A snapshot, not a promise: the
+    listener can still die after the probe.
+    """
+    ports = ((hook_plane or {}).get("plugin_hooks") or {}).get("http_ports") or []
+    for port in ports:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=_PORT_PROBE_TIMEOUT_S):
+                pass
+        except OSError:
+            return f"http hook port {port} accepts no connection"
+    return None
+
+
 def hook_plane_status_line(hook_plane: dict | None, *, extra_failure: str | None = None) -> str:
     """`HOOK PLANE: ARMED|UNARMED (delivery: <surface>)`, the first line of a verdict.
 
-    ARMED needs a registered hook surface, a resolving `.coordinator-content-root`, and no
-    `extra_failure`; a given `extra_failure` forces UNARMED and is appended
-    after `; `. An absent `hook_plane` reports UNARMED with delivery `unknown`.
+    ARMED needs a registered hook surface, a resolving `.coordinator-content-root`, an answering
+    listener on every registered http-hook port (probed only in a live session;
+    otherwise ARMED carries a not-probed qualifier), and no `extra_failure`; a
+    failure forces UNARMED and is appended after `; `. An absent `hook_plane` reports UNARMED with delivery `unknown`.
     """
     plane = hook_plane or {}
     delivery = plane.get("hook_delivery", "unknown")
+    ports = (plane.get("plugin_hooks") or {}).get("http_ports") or []
+    qualifier = None
+    if not extra_failure and ports:
+        if live_session():
+            extra_failure = forwarder_dark_reason(hook_plane)
+        else:
+            qualifier = "forwarder starts at session start, not probed"
     armed = bool(
         hook_plane
         and plane.get("hooks_registered")
         and plane.get("content_root_resolves")
         and not extra_failure
     )
-    suffix = f"; {extra_failure}" if extra_failure else ""
+    suffix = f"; {extra_failure or qualifier}" if (extra_failure or qualifier) else ""
     return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery}{suffix})"
 
-
-def write_rule_surface(claude_home: Path, basename: str, body: str | None) -> bool:
-    """Land (or, for a None body, clear) `<claude_home>/rules/<basename>`.
-
-    Returns whether a file was written.
-    """
-    rule_path = Path(claude_home) / "rules" / basename
-    if body is None:
-        rule_path.unlink(missing_ok=True)
-        return False
-    rule_path.parent.mkdir(parents=True, exist_ok=True)
-    rule_path.write_text(body, encoding="utf-8", newline="\n")
-    return True

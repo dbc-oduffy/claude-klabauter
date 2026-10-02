@@ -24,7 +24,8 @@ Scope: `paths` given (a non-empty list, POSIX-relative) scans exactly those
 files — a caller wanting a whole-repo pass supplies the full tracked-file
 list itself (`git ls-files`, or `tracked_source_files` below). No `paths`
 scans only files changed against `base` (default: the merge-base between
-HEAD and the remote/local default branch) plus untracked files — one `git
+HEAD and the remote/local default branch, or HEAD~`DEFAULT_DIFF_COMMIT_CAP`
+when the merge-base is further back) plus untracked files — one `git
 diff --name-only` and one `git ls-files --others`. This is the default
 because a repo-wide regex pass over every tracked file does not fit inside
 a single-process budget; a diff-scoped pass over what one session actually
@@ -44,17 +45,15 @@ sweep's own `_run_git`.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.attribution import is_exempt_path
 from coordinator_core.commenting import scan_text
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
-from coordinator_core.win_portability import no_console_creationflags
 
-_GIT_TIMEOUT_SECONDS = 15
 
 #: Extensions that carry no comments to find — skipped before a byte is
 #: read, same reasoning as `.json` (the original AC6 exemption): the
@@ -71,26 +70,22 @@ _SKIP_PREFIXES = (".structural-index/",)
 #: remote configured — a fresh clone-less throwaway repo, for instance).
 _DEFAULT_BRANCH_CANDIDATES = ("origin/main", "origin/master", "main", "master")
 
+#: Most recent commits the default scope reaches back over. On a long-lived
+#: branch the merge-base sits thousands of files behind HEAD (4181 files,
+#: 2.6s measured), which is a repo-wide pass, not a session's own work; past
+#: this many commits the base moves up to HEAD~N. An explicit `base` is
+#: never capped.
+DEFAULT_DIFF_COMMIT_CAP = 50
+
 
 def _run_git(repo_root: Path, args: List[str]) -> Optional[str]:
     """Run a read-only `git` subprocess in `repo_root`; return stdout on
     success, None on any failure (not a git repo, `git` missing, timeout,
     or a non-zero exit — e.g. no such ref).
     """
-    try:
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        print(
-            f"skip: _run_git: proc = subprocess.run(...) failed: {sys.exc_info()[1]}",
-            file=sys.stderr,
-        )
+    proc = run_git(args, cwd=str(repo_root))
+    if proc.timed_out or proc.returncode == 127:
+        print(f"skip: _run_git: git {args[0]} did not run (rc={proc.returncode})", file=sys.stderr)
         return None
     if proc.returncode != 0:
         return None
@@ -143,10 +138,25 @@ def _merge_base(repo_root: Path, ref: str) -> Optional[str]:
     return sha or None
 
 
+def _cap_base(repo_root: Path, merge_base: str) -> str:
+    """`merge_base`, unless more than `DEFAULT_DIFF_COMMIT_CAP` commits lie
+    between it and HEAD — then the commit that many back from HEAD. One
+    `rev-list --skip` answers both: it prints a commit only when the range
+    is longer than the cap, and that commit is the cap's cutoff.
+    """
+    stdout = _run_git(
+        repo_root,
+        ["rev-list", "--max-count=1", f"--skip={DEFAULT_DIFF_COMMIT_CAP}", f"{merge_base}..HEAD"],
+    )
+    capped = stdout.strip() if stdout else ""
+    return capped or merge_base
+
+
 def changed_files(repo_root: Path, base: Optional[str] = None) -> List[str]:
     """Files changed relative to `base` (committed and uncommitted), plus
     every untracked file — the default scope. `base` defaults to the
-    merge-base between HEAD and the resolved default branch; when neither
+    merge-base between HEAD and the resolved default branch, capped at
+    `DEFAULT_DIFF_COMMIT_CAP` commits back; when neither
     is resolvable (no remote, no `main`/`master`, a single-commit repo with
     no divergent history), the diff leg contributes nothing and only
     untracked files are reported — never an error, since "nothing to diff
@@ -156,7 +166,9 @@ def changed_files(repo_root: Path, base: Optional[str] = None) -> List[str]:
     if base_ref is None:
         default_ref = _default_branch_ref(repo_root)
         if default_ref is not None:
-            base_ref = _merge_base(repo_root, default_ref)
+            merge_base = _merge_base(repo_root, default_ref)
+            if merge_base:
+                base_ref = _cap_base(repo_root, merge_base)
 
     changed: set[str] = set()
     if base_ref:

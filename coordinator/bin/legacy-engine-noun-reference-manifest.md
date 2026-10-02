@@ -10561,7 +10561,6 @@ Aggregate count plus generated file list only -- no per-line rationale (would ma
 - `coordinator_core/ops/handoff_match.py`
 - `coordinator_core/ops/handoff_normalize.py`
 - `coordinator_core/ops/handoff_phase_stamp.py`
-- `coordinator_core/ops/handoff_ship_archive.py`
 - `coordinator_core/ops/handoff_transition.py`
 - `coordinator_core/ops/initiatives_serve.py`
 - `coordinator_core/ops/install_content_root_precommit_hook.py`

@@ -58,18 +58,17 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.dag import _read_meta
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.roadmap.blitz_land import LandingRefused, _set_field
 from coordinator_core.session.claimed_write import replace_text
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.fleet._common import (
     Move,
     archive_and_commit,
@@ -91,7 +90,6 @@ _LANDED_STATUSES = frozenset({"implemented", "landed"})
 
 _LOCK_STALE_S = 120.0
 
-_GIT_LOG_TIMEOUT_S = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -257,23 +255,17 @@ def _plan_landing_shas(worktree_root: Path, plan_rels: List[str]) -> Dict[str, O
     result: Dict[str, Optional[str]] = {rel: None for rel in plan_rels}
     if not plan_rels:
         return result
-    try:
-        proc = subprocess.run(
-            [
-                "git", "log", "--format=%x00%H", "--name-only",
-                "-G^status: *(implemented|landed) *$",
-                "--", *plan_rels,
-            ],
-            cwd=str(worktree_root),
-            capture_output=True,
-            text=True,
-            timeout=_GIT_LOG_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        _LOG.warning("handoff_discharge_landed: git log -G failed — %s", exc)
-        return result
+    proc = run_git(
+        [
+            "log", "--format=%x00%H", "--name-only",
+            "-G^status: *(implemented|landed) *$",
+            "--", *plan_rels,
+        ],
+        cwd=str(worktree_root),
+    )
     if proc.returncode != 0:
+        if proc.timed_out or proc.returncode == 127:
+            _LOG.warning("handoff_discharge_landed: git log -G failed — rc=%s", proc.returncode)
         return result
     for record in proc.stdout.split("\x00"):
         lines = [ln.strip() for ln in record.splitlines() if ln.strip()]

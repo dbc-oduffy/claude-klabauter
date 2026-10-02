@@ -36,6 +36,7 @@ from coordinator_core.completion_receipts.verdict import judge_verdict, mint_ref
 from coordinator_core.execute_plan_assemble.row_spans import _row_disposition
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.session import record_homes
 from coordinator_core.ops.dispatch_emit.commit_request import (
     plan_deliverable_id,
     valid_deliverable_id,
@@ -123,7 +124,11 @@ def _handoff_claims(worktree_root: Path, session_id: Optional[str]) -> list[str]
     from coordinator_core.session.claims import list_claims_by_session_checked
 
     matches, _errors = list_claims_by_session_checked(session_id, str(worktree_root))
-    return [f"state/handoffs/{name}" for class_, name in matches if class_ == _HANDOFF_CLASS]
+    return [
+        Path(record_homes.record_path("", "handoffs", name)).as_posix()
+        for class_, name in matches
+        if class_ == _HANDOFF_CLASS
+    ]
 
 
 def _plan_rows_landed(

@@ -66,10 +66,11 @@ never trusted as a spurious member.
 Negative-spec:
     - Does NOT credit anything — no verdict filter, no kind partition, no
       foreign-session narrowing, no stored-HEAD exclusion. Those five credit
-      rules (`_verdict_counts`, `_record_range_has_stored_head`,
-      `_credit_from_kind_partition`, `_narrow_foreign_session_scope`, the
-      never-path-scoped asymmetric scope rule) are preserved BY SYMBOL in
-      `coordinator_core.coverage` and applied by the CALLER before a
+      rules (`_verdict_counts`, `_record_range_has_stored_head`, the
+      plan-kind partition over `_classify_bookkeeping_shas`,
+      `_narrow_foreign_session_scope`, the never-path-scoped asymmetric scope
+      rule) live in `coordinator_core.coverage` and
+      `review_trail.backfill._resolve_special`, applied by the CALLER before a
       (record_id, sha_range) pair ever reaches `fold_in` — this module is
       the store, not the gate.
     - Does NOT write to a tracked path. `.git/coordinator-review-trail/` is

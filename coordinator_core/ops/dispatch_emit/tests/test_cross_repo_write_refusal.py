@@ -70,6 +70,49 @@ def test_write_under_own_repo_is_fine(tmp_path: Path) -> None:
     check_cross_repo_writes(rows, repo_root)  # does not raise
 
 
+def test_absolute_and_escaping_paths_refused_and_names_each(tmp_path: Path) -> None:
+    repo_root = tmp_path / "coordinator-content-repo"
+    repo_root.mkdir()
+    rows = [
+        _row("A", ["C:\\elsewhere\\a.md"]),  # abs-path-ok: drive-letter fixture for the predicate
+        _row("B", ["/opt/other/b.md"]),
+        _row("C", ["../CoordinatorContentRepo2/a.md"]),
+        _row("D", ["coordinator_core/../../x.md"]),
+    ]
+    with pytest.raises(CrossRepoWriteError) as excinfo:
+        check_cross_repo_writes(rows, repo_root)
+    message = str(excinfo.value)
+    for needle in ("elsewhere", "/opt/other/b.md", "CoordinatorContentRepo2", "x.md"):
+        assert needle in message
+
+
+def test_paths_outside_repo_root_accepts_inside_paths(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
+        paths_outside_repo_root,
+    )
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    inside_abs = str(repo_root / "a" / "b.py")
+    assert paths_outside_repo_root(
+        ["coordinator_core/x.py", inside_abs, "a/../b.py"], repo_root
+    ) == []
+
+
+def test_paths_outside_repo_root_preserves_input_order(tmp_path: Path) -> None:
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
+        paths_outside_repo_root,
+    )
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _make_sibling_repo(tmp_path, "peer")
+    bad = ["peer/a.md", "ok.py", "../x.md", "Z:/q.md", "/usr/q.md"]  # abs-path-ok: drive-letter fixture
+    assert paths_outside_repo_root(bad, repo_root) == [
+        "peer/a.md", "../x.md", "Z:/q.md", "/usr/q.md",  # abs-path-ok: drive-letter fixture
+    ]
+
+
 def test_no_sibling_dir_on_disk_is_fine(tmp_path: Path) -> None:
     repo_root = tmp_path / "coordinator-content-repo"
     repo_root.mkdir()

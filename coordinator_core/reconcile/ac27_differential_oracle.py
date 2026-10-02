@@ -49,7 +49,7 @@ Negative-spec:
       The corpus axis's older-ref handoffs are likewise read via `git show
       <ref>:<path>` strings -- never `git checkout`, so the working tree the live
       axis reads is never touched.
-    - Never invokes handoff.reconcile_open, handoff.ship_and_archive, or
+    - Never invokes handoff.reconcile_open or
       handoff.transition gate-cascade-clear -- calls gate_eval.evaluate_gate()
       directly, bypassing every mutating caller and every op-level side effect
       (D1 conservation history, D2 dry_run policy resolution, etc).

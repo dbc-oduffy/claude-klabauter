@@ -312,9 +312,40 @@ def _step2_directive() -> dict[str, Any]:
     )
 
 
-def test_step2_directive_args_are_recognized_by_the_real_cli_parser() -> None:
+def _stub_fast_tier_execution(
+    monkeypatch: pytest.MonkeyPatch, cli_module: Any
+) -> list[str]:
+    """Stub everything past argv parsing so `fast` never launches the real suite.
+
+    The CLI's `fast` mode resolves the project's fast-test command and spawns it;
+    an unstubbed call from inside pytest re-enters the whole suite. Returns the
+    list that records each resolve_fast_test_cmd call.
+    """
+    from coordinator_core.session.tier_u_gate import TierUGateResult
+
+    calls: list[str] = []
+
+    def _fake_fast(repo_root: Optional[str] = None) -> Any:
+        calls.append("fast")
+        return cli_module._resolver.ResolveResult("stub-cmd\n", 0, "")
+
+    monkeypatch.setattr(cli_module._resolver, "resolve_fast_test_cmd", _fake_fast)
+    monkeypatch.setattr(cli_module, "compute_diff_scoped_paths", lambda repo_root=None: ([], True))
+    monkeypatch.setattr(
+        cli_module,
+        "enforce_tier_u_gate",
+        lambda cmd, *, repo_root=None: TierUGateResult(proceed=True),
+    )
+    monkeypatch.setattr(cli_module, "_run_resolved_command", lambda cmd: 0)
+    return calls
+
+
+def test_step2_directive_args_are_recognized_by_the_real_cli_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     directive = _step2_directive()
     cli_module = wwc_apply._load_cli_module(directive["cli"])
+    _stub_fast_tier_execution(monkeypatch, cli_module)
 
     captured_stderr = io.StringIO()
     with contextlib.redirect_stderr(captured_stderr):
@@ -336,22 +367,7 @@ def test_step2_directive_routes_to_the_fast_tier_resolver(
     directive = _step2_directive()
     cli_module = wwc_apply._load_cli_module(directive["cli"])
 
-    calls: list[str] = []
-
-    def _fake_fast(repo_root: Optional[str] = None) -> Any:
-        calls.append("fast")
-        return cli_module._resolver.ResolveResult("stub-cmd\n", 0, "")
-
-    monkeypatch.setattr(cli_module._resolver, "resolve_fast_test_cmd", _fake_fast)
-    from coordinator_core.session.tier_u_gate import TierUGateResult
-
-    monkeypatch.setattr(cli_module, "find_changed_test_files", lambda repo_root=None: [])
-    monkeypatch.setattr(
-        cli_module,
-        "enforce_tier_u_gate",
-        lambda cmd, *, repo_root=None: TierUGateResult(proceed=True),
-    )
-    monkeypatch.setattr(cli_module, "_run_resolved_command", lambda cmd: 0)
+    calls = _stub_fast_tier_execution(monkeypatch, cli_module)
 
     exit_code = cli_module.main(list(directive["args"]))
 

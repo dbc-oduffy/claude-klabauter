@@ -28,7 +28,7 @@ against. Replaced with `_resolve_doctrine_repo_root()` below, an adaptation
 of `cater_subagent_start._resolve_role_append_snippet_path`'s /
 `provision_report.resolve_plugin_root()`'s own multi-rung plugin-root probe
 (CLAUDE_PLUGIN_ROOT env, `<claude_config_dir>/plugins/coordinator-claude` in
-both known shapes, `.coordinator-content-root` pointer) -- ONE LEVEL UP from those probes'
+both known shapes, content-root pointer) -- ONE LEVEL UP from those probes'
 own target (they resolve the coordinator-claude CONTENT root, i.e. the
 `coordinator/` subdir; this hook needs the REPO ROOT one level above it,
 where `global-doctrine/`, `coordinator/templates/global-doctrine/`, and the
@@ -55,8 +55,9 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core._settings_home import claude_config_dir
 from coordinator_core._hook_envelope import payload_of
+from coordinator_core.content_root import read_content_root
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
@@ -91,15 +92,15 @@ def _resolve_doctrine_repo_root() -> Optional[Path]:
         return plugin_base
 
     try:
-        pointer = machine_local_dir() / ".coordinator-content-root"
-        content_root_text = pointer.read_text(encoding="utf-8").strip()
+        root_text = read_content_root()
     except OSError:
-        content_root_text = ""
-    if content_root_text:
-        candidate_root = Path(content_root_text)
-        found = _artifact_at(candidate_root)
-        if found is not None:
-            return candidate_root
+        root_text = ""
+    if root_text:
+        root_path = Path(root_text)
+        for candidate_root in (root_path, root_path.parent):
+            found = _artifact_at(candidate_root)
+            if found is not None:
+                return candidate_root
 
     return None
 

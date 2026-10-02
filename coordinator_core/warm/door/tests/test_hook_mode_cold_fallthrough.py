@@ -13,6 +13,7 @@ from coordinator_core.warm.tests.test_door_read_deadline_posix import (  # noqa:
     _make_stub_engine_root,
     runtime_base,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -34,7 +35,7 @@ def door(tmp_path_factory) -> Path:
     subprocess.run(
         [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""',
          "-o", str(out), str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
-        check=True, capture_output=True,
+        check=True, capture_output=True, **no_console_creationflags(),
     )
     return out
 
@@ -49,7 +50,7 @@ def _run(door: Path, root: Path, runtime_base: Path, cold_body: str) -> subproce
     )
     return subprocess.run(
         [str(door), "hooks.preuse_bash_dispatch"],
-        input=_PAYLOAD, capture_output=True, env=env, cwd=str(root), timeout=60,
+        input=_PAYLOAD, capture_output=True, env=env, cwd=str(root), timeout=60, **no_console_creationflags(),
     )
 
 
@@ -105,7 +106,7 @@ def test_no_cold_entrypoint_passes_loudly(door, tmp_path, runtime_base):
     )
     proc = subprocess.run(
         [str(door), "hooks.preuse_bash_dispatch"],
-        input=_PAYLOAD, capture_output=True, env=env, cwd=str(root), timeout=60,
+        input=_PAYLOAD, capture_output=True, env=env, cwd=str(root), timeout=60, **no_console_creationflags(),
     )
 
     assert proc.returncode == 0
@@ -132,7 +133,7 @@ def test_the_loud_pass_names_the_payloads_own_event(door, tmp_path, runtime_base
     )
     proc = subprocess.run(
         [str(door), "hooks.preuse_bash_dispatch"],
-        input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=str(root), timeout=60,
+        input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=str(root), timeout=60, **no_console_creationflags(),
     )
 
     assert proc.returncode == 0

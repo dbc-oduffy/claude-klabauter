@@ -202,6 +202,7 @@ def _run_push(
     gh_pr_merge_stderr: str = "",
     reconcile_ok: bool = True,
     reconcile_reason: str = "",
+    promote: bool = False,
 ):
     dest = str(tmp_path / "dest")
     spy = _SubprocessSpy(
@@ -244,6 +245,8 @@ def _run_push(
     argv = ["alpha"]
     root = percolate_root if percolate_root is not None else tmp_path / "percolate-root"
     argv += ["--percolate-root", str(root)]
+    if promote:
+        argv.append("--promote")
 
     parser = _mod._build_parser()
     args = parser.parse_args(argv)
@@ -384,6 +387,7 @@ def test_ahead_and_behind_still_pushes(tmp_path, monkeypatch):
         monkeypatch,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_AND_BEHIND,
         symref_stdout=_SYMREF_MAIN,
+        promote=True,
     )
     assert rc == _mod._EXIT_OK
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
@@ -538,7 +542,7 @@ def test_default_branch_dest_never_invokes_gh(tmp_path, monkeypatch):
     `main` tracking `origin/main`, symref resolves to `main` too: no `gh`
     call anywhere in the call list."""
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=_STATUS_CLEAN_AHEAD_1, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=_STATUS_CLEAN_AHEAD_1, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
@@ -551,6 +555,7 @@ def test_non_default_branch_opens_and_merges_pr_with_explicit_strategy(tmp_path,
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
     )
@@ -567,12 +572,54 @@ def test_non_default_branch_opens_and_merges_pr_with_explicit_strategy(tmp_path,
     assert "--merge" in merge_calls[0]
 
 
+def test_feature_branch_without_promote_pushes_but_refuses_merge_into_default(
+    tmp_path, monkeypatch, capsys
+):
+    """A round on a branch that is neither the default nor a release channel
+    pushes that branch and stops: no `gh` call, so no PR is opened or merged
+    into the mirror's `main` without an explicit `--promote`."""
+    rc, spy, dest = _run_push(
+        tmp_path,
+        monkeypatch,
+        status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
+        symref_stdout=_SYMREF_MAIN,
+    )
+    assert rc == _mod._EXIT_USAGE
+    assert [c for c in spy.calls if c[:1] == ["gh"]] == []
+    push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert push_calls == [["git", "-C", dest, "push"]]
+    err = capsys.readouterr().err
+    assert "'feature-x' pushed, not merged into 'main'" in err
+    assert "percolate-push alpha --promote" in err
+
+
+def test_feature_branch_already_pushed_without_promote_still_refuses_merge(tmp_path, monkeypatch, capsys):
+    """The retry shape (ahead==0) takes the same refusal: nothing to push is
+    not a licence to resume a merge that was never authorized."""
+    rc, spy, dest = _run_push(
+        tmp_path,
+        monkeypatch,
+        status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_0,
+        symref_stdout=_SYMREF_MAIN,
+    )
+    assert rc == _mod._EXIT_USAGE
+    assert [c for c in spy.calls if c[:1] == ["gh"]] == []
+    assert "--promote" in capsys.readouterr().err
+
+
+def test_unpromoted_merge_refusal_fits_the_message_cap():
+    from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
+
+    message = _mod._unpromoted_merge_refusal("coordinator-claude", "feature-branch-x", "main")
+    assert len(message.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
+
+
 def test_release_channel_branch_pushes_and_never_invokes_gh(tmp_path, monkeypatch):
     """A declared release channel (`candidate`) takes the identical
     push-only, no-`gh` path as the default branch -- a publish round
     landing on `candidate` must never open or merge a PR into `main`."""
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_1, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_1, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
@@ -592,7 +639,7 @@ def test_non_default_non_channel_branch_still_opens_and_merges_pr(tmp_path, monk
         "# branch.upstream origin/feature-y\n# branch.ab +1 -0\n"
     )
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=status, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
@@ -620,7 +667,7 @@ def test_channel_declaration_consulted_not_inferred_from_non_default(tmp_path, m
         "# branch.upstream origin/release-only\n# branch.ab +1 -0\n"
     )
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=status, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
@@ -645,7 +692,7 @@ def test_channel_declaration_consulted_negative_pairing_same_branch_unpatched_se
         "# branch.upstream origin/release-only\n# branch.ab +1 -0\n"
     )
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=status, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=status, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     gh_calls = [c for c in spy.calls if c[:1] == ["gh"]]
@@ -661,7 +708,7 @@ def test_release_channel_branch_with_nothing_to_push_exits_nothing_to_push_messa
     """Covers the second of the two sites C1 amended: the nothing-to-push
     early return, not just the PR-leg guard."""
     rc, spy, dest = _run_push(
-        tmp_path, monkeypatch, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_0, symref_stdout=_SYMREF_MAIN
+        tmp_path, monkeypatch, promote=True, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_0, symref_stdout=_SYMREF_MAIN
     )
     assert rc == _mod._EXIT_OK
     err = capsys.readouterr().err
@@ -680,6 +727,7 @@ def test_ahead_zero_on_non_default_branch_still_runs_pr_leg(tmp_path, monkeypatc
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_0,
         symref_stdout=_SYMREF_MAIN,
     )
@@ -702,6 +750,7 @@ def test_existing_open_pr_skips_create_resumes_to_merge(tmp_path, monkeypatch):
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_pr_list_stdout=json.dumps([{"number": 42}]),
@@ -724,6 +773,7 @@ def test_no_existing_open_pr_still_creates_one(tmp_path, monkeypatch):
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
     )
@@ -739,6 +789,7 @@ def test_gh_pr_list_failure_fails_publish_loudly_never_treated_as_absent(tmp_pat
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_pr_list_returncode=1,
@@ -759,6 +810,7 @@ def test_gh_pr_list_unparseable_json_fails_publish_loudly(tmp_path, monkeypatch,
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_pr_list_stdout="not json",
@@ -778,6 +830,7 @@ def test_gh_auth_status_scoped_to_dest_remote_host(tmp_path, monkeypatch):
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         remote_url_stdout="https://github.com/example-org/example-repo.git\n",
@@ -793,6 +846,7 @@ def test_unresolvable_remote_host_refuses_scope_check(tmp_path, monkeypatch, cap
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         remote_url_returncode=1,
@@ -809,6 +863,7 @@ def test_missing_repo_scope_refuses_with_remediation_command(tmp_path, monkeypat
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_auth_stdout="  - Token scopes: 'gist', 'read:org'",
@@ -828,6 +883,7 @@ def test_scope_substring_lookalikes_do_not_satisfy_repo(tmp_path, monkeypatch, c
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_auth_stdout="  - Token scopes: 'public_repo', 'admin:repo_hook', 'gist'",
@@ -843,6 +899,7 @@ def test_absent_token_scopes_line_refuses_rather_than_assuming(tmp_path, monkeyp
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_auth_stdout="  x Logged in to github.com (keyring)",
@@ -865,6 +922,7 @@ def test_gh_pr_create_failure_fails_publish_loudly(tmp_path, monkeypatch, capsys
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_pr_create_returncode=1,
@@ -882,6 +940,7 @@ def test_gh_pr_merge_failure_fails_publish_loudly(tmp_path, monkeypatch, capsys)
     rc, spy, dest = _run_push(
         tmp_path,
         monkeypatch,
+        promote=True,
         status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1,
         symref_stdout=_SYMREF_MAIN,
         gh_pr_merge_returncode=1,

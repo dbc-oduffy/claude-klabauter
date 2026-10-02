@@ -29,7 +29,7 @@ status: routed
 precedent: shipped-before
 scout_evidence:
   - "coordinator_core/workstream_complete/apply.py, workday_complete/apply.py, workweek_complete/apply.py each carry a private _resolve_script_path/_CLI_DISPATCH copy (EM re-confirmed by grep at HEAD)"
-  - "coordinator_core/ops/coordinator_content_root.py is the mature cross-repo DoE root resolver, ~149 consumers -- the hard half of this job is already built"
+  - "coordinator_core/content_root.py is the mature cross-repo content root resolver, ~149 consumers -- the hard half of this job is already built"
   - "coordinator_core/ceremony_common/cli_dispatch.py :: load_cli_module already loads extensionless scripts via explicit SourceFileLoader"
   - "No coordinator_core module exists for uhura or bug_sweep (EM re-confirmed: absent); group_em exists"
   - "Originating memo state/cross-repo/archive/2026-09-01-example-game-repo-em-mandated-steps-no-directive-emits.md is status actioned, realized_by d49f9eb2ac -- DoE ceded the shape"

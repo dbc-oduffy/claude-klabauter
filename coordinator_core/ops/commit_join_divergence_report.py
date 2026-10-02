@@ -15,6 +15,7 @@ its full 40-hex form only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -107,6 +108,11 @@ def _deliverables_by_handoff(worktree_root: Path, wanted: Set[str]) -> Dict[str,
 
 @register_op("commit_ledger.join_divergence_report")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    # Body spawns git and reads the filesystem; off-loop so dispatch's wait_for can fire.
+    return await asyncio.to_thread(_run, params, repo_root)
+
+
+def _run(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "commit_ledger.join_divergence_report" handler.
 
     Params: `n` (int, default 200, clamped to 1..1000), optional `cwd`.

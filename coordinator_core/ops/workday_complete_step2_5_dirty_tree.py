@@ -178,17 +178,12 @@ from __future__ import annotations
 
 import dataclasses
 
-# `.gitignore` stays a concrete `MUTATES` path, not a `GENERATES` entry, by
-# design: this module edits a shared file surgically (`_act_gitignore`) and
-# neither created nor owns the rest of it. A stamped `GENERATES` entry would
-# claim this module emits `.gitignore`, which is false, and `.gitignore`
-# cannot carry a stamp. `generator_provenance.py :: _build_record` therefore
-# scores this module UNDECLARED
-# (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md, P012-C5)
-# -- an accepted outcome, not a gap. Filed to C6's checker-vocabulary
-# finding. Do not add `GENERATES = []` (the module writes) and do not
-# rewrite the path as a glob to dodge `_mutates_concrete_patterns`.
-MUTATES = [".gitignore", "cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
+# `.gitignore` is `MUTATES_APPEND`, not a `GENERATES` entry: this module edits
+# a shared file surgically (`_act_gitignore`) and neither created nor owns the
+# rest of it, and `.gitignore` cannot carry a stamp. Do not add
+# `GENERATES = []` (the module writes).
+MUTATES_APPEND = [".gitignore"]
+MUTATES = ["cross-repo/inbox/**", "cross-repo/archive/**", "state/review-trail/**", "state/memos/**", "state/lessons-outbox/**", "state/improvement-queue/**", "state/debt-backlog/**", "state/bug-backlog/**", "tasks/learn-lessons-**", "tasks/audits/**", "tasks/daily-review-scratch/**", "archive/**", "docs/plans/*-check.md"]
 
 import fnmatch
 import os

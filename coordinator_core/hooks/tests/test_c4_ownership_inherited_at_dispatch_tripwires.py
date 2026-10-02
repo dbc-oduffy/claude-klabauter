@@ -395,13 +395,17 @@ def _census_scope_helper_sites(root: Path) -> tuple[frozenset, frozenset]:
         if not _is_census_scope(rel):
             continue
         try:
+            text = path.read_text(encoding="utf-8")
+            # Every census entry names one of the helpers.
+            if not any(name in text for name in _SCOPE_HELPER_NAMES):
+                continue
             # `SyntaxWarning` is muted for the parse itself: several modules
             # under census carry regex string literals that emit invalid-escape
             # warnings at compile time, and surfacing them here would attribute
             # unrelated lint noise to this pin's own test run.
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(path.read_text(encoding="utf-8"))
+                tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
         for node, qualname in _walk_with_qualname(tree, []):
@@ -673,9 +677,13 @@ def _census_claim_index_call_sites(root: Path, attr: str) -> frozenset:
         if not _is_census_scope(rel):
             continue
         try:
+            text = path.read_text(encoding="utf-8")
+            # A hit is `claim_index.<attr>(...)`, both identifiers in the source.
+            if attr not in text or "claim_index" not in text:
+                continue
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
-                tree = ast.parse(path.read_text(encoding="utf-8"))
+                tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
         for node, qualname in _walk_with_qualname(tree, []):

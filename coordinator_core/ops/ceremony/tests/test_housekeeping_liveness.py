@@ -167,8 +167,19 @@ def test_check_stale_detailed_silent_for_never_stamped_class(tmp_path: Path) -> 
 
 
 def test_remedy_commands_classes_with_no_cli_are_empty() -> None:
-    for cls in (hl.ARCHIVE_SWEEPS, hl.COMPLETION_SCAFFOLD, hl.ROADMAP_CALLOUT):
+    for cls in hl._NO_REMEDY_CLI_YET:
         assert hl.REMEDY_COMMANDS[cls] == ()
+
+
+def test_every_class_has_a_remedy_or_is_listed_as_having_none() -> None:
+    for cls in hl.KNOWN_CLASSES:
+        assert hl.REMEDY_COMMANDS[cls] or cls in hl._NO_REMEDY_CLI_YET, cls
+    assert not any(hl.REMEDY_COMMANDS[c] for c in hl._NO_REMEDY_CLI_YET)
+
+
+def test_roadmap_callout_remedy_names_the_shipped_cli() -> None:
+    (cmd,) = hl.REMEDY_COMMANDS[hl.ROADMAP_CALLOUT]
+    assert "coordinator/bin/refresh-roadmap-callout.py" in cmd
 
 
 def test_remedy_commands_covers_every_known_class() -> None:
@@ -364,7 +375,7 @@ def test_git_maintenance_is_the_first_class_with_a_real_remedy():
     exception to it."""
     assert hl.REMEDY_COMMANDS[hl.GIT_MAINTENANCE]
     for cls in hl.KNOWN_CLASSES:
-        if cls != hl.GIT_MAINTENANCE:
+        if cls in hl._NO_REMEDY_CLI_YET:
             assert hl.REMEDY_COMMANDS[cls] == (), cls
 
 

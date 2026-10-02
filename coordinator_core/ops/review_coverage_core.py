@@ -274,8 +274,8 @@ def _classify_shape(
     which is the only coverage-crediting entry point.
 
     `kind` mirrors the kind-aware crediting rule (C5, docs/plans/2026-08-05-
-    coverage-gate-planning-artifact-class.md § C5, reference implementation
-    `coordinator_core.coverage._credit_from_kind_partition`): "diff" for a
+    coverage-gate-planning-artifact-class.md § C5, applied at fold time by
+    `coordinator_core.review_trail.backfill._resolve_special`): "diff" for a
     legacy/no-scope_kind record or an explicit scope_kind="diff" (or future
     value); "plan" for scope_kind="plan" — RESOLVED like a diff record
     instead of skipped, so `_classify`'s caller can credit it, but ONLY

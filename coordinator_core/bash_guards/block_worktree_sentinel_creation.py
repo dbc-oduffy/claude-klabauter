@@ -74,6 +74,7 @@ from typing import Any, Dict, List, Optional
 from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_INDIRECTION,
     SentinelCreationDetector,
+    indirection_deny_reason,
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -221,14 +222,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     del cmd
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        return (
-            "BLOCKED (override-file guard): payload unreadable (%s); it "
-            "might create the PM-only worktree-ban override file unseen.\n\n"
-            "Use instead: read-only commands (`jq`, `cat`, `echo`, `grep`, "
-            "`head`, `ls`, no file redirect), directly or in `sh -c`; "
-            "`./path/to/script.sh` if executable with a shebang.\n\n"
-            "Lower this guard: `%s`." % (safe_shape, LEVEL_VERB)
-        )
+        return indirection_deny_reason("override-file guard", safe_shape)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
         "BLOCKED: creates/modifies a worktree-ban override file. Use "

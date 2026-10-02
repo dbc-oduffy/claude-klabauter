@@ -138,11 +138,9 @@ _LOG = logging.getLogger(__name__)
 # shipped_in_kind discriminant (DR-096, coordinator-content-repo 2026-07-26 ruling) — the
 # enum tagging WHICH sanctioned resolution produced a shipped_in value. Kept
 # here (not just in archive_stamp.py) because this handler is the one
-# structural point THREE of the four current writers already converge on:
-# `archive_stamp.stamp_shipped_in` (wraps this handler), plus
-# `handoff_ship_archive.py` (calls this
-# handler directly, bypassing that wrapper, but still passes `kind` through the
-# same param this handler validates). The fourth writer
+# structural point the writers converge on: `archive_stamp.stamp_shipped_in`
+# wraps this handler and passes `kind` through the param it validates. The
+# other writer
 # (ops.normalize_claimed_frontmatter) still bypasses this handler's RMW path
 # entirely (it has no live file to lock through `_handler`, only marker text
 # to translate) but no longer keeps its own copy of the value grammar — it
@@ -164,7 +162,7 @@ _SHIPPED_IN_KIND_ENUM = frozenset(
 # callable instead of duplicating the frontmatter-mutation logic.
 # `_handler` itself is just the thinnest possible caller of this function;
 # behavior for every existing caller (`archive_stamp.stamp_shipped_in`,
-# `handoff_ship_archive.py`, this module's own `_handler`) is unchanged.
+# this module's own `_handler`) is unchanged.
 # ---------------------------------------------------------------------------
 
 

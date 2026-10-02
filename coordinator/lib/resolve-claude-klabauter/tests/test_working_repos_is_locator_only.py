@@ -135,17 +135,20 @@ def test_no_working_repos_entry_needed_when_session_is_the_live_root(
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
 
     (ml_dir / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+        f'"repos.claude_klabauter" = \'{published_root}\'\n'
+        f'"repos.claude_klabauter" = \'{live_root}\'\n',
+        encoding="utf-8",
     )
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(live_root))
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(resolve_claude_klabauter, "_self_located_root", lambda: None)
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
     assert root == str(live_root)
@@ -157,7 +160,6 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
     _make_claude_klabauter_fixture(live_root)
-    (ml_dir / ".claude-klabauter-live-root").write_text(str(live_root), encoding="utf-8")
 
     published_root = tmp_path / "published-klabauter"
     _make_published_engine_fixture(published_root)
@@ -166,11 +168,15 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     session_root.mkdir()
 
     (ml_dir / "registry.local.toml").write_text(
-        f'"repos.claude_klabauter" = \'{published_root}\'\n', encoding="utf-8"
+        f'"repos.claude_klabauter" = \'{published_root}\'\n'
+        f'"repos.claude_klabauter" = \'{live_root}\'\n',
+        encoding="utf-8",
     )
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(session_root))
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(resolve_claude_klabauter, "_self_located_root", lambda: None)
 
     assert resolve_claude_klabauter.resolve_engine_target(ml_dir) is None
     assert resolve_claude_klabauter._is_claude_klabauter_source_tree(ml_dir) is False

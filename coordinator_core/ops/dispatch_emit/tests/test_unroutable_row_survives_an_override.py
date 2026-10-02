@@ -11,7 +11,8 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
-_EVIDENCE = "docs/plans/evidence/2026-09-11-opus-model-tier-arm-results.md"
+_EVIDENCE = "docs/plans/2026-09-11-opus-model-tier-arm-results.md"
+_MEASUREMENT_RECORD = "docs/plans/evidence/2026-09-11-opus-model-tier-arm-results.md"
 _BODY = "Spec: measure the arms\nComplexity: M\n"
 
 
@@ -66,3 +67,12 @@ def test_mixed_writes_still_outrank_an_override():
             name="wf",
             description="mixed", **REVIEW_KW,
         )
+
+
+def test_an_evidence_record_is_not_an_immutable_body():
+    script = compose_script(
+        [[_row([_MEASUREMENT_RECORD], change_kind="verification")]],
+        name="wf",
+        description="evidence", **REVIEW_KW,
+    )
+    assert "agentType: 'coordinator:executor'" in script

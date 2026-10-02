@@ -396,3 +396,21 @@ def test_an_in_process_write_claim_lands_as_a_write(repo, monkeypatch):
     sink = touch_record.sink_path(_sid_dir(repo, "mine"))
     claims = touch_record.project_live_claims(sink, cwd=repo).claims
     assert claims["pkg/mod.py"].kind == touch_record.KIND_WRITE
+
+
+def test_a_holder_can_enumerate_its_own_path_claims(repo, monkeypatch):
+    """The path plane is listable by its holder; a release drops the path and
+    a peer's claim never appears."""
+    monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
+    monkeypatch.setattr(
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+    )
+    _my_claim(repo, "mine", "pkg/a.py", touch_record.KIND_WRITE)
+    _my_claim(repo, "mine", "pkg/b.py", touch_record.KIND_READ)
+    _peer_claim(repo, "peer", "pkg/c.py", touch_record.KIND_WRITE)
+
+    assert scope.own_path_claims("mine", cwd=repo) == ["pkg/a.py", "pkg/b.py"]
+
+    scope.release_own_path_claims("mine", ["pkg/a.py"], cwd=repo)
+
+    assert scope.own_path_claims("mine", cwd=repo) == ["pkg/b.py"]

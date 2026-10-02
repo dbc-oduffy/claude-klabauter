@@ -44,7 +44,7 @@ that module's docstring for why no exact tokenizer dependency is pinned):
     coordinator/CLAUDE.md   (coordinator-content-repo, dev-repo sentinel)   39,896 B  -> ~9,974 tokens
     ~/.claude/CLAUDE.md     (global)                          28,331 B  -> ~7,083 tokens
 
-Both figures are 3.5x-5x `docs/wiki/tiered-context-loading.md`'s stated Tier-0
+Both figures are 3.5x-5x `coordinator-content-repo coordinator/docs/wiki/skills-corpus/tiered-context-loading.md`'s stated Tier-0
 "<=2K tokens, always loaded" ceiling for CLAUDE.md — see that wiki's own
 reconciliation (chunk C1 follow-up) for which side of that contradiction was
 corrected; this module does not itself enforce a token ceiling, only reports

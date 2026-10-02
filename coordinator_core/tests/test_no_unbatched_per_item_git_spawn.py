@@ -629,8 +629,7 @@ _CLASS_TAG = re.compile(r"#\s*class:\s*([a-zA-Z0-9-]+)")
     # fails, and it replaces mapping the whole set to a single degraded verdict. The collector
     # cannot distinguish a primary path from a fallback, so it counts the fallback. Deleting
     # the fallback to clear the key would trade a degrade-on-failure posture for a metric --
-    # forbidden by name in `state/ledgers/amp-cfinal-exemption-ledger.md`. Precedent:
-    # `orphan_branch_sweep.py::main`, frozen in `_KNOWN_SITES` on the same argument.
+    # forbidden by name in `state/ledgers/amp-cfinal-exemption-ledger.md`.
     # 2026-08-19 -- # class: no-primitive-MEASURED-wrong. No batch primitive, and this one was
     # MEASURED after a batched version of it
     # was written and found wrong. `git rev-list` cannot express a union of ranges: its
@@ -824,6 +823,20 @@ class AmpSite:
         return (self.path, self.enclosing, self.callee, self.ordinal)
 
 
+_WALK_CACHE: dict[int, tuple[ast.AST, tuple[ast.AST, ...]]] = {}
+
+
+def _walk(node: ast.AST) -> tuple[ast.AST, ...]:
+    """`ast.walk(node)` materialised once per node identity. The discriminators re-walk the same
+    function/loop subtree once per marked call; trees are never mutated after parse. The entry
+    pins `node` so a recycled `id` can never alias a dead tree."""
+    hit = _WALK_CACHE.get(id(node))
+    if hit is None:
+        hit = (node, tuple(ast.walk(node)))
+        _WALK_CACHE[id(node)] = hit
+    return hit[1]
+
+
 def _relpath(path: pathlib.Path, root: pathlib.Path) -> str:
     try:
         return path.resolve().relative_to(_REPO_ROOT).as_posix()
@@ -933,10 +946,10 @@ def _function_local_literal_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) ->
     #: including two act-time TOCTOU rechecks and `review_trail_write._own_frozen_diff_shas`.
     #: `results = []` grown in a loop and then iterated is the single most common shape in this
     #: tree, and it is genuine amplification every time.
-    for loop in ast.walk(fn):
+    for loop in _walk(fn):
         if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While, *_COMPREHENSIONS)):
             continue
-        for inner in ast.walk(loop):
+        for inner in _walk(loop):
             if (
                 isinstance(inner, ast.Call)
                 and isinstance(inner.func, ast.Attribute)
@@ -944,7 +957,7 @@ def _function_local_literal_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) ->
             ):
                 disqualified.add(inner.func.value.id)
 
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 for name in _names_in(target):
@@ -1043,7 +1056,7 @@ def _is_chunking_stride_iterable(node: ast.expr) -> bool:
 
 def _names_in(node: ast.expr) -> set[str]:
     """Every `ast.Name` identifier referenced anywhere inside `node`."""
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    return {n.id for n in _walk(node) if isinstance(n, ast.Name)}
 
 
 def _loop_target_names(target: ast.expr) -> set[str]:
@@ -1115,7 +1128,7 @@ def _tainted_names_for_loop(loop: ast.AST, seed: set[str]) -> frozenset[str]:
     tainted = set(seed)
     for _ in range(10):
         grew = False
-        for node in ast.walk(loop):
+        for node in _walk(loop):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
             value = node.value
@@ -1300,7 +1313,7 @@ def _loop_argv0_bindings(loop: ast.AST) -> dict[str, ast.expr]:
     either extractor can see a shape at all. Threaded through as `bindings` so a chain of two
     such assignments resolves transitively; real sites only ever use one hop."""
     bindings: dict[str, ast.expr] = {}
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
@@ -1464,7 +1477,7 @@ def _loop_expr_bindings(loop: ast.AST) -> dict[str, ast.expr]:
     Restricted to argv-shaped RHSs on purpose: a name bound to anything else tells this
     discriminator nothing, and resolving it would only widen a suppressor."""
     bindings: dict[str, ast.expr] = {}
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
@@ -1528,7 +1541,7 @@ def _argv_accumulates_loop_target(
         return False
     if not bindings or argv.id not in bindings:
         return False
-    for inner in ast.walk(loop):
+    for inner in _walk(loop):
         if inner is loop or not isinstance(inner, (ast.For, ast.AsyncFor)):
             continue
         if not (_names_in(inner.iter) & target_names):
@@ -1536,7 +1549,7 @@ def _argv_accumulates_loop_target(
         inner_targets = _loop_target_names(inner.target)
         if not inner_targets:
             continue
-        for sub in ast.walk(inner):
+        for sub in _walk(inner):
             if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)):
                 continue
             grower = sub.func
@@ -1635,7 +1648,7 @@ def _generic_runner_param(
     if len(params) != 1:
         return None
     only_param = params[0]
-    for node in ast.walk(func_node):
+    for node in _walk(func_node):
         if node is func_node:
             continue
         if isinstance(node, ast.Call) and node.args and node.lineno in spawn_linenos:
@@ -1701,7 +1714,7 @@ def _verb_gated_spawn_verbs(
     if not spawn_linenos:
         return None
     params = [a.arg for a in func_node.args.args]
-    for node in ast.walk(func_node):
+    for node in _walk(func_node):
         if not isinstance(node, ast.If):
             continue
         test = node.test
@@ -2038,7 +2051,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
 
         imported: set[str] = set()
         raw_imports: dict[str, set[tuple[str, str]]] = {}
-        for node in ast.walk(tree):
+        for node in _walk(tree):
             if isinstance(node, ast.ImportFrom):
                 abs_module = _absolute_import_module(relpath, node)
                 for alias in node.names:
@@ -2180,7 +2193,7 @@ def _helper_spawn_argv0_params(
     bindings = _loop_argv0_bindings(fn)
     local = _loop_expr_bindings(fn)
     out: set[str] = set()
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
             continue
         if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
@@ -2206,7 +2219,7 @@ def _names_in_through_assignments(expr: ast.expr, fn: ast.AST) -> set[str]:
     concerned. Bounded by a fixed-point over `fn`'s own assignments, so it terminates and never
     leaves the function."""
     assigns: dict[str, ast.expr] = {}
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
             if isinstance(target, ast.Name):
@@ -2301,7 +2314,7 @@ _OPERATOR_READ_ATTRS = frozenset({"readline", "readlines", "read"})
 
 def _reads_operator_input(expr: ast.expr) -> bool:
     """True when `expr` obtains a value from the interactive operator."""
-    for node in ast.walk(expr):
+    for node in _walk(expr):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -2324,7 +2337,7 @@ def _cache_guard_covers(loop: ast.AST, call: ast.Call, name: str) -> bool:
 
     `is not None` and `!=` are deliberately NOT accepted: a call behind `if cache is not None`
     runs on every iteration after the first, which is per-item amplification wearing a guard."""
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, ast.If):
             continue
         test = node.test
@@ -2346,7 +2359,7 @@ def _cache_guard_covers(loop: ast.AST, call: ast.Call, name: str) -> bool:
             and test.operand.id == name
         ):
             matches = True
-        if matches and any(sub is call for stmt in node.body for sub in ast.walk(stmt)):
+        if matches and any(sub is call for stmt in node.body for sub in _walk(stmt)):
             return True
     return False
 
@@ -2362,8 +2375,8 @@ def _bound_before_loop(
     loop_start = getattr(loop, "lineno", None)
     if loop_start is None:
         return False
-    inside_loop = {id(n) for n in ast.walk(loop)}
-    for node in ast.walk(fn):
+    inside_loop = {id(n) for n in _walk(loop)}
+    for node in _walk(fn):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         if id(node) in inside_loop:
@@ -2382,11 +2395,11 @@ def _cache_reset_inside_loop(loop: ast.AST, call: ast.Call, name: str) -> bool:
     A cache cleared (or rebound) mid-loop is resolved again on the next pass, so the site really
     does spawn per item. Without this clause the discriminator would silence exactly the shape it
     must keep reporting."""
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
-        if value is not None and any(sub is call for sub in ast.walk(value)):
+        if value is not None and any(sub is call for sub in _walk(value)):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         if any(name in _names_in(t) for t in targets):
@@ -2451,10 +2464,10 @@ def _is_lazily_memoized_resolution(
         return False
 
     cached_names: set[str] = set()
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
-        if not any(sub is call for sub in ast.walk(node.value)):
+        if not any(sub is call for sub in _walk(node.value)):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         for target in targets:
@@ -2482,7 +2495,7 @@ def _is_operator_gated_spawn(call: ast.Call, loop: ast.AST | None) -> bool:
     if loop is None:
         return False
     gate_names: set[str] = set()
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             if _reads_operator_input(node.value):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -2490,10 +2503,10 @@ def _is_operator_gated_spawn(call: ast.Call, loop: ast.AST | None) -> bool:
                     gate_names |= _names_in(t)
     if not gate_names:
         return False
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, ast.If) or not (_names_in(node.test) & gate_names):
             continue
-        if any(sub is call for stmt in node.body for sub in ast.walk(stmt)):
+        if any(sub is call for stmt in node.body for sub in _walk(stmt)):
             return True
     return False
 
@@ -2516,9 +2529,9 @@ def _is_attribution_search(
         return False
 
     result_names: set[str] = set()
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if any(sub is call for sub in ast.walk(node.value)):
+            if any(sub is call for sub in _walk(node.value)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for t in targets:
                     result_names |= _names_in(t)
@@ -2526,7 +2539,7 @@ def _is_attribution_search(
     #: Every name the loop BINDS -- targets and assignments alike. A test built only from these
     #: is reading the loop's own working state, never out-of-band state the spawn perturbed.
     bound_in_loop: set[str] = set()
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if isinstance(node, (ast.For, ast.AsyncFor)):
             bound_in_loop |= _names_in(node.target)
         elif isinstance(node, ast.Assign):
@@ -2547,7 +2560,7 @@ def _is_attribution_search(
                 bound_in_loop.add(node.func.value.id)
 
     excluded = set(tainted) | result_names | bound_in_loop
-    for node in ast.walk(loop):
+    for node in _walk(loop):
         if not isinstance(node, ast.If) or node.lineno <= call.lineno:
             continue
         test_names = _names_in(node.test)
@@ -2595,12 +2608,12 @@ def _has_enclosing_loop(fn: ast.AST, loop: ast.AST) -> bool:
     17's `has_outer_loop` gate: a `break` only exits the loop it is lexically inside, so a
     single-shot proof scoped to `loop`'s own body says nothing about an outer loop that keeps
     iterating regardless of what the inner loop does on any one pass."""
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if node is loop:
             continue
         if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
             continue
-        if any(sub is loop for sub in ast.walk(node)):
+        if any(sub is loop for sub in _walk(node)):
             return True
     return False
 
@@ -2661,9 +2674,9 @@ def _is_single_shot_terminal(
     ancestors = [
         stmt
         for _stmt_id, (stmt, _body) in indexed.items()
-        if any(sub is call for sub in ast.walk(stmt))
+        if any(sub is call for sub in _walk(stmt))
     ]
-    ancestors.sort(key=lambda stmt: sum(1 for _ in ast.walk(stmt)))
+    ancestors.sort(key=lambda stmt: sum(1 for _ in _walk(stmt)))
 
     for stmt in ancestors:
         _stmt, body = indexed[id(stmt)]
@@ -2705,12 +2718,6 @@ def _is_single_shot_terminal(
 #     primary's result (symmetric to 3b, which only read `node.body`); shape 3e, the fallback is
 #     the else-arm of an `ast.IfExp` (a ternary, often nested in a dict literal) rather than a
 #     statement-level `if`/`else` block.
-# NOT widened: `orphan_branch_sweep.py::main -> _run`'s primary (`gh pr list`, unscoped, grouped
-# into a client-side dict keyed by a field read off each result item, two hops from the primary's
-# own bound name) needs a materially different, riskier mechanism than result-indexing-by-loop-
-# var and is deliberately deferred rather than folded into this same widening -- see this
-# chunk's run-report.
-#
 # `distill_apply_disposal.py::_delete_tracked_and_append_log -> _run_git`'s own fallback call
 # site (the `git rm` retry) IS reached by the clause-2/3d widening above, but the KEY still
 # reports: two sibling `_run_git` calls in the same function share the key and are genuinely
@@ -2729,7 +2736,7 @@ def _derived_names(seed: set[str], fn: ast.AST) -> set[str]:
     out = set(seed)
     for _ in range(10):
         grew = False
-        for node in ast.walk(fn):
+        for node in _walk(fn):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
                 continue
             if not (_names_in(node.value) & out):
@@ -2779,7 +2786,7 @@ def _result_indexed_by_loop_var(fn: ast.AST, result_name: str, loop_target_names
     by being a MAPPING the loop later indexes per item. This is a second, narrower route to
     "carries whole" alongside `_carries_whole`'s argv-shape route, not a replacement for it --
     the primary must still be a recognized spawn or same-callee candidate before this is checked."""
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if (
             isinstance(node, ast.Subscript)
             and isinstance(node.value, ast.Name)
@@ -2832,16 +2839,16 @@ def _batched_primary_result_names(
     2026-08-27, by RESULT INDEXING (`_result_indexed_by_loop_var`): the primary's own bound name
     is later subscripted/`.get()`-ed by the loop's own target name."""
     out: set[str] = set()
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
-        for call in ast.walk(node.value):
+        for call in _walk(node.value):
             if not isinstance(call, ast.Call):
                 continue
             call_name = _call_callee_name(call)
             is_spawn = call.lineno in spawn_linenos and call_name in _SPAWN_API_NAMES
             names_here = {
-                n.id for n in ast.walk(call) if isinstance(n, ast.Name)
+                n.id for n in _walk(call) if isinstance(n, ast.Name)
             }
             is_same_callee = callee is not None and (
                 call_name == callee
@@ -2894,27 +2901,27 @@ def _loop_is_gated_on_failure(
     """
     gated = _derived_names(result_names, fn)
 
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         #: 3a -- an except handler containing the loop.
         if isinstance(node, ast.Try):
             for handler in node.handlers:
-                if any(sub is loop for sub in ast.walk(handler)):
+                if any(sub is loop for sub in _walk(handler)):
                     return True
         #: 3b/3d -- an `if` on the primary's result (or a name derived from it), with the loop in
         #: either the success arm (3b) or the fallback arm (3d).
         if isinstance(node, ast.If) and (_names_in(node.test) & gated):
             if any(sub is loop for sub in node.body) or any(
-                sub is loop for stmt in node.body for sub in ast.walk(stmt)
+                sub is loop for stmt in node.body for sub in _walk(stmt)
             ):
                 return True
             if any(sub is loop for sub in node.orelse) or any(
-                sub is loop for stmt in node.orelse for sub in ast.walk(stmt)
+                sub is loop for stmt in node.orelse for sub in _walk(stmt)
             ):
                 return True
 
     #: 3c -- a preceding sibling `if` that RETURNS on the success path, at any statement-bearing
     #: level of the function.
-    for parent in ast.walk(fn):
+    for parent in _walk(fn):
         body = getattr(parent, "body", None)
         if not isinstance(body, list):
             continue
@@ -2937,12 +2944,12 @@ def _call_is_ifexp_fallback(call: ast.Call, fn: ast.AST, result_names: set[str])
     is conditionally skipped per iteration. WIDENED 2026-08-27 for `consolidate_assemble/
     __init__.py::brief`'s `all_tip_authors[ref] if ref in all_tip_authors else tip_author(...)`."""
     gated = _derived_names(result_names, fn)
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, ast.IfExp):
             continue
         if not (_names_in(node.test) & gated):
             continue
-        if any(sub is call for sub in ast.walk(node.orelse)):
+        if any(sub is call for sub in _walk(node.orelse)):
             return True
     return False
 
@@ -2960,10 +2967,10 @@ def _enclosing_loop_of(fn: ast.AST, call: ast.Call) -> ast.AST | None:
     docstring already records about covering both loop forms."""
     best: ast.AST | None = None
     best_lineno = -1
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
             continue
-        if any(sub is call for sub in ast.walk(node)) and node.lineno > best_lineno:
+        if any(sub is call for sub in _walk(node)) and node.lineno > best_lineno:
             best, best_lineno = node, node.lineno
     return best
 
@@ -3034,7 +3041,7 @@ def _source_names(seed: set[str], fn: ast.AST) -> set[str]:
     out = set(seed)
     for _ in range(3):
         grew = False
-        for node in ast.walk(fn):
+        for node in _walk(fn):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -3182,7 +3189,7 @@ def _helper_spliced_params(
     bindings = _loop_argv0_bindings(fn)
     local = _loop_expr_bindings(fn)
     out: set[str] = set()
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
             continue
         if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
@@ -3209,7 +3216,7 @@ def _helper_spawn_scope_params(
     bindings = _loop_argv0_bindings(fn)
     local = _loop_expr_bindings(fn)
     out: set[str] = set()
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, ast.Call) or node.lineno not in spawn_linenos:
             continue
         if _call_callee_name(node) not in _SPAWN_API_NAMES or not node.args:
@@ -3246,7 +3253,7 @@ def _own_param_runner_invocation(
     shape: the parameter IS the callee. First match only, no chaining -- one hop, matching every
     other route's discipline in this module."""
     params = set(_func_params(fn))
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
         name = node.func.id
@@ -3538,7 +3545,7 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
     invoked: set[tuple[str, str, str]] = set()
     for (rp, name), fn in index.func_defs.items():
         params = set(_func_params(fn))
-        for node in ast.walk(fn):
+        for node in _walk(fn):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
@@ -3551,7 +3558,7 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
         changed = False
         for (rp, name), fn in index.func_defs.items():
             params = set(_func_params(fn))
-            for node in ast.walk(fn):
+            for node in _walk(fn):
                 if not isinstance(node, ast.Call):
                     continue
                 callee = _call_callee_name(node)
@@ -3567,7 +3574,7 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
 
     tainted: set[tuple[str, str, str]] = set()
     for (rp, name), fn in index.func_defs.items():
-        for node in ast.walk(fn):
+        for node in _walk(fn):
             if not isinstance(node, ast.Call):
                 continue
             callee = _call_callee_name(node)
@@ -3587,7 +3594,7 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
             params = {p for p in _func_params(fn) if (rp, name, p) in tainted}
             if not params:
                 continue
-            for node in ast.walk(fn):
+            for node in _walk(fn):
                 if not isinstance(node, ast.Call):
                     continue
                 callee = _call_callee_name(node)
@@ -3653,7 +3660,7 @@ def _is_discarded_target(target: ast.expr, body: list[ast.AST]) -> bool:
     if not isinstance(target, ast.Name):
         return False
     for stmt in body:
-        for node in ast.walk(stmt):
+        for node in _walk(stmt):
             if isinstance(node, ast.Name) and node.id == target.id:
                 return False
     return True
@@ -3711,7 +3718,7 @@ def _is_retry_bounded_range(iterable: ast.expr) -> bool:
     if iterable.keywords or not iterable.args:
         return False
     for arg in iterable.args:
-        for node in ast.walk(arg):
+        for node in _walk(arg):
             if isinstance(node, ast.Call):
                 if not isinstance(node.func, ast.Name) or node.func.id not in {"max", "min"}:
                     return False
@@ -4067,7 +4074,7 @@ def _name_is_locally_bound_data(fn: ast.AST | None, name: str) -> bool:
     exists to see is spelled exactly that way."""
     if fn is None:
         return False
-    for node in ast.walk(fn):
+    for node in _walk(fn):
         if isinstance(node, (ast.For, ast.AsyncFor)) and name in _loop_target_names(node.target):
             return True
         if isinstance(node, ast.comprehension) and name in _loop_target_names(node.target):
@@ -4077,7 +4084,7 @@ def _name_is_locally_bound_data(fn: ast.AST | None, name: str) -> bool:
         ):
             if any(
                 isinstance(leaf, ast.Constant) and leaf.value is not None
-                for leaf in ast.walk(node.value)
+                for leaf in _walk(node.value)
             ):
                 return True
     return False
@@ -4190,6 +4197,7 @@ def find_unbatched_per_item_spawns(
     callers until this use, which is why the cross-parse unsoundness it forecloses was never
     observed in practice.
     """
+    _WALK_CACHE.clear()
     files = _discover_scope_files(roots)
     records = _load_file_records(files)
     if index_transform is not None:
@@ -4228,7 +4236,7 @@ def find_unbatched_per_item_spawns(
         # file, before any suppression-registry lookup or discriminator runs -- see
         # `_assign_call_ordinals`'s docstring for why this must not be inline below.
         marked_call_descriptors: list[tuple[ast.Call, tuple[int, int], str, str | None]] = []
-        for node in ast.walk(tree):
+        for node in _walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             position = (node.lineno, node.col_offset)
@@ -4244,7 +4252,7 @@ def find_unbatched_per_item_spawns(
             )
         ordinal_by_call = _assign_call_ordinals(marked_call_descriptors)
 
-        for node in ast.walk(tree):
+        for node in _walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             key = (node.lineno, node.col_offset)
@@ -4798,10 +4806,6 @@ class _EnclosingTracker(ast.NodeVisitor):
 #:                here rather than discovered later.
 _ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
     # --- sibling CLI writes one record per invocation (fast tier) ---
-    ("coordinator/bin/percolate-mirror.py", "_run_gate_legs", "_run", 0): (
-        "test_sibling_cli_single_record::test_percolate_gate_scan_secrets_takes_one_target",
-        "fast",
-    ),
     ("coordinator/bin/coordinator-harvest-deferrals.py", "_harvest", "_run_lesson_promote", 0): (
         "test_sibling_cli_single_record::test_lesson_promote_takes_one_record",
         "fast",
@@ -4878,17 +4882,10 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
     #: alone. The git-arity oracle it named still exists and still passes -- it is simply no
     #: longer load-bearing for this site, which is the better outcome: a bounded loop decided
     #: structurally beats the same loop decided by asking git about its argument surface.
+    #: The `git rm` itself is now ONE batched spawn (stdin pathspec) with a per-item retry only on
+    #: a refused batch, reached through a local closure the collector does not flag. The one
+    #: remaining marked call is the commit-failure restore-from-HEAD `git checkout` loop.
     ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec", 0): (
-        "test_git_argument_surface::test_git_rm_is_atomic_across_its_pathspec",
-        "cadence",
-    ),
-    #: SECOND marked call in this function (the commit-failure restore-from-HEAD `git checkout`
-    #: loop, distinct from the `git rm` loop ordinal 0 names) -- the widened per-call anchor now
-    #: distinguishes it from the one above; both shared one over-broad 3-tuple key before this
-    #: migration and were suppressed together under it. Mechanical widening only (this plan
-    #: changes the key SHAPE, not the disposition): kept on the same oracle claim it already
-    #: shared, not re-litigated into its own rationale here.
-    ("coordinator_core/ops/fleet/_common.py", "rm_and_commit", "create_subprocess_exec", 1): (
         "test_git_argument_surface::test_git_rm_is_atomic_across_its_pathspec",
         "cadence",
     ),
@@ -4950,7 +4947,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
 
 _KNOWN_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
     {
-        # OPEN (3) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
+        # OPEN (1) -- wave 4 left these UNDECIDED, and that is recorded rather than laundered.
         # Each chunk named a real batch primitive for its row and then declined it on budget,
         # verification-cost, or regression-risk grounds; the C-review second-reader pass
         # (`state/ledgers/wave4-dispositions/second-reader.md`) overturned all four from EXEMPT
@@ -4965,8 +4962,13 @@ _KNOWN_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # sibling cockpit batch on this module already used. Two spawns for the whole vendored
         # set, whatever N is. Pinned by `test_schema_drift_watch.py::TestSchemaAdvisoryBatch::
         # test_process_count_does_not_grow_with_the_set`.
+        #
+        # `orphan_branch_sweep.py::main -> _run` is FIXED: one unscoped `gh pr list` serves every
+        # branch and the per-branch `gh pr list --head` fallback is deleted, because every way the
+        # listing fails fails a per-branch call identically. Pinned by `test_orphan_branch_sweep.
+        # py::test_process_count_does_not_grow_with_the_set` and `test_failed_pr_listing_does_not_
+        # fan_out_per_branch`.
         ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git', 0),
-        ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_run', 0),
         # OPEN (2), 2026-09-19 -- `coordinator/bin/compose-review-wave.py::compose` arrived via
         # `coordinator/bin/`'s C1 port (commit eabd94b008) already amplifying: one
         # `freeze-review-diff` CLI spawn and one `waste-signal.py --attribute-diff` child PER
@@ -5146,6 +5148,24 @@ _KNOWN_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         #   rationale it never shared.
         ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run', 0),
         ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run', 1),
+        #   `register_discovered_repos.py::main` -> `run` ordinal 2 (the per-key
+        #   `machine-local set repos.<key> <path>` write; ordinals shifted when an earlier `run`
+        #   call was added): the external `machine-local` CLI takes one (key, value) per
+        #   invocation, so no batch primitive exists here; fan-out is the count of discovered,
+        #   not-yet-registered repos, a small one-time set.
+        ('coordinator_core/ops/register_discovered_repos.py', 'main', 'run', 2),
+        #   `_index_resync_drain.py::drain_pending_resyncs` -> `run_git` ordinals 0/1: NOT per
+        #   record. The loop iterates `_argv_group_chunks` argv-length chunks; each chunk is ONE
+        #   batched `git ls-files -s -z` over every record's paths plus at most ONE
+        #   `git restore --staged` over every needed record. Spawns scale with chunk count
+        #   (1 for any realistic pending set), not record count.
+        ('coordinator_core/ops/fleet/_index_resync_drain.py', 'drain_pending_resyncs', 'run_git', 0),
+        ('coordinator_core/ops/fleet/_index_resync_drain.py', 'drain_pending_resyncs', 'run_git', 1),
+        #   `source_edit_gate/gate.py::_run_groups` -> `run_selected`: one pytest/jest run per
+        #   (runner, root) group, bounded by the number of distinct test roots touched by one
+        #   edit; each run already receives every selected file of its group in one invocation.
+        #   Distinct runners/roots cannot share a process.
+        ('coordinator_core/source_edit_gate/gate.py', '_run_groups', 'run_selected', 0),
         #   `setup_chain_walker.py::_sibling_fallback` -> `_functional_probe_ok`: no batch
         #   primary exists anywhere in this function, so the block's retained-fallback shape
         #   does not describe this call site at all
@@ -5221,6 +5241,26 @@ def _gate_scope_paths() -> tuple[pathlib.Path, ...]:
     return tuple(_REPO_ROOT / root for root in _GATE_SCOPE_ROOTS)
 
 
+_GATE_SCAN_RAW: list[AmpSite] | None = None
+
+
+def _gate_violations() -> list[AmpSite]:
+    """The live-tree scan, run ONCE per session with both suppression registers empty and then
+    filtered by the registers currently bound in this module -- so the standing gate, both
+    self-invalidation legs, and the burn-down list share one scan, and a test that monkeypatches
+    a register still sees the suppression it set up."""
+    global _GATE_SCAN_RAW
+    if _GATE_SCAN_RAW is None:
+        saved = (globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"])
+        globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"] = frozenset(), {}
+        try:
+            _GATE_SCAN_RAW = find_unbatched_per_item_spawns(_gate_scope_paths())
+        finally:
+            globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"] = saved
+    exempt, claims = globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"]
+    return [site for site in _GATE_SCAN_RAW if site.key not in exempt and site.key not in claims]
+
+
 def test_no_new_amplification_sites_outside_known_inventory():
     """Standing gate (G2), green at land: NOT a bare `violations == []` (blocked on volume --
     116 hits / 51 files, measured 2026-08-08 repo-wide run, `state/audits/
@@ -5229,7 +5269,7 @@ def test_no_new_amplification_sites_outside_known_inventory():
     and bites immediately on any NEW amplification site outside the frozen inventory -- the
     class-regrowth property this whole plan exists to buy, satisfied at land rather than deferred
     to graduation."""
-    violations = find_unbatched_per_item_spawns(_gate_scope_paths())
+    violations = _gate_violations()
     observed = {site.key for site in violations}
     new_site_keys = observed - _KNOWN_SITES
     new_violations = [site for site in violations if site.key in new_site_keys]
@@ -5247,7 +5287,7 @@ def test_every_exemption_still_names_a_live_site(monkeypatch):
     here is a DELETE, not a re-key -- the site it named is gone."""
     declared = set(_EXEMPT_SITES)
     monkeypatch.setitem(globals(), "_EXEMPT_SITES", set())
-    unexempted = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
+    unexempted = {site.key for site in _gate_violations()}
     dead = declared - unexempted
     assert not dead, (
         "these _EXEMPT_SITES entries no longer match any detected site -- delete them:\n"
@@ -5388,7 +5428,7 @@ def test_oracle_claims_still_name_live_sites(monkeypatch):
     declared = set(_ORACLE_CLAIMS)
     monkeypatch.setitem(globals(), "_ORACLE_CLAIMS", {})
     monkeypatch.setitem(globals(), "_EXEMPT_SITES", set())
-    observed = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
+    observed = {site.key for site in _gate_violations()}
     stale = sorted(declared - observed)
     assert not stale, (
         "these `_ORACLE_CLAIMS` entries no longer match any detected site -- delete them:\n"
@@ -5561,7 +5601,7 @@ def _suppressing_predicate_names() -> set[str]:
     def called_names(node: ast.AST) -> set[str]:
         return {
             n.func.id
-            for n in ast.walk(node)
+            for n in _walk(node)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
         }
 
@@ -5570,7 +5610,7 @@ def _suppressing_predicate_names() -> set[str]:
 
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "find_unbatched_per_item_spawns":
-            for sub in ast.walk(node):
+            for sub in _walk(node):
                 if (
                     isinstance(sub, ast.If)
                     and len(sub.body) == 1
@@ -5595,7 +5635,7 @@ def _asserts_a_site_is_still_reported(func: ast.FunctionDef) -> bool:
     that pins a suppressor. A test that merely asserts `violations == []` is a POSITIVE control
     for a discriminator and proves nothing about its limits; forcing that discriminator maximally
     permissive would leave it green."""
-    for node in ast.walk(func):
+    for node in _walk(func):
         if not isinstance(node, ast.Assert):
             continue
         test = node.test
@@ -5612,7 +5652,7 @@ def _asserts_a_site_is_still_reported(func: ast.FunctionDef) -> bool:
                         return True
         #: `assert violations[0].route == "a-direct"`
         if isinstance(test, ast.Compare) and any(
-            isinstance(n, ast.Subscript) for n in ast.walk(test.left)
+            isinstance(n, ast.Subscript) for n in _walk(test.left)
         ):
             return True
         #: The dominant idiom in this module's own self-tests:
@@ -5716,7 +5756,7 @@ def test_burn_down_known_preexisting_amplification_sites():
     -> one `cat-file --batch-check`).
 
     A BATCHED SITE THAT KEEPS A CORRECTNESS FALLBACK STILL FIRES HERE, and three rows below are
-    exactly that -- do not read them as unfixed. `orphan_branch_sweep::main` (both keys) and
+    exactly that -- do not read them as unfixed. `orphan_branch_sweep::main -> _git` and
     `migrate_branch_canonical_case` took a real batch on the fast path and kept a per-item call
     for the case the batch cannot answer: a ref the batch did not resolve, a case-folding
     filesystem where `for-each-ref` enumeration and `show-ref --verify` are not equivalent. This
@@ -5744,16 +5784,15 @@ def test_burn_down_known_preexisting_amplification_sites():
     entry retired the same day: A REGISTER THAT AGES SILENTLY DEFAULTS TO UNGUARDED, which is why
     `test_oracle_claims_still_name_live_sites` and this test's own subset assertion both exist.
 
-    10 keys remain and this assertion is NOT yet a standing `violations == []`. A reader six
+    9 keys remain and this assertion is NOT yet a standing `violations == []`. A reader six
     months out must not mistake this for a weakened test, and must not mistake the shrunk
     inventory for a finished one. What is left is the genuinely hard residue -- the easy and
     the merely-stale are gone, so the next reader should expect every remaining row to argue
     back. They break down as:
 
-      2  OPEN     -- `check_destructive_rm` and `orphan_branch_sweep::main -> _run`, both now
-                    BATCHED with a fallback (see the block above), both still visible to this
-                    static collector because the fallback call survives in the source.
-                    `check_destructive_rm`'s per-target `git status` is one call per repo root
+      1  OPEN     -- `check_destructive_rm`, BATCHED with a fallback (see the block above),
+                    still visible to this static collector because the fallback call survives
+                    in the source. `check_destructive_rm`'s per-target `git status` is one call per repo root
                     on the fast path; it declines rather than guesses on a porcelain shape it
                     cannot attribute exactly (a rename arrow, a `core.quotepath`-quoted path)
                     and pays the per-target call then. That is deliberate: this is the guard
@@ -5782,7 +5821,7 @@ def test_burn_down_known_preexisting_amplification_sites():
                     collision) that have now been retired exactly that way -- a collector false
                     positive gets a discriminator, never a ledger note.
 
-    So all 10 remaining rows are amplification debt in the original sense; the
+    So all 9 remaining rows are amplification debt in the original sense; the
     collector-precision backlog this test used to also carry is closed. Closing this test means
     disposing all 27 of the original inventory; `_KNOWN_SITES` shrinking to `frozenset()` is what
     flips the marker off.
@@ -5792,7 +5831,7 @@ def test_burn_down_known_preexisting_amplification_sites():
     blocker for every other session sharing `main`. This test's failure output is exactly that
     worklist, in the marker's own terms: run it explicitly to see the current burn-down surface.
     """
-    violations = find_unbatched_per_item_spawns(_gate_scope_paths())
+    violations = _gate_violations()
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
@@ -7467,8 +7506,7 @@ def test_discriminator_batched_primary_fallback_orelse_shape_not_flagged(tmp_pat
     """Discriminator 13, shape 3d (WIDENED 2026-08-27, chunk C3 of `2026-08-27-the-
     discriminators-that-already-exist-reach-their-rows`) -- the per-item loop is the FALLBACK,
     sitting in the `orelse` of an `If` gated on the batch's own success flag, symmetric to shape
-    3b which only read the `If`'s `body`. `orphan_branch_sweep.py::main`'s real shape (`if
-    gh_batch_ok: ... else: for branch in ...: ...`). Pinned as a SITE-not-reported assertion, not
+    3b which only read the `If`'s `body` (`if batch_ok: ... else: for item in ...: ...`). Pinned as a SITE-not-reported assertion, not
     a unit test on the predicate's internals -- the exact shape the discriminator-7 gap left a
     hole behind."""
     fixture = tmp_path / "disc_fallback_orelse.py"
@@ -8541,7 +8579,7 @@ def test_route_g_pin_against_live_repo():
     negative) -- an empty live pin proves the repo is clean, never that the route works, and
     those two claims must not be confused. A NEW key appearing here is a real two-hop forwarded
     runner and must be read as one, not absorbed by re-pinning it."""
-    violations = find_unbatched_per_item_spawns(_gate_scope_paths())
+    violations = _gate_violations()
     route_g_keys = {site.key for site in violations if site.route == "g-forwarded-runner"}
     assert route_g_keys == set()
 
@@ -8631,7 +8669,7 @@ def test_ordinal_assignment_refuses_a_duplicate_call_identity():
     submitting the exact same node twice can collide)."""
     src = "subprocess.run(['git', 'status'])\n"
     tree = ast.parse(src)
-    call_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    call_node = next(n for n in _walk(tree) if isinstance(n, ast.Call))
     position = (call_node.lineno, call_node.col_offset)
 
     with pytest.raises(RuntimeError, match="indistinguishable"):

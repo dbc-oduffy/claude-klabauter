@@ -738,7 +738,27 @@ def test_provenance_invariance_read_vs_executed(
     for key in read_decision:
         if key in ("detents", "next_move"):
             continue
+        if key == "directives":
+            assert _without_premise_args(read_decision[key]) == _without_premise_args(
+                executed_decision[key]
+            ), key
+            continue
         assert read_decision[key] == executed_decision[key], key
+
+
+def _without_premise_args(directives):
+    # The scaffold directive records the caller's premise provenance onto the
+    # sizing object; that is recording, not routing, so it is the one
+    # directive argument permitted to differ across provenance.
+    return [
+        {
+            **d,
+            "args": [
+                a for a in d.get("args") or [] if not a.startswith(("--premise=", "--premise-evidence="))
+            ],
+        }
+        for d in directives
+    ]
 
 
 @pytest.mark.parametrize(
@@ -760,6 +780,11 @@ def test_provenance_invariance_not_applicable_vs_executed(
     executed_decision = sa.route(**kwargs, premise_provenance="executed")
     for key in na_decision:
         if key in ("detents", "next_move"):
+            continue
+        if key == "directives":
+            assert _without_premise_args(na_decision[key]) == _without_premise_args(
+                executed_decision[key]
+            ), key
             continue
         assert na_decision[key] == executed_decision[key], key
 
@@ -1075,11 +1100,10 @@ def test_completion_entry_schema_version_and_bump_class():
             "coordinator_core/frontmatter/schemas/completion-entry.schema.json"
         ).read_text(encoding="utf-8")
     )
-    # 1.4.0 since 62b27af07 re-vendored this mirror for the XXL tier (leg 3 of
-    # a three-leg coordinated landing). The bump class is unchanged; only the
-    # version pin here was left behind.
-    assert schema["x-schema-version"] == "1.4.0"
-    assert schema["x-bump-class"] == "enum-value-additive"
+    # 1.5.0 since 19dcc3a785 vendored the completion-receipts fields, a
+    # top-level array addition; this pin follows the vendored bytes.
+    assert schema["x-schema-version"] == "1.5.0"
+    assert schema["x-bump-class"] == "top-level-array-additive"
 
 
 def test_vendored_schema_widened_enums_order_exact():
@@ -1932,3 +1956,17 @@ def test_repo_span_flag_is_unrecognised():
 
 def test_route_enum_has_no_first_person():
     assert "first-person" not in sa.ROUTE_ENUM
+
+
+def test_ask_scope_raise_names_the_raise_line():
+    out = sa.route(
+        estimate={"tshirt": "L"},
+        probe_signal="raise",
+        probe_raise_basis="ask-scope",
+    )
+    assert out["probe_raise"] == "probe raise: L -> XL, basis=ask-scope, route=pm-decision"
+    assert out["probe_raise"] in out["narration"]
+
+
+def test_no_raise_line_without_a_resize():
+    assert sa.route(estimate={"tshirt": "L"})["probe_raise"] is None

@@ -12,14 +12,14 @@ the "2-week minimum soak" criterion.
 
 Port source: coordinator/bin/scope-soak-enable (coordinator-content-repo)
 Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292, chunk B3
-See also: docs/pretooluse-deny-contract.md, docs/wiki/scoped-safety-commits.md § Phase 5
+See also: docs/pretooluse-deny-contract.md, coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md § Phase 5
 
 Negative-spec:
     - Never overwrites an existing sentinel — idempotent no-op on rerun.
     - Always writes UTC (no BSD/GNU `date -u` fallback branch needed in Python —
       datetime.now(timezone.utc) is portable).
     - Output wording is verbatim-preserved even though no caller machine-parses
-      it — it is quoted in docs/wiki/scoped-safety-commits.md and
+      it — it is quoted in coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md and
       docs/pretooluse-deny-contract.md as user-facing help text.
 """
 

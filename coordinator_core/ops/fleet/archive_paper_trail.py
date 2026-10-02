@@ -75,10 +75,11 @@ Negative-spec:
     inside _common.archive_and_commit, not re-implemented here).
   - Does NOT register any op key scope — that is the shared _registry_map.py /
     op_scopes.py surface, owned by a separate serial tail pass.
-  - Does NOT overwrite an existing destination — a genuine same-day collision
-    (dest already present while src also still exists) is left untouched and
-    logged rather than force-merged; this module does not carry the `cp -r`
-    variant's silent-overwrite hazard.
+  - Does NOT overwrite an existing destination file. A dest already present
+    while src still exists is a prior partial archive: the rerun resumes it,
+    moving only files whose destination is free, reporting every colliding
+    or failed file in `failed`, and marking the reply `resumed: true` — never
+    the silent no-op shape, and never the `cp -r` variant's overwrite.
 """
 
 from __future__ import annotations
@@ -137,11 +138,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
     The response MAY additionally carry a `failed` key — a non-empty list of
     `{"id": str, "reason": str}` items from `_common.archive_and_commit` —
     present ONLY when a dry_run:false attempt's per-file git-mv failed for one
-    or more files (`archived` is then `False`). This is an ADDITIVE key,
+    or more files (`archived` is then `False`), or when a resumed archive
+    (`resumed: true`, dest already present) found a destination file taken.
+    Both are ADDITIVE keys,
     absent on every other path, so a v1 consumer reading only
     `{archived, dest, already_archived}` is unaffected. See
     `coordinator/bin/archive-paper-trail.py`'s exit-code 4 branch, which is
-    the sanctioned consumer of this key.
+    the sanctioned consumer of `failed`.
 
     dry_run:true  → preview only; mutates nothing.
     dry_run:false → performs the atomic rename (via _common.archive_and_commit)
@@ -192,26 +195,45 @@ async def _handler(params: dict, repo_root=None) -> dict:
             "already_archived": True,
         }
 
-    if dest.exists():
-        _LOG.error(
-            "fleet.archive_paper_trail: dest %s already exists while src %s "
-            "still exists — refusing to overwrite; leaving both untouched",
-            dest, src,
-        )
-        return {
-            "archived": False,
-            "dest": rel_id(dest, worktree),
-            "already_archived": False,
-        }
+    # dest alongside a live src is a prior partial archive: resume it, moving
+    # only files whose destination is still free and naming the rest.
+    resuming = dest.exists()
 
     if dry_run:
-        return {
+        preview = {
             "archived": False,
             "dest": rel_id(dest, worktree),
             "already_archived": False,
         }
+        if resuming:
+            preview["resumed"] = True
+        return preview
 
     files = sorted(p for p in src.rglob("*") if p.is_file())
+    collisions = []
+    if resuming:
+        free = []
+        for f in files:
+            if (dest / f.relative_to(src)).exists():
+                collisions.append({
+                    "id": rel_id(f, worktree),
+                    "reason": "destination file already exists; not overwritten",
+                })
+            else:
+                free.append(f)
+        files = free
+        if not files and collisions:
+            _LOG.error(
+                "fleet.archive_paper_trail: resume of %s -> %s blocked; every "
+                "remaining file collides: %s", src, dest, collisions,
+            )
+            return {
+                "archived": False,
+                "dest": rel_id(dest, worktree),
+                "already_archived": False,
+                "resumed": True,
+                "failed": collisions,
+            }
     if not files:
         for leftover_dir in sorted(
             (p for p in src.rglob("*") if p.is_dir()),
@@ -241,6 +263,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         f"{dest.name} [fleet.archive_paper_trail]"
     )
     acted, failed = await archive_and_commit(worktree, moves, subject)
+    failed = collisions + list(failed)
 
     if failed:
         _LOG.error(
@@ -248,12 +271,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
             "%s -> %s: %s",
             src, dest, failed,
         )
-        return {
+        reply = {
             "archived": False,
             "dest": rel_id(dest, worktree),
             "already_archived": False,
             "failed": failed,
         }
+        if resuming:
+            reply["resumed"] = True
+        return reply
 
     for leftover_dir in sorted(
         (p for p in src.rglob("*") if p.is_dir()),
@@ -269,8 +295,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except OSError:
         pass
 
-    return {
+    reply = {
         "archived": True,
         "dest": rel_id(dest, worktree),
         "already_archived": False,
     }
+    if resuming:
+        reply["resumed"] = True
+    return reply

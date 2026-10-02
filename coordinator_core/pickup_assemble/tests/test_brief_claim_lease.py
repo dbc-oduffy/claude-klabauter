@@ -1074,7 +1074,7 @@ def test_dropping_an_apply_stage_claim_still_runs_the_class_inverse(
     its existing behaviour on a real, applied claim."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _seed_handoff(repo, "h1.md", deployment_state="in_flight")
+    _seed_handoff(repo, "h1.md", deployment_state="in_flight", claimed_by="sid-a")
     as_session("sid-a")
     _write_claim(repo, "handoff", "h1.md", "sid-a", stage="apply", age_minutes=1)
 

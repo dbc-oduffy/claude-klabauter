@@ -217,3 +217,63 @@ def test_segments_byte_identical_across_admission_arms_ac6(
     )
 
     assert bare["segments"] == sized["segments"]
+
+
+def _add_lane_segments(content_root: Path) -> None:
+    residue_dir = content_root / "skills" / "plan" / "residue"
+    for name, seg_id, lane in (
+        ("040-lane-l.md", "lane-l", "L"),
+        ("050-lane-xl.md", "lane-xl", "XL"),
+    ):
+        (residue_dir / name).write_text(
+            f"---\nsegment_id: {seg_id}\nroute: plan\nclass: droppable\n"
+            f"order: 5\nlane: {lane}\n---\nBody.\n",
+            encoding="utf-8",
+        )
+
+
+def _lane_ids(result: dict[str, Any]) -> set[str]:
+    return {s["segment_id"] for s in result["segments"]}
+
+
+def test_lane_filter_excludes_other_lane_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content_root = _make_residue_dir(tmp_path)
+    _add_lane_segments(content_root)
+    _patch_content_root(monkeypatch, content_root)
+    sizing = tmp_path / "sizing.yaml"
+    sizing.write_text("route: plan\nestimate:\n  tshirt: L\n", encoding="utf-8")
+
+    ids = _lane_ids(brief(explicit_route="plan", sizing_object_path=sizing))
+
+    assert "lane-l" in ids
+    assert "lane-xl" not in ids
+    assert {"shared-reminder", "plan-reminder"} <= ids
+
+
+def test_absent_sizing_admits_every_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content_root = _make_residue_dir(tmp_path)
+    _add_lane_segments(content_root)
+    _patch_content_root(monkeypatch, content_root)
+
+    ids = _lane_ids(brief(explicit_route="plan"))
+
+    assert {"lane-l", "lane-xl"} <= ids
+
+
+def test_laneless_segment_admitted_under_any_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content_root = _make_residue_dir(tmp_path)
+    _add_lane_segments(content_root)
+    _patch_content_root(monkeypatch, content_root)
+    sizing = tmp_path / "sizing.yaml"
+    sizing.write_text("route: plan\nestimate:\n  tshirt: XS\n", encoding="utf-8")
+
+    ids = _lane_ids(brief(explicit_route="plan", sizing_object_path=sizing))
+
+    assert {"shared-reminder", "plan-reminder"} <= ids
+    assert not ({"lane-l", "lane-xl"} & ids)

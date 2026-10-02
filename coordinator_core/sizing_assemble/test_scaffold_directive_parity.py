@@ -106,6 +106,73 @@ class TestSizingObjectScaffoldParity:
         assert isinstance(directive["already_satisfied"], bool)
 
 
+class TestSizingAndPremiseThreading:
+    """The printed directive carries the resolved tshirt/route and premise, or
+    names what is missing instead of printing a command doc-new refuses."""
+
+    def test_resolved_tshirt_and_route_are_threaded(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            premise_provenance="read",
+            premise_evidence="tests/x.py:3",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        assert args.tshirt == "M"
+        assert args.route == result["route"] == "plan"
+        assert args.premise == "read"
+        assert args.premise_evidence == "tests/x.py:3"
+        assert "missing" not in directive
+
+    def test_missing_names_absent_premise_flags(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"}, intent="Ship the scaffold emitter"
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        assert directive["missing"] == ["--premise-provenance", "--premise-evidence"]
+
+    def test_unrecorded_provenance_is_missing(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            premise_provenance="unrecorded",
+            premise_evidence="x",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        assert directive["missing"] == ["--premise-provenance"]
+
+    def test_directive_run_verbatim_exits_zero_and_scaffolds_sizing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import subprocess
+        import sys
+
+        (tmp_path / ".git").mkdir()
+        monkeypatch.chdir(tmp_path)
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"},
+            intent="Ship the scaffold emitter",
+            premise_provenance="read",
+            premise_evidence="x",
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        proc = subprocess.run(
+            [sys.executable, str(_CLI_PATH), *directive["args"]],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert proc.returncode == 0, proc.stderr
+        out = next(
+            a.split("=", 1)[1] for a in directive["args"] if a.startswith("--out=")
+        )
+        text = (tmp_path / out).read_text(encoding="utf-8")
+        assert "tshirt: M" in text
+        assert "route: plan" in text
+
+
 class TestExpressLaneScaffoldsNothing:
     def test_express_lane_emits_no_directive(self) -> None:
         result = sizing_assemble.route(
@@ -196,3 +263,59 @@ class TestInteractionModeAndExitCriterionThreading:
         args = _parser.parse_args(directive["args"])
         assert args.exit_criterion == "Ship the thing"
         assert args.interaction_mode == "ceo"
+
+
+class TestDirectiveSatisfiesScaffoldCli:
+    def _args(self, **kw):
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"}, intent="Ship the scaffold emitter", **kw
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        return result, _parser.parse_args(directive["args"])
+
+    def test_directive_passes_the_cli_premise_validation(self) -> None:
+        _, args = self._args(premise_provenance="read", premise_evidence="tests/x.py:3")
+        mod_path = _CLI_PATH
+        loader = importlib.machinery.SourceFileLoader("doc_new_flags_check", str(mod_path))
+        spec = importlib.util.spec_from_loader("doc_new_flags_check", loader)
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        loader.exec_module(mod)
+        _detents, error = mod._validate_sizing_flags(args)
+        assert error is None
+
+    def test_premise_provenance_is_carried(self) -> None:
+        _, args = self._args(premise_provenance="executed", premise_evidence="pytest x")
+        assert args.premise == "executed"
+        assert args.premise_evidence
+
+    def test_computed_size_and_route_are_carried(self) -> None:
+        result, args = self._args()
+        assert args.tshirt == result["resolved_estimate"]["tshirt"] == "M"
+        assert args.route == result["route"] == "plan"
+
+
+class TestScaffoldedStatus:
+    def test_computed_sizing_lands_sized(self) -> None:
+        result = sizing_assemble.route(
+            estimate={"tshirt": "M"}, intent="Ship the scaffold emitter"
+        )
+        directive = _directive(result["directives"], "d-scaffold-sizing-object")
+        args = _parser.parse_args(directive["args"])
+        mod = importlib.machinery.SourceFileLoader(
+            "doc_new_status_probe", str(_CLI_PATH)
+        ).load_module()
+        text = mod._scaffold_sizing(
+            args.title,
+            tshirt=args.tshirt,
+            route=args.route,
+            premise=args.premise,
+            premise_evidence=args.premise_evidence,
+        )
+        assert "\nstatus: sized " in text
+        assert "\nstatus: draft" not in text
+
+    def test_bare_scaffold_stays_draft(self) -> None:
+        mod = importlib.machinery.SourceFileLoader(
+            "doc_new_status_probe2", str(_CLI_PATH)
+        ).load_module()
+        assert "\nstatus: draft " in mod._scaffold_sizing("x")

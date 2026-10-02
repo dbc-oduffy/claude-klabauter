@@ -345,14 +345,14 @@ def _pack_index_find(pidx: _PackIndex, sha_hex: str) -> Optional[int]:
 
 
 def _read_pack_bytes(pack_path: Path) -> bytes | mmap.mmap:
-    fh = open(pack_path, "rb")
-    try:
-        return mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
-    except ValueError:
-        fh.seek(0)
-        return fh.read()
-    finally:
-        fh.close()
+    # The mmap outlives the file handle (it holds its own descriptor) and is
+    # released when the caller drops it. ValueError is mmap's refusal of a
+    # zero-length file, so the fallback read is always empty, never a big pack.
+    with open(pack_path, "rb") as fh:
+        try:
+            return mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except ValueError:
+            return b""
 
 
 def _delta_read_size(data: bytes, pos: int) -> tuple[int, int]:

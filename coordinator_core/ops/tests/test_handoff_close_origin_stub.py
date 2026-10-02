@@ -507,7 +507,7 @@ def _seed_non_roadmap_spinoff_stub(
     """Seed a NON-ROADMAP `kind: spinoff` origin stub — schema-legal without
     `roadmap_id`/`stub_id` (those are legal only on `kind: spinoff-roadmap`/
     `roadmap-baton`), the exact population `predecessor_handoff` exists to
-    reach: `_is_baton_kind` admits `kind: spinoff`, but the pair-keyed
+    reach: `is_baton_kind` admits `kind: spinoff`, but the pair-keyed
     `_scan_matches`/`_try_close` pipeline can never match it (no pair to
     match on)."""
     stub = worktree / "state" / "handoffs" / name
@@ -541,7 +541,7 @@ def _seed_session_handoff(worktree: Path, name: str = "not-a-baton.md") -> Path:
         "status: open\n"
         "predecessor: none\n"
         "category: infra\n"
-        "summary: session-handoff fixture, refused by _is_baton_kind\n"
+        "summary: session-handoff fixture, refused by is_baton_kind\n"
         "deployment_state: ready_to_fire\n"
         "---\n\nBody.\n",
         encoding="utf-8",
@@ -688,6 +688,33 @@ def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypat
     assert result["no_candidates"] is True
     assert result["closed"] == []
     assert result["skipped"] == []
+
+
+def test_op_resolves_pair_through_imported_read_pair(tmp_path, monkeypatch):
+    import coordinator_core.ops.origin_stub_staleness as staleness
+
+    assert m.read_pair is staleness.read_pair
+    assert m.read_closes_stubs is staleness.read_closes_stubs
+    assert m.is_baton_kind is staleness.is_baton_kind
+
+    worktree = tmp_path
+    (worktree / ".git").mkdir(parents=True, exist_ok=True)
+    plan = worktree / "docs" / "plans" / "plan.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nroadmap_id: r1\nstub_id: s1\n---\nbody\n", encoding="utf-8")
+
+    calls = []
+
+    def _spy(meta):
+        calls.append(meta)
+        return ("r1", "s1")
+
+    monkeypatch.setattr(m, "read_pair", _spy)
+    result = _run(m._handler({"plan_path": "docs/plans/plan.md"}, worktree))
+
+    assert calls
+    assert result["pairs_resolved"] == 1
+    assert result["skipped"][0]["reason"] == "no-match"
 
 
 def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):

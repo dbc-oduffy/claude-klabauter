@@ -232,6 +232,8 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
     "block_venv_creation": lambda mod: "python -m venv .venv",
+    # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
+    "guard_headless_claude_plugin_dir": lambda mod: "claude -p hi",
 }
 
 
@@ -304,6 +306,13 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
     "block_noncanonical_branch_creation": lambda mod, mp: (
         _hazard_repo_monkeypatch(mod, mp) or {}
     ),
+    # Without a dev-install sentinel the guard returns a bare clean for every
+    # dialect, which says nothing about PowerShell; drive it past that gate.
+    "guard_headless_claude_plugin_dir": lambda mod, mp: (
+        mp.setattr(mod, "_is_dev_install", lambda: True),
+        mp.setattr(mod, "_plugin_root", lambda: "C:/plugin-root"),
+        {},
+    )[-1],
     "guard_host_subagent_bash_spawn_shapes": lambda mod, mp: (
         mp.setattr(mod, "_repo_config", lambda cwd=None: "structural-test-config"),
         mp.setattr(mod, "_policy_is_deny", lambda config: True),

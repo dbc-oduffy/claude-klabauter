@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 DEFAULT_SWEEP_FILES_THRESHOLD = 10
 DEFAULT_SWEEP_LINES_THRESHOLD = 15
@@ -27,26 +26,10 @@ _COMMIT_FIELD_SEP = "\x1f"
 _WHITESPACE_RE = re.compile(r"\s+")
 _LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|\(https?://[^)\s]+\)|https?://\S+")
 
-_GIT_TIMEOUT_SECS = 30
-
-
 def _run_git(repo_root: Path, *args: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_GIT_TIMEOUT_SECS,
-            **no_console_creationflags(),
-        )
-    except subprocess.TimeoutExpired:
-        print(
-            f"doc_staleness: git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECS}s",
-            file=sys.stderr,
-        )
+    result = run_git(list(args), cwd=str(repo_root))
+    if result.timed_out:
+        print(f"doc_staleness: git {' '.join(args)} timed out", file=sys.stderr)
         return ""
     if result.returncode != 0:
         if result.stderr:

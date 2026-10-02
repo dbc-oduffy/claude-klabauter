@@ -140,6 +140,39 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 _RUN_ID_FLAG = "--run-id"
+_STANDING_GRANT_FLAG = "--standing-grant"
+
+#: Grants the EM may pass explicitly (never inferred) when the PM already
+#: authorized them in the session prompt. Each maps to the disposition it
+#: answers; `_satisfied_by` decides which judgment points it covers.
+STANDING_GRANTS: dict[str, str] = {"commit": "ready-to-commit", "tests": "granted"}
+
+
+def _satisfied_by(grant: str, jp: dict[str, Any]) -> bool:
+    offered = {d.get("value") for d in jp.get("dispositions") or []}
+    if STANDING_GRANTS[grant] not in offered:
+        return False
+    return grant == "commit" or str(jp.get("id", "")).endswith("-tier-u-grant")
+
+
+def _apply_standing_grants(
+    judgment_points: list[dict[str, Any]], grants: tuple[str, ...]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Answer each judgment point a standing grant covers; it leaves the ask list
+    and lands in `decisions` with its basis, so it is recorded, not re-raised."""
+    remaining: list[dict[str, Any]] = []
+    decisions: dict[str, Any] = {}
+    for jp in judgment_points:
+        grant = next((g for g in grants if _satisfied_by(g, jp)), None)
+        if grant is None:
+            remaining.append(jp)
+            continue
+        decisions[jp["id"]] = {
+            "disposition": STANDING_GRANTS[grant],
+            "basis": f"standing-grant:{grant}",
+            "question": jp.get("question"),
+        }
+    return remaining, decisions
 
 
 @dataclass(frozen=True)
@@ -152,7 +185,11 @@ class BriefResult:
 
 
 def brief(
-    cadence: str, *, run_id: str | None = None, repo_root: Path | None = None
+    cadence: str,
+    *,
+    run_id: str | None = None,
+    repo_root: Path | None = None,
+    standing_grants: tuple[str, ...] = (),
 ) -> BriefResult:
     """Compute the cadence-selected backlog-grind decision object.
 
@@ -170,6 +207,10 @@ def brief(
     `None` means the caller named no run — a reader that needs one says so
     in its own judgment point rather than this seam deciding on its behalf.
 
+    `standing_grants` names PM authorizations the EM passed explicitly
+    (`STANDING_GRANTS` keys); a judgment point one covers is answered in
+    `decisions` rather than asked. Never inferred from anything else.
+
     Raises `ValueError` for a `cadence` outside `CADENCES`. Read-only
     (AC2): performs no disk mutation and no git mutation. Calls
     `resolve_operator_config()` (AC5) rather than re-deriving
@@ -184,6 +225,12 @@ def brief(
             f"backlog-grind-assemble: unrecognized cadence {cadence!r}; "
             f"must be one of {CADENCES}"
         )
+    unknown = sorted(set(standing_grants) - set(STANDING_GRANTS))
+    if unknown:
+        raise ValueError(
+            f"backlog-grind-assemble: unknown standing grant(s) {unknown}; "
+            f"must be from {sorted(STANDING_GRANTS)}"
+        )
 
     resolve_operator_config()
 
@@ -193,14 +240,18 @@ def brief(
         result = reader.collect(cadence, run_id=run_id)
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)
+    judgment_points, decisions = _apply_standing_grants(judgment_points, standing_grants)
+    artifact: dict[str, Any] = {"cadence": cadence, "run_id": run_id}
+    if standing_grants:
+        artifact["standing_grants"] = sorted(set(standing_grants))
 
     envelope = build_envelope(
-        artifact={"cadence": cadence, "run_id": run_id},
+        artifact=artifact,
         preflight={},
         gates={},
         directives=directives,
         judgment_points=judgment_points,
-        decisions={},
+        decisions=decisions,
         narration=(
             f"backlog-grind-assemble brief {cadence}: {len(directives)} "
             f"directive(s), {len(judgment_points)} judgment point(s) "
@@ -223,6 +274,7 @@ def brief(
 
 _USAGE_LINE = (
     f"backlog-grind-assemble brief <{'|'.join(CADENCES)}> [--run-id <run-id>]"
+    " [--standing-grant <commit,tests>]"
 )
 
 
@@ -339,16 +391,28 @@ def main(argv: list[str]) -> int:
         return _usage()
 
     run_id: str | None = None
+    grants: tuple[str, ...] | None = None
     remaining = rest[1:]
     while remaining:
         token = remaining[0]
-        if token != _RUN_ID_FLAG or len(remaining) < 2 or run_id is not None:
+        if len(remaining) < 2:
             return _usage()
-        run_id = remaining[1]
+        if token == _RUN_ID_FLAG and run_id is None:
+            run_id = remaining[1]
+        elif token == _STANDING_GRANT_FLAG and grants is None:
+            grants = tuple(g.strip() for g in remaining[1].split(",") if g.strip())
+            if not grants or not set(grants) <= set(STANDING_GRANTS):
+                return _usage()
+        else:
+            return _usage()
         remaining = remaining[2:]
 
     try:
-        result = brief(cadence, run_id=run_id)
+        result = (
+            brief(cadence, run_id=run_id, standing_grants=grants)
+            if grants
+            else brief(cadence, run_id=run_id)
+        )
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble's own
         print(f"backlog-grind-assemble: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL

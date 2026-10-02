@@ -82,3 +82,17 @@ def test_collect_still_only_fires_on_debt_triage_cadence(tmp_path: Path, monkeyp
         result = readers_debt.collect(cadence)
         assert result.directives == []
         assert result.judgment_points == []
+
+
+def test_groups_key_on_surface_path_then_fall_back_to_title():
+    rows = [
+        {"frontmatter": {"surface": "coordinator_core/ops/a.py, docs/x.md", "system": "free text"}},
+        {"frontmatter": {"surface": "|-\ncoordinator_core/ops/session/b.py"}},
+        {"frontmatter": {"title": "stale ref in docs/wiki/foo.md"}},
+        {"frontmatter": {"title": "no path at all"}},
+    ]
+    assert readers_debt._system_groups(rows) == {
+        "coordinator_core/ops": 2,
+        "docs/wiki": 1,
+        "ungrouped": 1,
+    }

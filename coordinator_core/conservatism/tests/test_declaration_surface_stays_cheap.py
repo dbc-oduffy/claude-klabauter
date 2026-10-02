@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from coordinator_core.win_portability import no_console_creationflags
 
 _FORBIDDEN = ("dataclasses", "inspect", "typing")
 
@@ -39,7 +40,7 @@ def test_declaration_surface_drags_no_expensive_stdlib_import():
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=60, **no_console_creationflags(),
     )
     assert result.returncode == 0, result.stderr
     dragged = [m for m in result.stdout.strip().split(",") if m]

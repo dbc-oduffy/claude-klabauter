@@ -28,7 +28,7 @@ SAME scoped `git status --porcelain=v2` spawn this module always issued,
 restricted to just the undetermined subset -- this is an optimisation with
 an escape hatch, never a narrowing of what this predicate can answer.
 
-Spec backlink: docs/wiki/scoped-safety-commits.md § SC-DR-015
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md § SC-DR-015
 Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md
   (`fail_loud=` split -- see `DivergenceCheckFailed` below; a genuine `git
   diff` failure/timeout must be indeterminate, not "no divergence", for a

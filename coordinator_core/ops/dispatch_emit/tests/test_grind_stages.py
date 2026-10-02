@@ -122,9 +122,54 @@ def test_ledger_sweep_names_every_queue_and_never_commits():
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"], record_js="REC")
     assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (REPO_ROOT) + '" in call_text
     assert "grind-row run-record --profile p1 --run-id ' + 'run-1'" in call_text
+    # The verb requires --record-file; the emitted call reads the record from stdin.
+    assert " --record-file - --repo-root " in call_text
     assert "(REC)" in call_text
     assert "commit_v2" not in call_text
     assert "coordinator:git-commit-agent" not in call_text
+
+
+def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
+    """The `grind-row run-record` argv the op-runner is told to run, with each
+    `' + (EXPR) + '` splice bound from ``bindings`` -- the verb onward."""
+    import re
+    import shlex
+
+    flat = re.sub(
+        r"' \+ \(([A-Za-z_][\w.]*)\) \+ '",
+        lambda m: shlex.quote(str(bindings[m.group(1)])),
+        call_text,
+    ).replace("' + '", "")
+    start = flat.index(grind_stages.ASSEMBLE_CMD + " grind-row run-record")
+    command = flat[start : flat.index("`", start)]
+    argv = shlex.split(command[len(grind_stages.ASSEMBLE_CMD) :])
+    assert argv[0] == "grind-row"
+    return argv[1:]
+
+
+def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
+    """The drain brief and `grind_rows.cmd_run_record` agree: the argv the
+    brief names, fed the record on stdin as the brief says, writes the run
+    record. A required flag the brief omits exits 2 and the run dies
+    `stage-dead` with no run-cost record."""
+    import io
+
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    call_text = grind_stages.compose_ledger_sweep_call(
+        label="ledger-sweep:drain", phase_title="Grind", profile="p1",
+        queue_dirs=[], run_id_js="RUN_ID", record_js="REC",
+    )
+    argv = _emitted_run_record_argv(
+        call_text, {"RUN_ID": "20261002T000000Z", "REPO_ROOT": tmp_path, "REC": "{}"}
+    )
+    assert "passing this JSON on stdin" in call_text
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"run_id": "20261002T000000Z"})))
+    monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
+
+    assert grind_rows.main(argv) == grind_rows.EXIT_OK
+    written = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261002T000000Z.json"
+    assert json.loads(written.read_text(encoding="utf-8")) == {"run_id": "20261002T000000Z"}
 
 
 def test_ledger_sweep_without_queue_dirs_omits_the_sweep():

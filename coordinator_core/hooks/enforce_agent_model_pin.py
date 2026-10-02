@@ -54,7 +54,7 @@ is silently outranking. The deny message is the fix for that asymmetry,
 not decoration: it names the pin, the value that violated it, and the
 resolved `coordinator/agents/<name>.md` path the pin was read from
 (`resolve_model_pins()`'s `_source_path`, ACTUALLY RESOLVED AT RUNTIME via
-`read_content_root_pointer()` -- never a hardcoded drive-lettered path in this
+`read_content_root()` -- never a hardcoded drive-lettered path in this
 module's source; see that function's own docstring).
 
 ADVISORY. A strictly-cheaper override is not silent: it returns

@@ -6,8 +6,7 @@ does — no git repo, no `spawns_process` marker. Leg (a)'s two reads
 (`_claimant`, `resolve_live_session_ids`) are monkeypatched on the module.
 Leg (b) is isolated too: `has_live_children_from_metas` is monkeypatched to
 return `{"referenced": False, "children": [], "exit_code": 1}` (exit_code 1 =
-"no live children"; see `reap_in_flight_claims.survey`'s `exit_code != 1`
-skip) — leg (b) fails closed on an empty/unreadable live set otherwise, and a
+"no live children") — leg (b) fails closed on an empty/unreadable live set otherwise, and a
 real await against the un-mocked resolver would need a live corpus this test
 never builds. A non-None `corpus_metas` is passed so `_predicate_refusal`
 routes leg (b) through the metas-indexed path this monkeypatch targets.

@@ -1,19 +1,7 @@
 """
-Tests for coordinator_core.orient_assemble.readers_health_reaper's
-`_read_reaper_dry_run` — the in-process replacement for the deleted
-`_REAP_SUBPROCESS_EXCEPTION` subprocess call.
-
-Spec backlink: docs/plans/2026-08-26-two-callers-want-two-numbers-not-a-1301-line-cli.md
-chunk C2.
-
-Negative-spec:
-    - Does NOT spawn a subprocess anywhere in this module — `_read_reaper_dry_run`
-      calls `reap_in_flight_claims.survey()` directly, in-process. Every test here
-      patches `_reap_survey` rather than touching the filesystem corpus `survey()`
-      itself reads.
-    - Does NOT re-implement the deleted `_REAP_WOULD_RELEASE_RE` /
-      `_REAP_WOULD_RECLAIM_RE` prose-parsing contract — `survey()` returns integers
-      directly, so there is no stdout to regex-match.
+Tests for coordinator_core.orient_assemble.readers_health_reaper's readers:
+goal coverage, trail scope, git maintenance, plugin drift, hook currency, and
+the session-cadence workday judgment point.
 """
 
 from __future__ import annotations
@@ -23,67 +11,12 @@ import sys
 
 import pytest
 
-from unittest import mock
-
 from pathlib import Path
 
 from coordinator_core.orient_assemble import readers_health_reaper as rhr
-from coordinator_core.ops.reap_in_flight_claims import SurveyResult
+from coordinator_core.win_portability import no_console_creationflags
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def test_two_integer_contract_produces_expected_directive():
-    fake_result = SurveyResult(would_release=2, would_reclaim=3, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result) as survey_mock:
-        result = rhr._read_reaper_dry_run()
-
-    survey_mock.assert_called_once_with(rhr._CLAUDE_KLABAUTER_ROOT)
-    assert len(result.directives) == 1
-    directive = result.directives[0]
-    assert directive["id"] == "d-reaper-orphaned-handoffs"
-    assert directive["cli"] == "reap-orphaned-in-flight-handoffs"
-    assert directive["args"] == []
-    assert "2 orphaned in_flight handoff(s) would be released" in directive["detail"]
-    assert "3 orphaned in_flight handoff(s) would be reclaimed as shipped" in directive["detail"]
-    assert not result.judgment_points
-
-
-def test_zero_directive_case_returns_empty_reader_result():
-    fake_result = SurveyResult(would_release=0, would_reclaim=0, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result):
-        result = rhr._read_reaper_dry_run()
-
-    assert result.directives == []
-    assert result.judgment_points == []
-
-
-def test_no_subprocess_created_on_this_path():
-    fake_result = SurveyResult(would_release=1, would_reclaim=0, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result):
-        with mock.patch("subprocess.run") as subprocess_run_mock:
-            rhr._read_reaper_dry_run()
-
-    subprocess_run_mock.assert_not_called()
-
-
-def test_reader_goes_quiet_rather_than_killing_orientation(monkeypatch):
-    def _boom(_repo_root):
-        raise OSError("handoff vanished mid-scan")
-
-    monkeypatch.setattr(rhr, "_reap_survey", _boom)
-    result = rhr._read_reaper_dry_run()
-    assert result.directives == []
-    assert result.judgment_points == []
-
-
-def test_an_unexpected_raise_is_not_swallowed_by_the_reader(monkeypatch):
-    def _boom(_repo_root):
-        raise RuntimeError("survey blew up")
-
-    monkeypatch.setattr(rhr, "_reap_survey", _boom)
-    with pytest.raises(RuntimeError, match="survey blew up"):
-        rhr.collect("day")
 
 
 class _FakeGoalCoverageScanModule:
@@ -442,7 +375,7 @@ def test_probe_subcommands_are_callable_in_a_clean_interpreter():
         ],
         capture_output=True,
         text=True,
-        cwd=str(_REPO_ROOT),
+        cwd=str(_REPO_ROOT), **no_console_creationflags(),
     )
     assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
     assert proc.returncode == 0, proc.stderr
@@ -540,3 +473,83 @@ def test_session_workday_jp_needs_registered_and_onboarded_cwd(
     ids = [j["id"] for j in rhr._read_marker_freshness("session").judgment_points]
     assert (ids == ["j-session-day-review-due"]) is expect_jp
     assert (not ids) is (not expect_jp)
+def _stub_survey(*stale):
+    from coordinator_core.ops.origin_stub_staleness import OriginStubSurvey
+
+    return OriginStubSurvey(stale=tuple(stale), live_with_pair=len(stale), unreadable=())
+
+
+def _one_stale():
+    from coordinator_core.ops.origin_stub_staleness import StaleOriginStub
+
+    return StaleOriginStub(
+        path="state/handoffs/stub-a.md",
+        pair=("r", "s"),
+        deployment_state="ready_to_fire",
+        evidence_path="docs/plans/shipped-plan.md",
+        evidence_kind="plan",
+    )
+
+
+def _isolate_collect(monkeypatch):
+    from coordinator_core.orient_assemble.reader_result import ReaderResult
+
+    for name in (
+        "_read_claude_klabauter_bin_sentinel",
+        "_read_working_repo_registration",
+        "_read_hook_currency",
+        "_read_git_perf_currency",
+        "_read_ceremony_hook",
+        "_read_marker_freshness",
+        "_read_plugin_drift",
+        "_read_git_maintenance_due",
+        "_read_goal_coverage",
+        "_read_trail_scope",
+    ):
+        monkeypatch.setattr(rhr, name, lambda *a, **k: ReaderResult())
+
+
+def test_collect_day_surfaces_stale_origin_stub_judgment_point(monkeypatch, tmp_path):
+    _isolate_collect(monkeypatch)
+    monkeypatch.setattr(rhr, "survey", lambda root: _stub_survey(_one_stale()))
+    result = rhr.collect("day", repo_root=str(tmp_path))
+    assert result.directives == []
+    assert [jp["id"] for jp in result.judgment_points] == ["j-stale-origin-stubs"]
+    evidence = result.judgment_points[0]["evidence"]
+    assert "state/handoffs/stub-a.md" in evidence
+    assert "docs/plans/shipped-plan.md" in evidence
+
+
+def test_collect_session_has_no_stale_origin_stub_point(monkeypatch, tmp_path):
+    _isolate_collect(monkeypatch)
+
+    def _boom(root):
+        raise AssertionError("survey must not run at session cadence")
+
+    monkeypatch.setattr(rhr, "survey", _boom)
+    result = rhr.collect("session", repo_root=str(tmp_path))
+    assert result.judgment_points == []
+
+
+def test_stale_origin_stubs_empty_survey_is_quiet(monkeypatch, tmp_path):
+    monkeypatch.setattr(rhr, "survey", lambda root: _stub_survey())
+    result = rhr._read_stale_origin_stubs(str(tmp_path))
+    assert result.directives == [] and result.judgment_points == []
+
+
+def test_stale_origin_stubs_oserror_yields_empty_result(monkeypatch, tmp_path):
+    def _raise(root):
+        raise OSError("vanished")
+
+    monkeypatch.setattr(rhr, "survey", _raise)
+    result = rhr._read_stale_origin_stubs(str(tmp_path))
+    assert result.directives == [] and result.judgment_points == []
+
+
+def test_stale_origin_stubs_non_oserror_propagates(monkeypatch, tmp_path):
+    def _raise(root):
+        raise TypeError("survey defect")
+
+    monkeypatch.setattr(rhr, "survey", _raise)
+    with pytest.raises(TypeError):
+        rhr._read_stale_origin_stubs(str(tmp_path))

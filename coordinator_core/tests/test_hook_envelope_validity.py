@@ -432,9 +432,13 @@ def _builder_call_sites(tree: ast.Module, known: AbstractSet[str]):
 #: "allow"`) -- a key removal cannot introduce an illegal
 #: `permissionDecision`, `hookEventName`, or empty deny reason, so this site
 #: is derived-safe rather than a fresh construction needing its own legality
-#: check.
+#: check. `guard_runner.verdict_to_envelope` wraps a `hook_output` it builds
+#: itself with the literal `hookEventName: "PreToolUse"`, `permissionDecision`
+#: set only to `"deny"` (paired with the reason), and `additionalContext` only
+#: when non-empty, so it too is derived-safe.
 DERIVED_SAFE_SITES = frozenset({
-    "coordinator_core/bash_guards/_advisory_value.py:151",
+    "coordinator_core/bash_guards/_advisory_value.py:133",
+    "coordinator_core/hooks/support/guard_runner.py:142",
 })
 
 

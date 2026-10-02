@@ -100,3 +100,64 @@ def test_reachable_baseline_takes_three_way(tmp_path: Path) -> None:
         f"Expected exit 0 (three-way clean) when baseline SHA is reachable, "
         f"got {exit_code} — guard may be incorrectly degrading reachable baselines"
     )
+
+
+def _build_fixture(tmp_path: Path, n_files: int, n_edited: int) -> tuple[Path, Path, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    source, _ = _init_source_repo(tmp_path)
+    (source / ".gitattributes").write_text("*.cmd eol=crlf\n*.golden -text\n", encoding="utf-8")
+    for i in range(n_files):
+        ext = (".py", ".cmd", ".golden")[i % 3]
+        (source / f"f{i}{ext}").write_bytes(f"line {i}\nsecond\n".encode())
+    subprocess.run(["git", "-C", str(source), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(source), "commit", "-m", "fixture"], check=True, capture_output=True)
+    head = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    live = tmp_path / "live"
+    live.mkdir()
+    _mirror_source_to_live(source, live)
+    for i in range(n_edited):
+        ext = (".py", ".cmd", ".golden")[i % 3]
+        (live / f"f{i}{ext}").write_bytes(b"edited\n")
+    return source, live, head
+
+
+def _count_spawns(monkeypatch: pytest.MonkeyPatch, source: Path, live: Path, head: str) -> tuple[int, int]:
+    calls: list[int] = []
+    real_run = subprocess.run
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _counting)
+    rc = run(source, live, baseline_sha_cli=head)
+    return rc, len(calls)
+
+
+def test_spawn_count_is_constant_in_live_file_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small = _build_fixture(tmp_path / "small", 30, 3)
+    large = _build_fixture(tmp_path / "large", 120, 3)
+
+    rc_small, spawns_small = _count_spawns(monkeypatch, *small)
+    rc_large, spawns_large = _count_spawns(monkeypatch, *large)
+
+    assert rc_small == rc_large == 3
+    assert spawns_small == spawns_large
+
+
+def test_consumer_modified_signal_survives_for_attribute_classes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, live, head = _build_fixture(tmp_path, 9, 3)
+
+    rc = run(source, live, baseline_sha_cli=head, fmt="json")
+
+    out = capsys.readouterr().out
+    import json as _json
+
+    data = _json.loads(out)
+    assert rc == 3
+    assert data["counts"]["consumer_modified"] == 3
+    assert data["counts"]["unchanged"] == 8  # 9 fixture files + install.sh + .gitattributes - 3 edited

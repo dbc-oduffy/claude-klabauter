@@ -65,6 +65,33 @@ def test_never_touches_non_agents_archive_entries(tmp_path):
     assert session_entry.exists()
 
 
+def test_session_archive_pruned_after_its_own_window(tmp_path):
+    sessions_dir = tmp_path / "coordinator-sessions"
+    archive_root = sessions_dir / ".archive"
+    archive_root.mkdir(parents=True)
+
+    old = _make_archive_entry(
+        archive_root, "sess-old-2026-01-01",
+        age_seconds=reap._SESSION_ARCHIVE_RETENTION_SECONDS + 3600,
+    )
+    mid = _make_archive_entry(
+        archive_root, "sess-mid-2026-08-01",
+        age_seconds=reap._AGENT_ARCHIVE_RETENTION_SECONDS + 3600,
+    )
+    agent = _make_archive_entry(
+        archive_root, "_agents-x-2026-01-01",
+        age_seconds=reap._SESSION_ARCHIVE_RETENTION_SECONDS + 3600,
+    )
+
+    pruned, failed = reap._prune_stale_session_archive(sessions_dir)
+
+    assert pruned == ["sess-old-2026-01-01"]
+    assert failed == []
+    assert not old.exists()
+    assert mid.exists()
+    assert agent.exists()
+
+
 def test_missing_archive_dir_is_a_noop(tmp_path):
     sessions_dir = tmp_path / "coordinator-sessions"
     sessions_dir.mkdir(parents=True)

@@ -346,6 +346,14 @@ def test_bug_backlog_bad_severity_refusal_lists_allowed_values() -> None:
         assert value in line
 
 
+def test_missing_status_and_bad_severity_are_one_refusal() -> None:
+    result = _run_cli(_BUG_ARGS + ["--severity", "P9"])
+    assert result.returncode != 0
+    assert "--status" in result.stderr and "--severity" in result.stderr
+    for value in ("wontfix", "P0", "P3"):
+        assert value in result.stderr
+
+
 def test_invalid_severity_value_names_valid_set() -> None:
     name = "Test 4d — --severity medium is rejected and the valid P0-P3 set is named"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -728,7 +736,7 @@ def test_central_scope_writes_to_claude_klabauter_root() -> None:
     claude-klabauter's own state/ tree.
 
     Central state routes to _claude_klabauter_root() unconditionally, per
-    docs/wiki/state-placement-law.md § Taxonomy "Central/global state" (governing law:
+    coordinator-content-repo coordinator/docs/wiki/hook-best-practices/state-placement-law.md § Taxonomy "Central/global state" (governing law:
     coordinator-content-repo coordinator/docs/wiki/state-placement-law.md:36). The
     [coordinator-content-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md plan's
     proposal to instead route this branch to DoE was never ratified: that plan is

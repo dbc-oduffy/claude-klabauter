@@ -96,15 +96,14 @@ from pathlib import Path
 from typing import Callable, Optional, cast
 
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
+from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.ipc import register_op
 
-#: This file lives at `<engine_root>/coordinator_core/ops/invoke_from_argv.py`
-#: — `parents[2]` is `<engine_root>` itself, the same root `coordinator/bin/`
-#: hangs off in every published/live checkout. This process (the warm server)
-#: is already running FROM that root, so no second root-resolution mechanism
-#: (env var, sidecar, registry) is introduced here — it is simply this
-#: module's own on-disk location, one hop up from `coordinator_core/`.
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]
+#: The root `coordinator/bin/` hangs off in every published/live checkout.
+#: This process (the warm server) is already running FROM that root, so no
+#: second root-resolution mechanism (env var, sidecar, registry) is introduced
+#: here — it is the shared on-disk anchor `engine_root.ENGINE_CHECKOUT_ROOT`.
+_ENGINE_ROOT = ENGINE_CHECKOUT_ROOT
 
 #: Committed warm-load allowlist (chunk C1). Resolution and warm-safety are
 #: different properties — resolving to a real `coordinator/bin/<name>.py`

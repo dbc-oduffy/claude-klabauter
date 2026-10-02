@@ -153,3 +153,54 @@ def test_absent_governing_plan_is_not_an_error(tmp_path):
     _init_git_repo(tmp_path)
 
     assert wsc._dispatched_chunk_shas_missing_from_slices(tmp_path, None, set()) == ([], [])
+
+
+def _commit_with_trailers(root: Path, name: str, *trailers: str) -> str:
+    (root / name).write_text(f"{name}\n", encoding="utf-8")
+    subprocess.run(["git", "add", name], cwd=root, check=True, **_NO_WINDOW)
+    argv = ["git", "commit", "-q", "-m", f"add {name}"]
+    for trailer in trailers:
+        argv += ["--trailer", trailer]
+    subprocess.run(argv, cwd=root, check=True, **_NO_WINDOW)
+    return _head(root)
+
+
+def _plan_with_deliverable(root: Path, deliverable_id: str, chunk_id: str, sha: str):
+    governing = _plan(root, chunk_id, sha)
+    text = governing.path.read_text(encoding="utf-8")
+    governing.path.write_text(
+        text.replace("title: t\n", f"title: t\ndeliverable_id: {deliverable_id}\n", 1),
+        encoding="utf-8",
+    )
+    return governing
+
+
+_PEER = "99999999-9999-4999-8999-999999999999"
+
+
+def test_matching_deliverable_id_overrides_a_foreign_session_id(tmp_path):
+    _init_git_repo(tmp_path)
+    sha = _commit_with_trailers(
+        tmp_path, "driver.py", f"Session-Id: {_PEER}", "Deliverable-Id: dlv-abc123"
+    )
+
+    recoverable, conflicting = wsc._dispatched_chunk_shas_missing_from_slices(
+        tmp_path, _plan_with_deliverable(tmp_path, "dlv-abc123", "C4", sha), set()
+    )
+
+    assert recoverable == [{"chunk": "C4", "sha": sha}]
+    assert conflicting == []
+
+
+def test_mismatched_deliverable_id_does_not_override_a_foreign_session_id(tmp_path):
+    _init_git_repo(tmp_path)
+    sha = _commit_with_trailers(
+        tmp_path, "driver.py", f"Session-Id: {_PEER}", "Deliverable-Id: dlv-other9"
+    )
+
+    recoverable, conflicting = wsc._dispatched_chunk_shas_missing_from_slices(
+        tmp_path, _plan_with_deliverable(tmp_path, "dlv-abc123", "C4", sha), set()
+    )
+
+    assert recoverable == []
+    assert conflicting == [{"chunk": "C4", "sha": sha, "committed_by": _PEER}]

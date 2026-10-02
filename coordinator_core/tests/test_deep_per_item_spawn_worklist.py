@@ -342,6 +342,31 @@ def _deep_find_unbatched_per_item_spawns(roots, max_depth: int):
     )
 
 
+@pytest.fixture(scope="module")
+def live_one_hop_sites():
+    """The standing gate's own verdict over the live corpus, walked once per module. Every
+    live-corpus test needing it shares this walk: each `find_unbatched_per_item_spawns` call over
+    `_gate_scope_paths()` re-parses the whole corpus (tens of seconds of process time)."""
+    return find_unbatched_per_item_spawns(_gate_scope_paths())
+
+
+@pytest.fixture(scope="module")
+def live_deep_walk_depth4():
+    """ONE depth-4 walk over the live corpus, as `(sites, depth_of)` from
+    `deep_find_with_site_depths`, shared by both standing multi-hop reproducers. `depth_of(site)`
+    is the lowest depth a site becomes visible at, so "the one-hop gate cannot see this site" is
+    `depth_of(site) >= 2` off this same walk -- no second corpus parse for a separate one-hop
+    collect. The depth-1 slice equalling the live gate is pinned corpus-wide by
+    `test_depth_one_key_set_equals_live_gate`."""
+    return deep_find_with_site_depths(_gate_scope_paths(), max_depth=4)
+
+
+@pytest.fixture(scope="module")
+def advisory_rows_depth4(live_one_hop_sites):
+    """The depth-4 advisory worklist, built once per module over the shared one-hop walk."""
+    return _advisory_worklist(max_depth=4, live_gate_sites=live_one_hop_sites)
+
+
 def test_two_hop_chain_found_at_depth_two_not_at_one_hop(tmp_path):
     """`check` -> `wrapper` -> `_git_add` (the spawner). One hop from a spawner reaches only
     `wrapper`, so the stock (one-hop) collector reports nothing for `check`'s own loop body
@@ -651,7 +676,7 @@ def test_depth_one_widening_is_a_structural_noop_and_base_is_unmutated():
 
 
 @pytest.mark.cadence
-def test_depth_one_key_set_equals_live_gate():
+def test_depth_one_key_set_equals_live_gate(live_one_hop_sites):
     """AC8, and half of AC3's evidence (C7's closing diff is the other half): the reason the
     instrument can be trusted not to disturb the gate it sits beside. A STANDING test asserting
     that the key set from a depth-1 widened index, collected through C0's `index_transform`
@@ -668,7 +693,7 @@ def test_depth_one_key_set_equals_live_gate():
     the collector and the widened index it visits always come from the same parse. C0 owns
     pinning that the cross-parse configuration is unreachable (AC9).
     """
-    live = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
+    live = {site.key for site in live_one_hop_sites}
     depth_one = {
         site.key
         for site in _deep_find_unbatched_per_item_spawns(_gate_scope_paths(), max_depth=1)
@@ -995,12 +1020,14 @@ def _site_depth(
     return None
 
 
-def _advisory_worklist(max_depth: int) -> list[dict]:
+def _advisory_worklist(max_depth: int, live_gate_sites=None) -> list[dict]:
     """One shared parse (`find_unbatched_per_item_spawns`'s own `index_transform` seam, exactly
     as `_deep_find_unbatched_per_item_spawns` uses it) feeds both the reported sites AND the
     `_call_graph`/`_depths` this function needs for the `depth`/`cache_in_front` columns -- no
     second walk of the corpus for THOSE. `depth1_confirmed_keys` below is the one deliberate,
-    documented exception (C4-FIX) -- see its own note just above its use."""
+    documented exception (C4-FIX) -- see its own note just above its use. `live_gate_sites`, when
+    given, is that unwidened gate walk already computed by the caller (the module-scoped
+    `live_one_hop_sites` fixture), so it is not re-walked here."""
     # The transform's OWN `base` argument is what feeds `_call_graph`/`_depths`/
     # `widened_index`, and is captured here for the annotation columns below -- exactly as
     # `_deep_find_unbatched_per_item_spawns` threads it. Building an index from a separate
@@ -1049,9 +1076,9 @@ def _advisory_worklist(max_depth: int) -> list[dict]:
     # set) is unconditional -- worth the one extra corpus walk this function otherwise avoids.
     # This walk is NOT per-item and NOT a subprocess spawn; this test already runs in "minutes,
     # not seconds" by design (advisory, non-gating, `designed_red`).
-    depth1_confirmed_keys = {
-        site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())
-    }
+    if live_gate_sites is None:
+        live_gate_sites = find_unbatched_per_item_spawns(_gate_scope_paths())
+    depth1_confirmed_keys = {site.key for site in live_gate_sites}
 
     rows = []
     for site in sites:
@@ -1343,7 +1370,7 @@ def test_baseline_top_capped_at_three_highest_reachable():
 
 @pytest.mark.designed_red
 @pytest.mark.cadence
-def test_deep_per_item_spawn_advisory_worklist(tmp_path):
+def test_deep_per_item_spawn_advisory_worklist(tmp_path, advisory_rows_depth4):
     """AC2, AC7, AC10. ADVISORY OUTPUT -- modeled on the gate's own `designed_red` burn-down
     worklist (`test_burn_down_known_preexisting_amplification_sites`), never on a gating subset
     assertion: this test emits a cost-ranked worklist and writes the audit file below, and it
@@ -1363,7 +1390,7 @@ def test_deep_per_item_spawn_advisory_worklist(tmp_path):
     reintroducing `_REPO_ROOT`/`_BASELINE_PATH` here fails loudly instead of silently touching
     the tracked copies again.
     """
-    rows = _advisory_worklist(max_depth=4)
+    rows = advisory_rows_depth4
 
     assert all(
         "depth" in row and (row["depth"] is None or row["depth"] >= 1) for row in rows
@@ -1420,31 +1447,32 @@ def test_deep_per_item_spawn_advisory_worklist(tmp_path):
 
 
 @pytest.mark.cadence
-def test_deep_reproducer_commitments_recheck_reaches_git_ancestry_at_depth_four():
+def test_deep_reproducer_commitments_recheck_reaches_git_ancestry_at_depth_four(
+    live_deep_walk_depth4,
+):
     """Standing multi-hop reproducer #1 (AC4). `recheck_commitments ->
     _evaluate_record -> sibling_fact.resolve_leg -> git_ancestry.is_ancestor ->
     git/run.run_git` -- one `merge-base --is-ancestor` per commitment record,
     four hops from `recheck_commitments`'s own per-record loop to the spawn.
 
     Written against the LIVE, real corpus (not a fixture) precisely because
-    this is the property the one-hop gate structurally cannot have: the
-    one-hop `find_unbatched_per_item_spawns` call below must come back empty
-    for this exact site, and the depth-4 widened collector must find it, in
-    the same test -- so a future deletion of the chain (this module's `import
+    this is the property the one-hop gate structurally cannot have: this
+    exact site must not be depth 1 in the shared depth-4 walk, and the depth-4
+    widened collector must find it, in the same test -- so a future deletion of the chain (this module's `import
     ast` walk finding nothing to walk) fails LOUDLY via the second assertion
     rather than silently passing over an empty set.
     """
-    roots = _gate_scope_paths()
     target_path = "coordinator_core/reconcile/commitments_recheck.py"
     target_enclosing = "recheck_commitments"
     target_callee = "_evaluate_record"
 
-    one_hop = find_unbatched_per_item_spawns(roots)
+    deep, depth_of = live_deep_walk_depth4
     one_hop_hit = any(
         site.path == target_path
         and site.enclosing == target_enclosing
         and site.callee == target_callee
-        for site in one_hop
+        and depth_of(site) == 1
+        for site in deep
     )
     assert not one_hop_hit, (
         "this reproducer's whole point is a chain the one-hop gate cannot see -- if it now "
@@ -1452,7 +1480,6 @@ def test_deep_reproducer_commitments_recheck_reaches_git_ancestry_at_depth_four(
         "reproducer"
     )
 
-    deep = _deep_find_unbatched_per_item_spawns(roots, max_depth=4)
     deep_hit = any(
         site.path == target_path
         and site.enclosing == target_enclosing
@@ -1467,7 +1494,9 @@ def test_deep_reproducer_commitments_recheck_reaches_git_ancestry_at_depth_four(
 
 
 @pytest.mark.cadence
-def test_deep_reproducer_handoff_transition_reaches_gate_evidence_leg_at_depth_four():
+def test_deep_reproducer_handoff_transition_reaches_gate_evidence_leg_at_depth_four(
+    live_deep_walk_depth4,
+):
     """Standing multi-hop reproducer #2 (AC4). `_read_gate_evidence_resolved ->
     _reresolve_gate_evidence_leg` -- same three-hop tail as reproducer #1
     (`sibling_fact.resolve_leg -> git_ancestry.is_ancestor -> git/run.run_git`),
@@ -1477,17 +1506,17 @@ def test_deep_reproducer_handoff_transition_reaches_gate_evidence_leg_at_depth_f
     present at depth 4 in the same test, so a future deletion of this chain
     fails loudly instead of the assertion silently passing over an empty set.
     """
-    roots = _gate_scope_paths()
     target_path = "coordinator_core/ops/handoff_transition.py"
     target_enclosing = "_read_gate_evidence_resolved"
     target_callee = "_reresolve_gate_evidence_leg"
 
-    one_hop = find_unbatched_per_item_spawns(roots)
+    deep, depth_of = live_deep_walk_depth4
     one_hop_hit = any(
         site.path == target_path
         and site.enclosing == target_enclosing
         and site.callee == target_callee
-        for site in one_hop
+        and depth_of(site) == 1
+        for site in deep
     )
     assert not one_hop_hit, (
         "this reproducer's whole point is a chain the one-hop gate cannot see -- if it now "
@@ -1495,7 +1524,6 @@ def test_deep_reproducer_handoff_transition_reaches_gate_evidence_leg_at_depth_f
         "reproducer"
     )
 
-    deep = _deep_find_unbatched_per_item_spawns(roots, max_depth=4)
     deep_hit = any(
         site.path == target_path
         and site.enclosing == target_enclosing
@@ -1510,7 +1538,7 @@ def test_deep_reproducer_handoff_transition_reaches_gate_evidence_leg_at_depth_f
 
 
 @pytest.mark.cadence
-def test_worklist_depth_one_rows_are_all_live_gate_sites():
+def test_worklist_depth_one_rows_are_all_live_gate_sites(live_one_hop_sites, advisory_rows_depth4):
     """C4-FIX, requirement 4: a STANDING (never `designed_red`) pin on the defect this chunk
     fixes -- no row in the advisory worklist may be labelled depth 1 unless its `AmpSite.key` is
     actually in the live gate's own key set (`find_unbatched_per_item_spawns(_gate_scope_paths())`
@@ -1520,8 +1548,8 @@ def test_worklist_depth_one_rows_are_all_live_gate_sites():
     the same drift), so a count assertion here would rot the moment a peer commits. This is the
     test that matters in a year, per the fix brief.
     """
-    live_keys = {site.key for site in find_unbatched_per_item_spawns(_gate_scope_paths())}
-    rows = _advisory_worklist(max_depth=4)
+    live_keys = {site.key for site in live_one_hop_sites}
+    rows = advisory_rows_depth4
     depth_one_keys = {row["site"].key for row in rows if row["depth"] == 1}
     assert depth_one_keys <= live_keys, (
         "every depth-1-labelled worklist row must be a real depth-1 gate site -- a row here not "
@@ -1530,7 +1558,7 @@ def test_worklist_depth_one_rows_are_all_live_gate_sites():
 
 
 @pytest.mark.cadence
-def test_worklist_rows_never_carry_a_fabricated_time_unit():
+def test_worklist_rows_never_carry_a_fabricated_time_unit(advisory_rows_depth4):
     """C9: a STANDING pin against the defect this chunk fixes -- `reachable_spawn_sites` is a
     reachability COUNT, not milliseconds, and must never be multiplied into a time unit again.
     Measured case: `close_out_and_stamp.py :: _disposition_ref_evidence -> _verify_disposition_ref`
@@ -1540,7 +1568,7 @@ def test_worklist_rows_never_carry_a_fabricated_time_unit():
     no row dict carries any key matching `.*_ms$` other than `cost_ms`, and that `cost_ms` is
     either `None` or sourced from `_KNOWN_SITE_COST_MS` (never derived from a count).
     """
-    rows = _advisory_worklist(max_depth=4)
+    rows = advisory_rows_depth4
     known_costs = set(_KNOWN_SITE_COST_MS.values())
     ms_key_re = re.compile(r".*_ms$")
     for row in rows:

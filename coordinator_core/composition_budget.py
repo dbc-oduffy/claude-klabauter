@@ -2,19 +2,16 @@
 coordinator_core.composition_budget — cross-process composition invocation + elapsed budget.
 
 EXTRACTION VS NEW WORK (docs/plans/2026-08-15-composition-invocation-budgets.md chunk C9):
-`coordinator_core/percolate/engine.py::run_entrypoint_gate` already carries a WORKING
-aggregate-budget shape (`_budget_ok() = time.monotonic() - start_time <= aggregate_budget`,
-skip-and-surface via its own `budget_exceeded[]` list) -- but it is elapsed-time-only,
-single-process, single-run. `CompositionBudget.check()` below extracts exactly that
-timing half (same monotonic-delta comparison, same "checked before dispatch, not merely
-before report" contract). Everything else here -- the invocation counter, the injectable
-cross-process identity channel, and the fail-loud disposition -- is NEW WORK, not a
-percolate extraction. percolate is the PRECEDENT this primitive was extracted FROM, not a
-caller of it: `run_entrypoint_gate` still runs its own private `_budget_ok()` closure and
-its own `budget_exceeded[]` bookkeeping, and has not been converted. This module leaves
-that behaviour unchanged: `disposition="skip-and-surface"` (the default) reproduces
-percolate's existing behaviour exactly; `disposition="fail-loud"` is additive, for AC9's
-caller (chunk C10), and does not alter percolate's own call sites.
+`coordinator_core/percolate/engine.py::run_entrypoint_gate` carried the original
+aggregate-budget shape (an elapsed-time-only, single-process, single-run
+`time.monotonic() - start_time <= aggregate_budget` check, skip-and-surface).
+`CompositionBudget.check()` below extracts exactly that timing half (same monotonic-delta
+comparison, same "checked before dispatch, not merely before report" contract), and
+`run_entrypoint_gate` now consumes it with `disposition="skip-and-surface"` (the default),
+which reproduces the original behaviour exactly. Everything else here -- the invocation
+counter, the injectable cross-process identity channel, and the fail-loud disposition --
+is NEW WORK, not a percolate extraction. `disposition="fail-loud"` is additive, for AC9's
+caller (chunk C10), and does not alter percolate's call site.
 
 NEGATIVE-SPEC -- THIS PRIMITIVE IS ARMED, AND A BREACH IS AN OBSERVATION, NOT A FAILURE.
 Superseded 2026-08-19 (fl-core-03 C6). The previous text here said the primitive was built
@@ -43,11 +40,10 @@ clause of it. What is true now:
     ceilings with zero breaches and ~3.76x headroom. Do not tighten either dial to "make the
     guard useful"; a ceiling that fires on the healthy steady state gets reverted and takes
     the instrument with it. Amend the derivation record first, then the constant.
-  - THE SINK STILL CANNOT SEE percolate. `percolate/engine.py :: run_entrypoint_gate` runs
-    its own `_budget_ok()` closure and was never converted to this primitive (see the
-    paragraph above -- percolate is the precedent this was extracted FROM, not a caller).
-    Its compositions therefore appear in no composition row, and the fleet's cost picture
-    has a NAMED blind spot rather than an unnoticed one. Tracker row filed by chunk C10.
+  - THE SINK STILL CANNOT SEE percolate. `percolate/engine.py :: run_entrypoint_gate`
+    consumes this primitive but never calls `flush_composition_record`, so its
+    compositions appear in no composition row, and the fleet's cost picture has a NAMED
+    blind spot rather than an unnoticed one. Tracker row filed by chunk C10.
   - FOUR COMPOSITIONS WERE UNOBSERVED when these values were derived --
     `consolidate_assemble`, `merge_assemble`, `workday_complete`, `workweek_complete` --
     because they run on a cadence longer than the measurement window. `workweek_complete` is

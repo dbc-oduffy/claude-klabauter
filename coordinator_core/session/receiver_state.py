@@ -1,6 +1,6 @@
 """
 coordinator_core.session.receiver_state — receiver-state sensor: PAUSED / PRODUCING /
-UNKNOWN verdict ladder + CPU cursor, and the per-session sibling-file writer for both.
+UNKNOWN verdict ladder, and the per-session sibling-file writer.
 
 PURE IN-PROCESS LIBRARY, not an IPC op — it self-registers nothing and touches none of
 the shared op-registry files (same posture as ``session/liveness.py``'s "PURE IN-PROCESS
@@ -10,14 +10,13 @@ into this module and owns the five-surface registration.
 Purpose: answer, for a session other than itself, "is that session paused, and why" —
 distinct from ``session/liveness.py``, which answers only alive-vs-dead and reports a
 session sitting untouched at a permission prompt for forty minutes as fully live. This
-module reads ONE session's own transcript structure (never another session's) plus a
-CPU-time cursor for that same session, and writes a verdict to a NEW per-session sibling
+module reads ONE session's own transcript structure (never another session's)
+and writes a verdict to a NEW per-session sibling
 file under ``.git/coordinator-sessions/<sid>/`` — never into ``meta.json``, never into
 ``state/`` (see Negative-spec).
 
-Three parts, ported from the DoE spike's ``probe-paused.py:114-148`` with two explicit,
-named departures (the UNKNOWN-override fix and the CPU cursor replacing a blocking
-12s-apart double-sample):
+Parts, ported from the DoE spike's ``probe-paused.py:114-148`` with one explicit,
+named departure (the UNKNOWN-override fix):
 
     (a) BOUNDED TAIL READ — ``_read_tail_lines`` mirrors
         ``hooks/subagent_arrival_check.py::_read_last_nonempty_line``'s shape (chunked
@@ -98,42 +97,9 @@ named departures (the UNKNOWN-override fix and the CPU cursor replacing a blocki
         writer — a receiver-state verdict is a single point-in-time snapshot, not an
         accumulating record, so there is nothing to merge. The directory is resolved
         through the existing seam, ``session/core.py::session_dir`` — never rebuilt by
-        hand. Records: ``verdict``, ``reason``, the CPU cursor pair from part (e) below,
+        hand. Records: ``verdict``, ``reason``,
         a stamp, and (AC4) the unmodelled ``type``/``subtype`` when the ladder fell
         through to UNKNOWN.
-
-    (e) CPU CURSOR — ``compute_cpu_cursor`` — one non-blocking ``cpu_times()`` read per
-        invocation. NOT a fixed-window blocking sample: the spike blocks for 12 seconds
-        between two ``ps`` snapshots, which has no home here (the calling hook runs on a
-        5s timeout, per-op dispatch-timeout overrides were retired by decision — ipc.py
-        DEC-2 — and 50-70 concurrent sessions parking 50-70 threads asleep at once is not
-        something anything else in this tree does). Instead: read ``cpu_seconds`` once,
-        persist ``(cpu_seconds, wall_clock)`` into the sibling file, and on the NEXT
-        invocation compute the delta against the PREVIOUS stamp, normalised by elapsed
-        wall time (the interval between invocations is now variable, unlike the spike's
-        fixed 12s window — this is exactly why the spike's absolute constant cannot carry
-        over even in principle). ``psutil`` is a declared dependency but is NEVER
-        imported at module scope here — every access goes through the lazy accessor at
-        ``session/core.py::_psutil()``, matching that module's own discipline. No
-        ``cpu_times()`` call exists anywhere else in this tree; this is the first.
-
-        TIEBREAK ONLY (AC7): ``resolve_verdict`` (the module-level entry point tying (c)
-        and (e) together) only consults the CPU cursor to resolve an UNKNOWN ladder
-        verdict — it NEVER overturns a confident PAUSED/PRODUCING verdict from the
-        ladder. The ladder is pure file structure and therefore load-independent; CPU
-        time is not, and on a contended box its error direction is false-PAUSED on
-        genuinely-working sessions (a descheduled-but-working session accrues less CPU
-        in its sampling window). Where the two disagree and the ladder was confident,
-        the ladder wins and the disagreement is recorded in the verdict's ``reason``.
-
-        Threshold: ``_CPU_FLOOR_UNDERIVED`` is a **placeholder constant explicitly
-        marked underived** — see its own docstring. It is NOT seeded with the spike's
-        0.15 (see Anti-scope in the plan: that figure rests on five PRODUCING samples on
-        a quiet 30-session box, and this machine runs 50-70). Until a follow-up chunk
-        (C4, NOT part of this dispatch) derives a real threshold from local samples under
-        representative load, the CPU leg is GATED OFF (``_CPU_LEG_ENABLED = False``) —
-        every CPU-tiebreak consult is a documented no-op, and UNKNOWN stays UNKNOWN
-        rather than being resolved off an unvalidated number.
 
 Fail-soft throughout (AC12): a missing, unreadable, or garbage transcript yields
 UNKNOWN, never a raise — this module and its caller (the hook op) never propagate an
@@ -141,16 +107,9 @@ exception out of ``resolve_verdict`` / ``write_receiver_state``.
 
 Does NOT read or depend on ``stable_pid`` (AC13) — that field is not stamping reliably
 on this machine (see the plan's Out of scope) and this module routes around it entirely,
-reading only the transcript and the CALLING PROCESS's own ``cpu_times()`` (never a PID
-liveness check — see RAW-PID-LIVENESS floor below).
-
-RAW-PID-LIVENESS floor (docs/wiki/coordinator-tripwires.md; restated here per
-``session/liveness.py``'s own instruction to keep this distinction explicit at every call
-site that reads process info): this module's CPU-time read is a STATE signal, not a
-LIVENESS verdict. It never calls ``ps -p`` / ``kill -0`` / ``psutil.pid_exists`` on a
-stored PID, and it never feeds ``core.stable_pid_alive``. Do not mistake the
-``cpu_times()`` call in part (e) for a liveness check — it answers "how busy has this
-process been", not "is this process alive".
+reading only the transcript, and never makes a PID liveness check
+(``ps -p`` / ``kill -0`` / ``psutil.pid_exists`` on a stored PID) or feeds
+``core.stable_pid_alive`` — see RAW-PID-LIVENESS floor in ``session/liveness.py``.
 
 Negative-spec:
     - Do NOT write to ``meta.json`` — its single-writer invariant is guarded by prose
@@ -160,13 +119,9 @@ Negative-spec:
     - Do NOT write to ``state/`` — session-runtime/liveness layer only
       (``.git/coordinator-sessions/``), same confinement as every bookkeeping op in
       ``ipc.py``'s inventory.
-    - Do NOT ``sleep`` anywhere on any path — see part (e) above and ipc.py DEC-2.
-    - Do NOT treat the CPU signal as co-equal, independent corroboration alongside
-      ``PRODUCING:delegated``: subagent-sidecar mtime (which drives that verdict) is
-      also what drives the session's own CPU consumption, so the two are correlated
-      evidence dressed as corroboration, not two independent signals. The genuinely
-      independent pair this module treats as tiebreak-worthy is the ladder's
-      ``stop_reason`` branches vs the CPU cursor.
+    - Do NOT ``sleep`` anywhere on any path — see ipc.py DEC-2.
+    - Do NOT add a CPU-time signal to the ladder: CPU delta does not discriminate
+      PAUSED from PRODUCING at this granularity.
     - ``delegation_evidence_from_sidecar`` reads ONLY mtimes off directory-listing
       metadata (`os.scandir`/`stat`) — it never opens a subagent transcript file, so
       it carries none of part (b)'s privacy machinery and needs none: there is no
@@ -232,9 +187,6 @@ _TOOL_UNANSWERED_GRACE_SECONDS = 90
 _ASKING_HUMAN_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 _TOOL_RESULT_SENTINEL = "__TOOL_RESULT__"
-
-_CPU_LEG_ENABLED = False
-_CPU_FLOOR_UNDERIVED = None
 
 _SIBLING_FILENAME = "receiver-state.json"
 
@@ -679,106 +631,9 @@ def _classify_one(
     )
 
 
-@dataclasses.dataclass(frozen=True)
-class CpuCursor:
-
-    cpu_seconds: float
-    wall_clock_epoch: float
-
-
-def read_cpu_times_for_pid(pid: int) -> Optional[float]:
-    """Return `pid`'s total CPU seconds (user + system) via the lazy psutil accessor, or
-    None on any failure (process gone, psutil absent, permission denied).
-
-    Blocking (touches /proc or a platform equivalent) — callers MUST invoke this via
-    asyncio.to_thread(), never directly from an async handler. This module itself never
-    awaits; the op wrapper (hooks/receiver_state_sensor.py) owns the to_thread wrapping.
-
-    Never raises. NOT a liveness check (see module docstring's RAW-PID-LIVENESS floor
-    restatement) — a None return here means "no CPU sample available", not "process
-    dead"; callers must not conflate the two.
-    """
-    psutil_mod = _session_core._psutil()
-    if psutil_mod is None:
-        return None
-    try:
-        proc = psutil_mod.Process(pid)
-        times = proc.cpu_times()
-    except Exception:
-        return None
-    try:
-        return float(times.user) + float(times.system)
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-
-def compute_cpu_cursor(pid: int, *, now_epoch: float) -> Optional[CpuCursor]:
-    cpu_seconds = read_cpu_times_for_pid(pid)
-    if cpu_seconds is None:
-        return None
-    return CpuCursor(cpu_seconds=cpu_seconds, wall_clock_epoch=now_epoch)
-
-
-def cpu_delta_rate(previous: Optional[CpuCursor], current: CpuCursor) -> Optional[float]:
-    if previous is None:
-        return None
-    wall_delta = current.wall_clock_epoch - previous.wall_clock_epoch
-    if wall_delta <= 0:
-        return None
-    cpu_delta = current.cpu_seconds - previous.cpu_seconds
-    if cpu_delta < 0:
-        return None
-    return cpu_delta / wall_delta
-
-
-def resolve_cpu_tiebreak(rate: Optional[float]) -> Optional[str]:
-    """Map a CPU delta-rate to a tiebreak verdict tag, or None when the CPU leg is
-    disabled/unavailable/inconclusive.
-
-    TIEBREAK ONLY (AC7) — this function's return value is consulted by
-    `resolve_verdict` ONLY when the ladder itself produced UNKNOWN; it must never be
-    used to overturn a confident PAUSED/PRODUCING ladder verdict, and this function
-    itself has no way to overturn anything — it only ever proposes.
-
-    Currently ALWAYS returns None: `_CPU_LEG_ENABLED` is False (see that constant's
-    docstring) until C4 (a separate, later dispatch) derives a real threshold from
-    local samples under representative load. This is not a no-op bug — it is the
-    documented, deliberate state of the gate until that derivation lands.
-    """
-    if not _CPU_LEG_ENABLED or _CPU_FLOOR_UNDERIVED is None or rate is None:
-        return None
-    if rate >= _CPU_FLOOR_UNDERIVED:
-        return "PRODUCING:cpu-tiebreak"
-    return "PAUSED:cpu-tiebreak"
-
-
-def resolve_verdict(
-    ladder_verdict: Verdict,
-    *,
-    cpu_rate: Optional[float],
-) -> Verdict:
-    """Apply the CPU tiebreak (AC7: UNKNOWN-only) on top of the ladder's own verdict.
-
-    Never overturns a PAUSED/PRODUCING ladder verdict — only an UNKNOWN one may be
-    resolved by the CPU signal, and only while `_CPU_LEG_ENABLED` is True (currently
-    never — see `resolve_cpu_tiebreak`). Any disagreement between a confident ladder
-    verdict and what the CPU signal WOULD have said is not computed here at all
-    (nothing to disagree with when the ladder already won); this function's contract
-    is purely "may I resolve an UNKNOWN", not "does the CPU signal agree with a
-    confident verdict".
-    """
-    if not ladder_verdict.verdict.startswith("UNKNOWN"):
-        return ladder_verdict
-    tiebreak = resolve_cpu_tiebreak(cpu_rate)
-    if tiebreak is None:
-        return ladder_verdict
-    tag, _, reason_tag = tiebreak.partition(":")
-    return Verdict(
-        tag,
-        f"{reason_tag} resolved ladder UNKNOWN ({ladder_verdict.reason})",
-        unmodelled_type=ladder_verdict.unmodelled_type,
-        unmodelled_subtype=ladder_verdict.unmodelled_subtype,
-    )
+def resolve_verdict(ladder_verdict: Verdict) -> Verdict:
+    """The verdict to persist: the ladder's own, unchanged."""
+    return ladder_verdict
 
 
 _SAFE_SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -796,8 +651,7 @@ def _sibling_path(sid: str, cwd: Optional[str] = None) -> Optional[str]:
 def read_receiver_state(sid: str, cwd: Optional[str] = None) -> Optional[dict]:
     """Raw reader — the previously-written receiver-state record for `sid`, or None if
     absent/unreadable/malformed. No liveness check; this is the raw artifact, primarily
-    useful so `compute_cpu_cursor`'s caller can recover the PREVIOUS cursor to diff
-    against (see `cpu_delta_rate`). Never raises."""
+    useful to callers that diff against the previous stamp. Never raises."""
     path = _sibling_path(sid, cwd)
     if path is None or not os.path.isfile(path):
         return None
@@ -815,7 +669,6 @@ def write_receiver_state(
     sid: str,
     *,
     verdict: Verdict,
-    cpu_cursor: Optional[CpuCursor],
     stamp_iso: str,
     cwd: Optional[str] = None,
 ) -> bool:
@@ -849,11 +702,6 @@ def write_receiver_state(
     if verdict.unmodelled_type:
         record["unmodelled_type"] = verdict.unmodelled_type
         record["unmodelled_subtype"] = verdict.unmodelled_subtype
-    if cpu_cursor is not None:
-        record["cpu_cursor"] = {
-            "cpu_seconds": cpu_cursor.cpu_seconds,
-            "wall_clock_epoch": cpu_cursor.wall_clock_epoch,
-        }
 
     try:
         fd, tmp_name = tempfile.mkstemp(prefix=f"{_SIBLING_FILENAME}.", dir=sdir)

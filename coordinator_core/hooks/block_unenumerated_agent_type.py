@@ -147,7 +147,7 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 import yaml
 
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 
@@ -699,11 +699,11 @@ def resolve_roster(
     still exists and is still honored, it just is not disclosed here.
 
     `content_root`/`home` are injectable (default: real resolution via
-    `read_content_root_pointer()` / `_home_dir()`) purely for test isolation --
+    `read_content_root()` / `_home_dir()`) purely for test isolation --
     production callers never pass them.
     """
     if content_root is _UNSET:
-        content_root = read_content_root_pointer()
+        content_root = read_content_root()
     if home is _UNSET:
         home = _home_dir()
 
@@ -838,11 +838,11 @@ def resolve_model_pins(
     wins, resolved last.
 
     `content_root`/`home` are injectable (default: real resolution via
-    `read_content_root_pointer()` / `_home_dir()`) purely for test isolation --
+    `read_content_root()` / `_home_dir()`) purely for test isolation --
     production callers never pass them.
     """
     if content_root is _UNSET:
-        content_root = read_content_root_pointer()
+        content_root = read_content_root()
     if home is _UNSET:
         home = _home_dir()
 

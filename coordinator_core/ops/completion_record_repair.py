@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import datetime
 import re
-import subprocess
 from pathlib import Path
 from typing import Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
 
@@ -76,9 +75,9 @@ from coordinator_core.completion_record_integrity import (
     REASON_PLAN_UNRESOLVABLE,
 )
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.completion_record_sweep import sweep_repo
 from coordinator_core.session.claimed_write import replace_text
-from coordinator_core.win_portability import no_console_creationflags
 
 #: Legal `status:` enum values per `completion-entry.schema.json` (1.4.0) --
 #: no `needs-author` slot exists.
@@ -228,16 +227,15 @@ def build_git_history_index(
         + "%s"
         + _RECORD_SEP
     )
-    argv = ["git", "-C", str(repo_root), "log", "--no-merges", "--reverse", f"--format={fmt}"]
+    argv = ["-C", str(repo_root), "log", "--no-merges", "--reverse", f"--format={fmt}"]
     if since:
         argv.append(f"--since={since}")
     if until:
         argv.append(f"--until={until}")
     argv.append("HEAD")
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, **no_console_creationflags())
-    except (OSError, subprocess.SubprocessError) as exc:
-        return GitHistoryIndex(commits=(), by_deliverable_id={}, by_sha={}, ok=False, error=f"git log failed to spawn: {exc}")
+    proc = run_git(argv)
+    if proc.timed_out:
+        return GitHistoryIndex(commits=(), by_deliverable_id={}, by_sha={}, ok=False, error="git log timed out")
     if proc.returncode != 0:
         return GitHistoryIndex(
             commits=(), by_deliverable_id={}, by_sha={}, ok=False,

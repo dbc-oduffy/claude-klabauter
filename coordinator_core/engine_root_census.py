@@ -114,11 +114,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core._settings_home import settings_home
+
+#: One stderr line per process for a non-OSError census failure.
+_DEFECT_REPORTED = False
 
 _SECONDS_PER_DAY = 86400.0
 
@@ -160,8 +164,13 @@ def record_fallback_read(
         os.makedirs(path.parent, exist_ok=True)
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
-    except Exception:
+    except OSError:
         pass
+    except Exception as exc:  # noqa: BLE001 -- never raises (negative-spec), but a code defect must not undercount silently
+        global _DEFECT_REPORTED
+        if not _DEFECT_REPORTED:
+            _DEFECT_REPORTED = True
+            sys.stderr.write(f"engine-root census: record_fallback_read defect {exc!r}; read not counted\n")
 
 
 def census(

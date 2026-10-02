@@ -544,7 +544,7 @@ def compose_fix_call(
             "report every file you touched and every file you created -- "
             "paths inside this repo relative to the repo root, any file outside it "
             "by its absolute path -- and "
-            "when they pass run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
+            "when they pass and `has_tradeoff` is false run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
         )
     )
     _manifest_stale_note = (
@@ -566,7 +566,10 @@ def compose_fix_call(
     parts.append((
         "lit",
         "`, reporting the `{{old,new}}` path pair it prints as "
-        f"`close_result`.{_manifest_stale_note}",
+        f"`close_result`.{_manifest_stale_note} When `has_tradeoff` is true, "
+        "do not run `backlog-grind-assemble grind-row close`: the row must stay "
+        "at its path for the adjudicator, and a subagent cannot edit a row once "
+        "it is archived.",
     ))
     if feedback_js:
         parts.append(("expr", feedback_js))
@@ -830,6 +833,10 @@ def compose_commit_call(
     parts.append(row_id_part)
     parts.append(("lit", " "))
     parts.append(outcome_part)
+    # Trap: commit_v2 refuses a staged deletion whose message names no removal
+    # verb, and the committer may not invent a body; the subject must carry it.
+    if removed_files or removed_files_js:
+        parts.append(("lit", ", backlog row removed to archive"))
     parts.append(("lit", "` and a commit body naming this row."))
     if trailers:
         parts.append(
@@ -921,7 +928,8 @@ def compose_ledger_sweep_call(
         parts.append(("lit", "Run "))
     parts.append(("lit", f"`{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id "))
     parts.append(run_id_part)
-    parts.append(("lit", " --repo-root "))
+    # --record-file is required by the verb; stdin ("-") is the only source here.
+    parts.append(("lit", " --record-file - --repo-root "))
     parts.append(("expr", repo_root_js))
     parts.append(("lit", "`"))
     if record_js:
@@ -970,11 +978,20 @@ def compose_undo_call(
     parts.extend(_list_parts(touched_files, touched_files_js))
     parts.append(("lit", "], and remove these files the fix created: ["))
     parts.extend(_list_parts(created_files, created_files_js))
-    parts.append(("lit", "]. " + _NO_STAGING_CLAUSE))
+    parts.append(
+        (
+            "lit",
+            "]. Return `undone` only once `git status --porcelain` shows none of them modified, "
+            "deleted or untracked; otherwise return `undo-failed` with a reason. " + _NO_STAGING_CLAUSE,
+        )
+    )
     schema = {
         "type": "object",
         "required": ["outcome"],
-        "properties": {"outcome": {"type": "string", "enum": ["undone"]}},
+        "properties": {
+            "outcome": {"type": "string", "enum": ["undone", "undo-failed"]},
+            "reason": {"type": "string"},
+        },
     }
     return _agent_call(
         _join_prompt_parts(parts),

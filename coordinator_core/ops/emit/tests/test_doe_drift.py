@@ -684,3 +684,35 @@ class TestRunDriftCheck:
         ):
             with pytest.raises(DriftError, match="fails its own schema"):
                 run_drift_check(pinned_version="2.5.0", doe_clone=tmp_path)
+
+
+class TestDoeCloneKeyLadder:
+    """The working-checkout key the registry actually writes resolves the clone;
+    the legacy `repos.content_root` spelling still does."""
+
+    def test_working_repos_key_resolves(self) -> None:
+        from coordinator_core.ops.emit import doe_drift as d
+
+        assert d._extract_repos_content_root_from_toml(
+            {"engine.working_repos.content_root": "/w"}
+        ) == "/w"
+        assert d._extract_repos_content_root_regex(
+            "\"engine.working_repos.content_root\" = '/w'  # set\n"
+        ) == "/w"
+
+    def test_working_repos_key_wins_over_legacy(self) -> None:
+        from coordinator_core.ops.emit import doe_drift as d
+
+        data = {"repos.content_root": "/legacy", "engine": {"working_repos": {"content_root": "/w"}}}
+        assert d._extract_repos_content_root_from_toml(data) == "/w"
+
+    def test_legacy_key_still_resolves(self) -> None:
+        from coordinator_core.ops.emit import doe_drift as d
+
+        assert d._extract_repos_content_root_from_toml({"repos": {"content_root": "/l"}}) == "/l"
+        assert d._extract_repos_content_root_regex('"repos.content_root" = "/l"') == "/l"
+
+    def test_unset_is_none(self) -> None:
+        from coordinator_core.ops.emit import doe_drift as d
+
+        assert d._extract_repos_content_root_from_toml({"repos.content_root": "/c"}) is None

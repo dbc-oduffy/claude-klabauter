@@ -214,3 +214,11 @@ def test_concurrent_mints_never_collide(tmp_path: Path) -> None:
 
     assert len(numbers) == len(set(numbers)), f"collision(s) in {numbers}"
     assert sorted(numbers) == list(range(1, n_workers + 1))
+
+
+def test_reservation_lives_under_git_dir_when_the_tree_has_one(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "decisions").mkdir(parents=True)
+    number = mint_next_dr_id(tmp_path)
+    assert (tmp_path / ".git" / "coordinator-dr-reservations" / f"DR-{number}.reserved").is_file()
+    assert not (tmp_path / "state").exists()

@@ -26,6 +26,8 @@ Spec backlink: coordinator_core/bash_guards/guard_head_tail_rewrite.py
 
 from __future__ import annotations
 
+import shlex
+
 from coordinator_core.bash_guards import guard_head_tail_rewrite as guard
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.search import census as _census
@@ -95,6 +97,13 @@ def _payload(cmd, cwd):
 
 class TestFindCensusServesInProcess:
 
+    @staticmethod
+    def _bash_root(path):
+        # Bash de-escapes the backslashes of a native Windows path before the
+        # guard sees it (`_command_tokenizer`), so the bash leg is fed the
+        # forward-slash form a real bash session would pass.
+        return shlex.quote(path.as_posix())
+
     def _fixture(self, tmp_path):
         (tmp_path / "a.txt").write_text("one\n")
         (tmp_path / "b.txt").write_text("two\n")
@@ -103,7 +112,7 @@ class TestFindCensusServesInProcess:
 
     def test_served_answer_replaces_command_with_true(self, tmp_path):
         census_dir = self._fixture(tmp_path)
-        cmd = "find %s -type f -name '*.txt' | head -n 5" % census_dir
+        cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         hso = out["hookSpecificOutput"]
@@ -114,7 +123,7 @@ class TestFindCensusServesInProcess:
 
     def test_served_answer_matches_real_find_equivalence(self, tmp_path):
         census_dir = self._fixture(tmp_path)
-        cmd = "find %s -type f -name '*.txt' | head -n 5" % census_dir
+        cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
         hso = out["hookSpecificOutput"]
         context = hso["additionalContext"]
@@ -129,7 +138,7 @@ class TestFindCensusServesInProcess:
 
     def test_no_payload_keeps_old_generator_rewrite(self, tmp_path):
         census_dir = self._fixture(tmp_path)
-        cmd = "find %s -type f -name '*.txt' | head -n 5" % census_dir
+        cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = guard.check_head_tail_plumbing_rewrite(cmd)
         assert out is not None
         assert "python3" in out["hookSpecificOutput"]["updatedInput"]["command"] or (
@@ -138,7 +147,7 @@ class TestFindCensusServesInProcess:
 
     def test_shape_census_declines_falls_back_to_generator_rewrite(self, tmp_path):
         census_dir = self._fixture(tmp_path)
-        cmd = "find %s -type d | head -n 5" % census_dir
+        cmd = "find %s -type d | head -n 5" % self._bash_root(census_dir)
         out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         hso = out["hookSpecificOutput"]
@@ -147,7 +156,7 @@ class TestFindCensusServesInProcess:
     def test_walk_budget_exceeded_falls_back_not_crashes(self, tmp_path, monkeypatch):
         census_dir = self._fixture(tmp_path)
         monkeypatch.setattr(_census, "WALK_BUDGET_ENTRIES", 0)
-        cmd = "find %s -type f | head -n 5" % census_dir
+        cmd = "find %s -type f | head -n 5" % self._bash_root(census_dir)
         out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         assert out["hookSpecificOutput"]["updatedInput"]["command"] != "true"

@@ -86,6 +86,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -1612,6 +1613,116 @@ def _resolve_dispatch_root(claude_klabauter_root: Path) -> Path | None:
     return mirror_path if _engine_root_is_stamped(mirror_path) else None
 
 
+_COLD_PING_CMD_TAIL = ["-m", "coordinator_core.invoke", "ping", "{}"]
+_COLD_PING_SPAWN_TIMEOUT_SECONDS = 30
+_SMOKE_JOIN_SECONDS = 30.0
+
+
+class _ColdPing:
+    """One cold `coordinator_core.invoke ping` spawn shared by the invoke smoke
+    and latency probes. `box` carries rc/stdout/stderr and, where the platform
+    can measure it, `measurement`; each probe joins with its own timeout."""
+
+    def __init__(self, dispatch_root: Path) -> None:
+        self.box: dict[str, Any] = {}
+        self._thread = threading.Thread(
+            target=_spawn_cold_ping, args=(dispatch_root, self.box), daemon=True
+        )
+        self._thread.start()
+
+    def join(self, timeout: float) -> bool:
+        """True once the spawn has finished within *timeout* seconds."""
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
+
+
+# Memo for one doctor run; `run_probes` clears it before the first probe.
+_COLD_PING_MEMO: dict[str, _ColdPing] = {}
+
+
+def _cold_ping(dispatch_root: Path) -> _ColdPing:
+    key = f"{sys.executable}|{dispatch_root}"
+    ping = _COLD_PING_MEMO.get(key)
+    if ping is None:
+        ping = _COLD_PING_MEMO[key] = _ColdPing(dispatch_root)
+    return ping
+
+
+def _read_captured(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _spawn_cold_ping(dispatch_root: Path, box: dict[str, Any]) -> None:
+    """Spawn the ping once. Process-time measurement where the platform has it
+    (Windows/Darwin); a plain `subprocess.run` elsewhere, with no measurement."""
+    cmd = [sys.executable, *_COLD_PING_CMD_TAIL]
+    try:
+        try:
+            from coordinator_core.benchmarks.process_time import (
+                single_invocation_tree_process_time,
+            )
+        except ImportError as exc:
+            box["import_error"] = str(exc)
+        else:
+            with tempfile.TemporaryDirectory() as td:
+                out_path = os.path.join(td, "stdout")
+                err_path = os.path.join(td, "stderr")
+                try:
+                    measurement = single_invocation_tree_process_time(
+                        cmd,
+                        cwd=str(dispatch_root),
+                        stdout_path=out_path,
+                        stderr_path=err_path,
+                    )
+                except NotImplementedError as exc:
+                    box["not_implemented"] = str(exc)
+                else:
+                    box["measurement"] = measurement
+                    box["rc"] = measurement["rc"]
+                    box["stdout"] = _read_captured(out_path)
+                    box["stderr"] = _read_captured(err_path)
+                    return
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_COLD_PING_SPAWN_TIMEOUT_SECONDS,
+            cwd=str(dispatch_root),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        box["rc"] = result.returncode
+        box["stdout"] = result.stdout
+        box["stderr"] = result.stderr
+    except FileNotFoundError:
+        box["file_not_found"] = True
+    except subprocess.TimeoutExpired:
+        box["timed_out"] = True
+    except Exception as exc:  # surfaced by each probe as its own SKIP/INFO verdict.
+        box["error"] = f"{type(exc).__name__}: {exc}"
+
+
+# A liveness probe spawns or dials the engine (invoke/warm). Each registers
+# through `_liveness_probe`; the sentinel test derives its subject set from this
+# registry and fails any `_run_probe_*` reaching `_LIVENESS_SPAWN_HELPERS`
+# without registering.
+LIVENESS_PROBES: dict[str, str] = {}
+_LIVENESS_SPAWN_HELPERS = frozenset({"_cold_ping", "_spawn_cold_ping", "try_warm_dispatch"})
+
+
+def _liveness_probe(probe_id: str):
+    """Register the decorated `_run_probe_*` as a liveness probe under `probe_id`."""
+
+    def _register(fn):
+        LIVENESS_PROBES[probe_id] = fn.__name__
+        return fn
+
+    return _register
+
+
+@_liveness_probe("claude-klabauter.invoke.smoke")
 def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.invoke.smoke — OPTIONAL (required=False).
 
@@ -1695,16 +1806,10 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                 data={"engine_root": str(claude_klabauter_root), "dispatch_root": None},
             )
 
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=str(dispatch_root),
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except FileNotFoundError:
+        ping = _cold_ping(dispatch_root)
+        finished = ping.join(_SMOKE_JOIN_SECONDS)
+        box = ping.box
+        if box.get("file_not_found"):
             return _ProbeResult(
                 probe=_INVOKE_SMOKE_PROBE,
                 status=_INFO,
@@ -1713,12 +1818,12 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                 required=False,
                 skipped=True,
             )
-        except subprocess.TimeoutExpired:
+        if not finished or box.get("timed_out"):
             return _ProbeResult(
                 probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
-                    "python3 -m coordinator_core.invoke ping '{}' timed out after 30 s. "
+                    f"python3 -m coordinator_core.invoke ping '{{}}' timed out after {_SMOKE_JOIN_SECONDS:.0f} s. "
                     "Spawn-per-call dispatch should complete in well under 1 s."
                 ),
                 remediation=(
@@ -1728,14 +1833,16 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                 ),
                 required=False,
             )
+        if "error" in box:
+            raise RuntimeError(box["error"])
 
-        if result.returncode != 0:
+        if box["rc"] != 0:
             return _ProbeResult(
                 probe=_INVOKE_SMOKE_PROBE,
                 status=_BROKEN,
                 detail=(
-                    f"coordinator_core.invoke ping '{{}}' exited {result.returncode}. "
-                    f"stderr: {result.stderr.strip()!r}"
+                    f"coordinator_core.invoke ping '{{}}' exited {box['rc']}. "
+                    f"stderr: {box['stderr'].strip()!r}"
                 ),
                 remediation=(
                     f"Run manually from {dispatch_root}: "
@@ -1745,7 +1852,7 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                 required=False,
             )
 
-        stdout = result.stdout.strip()
+        stdout = box["stdout"].strip()
         try:
             envelope = json.loads(stdout)
         except json.JSONDecodeError:
@@ -3562,6 +3669,7 @@ _INVOKE_LATENCY_PROBE = "claude-klabauter.invoke.latency"
 _INVOKE_LATENCY_TIMEOUT_SECONDS = 5.0
 
 
+@_liveness_probe("claude-klabauter.invoke.latency")
 def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResult:
     """Probe claude-klabauter.invoke.latency — OPTIONAL (required=False); WARN over budget.
 
@@ -3642,45 +3750,24 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                 data={"engine_root": str(claude_klabauter_root), "dispatch_root": None},
             )
 
-        try:
-            from coordinator_core.benchmarks.process_time import (
-                single_invocation_tree_process_time,
-            )
-        except ImportError as exc:
+        ping = _cold_ping(dispatch_root)
+        finished = ping.join(_INVOKE_LATENCY_TIMEOUT_SECONDS)
+        result_box = ping.box
+
+        if "import_error" in result_box:
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
                 status=_INFO,
                 detail=(
-                    f"coordinator_core.benchmarks.process_time not importable: {exc}; "
-                    "invoke latency probe skipped."
+                    "coordinator_core.benchmarks.process_time not importable: "
+                    f"{result_box['import_error']}; invoke latency probe skipped."
                 ),
                 remediation="Verify coordinator_core/benchmarks/process_time.py is present.",
                 required=False,
                 skipped=True,
             )
 
-        result_box: dict[str, Any] = {}
-
-        def _measure() -> None:
-            try:
-                result_box["measurement"] = single_invocation_tree_process_time(
-                    [sys.executable, "-m", "coordinator_core.invoke", "ping", "{}"],
-                    cwd=str(dispatch_root),
-                    stdout_path=os.devnull,
-                    stderr_path=os.devnull,
-                )
-            except FileNotFoundError:
-                result_box["file_not_found"] = True
-            except NotImplementedError as exc:
-                result_box["not_implemented"] = str(exc)
-            except Exception as exc:  # belt-and-braces; surfaced as a SKIP below.
-                result_box["error"] = f"{type(exc).__name__}: {exc}"
-
-        thread = threading.Thread(target=_measure, daemon=True)
-        thread.start()
-        thread.join(_INVOKE_LATENCY_TIMEOUT_SECONDS)
-
-        if thread.is_alive():
+        if not finished:
             timeout_ms = _INVOKE_LATENCY_TIMEOUT_SECONDS * 1000
             return _ProbeResult(
                 probe=_INVOKE_LATENCY_PROBE,
@@ -5079,6 +5166,7 @@ _WARM_ROUNDTRIP_PROBE = "claude-klabauter.warm.roundtrip"
 _WARM_ROUNDTRIP_CONNECT_TIMEOUT_SECONDS = 3.0
 
 
+@_liveness_probe("claude-klabauter.warm.roundtrip")
 def _run_probe_warm_roundtrip(
     claude_klabauter_root: Path | None,
     include_live_roundtrip: bool,
@@ -5551,6 +5639,7 @@ def run_probes(
     retired — coordinator_core is a command-type engine with no resident process to probe.
     Retired under docs/plans/2026-07-06-claude-klabauter-doctor-prose-based-command-type.md § C1a.
     """
+    _COLD_PING_MEMO.clear()
     results: list[_ProbeResult] = []
     known_ids: set[str] = set()
 

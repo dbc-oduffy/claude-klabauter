@@ -89,6 +89,10 @@ def __getattr__(name: str) -> Any:
 # Schema filename and the round-trip test label). ProvenanceEnvelope is
 # included as a shared type so the emitted schema set is self-contained.
 # Ported verbatim (key order + key set) from `index.ts`'s `ENTITY_SCHEMAS`.
+# `entities/commit_closure.py` is deliberately absent: it has no `index.ts`
+# counterpart, and registering it here would break the verbatim-port
+# invariant and make `test_committed_emit_drift.py` demand a DoE-side
+# committed schema this store-less emit leg exists to avoid.
 ENTITY_SCHEMAS: dict[str, Any] = {
     "provenance-envelope": ProvenanceEnvelope,
     "coordinator-root": CoordinatorRoot,

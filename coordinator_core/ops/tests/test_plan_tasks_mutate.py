@@ -3932,3 +3932,99 @@ def test_unparseable_spine_refuses_the_write_naming_the_line(tmp_path, params):
     assert plan.read_text(encoding="utf-8") == original, (
         "file must be byte-unchanged after a parse abort"
     )
+
+
+def _certified(content: str) -> str:
+    from coordinator_core.frontmatter.primitives import canonical_body_sha
+
+    sha = canonical_body_sha(content)
+    stamp = (
+        "mise_prepped_by: test\n"
+        "mise_prepped_at: 2026-09-23T00:00:00Z\n"
+        f"mise_prepped_sha: '{sha}'\n"
+        "mise_prepped_findings: []\n"
+    )
+    assert content.startswith("---\n")
+    return "---\n" + stamp + content[len("---\n"):]
+
+
+def test_resolve_keeps_a_certified_plan_certified(tmp_path):
+    from coordinator_core.roadmap.prep_gate import CERTIFIED, read_stamp
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-certified.md", _certified(_PLAN_WITH_TASKS))
+    assert read_stamp(plan.read_text(encoding="utf-8"))["state"] == CERTIFIED
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "coded",
+            "disposition_ref": "abc1234",
+            "disposition_detail": "shipped in abc1234",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" in text
+    assert read_stamp(text)["state"] == CERTIFIED
+
+
+def test_resolve_leaves_an_uncertified_plan_unstamped(tmp_path):
+    from coordinator_core.roadmap.prep_gate import UNSTAMPED, read_stamp
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-plain.md", _PLAN_WITH_TASKS)
+    _run(_handler(
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1", "disposition": "coded",
+         "disposition_ref": "abc1234", "disposition_detail": "shipped in abc1234"},
+        repo_root=repo / ".git",
+    ))
+    assert read_stamp(plan.read_text(encoding="utf-8"))["state"] == UNSTAMPED
+
+
+def _approve_in_place(plan):
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    plan.write_text(
+        stamp_approved_body_sha(plan.read_text(encoding="utf-8")), encoding="utf-8"
+    )
+
+
+def test_resolve_keeps_an_approved_plan_verifiable(tmp_path):
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "approved-resolve.md", _PLAN_WITH_CODED_PREFIX_AND_OPEN_TAIL)
+    _approve_in_place(plan)
+    assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+    result = _run(_handler(
+        {"verb": "resolve", "plan_path": str(plan), "id": "C3",
+         "disposition": "coded", "disposition_ref": "abc3333"},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+
+def test_add_task_makes_an_approved_plan_read_changed(tmp_path):
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_CHANGED, check_approved_body
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "approved-add.md", _PLAN_WITH_TASKS)
+    _approve_in_place(plan)
+
+    result = _run(_handler(
+        {"verb": "add-task", "plan_path": str(plan), "task": _valid_task("C2")},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    state, message = check_approved_body(plan.read_text(encoding="utf-8"))
+    assert state == APPROVED_BODY_CHANGED
+    assert "plan review" in message

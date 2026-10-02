@@ -117,7 +117,12 @@ def _adjacent_segment_hits(tree: ast.AST) -> list:
 
 def _violations(path: str) -> list:
     try:
-        tree = ast.parse(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        # Both hit shapes need a string Constant spelling "subagent-share".
+        if "subagent" not in text:
+            return []
+        tree = ast.parse(text)
     except (OSError, SyntaxError):
         return []
     docstrings = _docstring_constant_ids(tree)

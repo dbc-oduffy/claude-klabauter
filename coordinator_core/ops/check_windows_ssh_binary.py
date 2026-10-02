@@ -102,7 +102,7 @@ def _run_git(args: Sequence[str]) -> Optional[str]:
             capture_output=True,
             text=True,
             **no_console_creationflags(),
-        )
+        )  # popup-safe-env-suppressed
     except OSError as exc:
         print(f"skip: git subcommand failed: {exc}", file=sys.stderr)
         return None

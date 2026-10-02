@@ -265,9 +265,7 @@ Negative-spec:
   - Does NOT reimplement handoff.stamp/handoff.transition frontmatter-mutation
     LOGIC -- shipped_in is written exclusively via stamp_shipped_in's own
     handoff.stamp op call.
-  - Does NOT change handoff_ship_archive.py's behavior or scope -- that op
-    remains the event-driven ship+archive composite for the /workstream-complete
-    call site; this op is the faithful port of the DoE archive-ceremony CLI
+  - Is the faithful port of the DoE archive-ceremony CLI
     for /handoff Step 1 and callers that need the 4-mode flag surface
     (stamp_shipped / stamp_only / supersede / chain) and the unconditional
     live-children guard in one call.

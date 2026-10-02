@@ -21,21 +21,20 @@ NEGATIVE-SPEC (read before touching this module):
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._git_root_util import git_root
-from coordinator_core.win_portability import no_console_creationflags
 
 SCHEMA = "kr2-two-repo-rate/v1"
 GOAL_ID = "goal-claude-klabauter-engine-of-record"
 KR = "kr-2"
 ENGINE_PATH_PREFIXES = ("coordinator_core/", "bin/")
 DEFAULT_WINDOW_DAYS = 28
-_GIT_TIMEOUT = 20
 _SENTINEL = "\x01"
 _PAIRING_REASON = (
     "no evidence source links a claude-klabauter commit to a paired coordinator-content-repo commit "
@@ -43,19 +42,11 @@ _PAIRING_REASON = (
 )
 
 
-def _git(args: List[str], cwd: str) -> Optional["subprocess.CompletedProcess[str]"]:
-    try:
-        return subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
+def _git(args: List[str], cwd: str) -> Optional[GitResult]:
+    result = run_git(args, cwd=cwd)
+    if result.timed_out or result.returncode == 127:
         return None
+    return result
 
 
 def _resolve_window(params: dict) -> Tuple[date, date]:
@@ -85,6 +76,11 @@ def _count_engine_commits(log_output: str) -> int:
 
 @register_op("goal.kr2_two_repo_rate")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    # Body spawns git and reads the filesystem; off-loop so dispatch's wait_for can fire.
+    return await asyncio.to_thread(_run, params, repo_root)
+
+
+def _run(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "goal.kr2_two_repo_rate" handler — KR2 of
     `goal-claude-klabauter-engine-of-record`; read-only, two git spawns.
 

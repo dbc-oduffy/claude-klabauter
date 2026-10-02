@@ -163,6 +163,22 @@ independently. A module declaring `MUTATES` with no `GENERATES` reports
 staleness contract at all, distinct from `UNDECLARED`,
 `WRITE_TARGET_UNRESOLVED`, and the empty-pairs `GENERATES = []` case.
 
+Three further module-level declarations name provenance `GENERATES` and
+`MUTATES` cannot express; each classifies as declared and outside the
+staleness contract (`Verdict.MUTATES_DECLARED`, or declared-empty beside a
+`GENERATES`), never `UNDECLARED`:
+
+  - `MUTATES_APPEND = [<concrete path>, ...]` — an append-only ledger or a
+    surgical edit to a shared file. Concrete, wildcard-free paths only.
+  - `GENERATES_EXTERNAL = True` — the generator emits into a caller-supplied
+    destination foreign to this repo.
+  - `UNSTAMPED_BY_DESIGN = [<glob>, ...]` — declared `GENERATES` artifacts
+    matching a glob carry no stamp on purpose and are not compared.
+
+A `MUTATES` whose globs all sit under `state/` or `.coordinator-local/` and
+match no tracked path is a runtime ledger (decided by path shape, never by
+`.gitignore`) and classifies the same way.
+
 Negative-spec:
   - This module does not add or edit any generator's `GENERATES` list —
     that is C2's write set. Its own tests use synthetic fixture modules
@@ -289,6 +305,10 @@ class FileWrites:
     cache entry that failed to parse at all -- `_scan_file_writes` always
     takes an already-parsed `tree`, so it is always `False` here.
 
+    `mutates_append`/`generates_external`/`unstamped_by_design` are the raw
+    declarations of the same names (see the module docstring's seam-vocabulary
+    paragraph), `None` when absent.
+
     `write_surface_paths` carries `_static_write_surface_paths`' result for
     the same reason every other field is here rather than recomputed in
     `_resolve`: it is a pure function of the parsed source, so it belongs on
@@ -302,6 +322,9 @@ class FileWrites:
     write_sites: list[str | None]
     syntax_error: bool
     write_surface_paths: tuple[str, ...] = ()
+    mutates_append: object = None
+    generates_external: object = None
+    unstamped_by_design: object = None
 
 
 def _looks_like_tmp(target: str) -> bool:
@@ -1281,6 +1304,9 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
         write_surface_paths=(
             _static_write_surface_paths(tree) if any(site is None for site in sites) else ()
         ),
+        mutates_append=_extract_declaration(tree, "MUTATES_APPEND"),
+        generates_external=_extract_declaration(tree, "GENERATES_EXTERNAL"),
+        unstamped_by_design=_extract_declaration(tree, "UNSTAMPED_BY_DESIGN"),
     )
 
 
@@ -1577,18 +1603,25 @@ def _eval_declaration(node, table: dict) -> object:
     return resolved if resolved is not None else "__MALFORMED__"
 
 
-def _extract_mutates(tree: ast.Module) -> object | None:
+def _extract_declaration(tree: ast.Module, name: str) -> object | None:
+    """The module-level `name = <value>` declaration, evaluated through
+    `_eval_declaration` (string constants and f-strings resolve), or `None`
+    when the module does not assign it."""
     table = _module_string_constants(tree, _owned_string_constants())
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-            if "MUTATES" in names:
+            if name in names:
                 return _eval_declaration(node.value, table)
         if isinstance(node, ast.AnnAssign):
             target = node.target
-            if isinstance(target, ast.Name) and target.id == "MUTATES" and node.value is not None:
+            if isinstance(target, ast.Name) and target.id == name and node.value is not None:
                 return _eval_declaration(node.value, table)
     return None
+
+
+def _extract_mutates(tree: ast.Module) -> object | None:
+    return _extract_declaration(tree, "MUTATES")
 
 
 def _valid_mutates_shape(mutates: object) -> bool:
@@ -1671,6 +1704,27 @@ def _valid_sources(sources: object, repo_root: Path) -> bool:
     return True
 
 
+_RUNTIME_LEDGER_PREFIXES = ("state/", ".coordinator-local/")
+
+
+def _matches_any_glob(path: str, globs: object) -> bool:
+    return any(fnmatch.fnmatch(path, glob) for glob in globs)  # type: ignore[union-attr]
+
+
+def _is_runtime_ledger(patterns: list[str]) -> bool:
+    """True when every pattern lives under a runtime-state tree. Decided by
+    path shape, never by `.gitignore`."""
+    return all(pattern.startswith(_RUNTIME_LEDGER_PREFIXES) for pattern in patterns)
+
+
+def _valid_string_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) > 0
+        and all(isinstance(entry, str) and entry for entry in value)
+    )
+
+
 def _build_record(
     rel_path: str,
     generates: object,
@@ -1678,9 +1732,46 @@ def _build_record(
     basis: str | None = None,
     mutates: object = None,
     tracked: frozenset[str] | None = None,
+    mutates_append: object = None,
+    generates_external: object = None,
+    unstamped_by_design: object = None,
 ) -> GeneratorRecord:
     mutates_patterns: tuple[str, ...] = ()
     mutates_error: str | None = None
+    notes: list[str] = []
+
+    if mutates_append is not None:
+        if not _valid_string_list(mutates_append) or _mutates_concrete_patterns(list(mutates_append)) != list(
+            mutates_append
+        ):
+            mutates_error = (
+                f"{rel_path} MUTATES_APPEND must be a non-empty list of concrete "
+                f"(wildcard-free) paths: {mutates_append!r}"
+            )
+        else:
+            mutates_patterns = tuple(mutates_append)
+            notes.append(f"MUTATES_APPEND = {list(mutates_append)!r} (append-only ledger or surgical edit)")
+
+    external_error: str | None = None
+    if generates_external is not None:
+        if generates_external is not True:
+            external_error = f"{rel_path} GENERATES_EXTERNAL must be the literal True: {generates_external!r}"
+        else:
+            notes.append("GENERATES_EXTERNAL (destination is caller-supplied and foreign to this repo)")
+
+    if unstamped_by_design is not None and not _valid_string_list(unstamped_by_design):
+        return GeneratorRecord(
+            generator=rel_path,
+            pairs=(),
+            verdict=Verdict.UNDECLARED,
+            detail=f"{rel_path} UNSTAMPED_BY_DESIGN must be a non-empty list of glob strings: {unstamped_by_design!r}",
+        )
+    if external_error is not None:
+        return GeneratorRecord(generator=rel_path, pairs=(), verdict=Verdict.UNDECLARED, detail=external_error)
+
+    declared_outside = mutates_append is not None or generates_external is not None
+    mutates_plain = False
+
     if mutates is not None:
         if not _valid_mutates_shape(mutates):
             mutates_error = (
@@ -1690,10 +1781,15 @@ def _build_record(
         else:
             patterns = list(mutates)
             if not _mutates_any_tracked_match(patterns, tracked):
-                mutates_error = (
-                    f"{rel_path} MUTATES pattern(s) match no currently-tracked path: "
-                    f"{patterns!r}"
-                )
+                if _is_runtime_ledger(patterns):
+                    mutates_patterns = mutates_patterns + tuple(patterns)
+                    notes.append(f"runtime-ledger: MUTATES {patterns!r} matches no tracked path")
+                    declared_outside = True
+                else:
+                    mutates_error = (
+                        f"{rel_path} MUTATES pattern(s) match no currently-tracked path: "
+                        f"{patterns!r}"
+                    )
             else:
                 broad_patterns = _mutates_broad_patterns(patterns)
                 concrete_patterns = _mutates_concrete_patterns(patterns)
@@ -1714,8 +1810,10 @@ def _build_record(
                             f"concrete path; a fixed artifact declares GENERATES"
                         )
                 else:
-                    mutates_patterns = tuple(patterns)
+                    mutates_patterns = mutates_patterns + tuple(patterns)
+                    mutates_plain = True
 
+    if mutates is not None or declared_outside:
         if generates is None:
             if mutates_error is not None:
                 return GeneratorRecord(
@@ -1724,11 +1822,13 @@ def _build_record(
                     verdict=Verdict.UNDECLARED,
                     detail=mutates_error,
                 )
+            parts = ([f"MUTATES = {list(mutates)!r}"] if mutates_plain else []) + notes
+            suffix = "corpus mutator, no staleness contract" if mutates_plain and not notes else "no staleness contract"
             return GeneratorRecord(
                 generator=rel_path,
                 pairs=(),
                 verdict=Verdict.MUTATES_DECLARED,
-                detail=f"{rel_path} declares MUTATES = {list(mutates_patterns)!r} (corpus mutator, no staleness contract)",
+                detail=f"{rel_path} declares {'; '.join(parts)} ({suffix})",
                 mutates=mutates_patterns,
             )
 
@@ -1765,6 +1865,8 @@ def _build_record(
 
     if len(generates) == 0:
         detail = f"{rel_path} declares GENERATES = [] (declared-empty, no artifacts)"
+        for note in notes:
+            detail = f"{detail}; {note}"
         if mutates_error is not None:
             detail = f"{detail}; {mutates_error}"
         return GeneratorRecord(
@@ -1825,7 +1927,18 @@ def _build_record(
             )
         )
 
+    if unstamped_by_design is not None:
+        exempt = [pair for pair in pairs if _matches_any_glob(pair.artifact, unstamped_by_design)]
+        if exempt:
+            pairs = [pair for pair in pairs if pair not in exempt]
+            notes.append(
+                f"UNSTAMPED_BY_DESIGN {unstamped_by_design!r} exempts "
+                f"{[pair.artifact for pair in exempt]!r} from staleness comparison"
+            )
+
     detail = f"{rel_path} declares {len(pairs)} pair(s)"
+    for note in notes:
+        detail = f"{detail}; {note}"
     if mutates_error is not None:
         detail = f"{detail}; {mutates_error}"
     return GeneratorRecord(
@@ -1990,14 +2103,25 @@ def discover_generators(
                 mutates = writes.mutates
 
                 basis: str | None = None
-                if generates is None and mutates is None:
+                declares_outside = writes.mutates_append is not None or writes.generates_external is not None
+                if generates is None and mutates is None and not declares_outside:
                     is_test_module = _is_test_module(rel_path, test_module_globs)
                     basis = _resolve(writes, tracked, is_test_module)
                     if not basis:
                         continue
 
                 sweep_records.append(
-                    _build_record(rel_path, generates, repo_root, basis, mutates=mutates, tracked=tracked)
+                    _build_record(
+                        rel_path,
+                        generates,
+                        repo_root,
+                        basis,
+                        mutates=mutates,
+                        tracked=tracked,
+                        mutates_append=writes.mutates_append,
+                        generates_external=writes.generates_external,
+                        unstamped_by_design=writes.unstamped_by_design,
+                    )
                 )
 
         # C6's os.scandir stack walk is unordered across filesystems -- this

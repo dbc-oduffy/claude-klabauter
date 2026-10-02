@@ -5,7 +5,7 @@ thin wrapper over `session.receiver_state`, producing the receiver-state sibling
 Purpose: the calling session's own PAUSED/PRODUCING/UNKNOWN verdict, and why — the
 detection half of the receiver-state sensor DoE and this repo split at the transport
 boundary (DoE owns hook registration + the stderr/exit-2 Stop-hook contract; this repo
-owns detection). All ladder logic, the CPU cursor, and the sibling-file writer live in
+owns detection). All ladder logic and the sibling-file writer live in
 `coordinator_core.session.receiver_state` — this module holds NO detection logic of its
 own, matching `track_touched_files.py`'s own "thin op over the library module" shape.
 
@@ -35,10 +35,6 @@ Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
     transcript_path   — this session's OWN transcript path. Required; without it there
                          is nothing to tail-read and the op writes an UNKNOWN verdict
                          with that reason.
-    pid               — the CALLING session's own OS process id, for the CPU cursor leg
-                         (`session.receiver_state.compute_cpu_cursor`). Optional — an
-                         absent/unparseable pid simply skips the CPU cursor for this
-                         invocation (the ladder verdict is still written).
     delegation_evidence — "true"/"false" flag (via `_payload.field()`'s bool
                          normalisation), OPTIONALLY supplied by the CALLER, for the
                          ladder's step 7 override; an absent/anything-other-than-"true"
@@ -57,15 +53,13 @@ Always returns `no_advisory()` — the product is the on-disk write side-effect,
 as `track_touched_files.py` does. Never blocks a tool call; never raises into its caller
 (fail-soft, matching `holder_evidence.py`'s own contract, per AC12).
 
-All blocking I/O (the transcript tail read, the CPU-time read, the sibling-file
-read/write) is wrapped in `asyncio.to_thread` — this handler's own body performs no
+All blocking I/O (the transcript tail read and the sibling-file write) is wrapped in `asyncio.to_thread` — this handler's own body performs no
 direct file or process I/O. `asyncio` is imported inside the handler, not at module
 scope (import-budget discipline, matching every other hook op in this package).
 
 Negative-spec:
-    - Does NOT read or depend on `stable_pid` (AC13) — `pid` here is the caller-supplied
-      OS pid used ONLY for a CPU-TIME sample, never fed to any liveness check. See
-      `session.receiver_state`'s RAW-PID-LIVENESS floor restatement.
+    - Does NOT read or depend on `stable_pid` (AC13), and takes no OS pid: a `pid`
+      field a caller still sends is ignored.
     - Does NOT open or read any subagent transcript to compute delegation evidence —
       only a directory listing plus each entry's `stat()` mtime (see Input above and
       `session.receiver_state.delegation_evidence_from_sidecar`'s own docstring for
@@ -95,7 +89,6 @@ from coordinator_core.session import receiver_state
 def _run_sensor(
     session_id: str,
     transcript_path: str,
-    pid_raw: str,
     delegation_evidence: bool,
     repo_root: "str | None",
 ) -> None:
@@ -128,29 +121,15 @@ def _run_sensor(
         delegation_evidence=merged_delegation_evidence,
     )
 
-    cpu_cursor = None
-    cpu_rate = None
-    if pid_raw:
-        try:
-            pid = int(pid_raw)
-        except ValueError:
-            pid = None
-        if pid is not None:
-            cpu_cursor = receiver_state.compute_cpu_cursor(pid, now_epoch=float(now_epoch))
-            if cpu_cursor is not None:
-                previous_record = receiver_state.read_receiver_state(session_id, cwd)
-                previous_cursor = _cursor_from_record(previous_record)
-                cpu_rate = receiver_state.cpu_delta_rate(previous_cursor, cpu_cursor)
-
-    final_verdict = receiver_state.resolve_verdict(ladder_verdict, cpu_rate=cpu_rate)
+    final_verdict = receiver_state.resolve_verdict(ladder_verdict)
 
     receiver_state.write_receiver_state(
         session_id,
         verdict=final_verdict,
-        cpu_cursor=cpu_cursor,
         stamp_iso=stamp_iso,
         cwd=cwd,
     )
+
 
 def _mtime_or_none(path: str) -> "float | None":
     import os
@@ -158,21 +137,6 @@ def _mtime_or_none(path: str) -> "float | None":
     try:
         return os.stat(path).st_mtime
     except OSError:
-        return None
-
-
-def _cursor_from_record(record: "dict | None"):
-    if not isinstance(record, dict):
-        return None
-    raw_cursor = record.get("cpu_cursor")
-    if not isinstance(raw_cursor, dict):
-        return None
-    try:
-        return receiver_state.CpuCursor(
-            cpu_seconds=float(raw_cursor["cpu_seconds"]),
-            wall_clock_epoch=float(raw_cursor["wall_clock_epoch"]),
-        )
-    except (KeyError, TypeError, ValueError):
         return None
 
 
@@ -186,12 +150,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     transcript_path = field(params, "transcript_path")
-    pid_raw = field(params, "pid")
     delegation_evidence = field(params, "delegation_evidence") == "true"
 
     try:
         await asyncio.to_thread(
-            _run_sensor, session_id, transcript_path, pid_raw, delegation_evidence, repo_root
+            _run_sensor, session_id, transcript_path, delegation_evidence, repo_root
         )
     except Exception:
         pass

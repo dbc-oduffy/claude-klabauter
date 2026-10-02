@@ -1539,9 +1539,13 @@ def test_rung_verb_flips_draft_to_target(tmp_path, capsys, verb, target):
     rc = main([verb, "--plan", str(p)])
     assert rc == 0
     assert f'status "draft" → {target}' in capsys.readouterr().out
-    assert p.read_text(encoding="utf-8") == (
-        "---\ntitle: T\nstatus: " + target + "\nowner: x\n---\n\nBody.\n"
-    )
+    expected = "---\ntitle: T\nstatus: " + target + "\nowner: x\n---\n\nBody.\n"
+    if target == "approved":
+        from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+        expected = stamp_approved_body_sha(expected)
+        assert "approved_body_sha: " in expected
+    assert p.read_text(encoding="utf-8") == expected
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)

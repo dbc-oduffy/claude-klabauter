@@ -188,7 +188,11 @@ from coordinator_core.benchmarks.isolated_clone import (
     rmtree_or_raise,
 )
 from coordinator_core.warm import breadcrumb
-from coordinator_core.warm.engine_root import is_engine_root
+from coordinator_core.warm.tests.door_test_support import (
+    ENGINE_ROOT_OVERRIDE_ENV,
+    candidate_source_roots,
+    resolve_stamped_source_root,
+)
 from coordinator_core.session.core import stable_pid_alive
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -224,7 +228,6 @@ N_QUANTILE_SAMPLES_DARWIN = 15
 spike's own methodology (`batched_process_time_quantiles` module docstring),
 reused here rather than re-derived."""
 
-_ENGINE_ROOT_OVERRIDE_ENV = "COORDINATOR_WARM_GATE_ENGINE_ROOT"
 
 _BOOT_WAIT_DEADLINE_SECS = 20.0
 """Bounded wall-clock wait for the isolated server's own breadcrumb to go
@@ -234,21 +237,6 @@ module docstring point 4)."""
 _BOOT_POLL_INTERVAL_SECS = 0.25
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def _candidate_source_roots() -> list[Path]:
-    override = os.environ.get(_ENGINE_ROOT_OVERRIDE_ENV)
-    if override:
-        return [Path(override)]
-    live_tree_root = Path(__file__).resolve().parents[3]
-    return [live_tree_root.parent / "claude-klabauter"]
-
-
-def _resolve_stamped_source_root() -> Optional[Path]:
-    for candidate in _candidate_source_roots():
-        if candidate.is_dir() and is_engine_root(candidate):
-            return candidate
-    return None
 
 
 def _hardlink_coordinator_core(source_root: Path, isolated_root: Path) -> int:
@@ -294,12 +282,12 @@ def warm_engine_root() -> Iterator[Path]:
     if not IS_WINDOWS:
         pytest.skip("process-time job-object accounting is a Windows-only primitive")
 
-    source_root = _resolve_stamped_source_root()
+    source_root = resolve_stamped_source_root()
     if source_root is None:
         pytest.skip(
             "no candidate engine root carries a valid build stamp among "
-            f"{_candidate_source_roots()!r} -- nothing stamped to boot an isolated "
-            f"warm server from; point {_ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
+            f"{candidate_source_roots()!r} -- nothing stamped to boot an isolated "
+            f"warm server from; point {ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
         )
 
     tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")
@@ -368,10 +356,10 @@ def warm_engine_root() -> Iterator[Path]:
 # `os.wait4`) is a different measurement mechanism entirely, already wired
 # through `batched_process_time_ms`/`batched_process_time_quantiles` and
 # reused here unmodified. What DOES port, verbatim, is the isolation
-# strategy: `_candidate_source_roots`, `_resolve_stamped_source_root`, and
-# `_hardlink_coordinator_core` above are already platform-agnostic (no
-# Windows-only calls in any of the three), so this fixture calls them
-# directly rather than duplicating them.
+# strategy: `candidate_source_roots` and `resolve_stamped_source_root`
+# (from `door_test_support`) and `_hardlink_coordinator_core` above are
+# already platform-agnostic (no Windows-only calls in any of the three), so
+# this fixture calls them directly rather than duplicating them.
 #
 # THE PLATFORM-SPECIFIC HALF -- election. `server.py::main()` dispatches
 # its own election arm on `sys.platform`, so booting the isolated server is
@@ -519,12 +507,12 @@ def warm_engine_root_darwin() -> Iterator[Path]:
     if not IS_DARWIN:
         pytest.skip("this fixture boots the POSIX unix-socket election arm -- macOS only")
 
-    source_root = _resolve_stamped_source_root()
+    source_root = resolve_stamped_source_root()
     if source_root is None:
         pytest.skip(
             "no candidate engine root carries a valid build stamp among "
-            f"{_candidate_source_roots()!r} -- nothing stamped to boot an isolated "
-            f"warm server from; point {_ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
+            f"{candidate_source_roots()!r} -- nothing stamped to boot an isolated "
+            f"warm server from; point {ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
         )
 
     tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")

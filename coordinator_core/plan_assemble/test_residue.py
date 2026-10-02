@@ -334,7 +334,7 @@ def test_selected_segments_carry_route_key_not_surface_key(
         assert "route" in segment
         assert "surface" not in segment
         assert set(segment.keys()) == {
-            "segment_id", "route", "class", "order", "content", "source_path",
+            "segment_id", "route", "class", "order", "lane", "content", "source_path",
         }
 
 

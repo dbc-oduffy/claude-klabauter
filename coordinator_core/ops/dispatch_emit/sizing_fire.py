@@ -12,6 +12,7 @@ from typing import Mapping, Sequence
 import yaml
 
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.session import record_homes
 
 ARM_XS, ARM_S, ARM_M_PLUS = "xs", "s", "m_plus"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan"}
@@ -26,6 +27,8 @@ _TSHIRT_ARM = {
     "XXL": ARM_M_PLUS,
 }
 _FIREABLE_STATUS = ("sized", "routed")
+# Literal `_scaffold_sizing` in coordinator-doc-new writes for intent and premise.evidence.
+_SCAFFOLD_PLACEHOLDER = "PLACEHOLDER"
 
 
 class SizingFireRefused(ValueError):
@@ -42,7 +45,7 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     p = Path(sizing_rel)
     if not p.is_absolute():
         p = root / p
-    p = contained_path(p, [root / "state" / "sizings"])
+    p = contained_path(p, [Path(record_homes.home_dir(str(root), "sizings"))])
     if p is None:
         raise SizingFireRefused([f"sizing escapes state/sizings/: {sizing_rel!r}"])
     if not p.is_file():
@@ -93,11 +96,20 @@ def collect_fire_refusals(
     if ec.get("accepted") is None:
         out.append(
             "`exit_criterion.accepted` is null — accept it first: "
-            f"coordinator-invoke sizing.accept_exit_criterion "
-            f'\'{{"sizing": "{sizing_rel}", "pm_quote": "<PM\'s words>"}}\''
+            f"sizing-accept-exit-criterion --sizing {sizing_rel} --pm-quote \"<PM's words>\""
         )
     if not sizing.get("interaction_mode"):
         out.append("`interaction_mode` is absent")
+    intent = sizing.get("intent")
+    if isinstance(intent, str) and intent.startswith(_SCAFFOLD_PLACEHOLDER):
+        out.append("`intent` is still the scaffold placeholder — write the PM's ask, verbatim")
+    premise = sizing.get("premise")
+    premise = premise if isinstance(premise, Mapping) else {}
+    evidence = premise.get("evidence")
+    if isinstance(evidence, str) and evidence.startswith(_SCAFFOLD_PLACEHOLDER):
+        out.append("`premise.evidence` is still the scaffold placeholder — cite what you actually looked at")
+    if premise.get("provenance") == "unrecorded":
+        out.append("`premise.provenance` is 'unrecorded' — record how the premise was verified")
     status = sizing.get("status")
     if status not in _FIREABLE_STATUS:
         out.append(f"`status` is {status!r}, not one of {list(_FIREABLE_STATUS)}")

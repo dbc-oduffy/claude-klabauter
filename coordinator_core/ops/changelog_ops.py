@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+from coordinator_core.git.correction_note import parse_note
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import compute_machine
@@ -636,11 +637,17 @@ def _has_daily_file(date: str, today: str, host: str, week_changelog_dir: Path) 
     return False
 
 
+_NOTE_FIELD_SEP = "\x1f"
+_RECORD_SEP = "\x1e"
+_COMMIT_RECORD_FORMAT = "--format=%H%x09%s%x1f%N%x1e"
+
+
 def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
     """Get git log body for the date window. Mirrors oracle's body= git log call.
 
     Window: --after={date}T00:00:00+00:00 --before={next_date}T00:00:00+00:00
-    Format: '%h %s' (short-sha + subject, newest-first).
+    Format: '%h %s' (short-sha + subject, newest-first); a commit carrying a parseable
+    correction note renders the corrected subject.
     Returns stripped output (trailing newlines removed), matching oracle's $() capture.
     """
     try:
@@ -652,14 +659,21 @@ def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
                 "log",
                 f"--after={_iso_utc(date)}",
                 f"--before={_iso_utc(next_date)}",
-                "--format=%h %s",
+                f"--format=%h %s{_NOTE_FIELD_SEP}%N{_RECORD_SEP}",
             ],
             capture_output=True,
             text=True,
             timeout=_SUBPROCESS_TIMEOUT,
             **no_console_creationflags(),
         )
-        return r.stdout.strip()
+        lines = []
+        for record in r.stdout.split(_RECORD_SEP):
+            head, _, note = record.strip("\n").partition(_NOTE_FIELD_SEP)
+            if not head:
+                continue
+            sha, space, subject = head.partition(" ")
+            lines.append(f"{sha}{space}{parse_note(note) or subject}")
+        return "\n".join(lines).strip()
     except (OSError, subprocess.TimeoutExpired):
         print(f"skip: _git_log_for_date: r = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
         return ""
@@ -925,24 +939,26 @@ def _collect_commits(
     date window) or not (date-window path).
     """
     if commit_span:
-        args = ["log", "--format=%H%x09%s", commit_span, "--no-merges"]
+        args = ["log", _COMMIT_RECORD_FORMAT, commit_span, "--no-merges"]
     else:
         yesterday = _yesterday(date)
         args = [
             "log",
-            "--format=%H%x09%s",
+            _COMMIT_RECORD_FORMAT,
             f"--after={yesterday}T23:59:59",
             f"--before={date}T23:59:59",
             "--no-merges",
         ]
     out: List[Tuple[str, str]] = []
-    for line in _git_lines_at(worktree, args):
-        parts = line.split("\t", 1)
+    for record in (_git_text_at(worktree, args) or "").split(_RECORD_SEP):
+        head, _, note = record.strip("\n").partition(_NOTE_FIELD_SEP)
+        parts = head.split("\t", 1)
         if len(parts) != 2:
             continue
         chash, csubj = parts
         if not chash:
             continue
+        csubj = parse_note(note) or csubj
         if _SELF_COMMIT_PATTERN.search(csubj):
             continue
         out.append((chash, csubj))

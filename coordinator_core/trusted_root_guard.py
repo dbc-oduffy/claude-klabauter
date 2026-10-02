@@ -314,20 +314,21 @@ def _content_root(env: dict) -> str:
         if registry_value:
             content = registry_value
 
-    if not content and settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".coordinator-content-root")
-        try:
-            with open(durable, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError:
-            content = ""
-    if not content and home:
-        sentinel = os.path.join(home, ".claude", ".coordinator-content-root")
-        try:
-            with open(sentinel, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError:
-            content = ""
+    for pointer_name in (".coordinator-content-root", ".coordinator-content-root"):
+        if not content and settings_home_dir:
+            durable = os.path.join(settings_home_dir, "machine-local", pointer_name)
+            try:
+                with open(durable, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                content = ""
+        if not content and home:
+            sentinel = os.path.join(home, ".claude", pointer_name)
+            try:
+                with open(sentinel, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                content = ""
     content = content.rstrip("\n")
     if content.endswith("/"):
         content = content[:-1]

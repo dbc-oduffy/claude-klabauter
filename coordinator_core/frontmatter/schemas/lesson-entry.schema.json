@@ -4,7 +4,7 @@
   "x-schema-name": "lesson-entry",
   "x-schema-version": "1.1.0",
   "x-bump-class": "nested-field-additive",
-  "x-bump-note": "RE-VENDOR — adds `discarded` to the status enum and the `promoted_to` property; claude-klabauter vendors this schema at coordinator_core/frontmatter/schemas/lesson-entry.schema.json and needs a re-vendor to pick up the bump.",
+  "x-bump-note": "RE-VENDOR — adds `discarded` to the status enum and the `promoted_to` property; the engine repo vendors this schema at coordinator_core/frontmatter/schemas/lesson-entry.schema.json and needs a re-vendor to pick up the bump.",
   "applies_to": "state/lessons/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Lesson-entry artifact — STORED per-entry YAML grammar, Decision-0 reversal (PM-ratified). Each lesson lives in a separate file: state/lessons/<date>-<slug>.yaml, written atomically by coordinator-queue-append --schema lessons (or coordinator-lesson-add), validated by validateFrontmatter() in bin/lib/schema.js via this schema. Spec backlink: pln-lessons-md-to-queryable-yaml-queu-2074f1 § C1. This is the FOURTH queue on the shared base field-set (improvement-queue / bug-backlog / debt-backlog / lessons). Pattern: required base fields + domain required fields + domain optional fields. See docs/wiki/schema-and-validation-contracts/lessons-schema.md for the full field table and lifecycle. Negative-spec: Do NOT add an `id:` field — filename is the canonical identity key (D2 convention). Do NOT add a stored `lifecycle:` or `live:` field — liveness is derived from status. Do NOT write entries to state/lessons.md — that path is superseded.",
@@ -71,7 +71,7 @@
     "queue_scope": {
       "type": "string",
       "enum": ["central", "project"],
-      "description": "Which queue this lesson entry lives in — central (cross-project, claude-klabauter-resident post-migration) or project (per-repo)."
+      "description": "Which queue this lesson entry lives in — central (cross-project, engine-resident post-migration) or project (per-repo)."
     },
     "trigger": {
       "type": "string",

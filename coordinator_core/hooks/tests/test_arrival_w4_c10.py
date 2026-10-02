@@ -297,10 +297,10 @@ def test_bin_drift_refresh_returns_banner(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_http_forwarder_no_op_without_plugin_root(monkeypatch):
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+def test_ensure_http_forwarder_discloses_when_no_forwarder_resolves(monkeypatch):
+    monkeypatch.setattr(sessionstart_ensure_http_forwarder, "_forwarder_module_path", lambda: None)
     result = sessionstart_ensure_http_forwarder._handler({})
-    assert result == {}
+    assert "not ensured" in result["hookSpecificOutput"]["additionalContext"]
 
 
 def test_probe_bind_wins_or_loses_cleanly():
@@ -408,7 +408,7 @@ def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch):
         "_guard_hook_generation_self_probe_handler",
         lambda params: _identity_no_advisory(),
     )
-    result = _run(sessionstart_dispatch._handler({"payload": {"session_id": "s1"}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1"}}))
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "cron" in context
 
@@ -424,7 +424,7 @@ def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch)
         lambda params: _identity_no_advisory(),
     )
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "blitz")
-    result = _run(sessionstart_dispatch._handler({"payload": {}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup"}}))
     assert "blitz" in result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -468,7 +468,7 @@ def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch):
         "_guard_hooks_kill_switch_detail_handler",
         lambda payload: {"text": "leg-kill-switch"},
     )
-    result = _run(sessionstart_dispatch._handler({"payload": {"session_id": "s1"}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1"}}))
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "cron" in context
     assert "leg-project-orientation" in context
@@ -492,7 +492,7 @@ def test_sessionstart_dispatch_sync_leg_wrapping_mismatch_is_isolated(monkeypatc
         },
     )
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
-    result = _run(sessionstart_dispatch._handler({"payload": {}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup"}}))
     assert "sync-leg-ok" in result["hookSpecificOutput"]["additionalContext"]
 
 
@@ -520,3 +520,21 @@ def test_plugin_root_breadcrumb_path_none_when_home_unresolvable(monkeypatch):
 
     monkeypatch.setattr(session_start_write_plugin_root_breadcrumb.Path, "home", staticmethod(_boom))
     assert session_start_write_plugin_root_breadcrumb._breadcrumb_path() is None
+
+
+def test_ensure_http_forwarder_falls_back_to_own_forwarder(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    own = sessionstart_ensure_http_forwarder._forwarder_module_path()
+    assert own is not None and own.is_file()
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+    assert sessionstart_ensure_http_forwarder._forwarder_module_path() == own
+
+
+def test_ensure_http_forwarder_prefers_plugin_forwarder(monkeypatch, tmp_path):
+    forwarder = tmp_path / "hooks" / "http_hook_forwarder.py"
+    forwarder.parent.mkdir()
+    forwarder.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path))
+    assert sessionstart_ensure_http_forwarder._forwarder_module_path() == forwarder

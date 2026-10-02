@@ -90,6 +90,7 @@ import pytest
 
 from coordinator_core.benchmarks.bash_dispatch_probe import (
     CORPUS_PAYLOADS,
+    ProbeRootUnavailable,
     _dispatch_cmd,
     _verify_single_invocation_succeeds,
     capture_executed_set_baseline,
@@ -97,6 +98,7 @@ from coordinator_core.benchmarks.bash_dispatch_probe import (
     capture_roster_baseline,
     enumerate_spawn_set_for_corpus,
     measure_derived_floor,
+    probe_root,
 )
 from coordinator_core.benchmarks.process_time import (
     IS_DARWIN,
@@ -105,6 +107,14 @@ from coordinator_core.benchmarks.process_time import (
 )
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _probe_root_or_skip():
+    try:
+        return probe_root()
+    except ProbeRootUnavailable as exc:
+        pytest.skip(str(exc))
 
 K_INVOCATIONS = 20
 """Amortisation factor recovering sub-tick resolution -- see

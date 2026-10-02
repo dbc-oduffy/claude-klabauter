@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 from coordinator_core.hooks import auto_push
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -36,8 +37,8 @@ def hermetic_git_env(monkeypatch, tmp_path):
 def _repo(tmp_path, url):
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "-C", str(root), "remote", "add", "origin", url], check=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "-C", str(root), "remote", "add", "origin", url], check=True, **no_console_passthrough_kwargs())
     return root
 
 
@@ -61,7 +62,7 @@ def test_credentialless_https_remote_writes_no_row(tmp_path, hermetic_git_env):
 def test_credential_helper_keeps_the_row(tmp_path, hermetic_git_env):
     root = _repo(tmp_path, "https://github.com/org/repo")
     subprocess.run(
-        ["git", "-C", str(root), "config", "credential.helper", "store"], check=True
+        ["git", "-C", str(root), "config", "credential.helper", "store"], check=True, **no_console_passthrough_kwargs(),
     )
     _feed(root)
     assert "PUSH FAILED on work/foo" in _log(root).read_text(encoding="utf-8")

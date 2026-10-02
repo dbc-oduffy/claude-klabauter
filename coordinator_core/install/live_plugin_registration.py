@@ -166,6 +166,26 @@ def _is_within(candidate: str, root: str) -> bool:
 def assert_live_plugin_registration(
     claude_home: Path, live_plugin_root: Path, *, dry_run: bool = False
 ) -> dict[str, Any]:
+    """Repoint every installed record of this plugin at the live clone.
+
+    Journals the file it rewrote (or an empty resolution when it wrote
+    nothing) unless `dry_run`."""
+    report = _assert_live_plugin_registration(claude_home, live_plugin_root, dry_run=dry_run)
+    if not dry_run:
+        from coordinator_core.install import resolution_journal
+
+        wrote = report.get("status") == STATUS_REPOINTED
+        resolution_journal.record_resolution(
+            "live-plugin-registration",
+            0,
+            [WriteSurfaceEntry(kind="file-path", path=report["path"])] if wrote else (),
+        )
+    return report
+
+
+def _assert_live_plugin_registration(
+    claude_home: Path, live_plugin_root: Path, *, dry_run: bool
+) -> dict[str, Any]:
     record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
     report: dict[str, Any] = {"path": str(record_path), "entries": []}
 

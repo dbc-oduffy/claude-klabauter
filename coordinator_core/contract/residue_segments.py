@@ -16,14 +16,19 @@ parameterises it identically, with its own directory, field name, and
 legal-value enum.
 
 Segment contract (frozen, caller-agnostic): each file directly under the
-segment directory carries YAML frontmatter with exactly four keys —
+segment directory carries YAML frontmatter with exactly four required keys plus one optional —
 
     ---
     segment_id: <stable-kebab-case-id, unique within the segment directory>
     <filter_key>: <one of legal_values>
     class: protected | droppable
     order: <integer>
+    lane: <optional sizing t-shirt, e.g. L | XL>
     ---
+
+`lane` is returned verbatim in the segment dict (`None` when absent) and is
+never validated or filtered here; a caller that scopes segments by lane does
+so after selection.
 
 The directory listing IS the manifest — there is no separate registry file
 a segment must additionally appear in. A segment's own frontmatter is its
@@ -128,6 +133,7 @@ def _parse_segment(
     filter_value = read_fm_field_unquoted(fm, filter_key)
     segment_class = read_fm_field_unquoted(fm, "class")
     order_raw = read_fm_field_unquoted(fm, "order")
+    lane = read_fm_field_unquoted(fm, "lane")
 
     missing = [
         key
@@ -164,6 +170,7 @@ def _parse_segment(
         filter_key: filter_value,
         "class": segment_class,
         "order": order,
+        "lane": lane,
         "content": split.body_with_leading_newline.lstrip("\n"),
         "source_path": path.relative_to(content_root).as_posix(),
     }

@@ -211,7 +211,7 @@ _EXEMPT_SITES: set[str] = {
     # not an accident. Consults the engine-root override env var first and only
     # then falls back to the sibling guess; the fallback is what trips Tooth 3,
     # and it reads, never creates. 2026-08-29.
-    "coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py::_candidate_source_roots",
+    "coordinator_core/warm/tests/door_test_support.py::candidate_source_roots",
     # System-gitconfig discovery ladder: git-for-windows sibling layouts
     # derived from `git`'s own bin dir, then `/etc/gitconfig` as the last
     # rung. That literal names git's POSIX system-config convention, which is

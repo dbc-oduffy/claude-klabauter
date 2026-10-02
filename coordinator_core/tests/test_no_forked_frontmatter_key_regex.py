@@ -339,7 +339,12 @@ def find_forked_frontmatter_key_regexes(root: Path) -> list[tuple[str, int, str]
         if _is_excluded_source_path(relpath, path):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            text = path.read_text(encoding="utf-8")
+            # `_FORKED_KEY_SHAPE` needs the rendered pattern to carry a literal
+            # `\s`, which a pattern's source spells as backslash-s.
+            if "\\s" not in text:
+                continue
+            tree = ast.parse(text, filename=str(path))
         except (SyntaxError, UnicodeDecodeError):
             continue
         consts = _module_string_constants(tree)

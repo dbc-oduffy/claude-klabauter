@@ -82,7 +82,12 @@ from coordinator_core.win_portability import no_console_creationflags  # noqa: E
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-_EXPLICIT_SKIPS: dict[str, str] = {}
+_EXPLICIT_SKIPS: dict[str, str] = {
+    "completion-receipt": (
+        "minted only by coordinator_core.completion_receipts.store.write_receipt "
+        "(terminal-commit and review-mint paths), never hand-scaffolded"
+    ),
+}
 
 
 def _repo_bin_dir() -> str:

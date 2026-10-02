@@ -11,7 +11,7 @@ exposing private deliberation content.
 BOARD-PUBLIC FIELD — `title`: memo titles ARE visible to all staff on the
 Cockpit dashboard (PM-ratified 2026-06-24). Authors are warned of this via
 the cross-repo-memo authoring norm documented in
-`docs/wiki/cross-repo-communication.md`. No redaction is applied here.
+`coordinator-content-repo coordinator/docs/wiki/cross-repo-communication.md`. No redaction is applied here.
 
 Spec backlink: docs/plans/2026-06-24-cockpit-cockpit-contract-reshape.md
 Ask 7 of the cockpit-contract reshape (chunk C6-entity).

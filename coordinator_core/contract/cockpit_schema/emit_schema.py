@@ -119,6 +119,7 @@ from coordinator_core.frontmatter.baton_class import baton_class
 # is ever wired up. Neither is attempted here -- this row is declaration-only
 # and must not change one byte of what this module emits.
 GENERATES: list = []
+GENERATES_EXTERNAL = True
 
 # ---------------------------------------------------------------------------
 # CONTRACT_VERSION — single literal source of truth (this module).
@@ -185,7 +186,7 @@ GENERATES: list = []
 #
 # Same class as the 3.5.0->3.6.0 `docs_staleness` bump above — a new
 # required-with-null property on an existing entity object is
-# `nested-field-additive` per docs/wiki/schema-version-gate.md's own
+# `nested-field-additive` per coordinator-content-repo coordinator/docs/wiki/schema-and-validation-contracts/schema-version-gate.md's own
 # holding/non-holding split, so MINOR is the rule-correct bump independent
 # of any consumer reply; cockpit's 2026-07-28 reply corroborates it as
 # tolerable in practice, it does not carry the classification on its own.

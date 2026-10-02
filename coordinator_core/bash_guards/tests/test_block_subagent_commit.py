@@ -2025,6 +2025,27 @@ def test_explicit_absolute_root_from_cmd_windows_drive_absolute():
     assert guard._explicit_absolute_root_from_cmd(cmd) == "C:/repo"
 
 
+def test_committing_segments_with_different_roots_name_no_root():
+    cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git -C /foreign commit -m b -- y.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) is None
+    assert guard._committing_segment_roots(cmd) == [(0, _FAKE_REPO_ROOT), (1, "/foreign")]
+
+
+def test_committing_segments_with_the_same_root_keep_it():
+    cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git -C {_FAKE_REPO_ROOT}/ commit -m b -- y.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
+
+
+def test_a_committing_segment_without_a_root_vetoes_the_other_segments_root():
+    cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git commit -m b -- y.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) is None
+
+
+def test_non_committing_segment_root_is_ignored():
+    cmd = f'git -C /elsewhere status; git -C {_FAKE_REPO_ROOT} commit -m a -- x.py'
+    assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
+
+
 def test_ownership_scope_rejection_denies(monkeypatch):
     """AC11/AC12-adjacent defense-in-depth: an ownership-scope rejection
     (a path outside the calling session's own claimed scope) denies even
@@ -3235,3 +3256,37 @@ def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
     assert guard._has_committing_op_invoke(cmd2) is False, cmd2
     result2 = guard.check(_payload(cmd2, agent_type=_SUBAGENT_TYPE))
     assert result2 is None, f"expected ALLOW for: {cmd2!r}, got {result2!r}"
+
+
+def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
+    """The parenthesised cause survives the cap; the path's middle is elided."""
+    reason = (
+        "path outside session s1 scope: "
+        "'coordinator_core/workstream_complete/directives_memo_lifecycle.py' "
+        "(claimed by live session abc123 — run: session-claim-cli "
+        "who-claims-path <path>); denied paths (1): ..."
+    )
+    summary = guard._ownership_leg_summary(reason)
+    assert summary.endswith("(claimed by live session abc123)")
+    assert "memo_lifecycle.py'" in summary
+    assert len(summary.encode("utf-8")) <= guard._OWNERSHIP_LEG_SUMMARY_MAX_BYTES + 3
+
+
+@pytest.mark.parametrize("shape", ["python3 {f}", "python3 -u {f} x", "python3 < {f}", "cd {d} && python3 {n}"])
+def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
+    script = tmp_path / "land.py"
+    script.write_text("from coordinator_core.git." "commit import commit_paths\n")
+    cmd = shape.format(f=script, d=tmp_path, n=script.name)
+    result = guard.check(_payload(cmd))
+    assert result is not None
+    assert "script file" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
+    clean = tmp_path / "clean.py"
+    clean.write_text("print('hi')\n")
+    assert guard.check(_payload("python3 %s" % clean)) is None
+    dirty = tmp_path / "land.py"
+    dirty.write_text("from coordinator_core.git." "commit import commit_paths\n")
+    assert guard.check(_payload("python3 %s" % dirty, agent_id=None)) is None
+    assert guard.check(_payload("python3 %s" % (tmp_path / "missing.py"))) is None

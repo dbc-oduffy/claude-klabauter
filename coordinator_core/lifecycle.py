@@ -90,8 +90,12 @@ def find_repo_root(cwd: Optional[str] = None) -> Path:
     """
     toplevel = _repo_root_seam.show_toplevel(cwd)
     if toplevel is None:
+        reason = _repo_root_seam.last_failure_reason(
+            cwd, _repo_root_seam.FORM_TOPLEVEL
+        )
         raise RuntimeError(
             "git rev-parse --show-toplevel failed (not a git repo?)"
+            + (f": {reason}" if reason else "")
         )
     return Path(toplevel).resolve()
 
@@ -137,9 +141,13 @@ def git_common_dir(repo_root: Path) -> Path:
     """
     common_dir = _repo_root_seam.git_common_dir(str(repo_root))
     if common_dir is None:
+        reason = _repo_root_seam.last_failure_reason(
+            str(repo_root), _repo_root_seam.FORM_GIT_COMMON_DIR
+        )
         raise RuntimeError(
             f"git rev-parse --git-common-dir failed: not a git repository "
             f"(or any of the parent directories): {repo_root}"
+            + (f" ({reason})" if reason else "")
         )
     return Path(common_dir)
 

@@ -178,6 +178,7 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_DIRECT,
     REASON_INDIRECTION,
     SentinelCreationDetector,
+    indirection_deny_reason,
     _DD_OF_RE,
     _FILE_ARG_COMMANDS,
     _REDIR_PREFIX_RE,
@@ -1169,17 +1170,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         # Redact the basename out regardless of which sub-path produced it,
         # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        return (
-            "BLOCKED (approval-sentinel guard): payload unreadable (%s); it "
-            "might create the PM-approval sentinel unseen.\n\n"
-            "Run instead: `python3 path/to/script.py` (bare interpreter, "
-            "literal path; also `python3 < path/to/script.py`, `bash`, `sh`) "
-            "-- the file is read and allowed unless it names the sentinel. "
-            "`$VAR` and `${VAR:-x}` expand from the environment only, not "
-            "from assignments in the same command. `./path/to/script` needs "
-            "an executable file with a shebang.\n\n"
-            "Lower this guard: `%s`." % (safe_shape, LEVEL_VERB)
-        )
+        return indirection_deny_reason("approval-sentinel guard", safe_shape)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     safe_argv0 = ", ".join(
         "`%s`" % name for name in sorted(_ApprovalSentinelDetector._SAFE_ARGV0)

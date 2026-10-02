@@ -68,7 +68,7 @@ rationale.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md (chunk
 W4-C13); docs/plans/2026-06-15-runtime-tripwire-idle-em-layered-fix.md §
-C2a; docs/wiki/runtime-tripwire.md § L2; coordinator-content-repo `coordinator/hooks/
+C2a; coordinator-content-repo coordinator/docs/wiki/hook-best-practices/runtime-tripwire.md § L2; coordinator-content-repo `coordinator/hooks/
 scripts/runtime-tripwire-stop-watcher.py` (source, 594 lines).
 """
 
@@ -353,7 +353,7 @@ def _spawn_detached(argv: list) -> Optional[int]:
             except OSError:
                 proc = subprocess.Popen(argv, creationflags=flags, **common_kwargs)
         else:
-            proc = subprocess.Popen(argv, start_new_session=True, **common_kwargs)
+            proc = subprocess.Popen(argv, start_new_session=True, **common_kwargs)  # popup-intentional-last-resort: POSIX branch, no console exists
         return proc.pid
     except Exception:
         return None

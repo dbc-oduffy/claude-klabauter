@@ -28,7 +28,7 @@ accept-unenforced), and a live check of DoE's current root `CLAUDE.md` and
 content today (grep -in for "handoff" or "status:" against both: zero
 doctrine hits). AC2's actual guarantee — no handoff WRITER surface prescribes
 `status: superseded` — is still fully covered by the three writer surfaces
-below that were never retired: `docs/wiki/spinoff-handoffs.md`,
+below that were never retired: `coordinator-content-repo coordinator/docs/wiki/baton-lifecycle/spinoff-handoffs.md`,
 `skills/handoff/SKILL.md`, and `schemas/handoff.schema.json`. The retired
 `coordinator/CLAUDE.md` check is dropped rather than repointed at a guessed
 successor, since no successor exists to point at.

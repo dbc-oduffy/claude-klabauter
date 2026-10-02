@@ -558,3 +558,49 @@ def test_journal_omits_entry_for_refused_write(tmp_path, _journal_env, monkeypat
 
     assert _resolved(_journal_env) is None
     assert not (tmp_path / ".zshrc").exists()
+
+
+def test_a_block_under_the_superseded_engine_stem_is_replaced_not_joined(tmp_path, monkeypatch):
+    """A mirror publish used to spell its markers with another engine noun; an
+    install from either side must leave exactly one block per guard."""
+    from coordinator_core.install import shell_rc_guard as mod
+
+    monkeypatch.setattr(mod.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    old_begin, old_end = mod.superseded_marker_pairs("SETTINGS_HOME_BIN")[0]
+    rc = tmp_path / ".zshrc"
+    rc.write_text(f"# keep\n{old_begin}\nexport OLD=1\n{old_end}\n# tail\n")
+
+    result = mod.write_shell_rc_guard_block(
+        sentinel_id="SETTINGS_HOME_BIN", rc_files=[rc], path_entry="/x/bin", position="append"
+    )
+
+    text = rc.read_text()
+    begin, _ = mod._sentinel_markers("SETTINGS_HOME_BIN")
+    assert result["modified"] is True
+    assert old_begin not in text and "OLD=1" not in text
+    assert text.count(begin) == 1
+    assert "# keep" in text and "# tail" in text
+    again = mod.write_shell_rc_guard_block(
+        sentinel_id="SETTINGS_HOME_BIN", rc_files=[rc], path_entry="/x/bin", position="append"
+    )
+    assert again["already_present"] is True and rc.read_text() == text
+
+
+def test_superseded_and_current_blocks_together_collapse_to_one(tmp_path, monkeypatch):
+    from coordinator_core.install import shell_rc_guard as mod
+
+    monkeypatch.setattr(mod.os, "name", "posix")
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    begin, end = mod._sentinel_markers("CLAUDE_CLI_PATH")
+    old_begin, old_end = mod.superseded_marker_pairs("CLAUDE_CLI_PATH")[0]
+    body = mod._build_path_entry_body("/y/bin", "prepend")
+    rc = tmp_path / ".bash_profile"
+    rc.write_text(f"{begin}\n{body}\n{end}\n{old_begin}\n{body}\n{old_end}\n")
+
+    mod.write_shell_rc_guard_block(
+        sentinel_id="CLAUDE_CLI_PATH", rc_files=[rc], path_entry="/y/bin", position="prepend"
+    )
+
+    text = rc.read_text()
+    assert text.count(begin) == 1 and old_begin not in text

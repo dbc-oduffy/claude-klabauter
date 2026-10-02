@@ -50,6 +50,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import logging
 import os
 import posixpath
 import re
@@ -60,11 +61,13 @@ import types
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.session import core, liveness, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
+
+_LOG = logging.getLogger(__name__)
 
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
 #: drive-qualified ``C:…`` form. Mirrors the bash glob test
@@ -3222,6 +3225,50 @@ def release_own_path_claims(
         )
 
 
+def own_path_claims(sid: str, cwd: Optional[str] = None) -> List[str]:
+    """Every path THIS session's own touch record (plus its back-pointed
+    agent fan-out) currently ``T``-claims, sorted -- the read twin of
+    :func:`release_own_path_claims`'s full-release set, so a holder can
+    enumerate what it would release. A degraded sink contributes nothing."""
+    sinks: List[Tuple[str, Callable[[str], Optional[str]]]] = []
+    sdir = core.session_dir(sid, cwd)
+    if sdir:
+        sinks.append(
+            (os.path.join(sdir, _TOUCH_RECORD_FILENAME), lambda raw: normalize_touch_path(raw, cwd, root=cwd))
+        )
+    base = core.sessions_dir(cwd)
+    agents_base = os.path.join(base, ".agents") if base else None
+    if agents_base and os.path.isdir(agents_base):
+        from coordinator_core.ops.session.safe_commit_offer import (  # noqa: PLC0415 -- import cycle
+            _normalize_agent_touched_entry,
+        )
+
+        try:
+            entries = sorted(os.scandir(agents_base), key=lambda e: e.name)
+        except OSError:
+            entries = []
+        for entry in entries:
+            try:
+                with open(os.path.join(entry.path, "em-session-id.txt"), "r", encoding="utf-8") as fh:
+                    if fh.readline().strip() != sid:
+                        continue
+            except OSError:
+                continue
+            sinks.append((os.path.join(entry.path, _TOUCH_RECORD_FILENAME), _normalize_agent_touched_entry))
+    held: Set[str] = set()
+    for sink, normalize in sinks:
+        lines, degraded = _read_touch_record_as_legacy_lines(sink)
+        if degraded:
+            continue
+        for raw in project_self_scope(lines):
+            if not raw or raw.endswith("/"):
+                continue
+            norm = normalize(raw)
+            if norm and not norm.endswith("/"):
+                held.add(norm)
+    return sorted(held)
+
+
 def release_committed_claims(
     sid: str, paths: List[str], cwd: Optional[str] = None
 ) -> None:
@@ -3240,6 +3287,47 @@ def release_committed_claims(
     should be built against this name.
     """
     release_own_path_claims(sid, paths, cwd=cwd)
+
+
+def release_committed_claims_or_retain(
+    worktree_root: Path | str,
+    paths: Iterable[str],
+    sid: Optional[str],
+    label: str,
+) -> None:
+    """Post-commit claim release for a commit route: the call every route
+    makes AFTER its commit has landed.
+
+    Two safety rules live here so a new route inherits them by calling this
+    instead of :func:`release_committed_claims` directly:
+
+    - SKIP ON FALSY ``sid``. An unattributable release is not a release:
+      releasing under an unknown or guessed sid drops a claim that is not
+      the caller's to drop. Callers pass the sid they were GIVEN or
+      resolved; this function never resolves one itself.
+    - SWALLOW ANY FAILURE to a ``_LOG.debug`` line naming ``label``. The
+      commit is the durable outcome; a retained stale claim is the safe
+      residue, so a release failure never turns a landed commit into a
+      reported failure.
+
+    ``paths`` is consumed INSIDE the guard: pass a generator expression for
+    paths whose computation can itself raise (``rel_id`` on a path outside
+    the root) and that failure is retained, not propagated. An empty
+    ``paths`` is a no-op. Blocking (``git status`` underneath): async
+    callers wrap this in ``asyncio.to_thread``.
+    """
+    if not sid:
+        return
+    try:
+        release_paths = list(paths)
+        if release_paths:
+            release_committed_claims(sid, release_paths, cwd=str(worktree_root))
+    except Exception:
+        _LOG.debug(
+            "%s: release_committed_claims failed post-commit; claim(s) retained",
+            label,
+            exc_info=True,
+        )
 
 
 def release_all_committed_claims(sid: str, cwd: Optional[str] = None) -> None:

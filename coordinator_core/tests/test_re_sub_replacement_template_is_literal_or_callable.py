@@ -167,7 +167,12 @@ def find_non_literal_sub_replacements(root: Path) -> list[tuple[str, int, str]]:
         if _is_excluded_source_path(relpath, path):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            text = path.read_text(encoding="utf-8")
+            # Every hit is a `.sub`/`.subn` attribute, so "sub" must appear in
+            # the source (whitespace may split `re` from `.sub`, never `sub`).
+            if "sub" not in text:
+                continue
+            tree = ast.parse(text, filename=str(path))
         except (SyntaxError, UnicodeDecodeError):
             continue
         defined_function_names = _module_defined_function_names(tree)

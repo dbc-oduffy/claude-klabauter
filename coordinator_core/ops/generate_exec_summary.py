@@ -9,7 +9,7 @@ goals) verbatim across regenerations. Shaped after regenerate-orientation-cache:
 git-root resolve, disk derivation, --check flag, no-clobber create.
 
 Spec backlink: docs/plans/2026-07-03-exec-summary-per-repo-brief.md § C2
-Spec backlink: docs/wiki/exec-summary-artifact.md § Generator contract
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/em-operating-model/exec-summary-artifact.md § Generator contract
 
 CLI usage (mirrors the bash oracle byte-for-byte):
     generate-exec-summary.sh [--check]

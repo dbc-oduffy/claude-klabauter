@@ -62,10 +62,10 @@ Functions:
         Never raises.
   - `read_doe_identity() -> dict`
         The DoE registry manifest's `identity` object — THE one manifest read
-        in this module, resolving the DoE root through the canonical DR-071
-        ladder (`coordinator_core.content_root_pointer.read_content_root_pointer()`:
-        registry `repos.content_root`, then `<settings-home>/machine-local/
-        .coordinator-content-root`, then the legacy `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`).
+        in this module, resolving the content root through
+        `coordinator_core.content_root.read_content_root()` (registry
+        `repos.content_root`, then the pointer files under settings-home and
+        `${CLAUDE_HOME:-$HOME}/.claude`, with the legacy-name read-through).
         Graceful degradation: `{}` on any resolution/read/parse failure.
         Never raises.
   - `read_receiver_aliases() -> dict[str, str]`
@@ -131,7 +131,7 @@ Functions:
         is a central id (`identity.centralReceiverIds`) or a redirect alias
         (`identity.redirectAliases`) — both fan in to the same registered
         central repo, so both canonicalize to the SAME id (today, that's
-        `coordinator-content-repo-em` -> `repos.content_root`, never hardcoded — derived by
+        `coordinator-content-repo-em` -> the doctrine repo's registry key, never hardcoded — derived by
         the same fan-in scan `resolve_receiver_inbox` uses). For any other
         receiver id, returns the input stripped/lowercased, unchanged
         otherwise — this is the addressee-gate normalization: a memo's
@@ -183,7 +183,7 @@ from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.data_root import content_root_for
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
 from coordinator_core.memo_corpus import receiver_inbox_root
 
@@ -271,55 +271,41 @@ def read_doe_identity() -> dict:
     `read_central_receiver_ids()` and `read_redirect_aliases()` are three
     projections over it, not three independent sentinel readers.
 
-    content-root resolution delegates to `coordinator_core.content_root_pointer.
-    read_content_root_pointer()`, the repo's canonical DR-071 ladder:
-        1. registry `repos.content_root`                (canonical anchor)
-        2. <settings-home>/machine-local/.coordinator-content-root    (durable file mirror)
-        3. ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root    (legacy fallback)
-    Each reader here previously implemented rung 3 ALONE, and implemented it
-    against `<CLAUDE_HOME>/.coordinator-content-root` — a location no writer has written since
-    `ops.gen_content_root_pointer` moved the pointer to rung 2 (the tracked
-    `~/.claude` meta-repo syncs between machines, so a per-machine clone path
-    could not live there). The result was a reader/writer split that reported
-    "repos.content_root not registered on this machine" from `--list-receivers`
-    on a machine where delivery to that receiver worked: `is_central` was
-    False for every candidate because the central-id set was empty.
+    Content-root resolution delegates to `coordinator_core.content_root.
+    read_content_root()`, the repo's canonical ladder:
+        1. registry `repos.content_root`                       (canonical anchor)
+        2. <settings-home>/machine-local/.coordinator-content-root (durable file mirror)
+        3. ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root (fallback)
+    A reader that implements only rung 3 reports "content root not registered
+    on this machine" from `--list-receivers` on a machine where delivery to
+    that receiver worked: `is_central` is False for every candidate because the
+    central-id set is empty.
 
-    Graceful degradation: returns {} if no DoE root resolves, or the manifest
+    Graceful degradation: returns {} if no content root resolves, or the manifest
     is absent/unreadable/unparseable. Intentionally NOT fail-loud (unlike
     read_registry_repos) — the manifest is an ergonomic convenience layer, not
     the load-bearing repos.* registry itself. Never raises.
     """
     try:
-        # The full DR-071 ladder, per this function's own docstring: registry
-        # `repos.content_root`, then <settings-home>/machine-local/.coordinator-content-root,
-        # then the legacy path. This read USED to be a bare `<CLAUDE_HOME>/
-        # .claude/.coordinator-content-root` file read — rung 3 alone, the one rung the
-        # docstring above explicitly identifies as "a location no writer has
-        # written since ops.gen_content_root_pointer moved the pointer to rung 2".
-        # So it reproduced, verbatim, the reader/writer split the docstring
-        # narrates as already fixed: every receiver's `is_central` came back
-        # False and manifest-backed resolution silently disabled itself on a
-        # machine where `repos.content_root` was registered and delivery worked.
-        # `read_content_root_pointer` was already imported at the top of this
-        # module and simply never called.
-        raw_root = read_content_root_pointer()
+        # The full ladder, per this function's own docstring. A bare
+        # pointer-file read here would skip the registry rung and disable
+        # manifest-backed resolution on a machine where the registry names the root.
+        raw_root = read_content_root()
         if not raw_root.strip():
             _LOG.warning(
-                "_memo_resolver: no DoE root resolved (registry repos.content_root, "
-                "<settings-home>/machine-local/.coordinator-content-root, and the legacy "
-                "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root all came back empty) — "
+                "_memo_resolver: no content root resolved (registry repos.content_root "
+                "and the content-root pointer files all came back empty) — "
                 "manifest-backed receiver identity resolution disabled",
             )
             return {}
-        content_root = normalize_native_path(raw_root.strip())
-        content_root = content_root_for(content_root)
+        resolved_root = normalize_native_path(raw_root.strip())
+        content_root = content_root_for(resolved_root)
         if content_root is None:
             _LOG.warning(
                 "_memo_resolver: no coordinator content root under %s (neither a "
                 "coordinator/ directory nor a flat .claude-plugin/plugin.json) — "
                 "manifest-backed receiver identity resolution disabled",
-                content_root,
+                resolved_root,
             )
             return {}
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
@@ -714,6 +700,12 @@ def _central_fan_in_matches(
             else convention_repo_key(cid)
         )
         if candidate_key in all_repos:
+            # Two spellings of one repo (authoring `repos.content_root` and the
+            # published `repos.content_root`) registered at the same path are
+            # one receiver, not a disagreement.
+            path = Path(all_repos[candidate_key])
+            if any(same_repo_path(Path(all_repos[k]), path) for k in matched_keys):
+                continue
             matched_keys.setdefault(candidate_key, cid)
     return matched_keys
 
@@ -804,10 +796,10 @@ def resolve_receiver_inbox(
     single authoritative registry key: every central id maps through the same
     convention/alias rules any other receiver would use, but only ONE of those
     ids is expected to have a registered repos.* entry on a given machine
-    (today, that's 'coordinator-content-repo-em' → repos.content_root — never hardcoded here,
+    (today, that's 'coordinator-content-repo-em' → the doctrine repo's key — never hardcoded here,
     always derived by scanning the manifest's central-id set, in sorted order,
     against the registered repos). This mirrors the DoE cross-repo-memo CLI's
-    "central is not a repos.* key — anchored on repos.content_root" special-case
+    "central is not a repos.* key — anchored on the doctrine repo's key" special-case
     without importing DoE's coordinator_registry or hardcoding the literal key.
 
     Raises:
@@ -869,8 +861,8 @@ def resolve_self_em_id(self_root: Path) -> str:
     canonical key when a repo is registered under several (its own key plus
     the receive-only aliases siblings may address it by) — enumeration order
     used to decide that, and the two callers enumerate in different orders
-    (central included — a repo registered under `repos.content_root` resolves
-    to `_repo_key_to_self_em_id('repos.content_root')`, i.e.
+    (central included — the doctrine repo's registered key resolves
+    through `_repo_key_to_self_em_id`, i.e.
     `'coordinator-content-repo-em'` today, the SAME id `em_id_for_root`'s dedicated
     central-canonical branch produces, without a second special case here).
     Falls back to the unregistered-repo convention
@@ -1052,7 +1044,17 @@ def unique_nearest_receiver(
     if receiver_em_id.strip().lower() in read_retired_central_receiver_ids():
         return None
     matches = _nearest_receiver_matches(receiver_em_id, all_repos, n=2)
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) != 1:
+        return None
+    # Auto-accept only an ABBREVIATION of the candidate: every hyphen token
+    # typed must appear in it ('claude-klabauter-em' -> 'claude-klabauter-em'). Edit
+    # distance alone would redirect a valid-but-unregistered receiver to a
+    # different repo ('claude-klabauter-em' -> 'example-retrieval-repo-em' when claude-klabauter is
+    # absent from the registry); that must fail loud as UNKNOWN instead.
+    typed_tokens = set(receiver_em_id.strip().lower().split("-"))
+    if not typed_tokens <= set(matches[0].lower().split("-")):
+        return None
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1078,7 +1080,19 @@ def unique_nearest_receiver(
 # basename) — no registry state should ever be able to change the answer.
 # ---------------------------------------------------------------------------
 
-_NEVER_INBOX_MIRROR_PATH_BASENAMES = frozenset({"coordinator-claude", "claude-klabauter"})
+_NEVER_INBOX_MIRROR_PATH_BASENAMES = frozenset(
+    {"coordinator-claude", "claude-klabauter", "klabauter"}
+)
+
+#: Root file every klabauter publish ships (source: `dist/klabauter-toplevel/`);
+#: never present in an authoring repo. A receiver root carrying it is a mirror
+#: under any directory name.
+PUBLISH_MIRROR_MARKER = "PUBLISH_MIRROR"
+
+#: Terse alternative every no-delivery refusal ends with: a cloud session has no
+#: registry to register a receiver in, and a PR comment is the channel it still has.
+PR_COMMENT_FALLBACK = "Fallback: post the memo as a comment on the session's PR."
+
 
 
 def never_inbox_mirror_refusal(
@@ -1113,12 +1127,19 @@ def never_inbox_mirror_refusal(
         basename = os.path.basename(str(receiver_repo_path).rstrip("/\\")).lower()
     except Exception:
         basename = ""
-    if basename not in _NEVER_INBOX_MIRROR_PATH_BASENAMES:
+    try:
+        marked = (Path(receiver_repo_path) / PUBLISH_MIRROR_MARKER).is_file()
+    except OSError:
+        marked = False
+    if not marked and basename not in _NEVER_INBOX_MIRROR_PATH_BASENAMES:
         return None
+    central_ids = sorted(read_central_receiver_ids())
+    doctrine_em_id = central_ids[0] if central_ids else _repo_key_to_receiver_em_id("repos.content_root")
     return (
         f"memo: {receiver_em_id!r} resolves to a publish mirror, which has no inbox.\n"
-        f"  Send coordinator/doctrine topics to {_repo_key_to_self_em_id('repos.content_root')}; "
-        f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}."
+        f"  Send coordinator/doctrine topics to {doctrine_em_id}; "
+        f"engine/klabauter topics to {_repo_key_to_self_em_id('repos.claude_klabauter')}.\n"
+        f"  {PR_COMMENT_FALLBACK}"
     )
 
 
@@ -1175,5 +1196,5 @@ def undeliverable_checkout_refusal(
     return (
         f"memo: {receiver_em_id!r} resolves to {what} — refusing the send.\n"
         f"  Fallback: file a GitHub issue on the receiver's repo, prefixed "
-        f"'[session <id>]'."
+        f"'[session <id>]', or post the memo as a comment on the session's PR."
     )

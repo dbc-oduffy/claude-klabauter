@@ -647,6 +647,16 @@ def fire_row(row: CorpusRow) -> GuardCapture:
 
 _DENY = dispatch.GuardBand.CONFINEMENT_DENY
 
+def _approval_gate_on_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """The approval-sentinel guard is opt-in; its rows fire with the gate on."""
+    from coordinator_core.bash_guards import block_approval_sentinel_creation as _approval
+
+    mp.setattr(_approval, "feature_enabled", lambda _name: True)
+    return {}
+
+
 def _rehomed_doctrine_surface_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -931,6 +941,15 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-approval-sentinel-creation",
+        "block-approval-sentinel-creation-indirection",
+        "printf x | xargs touch",
+        True,
+        _DENY,
+        False,
+        setup=_approval_gate_on_setup,
+    ),
+    CorpusRow(
         "block-worktree-sentinel-creation",
         "block-worktree-sentinel-creation-fire",
         "touch .coordinator-override-worktree-guard",
@@ -944,6 +963,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "block-worktree-sentinel-creation-control",
         "touch normal_file.txt",
         False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-worktree-sentinel-creation",
+        "block-worktree-sentinel-creation-indirection",
+        "printf x | xargs touch",
+        True,
         _DENY,
         False,
     ),
@@ -1059,6 +1086,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "block-disarm-marker-sentinel-creation-control",
         "git status",
         False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-disarm-marker-sentinel-creation",
+        "block-disarm-marker-sentinel-creation-indirection",
+        "printf x | xargs touch",
+        True,
         _DENY,
         False,
     ),
@@ -1243,6 +1278,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-fleet-delegation-creation",
+        "block-fleet-delegation-creation-indirection",
+        "printf x | xargs touch",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "p4-verb-fence",
         "p4-verb-fence-fire",
         "p4.exe -p ssl:host:1666 -c client submit",
@@ -1366,6 +1409,16 @@ def _noncanonical_branch_creation_hazard_setup(
     return {_CWD_OVERRIDE_KEY: "/repo"}
 
 
+def _headless_plugin_dir_dev_install_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    from coordinator_core.bash_guards import guard_headless_claude_plugin_dir as guard
+
+    mp.setattr(guard, "_is_dev_install", lambda: True)
+    mp.setattr(guard, "_plugin_root", lambda: "/plugin-root")
+    return {}
+
+
 ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "destructive-git-revert-advisory",
@@ -1401,6 +1454,40 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
         setup=_git_repo_advisory_setup("git -C %s checkout -f"),
+    ),
+    CorpusRow(
+        "background-publish",
+        "background-publish-fire",
+        "python percolate-round.py --dest x",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "background-publish",
+        "background-publish-control",
+        "grep -n x percolate-round.py",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "headless-claude-plugin-dir",
+        "headless-claude-plugin-dir-fire",
+        'claude -p "x"',
+        True,
+        _REWRITE,
+        False,
+        setup=_headless_plugin_dir_dev_install_setup,
+    ),
+    CorpusRow(
+        "headless-claude-plugin-dir",
+        "headless-claude-plugin-dir-control",
+        "git status",
+        False,
+        _REWRITE,
+        False,
+        setup=_headless_plugin_dir_dev_install_setup,
     ),
     CorpusRow(
         "block-venv-creation",
@@ -2053,6 +2140,23 @@ def _wg_completion_monolith_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> D
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": "archive/completed/2026-08.md", "content": "x"},
+    }
+
+
+def _wg_authoring_leak_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    from coordinator_core.authoring_leaks import foreign_identity
+
+    (scratch_dir / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    mp.setattr(
+        "coordinator_core.write_guards._repo_root.resolve_repo_root",
+        lambda cwd=None: str(scratch_dir),
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(scratch_dir / "coordinator_core" / "mod_x.py"),
+            "content": 'NAME = "%s"\n' % foreign_identity._tokens()[0],
+        },
     }
 
 
@@ -2889,6 +2993,8 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_confined_agent_write", "fire", True, _wg_confined_agent_write_fire
     ),
     WriteGuardRow("block_confined_agent_write", "control", False, _wg_benign),
+    WriteGuardRow("nudge_authoring_leak", "fire", True, _wg_authoring_leak_fire),
+    WriteGuardRow("nudge_authoring_leak", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),
     WriteGuardRow("block_consumed_handoff_edit", "control", False, _wg_benign),
     WriteGuardRow(
@@ -3087,7 +3193,7 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         _wg_benign,
         unverified_reason=(
             "AC2-registration-only: this guard's real fire reads coordinator-content-repo's live schema "
-            "corpus/registry manifest off a sibling checkout (coordinator_content_root()) -- not "
+            "corpus/registry manifest off a sibling checkout (read_content_root()) -- not "
             "reproducible from a synthetic scratch dir without standing up that sibling tree, "
             "which is more environment state than this row is worth per the plan's own "
             "lighter-path sanction."
@@ -3346,6 +3452,7 @@ from coordinator_core.hooks import nudge_workflow_authoring_trampoline as _hook_
 from coordinator_core.hooks import offer_exploration_tier_dispatch as _hook_offer_exploration_tier_dispatch
 from coordinator_core.hooks import postuse_stop_family_dispatch as _hook_postuse_stop_family_dispatch
 from coordinator_core.hooks import postusefailure_cross_repo_memo_remediate as _hook_postusefailure_cross_repo_memo_remediate
+from coordinator_core.hooks import postuse_subagent_compaction_warning as _hook_postuse_subagent_compaction_warning
 from coordinator_core.hooks import preuse_agent_dispatch as _hook_preuse_agent_dispatch
 from coordinator_core.hooks import preuse_bash_dispatch as _hook_preuse_bash_dispatch
 from coordinator_core.hooks import preuse_skill_dispatch as _hook_preuse_skill_dispatch
@@ -3836,20 +3943,20 @@ def _fire_subagent_zero_tool_use_surface_structured() -> Optional[Dict[str, Any]
 
 # --- (19) suggest_sonnet_research -- real firing row: an unresolvable agent_id
 # (not a named-teammate id, not bare hex) is "not suppressed", firing the
-# DELEGATION REQUIRED advisory. `_has_deep_research_plugin` is monkeypatched to
+# DELEGATION REQUIRED advisory. `_research_plugins` is monkeypatched to
 # False exactly as hooks/test_suggest_sonnet_research.py's own `_run` does (a
 # present deep-research plugin on the executing machine would otherwise
 # suppress this row nondeterministically).
 def _fire_suggest_sonnet_research() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
+        mp.setattr(_hook_suggest_sonnet_research, "_research_plugins", lambda: (False, False))
         payload = {"agent_id": "not-an-agent-id", "session_id": "abcdefgh"}
         return _to_envelope_or_none(_run_maybe_async(_hook_suggest_sonnet_research._handler(payload)))
 
 
 def _fire_suggest_sonnet_research_control() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_hook_suggest_sonnet_research, "_has_deep_research_plugin", lambda: False)
+        mp.setattr(_hook_suggest_sonnet_research, "_research_plugins", lambda: (False, False))
         payload = {"agent_id": "arscout-deadbeef123456ab", "session_id": "abcdefgh-full-session"}
         return _to_envelope_or_none(_run_maybe_async(_hook_suggest_sonnet_research._handler(payload)))
 
@@ -4751,8 +4858,56 @@ def _fire_preuse_write_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_run_maybe_async(_hook_preuse_write_dispatch._handler(payload)))
 
 
+#: The orientation cache both SessionStart orientation cells render verbatim.
+#: Trap: the real cache is a gitignored `state/orientation_cache.md` that
+#: exists on an operator box and not on a fresh clone, so firing against the
+#: ambient cwd measured ~2.5KB on one host and ~200 bytes on another. A fixed
+#: seeded cache makes the cell the same size on every host.
+_ORIENTATION_CACHE_FIXTURE = """---
+generated_by: guard-message-corpus
+generated_at: 2026-07-17T00:00:00Z
+git_head_at_generation: abc1234
+---
+
+## Trust caveats
+- orientation is a snapshot; re-read the handoff before acting on it
+
+## Active workstreams
+1. Some workstream name
+2. Another workstream name
+
+## Rechecks due <=7 days
+(none)
+
+## Branch
+work/test/2026-07-17
+
+## Auto-push health
+- 2 unpushed commits
+
+## Wiki
+- `docs/wiki/` -- doctrine/reference material; browse before assuming absence.
+
+## Pinboard
+- 2026-07-17 corpus-writer: a note left for the next session to pick up
+"""
+
+
+def _orientation_payload(scratch: str) -> Dict[str, Any]:
+    """A payload resolving the orientation repo root to `scratch`, seeded with
+    `_ORIENTATION_CACHE_FIXTURE`. No `.git` marker, so the HEAD-drift banner
+    reads no SHA and stays silent rather than depending on host git state."""
+    state_dir = os.path.join(scratch, "state")
+    os.makedirs(state_dir, exist_ok=True)
+    with open(os.path.join(state_dir, "orientation_cache.md"), "w", encoding="utf-8") as fh:
+        fh.write(_ORIENTATION_CACHE_FIXTURE)
+    return {"cwd": scratch, "env": {"CLAUDE_PROJECT_DIR": scratch}}
+
+
 def _fire_project_orientation() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(_hook_project_orientation._handler({}))
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-po-", dir=_neutral_scratch_parent()) as scratch:
+        payload = _orientation_payload(scratch)
+        return _to_envelope_or_none(_hook_project_orientation._handler({"payload": payload}))
 
 
 def _fire_runtime_tripwire_em_check() -> Optional[Dict[str, Any]]:
@@ -4809,8 +4964,21 @@ def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
         mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
+        # The handler is source-gated (no source runs no leg) and its other legs
+        # write registry/breadcrumb/hook state, so run only the forwarder leg.
+        mp.setattr(
+            _hook_sessionstart_async_dispatch,
+            "_LEGS",
+            tuple(
+                leg
+                for leg in _hook_sessionstart_async_dispatch._LEGS
+                if leg[0] == "sessionstart_ensure_http_forwarder"
+            ),
+        )
         return _to_envelope_or_none(
-            _run_maybe_async(_hook_sessionstart_async_dispatch._handler({}))
+            _run_maybe_async(
+                _hook_sessionstart_async_dispatch._handler({"payload": {"source": "startup"}})
+            )
         )
 
 
@@ -4857,7 +5025,14 @@ def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
         )
         mp.setattr(_hook_sessionstart_dispatch, "_guard_settings_integrity_handler", lambda payload: {})
         mp.setattr(_hook_sessionstart_dispatch, "_guard_hooks_kill_switch_detail_handler", lambda payload: {})
-        return _to_envelope_or_none(_run_maybe_async(_hook_sessionstart_dispatch._handler({})))
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ssd-", dir=_neutral_scratch_parent()) as scratch:
+            # `compact`, not `startup`: a source is required for any leg to
+            # run, and `compact` skips the two startup-only legs that read
+            # host install state.
+            payload = dict(_orientation_payload(scratch), source="compact")
+            return _to_envelope_or_none(
+                _run_maybe_async(_hook_sessionstart_dispatch._handler({"payload": payload}))
+            )
 
 
 def _fire_sessionstart_ensure_http_forwarder() -> Optional[Dict[str, Any]]:
@@ -4981,6 +5156,37 @@ def _fire_postusefailure_cross_repo_memo_remediate_control() -> Optional[Dict[st
     )
 
 
+def _fire_postuse_subagent_compaction_warning(tokens: int) -> Optional[Dict[str, Any]]:
+    """Fires the compaction warning against a scratch settings home so the
+    once-per-band marker never lands in the real one."""
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-era-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / "settings-home").mkdir()
+        transcript = scratch_dir / "t.jsonl"
+        transcript.write_text(
+            _json.dumps({"message": {"model": "claude-x", "usage": {"input_tokens": tokens}}}) + "\n",
+            encoding="utf-8",
+        )
+        payload = {
+            "agent_id": "agent-corpus",
+            "agent_transcript_path": str(transcript),
+            "env": {"CLAUDE_HOME": str(scratch_dir / "no-home")},
+        }
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(scratch_dir / "settings-home"))
+            return _to_envelope_or_none(
+                _run_maybe_async(_hook_postuse_subagent_compaction_warning._handler(payload))
+            )
+
+
+def _fire_postuse_subagent_compaction_warning_fire() -> Optional[Dict[str, Any]]:
+    return _fire_postuse_subagent_compaction_warning(150000)
+
+
+def _fire_postuse_subagent_compaction_warning_control() -> Optional[Dict[str, Any]]:
+    return _fire_postuse_subagent_compaction_warning(1000)
+
+
 def _fire_session_start_cloud_focus() -> Optional[Dict[str, Any]]:
     payload = {
         "env": {
@@ -5082,6 +5288,18 @@ HOOK_ROWS: List[HookRow] = [
         "control",
         False,
         _fire_postusefailure_cross_repo_memo_remediate_control,
+    ),
+    HookRow(
+        "postuse_subagent_compaction_warning",
+        "fire-75-band",
+        True,
+        _fire_postuse_subagent_compaction_warning_fire,
+    ),
+    HookRow(
+        "postuse_subagent_compaction_warning",
+        "control",
+        False,
+        _fire_postuse_subagent_compaction_warning_control,
     ),
     HookRow(
         "session_start_cloud_focus",

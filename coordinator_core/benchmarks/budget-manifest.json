@@ -259,11 +259,12 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "green_path": 1,
+        "green_path": 0,
         "head_spine_unreadable_refused": 1,
-        "receiver_signing_enabled": 2
+        "receiver_signing_enabled": 1,
+        "receiver_index_unspliceable": 1
       },
-      "_rationale": "Measured 2026-09-24 against the rebuilt op (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-gate.md, C1). green_path=1: an ordinary delivery through coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py::test_green_path_spawn_count_matches_budget_and_is_attributed, one coordinator_core/ops/ceremony/git_native.py::_git._invoke spawn (the receiver-side commit's hookless update-index refresh); commit.gpgsign is false in both fixture repos so write_signed_commit_object never fires on this path. head_spine_unreadable_refused=1: git_native.read_tree_spine AND git_state.read_tree_spine both monkeypatched to return None (head_blobs resolves its own read_tree_spine binding against git_state's own module globals, unaffected by patching git_native's imported copy alone -- patching only the first measured zero spawns, not the claimed one), one coordinator_core/git/run.py::run_git ls-tree spawn via commit_authored_new_file's _head_entry_for -> git_state.head_blobs fallback, then refused loud by _commit_via_head_spine rather than falling to a spawning ladder; pinned by ::test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git. receiver_signing_enabled=2: the receiver repo's own commit.gpgsign set true (a NATURAL fixture precondition, no production monkeypatch) -- a third reachable site the plan's own census (HEAD 27f3041975) did not carry, found by this row's fire-time re-ask (step 0) -- spawns one coordinator_core/git/commit_signing.py::write_signed_commit_object (git commit-tree -S, which fails with no secret key on this box and falls through per DR-308, still counted -- the spawn is the signing ATTEMPT, not its success) plus the same one _git._invoke update-index refresh the green path pays; pinned by ::test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object. target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
+      "_rationale": "Measured 2026-09-24 against the rebuilt op (docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-gate.md, C1). green_path=0: an ordinary delivery through coordinator_core/ops/fleet/tests/test_memo_send_whole_op_spawn_count.py::test_green_path_spawn_count_matches_budget_and_is_attributed spawns nothing -- the receiver index entry is written in process by memo_send.py::_record_delivery_in_receiver_index (index_write.splice_index), which replaced the hookless update-index spawn; commit.gpgsign is false in both fixture repos so write_signed_commit_object never fires on this path. receiver_index_unspliceable=1: the receiver's index at v4 (a NATURAL fixture precondition), which splice_index refuses, so the index entry falls back to one hookless coordinator_core/ops/ceremony/git_native.py::_git._invoke update-index; pinned by ::test_receiver_index_fallback_spawn_count_matches_budget_and_reaches_git_invoke. head_spine_unreadable_refused=1: git_native.read_tree_spine AND git_state.read_tree_spine both monkeypatched to return None (head_blobs resolves its own read_tree_spine binding against git_state's own module globals, unaffected by patching git_native's imported copy alone -- patching only the first measured zero spawns, not the claimed one), one coordinator_core/git/run.py::run_git ls-tree spawn via commit_authored_new_file's _head_entry_for -> git_state.head_blobs fallback, then refused loud by _commit_via_head_spine rather than falling to a spawning ladder; pinned by ::test_unreadable_head_spine_refusal_spawn_count_matches_budget_and_reaches_run_git. receiver_signing_enabled=2: the receiver repo's own commit.gpgsign set true (a NATURAL fixture precondition, no production monkeypatch) -- a third reachable site the plan's own census (HEAD 27f3041975) did not carry, found by this row's fire-time re-ask (step 0) -- spawns one coordinator_core/git/commit_signing.py::write_signed_commit_object (git commit-tree -S, which fails with no secret key on this box and falls through per DR-308, still counted -- the spawn is the signing ATTEMPT, not its success), the only spawn on that path; pinned by ::test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object. target_ms/tolerance satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
     },
     "memo.transition": {
       "target_ms": 300,
@@ -275,6 +276,62 @@
         "green_path": 2
       },
       "_rationale": "Measured 2026-09-30 with coordinator_core/benchmarks/spawn_counter.py::_count_spawns_attributed (docs/plans/2026-07-19-engine-migration-high-traffic-strangle.md, B1) over the unit fixture coordinator_core/ops/memo/tests/test_memo_transition_commit_ownership.py::_setup_memo(_OPEN_FIXTURE) (tracked clean open memo in a tmp git repo), one `claim` through memo_transition._handler; exit_code 0, applied True; identical count on 3 runs. green_path=2: (1) `git hash-object -w` via git_native.py::_hash_object_stdin_bytes (a direct subprocess.run, reached from memo_transition._commit_terminal_write -> git_native.commit_authored_content; the counter attributes it `unattributed` because _hash_object_stdin_bytes is not one of its three attributed frames), (2) `git update-index --add --cacheinfo` via git_native.py::_git._invoke. Wall time of the same invocation 53-71ms, under the 200ms/500ms brightline. Enforced by coordinator_core/ops/memo/tests/test_memo_transition_whole_op_spawn_count.py. target_ms/tolerance copy the MUTATING class default and satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
+    },
+    "hooks.stop_dispatch": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "terminal_review_session_walk": 1
+      },
+      "_rationale": "One bounded `git log --numstat` over the session's own commits (guard_terminal_review._session_commits via git/run.py::run_git); it is the terminal-review gate's only source for which commits are this session's and what code they touch, and every other leg of the Stop fan-in reads files. Counted by coordinator_core/hooks/tests/test_stop_dispatch_spawn_count.py with exact equality; a second spawn on the Stop path fails that test."
+    },
+    "session.reap": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "dirty_touched_path_refusal": 1
+      },
+      "_rationale": "One whole-tree `git status --porcelain` (session_facts._dirty_paths via git_native._git._invoke), paid lazily and at most once per reap, only when a stale agent dir carries touched paths; it is the refusal that stops an agent dir with uncommitted work from being archived. Counted by coordinator_core/ops/session/tests/test_reap_spawn_count.py with exact equality."
+    },
+    "roadmap.blitz_land": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "shipped_in_reachability": 1
+      },
+      "_rationale": "One `git rev-list <shas> --not HEAD` for the whole set of cited shipped_in SHAs (blitz_land.shipped_in_refusals via git/run.py::run_git), batched so the count does not grow with the number of batons; it is what refuses a stamp citing a commit HEAD cannot reach. Counted by coordinator_core/ops/tests/test_roadmap_blitz_land_spawn_count.py with exact equality."
+    },
+    "dispatch.emit": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "plan_route_gitignore_filter": 1
+      },
+      "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
+    },
+    "hooks.postuse_advisory_dispatch": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "ascii_write_touch": 0,
+        "non_ascii_write_touch": 1
+      },
+      "_rationale": "The Bash-commit claim-release leg decides landed-ness by comparing the index to HEAD's tree spine in process, so a commit costs no process. The touch-record leg's path normalizer is zero-spawn for an ASCII tracked-or-untracked path and pays one `git ls-files --full-name` (session/scope.py::_git_run via git/run.py::run_git) for a path it cannot prove, such as a non-ASCII name. Counted by coordinator_core/hooks/tests/test_postuse_advisory_dispatch_spawn_count.py with exact equality."
     },
     "memo.draft": {
       "target_ms": 300,

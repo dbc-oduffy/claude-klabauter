@@ -15,7 +15,7 @@ symbols (`is_identifier_shape_operative`, `is_stable_artifact_id`,
 `SIBLING_REPO_RECORD`/`SIBLING_REPO_NAMES`, `IRREDUCIBLE_LITERALS`,
 `mcp_tool_prefixes`) at coordinator-content-repo `d4122a0a2`, plus new coverage for this
 arrival's own shape change: `_resolve_mcp_topology_path` resolves the
-doctrine-asset YAML through the plugin content root / `.coordinator-content-root` pointer
+doctrine-asset YAML through the plugin content root / content-root pointer
 rather than a `Path(__file__)`-relative walk (this module no longer sits
 three directories under a DoE-repo root), and the dynamic, sys.path-driven
 `_oss_payload` import in `_engine_sibling_record` still degrades correctly
@@ -171,7 +171,7 @@ def test_resolve_mcp_topology_path_fails_open_on_import_error(monkeypatch):
         if name in (
             "coordinator_core._settings_home",
             "coordinator_core.data_root",
-            "coordinator_core.content_root_pointer",
+            "coordinator_core.content_root",
         ):
             raise ImportError(f"blocked for test: {name}")
         return real_import(name, *args, **kwargs)

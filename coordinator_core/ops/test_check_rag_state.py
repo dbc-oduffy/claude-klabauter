@@ -7,7 +7,7 @@ Port of: check-rag-state.sh (DoE b5a4192c, 2026-07-20)
 Golden oracle captured by running the bash script directly (positive: RAG_STATE
 env fast-path for each valid token + each marker-file token; negative: garbage
 env token, garbage marker content, absent marker with no env override, and a
-missing/invalid `.coordinator-content-root`). Every case here reproduces the exact stdout
+missing/invalid content-root pointer). Every case here reproduces the exact stdout
 token + exit code observed from the bash oracle.
 
 No test touches the real $HOME — CLAUDE_HOME is monkeypatched to a tmp_path
@@ -31,13 +31,13 @@ def _drop_settings_home_override(monkeypatch):
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
     The module docstring's "no test touches the real $HOME" claim rests on the
-    CLAUDE_HOME monkeypatch below, which only holds while the `.coordinator-content-root`
-    pointer resolves off CLAUDE_HOME. ``content_root_pointer`` tries the DURABLE
+    CLAUDE_HOME monkeypatch below, which only holds while the content-root
+    pointer resolves off CLAUDE_HOME. ``content_root`` tries the DURABLE
     rung first — ``_settings_home.settings_home()/machine-local/.coordinator-content-root`` —
     and that resolver prefers ``COORDINATOR_SETTINGS_HOME`` over CLAUDE_HOME.
     The suite-root home quarantine (``coordinator_core/conftest.py::
     _quarantine_real_home``) does not clear that override, so on a box where an
-    operator exports it every case here reads the operator's real `.coordinator-content-root`
+    operator exports it every case here reads the operator's real pointer
     and never exercises the seeded one.
     """
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)

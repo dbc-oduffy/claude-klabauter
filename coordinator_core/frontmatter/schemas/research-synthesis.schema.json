@@ -3,7 +3,8 @@
   "$id": "https://coordinator.local/schemas/research-synthesis.schema.json",
   "x-schema-name": "research-synthesis",
   "x-schema-version": "1.1.0",
-  "x-bump-note": "1.0.0 -> 1.1.0 is nested-field-additive: three new OPTIONAL top-level string properties (market_scope, target_uid, target_label), no `required` change. RE-VENDOR: coordinator_core/frontmatter/schemas/research-synthesis.schema.json (claude-klabauter) needs re-vendor from this commit.",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 is nested-field-additive: three new OPTIONAL top-level string properties (market_scope, target_uid, target_label), no `required` change. RE-VENDOR: coordinator_core/frontmatter/schemas/research-synthesis.schema.json (the engine repo) needs re-vendor from this commit.",
   "applies_to": "docs/research/*.md",
   "kinds": [
     "research-synthesis"

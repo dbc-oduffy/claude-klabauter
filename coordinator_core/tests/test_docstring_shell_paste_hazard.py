@@ -384,6 +384,9 @@ def find_paste_hazards(
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        # Both hazards need a `>` on the line, plus a `$` or a backtick.
+        if ">" not in source or ("$" not in source and "`" not in source):
+            continue
         try:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError:

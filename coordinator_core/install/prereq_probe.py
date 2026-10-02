@@ -387,17 +387,19 @@ def probe_gh() -> str:
             "gh found but `gh --version` failed or produced empty output", remediation,
         )
 
-    auth = _run(["gh", "auth", "status"])
-    if auth is None or auth.returncode != 0:
+    # `gh auth status` false-negatives where GH_TOKEN is a proxy placeholder
+    # (cloud containers); an authenticated API round trip is the real test.
+    auth = _run(["gh", "api", "user", "--jq", ".login"])
+    if auth is None or auth.returncode != 0 or not (auth.stdout or "").strip():
         return emit_line(
             "gh", "fail", "hard",
-            "gh found and functional but not authenticated (gh auth status: failed)",
+            "gh found and functional but not authenticated (gh api user: failed)",
             "authenticate: `gh auth login`",
         )
 
     probe_repo = os.environ.get("COORDINATOR_GH_PROBE_REPO")
     if probe_repo:
-        repo_view = _run(["gh", "repo", "view", probe_repo])
+        repo_view = _run(["gh", "api", f"repos/{probe_repo}", "--jq", ".full_name"])
         if repo_view is None or repo_view.returncode != 0:
             out = (repo_view.stdout if repo_view else "") + (repo_view.stderr if repo_view else "")
             return emit_line(
@@ -601,10 +603,10 @@ def probe_clone_auth() -> str:  # noqa: C901 — faithful port of a genuinely br
         "or add an SSH key / Git Credential Manager for your host"
     )
 
-    # 1. gh auth status.
-    gh_status = _run(["gh", "auth", "status"])
-    if gh_status is not None and gh_status.returncode == 0:
-        return emit_line("clone_auth", "pass", "advisory", "GitHub CLI authenticated (gh auth status: ok)", "")
+    # 1. gh api user (not `gh auth status`: that false-negatives on a proxy-placeholder GH_TOKEN).
+    gh_status = _run(["gh", "api", "user", "--jq", ".login"])
+    if gh_status is not None and gh_status.returncode == 0 and (gh_status.stdout or "").strip():
+        return emit_line("clone_auth", "pass", "advisory", "GitHub CLI authenticated (gh api user: ok)", "")
 
     # 2. glab auth status.
     glab_status = _run(["glab", "auth", "status"])

@@ -129,7 +129,7 @@ NEGATIVE SPEC
       see BASELINE HYGIENE above; that is a hard failure, not a no-op.
 
 Spec backlink: PM ruling 2026-07-21 (`#!/bin/sh` sh/python polyglot wrapper
-retired as legacy debt), docs/wiki/cross-platform-invocation-parity.md,
+retired as legacy debt), coordinator-content-repo coordinator/docs/wiki/portability/cross-platform-invocation-parity.md,
 DR-076; the 2026-07-28 PM amendments that (1) re-scoped this suite from
 "no module docstring" to this command-substitution-span rule, to avoid
 colliding with CLAUDE.md's required-purpose-docstring convention, and (2)

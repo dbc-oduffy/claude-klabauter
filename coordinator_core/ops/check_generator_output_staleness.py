@@ -91,8 +91,8 @@ Coordinator-content-repo@a0d10df52 (`coordinator/hooks/hooks.json`'s
 `coordinator_core.frontmatter.schema_drift_watch.resolve_doe_repo_path`
 already uses (REPO_CONTENT_ROOT env var, then the fleet registry's
 `repos.content_root` entry, then the durable pointer file, then the legacy
-pointer file — all three of the latter folded into
-`coordinator_core.content_root_pointer.read_content_root_pointer`'s own ladder) —
+pointer file — all folded into
+`coordinator_core.content_root.read_content_root`'s own ladder) —
 without importing `schema_drift_watch` itself, which is owned by a live
 sibling plan. An absent or unreadable clone (no candidate directory
 containing a `coordinator/` subdir) resolves to `None`, which every caller
@@ -131,7 +131,7 @@ from typing import Any, Optional
 
 import yaml
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.generator_provenance import GeneratorRecord, Pair, discover_generators
 from coordinator_core.ops.staleness_git import (
     SinceRange,
@@ -303,7 +303,7 @@ def resolve_peer_repo_path() -> Optional[Path]:
 
     Imitates `coordinator_core.frontmatter.schema_drift_watch
     .resolve_doe_repo_path`'s ladder (REPO_CONTENT_ROOT env var, then
-    `read_content_root_pointer()`'s registry/durable-file/legacy-file rungs)
+    `read_content_root()`'s registry/durable-file/legacy-file rungs)
     without importing that module. Returns None when no candidate directory
     contains `PEER_REPO_SENTINEL` (the artifact this leg actually consumes,
     `coordinator/hooks/hooks.json`) — a bare `coordinator/` subdir is not
@@ -319,10 +319,10 @@ def resolve_peer_repo_path() -> Optional[Path]:
         candidates.append(Path(env_root))
 
     try:
-        pointer_root = read_content_root_pointer().strip()
+        pointer_root = read_content_root().strip()
     except Exception as exc:
         print(
-            f"resolve_peer_repo_path: read_content_root_pointer() raised unexpectedly "
+            f"resolve_peer_repo_path: read_content_root() raised unexpectedly "
             f"(never-raises contract violated): {exc}",
             file=sys.stderr,
         )

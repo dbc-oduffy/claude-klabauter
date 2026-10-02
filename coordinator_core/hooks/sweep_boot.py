@@ -71,15 +71,14 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
-from coordinator_core.win_portability import no_console_creationflags
 
 _FRONTMATTER_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$")
 
@@ -129,17 +128,7 @@ def _read_cache_head(repo_root: str) -> "Optional[str]":
 
 
 def _read_current_head(repo_root: str) -> "Optional[str]":
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    result = run_git(["rev-parse", "HEAD"], cwd=repo_root)
     if result.returncode != 0:
         return None
     head = result.stdout.strip()

@@ -150,3 +150,36 @@ def test_c10a_steps_venv_rebuild_still_reachable_without_relocation(tmp_path, mo
     )
 
     assert rc == 0
+
+
+def test_c10a_steps_removes_the_retired_settings_home_copy(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    install_base, settings_home_path, plugin_root, bin_dst = _make_dirs(tmp_path)
+    stale = settings_home_path / "coordinator-whoami"
+    (stale / "coordinator_whoami").mkdir(parents=True)
+    (stale / "pyproject.toml").write_text("x", encoding="utf-8")
+
+    assert _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False) == 0
+
+    assert not stale.exists()
+
+
+def test_c10a_steps_check_only_leaves_the_retired_copy(tmp_path):
+    install_base, settings_home_path, plugin_root, bin_dst = _make_dirs(tmp_path)
+    stale = settings_home_path / "coordinator-whoami"
+    stale.mkdir()
+
+    _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=True)
+
+    assert stale.is_dir()
+
+
+def test_mutation_switch_keeps_the_retired_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    install_base, settings_home_path, plugin_root, bin_dst = _make_dirs(tmp_path)
+    stale = settings_home_path / "coordinator-whoami"
+    stale.mkdir()
+
+    _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False)
+
+    assert stale.is_dir()

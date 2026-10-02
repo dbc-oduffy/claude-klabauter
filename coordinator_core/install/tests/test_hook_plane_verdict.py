@@ -220,13 +220,6 @@ def test_status_line_and_problems():
     assert hpv.hook_plane_status_line(bad).startswith("HOOK PLANE: UNARMED")
 
 
-def test_write_rule_surface(tmp_path):
-    assert hpv.write_rule_surface(tmp_path, "a.md", "x\n") is True
-    assert (tmp_path / "rules" / "a.md").read_bytes() == b"x\n"
-    assert hpv.write_rule_surface(tmp_path, "a.md", None) is False
-    assert not (tmp_path / "rules" / "a.md").exists()
-
-
 def test_content_root_bin_dir_resolves_on_flat_mirror(tmp_path):
     flat = tmp_path / "flat"
     (flat / ".claude-plugin").mkdir(parents=True)
@@ -238,3 +231,76 @@ def test_content_root_bin_dir_resolves_on_flat_mirror(tmp_path):
     plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=None)
     assert plane["content_root_bin_dir"] == str(flat / "bin")
     assert plane["content_root_bin_resolves"] is True
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _http_plane(tmp_path: Path, port: int) -> dict:
+    home = tmp_path / "home"
+    root = _plugin(
+        tmp_path,
+        {"hooks": {"PreCompact": [{"hooks": [{"type": "http", "url": f"http://127.0.0.1:{port}/hook/x"}]}]}},
+    )
+    _record(home, root)
+    _json(home / "settings.json", {"enabledPlugins": {KEY: True}})
+    (home / ".coordinator-content-root").write_text("/legacy\n", encoding="utf-8")
+    return hpv.derive_hook_plane(claude_home=home, plugin_root=root, settings_home=None)
+
+
+def test_plugin_hooks_record_http_ports(tmp_path):
+    assert _http_plane(tmp_path, 47623)["plugin_hooks"]["http_ports"] == [47623]
+
+
+def test_dark_http_port_makes_verdict_unarmed(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDECODE", "1")
+    plane = _http_plane(tmp_path, _free_port())
+    line = hpv.hook_plane_status_line(plane)
+    assert line.startswith("HOOK PLANE: UNARMED")
+    assert "accepts no connection" in line
+
+
+def test_dark_port_outside_a_session_is_armed_with_qualifier(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    line = hpv.hook_plane_status_line(_http_plane(tmp_path, _free_port()))
+    assert line == "HOOK PLANE: ARMED (delivery: plugin; forwarder starts at session start, not probed)"
+
+
+def test_cloud_boot_probes(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    assert "accepts no connection" in hpv.hook_plane_status_line(_http_plane(tmp_path, _free_port()))
+
+
+def test_listening_http_port_stays_armed(tmp_path, monkeypatch):
+    import socket
+
+    monkeypatch.setenv("CLAUDECODE", "1")
+
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        plane = _http_plane(tmp_path, srv.getsockname()[1])
+        assert hpv.hook_plane_status_line(plane) == "HOOK PLANE: ARMED (delivery: plugin)"
+
+
+def test_no_http_hook_means_no_probe(tmp_path):
+    plane = {"hook_delivery": "plugin", "hooks_registered": True, "content_root_resolves": True}
+    assert hpv.forwarder_dark_reason(plane) is None
+
+
+def test_registry_scrub_twin_key_resolves(tmp_path):
+    sh = tmp_path / "sh"
+    ml = sh / "machine-local"
+    ml.mkdir(parents=True)
+    twin = "repos." + "content_root"
+    (ml / "registry.toml").write_text(f'"{twin}" = \'/twin\'\n', encoding="utf-8")
+    plane = hpv.derive_hook_plane(claude_home=tmp_path / "home", plugin_root=None, settings_home=sh)
+    assert plane["content_root_resolves"] is True
+    assert plane["content_root_rungs"][f"registry {twin}"] == "/twin"

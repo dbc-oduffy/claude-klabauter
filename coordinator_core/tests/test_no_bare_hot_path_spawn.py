@@ -126,14 +126,30 @@ module's collector, deliberately, rather than one assertion over the union:
 `{"subprocess"}` only, and `test_no_bare_hot_path_spawn` (the fast-tier
 standing gate, must stay GREEN) never passes anything wider. The `os`/
 `asyncio` families are real, live in the collector, and reachable by an
-explicit `families=` argument -- but they surface pre-existing sites this
-workstream did not introduce (see `state/audits/
-2026-08-07-spawn-gate-widening-surfaces-28-preexisting-sites.md`), so
-`test_widened_spawn_families_surface_known_preexisting_sites` (marked
-`designed_red`, deselected by the fast tier) is the ONLY assertion that
-exercises them. Do not fold the widened families into the standing gate's
-default without first burning down that audit's worklist -- that is a
-follow-up workstream, not a narrowing of this one.
+explicit `families=` argument, which
+`test_widened_spawn_families_surface_known_preexisting_sites` passes; it is
+a plain assertion now that the audit's worklist
+(`state/audits/2026-08-07-spawn-gate-widening-surfaces-28-preexisting-sites.md`)
+is burned down.
+
+SIBLING GATE -- `test_no_output_swallowing_no_console_spawn.py`: this gate cannot
+tell a suppressed site that also wires `stdin=`/`stdout=`/`stderr=`/
+`capture_output=` (safe) from one that wires none (the child binds to the
+invisible console and its output is lost). That axis is the sibling gate's;
+its `_SCAN_ROOTS` is pinned to cover `coordinator_core` plus every root in
+`_UNWALKED_ROOT_BASELINE` below, so the two gates see one population.
+
+NEGATIVE-SPEC -- suppression names this module's resolvers cannot trace, all
+erring false-negative (a bare or doubly-suppressed site passes), accepted:
+  - a `**kwargs` PARAMETER forwarded into a spawn: the resolver follows
+    assignments in the enclosing scope, never a name back through its call
+    sites, so a suppression passed in by a caller is invisible to both
+    `_call_is_suppressed` and `find_double_console_suppressions`.
+  - a suppression name more than one hop from a `no_console`-shaped source
+    (tuple/list unpack, or a second function call between the primitive and
+    the splat).
+Closing either means tracing parameters across call sites -- a different
+analysis than this module's per-scope AST pass, not an extension of it.
 
 Spec backlink: pln-no-window-subprocess-primitive-750d2d § C6, AC5.
 """
@@ -334,7 +350,13 @@ def _collect_no_console_names(stmts: list[ast.stmt]) -> set[str]:
     into a nested `FunctionDef`/`AsyncFunctionDef`/`Lambda` -- a same-named
     local inside a nested function binding something unrelated must not
     leak into this resolution. Callers apply this once at module scope and
-    once per function scope, then union the two sets."""
+    once per function scope, then union the two sets.
+
+    BLIND SPOTS (accepted, false-negative only): a name arriving as a function
+    PARAMETER (`def f(**kw): subprocess.run(a, **kw)`) is never resolved, and a
+    name more than one hop from a `no_console`-shaped source (tuple/list
+    unpack, or a second call in between) is not followed. Module docstring
+    "NEGATIVE-SPEC" carries the rationale."""
 
     names: set[str] = set()
 
@@ -793,7 +815,13 @@ def find_double_console_suppressions(
     whether it was suppressed twice, so 16 sites went in broken and took 64
     tests in `coordinator_core/git/tests/` down with them. A detector that
     can only see under-application will keep re-admitting the sweep's own
-    over-application."""
+    over-application.
+
+    BLIND SPOT (accepted, false-negative only): two sources are counted only
+    when each resolves via `_collect_no_console_names` in the call's own scope.
+    A source threaded through a function parameter or more than one hop of
+    unpack/call is not seen, so a double suppression there still raises at
+    runtime. Module docstring "NEGATIVE-SPEC" carries the rationale."""
 
     # Was a THIRD, divergent file walk
     # (`root.rglob("*.py")`), disagreeing with the other two arms of this
@@ -805,10 +833,10 @@ def find_double_console_suppressions(
     for relpath, file_path in sorted(discovered):
         try:
             source = file_path.read_text(encoding="utf-8")
+            if "no_console" not in source:
+                continue
             tree = ast.parse(source)
         except (OSError, SyntaxError):
-            continue
-        if "no_console" not in source:
             continue
         module_names = _collect_no_console_names(tree.body)
         scopes: list[tuple[ast.AST, set[str]]] = [(tree, module_names)]
@@ -870,30 +898,12 @@ def test_no_bare_test_tree_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-@pytest.mark.designed_red
 def test_widened_spawn_families_surface_known_preexisting_sites():
-    """Red by design, 2026-08-07 -- reported, deliberately not gated.
-
-    Widening the collector past `subprocess` to `os.system`/`os.popen`/
-    `asyncio.create_subprocess_*` (Finding 2 of this workstream's review)
-    surfaces 28 pre-existing, unsuppressed sites: 25 `asyncio.
-    create_subprocess_exec` call sites (July-dated, none introduced by this
-    workstream) plus 3 `subprocess` sites whose suppression is genuinely
-    conditional/dynamic in a way this AST-only collector cannot trace even
-    after this workstream's function-scope resolution pass. Full inventory,
-    file/line/enclosing/family, and the verified-suppressed status of each
-    of the 3: `state/audits/
-    2026-08-07-spawn-gate-widening-surfaces-28-preexisting-sites.md`.
-
-    Why `designed_red`, not gated: burning these down is a follow-up
-    workstream (`asyncio.create_subprocess_exec` DOES accept `creationflags`
-    -- see that audit's "route to burn-down" note -- so it is a real,
-    tractable backlog, not a design dead-end). Gating on them here would
-    turn a widening the no-window workstream wants VISIBLE into a blocker
-    for the 11 other sessions sharing `main` right now. This test's failure
-    output is exactly that worklist, in the marker's own terms: run it
-    explicitly to see the current burn-down surface.
-    """
+    """Standing gate over every spawn family (`subprocess`, `os.system`/
+    `os.popen`, `asyncio.create_subprocess_*`): no bare, unsuppressed site
+    under `coordinator_core`. The burn-down of the audit's worklist
+    (`state/audits/2026-08-07-spawn-gate-widening-surfaces-28-preexisting-
+    sites.md`) is complete; a new bare asyncio/os spawn fails here."""
     violations = find_bare_hot_path_spawns(REPO_ROOT / "coordinator_core", families=_ALL_FAMILIES)
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
@@ -1103,7 +1113,7 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
 #: That is disproportionate for a fast-tier gate under this repo's load norm,
 #: and "make the work cheaper" beats widening the budget -- but the fix is a
 #: cheaper walk, not giving up on content coverage: `_bare_spawns_in_file`
-#: parses exactly these two named files directly (no directory walk at all),
+#: parses exactly these named files directly (no directory walk at all),
 #: measured sub-millisecond. `test_top_level_py_files_have_no_bare_spawn`
 #: below uses it, so an *existing* pinned file gaining a bare spawn later is
 #: caught same as a new file arriving.
@@ -1114,10 +1124,8 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
 #: (which only scans names already in this set), so nothing catches its
 #: *arrival* without this assertion forcing a decision about it. Found in
 #: review 2026-08-21; `conftest.py` is loaded by every pytest run, so this
-#: surface is genuinely hot even though both files are currently clean.
-_REPO_ROOT_PY_FILES: frozenset[str] = frozenset(
-    {"conftest.py", "scratch_check_forwarders.py"}
-)
+#: surface is genuinely hot even though it is currently clean.
+_REPO_ROOT_PY_FILES: frozenset[str] = frozenset({"conftest.py"})
 
 
 def test_top_level_py_files_have_no_bare_spawn():

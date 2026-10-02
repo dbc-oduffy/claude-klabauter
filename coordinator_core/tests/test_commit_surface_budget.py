@@ -44,7 +44,11 @@ COMMENT_DOCSTRING_CEILINGS = {
     "coordinator_core/ops/ceremony/git_native.py": 3423,
     "coordinator_core/ops/ceremony/commit_gates.py": 519,
     "coordinator_core/ops/ceremony/push.py": 1130,
-    "coordinator_core/ops/ceremony/commit_v2.py": 401,
+    # commit_v2.py 401 -> 433: the three post-commit-tree gates and the peer-hold disclosure
+    # (docs/plans/2026-09-30-commit-tripwires-on-engine-commit-path.md,
+    # docs/plans/2026-09-30-scoped-commit-knows-what-it-stages.md); the added documentation could
+    # not be offset because the surrounding gravestone/prohibition blocks are pinned.
+    "coordinator_core/ops/ceremony/commit_v2.py": 433,
     "coordinator_core/ops/ceremony/tail_ops.py": 267,
     "coordinator_core/git/git_state.py": 379,
     "coordinator_core/git/git_index.py": 161,

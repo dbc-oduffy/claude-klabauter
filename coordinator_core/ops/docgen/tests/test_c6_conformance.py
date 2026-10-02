@@ -234,6 +234,11 @@ def _build_specs() -> dict[str, dict]:
         "values": _handoff_family_values(
             "PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)",
             authoring_session=_resolved_authoring_session(),
+            # No held baton and no resolvable display name in the test env:
+            # the oracle omits `workstream:` and names the marker's author
+            # with its own `current EM` fallback.
+            workstream="",
+            spinoff_marker_who="current EM",
         ),
     }
 

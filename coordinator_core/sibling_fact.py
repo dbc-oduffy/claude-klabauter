@@ -112,8 +112,7 @@ from coordinator_core.machine_resolver import registry_get
 #: `handoff_transition`, which imports `resolve_leg` from THIS module. At module
 #: scope that closes a cycle: `import coordinator_core.sibling_fact` leaves this
 #: module partially initialised, `handoff_transition` fails on the partial
-#: import, and it plus `handoff_ship_archive` silently fail to register their
-#: ops. A low-level primitive must not pull in the op registry at import time.
+#: import, and silently fails to register its ops. A low-level primitive must not pull in the op registry at import time.
 
 #: The closed set of primitive kinds this module resolves. Any other kind
 #: handed to `resolve_leg` is a caller bug (a gate_evidence-side composition

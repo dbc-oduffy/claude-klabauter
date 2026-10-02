@@ -311,6 +311,52 @@
         "observation": { "type": "string", "maxLength": 300 },
         "sidecar_path": { "type": "string", "maxLength": 300 }
       }
+    },
+    "predispatch_check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "evidence", "note"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["still-open", "already-done"] },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "anchor", "excerpt", "discharges"],
+            "properties": {
+              "path": { "type": "string" },
+              "anchor": { "type": "string" },
+              "excerpt": { "type": "string" },
+              "discharges": { "type": "string" }
+            }
+          }
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "falsifier_integrity_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "tells", "contamination", "body"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["SOUND", "BROKEN", "UNREVIEWABLE"] },
+        "tells": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tell", "status", "note"],
+            "properties": {
+              "tell": { "type": "string" },
+              "status": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "contamination": { "type": "string" },
+        "body": { "type": "string" }
+      }
     }
   }
 }

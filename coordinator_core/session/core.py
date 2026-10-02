@@ -22,7 +22,7 @@ Negative-spec:
       separate ``stable_pid`` field) is a legitimate liveness signal.
     - Do NOT duplicate PID/liveness fields into any structure outside the
       session registry's ``meta.json`` — RAW-PID-LIVENESS floor
-      (docs/wiki/coordinator-tripwires.md) and the single-liveness-key
+      (coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md) and the single-liveness-key
       invariant (D5, pcore-03) both forbid it.
 """
 
@@ -327,47 +327,31 @@ def sessions_dir(cwd: Optional[str] = None) -> str:
     """Port of ``_cs_sessions_dir``: ``<git-common-dir>/coordinator-sessions``,
     or ``""`` if not in a git repo.
 
-    Resolves the session hub via ``git rev-parse --git-common-dir`` rather
-    than joining a literal ``".git"`` onto ``git_root()``'s toplevel. In a
-    linked git worktree, ``<worktree>/.git`` is a gitdir-pointer FILE, not a
-    directory — joining onto it and calling ``mkdir`` raises
-    ``NotADirectoryError``. ``--git-common-dir`` instead resolves to the MAIN
-    worktree's real ``.git`` directory from any worktree of the repo. In a
-    normal (non-worktree) repo this is byte-identical to the prior
-    ``<root>/.git`` behavior — no existing session hub relocates.
+    The hub is the repo's COMMON git dir (via ``_sessions_dir_resolve`` ->
+    ``git.repo_root.git_common_dir``, a filesystem walk that spawns
+    ``git rev-parse --git-common-dir`` only when no ``.git`` entry is found),
+    never ``<toplevel>/.git``: in a linked worktree that is a gitdir-pointer
+    FILE, and ``mkdir`` under it raises ``NotADirectoryError``. Common dir,
+    not ``--git-dir``: the worktree-private dir would give each worktree its
+    own ``memo-claims/``/``handoff-claims/``/``plan-claims/`` namespace and let
+    two worktrees of one repo claim the same artifact. In a normal repo this
+    is byte-identical to ``<root>/.git``.
 
-    Deliberately uses ``--git-common-dir``, NOT ``--git-dir``: ``--git-dir``
-    inside a worktree returns the worktree-PRIVATE
-    ``<main>/.git/worktrees/<name>`` directory, which would give each
-    worktree of one repo its own private claim namespace under
-    ``memo-claims/``, ``handoff-claims/``, ``plan-claims/`` — silently
-    permitting two sessions in different worktrees of the SAME repo to claim
-    the same memo/handoff/plan concurrently, exactly the collision the claim
-    locks exist to prevent. Claims must contend across every worktree of one
-    repo, so the hub is the shared common dir, never the worktree-local one.
-
-    Uses ``--path-format=absolute`` so git emits an absolute path directly —
-    avoids the trap where ``Path(x).resolve()`` on a relative
-    ``--git-common-dir`` result (the common case, a bare ``".git"``) would
-    resolve against the CURRENT PROCESS cwd instead of the subprocess's
-    ``cwd``, silently producing a wrong path.
-
-    Caching policy (added to eliminate repeat byte-identical spawns —
-    ``session_dir()``/``session_live()`` call this multiple times per
-    op-invocation with the same explicit ``cwd``): cached, process-local,
+    Caching policy (``session_dir()``/``session_live()`` call this multiple
+    times per op-invocation with the same explicit ``cwd``): cached, process-local,
     keyed on ``cwd`` ONLY when ``cwd is not None``. A caller passing an
     explicit ``cwd`` has asked for a FIXED root and can be served from
     cache; ``cwd=None`` means "resolve against whatever the process cwd is
     right now" — the same case ``git_root()``'s docstring documents as able
     to legitimately change mid-process — so that branch is never cached and
-    always re-spawns, mirroring ``git_root()``'s own uncached contract.
+    always re-resolves, mirroring ``git_root()``'s own uncached contract.
 
     A FAILED resolution (not a git repo, git missing, transient spawn
     error) is deliberately NOT cached even for an explicit ``cwd`` — only a
     successful resolution is memoized. A transient failure (e.g. a git lock
     contention, or a repo mid-initialization) caching as authoritative would
     poison every subsequent call for that ``cwd`` for the rest of the
-    process; the cost of re-spawning on the (rare, off-hot-path) failure
+    process; the cost of re-resolving on the (rare, off-hot-path) failure
     case is far cheaper than that failure mode. See ``reset_sessions_dir_cache()``
     for the cache-clear escape hatch, and ``lifecycle.git_common_dir`` for
     the sibling ``--git-common-dir`` resolver this module deliberately does

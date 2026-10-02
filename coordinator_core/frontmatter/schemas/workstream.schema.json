@@ -23,7 +23,7 @@
     },
     "coordinator_root_path": {
       "type": "string",
-      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from claude-klabauter-em constraints memo: the physical directory <claude-klabauter>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with claude-klabauter's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary claude-klabauter's trackers.py already uses (composite-natural-key component)."
+      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from the engine repo's EM constraints memo: the physical directory <the engine>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with the engine's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary the engine's trackers.py already uses (composite-natural-key component)."
     },
     "deliverables": {
       "type": "array",

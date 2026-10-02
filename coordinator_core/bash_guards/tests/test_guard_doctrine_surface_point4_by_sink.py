@@ -41,7 +41,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 SURFACES = [
     "global-doctrine/CLAUDE.md",
@@ -143,7 +143,7 @@ def test_unanalysable_write_families_stay_fail_closed() -> None:
 
 
 def _live_governed_surfaces() -> Optional[list]:
-    content_root = coordinator_content_root()
+    content_root = resolve_content_root()
     if not content_root:
         return None
     return dispatch.resolve_governed_authoring_surfaces(str(Path(content_root) / "coordinator"))
@@ -158,7 +158,7 @@ def test_the_corpus_surface_is_live() -> None:
     live = _live_governed_surfaces()
     if live is None:
         pytest.skip(
-            "no coordinator-content-repo sibling checkout resolved by coordinator_content_root(); "
+            "no coordinator-content-repo sibling checkout resolved by resolve_content_root(); "
             "the governed-surfaces manifest cannot be read to check this corpus"
         )
     assert GOV in live, (

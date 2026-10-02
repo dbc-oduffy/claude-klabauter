@@ -38,6 +38,19 @@ _AGENT_ID = "a0123456789abcdef"
 _GRANT_SID = "s-grant-leg-test"
 
 
+@pytest.fixture(autouse=True)
+def _workstation_leg(monkeypatch):
+    """Pin the workstation leg; the host's cloud env must not select the cloud leg."""
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: False)
+
+
+def test_cloud_box_denies_a_broad_suite_command(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
+    result = guard.check(_payload("pytest", repo))
+    assert result is not None
+    assert "cloud box" in json.dumps(result)
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A fake repo root whose pytest config pins this repo's real shape:
@@ -1219,6 +1232,22 @@ class TestGrantLeg:
         assert guard.check(
             _payload("with-suite-mutex -- pytest", grant_repo)
         ) is None
+
+    def test_non_authorizing_grant_record_keeps_scoped_run_route(
+        self, grant_repo, free_mutex, monkeypatch
+    ):
+        """A grant record that fails the gate (session reads dead) must not
+        remove the literal-path scoped run the no-record path allows."""
+        cmd = "python3 -m pytest tests/test_x.py -q"
+        assert guard.check(_payload(cmd, grant_repo)) is None
+        _write_live_session(grant_repo, _GRANT_SID)
+        assert grant_module.write_tier_u_grant(
+            "pm", "run it", session_id=_GRANT_SID, cwd=str(grant_repo)
+        )
+        monkeypatch.setattr(grant_module.liveness, "session_live", lambda *a, **k: False)
+        assert grant_module.check_tier_u_grant(str(grant_repo))[0] is False
+        assert guard.check(_payload(cmd, grant_repo)) is None
+        assert guard.check(_payload("pytest", grant_repo)) is not None
 
     def test_em_tier_u_collect_only_no_grant_allowed(self, grant_repo, free_mutex):
         """2026-08-28 row (the-tier-u-guard-refuses-collect-only): a

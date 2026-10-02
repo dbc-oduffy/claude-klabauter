@@ -6422,3 +6422,42 @@ def test_existing_pinboard_line_reads_the_current_pinboard_bullet(tmp_path):
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text("# Orientation\n\n## Pinboard\n- current note here\n", encoding="utf-8")
     assert wsc._existing_pinboard_line(tmp_path) == "current note here"
+
+
+def test_superseding_directive_plan_path_records_the_plan_id_mint_matches(tmp_path):
+    """d-record-superseding-review hands `--plan <path>`; the record's `plan_id`
+    must be the plan's frontmatter `pln-` id, since review-stamp mint compares
+    it to the plan's own and refuses a path."""
+    from coordinator_core.ops.review_mint.supersede import SupersedeRefused, record_superseding_review
+
+    def _git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=tmp_path, capture_output=True, text=True, check=True, **no_console_creationflags(),
+        ).stdout.strip()
+
+    _git("init", "-q")
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nstatus: approved\nplan_id: pln-example-abc123\n---\n\n# P\n", encoding="utf-8")
+    shas = []
+    for i in range(2):
+        (tmp_path / f"f{i}.txt").write_text(str(i))
+        _git("add", ".")
+        _git("commit", "-q", "-m", f"c{i}")
+        shas.append(_git("rev-parse", "HEAD"))
+
+    result = record_superseding_review(
+        repo_root=tmp_path, plan="docs/plans/p.md",
+        commit_range={"base": shas[0], "head": shas[1]},
+        wave_sidecar_paths=[], prep_sidecar=None, stage_returns=None, session_id="sid-1",
+    )
+    assert result["record"]["plan_id"] == "pln-example-abc123"
+
+    plan.write_text("---\nstatus: approved\n---\n\n# P\n", encoding="utf-8")
+    with pytest.raises(SupersedeRefused, match="plan_id"):
+        record_superseding_review(
+            repo_root=tmp_path, plan="docs/plans/p.md",
+            commit_range={"base": shas[0], "head": shas[1]},
+            wave_sidecar_paths=[], prep_sidecar=None, stage_returns=None, session_id="sid-2",
+        )

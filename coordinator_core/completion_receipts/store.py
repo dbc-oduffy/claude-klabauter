@@ -7,7 +7,6 @@ git spawn, batched over every path, so no reader pays a spawn per receipt.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 import yaml
@@ -19,8 +18,8 @@ from coordinator_core.completion_receipts.model import (
     validate,
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.git.run import run_git
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.win_portability import no_console_creationflags
 
 _GIT_TIMEOUT_SECS = 30
 _HEADER = "\x02"
@@ -98,18 +97,13 @@ def introducing_commits(worktree_root: Path, rel_paths: list[str]) -> dict[str, 
     result: dict[str, str | None] = {p: None for p in rel_paths}
     if not rel_paths:
         return result
-    proc = subprocess.run(
+    proc = run_git(
         [
-            "git", "-c", "core.quotepath=off", "log", "--diff-filter=A", "--name-only",
+            "-c", "core.quotepath=off", "log", "--diff-filter=A", "--name-only",
             f"--format={_HEADER}%H", "--", *rel_paths,
         ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
         cwd=str(worktree_root),
         timeout=_GIT_TIMEOUT_SECS,
-        stdin=subprocess.DEVNULL,
-        **no_console_creationflags(),
     )
     if proc.returncode != 0:
         return result

@@ -1315,6 +1315,69 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
     return Alternative(AlternativeKind.COMMAND, span, argv)
 
 
+_INDENTED_RUN_RE = re.compile(r"(?:^[ \t]{2,}\S[^\n]*(?:\n|\Z))+", re.MULTILINE)
+_NON_OFFER_PREFIXES = ("Subagent:", "Command:", "Denied:", "Reason:")
+#: First tokens of a line that continues a script body (a rewrite's
+#: `python3 -c` source or shell control flow), never a command on its own.
+_BODY_LINE_HEADS = frozenset(
+    {
+        "import", "from", "for", "while", "if", "elif", "else", "try", "except",
+        "finally", "with", "def", "class", "return", "print", "pass", "fi", "do",
+        "done", "then", "esac", "case", "}", ")",
+    }
+)
+
+
+def _offer_argv(candidate: str) -> Optional[List[str]]:
+    """argv for a self-contained command line, or None when the line cannot
+    stand alone (unbalanced quote, or a script-body keyword head)."""
+    if _exceeds_tokenizable_ceiling(candidate):
+        return candidate.split()
+    try:
+        argv = shlex.split(candidate, posix=True)
+    except ValueError:
+        return None
+    if not argv or argv[0] in _BODY_LINE_HEADS:
+        return None
+    return argv
+
+
+def _inside_open_quote(prefix: str) -> bool:
+    """True when ``prefix`` leaves a shell quote open, so the text that follows
+    is the body of a quoted payload (a rewrite's ``python3 -c '...'``). A prefix
+    past the tokenizer ceiling reads as open, so it is never graded."""
+    if _exceeds_tokenizable_ceiling(prefix):
+        return True
+    try:
+        shlex.split(prefix, posix=True)
+    except ValueError:
+        return True
+    return False
+
+
+def _indented_offers(text: str) -> List[Alternative]:
+    """Plain indented commands a cue window offers. A run of consecutive
+    indented lines is graded line by line only when every line is a
+    self-contained command and no quote is open where the run starts; either
+    failing marks the run as a rewrite body, which is never graded."""
+    offers: List[Alternative] = []
+    seen = set()
+    for window in _cue_windows(text):
+        for run in _INDENTED_RUN_RE.finditer(window):
+            if _inside_open_quote(window[: run.start()]):
+                continue
+            lines = [ln.strip() for ln in run.group(0).splitlines() if ln.strip()]
+            lines = [ln for ln in lines if not ln.startswith(_NON_OFFER_PREFIXES)]
+            argvs = [_offer_argv(ln) for ln in lines]
+            if not lines or any(argv is None for argv in argvs):
+                continue
+            for ln, argv in zip(lines, argvs):
+                if ln not in seen:
+                    seen.add(ln)
+                    offers.append(Alternative(AlternativeKind.COMMAND, ln, argv))
+    return offers
+
+
 def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = False) -> List[Alternative]:
     """Extract every alternative a guard's emitted ``hookSpecificOutput``
     names, classified into one of the five ``AlternativeKind`` members.
@@ -1323,35 +1386,16 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
     spec). Raises ``UnclassifiableAlternative`` for alternative-shaped
     signal this function cannot classify (a gate failure).
 
-    ``override_route_known`` (2026-08-11, C1 chunk, guard-messages-point-to-
-    docs-never-name plan) -- default ``False``, so every EXISTING caller
-    (notably ``_firing_shape.py``, which must stay guard-agnostic and purely
-    textual -- Axis A/B are orthogonal by that module's own design) sees
-    byte-identical behavior. ``evaluate_guard`` is the one caller that passes
-    ``True``, and only when it has ALREADY resolved a real OVERRIDE route for
-    this guard from the call-site argument (``_source_override_alternatives``).
-
-    WHY THIS EXISTS -- a regression this dispatch measured directly, not a
-    speculative one. Before `operator_override_note`'s C2 reshape, virtually
-    every guard's rendered text contained a ``COORDINATOR_*`` token, so
-    `_OVERRIDE_RE` below ALWAYS populated `alts` with at least one entry --
-    which meant the increasingly speculative fallback further down (``if not
-    alts:``, scanning raw indented lines for a promised-but-unclassified
-    alternative) essentially NEVER ran, for ANY guard, regardless of that
-    guard's own message shape. C2 removed the one signal that was
-    accidentally keeping that fallback dormant fleet-wide -- with it gone,
-    guards whose real alternative is a MULTI-LINE indented rewrite (e.g.
-    `guard_plumbing_and_loops`'s python3 -c body) hit the fallback for the
-    first time, which naively treats each source line as its own one-token
-    "command" and grades every one DEAD (`import` does not resolve on PATH,
-    neither does `for`, `if`, ...). ``override_route_known=True`` restores
-    the exact pre-C2 gating (a known-non-empty ``alts`` state suppresses the
-    fallback) via the SOURCE-derived signal instead of the now-absent
-    render-derived one -- it does not fix the fallback's own line-splitting
-    fragility (a distinct, pre-existing defect this reshape merely
-    unmasked, out of this chunk's scope), it restores the guard against
-    ever reaching it for a reason unrelated to that guard's own message
-    shape."""
+    ``override_route_known`` -- default ``False``, so every caller that does not
+    know a call-site override route (notably ``_firing_shape.py``, which must
+    stay guard-agnostic and purely textual) sees the raw-line fallback below.
+    ``evaluate_guard`` passes ``True`` when it has already resolved a real
+    OVERRIDE route for the guard from the call-site argument
+    (``_source_override_alternatives``); the raw-line fallback then stays off,
+    because it would otherwise grade each line of a multi-line rewrite
+    (`guard_plumbing_and_loops`'s python3 -c body) as its own command. Plain
+    one-command indented offers are still extracted under a cue, via
+    ``_indented_offers``, which skips rewrite bodies."""
     text = hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
     alts: List[Alternative] = []
 
@@ -1385,12 +1429,13 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
         if marker in text:
             alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, marker, marker))
 
-    if not alts and override_route_known:
-        # See this function's own docstring, "WHY THIS EXISTS" -- a known
-        # OVERRIDE route (sourced from the call site, not this render)
-        # stands in for the render-derived OVERRIDE match that used to keep
-        # `alts` non-empty fleet-wide, suppressing the fallback below for
-        # the SAME reason it was suppressed before C2, not a new exemption.
+    if override_route_known:
+        # A known OVERRIDE route (sourced from the call site) stands in for
+        # the render-derived match that once kept `alts` non-empty, so the
+        # raw-line fallback below stays off. Plain indented offers are still
+        # graded; rewrite bodies are skipped by `_indented_offers`.
+        if _ALT_CUE_RE.search(text):
+            alts.extend(_indented_offers(text))
         return alts
 
     if not alts:
@@ -1401,19 +1446,7 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
         # mid-sentence "instead" must not manufacture a failure on a
         # message that never actually promised a concrete substitute).
         if _ALT_CUE_RE.search(text):
-            for window in _cue_windows(text):
-                for m in _INDENTED_CMD_RE.finditer(window):
-                    candidate = m.group(1).strip()
-                    if candidate and not candidate.startswith(("Subagent:", "Command:", "Denied:", "Reason:")):
-                        if _exceeds_tokenizable_ceiling(candidate):
-                            argv = candidate.split()
-                        else:
-                            try:
-                                argv = shlex.split(candidate, posix=True)
-                            except ValueError:
-                                argv = candidate.split()
-                        if argv:
-                            alts.append(Alternative(AlternativeKind.COMMAND, candidate, argv))
+            alts.extend(_indented_offers(text))
             if not alts:
                 # Last resort, still POSITION-anchored (never a bare
                 # backtick/prose scan): a colon immediately introducing an
@@ -1428,6 +1461,9 @@ def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = Fa
                 # elsewhere never triggers this) and ordinary windowed
                 # scanning still found nothing.
                 for m in _LABELED_INDENT_BLOCK_RE.finditer(text):
+                    cues = [c.end() for c in _ALT_CUE_RE.finditer(text, 0, m.start())]
+                    if cues and _inside_open_quote(text[cues[-1] : m.start()]):
+                        continue
                     for line in m.group(1).splitlines():
                         candidate = line.strip()
                         if not candidate or candidate.startswith(("Subagent:", "Command:", "Denied:", "Reason:")):

@@ -1072,25 +1072,25 @@ def resolve_cutover_schema(
 #: doesn't silently fail to match. Extra unused aliases are harmless — derive()
 #: (C4a::_scan_repos) only consults the aliases a record's gate_source.repos[]
 #: actually names.
-_CONTENT_ROOT_ALIASES: tuple[str, ...] = ("coordinator-content-repo", "coordinator-content-repo", "content_root")
+_DOCTRINE_ROOT_ALIASES: tuple[str, ...] = ("coordinator-content-repo", "coordinator-content-repo", "content_root")
 _CLAUDE_KLABAUTER_ROOT_ALIASES: tuple[str, ...] = ("claude-klabauter", "claude_klabauter", "claude-klabauter")
 
 
-def _content_root_aliases() -> tuple[str, ...]:
+def _doctrine_root_aliases() -> tuple[str, ...]:
     """Literal aliases plus the registry-derived doctrine repo name and its case/underscore forms."""
     from coordinator_core._fleet_names import doctrine_repo_name
 
     name = doctrine_repo_name()
     if not name:
-        return _CONTENT_ROOT_ALIASES
+        return _DOCTRINE_ROOT_ALIASES
     forms = (name, name.lower(), name.replace("-", "_"), name.lower().replace("-", "_"))
-    return tuple(dict.fromkeys((*_CONTENT_ROOT_ALIASES, *forms)))
+    return tuple(dict.fromkeys((*_DOCTRINE_ROOT_ALIASES, *forms)))
 
 
-def _build_repo_roots(content_root: Path) -> dict[str, Path]:
+def _build_repo_roots(doctrine_root: Path) -> dict[str, Path]:
     """Build the {repo-name-alias: local root} map `derive()` scans against.
 
-    `content_root` is the caller-resolved coordinator-content-repo worktree (this handler's own
+    `doctrine_root` is the caller-resolved coordinator-content-repo worktree (this handler's own
     `repo_root`/`main_worktree_root()` — cutover records live DoE-side, D2).
     The claude-klabauter root is THIS repo's own root, derived via an in-repo
     `Path(__file__)` climb — safe under `test_no_hardcoded_paths.py`'s Tooth 2
@@ -1101,8 +1101,8 @@ def _build_repo_roots(content_root: Path) -> dict[str, Path]:
     """
     claude_klabauter_root = Path(__file__).resolve().parents[2]
     roots: dict[str, Path] = {}
-    for alias in _content_root_aliases():
-        roots[alias] = content_root
+    for alias in _doctrine_root_aliases():
+        roots[alias] = doctrine_root
     for alias in _CLAUDE_KLABAUTER_ROOT_ALIASES:
         roots[alias] = claude_klabauter_root
     return roots
@@ -1464,7 +1464,7 @@ _SIBLING_COMMITMENT_REF_RE = re.compile(
 _SIBLING_COMMITMENT_FULFILLED_STATUS = "fulfilled"
 
 
-def _reverify_sibling_commitment_ref(ref: str, content_root: Optional[Path]) -> tuple[bool, str]:
+def _reverify_sibling_commitment_ref(ref: str, doctrine_root: Optional[Path]) -> tuple[bool, str]:
     """Resolve `ref` to a `state/cross-repo-commitments/*.yaml` record on OUR
     OWN disk and confirm it genuinely attests the sibling's confirmation.
 
@@ -1486,7 +1486,7 @@ def _reverify_sibling_commitment_ref(ref: str, content_root: Optional[Path]) -> 
     (the commitment record is the sibling-sourced signal; this function only
     reads it).
     """
-    if content_root is None:
+    if doctrine_root is None:
         return False, f"sibling-commitment-ref {ref!r}: no DoE repo root available to resolve against"
     if not _SIBLING_COMMITMENT_REF_RE.match(ref):
         return False, f"sibling-commitment-ref {ref!r}: does not match the cross-repo-commitment filename shape"
@@ -1495,8 +1495,8 @@ def _reverify_sibling_commitment_ref(ref: str, content_root: Optional[Path]) -> 
     prefix = "state/cross-repo-commitments/"
     if relative.startswith(prefix):
         relative = relative[len(prefix):]
-    candidate = content_root / "state" / "cross-repo-commitments" / relative
-    resolved = contained_path(candidate, [content_root])
+    candidate = doctrine_root / "state" / "cross-repo-commitments" / relative
+    resolved = contained_path(candidate, [doctrine_root])
     if resolved is None or not resolved.is_file():
         return False, f"sibling-commitment-ref {ref!r}: commitment record not found at {candidate}"
 

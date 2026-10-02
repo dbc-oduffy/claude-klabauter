@@ -380,6 +380,8 @@ from __future__ import annotations
 
 import calendar
 import json
+import os
+import sys
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -454,6 +456,30 @@ class RegistryRecord:
     stable_pid_capture: str | None = None
 
 
+def _in_sanity_band(epoch: float) -> bool:
+    now = time.time()
+    return now - _SANITY_BAND_PAST_SEC <= epoch <= now + _SANITY_BAND_FUTURE_SEC
+
+
+def _linux_boot_ticks_to_epoch(raw: str) -> float | None:
+    """Linux `procStart` shape: a digits string of clock ticks since boot
+    (cloud/managed-remote containers, e.g. ``"798"`` for a process started
+    ~8 s after boot). Epoch is ``btime + ticks / CLK_TCK``, read from
+    ``/proc/stat`` and ``sysconf`` -- no spawn. None off Linux or on any
+    read failure."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+        with open("/proc/stat", "rb") as fh:
+            for line in fh:
+                if line.startswith(b"btime "):
+                    return int(line.split()[1]) + int(raw) / hz
+    except (OSError, ValueError, OverflowError, AttributeError):
+        pass
+    return None
+
+
 def _proc_start_to_epoch(raw) -> float | None:
     """Convert a raw `procStart` field to a Unix epoch, or None if invalid.
 
@@ -514,6 +540,8 @@ def _proc_start_to_epoch(raw) -> float | None:
                         epoch = int(raw) / _FILETIME_TICKS_PER_SEC - _FILETIME_EPOCH_OFFSET_SEC
                     except (ValueError, OverflowError):
                         return None
+                    if not _in_sanity_band(epoch):
+                        epoch = _linux_boot_ticks_to_epoch(raw)
                 else:
                     return None
             else:
@@ -528,8 +556,7 @@ def _proc_start_to_epoch(raw) -> float | None:
     if epoch is None:
         return None
 
-    now = time.time()
-    if epoch < now - _SANITY_BAND_PAST_SEC or epoch > now + _SANITY_BAND_FUTURE_SEC:
+    if not _in_sanity_band(epoch):
         return None
     return epoch
 

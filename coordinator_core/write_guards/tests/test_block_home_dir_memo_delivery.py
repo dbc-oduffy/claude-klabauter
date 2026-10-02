@@ -231,8 +231,8 @@ class TestDenyMessageInboxResolution:
         self, monkeypatch, _fake_home
     ):
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
-            lambda: (None, None),
+            "coordinator_core.content_root.read_content_root",
+            lambda: "",
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
@@ -244,8 +244,8 @@ class TestDenyMessageInboxResolution:
         content_root = tmp_path / "coordinator-content-repo"
         (content_root / "state" / "cross-repo").mkdir(parents=True)
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
-            lambda: (str(content_root), "env"),
+            "coordinator_core.content_root.read_content_root",
+            lambda: str(content_root),
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
@@ -260,7 +260,7 @@ class TestDenyMessageInboxResolution:
             raise RuntimeError("registry unreadable")
 
         monkeypatch.setattr(
-            "coordinator_core.ops.coordinator_content_root.coordinator_content_root_in_process",
+            "coordinator_core.content_root.read_content_root",
             _boom,
         )
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")

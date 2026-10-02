@@ -492,13 +492,13 @@ def test_vendored_fix_and_regenerate_in_one_commit_is_fresh(tmp_path, monkeypatc
 
 def test_resolve_peer_repo_path_absent_clone_is_none(tmp_path, monkeypatch):
     monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setattr(cgos, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     assert cgos.resolve_peer_repo_path() is None
 
 
 def test_compute_vendored_staleness_unresolvable_peer_is_indeterminate(tmp_path, monkeypatch):
     monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setattr(cgos, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     results = cgos.compute_vendored_staleness()
     assert all(entry["verdict"] == Verdict.INDETERMINATE for entry in results.values())
 
@@ -510,7 +510,7 @@ def test_compute_all_staleness_merges_local_and_vendored_keys(tmp_path, monkeypa
     _commit_all(local_repo, "initial")
 
     monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
-    monkeypatch.setattr(cgos, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     results = cgos.compute_all_staleness(local_repo)
     assert any(key.startswith("coordinator-content-repo:") or key == "<coordinator-content-repo clone unresolved>" for key in results)
 

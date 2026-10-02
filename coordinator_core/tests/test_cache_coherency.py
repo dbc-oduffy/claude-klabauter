@@ -203,6 +203,19 @@ class TestAC10MtimeEqual:
             f"is still in use — R5 same-second staleness bug."
         )
 
+    def test_same_size_same_mtime_edit_detected(self, tmp_path: Path):
+        """A stat gate (mtime+size) would miss this edit; the content-hash key must not."""
+        hf = tmp_path / "same-size.md"
+        _make_handoff(hf, slug="same-size", status="open")
+        assert dag._read_meta(str(hf)).get("status") == "open"
+        st = hf.stat()
+        _make_handoff(hf, slug="same-size", status="shut")
+        assert hf.stat().st_size == st.st_size
+        os.utime(str(hf), (st.st_atime, st.st_mtime))
+        assert dag._read_meta(str(hf)).get("status") == "shut", (
+            "dag._read_meta missed a same-size same-mtime edit: stat-gated cache"
+        )
+
     def test_cache_key_is_hash_not_mtime(self, tmp_path: Path):
         """Cache key must differ on body change even with identical mtime."""
         hf = tmp_path / "key-check.md"

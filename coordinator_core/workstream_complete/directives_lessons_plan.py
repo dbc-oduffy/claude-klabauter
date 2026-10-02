@@ -209,7 +209,9 @@ def resolve_governing_plan_with_source(
          write-time fact rather than the dead field a fleet-wide sweep
          found on 0 of 276 live handoffs pre-C5. This is now the SOLE
          disk-resolvable source; there is nothing below it to fall
-         through to. Source strings (`"handoff_frontmatter"` /
+         through to, except the same name under the archive roots
+         (`"handoff_frontmatter_archived"`) when an archiver moved the plan
+         after the baton was stamped. Source strings (`"handoff_frontmatter"` /
          `"handoff_frontmatter_not_found"` / `"none"`) are UNCHANGED from
          the pre-C10 leg-3 names — `test_workstream_complete.py` (out of
          this chunk's `writes:` scope) asserts them verbatim; renaming

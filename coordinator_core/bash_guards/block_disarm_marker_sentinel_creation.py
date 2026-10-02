@@ -117,7 +117,7 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._blanket_disarm import MARKER_BASENAME
 from coordinator_core.bash_guards._sentinel_creation_guard import (
-    INDIRECTION_REMEDY,
+    indirection_deny_reason,
     REASON_INDIRECTION,
     SentinelCreationDetector,
 )
@@ -152,18 +152,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     del cmd
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the marker>")
-        return (
-            "[disarm-marker guard] BLOCKED: this command was denied because "
-            "its payload is delivered through an interpreter, stdin, or "
-            "command-assembly indirection this guard cannot examine -- NOT "
-            "because the payload was found to touch the blanket-disarm "
-            "marker.\n\n"
-            "Detected shape: %s\n\n"
-            "If this command genuinely does not touch the disarm marker: "
-            "%s\n\n"
-            "Reading or removing an existing marker remains available -- "
-            "removal only re-arms the guard suite." % (safe_shape, INDIRECTION_REMEDY)
-        )
+        return indirection_deny_reason("disarm-marker guard", safe_shape)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
         "[disarm-marker guard] BLOCKED: this command would create or "

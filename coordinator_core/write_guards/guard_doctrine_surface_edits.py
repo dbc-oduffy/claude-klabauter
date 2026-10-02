@@ -167,7 +167,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
@@ -325,7 +325,7 @@ def _home_claude_md() -> "str | None":
         return None
 
 
-_DOE_ONLY_SURFACES: "tuple[tuple[str, ...], ...]" = (
+_CONTENT_ONLY_SURFACES: "tuple[tuple[str, ...], ...]" = (
     ("global-doctrine", "CLAUDE.md"),
     ("coordinator", "snippets", "em-operating-doctrine.md"),
 )
@@ -341,7 +341,7 @@ _content_root_memo: "list[str | None]" = []
 def _content_root() -> "str | None":
     if not _content_root_memo:
         try:
-            resolved = read_content_root_pointer() or None
+            resolved = read_content_root() or None
         except Exception:
             resolved = None
         _content_root_memo.append(_norm(resolved) if resolved else None)
@@ -380,7 +380,7 @@ def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]
     ADDITIVE BY CONSTRUCTION. Every entry this returns is one `check()` will
     deny without an approval; nothing is removed relative to the previous
     composition, so no allow path widens -- the direction a hard-deny guard
-    is allowed to move without a ruling. An unresolvable `.coordinator-content-root` pointer
+    is allowed to move without a ruling. An unresolvable content-root pointer
     drops the DoE-anchored entries and lands exactly on the pre-fix
     protected set rather than on an error.
     """
@@ -398,14 +398,14 @@ def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]
 
     content_root = _content_root()
     if content_root:
-        for parts in _DOE_ONLY_SURFACES:
+        for parts in _CONTENT_ONLY_SURFACES:
             try:
                 _add(_norm(os.path.join(content_root, *parts)), content_root)
             except Exception:
                 pass
 
     if repo_root:
-        for parts in _DOE_ONLY_SURFACES + _PER_REPO_SURFACES:
+        for parts in _CONTENT_ONLY_SURFACES + _PER_REPO_SURFACES:
             try:
                 _add(_norm(os.path.join(repo_root, *parts)), None)
             except Exception:
@@ -466,10 +466,9 @@ def _sentinel_state(repo_root: "str | None") -> str:
         mtime = os.path.getmtime(sentinel_path)
     except OSError:
         return "deny-absent"
-    except Exception:
-        return "deny-absent"
     age = time.time() - mtime
-    if age > _APPROVAL_WINDOW_SECONDS:
+    # A future mtime (clock skew, touch -d) would otherwise never expire.
+    if age < 0 or age > _APPROVAL_WINDOW_SECONDS:
         return "deny-expired"
     return "allow"
 

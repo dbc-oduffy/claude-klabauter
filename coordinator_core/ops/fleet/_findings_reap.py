@@ -62,6 +62,7 @@ from coordinator_core.ops.review_findings_ledger import (
     _frontmatter_bounds,
 )
 from coordinator_core.session.machinery_paths import review_trail_dir
+from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 
@@ -349,6 +350,7 @@ async def _is_tracked(worktree_root: Path, path: Path) -> str:
         env=_make_git_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **no_console_creationflags(),
     )
     _out, stderr = await proc.communicate()
     if proc.returncode == 0:
@@ -421,6 +423,7 @@ async def _is_tracked_batch(worktree_root: Path, paths: List[Path]) -> Dict[Path
         env=_make_git_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **no_console_creationflags(),
     )
     out, stderr = await proc.communicate()
     if proc.returncode == 0:

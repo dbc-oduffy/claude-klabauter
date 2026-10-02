@@ -54,9 +54,15 @@ def _isolate_env(monkeypatch, tmp_path):
     or the real $SHELL/$HOME — every test sets what it needs explicitly."""
     monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)
     monkeypatch.delenv("COORDINATOR_SHIM_RC", raising=False)
+    # Status rows gain a "PowerShell NOT covered" suffix on native Windows
+    # (nt without MSYSTEM); pin the Git Bash shape so the literal-row
+    # assertions are host-independent. The suffix has its own test below.
+    monkeypatch.setenv("MSYSTEM", "UCRT64")
     empty_registry = tmp_path / "ml-registry"
     empty_registry.mkdir(exist_ok=True)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
+    monkeypatch.setattr(seam, "_running_engine_root", lambda: "")
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +93,8 @@ def test_check_only_when_sentinel_already_present_reports_ready(
 ):
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
-    rc_path.write_text(f"# pre-existing content\n{seam.SENTINEL}\nsome-line\n")
+    guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")
+    rc_path.write_text(f"# pre-existing content\n\n{seam._render_block(guard_src)}\n")
     before = rc_path.read_text()
 
     rc = seam.main(["--check-only", "--rc", str(rc_path)])
@@ -132,32 +139,60 @@ def test_live_run_writes_sentinel_block_and_preserves_prior_content(
     assert contents.index(seam.SENTINEL) < contents.index(seam.SENTINEL_END)
 
 
-def test_legacy_begin_only_block_still_detected_as_already_installed(
+def test_legacy_begin_only_block_is_replaced_not_duplicated(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    """A machine with the pre-C6 BEGIN-only block (no END marker at all)
-    must still be detected as already-installed -- detection is by
-    `SENTINEL` line-membership alone and must never require `SENTINEL_END`.
-    No retrofit: the legacy block is left byte-for-byte untouched."""
+    """The pre-C6 BEGIN-only block tests `-x` on a 100644 guard, so it never
+    ran; it is replaced by the current block and the rc's other content stays."""
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")
-    legacy_block = (
+    rc_path.write_text(
         "# pre-existing content\n"
         f"\n{seam.SENTINEL}\n"
         f'_cc_fsize_guard="{guard_src}"\n'
         'if [ -x "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
         "unset _cc_fsize_guard\n"
+        "# trailing operator line\n"
     )
-    rc_path.write_text(legacy_block)
 
     rc = seam.main(["--rc", str(rc_path)])
 
     assert rc == 0
-    assert f"shell_init_guard: ready (no-op) ({rc_path})" in capsys.readouterr().out
-    # No retrofit, no second block, no END marker inserted after the fact.
-    assert rc_path.read_text() == legacy_block
-    assert seam.SENTINEL_END not in rc_path.read_text()
+    assert f"shell_init_guard: updated ({rc_path})" in capsys.readouterr().out
+    text = rc_path.read_text()
+    assert text.count(seam.SENTINEL) == 1
+    assert 'if [ -x "$_cc_fsize_guard" ]' not in text
+    assert seam.SENTINEL_END in text
+    assert "# pre-existing content" in text and "# trailing operator line" in text
+
+
+def test_block_naming_another_engine_clone_is_rewritten_to_the_resolved_one(
+    capsys, monkeypatch, tmp_path, claude_klabauter_clone
+):
+    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    rc_path = tmp_path / ".bashrc"
+    other = str(tmp_path / "other-engine" / "bin" / "shell-init-guard.py")
+    rc_path.write_text(f"# keep\n\n{seam._render_block(other)}\n")
+
+    assert seam.main(["--check-only", "--rc", str(rc_path)]) == 1
+    assert "would update" in capsys.readouterr().out
+    assert seam.main(["--rc", str(rc_path)]) == 0
+
+    text = rc_path.read_text()
+    assert text.count(seam.SENTINEL) == 1
+    assert other not in text
+    assert str(claude_klabauter_clone / "bin" / "shell-init-guard.py") in text
+    assert text.startswith("# keep\n")
+    assert seam.main(["--check-only", "--rc", str(rc_path)]) == 0
+
+
+def test_running_engine_outranks_the_registry(monkeypatch, tmp_path, claude_klabauter_clone):
+    registered = tmp_path / "registered"
+    registered.mkdir()
+    monkeypatch.setattr(seam._machine_resolver, "registry_get", lambda key: str(registered))
+    monkeypatch.setattr(seam, "_running_engine_root", lambda: str(claude_klabauter_clone))
+    assert seam.resolve_claude_klabauter_clone() == str(claude_klabauter_clone)
 
 
 def test_live_run_is_idempotent_on_second_invocation(
@@ -321,3 +356,28 @@ def test_rc_created_fresh_when_absent(monkeypatch, tmp_path, claude_klabauter_cl
     assert rc == 0
     assert rc_path.exists()
     assert seam.SENTINEL in rc_path.read_text()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="suffix is native-Windows only")
+def test_native_windows_status_row_discloses_powershell_gap(
+    capsys, monkeypatch, tmp_path, claude_klabauter_clone
+):
+    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.delenv("MSYSTEM", raising=False)
+    rc_path = tmp_path / ".bashrc"
+
+    assert seam.main(["--rc", str(rc_path)]) == 0
+
+    assert (
+        f"shell_init_guard: installed ({rc_path} — POSIX shells only; "
+        "PowerShell sessions are NOT covered)"
+    ) in capsys.readouterr().out
+
+
+def test_mutation_switch_refuses_the_rewrite_and_leaves_the_rc(capsys, monkeypatch, tmp_path, claude_klabauter_clone):
+    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    rc_path = tmp_path / ".bashrc"
+    rc_path.write_text("# keep\n")
+    assert seam.main(["--rc", str(rc_path)]) == 1
+    assert rc_path.read_text() == "# keep\n"

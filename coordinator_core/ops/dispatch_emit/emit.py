@@ -270,7 +270,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple, Optional
 
 import yaml
@@ -302,6 +302,11 @@ from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import (
 )
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     check_cross_repo_writes,
+)
+from coordinator_core.ops.dispatch_emit.memo_row import (
+    MemoDelivery,
+    check_memo_rows,
+    memo_fence_clause,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import (
@@ -355,8 +360,9 @@ _logger = logging.getLogger(__name__)
 #: (Review: coordinator:code-reviewer, finding 1, EM-agreed break-class
 #: fix).
 _EMITTED_COMMIT_AUTHORITY = (
-    "this run's terminal scoped commit (`dispatch.terminal_commit` -> "
-    "`ceremony.commit_v2`, issued by the workflow's driver after the run)"
+    "this run's checkpoint committer and its terminal scoped commit "
+    "(`dispatch.terminal_commit` -> `ceremony.commit_v2`, issued by the "
+    "workflow's driver after the run)"
 )
 _EMITTED_DEFERRED_VERIFICATION_AUTHORITY = (
     "this run's terminal scoped commit and its per-row `verify:` "
@@ -386,11 +392,13 @@ _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 #: be done by the only agent permitted to write the row's paths.
 _EXECUTION_TIER_CHANGE_KINDS = frozenset({"verification"})
 _TEST_AGENT_TYPE = "coordinator:test-runner"
+_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
 _AGENT_MODELS = {
     _EXECUTOR_AGENT_TYPE: "sonnet",
     _ENRICHER_AGENT_TYPE: "sonnet",
     _TEST_AGENT_TYPE: "haiku",
+    _COMMIT_AGENT_TYPE: "sonnet",
 }
 
 #: The Workflow runtime aborts an agent call after this many stalled ms
@@ -685,6 +693,16 @@ class NoWavesError(ValueError):
     (state/bug-backlog/2026-09-23-dispatch-emit-writes-a-workflow-script-t-
     10ad124c7958.yaml).
     """
+
+
+class ScriptOverCapError(NoWavesError):
+    """The composed script exceeds ``_WORKFLOW_SCRIPT_BYTE_CAP``; carries the
+    measured size so a caller can cut the inventory into enough parts."""
+
+    def __init__(self, message: str, *, script_size: int, row_count: int) -> None:
+        super().__init__(message)
+        self.script_size = script_size
+        self.row_count = row_count
 
 
 class DispatchGateViolation(ValueError):
@@ -1102,6 +1120,7 @@ _HOST_NATIVE_AGENT_TYPE_ROSTER: dict[str, str] = {
     _EXECUTOR_AGENT_TYPE: "general-purpose",
     _ENRICHER_AGENT_TYPE: "general-purpose",
     _TEST_AGENT_TYPE: "general-purpose",
+    _COMMIT_AGENT_TYPE: "general-purpose",
 }
 
 
@@ -1251,16 +1270,14 @@ class PlanContext:
     goal: Optional[str]
     problem_excerpt: Optional[str]
     exit_criterion: Optional[str] = None
-    #: Absolute path of the repo every repo-relative citation in this script
-    #: resolves against. `None` when the caller passed no `repo_root`, and the
-    #: preamble then says the anchor is undeclared rather than inventing one.
-    #: See `_plan_context_preamble` for why an emitted script needs it at all.
+    #: Set when the emitter was handed a repo root. Only presence matters: the
+    #: root's value is read at run time from `args.repoRoot` and never written
+    #: into emitted text. `None` omits the anchor line.
     repo_root: Optional[str] = None
-    #: Directory holding the `claude` CLI when it lives off the standard system
-    #: PATH, resolved once at emit time by `_off_path_claude_dir`. `None` means
-    #: the CLI was not found or is already on a default PATH; the preamble then
-    #: omits the line rather than naming a guess.
-    claude_bin_dir: Optional[str] = None
+    #: True when the `claude` CLI sits off a default PATH (probed at emit time
+    #: by `_claude_is_off_default_path`); the preamble then carries a
+    #: directory-free PATH hint.
+    claude_off_path: bool = False
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1306,17 +1323,33 @@ _CLAUDE_INSTALL_PREFIXES = (
     "/opt/homebrew/bin",
 )
 
+#: JS binding the emitted script reads its repo root from at run time; the
+#: root is never spliced into emitted text. An absent `args.repoRoot` falls back
+#: to `.`, which resolves against the cwd the workflow starts in.
+_REPO_ROOT_VAR = "_repoRoot"
+_REPO_ROOT_DECLARATION = (
+    f"  const {_REPO_ROOT_VAR} = (typeof args !== 'undefined' && args && "
+    "typeof args.repoRoot === 'string' && args.repoRoot) ? args.repoRoot : '.';"
+)
+
+def _runtime_root_marker() -> str:
+    """The repo root as a runtime JS expression, in the marker syntax
+    ``_resolve_markers_plus`` and ``SharedBlocks.declaration`` both resolve."""
+    return f"{_SHARED_PATH_MARKER_DELIM}{_REPO_ROOT_VAR}{_SHARED_PATH_MARKER_DELIM}"
+
+
 _CLAUDE_PATH_LINE = (
-    "claude CLI: at {dir}, off your default PATH; run `export PATH={dir}:$PATH` "
-    "before shelling out. `command not found` does not mean it is missing."
+    "claude CLI: if `claude` is `command not found`, it is off your default "
+    "PATH, not missing; find its directory (`which -a claude` from a login shell) and `export "
+    "PATH=<that directory>:$PATH` before shelling out."
 )
 
 
-def _off_path_claude_dir() -> Optional[str]:
-    """Directory of the `claude` CLI when it sits outside `_SYSTEM_PATH_DIRS`,
-    else ``None``. Resolved at emit time because the emitter is the one party
-    that can see the binary and is already writing the brief; each executor
-    rediscovering it costs a wave.
+def _claude_is_off_default_path() -> bool:
+    """True when the `claude` CLI exists but sits outside the directories a
+    dispatched executor's default PATH carries. Probed at emit time because the
+    emitter is the one party that can see the binary; only the boolean reaches
+    the brief, never the directory.
     """
     found = shutil.which("claude")
     if found is None:
@@ -1325,9 +1358,8 @@ def _off_path_claude_dir() -> Optional[str]:
             path=os.pathsep.join(os.path.expanduser(d) for d in _CLAUDE_INSTALL_PREFIXES),
         )
     if found is None:
-        return None
-    directory = Path(found).parent.as_posix()
-    return None if directory in _SYSTEM_PATH_DIRS else directory
+        return False
+    return Path(found).parent.as_posix() not in _SYSTEM_PATH_DIRS
 
 
 #: The preflight runs first, so an unresolvable root halts the run before any
@@ -1586,7 +1618,7 @@ def derive_plan_context(
         problem_excerpt=problem_excerpt,
         exit_criterion=_prime_exit_criterion_statement(plan_text),
         repo_root=repo_root,
-        claude_bin_dir=_off_path_claude_dir(),
+        claude_off_path=_claude_is_off_default_path(),
     )
 
 
@@ -1755,9 +1787,9 @@ def _plan_context_preamble(context: PlanContext) -> str:
     """
     lines = []
     if context.repo_root:
-        lines.append(_REPO_ANCHOR_LINE.format(root=context.repo_root))
-    if context.claude_bin_dir:
-        lines.append(_CLAUDE_PATH_LINE.format(dir=context.claude_bin_dir))
+        lines.append(_REPO_ANCHOR_LINE.format(root=_runtime_root_marker()))
+    if context.claude_off_path:
+        lines.append(_CLAUDE_PATH_LINE)
     lines.append(f"Plan: {context.title}")
     if context.goal:
         lines.append(f"Goal: {context.goal}")
@@ -1979,6 +2011,10 @@ def _declared_scope_block(row: WaveRow) -> str:
                 "**A test path listed here is IN SCOPE and is expected to be "
                 "written, not skipped** -- delivering the module and none of "
                 f"its tests is under-delivery, not staying in scope.\n\n{listed}\n\n"
+                "**A listed path that already exists is an incumbent.** Read it "
+                "and the tests that cover it BEFORE writing; a rewrite keeps "
+                "every capability the incumbent has, and its covering tests "
+                "stay green. Run those tests before and after.\n\n"
                 "**Report examined and changed as two separate counts, over "
                 f"this list of {len(paths) + len(prefixes)}.** A path you opened and found "
                 "nothing to change in is a no-op you examined -- report it. A "
@@ -1991,7 +2027,11 @@ def _declared_scope_block(row: WaveRow) -> str:
 
 
 def _row_return_contract(
-    row: WaveRow, plan_path: str, *, shared: Optional[SharedBlocks] = None
+    row: WaveRow,
+    plan_path: str,
+    *,
+    shared: Optional[SharedBlocks] = None,
+    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
 ) -> str:
     """Render the executor return contract (``executor_return_contract``)
     for one wave row: the footprint constraint (when the row declares
@@ -2042,6 +2082,9 @@ def _row_return_contract(
         )
     else:
         footprint = [report_path]
+
+    if memo_deliveries and row.id in memo_deliveries:
+        parts.append(memo_fence_clause(memo_deliveries[row.id]))
 
     parts.append(
         self_verify_constraint(
@@ -2126,8 +2169,14 @@ def _row_prompt(
     *,
     shared: Optional[SharedBlocks] = None,
     preamble: Optional[str] = None,
+    new_module_paths: tuple = (),
+    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
+
+    ``new_module_paths`` (optional) names ``.py`` modules this row creates
+    alongside edits to existing ones (``_new_module_paths``); when non-empty
+    the prompt orders their creation before any importing edit.
 
     The prompt MUST name where the row's own spec lives. A title-only
     prompt (``Execute C7: <title>``) leaves the executor to locate its
@@ -2183,8 +2232,13 @@ def _row_prompt(
         "dressed as compliance. Anything you do beyond your row, report under "
         "`Beyond brief:` with your reason. Never take another row (a peer "
         "holds it) and never edit the plan (it is every peer's instructions)."
-        f"\n\n{_row_return_contract(row, plan_path, shared=shared)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared, memo_deliveries=memo_deliveries)}"
     )
+    if new_module_paths:
+        body += (
+            f"\n\nCreate {', '.join(new_module_paths)} before editing any file "
+            "that imports them."
+        )
     if plan_context is not None:
         body = f"{_plan_context_preamble(plan_context)}\n\n{body}"
     return f"{prompt_head}\n\n{body}"
@@ -2197,6 +2251,8 @@ def _row_agent_call_expr(
     shared: Optional[SharedBlocks] = None,
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
+    new_module_paths: tuple = (),
+    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
 ) -> str:
     """Compose one row's ``agent(...)`` call expression -- the per-node body
     of the DAG's own ``_rows[id] = _runRow(...)`` registration (§ Design D4).
@@ -2210,9 +2266,17 @@ def _row_agent_call_expr(
     forward unopened straight to ``_row_prompt`` -- see that function's
     docstring.
     """
-    prompt = _row_prompt(row, plan_path, plan_context, shared=shared, preamble=preamble)
+    prompt = _row_prompt(
+        row,
+        plan_path,
+        plan_context,
+        shared=shared,
+        preamble=preamble,
+        new_module_paths=new_module_paths,
+        memo_deliveries=memo_deliveries,
+    )
     if shared is None:
-        prompt_literal = _js_string_literal(prompt)
+        prompt_literal = _resolve_markers_plus(prompt)
     else:
         head = f"{_prompt_head(preamble)}\n\n"
         if plan_context is not None:
@@ -2255,6 +2319,15 @@ def _escape_for_js_template_literal(text: str) -> str:
         .replace("`", "\\`")
         .replace("${", "\\${")
     )
+
+
+def _template_with_markers(text: str) -> str:
+    """``text`` as template-literal body: literal segments escaped, marker
+    segments interpolated as runtime JS expressions."""
+    pieces = []
+    for is_marker, part in _split_marker_segments(text):
+        pieces.append("${%s}" % part if is_marker else _escape_for_js_template_literal(part))
+    return "".join(pieces)
 
 
 _SHARED_VAR = "_shared"
@@ -2311,7 +2384,7 @@ class SharedBlocks:
     def declaration(self) -> Optional[str]:
         if not self._texts:
             return None
-        items = ",\n".join(f"    `{_escape_for_js_template_literal(t)}`" for t in self._texts)
+        items = ",\n".join(f"    `{_template_with_markers(t)}`" for t in self._texts)
         return f"  const {_SHARED_VAR} = [\n{items}\n  ];"
 
     def path_list_declaration(self) -> Optional[str]:
@@ -2833,7 +2906,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         _degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host)
     )
     return (
-        "  async function _runRow(id, deps, verifyScope, run) {\n"
+        "  async function _runRow(id, deps, verifyScope, run, commit) {\n"
         "    await Promise.all(deps);\n"
         "    const plan = _rowPlan[id];\n"
         "    if (_halted) {\n"
@@ -2881,9 +2954,141 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "schema: _ROW_VERIFY_SCHEMA }\n"
         "      ));\n"
         "    }\n"
+        "    if (!incomplete && commit) {\n"
+        "      _landed[id] = commit;\n"
+        "    }\n"
         "    return result;\n"
         "  }"
     )
+
+
+_CHECKPOINT_COMMIT_SCHEMA = {
+    "type": "object",
+    "required": ["outcome"],
+    "properties": {
+        "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
+        "sha": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+}
+_CHECKPOINT_PUSH_SCHEMA = {
+    "type": "object",
+    "required": ["pushed"],
+    "properties": {"pushed": {"type": "boolean"}, "reason": {"type": "string"}},
+}
+
+#: Branches a checkpoint push never targets.
+_CHECKPOINT_PROTECTED_BRANCHES = frozenset({"main", "master"})
+
+
+def _checkpoint_commit_js(
+    agent_type_host: Optional[str],
+    *,
+    repo_root: Optional[str],
+    session_id: Optional[str],
+    push_branch: Optional[str],
+) -> str:
+    """The script-scope checkpoint machinery: ``_runRow`` records each DONE
+    row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
+    rows to settle (never blocking any row or later wave), then one
+    ``coordinator:git-commit-agent`` commits the union of that wave's DONE
+    rows' paths through ``ceremony.commit_v2``, serialised on ``_commitChain``
+    so wave commits never race the index. A wave with no DONE row emits no
+    leg. Each landed commit gets a non-awaited push of the run's own work
+    branch (``push_branch``; never main/master, never forced). The terminal
+    commit still lands the receipts, stamps and any prefix-claimed files."""
+    root_clause = (
+        f"Your repo is `{repo_root}`: `cd` there before any command and resolve every "
+        "relative path against it. "
+        if repo_root
+        else ""
+    )
+    repo_flag = f" --repo {repo_root}" if repo_root else ""
+    head = _BRIEF_PRECEDENCE_CLAUSE + "\n\n" + root_clause
+    commit_tail = (
+        " You are the only stage that stages or commits anything. Stage exactly this "
+        "declared path list and nothing else, dropping any entry that neither exists "
+        "on disk nor is tracked at HEAD: ["
+    )
+    route = (
+        "] -- then commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
+        f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
+        "'{\"paths\":[...],\"message\":\"<subject>\"}'` -- the only committer route. "
+        "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
+        "If every listed path already matches HEAD, commit nothing and report outcome "
+        "committed without a sha. If the outcome is indeterminate, reconcile it against "
+        "`git log` and `git status` before doing anything else -- never retry blind. "
+        "On commit-failed, put the verbatim refusal in `reason`."
+        + _dispatching_session_id_paragraph(session_id)
+    )
+    commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
+    push_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
+    phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
+    lines = [
+        f"  const _CHECKPOINT_COMMIT_SCHEMA = {json.dumps(_CHECKPOINT_COMMIT_SCHEMA)};",
+        f"  const _CHECKPOINT_PUSH_SCHEMA = {json.dumps(_CHECKPOINT_PUSH_SCHEMA)};",
+        "  const _commitFailures = [];",
+        "  const _pushFailures = [];",
+        "  const _checkpointPushes = [];",
+        "  const _landed = {};",
+        "  const _waveTriggers = [];",
+        "  let _commitChain = Promise.resolve();",
+        "  function _waveCommit(n, ids) {",
+        "    _waveTriggers.push(Promise.allSettled(ids.map((i) => _rows[i])).then(() => {",
+        "      _commitChain = _commitChain.then(() => _commitWave(n, ids));",
+        "    }));",
+        "  }",
+        "  async function _commitWave(n, ids) {",
+        "    const done = ids.filter((i) => _landed[i]);",
+        "    if (!done.length) return;",
+        "    const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];",
+        "    const id = 'wave ' + n;",
+        "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
+        "    let r = null;",
+        "    try {",
+        "      r = await agent(",
+        f"        {_js_string_literal(head)} + 'You are the committer for wave ' + n + ' (' + done.join(', ') + "
+        "'). Commit subject: `' + subject + '`.' + "
+        f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
+        f"{_js_string_literal(route)},",
+        f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
+        f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_COMMIT_SCHEMA }}",
+        "      );",
+        "    } catch (e) {",
+        "      r = null;",
+        "    }",
+        "    if (!r || r.outcome !== 'committed') {",
+        "      _commitFailures.push(id + ': ' + ((r && r.reason) || 'no committer reply'));",
+        "      return;",
+        "    }",
+    ]
+    if push_branch is not None:
+        branch = push_branch
+        push_prompt = (
+            head
+            + f"Push a checkpoint of this run's work branch `{branch}`. Run "
+            f"`git{' -C ' + repo_root if repo_root else ''} rev-parse --abbrev-ref HEAD`; if it is "
+            f"not `{branch}`, report pushed false with reason `branch moved` and stop. Otherwise run "
+            f"exactly `git{' -C ' + repo_root if repo_root else ''} push origin HEAD:refs/heads/{branch}`. "
+            "Never pass --force or --force-with-lease, never push any other ref, never push main or "
+            "master. If the push is rejected or the remote is unreachable, report the verbatim output "
+            "in `reason` and stop: do not retry, merge or rebase."
+        )
+        lines += [
+            "    _checkpointPushes.push(agent(",
+            f"      {_js_string_literal(push_prompt)},",
+            f"      {{ label: 'checkpoint-push:' + id, phase: {phase}, agentType: {push_type}, "
+            f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_PUSH_SCHEMA }}",
+            "    ).then((p) => {",
+            "      if (!p || p.pushed !== true) {",
+            "        _pushFailures.push(id + ': ' + String((p && p.reason) || 'no pusher reply').slice(-300));",
+            "      }",
+            "    }, (e) => {",
+            "      _pushFailures.push(id + ': ' + String((e && e.message) || e).slice(-300));",
+            "    }));",
+        ]
+    lines.append("  }")
+    return "\n".join(lines)
 
 
 def _runtime_cap_on_host() -> int:
@@ -2926,7 +3131,6 @@ def _terminal_commit_marker(
     plan_path: Optional[str],
     deliverable_id: Optional[str],
     session_id: Optional[str],
-    repo_root: Optional[str],
     expected_branch: Optional[str] = None,
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
@@ -2959,7 +3163,6 @@ def _terminal_commit_marker(
             chunks=chunks,
             deliverable_id=deliverable_id,
             session_id=session_id,
-            repo_root=repo_root,
             plan_path=plan_path,
             expected_branch=expected_branch,
         )
@@ -3030,6 +3233,7 @@ def compose_script(
     preamble: Optional[str] = None,
     script_path: Optional[str] = None,
     expected_branch: Optional[str] = None,
+    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3187,6 +3391,24 @@ def compose_script(
         f"{stage_schema_literal('row_verification_result')};"
     )
 
+    push_branch = (
+        expected_branch
+        if expected_branch and expected_branch not in _CHECKPOINT_PROTECTED_BRANCHES
+        else None
+    )
+    if push_branch is None:
+        body_blocks.append(
+            "  log('No checkpoint push: the run is not on a non-protected work branch "
+            "(detached HEAD, main or master); checkpoint commits stay local.');"
+        )
+    body_blocks.append(
+        _checkpoint_commit_js(
+            agent_type_host,
+            repo_root=repo_anchor,
+            session_id=session_id,
+            push_branch=push_branch,
+        )
+    )
     body_blocks.append(_run_row_helper_js(agent_type_host))
 
     phase_titles.append(_EXECUTE_PHASE_TITLE)
@@ -3197,6 +3419,8 @@ def compose_script(
     )
 
     body_blocks.append("  const _rows = {};")
+    unchecked_rows: list[str] = []
+    committable_rows: set[str] = set()
     for node in dag.nodes:
         row = node.row
         deps_expr = (
@@ -3215,15 +3439,60 @@ def compose_script(
             shared,
             agent_type_host=agent_type_host,
             preamble=preamble,
+            new_module_paths=tuple(_new_module_paths(row, repo_root)),
+            memo_deliveries=memo_deliveries,
+        )
+        row_paths = row_pathspecs.get(row.id) or []
+        if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
+            unchecked_rows.append(row.id)
+            row_paths = []
+        if row_paths:
+            committable_rows.add(row.id)
+        commit_expr = (
+            "{ title: "
+            + _js_string_literal(row.title)
+            + ", paths: ["
+            + ", ".join(_js_string_literal(p) for p in row_paths)
+            + "] }"
+            if row_paths
+            else "null"
         )
         body_blocks.append(
             f"  _rows[{_js_string_literal(row.id)}] = _runRow("
             f"{_js_string_literal(row.id)}, {deps_expr}, "
-            f"{verify_expr}, async () => ({call_expr}));"
+            f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
         )
 
+    for n, wave in enumerate(waves, start=1):
+        ids = [r.id for r in wave if r.id in committable_rows]
+        if ids:
+            body_blocks.append(
+                f"  _waveCommit({n}, [" + ", ".join(_js_string_literal(i) for i in ids) + "]);"
+            )
+
+    if unchecked_rows:
+        body_blocks.append(
+            "  log("
+            + _js_string_literal(
+                f"No checkpoint commit for rows declaring more than "
+                f"{_SHARED_PATH_ARRAY_THRESHOLD} paths (the terminal commit covers them): "
+                + ", ".join(unchecked_rows)
+            )
+            + ");"
+        )
     body_blocks.append("  await Promise.all(Object.values(_rows));")
     body_blocks.append("  await Promise.all(_verifications);")
+    body_blocks.append("  await Promise.all(_waveTriggers);")
+    body_blocks.append("  await _commitChain;")
+    body_blocks.append("  await Promise.all(_checkpointPushes);")
+    body_blocks.append(
+        "  if (_commitFailures.length) log('Checkpoint commits that did not land (the "
+        "terminal commit still covers their paths): ' + _commitFailures.join('; '));"
+    )
+    body_blocks.append(
+        "  if (_pushFailures.length) log('Checkpoint pushes that failed (the commits are "
+        "local only): ' + _pushFailures.join('; '));"
+    )
 
     marker = _terminal_commit_marker(
         flat_rows,
@@ -3231,7 +3500,6 @@ def compose_script(
         plan_path=plan_path,
         deliverable_id=deliverable_id,
         session_id=session_id,
-        repo_root=repo_anchor,
         expected_branch=expected_branch,
     )
     if marker is not None:
@@ -3437,6 +3705,8 @@ def compose_script(
     declaration = shared.declaration() if shared is not None else None
     if declaration is not None:
         body_blocks.insert(0, declaration)
+    if repo_anchor:
+        body_blocks.insert(0, _REPO_ROOT_DECLARATION)
     if excluded_rows:
         body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
@@ -3451,10 +3721,12 @@ def compose_script(
     script_size = len(script.encode("utf-8"))
     if script_size > _WORKFLOW_SCRIPT_BYTE_CAP:
         row_count = sum(len(wave) for wave in waves)
-        raise NoWavesError(
+        raise ScriptOverCapError(
             f"composed script is {script_size} bytes, over the Workflow "
             f"runner's {_WORKFLOW_SCRIPT_BYTE_CAP}-byte cap ({row_count} "
-            "row(s)) -- split the inventory into parts of fewer rows"
+            "row(s)) -- split the inventory into parts of fewer rows",
+            script_size=script_size,
+            row_count=row_count,
         )
 
     return script
@@ -3781,6 +4053,71 @@ def find_import_window_rows(rows, repo_root: Optional[Path]) -> list:
     ]
 
 
+#: Finding code for ``find_new_module_with_importer``.
+NEW_MODULE_WITH_IMPORTER_CODE = "new-module-with-importer"
+
+
+def _is_test_py(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    name = parts[-1] if parts else ""
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or "tests" in parts[:-1]
+    )
+
+
+def _new_module_paths(row, repo_root: Optional[Path]) -> list:
+    """The row's non-test ``.py`` write paths absent from the tree, when the same
+    row also writes an existing non-test ``.py`` path; ``[]`` otherwise.
+
+    One ``exists`` per candidate path. Globs are not resolved. No-op when
+    ``repo_root`` is ``None``.
+    """
+    writes = row.writes
+    if repo_root is None or not isinstance(writes, list):
+        return []
+    root = Path(repo_root)
+    absent: list = []
+    has_existing = False
+    for raw_path in writes:
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path.endswith(".py")
+            or _GLOB_CHARS.intersection(raw_path)
+            or _is_test_py(raw_path)
+        ):
+            continue
+        if (root / raw_path).exists():
+            has_existing = True
+        else:
+            absent.append(raw_path)
+    return absent if has_existing else []
+
+
+def find_new_module_with_importer(rows, repo_root: Optional[Path]) -> list:
+    """WARN findings for rows that add a new ``.py`` module and edit an existing one.
+
+    Until the terminal commit lands, the worktree holds the importer's edit
+    and the new module in whatever order the executor wrote them, so a
+    reader sees an import of a module that does not exist yet. The row prompt
+    carries the ordering clause; this names the rows. Warns only.
+    """
+    findings = []
+    for row in rows:
+        new_paths = _new_module_paths(row, repo_root)
+        if new_paths:
+            findings.append(
+                Finding(
+                    Severity.WARN,
+                    NEW_MODULE_WITH_IMPORTER_CODE,
+                    f"row {row.id!r} adds {new_paths} and edits an existing .py "
+                    "file; the prompt orders the new module first",
+                )
+            )
+    return findings
+
+
 def emit_script(
     plan_path,
     *,
@@ -3901,9 +4238,11 @@ def emit_script(
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root)
+    memo_deliveries = check_memo_rows(rows, repo_root)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))
+        findings_out.extend(find_new_module_with_importer(rows, repo_root))
 
     waves = build_waves(rows)
 
@@ -3947,6 +4286,7 @@ def emit_script(
         preamble=preamble,
         script_path=script_path,
         expected_branch=expected_branch,
+        memo_deliveries=memo_deliveries,
     )
 
 

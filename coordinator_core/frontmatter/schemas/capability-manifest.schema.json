@@ -4,7 +4,7 @@
   "x-schema-name": "capability-manifest",
   "x-schema-version": "1.0.0",
   "applies_to": "state/capabilities/manifest.json",
-  "description": "Per-repo AUTHORED capability manifest — the surface each platform repo EMITS declaring the capabilities (stores, query surfaces, indexes, embed pipelines) it offers sibling repos, with a REAL consume seam per capability. This is the Tier-2 authored substrate (PM decision) that replaced the rejected Tier-1 heuristic (version_highlights[] + wiki keyword grep) — see docs/plans/2026-07-17-cross-repo-capability-lens.md § Mechanism selection. Claude-klabauter's engine op READS this file verbatim per emitting repo and aggregates N instances into fleet-capability-index.schema.json; it is never inferred or greped. Decentralized, per-repo emission — mirrors the Fleet Producer Contract emission discipline of strategic-self-description.schema.json (docs/wiki/state-placement-law.md § Fleet Producer Contract): no repo emits into a shared consolidation point.",
+  "description": "Per-repo AUTHORED capability manifest — the surface each platform repo EMITS declaring the capabilities (stores, query surfaces, indexes, embed pipelines) it offers sibling repos, with a REAL consume seam per capability. This is the Tier-2 authored substrate (PM decision) that replaced the rejected Tier-1 heuristic (version_highlights[] + wiki keyword grep) — see docs/plans/2026-07-17-cross-repo-capability-lens.md § Mechanism selection. the engine repo's engine op READS this file verbatim per emitting repo and aggregates N instances into fleet-capability-index.schema.json; it is never inferred or greped. Decentralized, per-repo emission — mirrors the Fleet Producer Contract emission discipline of strategic-self-description.schema.json (docs/wiki/hook-best-practices/state-placement-law.md § Fleet Producer Contract): no repo emits into a shared consolidation point.",
   "type": "object",
   "required": ["host_repo", "generated_at", "refresh_cadence", "capabilities"],
   "additionalProperties": false,
@@ -22,7 +22,7 @@
     "refresh_cadence": {
       "type": "string",
       "minLength": 1,
-      "description": "The emitting repo's declared refresh interval for this manifest (e.g. an ISO-8601 duration like \"P7D\", or a human cadence label the repo commits to). Read alongside `generated_at` by claude-klabauter's aggregation op and by the review SKILL's read-time TTL downgrade rule (AC8) — past this cadence, entries sourced from this manifest are downgraded to stale/unverified rather than trusted as live."
+      "description": "The emitting repo's declared refresh interval for this manifest (e.g. an ISO-8601 duration like \"P7D\", or a human cadence label the repo commits to). Read alongside `generated_at` by the engine's aggregation op and by the review SKILL's read-time TTL downgrade rule (AC8) — past this cadence, entries sourced from this manifest are downgraded to stale/unverified rather than trusted as live."
     },
     "capabilities": {
       "type": "array",

@@ -56,7 +56,7 @@ def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
     caller = tmp_path / "caller"
     caller.mkdir()
     subprocess.run(
-        ["git", "init", str(caller)],
+        ["git", "init", str(caller)],  # popup-safe-env-suppressed
         capture_output=True,
         check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -75,7 +75,7 @@ def _invoke_setup_error_op(tmp_path: Path) -> subprocess.CompletedProcess:
             sys.executable, "-m", "coordinator_core.invoke", "memo.check_addressee",
             "--bare", json.dumps(params), "--repo", str(caller),
             "--allow-unstamped-dispatch",
-        ],
+        ],  # popup-safe-env-suppressed
         capture_output=True,
         text=True,
         encoding="utf-8",

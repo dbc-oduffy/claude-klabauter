@@ -172,6 +172,7 @@ def test_planning_only_commit_classifies_planning(tmp_path: Path) -> None:
     [
         ("docs/research/", "docs/research/2026-08-05-example.md"),
         ("docs/problems/", "docs/problems/2026-08-05-example.md"),
+        ("state/roadmap/", "state/roadmap/spine/example.md"),
     ],
 )
 def test_each_new_planning_prefix_classifies_planning(

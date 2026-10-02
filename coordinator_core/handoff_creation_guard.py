@@ -96,14 +96,10 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
     """Return an ``archive/handoffs/`` record whose ``handoff_id`` frontmatter
     scalar matches ``handoff_id``, or ``None`` when absent/not found.
 
-    Shared match basis with ``reap-orphaned-in-flight-handoffs.py``'s
-    ``_handoff_id_archived_twin`` -- that CLI-local helper (added first, at
-    the reaper/resurrection-prevention layer) now delegates to this function
-    via an in-process CLAUDE_KLABAUTER_ROOT import trampoline rather than carrying its
-    own duplicate glob-and-compare loop, so the two guards -- this module's
-    RAISE-on-match creation guard and the reaper's SKIP-on-match resurrection
-    guard -- cannot silently drift apart on what counts as a "twin". Only the
-    reaction to a match stays call-site-local; the predicate is now singular.
+    The single "archived twin" predicate: any guard that reacts to a twin
+    (this module RAISES on a match) calls this rather than carrying its own
+    glob-and-compare loop, so guards cannot drift apart on what counts as a
+    twin. Only the reaction to a match stays call-site-local.
     """
     if not handoff_id:
         return None

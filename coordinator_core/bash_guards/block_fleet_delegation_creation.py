@@ -122,7 +122,7 @@ from typing import Any, Dict, Optional
 import re
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
-    INDIRECTION_REMEDY,
+    indirection_deny_reason,
     REASON_INDIRECTION,
     SentinelCreationDetector,
     _REDIR_PREFIX_RE,
@@ -298,21 +298,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     del cmd
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the delegation grant>")
-        return (
-            "BLOCKED (fleet-delegation guard): this command was denied "
-            "because its payload is delivered through an interpreter, "
-            "stdin, or command-assembly indirection this guard cannot "
-            "examine -- NOT because the payload was found to touch the "
-            "fleet-delegation grant record.\n\n"
-            "Detected shape: %s\n\n"
-            "If this command genuinely does not touch the grant record: "
-            "%s\n\n"
-            "Reading or removing an existing grant record remains available "
-            "as a DIRECT command -- `cat`, `ls`, `stat`, `rm` -- but not "
-            "through a wrapper like this one: inside an interpreter payload "
-            "this guard cannot tell a read from a write, so it denies "
-            "either way. Removal only re-locks the boundary." % (safe_shape, INDIRECTION_REMEDY)
-        )
+        return indirection_deny_reason("fleet-delegation guard", safe_shape)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
         "BLOCKED: creates/modifies the fleet-delegation grant record; "

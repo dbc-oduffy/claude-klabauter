@@ -128,7 +128,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             entry_template=WriteSurfaceEntry(
                 kind="structured-file-key",
                 path=f"<repo_root>/{_LOCAL_MD_FILENAME}",
-                key="fast_test_cmd|full_test_cmd",
+                key="<fast_test_cmd|full_test_cmd>",
                 reason=(
                     "detect_and_write_test_cmds: upserts detected fast_test_cmd/full_test_cmd "
                     "values into the target repo's coordinator.local.md frontmatter. "

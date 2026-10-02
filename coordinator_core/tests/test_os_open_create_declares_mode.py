@@ -65,7 +65,12 @@ def _is_os_open(func: ast.AST) -> bool:
 
 def _violations_in(path: Path) -> list[tuple[int, str]]:
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        # A violation needs an `O_CREAT` Name/Attribute node, whose spelling is
+        # literally in the source; unparseable files return [] either way.
+        if "O_CREAT" not in text:
+            return []
+        tree = ast.parse(text)
     except (OSError, SyntaxError):
         return []
 

@@ -74,6 +74,7 @@ import platform
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import sysconfig
@@ -138,6 +139,8 @@ MACHINE_LOCAL_REPO_KEYS: dict[str, str] = {
 #: hook plane unwired and `.coordinator-content-root` unwritten. A clone destination this process
 #: chose itself is not an untrusted root, and this is where that gets recorded
 #: rather than worked around with COORDINATOR_PLUGIN_ROOT_TRUSTED=1.
+CONTENT_ROOT_KEY = "repos.content_root"
+
 TRUST_ANCHOR_KEYS: dict[str, str] = {
     "coordinator-claude": "repos.content_root",
     "klabauter": "repos.claude_klabauter",
@@ -328,6 +331,9 @@ class Report:
     #: Verdict of `link_engine_cli_shims_onto_image_path`: the image-default-PATH
     #: dir the shims were linked into, and which names were linked vs. left alone.
     engine_cli_path_links: dict | None = None
+    #: Verdict of `link_machine_local_cli`: the link made (or left) for the bare
+    #: `machine-local` name on the image default PATH.
+    machine_local_cli_link: dict | None = None
     container_optin_requested: bool | None = None
     setup_exit_code: int | None = None
     plugin_settings: dict | None = None
@@ -412,8 +418,12 @@ class Report:
     #: up with a `prepare-commit-msg` hook file. See `install_hooks_fleet`.
     hooks_fleet: dict | None = None
     rag_install: dict | None = None
+    #: Per-checkout verdicts of `run_declared_cloud_preboots`.
+    cloud_preboots: list | None = None
     #: `deepen_shallow_checkouts`: per mounted shallow checkout, the detached fetch started.
     history_deepen: dict | None = None
+    #: `start_hook_forwarder`: pid/path started, or already_bound.
+    hook_forwarder: dict | None = None
     #: Verdict of `land_example_retrieval_repo_repo_bundle`: per mounted repo, whether the
     #: published structural-index bundle was pulled before the daemon could be
     #: armed. Advisory only — a failure here is recorded, never raised; see
@@ -422,11 +432,17 @@ class Report:
     #: `env.EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` written into `settings.json` by
     #: `land_example_retrieval_repo_repo_bundle`, or the write's own failure.
     session_focus_env: dict | None = None
+    #: `start_work_target_indexing`: the detached readiness worker started for the
+    #: session's work targets, and the status file it keeps current.
+    rag_work_targets: dict | None = None
     #: Verdicts of `pin_hook_interpreter`, `register_path_probe_hook` and
     #: `follow_engine_link_in_pth`.
     hook_interpreter: dict | None = None
     path_probe: dict | None = None
     engine_pth: dict | None = None
+    #: `cap_stop_hook_once_per_session`: whether the platform stop hook carries the
+    #: once-per-session block this boot.
+    stop_hook_once: dict | None = None
     mcp_registration: dict | None = None
     #: The headersHelper this run armed: the helper path and the daemon-start
     #: argv baked into it. See `arm_retrieval_connect_helper`.
@@ -567,8 +583,60 @@ def _git_clone(url: str, dest: str) -> None:
         raise RuntimeError(f"git clone {url} -> {dest} failed: {result.stderr.strip()}")
 
 
+#: The directory name the platform mounts each `CLONES` repo under when the
+#: environment selects it. Keys mirror `CLONES`; values are repo basenames.
+MOUNTED_CLONE_NAMES = {"coordinator-claude": "coordinator-claude", "klabauter": "claude-klabauter"}
+
+
+def _mounted_clone_source(name: str) -> Path | None:
+    """The mounted checkout of `CLONES[name]`'s repository, or None.
+
+    Matched by directory name AND by the repo URL's slug appearing in the
+    checkout's `.git/config` (a file read, no spawn) — a same-named directory
+    of some other repository is not a source.
+    """
+    slug = CLONES[name]["url"].rsplit("/", 1)[-1].removesuffix(".git")
+    for root in session_source_roots():
+        cand = root / MOUNTED_CLONE_NAMES[name]
+        try:
+            config = (cand / ".git" / "config").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if f"/{slug}" in config:
+            return cand
+    return None
+
+
+def _seed_clone_from_mount(mount: Path, url: str, dest: str) -> bool:
+    """Clone `dest` from the mounted checkout instead of the network.
+
+    A separate tree, never the mount itself: the plugin and engine must not run
+    whatever an agent later edits or checks out in the work tree. At setup time
+    the mount's HEAD is the platform's fresh checkout, the same commit a network
+    clone yields. `origin` is re-pointed at `url` so later fetches reach GitHub.
+    False on any failure; the caller falls back to the network clone.
+    """
+    if Path(dest).exists():
+        return True
+    kw = dict(capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        if subprocess.run(["git", "clone", "--quiet", "--depth", "1", mount.as_uri(), dest], **kw).returncode:  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+            shutil.rmtree(dest, ignore_errors=True)
+            return False
+        subprocess.run(["git", "-C", dest, "remote", "set-url", "origin", url], **kw)  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+    except (OSError, subprocess.SubprocessError):
+        shutil.rmtree(dest, ignore_errors=True)
+        return False
+    return True
+
+
 def clone_repo(name: str) -> None:
     spec = CLONES[name]
+    mount = _mounted_clone_source(name)
+    if mount is not None and _seed_clone_from_mount(mount, spec["url"], spec["dest"]):
+        print(f"[cloud_setup] {name}: seeded {spec['dest']} from mounted {mount}")
+        return
     _network_retry(f"clone {name}", lambda: _git_clone(spec["url"], spec["dest"]))
 
 
@@ -747,37 +815,42 @@ def _image_path_link_dir() -> Path:
     raise FileNotFoundError(f"no writable directory on the image default PATH {entries!r}")
 
 
+def _settings_bin() -> Path:
+    return Path(_engine_env()["COORDINATOR_SETTINGS_HOME"]) / "bin"
+
+
 def link_engine_cli_shims_onto_image_path(report: Report) -> None:
-    """Symlink every shim recorded as written into a directory of
+    """Symlink every launcher in the settings-home `bin` into a directory of
     the image default PATH, then require `PATH_PROBE_CLI` to resolve there.
 
-    `SHIM_DIR` reaches a session's PATH only through the env-var box, which
-    does not reliably carry it: a grind agent's shell then resolves every
-    engine CLI to "command not found" and its commit stage is lost. The image
-    default PATH is what every shell gets, so a link there needs no PATH state.
+    `settings.json`'s `env` PATH reaches only processes the harness spawns
+    itself; Workflow-dispatched agents and their shells carry the image default
+    PATH alone, so every engine CLI is "command not found" there and the commit
+    stage is lost. A link on the image default PATH needs no PATH state. Runs
+    after `scripts/setup.py`, which is what writes the launchers.
 
     A name that already exists at the link dir (an image binary, an operator's
-    file, a prior run's link) is left alone, never replaced. A no-op when
-    shim step recorded nothing: that step's own failure is the
-    loud one. Raises when the probe CLI does not resolve under the image
-    default PATH, which `run_step` records into the pre-boot verdict.
+    file, a prior run's link) is left alone, never replaced. Raises when the
+    probe CLI does not resolve under the image default PATH, which `run_step`
+    records into the pre-boot verdict.
     """
-    shims = report.engine_cli_shims
-    if shims is None:
-        return
+    source = _settings_bin()
     link_dir = _image_path_link_dir()
     linked: list[str] = []
     skipped_existing: list[str] = []
-    if link_dir.resolve() != SHIM_DIR.resolve():
-        for name in shims.get("written", []):
-            link = link_dir / name
-            if os.path.lexists(link):
-                skipped_existing.append(name)
-                continue
-            link.symlink_to(SHIM_DIR / name)
-            linked.append(name)
+    entries = sorted(source.iterdir()) if source.is_dir() else []
+    for entry in entries:
+        if entry.suffix in (".cmd", ".ps1") or not entry.is_file() or not os.access(entry, os.X_OK):
+            continue
+        link = link_dir / entry.name
+        if os.path.lexists(link):
+            skipped_existing.append(entry.name)
+            continue
+        link.symlink_to(entry)
+        linked.append(entry.name)
     resolved = shutil.which(PATH_PROBE_CLI, path=_image_default_path())
     report.engine_cli_path_links = {
+        "source": str(source),
         "link_dir": str(link_dir),
         "linked": linked,
         "skipped_existing": skipped_existing,
@@ -788,7 +861,42 @@ def link_engine_cli_shims_onto_image_path(report: Report) -> None:
         raise RuntimeError(
             f"`{PATH_PROBE_CLI}` does not resolve under the image default PATH "
             f"({_image_default_path()}): grind agents cannot run engine CLIs. "
-            f"Link the shims in {SHIM_DIR} into {link_dir}."
+            f"Link the launchers in {source} into {link_dir}."
+        )
+
+
+MACHINE_LOCAL_CLI = "machine-local"
+
+
+def link_machine_local_cli(report: Report) -> None:
+    """Put the bare `machine-local` name on the image default PATH.
+
+    Doctrine and skills call `machine-local get repos.<key>` by bare name. It is
+    not an engine `coordinator/bin` CLI, so `install_engine_cli_shims` never
+    covers it; the forwarder ships in the coordinator clone's `templates/bin/`.
+    A name already present at the link dir is left alone. Raises when the name
+    still does not resolve under the image default PATH.
+    """
+    forwarder = Path(CLONES["coordinator-claude"]["dest"]) / "templates" / "bin" / MACHINE_LOCAL_CLI
+    if not forwarder.is_file():
+        raise FileNotFoundError(f"{forwarder} absent — the coordinator clone has no machine-local forwarder")
+    link_dir = _image_path_link_dir()
+    link = link_dir / MACHINE_LOCAL_CLI
+    linked = False
+    if not os.path.lexists(link):
+        link.symlink_to(forwarder)
+        linked = True
+    resolved = shutil.which(MACHINE_LOCAL_CLI, path=_image_default_path())
+    report.machine_local_cli_link = {
+        "link": str(link),
+        "target": str(forwarder),
+        "linked": linked,
+        "resolves_to": resolved,
+    }
+    if resolved is None:
+        raise RuntimeError(
+            f"`{MACHINE_LOCAL_CLI}` does not resolve under the image default PATH "
+            f"({_image_default_path()}). Link {forwarder} into {link_dir}."
         )
 
 
@@ -931,6 +1039,12 @@ def seed_trust_anchor_keys(report: Report) -> None:
     elif "repos.content_root" in targets:
         report.doe_authoring_tree = str(authoring)
         targets["repos.content_root"] = (str(authoring), True)
+
+    # The canonical spelling `data_root` / provision-sidecar resolve snippets
+    # through; the machine-local write retires the paired `repos.content_root`
+    # line, and reads of either spelling still answer.
+    if "repos.content_root" in targets:
+        targets[CONTENT_ROOT_KEY] = targets["repos.content_root"]
 
     for key, (value, fatal) in targets.items():
         _write(key, value, fatal=fatal)
@@ -1295,17 +1409,20 @@ def _hook_plane_module():
     """The shared `coordinator_core/install/hook_plane_verdict.py`, loaded once by
     file path (this script runs with no engine installed, so it cannot import it).
 
-    Probes the klabauter clone first, then this script's own checkout, which is
-    what the dev tree and the tests resolve. Raises RuntimeError naming both
-    paths when neither exists.
+    Probes this script's own checkout first, then the klabauter clone. Own tree
+    first because the module and this script must come from the same tree: the
+    published mirror rewrites names both read (the pointer basename among them),
+    so a dev-tree script paired with the clone's module checks a file the script
+    never wrote. Piped from `curl`, this script has no tree and the clone answers.
+    Raises RuntimeError naming both paths when neither exists.
     """
     if _hook_plane_cache:
         return _hook_plane_cache[0]
     import importlib.util
 
     candidates = [
-        Path(CLONES["klabauter"]["dest"]) / _HOOK_PLANE_MODULE_REL,
         Path(__file__).resolve().parent.parent / _HOOK_PLANE_MODULE_REL,
+        Path(CLONES["klabauter"]["dest"]) / _HOOK_PLANE_MODULE_REL,
     ]
     for path in candidates:
         if not path.is_file():
@@ -2773,6 +2890,9 @@ def _defer_rag_install(argv: list[str], report: Report) -> None:
 #: reports the checkout as broken. Bounded by date, not unshallowed: a full fetch of a
 #: 26k-commit repo is the unbounded transfer this bound exists to refuse.
 HISTORY_DEEPEN_DAYS = 180
+#: Mounted checkouts fetched to FULL history instead: other repos' tests pin SHAs in these
+#: (claude-klabauter's schema-drift tests pin coordinator-content-repo SHAs older than any date bound would keep).
+FULL_HISTORY_CHECKOUTS = frozenset({"coordinator-content-repo"})
 HISTORY_DEEPEN_LOG = Path("/root/history-deepen.log")
 
 
@@ -2795,18 +2915,93 @@ def deepen_shallow_checkouts(report: Report) -> None:
         for cand in children:
             if not (cand / ".git" / "shallow").is_file() or cand.resolve() in own:
                 continue
+            depth = "--unshallow" if cand.name in FULL_HISTORY_CHECKOUTS else f"--shallow-since={since}"
             HISTORY_DEEPEN_LOG.parent.mkdir(parents=True, exist_ok=True)
             with open(HISTORY_DEEPEN_LOG, "ab") as log:
                 proc = subprocess.Popen(
-                    ["git", "-C", str(cand), "fetch", "--quiet", f"--shallow-since={since}", "origin"],
+                    ["git", "-C", str(cand), "fetch", "--quiet", depth, "origin"],
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
                     start_new_session=True,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
-            started[str(cand)] = {"pid": proc.pid, "since": since}
+            started[str(cand)] = {"pid": proc.pid, "depth": depth}
     report.history_deepen = {"started": started, "log": str(HISTORY_DEEPEN_LOG)}
+
+
+#: The fixed port every `type: "http"` hook in the coordinator plugin's hooks.json dials.
+HOOK_FORWARDER_PORT = 47623
+HOOK_FORWARDER_LOG = Path("/root/http-hook-forwarder.log")
+#: Stdlib-only standalone twin shipped by this engine; used when the plugin tree carries none.
+ENGINE_FORWARDER = Path(__file__).resolve().parent.parent / "coordinator_core" / "warm" / "http_hook_forwarder.py"
+
+
+def start_hook_forwarder(report: Report) -> None:
+    """Start the coordinator plugin's http hook forwarder, detached, unless the port is held.
+
+    Every coordinator hook is `type: "http"` against the forwarder, including the SessionStart
+    op that would start it, so nothing in a cloud container starts it but this step. With the
+    port closed each hook fails open and every Bash guard silently allows.
+    """
+    try:
+        socket.create_connection(("127.0.0.1", HOOK_FORWARDER_PORT), timeout=0.25).close()
+        report.hook_forwarder = {"already_bound": True}
+        return
+    except OSError:
+        pass
+    forwarder = Path(CLONES["coordinator-claude"]["dest"]) / "hooks" / "http_hook_forwarder.py"
+    if not forwarder.is_file():
+        forwarder = ENGINE_FORWARDER
+    if not forwarder.is_file():
+        raise FileNotFoundError(f"{forwarder} absent; every http hook will fail open")
+    HOOK_FORWARDER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(HOOK_FORWARDER_LOG, "ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, str(forwarder)],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    report.hook_forwarder = {"pid": proc.pid, "path": str(forwarder), "log": str(HOOK_FORWARDER_LOG)}
+
+
+def reprobe_hook_transport(report: Report) -> None:
+    """Refresh `report.hook_transport` at the end of setup, just before the hook-plane
+    verdict: the forwarder is a detached child that may bind after the earlier probe.
+    Retries briefly while the port is dark."""
+    import time
+
+    for attempt in range(_REPROBE_ATTEMPTS):
+        report.hook_transport = _probe_hook_transport()
+        if report.hook_transport.get("listening") is not False:
+            return
+        if attempt < _REPROBE_ATTEMPTS - 1:
+            time.sleep(_REPROBE_PAUSE_S)
+
+
+_REPROBE_ATTEMPTS = 4
+_REPROBE_PAUSE_S = 0.5
+
+
+RAG_INSTALL_OUTPUT_LOG = Path("/root/example-retrieval-repo-cloud-install-output.log")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+_OUTPUT_TAIL_CHARS = 1500
+
+
+def _output_tail(text: str) -> str:
+    return (text or "").strip()[-_OUTPUT_TAIL_CHARS:]
+
+
+def _keep_failed_output(log: Path, text: str, verdict: dict) -> None:
+    """Persist a failing child's combined output where the session can read it
+    after boot, and name the file on `verdict`. A failed write is recorded, never raised."""
+    try:
+        log.write_text(text or "", encoding="utf-8")
+        verdict["output_log"] = str(log)
+    except OSError as exc:
+        verdict["output_log"] = f"unwritable: {exc}"
 
 
 def run_example_retrieval_repo_cloud_install(report: Report) -> None:
@@ -2906,8 +3101,10 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     _safe_print(result.stdout.rstrip())
     report.rag_install["exit_code"] = result.returncode
     if result.returncode != 0:
+        _keep_failed_output(RAG_INSTALL_OUTPUT_LOG, result.stdout, report.rag_install)
         raise RuntimeError(
-            f"{RETRIEVAL_REPO_SLUG} installer exited {result.returncode}; its combined output is above"
+            f"{RETRIEVAL_REPO_SLUG} installer exited {result.returncode}; combined output in "
+            f"{RAG_INSTALL_OUTPUT_LOG}, tail: {_output_tail(result.stdout)}"
         )
 
     _fold_install_timing_into_report(rag_root, report)
@@ -2934,6 +3131,86 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
         "its test/dev dependencies (pytest, ...) are NOT installed. To run its "
         f"tests, install them post-boot with CPU torch:\n  {remediation_cmd}"
     )
+
+
+CLOUD_PREBOOT_TIMEOUT_S = 900
+CLOUD_PREBOOT_LOG_DIR = Path("/root")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+
+
+def declared_cloud_preboot(checkout: Path) -> "dict | str | None":
+    """The checkout's top-level ``cloud_preboot`` declaration from its install
+    manifest: ``{"argv": [...], "env": {...}}``, an error string when malformed,
+    None when undeclared. Addons that example-retrieval-repo's own installer runs declare
+    under ``example_retrieval_repo_addon`` instead and are not seen here."""
+    manifest = checkout / "docs" / "install" / "agent-install-manifest.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    decl = data.get("cloud_preboot") if isinstance(data, dict) else None
+    if decl is None:
+        return None
+    argv, env = (decl.get("argv"), decl.get("env", {})) if isinstance(decl, dict) else (None, None)
+    if (
+        not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv)
+        or not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items())
+    ):
+        return "cloud_preboot must be {argv: [str, ...] (non-empty), env: {str: str}}"
+    return {"argv": argv, "env": env}
+
+
+def run_declared_cloud_preboots(report: Report) -> None:
+    """Run each registered ``repos.*`` checkout's manifest-declared ``cloud_preboot``.
+
+    Selection is the manifest declaration alone, never a repo name. cwd is the
+    checkout; ``{python}`` and ``{repo_root}`` are substituted in argv and env
+    values. One checkout's failure never stops the rest; a failing step keeps
+    its combined output in a named log and the step raises at the end.
+    """
+    roots: dict[str, Path] = {}
+    for path in [*mounted_sibling_checkouts().values(), *map(Path, report.rag_roots.values())]:
+        if path.is_dir():
+            roots.setdefault(str(path.resolve()), path)
+    results: list[dict] = []
+    report.cloud_preboots = results
+    failed: list[str] = []
+    for checkout in sorted(roots.values(), key=lambda p: p.name):
+        decl = declared_cloud_preboot(checkout)
+        if decl is None:
+            continue
+        entry: dict = {"repo": checkout.name}
+        results.append(entry)
+        if isinstance(decl, str):
+            entry["error"] = decl
+            failed.append(checkout.name)
+            continue
+        subs = {"{python}": sys.executable, "{repo_root}": str(checkout)}
+
+        def _sub(value: str) -> str:
+            for token, replacement in subs.items():
+                value = value.replace(token, replacement)
+            return value
+
+        argv = [_sub(a) for a in decl["argv"]]
+        env = {**os.environ, **{k: _sub(v) for k, v in decl["env"].items()}}
+        entry["argv"] = argv
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(checkout), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=CLOUD_PREBOOT_TIMEOUT_S, stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            failed.append(checkout.name)
+            continue
+        entry["exit_code"] = proc.returncode
+        _safe_print(proc.stdout.rstrip())
+        if proc.returncode != 0:
+            _keep_failed_output(CLOUD_PREBOOT_LOG_DIR / f"{checkout.name}-cloud-preboot.log", proc.stdout, entry)
+            failed.append(checkout.name)
+    if failed:
+        raise RuntimeError("cloud_preboot failed: " + ", ".join(failed) + f" (see report.cloud_preboots)")
 
 
 def _fold_install_timing_into_report(rag_root: Path, report: Report) -> None:
@@ -3053,7 +3330,8 @@ def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
     (`example_retrieval_repo_mcp/audit.py :: _resolve_focus_repo`) requires the `repos.`
     key shape and reports `focus_repo_unknown` for a bare path, which is
     worse than leaving the var unset. Left unset when no key this script
-    registered names that root (`_focus_repo_machine_local_key`). Unset,
+    registered names that root (`_focus_repo_machine_local_key`). A value
+    already in this process's environment wins verbatim, list included. Unset,
     three-plus mounted repos leave example-retrieval-repo's tools answering
     `boot_fallback_ambiguous` (memo, "Also noted").
     """
@@ -3105,6 +3383,12 @@ def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
         _safe_print(f"[cloud_setup] repo bundle pull {owner_repo}: {verdicts[owner_repo]}")
     report.rag_bundle_pull = verdicts or {"skipped": "no mounted checkout has a GitHub origin"}
 
+    preset = (os.environ.get(SESSION_FOCUS_ENV) or "").strip()
+    if preset:
+        # A launcher-declared focus (possibly a comma-separated list) is the
+        # operator's choice; the install root is only a fallback default.
+        _set_plugin_settings_env(SESSION_FOCUS_ENV, preset, report)
+        return
     focus_root = report.rag_install.get("project_root") if report.rag_install else None
     focus_key = _focus_repo_machine_local_key(focus_root, report) if focus_root else None
     if focus_key:
@@ -3115,6 +3399,45 @@ def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
             f"{focus_root!r} — leaving {SESSION_FOCUS_ENV} unset rather than write a "
             "path example-retrieval-repo's resolver cannot use."
         )
+
+
+def start_work_target_indexing(report: Report) -> None:
+    """Start `rag_work_target_index.py` detached for the session's work targets.
+
+    Targets are `SESSION_FOCUS_ENV` when this process has it (one key or a comma
+    list), else the focus key `land_example_retrieval_repo_repo_bundle` wrote. The worker
+    installs example-retrieval-repo's write profile and indexes — bulk transfer, so it never
+    holds boot. The initial readiness file is written here, synchronously, so a
+    session that reads it before the worker's first write still finds a verdict.
+    """
+    if retrieval_half_skipped(report) or not report.rag_install or report.rag_install.get("exit_code") != 0:
+        report.rag_work_targets = {"skipped": "retrieval install did not succeed"}
+        return
+    import rag_work_target_index as worker
+
+    raw = os.environ.get(SESSION_FOCUS_ENV) or (report.session_focus_env or {}).get(SESSION_FOCUS_ENV)
+    keys = worker.parse_targets(raw)
+    if not keys:
+        report.rag_work_targets = {"skipped": f"no work target: {SESSION_FOCUS_ENV} unset"}
+        return
+    rag_root = report.rag_roots.get(RETRIEVAL_REPO_SLUG)
+    known = {k: v for k, v in report.machine_local_keys.items() if isinstance(v, str)}
+    worker.write_status(worker.initial_status(worker.resolve_roots(keys, known), rag_root))
+    worker.LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(worker.LOG_PATH, "ab") as log:
+        proc = subprocess.Popen(  # popup-intentional-last-resort: Linux-only cloud bootstrap
+            [sys.executable, str(Path(worker.__file__).resolve()), ",".join(keys)],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    report.rag_work_targets = {
+        "targets": keys,
+        "pid": proc.pid,
+        "status_file": str(worker.STATUS_PATH),
+        "log": str(worker.LOG_PATH),
+    }
 
 
 def _focus_repo_machine_local_key(project_root: str, report: Report) -> str | None:
@@ -3811,13 +4134,27 @@ def _orientation_body(report: Report) -> str | None:
         "session's working directory is above all of them rather than inside one.\n\n"
         "## Which one the work is in\n\n"
         f"`{SESSION_FOCUS_ENV}` declares it. Read it from this session's environment:\n\n"
-        f"- **Set** — that repo is the subject of the work, and the others are here to hold the "
-        "system up. Retrieval answers for it without being asked each time.\n"
+        f"- **Set** — one `repos.*` key or several, comma-separated. Every listed repo is a work "
+        "target; the others are here to hold the system up. The **first** is the repo "
+        "example-retrieval-repo answers for when a call names no `repo=`.\n"
         f"- **Unset** — the work target is **unspecified**. That is a normal state, not a "
         "shortfall: every index that exists is intact and queryable, and a call answers as soon "
         "as it names the repo it means.\n\n"
         f"Addressable keys: {known}. Pass one as `repo=\"repos.<key>\"` on a call, or set "
-        f"`{SESSION_FOCUS_ENV}` to one for the whole session.\n"
+        f"`{SESSION_FOCUS_ENV}` (e.g. `repos.a,repos.b`) for the whole session.\n\n"
+        "## Retrieval readiness\n\n"
+        f"At session start run `python3 {Path(__file__).resolve().parent / 'rag_work_target_index.py'} "
+        "--status` (exit 0 = ready). Not ready and nothing indexing: run the same script with the "
+        "work-target keys, comma-separated; never fall back to grep without saying so.\n\n"
+        "## Working in the shared tree\n\n"
+        "- A mid-turn user interrupt kills every background subagent: commit early and often, "
+        "and prefer short-lived agents.\n"
+        "- Never `git stash`, `git checkout -p`, or any interactive git: other agents' uncommitted "
+        "work shares this tree.\n"
+        "- Subagents never commit; the EM commits with explicit pathspecs and pushes.\n"
+        "- Before syncing with main (or any branch), commit in-flight work to the session branch: "
+        "a merge needs a clean tree and stash/worktree are banned.\n"
+        "- Run the fast tier or the tests covering your surface, never the full suite.\n"
     )
 
 
@@ -4182,6 +4519,79 @@ def register_path_probe_hook(report: Report) -> None:
     report.path_probe = {"command": command, "already_registered": already}
 
 
+STOP_HOOK_SCRIPT = "stop-hook-git-check.sh"
+_STOP_ONCE_BEGIN = "# >>> coordinator: stop hook blocks once per session >>>"
+_STOP_ONCE_END = "# <<< coordinator: stop hook blocks once per session <<<"
+_STOP_ONCE_BLOCK = (
+    _STOP_ONCE_BEGIN
+    + "\n"
+    + """# Cloud only. The marker is touched only when this hook exits 2, so a clean
+# stop never spends it; once spent, every later stop in the session passes.
+# Quiet while a sentinel is armed or once the upstream branch is gone.
+if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
+  coordinator_stop_sid=$(echo "$input" | jq -r '.session_id // empty')
+  if [[ -n "$coordinator_stop_sid" ]]; then
+    coordinator_stop_marker="/tmp/coordinator-stop-hook-blocked-${coordinator_stop_sid//[^A-Za-z0-9_-]/_}"
+    if [[ -e "$coordinator_stop_marker" ]]; then
+      exit 0
+    fi
+    # An armed autonomous/mise sentinel owns the commit cadence; a deleted
+    # upstream branch must not be recreated by obeying "push".
+    if [[ -e "${TMPDIR:-/tmp}/autonomous-run-${coordinator_stop_sid}" ]]; then
+      exit 0
+    fi
+    coordinator_stop_ref=$(git symbolic-ref -q HEAD 2>/dev/null)
+    if [[ -n "$coordinator_stop_ref" && "$(git for-each-ref --format='%(upstream:track)' "$coordinator_stop_ref" 2>/dev/null)" = "[gone]" ]]; then
+      exit 0
+    fi
+    trap 'coordinator_stop_rc=$?; if [[ $coordinator_stop_rc -eq 2 ]]; then touch "$coordinator_stop_marker"; fi; exit $coordinator_stop_rc' EXIT
+  fi
+fi
+"""
+    + _STOP_ONCE_END
+    + "\n"
+)
+_STOP_RECURSION_CHECK = re.compile(
+    r'^if \[\[ "\$stop_hook_active" = "true" \]\]; then\n[ \t]*exit 0\n[ \t]*fi\n', re.M
+)
+_STOP_ONCE_SPAN = re.compile(re.escape(_STOP_ONCE_BEGIN) + r".*?" + re.escape(_STOP_ONCE_END) + r"\n", re.S)
+
+
+def cap_stop_hook_once_per_session(report: Report) -> None:
+    """Make the platform stop git-check hook block at most once per cloud session.
+
+    The platform lays `~/.claude/stop-hook-git-check.sh` and may re-lay it, so
+    this re-applies every boot: an existing block is replaced in place, a
+    missing one goes immediately after the hook's recursion check. A script
+    with no recognisable recursion check raises -- the platform changed the
+    file, and a silent skip would leave the per-turn noise unexplained.
+    """
+    script = _claude_home() / STOP_HOOK_SCRIPT
+    verdict: dict = {"script": str(script)}
+    report.stop_hook_once = verdict
+    if not script.is_file():
+        verdict["skipped"] = "platform stop hook not present"
+        return
+    text = script.read_text(encoding="utf-8")
+    if _STOP_ONCE_SPAN.search(text):
+        patched = _STOP_ONCE_SPAN.sub(lambda _m: _STOP_ONCE_BLOCK, text, count=1)
+        verdict["action"] = "replaced"
+    else:
+        anchor = _STOP_RECURSION_CHECK.search(text)
+        if anchor is None:
+            raise RuntimeError(f"{script}: recursion check not found; once-per-session block not applied")
+        patched = text[: anchor.end()] + "\n" + _STOP_ONCE_BLOCK + text[anchor.end():]
+        verdict["action"] = "inserted"
+    if patched == text:
+        verdict["action"] = "unchanged"
+        return
+    mode = script.stat().st_mode
+    tmp_path = script.with_suffix(script.suffix + ".tmp")
+    tmp_path.write_text(patched, encoding="utf-8", newline="\n")
+    os.chmod(tmp_path, mode)
+    tmp_path.replace(script)
+
+
 def follow_engine_link_in_pth(report: Report) -> None:
     """Make the interpreter's `coordinator_core` path follow `ENGINE_CURRENT_LINK`.
 
@@ -4262,11 +4672,54 @@ def write_environment_import(root: Path, variant: str) -> None:
     try:
         text = src.read_text(encoding="utf-8")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
+        dest.write_text(text, encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"[cloud_setup] WARN environment: could not write {dest} from {src}: {exc}")
         return
     print(f"[cloud_setup] environment: wrote {dest} ({variant} variant)")
+
+
+def write_cloud_environment_imports() -> None:
+    """Write the cloud `.claude/environment.md` into the engine clone AND every mounted
+    checkout that carries the variant source — the mounted work tree is the one whose
+    CLAUDE.md a session actually loads."""
+    roots = [Path(CLONES["klabauter"]["dest"])]
+    for root in session_source_roots():
+        try:
+            roots += sorted(c for c in root.iterdir() if (c / "docs" / "claude-md" / "environment.cloud.md").is_file())
+        except OSError:
+            continue
+    for root in roots:
+        write_environment_import(root, "cloud")
+
+
+#: Test runner deps the repos' test commands need — mirrors claude-klabauter's
+#: `[project.optional-dependencies] test` (parity pinned by test_cloud_setup_test_deps.py).
+TEST_DEPS = ("pytest>=9.1", "pytest-xdist>=3.8", "pytest-timeout>=2.3")
+_TEST_DEP_MODULES = "import pytest, xdist, pytest_timeout"
+
+
+def install_test_deps(report: Report) -> None:
+    """pip-install `TEST_DEPS` into each session interpreter (`python`, `python3`, this
+    one) that cannot already import them. Raises naming every interpreter that failed."""
+    interpreters: list[str] = []
+    for cand in (shutil.which("python"), shutil.which("python3"), sys.executable):
+        if cand and os.path.realpath(cand) not in {os.path.realpath(i) for i in interpreters}:
+            interpreters.append(cand)
+    # The image's system interpreter is PEP 668-marked; this disposable container is the
+    # environment, so the marker guards nothing here.
+    env = {**os.environ, "PIP_BREAK_SYSTEM_PACKAGES": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
+    kw = dict(capture_output=True, text=True, stdin=subprocess.DEVNULL,
+              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    failed: list[str] = []
+    for py in interpreters:
+        if subprocess.run([py, "-c", _TEST_DEP_MODULES], timeout=30, **kw).returncode == 0:  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+            continue
+        result = subprocess.run([py, "-m", "pip", "install", "--quiet", *TEST_DEPS], timeout=300, env=env, **kw)  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+        if result.returncode != 0:
+            failed.append(f"{py}: {(result.stderr or result.stdout).strip()[-300:]}")
+    if failed:
+        raise RuntimeError("test deps install failed — " + "; ".join(failed))
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -4307,21 +4760,23 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step("verify review payload", verify_review_payload, report)
     run_step("set engine env", lambda: set_engine_env(report), report)
     run_step("sweep engine CLI shims", lambda: sweep_engine_cli_shims(report), report)
-    run_step(
-        "link engine CLI shims onto image PATH",
-        lambda: link_engine_cli_shims_onto_image_path(report),
-        report,
-    )
+    run_step("link machine-local CLI onto image PATH", lambda: link_machine_local_cli(report), report)
     # BEFORE scripts/setup.py, not after: setup.py's own install-health phase
     # trust-checks the plugin root this script hands it against these exact
     # registry keys, and refuses fail-loud when they resolve empty. See
     # seed_trust_anchor_keys' docstring for the cascade that ordering caused.
     run_step("seed trust anchor keys", lambda: seed_trust_anchor_keys(report), report)
     run_step("run scripts/setup.py", lambda: run_claude_klabauter_setup(report), report)
+    # AFTER setup.py: it writes the launchers this links.
+    run_step(
+        "link engine CLI shims onto image PATH",
+        lambda: link_engine_cli_shims_onto_image_path(report),
+        report,
+    )
     # AFTER setup.py, which writes the local variant into the same file.
     run_step(
         "write cloud environment import",
-        lambda: write_environment_import(Path(CLONES["klabauter"]["dest"]), "cloud"),
+        write_cloud_environment_imports,
         report,
     )
     run_step("register plugin settings", register_plugin_settings, report)
@@ -4334,6 +4789,7 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step("pin session PATH (early)", lambda: pin_session_path(report), report)
     run_step("pin hook interpreter", lambda: pin_hook_interpreter(report), report)
     run_step("register PATH probe hook", lambda: register_path_probe_hook(report), report)
+    run_step("cap stop hook once per session", lambda: cap_stop_hook_once_per_session(report), report)
     run_step("engine .pth follows link", lambda: follow_engine_link_in_pth(report), report)
     run_step("install global doctrine", lambda: install_global_doctrine(report), report)
     run_step("verify global doctrine", lambda: verify_global_doctrine(report), report)
@@ -4360,13 +4816,17 @@ def main(argv: "list[str] | None" = None) -> int:
     # AFTER repo-key registration, not before: the fleet installer enumerates
     # registered `repos.*` keys, so running it earlier heals nothing.
     run_step("install git hooks fleet", lambda: install_hooks_fleet(report), report)
+    run_step("install test deps", lambda: install_test_deps(report), report)
     run_step("deepen shallow checkouts", lambda: deepen_shallow_checkouts(report), report)
+    run_step("start http hook forwarder", lambda: start_hook_forwarder(report), report)
     run_step(
         "register publish mirror keys",
         lambda: register_publish_mirror_keys(report),
         report,
     )
     run_step(f"{RETRIEVAL_REPO_SLUG} cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
+    # AFTER the retrieval install: a declared step may use the daemon/registry it lands.
+    run_step("run declared cloud preboots", lambda: run_declared_cloud_preboots(report), report)
     # BEFORE anything that can start the daemon (in particular the connect-
     # helper step below): this process is the one leg with proxy/token access,
     # and the daemon blocks the very landing it needs once it holds the store.
@@ -4375,6 +4835,12 @@ def main(argv: "list[str] | None" = None) -> int:
     run_step(
         "land example-retrieval-repo repo bundle",
         lambda: land_example_retrieval_repo_repo_bundle(report),
+        report,
+    )
+    # AFTER the bundle pull: it reads the focus key that step writes.
+    run_step(
+        "start work-target indexing",
+        lambda: start_work_target_indexing(report),
         report,
     )
     # Directly after the one step that fills the cache, so no later step runs
@@ -4406,6 +4872,7 @@ def main(argv: "list[str] | None" = None) -> int:
         lambda: (record_warm_engine_verdict(report), fail_on_warm_engine_problems(report)),
         report,
     )
+    run_step("re-probe hook port", lambda: reprobe_hook_transport(report), report)
     run_step("assert hook plane armed", lambda: assert_hook_plane_armed(report), report)
 
     _record_session_surfaces_best_effort(report)

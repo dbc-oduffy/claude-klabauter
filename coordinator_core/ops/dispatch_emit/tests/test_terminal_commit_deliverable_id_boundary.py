@@ -44,15 +44,28 @@ def repo(tmp_path):
     return root
 
 
-def _run(repo: Path, marker_id: Optional[str], plan_id: Optional[str], plan_exists=True):
+def _run(
+    repo: Path,
+    marker_id: Optional[str],
+    plan_id: Optional[str],
+    plan_exists=True,
+    chunk_path: str = "a.py",
+    sibling_plan_id: Optional[str] = None,
+):
     plan_rel = "docs/plan.md"
     if plan_exists:
         (repo / "docs").mkdir(exist_ok=True)
         fm = f"deliverable_id: {plan_id}\n" if plan_id else ""
         (repo / plan_rel).write_text(f"---\n{fm}title: t\n---\nbody\n", encoding="utf-8")
-    (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    if sibling_plan_id:
+        (repo / chunk_path).write_text(
+            f"---\ndeliverable_id: {sibling_plan_id}\ntitle: sibling\n---\nbody\n",
+            encoding="utf-8",
+        )
+    else:
+        (repo / chunk_path).write_text("x = 1\n", encoding="utf-8")
     req = CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),),
+        chunks=(ChunkCommit(id="C1", title="t", paths=(chunk_path,)),),
         deliverable_id=marker_id,
         plan_path=plan_rel,
     )
@@ -108,6 +121,20 @@ def test_unreadable_plan_refused(repo):
 
 def test_matching_pair_commits_with_one_trailer(repo):
     out, _ = _run(repo, PLAN_ID, PLAN_ID)
+    assert out["committed"] is True
+    body = _git(["log", "-1", "--format=%B"], repo)
+    lines = [ln for ln in body.splitlines() if ln.startswith("Deliverable-Id:")]
+    assert lines == [f"Deliverable-Id: {PLAN_ID}"]
+
+
+def test_chunk_writing_a_sibling_plan_stamps_the_executing_plans_id(repo):
+    out, _ = _run(
+        repo,
+        PLAN_ID,
+        PLAN_ID,
+        chunk_path="docs/sibling-plan.md",
+        sibling_plan_id="dlv-sibling9",
+    )
     assert out["committed"] is True
     body = _git(["log", "-1", "--format=%B"], repo)
     lines = [ln for ln in body.splitlines() if ln.startswith("Deliverable-Id:")]

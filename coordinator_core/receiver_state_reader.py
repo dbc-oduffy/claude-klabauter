@@ -30,9 +30,8 @@ NEGATIVE SPEC -- what this module deliberately does NOT do:
   re-reads a transcript, re-derives PAUSED/PRODUCING/UNKNOWN, or classifies a
   session. If a branch here appears to decide *why* a session is paused, that
   is a bug in this module, not a feature -- the ladder owns that call.
-- **It never reads `cpu_cursor`.** Optional, tiebreak-only on the write side,
-  and gated off (`_CPU_LEG_ENABLED = False`) in the source at the ref above.
-  No code path in this module accesses it.
+- **It reads no `cpu_cursor`.** The field no longer exists: the sensor stopped
+  writing it, and a record on disk that still carries one has it ignored.
 - **It never reaches into transcript content.** Only the five documented
   top-level fields (`schema_version`, `session_id`, `verdict`, `reason`,
   `stamped_at`) plus the two optional diagnostic fields

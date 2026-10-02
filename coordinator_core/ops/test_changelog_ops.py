@@ -1128,3 +1128,59 @@ def test_a_live_day_still_honours_its_callers_span(tmp_path: Path) -> None:
 
     assert live["is_backfill"] is False
     assert live["commit_count"] == 1
+
+
+def _note_repo(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "noterepo"
+    repo.mkdir()
+    env = dict(os.environ)
+    env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = "2026-07-15T10:00:00+0000"
+
+    def git(*a: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(repo), *a], check=True, capture_output=True, text=True, env=env,
+            **no_console_creationflags(),
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t.com")
+    git("config", "user.name", "t")
+    (repo / "f.txt").write_text("x")
+    git("add", "-A")
+    git("commit", "-q", "-m", "dmaged subject")
+    return repo, git("rev-parse", "HEAD")
+
+
+def test_collect_commits_renders_the_corrected_subject_from_a_note(tmp_path: Path) -> None:
+    from coordinator_core.git.correction_note import format_note
+    from coordinator_core.ops.changelog_ops import _collect_commits
+
+    repo, sha = _note_repo(tmp_path)
+    assert _collect_commits(repo, "2026-07-15") == [(sha, "dmaged subject")]
+    subprocess.run(
+        ["git", "-C", str(repo), "notes", "add", "-f", "-m", format_note("damaged subject"), sha],
+        check=True, capture_output=True, **no_console_creationflags(),
+    )
+    assert _collect_commits(repo, "2026-07-15") == [(sha, "damaged subject")]
+
+
+def test_git_log_for_date_renders_the_corrected_subject_and_ignores_free_form_notes(tmp_path: Path) -> None:
+    from coordinator_core.git.correction_note import format_note
+    from coordinator_core.ops.changelog_ops import _git_log_for_date
+
+    repo, sha = _note_repo(tmp_path)
+    short = sha[:7]
+    plain = _git_log_for_date(str(repo), "2026-07-15", "2026-07-16")
+    assert plain.endswith(" dmaged subject") and plain.split(" ", 1)[0] == plain.split(" ")[0]
+    subprocess.run(
+        ["git", "-C", str(repo), "notes", "add", "-f", "-m", "just a remark", sha],
+        check=True, capture_output=True, **no_console_creationflags(),
+    )
+    assert _git_log_for_date(str(repo), "2026-07-15", "2026-07-16") == plain
+    subprocess.run(
+        ["git", "-C", str(repo), "notes", "add", "-f", "-m", format_note("damaged subject"), sha],
+        check=True, capture_output=True, **no_console_creationflags(),
+    )
+    corrected = _git_log_for_date(str(repo), "2026-07-15", "2026-07-16")
+    assert corrected == plain.replace("dmaged", "damaged")
+    assert corrected.startswith(plain.split(" ", 1)[0]) and short[:4] in corrected

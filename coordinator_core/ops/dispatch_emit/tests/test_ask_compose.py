@@ -69,11 +69,16 @@ def test_exactly_one_of_prompt_or_sizing_is_required():
         _compose(sizing_rel="state/sizings/x.yaml")
 
 
-def test_each_halt_returns_before_execute():
+def test_each_halt_assigns_before_the_guarded_stage_and_execute():
     script = _compose()
     halt_at = script.index("_gate.halt || !_gate.arm")
     assert halt_at < script.index("phase('stage')") < script.index("phase('execute')")
-    assert script.index("return { halted:", halt_at) < script.index("phase('stage')")
+    assert script.index("_halted = { halted:", halt_at) < script.index("phase('stage')")
+    stage_guard = script.rindex("if (!_halted) {", 0, script.index("phase('stage')"))
+    exec_guard = script.rindex("if (!_halted) {", 0, script.index("phase('execute')"))
+    assert halt_at < stage_guard < exec_guard
+    assert "return { halted:" not in script
+    assert "_halted = { halted: 'no-op'," in script
     assert "..._gate.halt" in script
     assert f"'{HALT_REFUSAL}'" in script
 

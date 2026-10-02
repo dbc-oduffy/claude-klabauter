@@ -44,10 +44,9 @@ below.
 CWD IS A LOAD-BEARING GAP THE TRIO NEVER HAD. Verified against the actual
 emitted directives (`build_directives(Path('.'), tag_prefix='v',
 proposed_tag='v1.2.3')`): `d6 check-no-illegal-paths` and `d1`/`d2
-merge-recovery-and-tag-cut` (`d2` is `cut-tag v1.2.3`) all currently rely
-on ambient process cwd absent an explicit arg, masked today only because
-today's spawn path runs them via `_run_py_script(cwd=repo_root)` — a
-subprocess with an explicit working directory. This module never spawns a
+merge-recovery-and-tag-cut` (`d2` is `cut-tag v1.2.3`) all rely
+on ambient process cwd absent an explicit arg, so the merge ceremony's
+apply step passes the repo root through `args` for each. This module never spawns a
 subprocess and never calls `os.chdir`; it must not be assumed to establish,
 preserve, or repair a cwd invariant for anything it loads or invokes. A
 caller merging directives like the three named above onto this primitive

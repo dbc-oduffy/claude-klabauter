@@ -103,3 +103,30 @@ def test_module_docstring_removal_does_not_need_pass():
     assert res.changed is True
     ast.parse(res.new_text)
     assert "pass" not in res.new_text
+
+
+def test_machine_read_markers_survive_strip():
+    from coordinator_core.comment_strip.keep_rules import MACHINE_READ_MARKERS, is_tooling_comment
+
+    samples = [
+        "# popup-safe-env-suppressed",
+        "# popup-intentional-last-resort",
+        "# type: Optional[float]",
+    ]
+    for text in samples:
+        assert any(p.search(text) for p in MACHINE_READ_MARKERS), text
+        assert is_tooling_comment(text), text
+    assert not is_tooling_comment("# plain prose about spawning")
+
+
+def test_stripped_file_keeps_popup_marker_and_drops_prose(tmp_path):
+    (tmp_path / "t.py").write_text(
+        "import subprocess\n"
+        "subprocess.run(['x'])  # popup-safe-env-suppressed\n"
+        "# plain prose comment\n"
+        "y = 1\n"
+    )
+    res = plan_file(tmp_path, "t.py", set())
+    out = res.new_text
+    assert "# popup-safe-env-suppressed" in out
+    assert "plain prose" not in out

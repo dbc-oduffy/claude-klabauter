@@ -139,6 +139,7 @@ import contextvars
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -150,6 +151,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional
 
 from coordinator_core import machine_path_leak
 from coordinator_core.bash_guards import commit_tripwires
+from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
 from coordinator_core.bash_guards._dialect import (
     Dialect,
     _strip_ps_quotes,
@@ -7374,6 +7376,45 @@ def _piped_exit_code_chain(command):
     return None
 
 
+_NOTE_CORRECTION = _NOTE_SENTINEL + " <subject>"
+_LESSONS_LIVE_PREFIX = "state/lessons/"
+_LESSONS_ARCHIVE_PREFIX = "archive/lessons-archived/"
+
+
+def _lessons_archive_paired_paths(status_lines: Optional[List[str]]) -> Set[str]:
+    """Staged paths that are one half of a lessons archival move.
+
+    A `state/lessons/<f>` deletion is paired when the same index stages an
+    `archive/lessons-archived/**/<f>` addition or modification of the same
+    basename; the archive write is the evidence the ceremony ran. A rename
+    record between the two prefixes pairs its destination. An unpaired
+    deletion is not returned.
+    """
+    deleted: Dict[str, str] = {}
+    archived: Set[str] = set()
+    paired: Set[str] = set()
+    for line in status_lines or []:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        code = parts[0][:1]
+        if code in ("R", "C") and len(parts) >= 3:
+            if (
+                parts[1].startswith(_LESSONS_LIVE_PREFIX)
+                and parts[2].startswith(_LESSONS_ARCHIVE_PREFIX)
+                and posixpath.basename(parts[1]) == posixpath.basename(parts[2])
+            ):
+                paired.add(parts[2])
+            continue
+        path = parts[1]
+        if code == "D" and path.startswith(_LESSONS_LIVE_PREFIX):
+            deleted[path] = posixpath.basename(path)
+        elif code in ("A", "M") and path.startswith(_LESSONS_ARCHIVE_PREFIX):
+            archived.add(posixpath.basename(path))
+    paired.update(path for path, base in deleted.items() if base in archived)
+    return paired
+
+
 def check_validate_commit(
     cmd: str,
     session_id: str = "",
@@ -7525,6 +7566,8 @@ def check_validate_commit(
         for _line in (_status_lines or [])
         if _line.startswith("D\t") and len(_line.split("\t")) >= 2
     }
+
+    _lessons_archive_paired = _lessons_archive_paired_paths(_status_lines)
 
     # --- Check 5: Scoped staging -- warn-only by default (Phase 2). Strict
     # mode (COORDINATOR_SCOPE_STRICT=1) promotes this to a DENY (Phase 5 --
@@ -7785,8 +7828,13 @@ def check_validate_commit(
                                 _orphan_abs = os.path.join(git_root, _orphan)
                                 if _mtime_epoch(_orphan_abs) >= _started_epoch:
                                     my_scope.add(_orphan)
-                except Exception:
-                    pass
+                except Exception as _union_exc:  # noqa: BLE001 -- fail-open, but declared
+                    from coordinator_core.bash_guards._verdict import record_silent
+
+                    record_silent(
+                        "validate-commit",
+                        f"orphan scope union raised {_union_exc!r}; my_scope not widened",
+                    )
 
                 # Union dispatched-agent touched files (broadened mode) --
                 # mirrors coordinator-safe-commit's own default-path scope
@@ -8109,6 +8157,8 @@ def check_validate_commit(
                 _deny_entries: List[Dict[str, str]] = []
 
                 for staged_file in commit_scope:
+                    if staged_file in _lessons_archive_paired:
+                        continue
                     if my_scope is not None and staged_file in my_scope:
                         _own_hash = _own_content_hashes.get(staged_file)
                         if _own_hash is not None:
@@ -9723,7 +9773,7 @@ def _bt_commit_has_explicit_pathspec(seg_tokens: List[str]) -> bool:
     `-- <paths>` scope (a standalone `--` separator with at least one
     operand after it), skipping option values so `-m -- ` shapes cannot
     fake one. This is the ratified default scoped-commit form
-    (DoE `docs/wiki/scoped-safety-commits.md` SC-DR-008/SC-DR-015), so its
+    (DoE `coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md` SC-DR-008/SC-DR-015), so its
     presence is the suppression condition for the advisory below.
 
     `--pathspec-from-file[=<f>]`/`--pathspec-file-nul` also count as
@@ -10613,7 +10663,7 @@ def check_git_commit_safe_commit_advise(
       `--pathspec-from-file`/`--pathspec-file-nul`, see
       `_bt_commit_has_explicit_pathspec`) IS the ratified default
       (`git add -- <paths> && git commit -m "x" -- <paths>`, DoE
-      `docs/wiki/scoped-safety-commits.md` SC-DR-015, which ratifies
+      `coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md` SC-DR-015, which ratifies
       pathspec on BOTH halves, not one); advising it toward anything
       spends the band's credibility on the case that needs it least, and
       the resulting nag-fatigue does not stay scoped to one check. This is
@@ -10796,8 +10846,8 @@ def check_git_commit_safe_commit_advise(
                             "authorship; without --only, also commits "
                             "staged.\n\n"
                             "Use instead:\n"
-                            '  git notes add -f -m "<correction>" %s'
-                            % (head_sha, head_subject, head_sha)
+                            '  git notes add -f -m "%s" %s'
+                            % (head_sha, head_subject, _NOTE_CORRECTION, head_sha)
                         )
                         + ("\n\n%s" % _amend_note if _amend_note else "")
                     )
@@ -10808,7 +10858,7 @@ def check_git_commit_safe_commit_advise(
                         "replaces its message/authorship; without --only, "
                         "also commits staged.\n\n"
                         "Use instead:\n"
-                        '  git notes add -f -m "<correction>" <sha>'
+                        '  git notes add -f -m "' + _NOTE_CORRECTION + '" <sha>'
                     )
                     + ("\n\n%s" % _amend_note if _amend_note else "")
                 )
@@ -10898,7 +10948,7 @@ def check_git_commit_safe_commit_advise(
             "commit. It replaces that commit's message and authorship, and "
             "(without --only) also commits everything currently staged.\n\n"
             "To fix a message without rewriting:\n"
-            "  git notes add -f -m \"<correction>\" <sha>"
+            "  git notes add -f -m \"" + _NOTE_CORRECTION + "\" <sha>"
         )
         # Sweeping-scope remediation. A command carrying `-- state/` NAMED a
         # scope, so every no-scope-at-all body below is false about it, and

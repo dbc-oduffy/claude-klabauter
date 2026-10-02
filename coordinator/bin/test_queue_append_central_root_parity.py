@@ -39,7 +39,7 @@ module; the legacy CLI has no `.py` extension, so it is loaded via
 shape — `if __name__ == "__main__":` guards `main()` so import alone triggers no
 I/O or subprocess calls).
 
-Governing law: docs/wiki/state-placement-law.md § Taxonomy "Central/global state"
+Governing law: coordinator-content-repo coordinator/docs/wiki/hook-best-practices/state-placement-law.md § Taxonomy "Central/global state"
 routes `state/lessons/` and `state/improvement-queue/` central writes to claude-klabauter
 UNCONDITIONALLY. DR-210 (docs/decisions/DR-210-claude-klabauter-native-tooling-ownership-strangler.md)
 forbids deleting the strangled legacy CLI, so a parity test — not deletion — is

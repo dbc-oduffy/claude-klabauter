@@ -23,10 +23,9 @@ to every consumer of discovery. The fix landed in `_extract_mutates` (it now
 resolves names and f-strings over the constants `machinery_paths` owns), NOT in
 the three modules -- respelling their patterns as literals would reintroduce
 exactly the duplication `MEMO_OUTBOX_RELDIR` exists to remove. This fixture was
-recaptured with their real verdicts. Note that the recapture also required
-bumping `generator_scan_cache._SCHEMA_VERSION`: entries are keyed on the SCANNED
-file's `(mtime_ns, size)`, which cannot see a change to the scanner itself, so
-without it every reader would have kept being served the stale verdict.
+recaptured with their real verdicts. The scan caches key their version on
+the scanner's own source digest, so a scanner edit can never serve a stale
+verdict into a recapture.
 
 Negative-spec:
   - This module does not test discovery's correctness (that is

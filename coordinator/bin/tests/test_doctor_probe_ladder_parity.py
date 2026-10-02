@@ -91,6 +91,7 @@ def test_neither_ladder_fabricates_a_root_with_no_signal(tmp_path, monkeypatch):
     bare.mkdir()
 
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(probe, "__file__", str(bare / "bin" / "claude-klabauter-doctor-probe.py"))
     import coordinator_core.machine_resolver as machine_resolver
 

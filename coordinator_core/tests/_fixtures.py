@@ -27,7 +27,7 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         env=GIT_ENV,
         timeout=15,
         stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
     )
 
 

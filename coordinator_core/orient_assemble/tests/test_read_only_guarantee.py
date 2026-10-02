@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -83,65 +82,18 @@ def test_handoff_triage_collect_is_read_only(forbid_disk_mutation, forbid_git_fe
     assert not any("fetch" in call for call in forbid_git_fetch)
 
 
-def test_health_reaper_collect_is_read_only_including_the_accepted_dry_run_subprocess(
+def test_health_reaper_collect_is_read_only(
     forbid_disk_mutation, forbid_git_fetch, monkeypatch
 ):
     monkeypatch.setattr(rhr, "_read_claude_klabauter_bin_sentinel", lambda: ReaderResult())
     monkeypatch.setattr(rhr, "_read_working_repo_registration", lambda: ReaderResult())
     monkeypatch.setattr(rhr, "_read_ceremony_hook", lambda cadence: ReaderResult())
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rhr.collect(cadence)
 
     assert not any("fetch" in call for call in forbid_git_fetch)
-
-
-def test_reaper_dry_run_reader_never_spawns_a_subprocess(monkeypatch, forbid_git_fetch):
-
-    seen_roots = []
-    monkeypatch.setattr(
-        rhr,
-        "_reap_survey",
-        lambda root: (seen_roots.append(root), SimpleNamespace(would_release=1, would_reclaim=0))[1],
-    )
-
-    result = rhr._read_reaper_dry_run()
-
-    assert [d["cli"] for d in result.directives] == ["reap-orphaned-in-flight-handoffs"]
-    assert forbid_git_fetch == [], (
-        f"reaper-dry-run reader must be zero-spawn; observed {forbid_git_fetch!r}"
-    )
-    # No threaded root supplied: falls back to _CLAUDE_KLABAUTER_ROOT, never _REPO_ROOT
-    # (retired name) -- the split this chunk exists to enforce.
-    assert seen_roots == [rhr._CLAUDE_KLABAUTER_ROOT]
-
-    seen_roots.clear()
-    threaded_root = "some-other-repo-root"
-    result = rhr._read_reaper_dry_run(threaded_root)
-    assert seen_roots == [threaded_root], (
-        "_read_reaper_dry_run must pass the threaded root to _reap_survey, "
-        "not fall back to _CLAUDE_KLABAUTER_ROOT, when one is supplied"
-    )
-
-
-def test_reaper_dry_run_reader_is_quiet_when_the_corpus_is_clean(monkeypatch, forbid_git_fetch):
-
-    seen_roots = []
-    monkeypatch.setattr(
-        rhr,
-        "_reap_survey",
-        lambda root: (seen_roots.append(root), SimpleNamespace(would_release=0, would_reclaim=0))[1],
-    )
-
-    assert rhr._read_reaper_dry_run().directives == []
-    assert seen_roots == [rhr._CLAUDE_KLABAUTER_ROOT]
-
-    seen_roots.clear()
-    threaded_root = "some-other-repo-root"
-    assert rhr._read_reaper_dry_run(threaded_root).directives == []
-    assert seen_roots == [threaded_root]
 
 
 def test_working_repo_registration_reader_never_spawns_a_subprocess(forbid_git_fetch, monkeypatch):

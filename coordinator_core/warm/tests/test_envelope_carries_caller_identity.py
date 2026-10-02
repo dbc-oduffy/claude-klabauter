@@ -185,6 +185,24 @@ def test_pipe_leg_absent_session_id_carries_no_fabricated_identity(monkeypatch):
     assert sent["_caller"]["pid"]
 
 
+def test_pipe_leg_env_carries_declared_caller_names_set_and_nonempty_only(monkeypatch):
+    """The Python producer stamps declared `FORWARDING_SET` names into `_env` the
+    way the doors do: a CALLER-mode name the caller set arrives; an empty one does not."""
+    monkeypatch.setattr(_warm_client, "is_warm_enabled", lambda: True)
+    monkeypatch.setattr(_warm_client, "engine_token", lambda: "faketoken")
+    monkeypatch.setattr(_warm_client, "_caller_session_id", lambda: "")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/caller/project")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "")
+    fake_pipe = _FakePipe()
+    monkeypatch.setattr(_warm_client, "_open_pipe", lambda pipe: fake_pipe)
+
+    _warm_client.try_warm_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
+
+    env = json.loads(fake_pipe.written[0])["_env"]
+    assert env["CLAUDE_PROJECT_DIR"] == "/caller/project"
+    assert "CLAUDE_CODE_REMOTE" not in env
+
+
 def test_serve_line_reads_the_widened_caller_object_and_threads_the_pid():
     captured: dict = {}
 

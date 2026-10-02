@@ -458,3 +458,26 @@ def test_handler_schedules_no_thread_for_tool_name_gated_legs_that_cannot_fire()
                 pad._handler({"session_id": SESSION, "tool_name": tool_name, **extra})
             )
         assert leg in spawned
+
+
+@pytest.mark.parametrize("tool_name, recorded", [("Edit", True), ("Write", True), ("Read", False)])
+def test_write_tools_record_their_touch_claim(tmp_path, monkeypatch, tool_name, recorded):
+    """The HTTP hook route reaches only this op, so the write-claim record must
+    be written from here or no Edit/Write ever claims its path."""
+    from coordinator_core.hooks import track_touched_files
+
+    calls = []
+
+    async def _fake(params, repo_root=None):
+        calls.append(params)
+
+    monkeypatch.setattr(track_touched_files, "_handler", _fake)
+    target = str(tmp_path / "x.py")
+    asyncio.run(pad._handler({"session_id": "s1", "tool_name": tool_name, "file_path": target}))
+    assert bool(calls) is recorded
+    calls.clear()
+    # The HTTP route forwards the raw event: the path rides in tool_input.
+    asyncio.run(pad._handler({"session_id": "s1", "tool_name": tool_name, "tool_input": {"file_path": target}}))
+    assert bool(calls) is recorded
+    if recorded:
+        assert calls[0]["file_path"] == target

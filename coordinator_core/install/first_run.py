@@ -49,7 +49,7 @@ Prior to this cutover, Step 4c resolved `platform-localize.sh` at
 TREE, not the install destination -- and spawned `bash <that path>`.
 `coordinator_core.install.substrate` installs `platform-localize.sh` to
 `<settings-home>/bin/` (a DIFFERENT directory, never `$PLUGIN_ROOT/bin/` --
-see `docs/wiki/coordinator-installer-shape.md` "durable-substrate-to-
+see `coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/coordinator-installer-shape.md` "durable-substrate-to-
 settings-home"), so the old not-found guard fired on every machine lacking a
 separately-placed copy at that source-tree path. Doubly broken: even when a
 copy WAS found there, `platform-localize.sh` had itself already been ported

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.run import GitResult
 from coordinator_core.ops import review_stamp as m
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -389,16 +390,16 @@ def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp
     plan_path = repo / "docs" / "plans" / "example.md"
     m.mint(plan_path, repo, build_test_path=str(build_test))
 
-    real_run = m.subprocess.run
+    real_run_git = m.run_git
 
-    def _fake_run(args, *a, **kw):
+    def _fake_run_git(args, *a, **kw):
         if "merge-base" in args:
-            return subprocess.CompletedProcess(
-                args, returncode=128, stdout="", stderr="fatal: not a valid object name"
+            return GitResult(
+                returncode=128, stdout="", stderr="fatal: not a valid object name", timed_out=False
             )
-        return real_run(args, *a, **kw)
+        return real_run_git(args, *a, **kw)
 
-    monkeypatch.setattr(m.subprocess, "run", _fake_run)
+    monkeypatch.setattr(m, "run_git", _fake_run_git)
     reason = m.check(plan_path, repo, supersession=False)
     assert reason is not None
     assert "could not resolve" in reason
@@ -536,7 +537,7 @@ def test_mint_refuses_when_integration_sidecar_lacks_prep_sidecar(tmp_path):
     build_test = share / "2026-09-27-test-runner.md"
     _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
     plan_path = repo / "docs" / "plans" / "example.md"
-    with pytest.raises(m.MintRefusal, match="carries no prep_sidecar"):
+    with pytest.raises(m.MintRefusal, match="carries no prep_sidecar; rerun with mint --repair"):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 

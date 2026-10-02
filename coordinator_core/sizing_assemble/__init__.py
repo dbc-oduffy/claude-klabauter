@@ -48,7 +48,8 @@ comfortably inside that import-cost envelope, and the absolute run time
 (~51ms) stays well under the ≤200ms budget ceiling (DR-344 §7) — no perf
 cut needed.
 
-READ-ONLY, by construction: `route()` only reads its arguments — it never
+READ-ONLY, by construction (`route()`; `write_back()`, reached only through
+`main()`'s `--write <state/sizings/x.yaml>`, is the one writer): `route()` only reads its arguments — it never
 touches disk, never writes a sizing-object, never shells out; its lazy,
 function-local `mode_resolution` import (`_validate_interaction_mode`)
 reaches only that module's pure constants/validation, never
@@ -280,7 +281,14 @@ _SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
     # `_scaffold_sizing --exit-criterion/--interaction-mode` flags exactly.
     Flag("--exit-criterion", "exit_criterion", required=False),
     Flag("--interaction-mode", "interaction_mode", required=False),
+    Flag("--tshirt", "tshirt", required=False),
+    Flag("--route", "route", required=False),
+    Flag("--premise", "premise", required=False),
+    Flag("--premise-evidence", "premise_evidence", required=False),
 )
+
+# `unrecorded` is migration-only provenance that doc-new refuses on a new scaffold.
+_RECORDABLE_PREMISES = ("executed", "read", "not-applicable")
 
 
 def _slug(text: str) -> str:
@@ -326,6 +334,10 @@ def _sizing_object_scaffold_directive(
     name: Optional[str] = None,
     exit_criterion: Optional[str] = None,
     interaction_mode: Optional[str] = None,
+    tshirt: Optional[str] = None,
+    route: Optional[str] = None,
+    premise: Optional[str] = None,
+    premise_evidence: Optional[str] = None,
 ) -> dict[str, Any]:
     root = Path.cwd()
     today = date.today().isoformat()
@@ -336,14 +348,37 @@ def _sizing_object_scaffold_directive(
         "out": f"state/sizings/{today}-{slug}.yaml",
         "exit_criterion": exit_criterion,
         "interaction_mode": interaction_mode,
+        "tshirt": tshirt,
+        "route": route,
+        "premise": premise if premise in _RECORDABLE_PREMISES else None,
+        "premise_evidence": (premise_evidence or "").strip() or None,
     }
-    return build_scaffold_directive(
+    directive = build_scaffold_directive(
         "d-scaffold-sizing-object",
         "sizing-object",
         resolved,
         _SIZING_OBJECT_FLAG_SPEC,
         root=root,
     )
+    # doc-new refuses a sizing-object scaffold with no premise provenance and
+    # evidence; naming them keeps the printed command from being one that fails.
+    missing = [
+        flag
+        for flag, key in (
+            ("--premise-provenance", "premise"),
+            ("--premise-evidence", "premise_evidence"),
+        )
+        if resolved[key] is None
+    ]
+    # Provenance is threaded only with its evidence: the two are accepted
+    # together or not at all, and a provenance-only directive would make the
+    # decision's directives vary with a value `route()` promises never alters it.
+    if "--premise-evidence" in missing:
+        args = [a for a in directive["args"] if not a.startswith("--premise=")]
+        directive["args"] = args
+    if missing:
+        directive["missing"] = missing
+    return directive
 
 # `_BASE_ROUTE_BY_TSHIRT`'s HARD GATE comment for why a new KEY is an
 TSHIRT_ORDER = ["XS", "S", "M", "L", "XL", "XXL"]
@@ -803,6 +838,7 @@ def route(
     exit_criterion: Optional[str] = None,
     interaction_mode: str = "hands-on",
     interaction_mode_source: Optional[str] = None,
+    premise_evidence: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
@@ -987,6 +1023,13 @@ def route(
         narration_bits.append(f"against appetite={appetite} -> route={resolved_route}.")
     else:
         narration_bits.append(f"-> route={resolved_route}.")
+    raise_line: Optional[str] = None
+    if resize_changed and probe_signal == "raise":
+        raise_line = (
+            f"probe raise: {tshirt} -> {resized_tshirt}, "
+            f"basis={probe_raise_basis or 'unstated'}, route={resolved_route}"
+        )
+        narration_bits.append(raise_line)
     narration = " ".join(narration_bits)
 
     #      PM-gated framing is APPENDED to this arm's text below rather than
@@ -1185,6 +1228,7 @@ def route(
         "dispositions": dispositions(resolved_route, resized_tshirt),
         "scout_evidence": scout_evidence,
         "narration": narration,
+        "probe_raise": raise_line,
         "next_move": next_move,
         "exit_criterion": exit_criterion_field,
         "interaction_mode": interaction_mode,
@@ -1206,9 +1250,148 @@ def route(
                     if interaction_mode_source in ("flag", "fleet")
                     else None
                 ),
+                tshirt=resized_tshirt,
+                route=resolved_route,
+                premise=premise_provenance,
+                premise_evidence=premise_evidence,
             )
         ],
     }
+
+
+def _render_block(mapping: dict) -> str:
+    import yaml
+
+    dumped = yaml.safe_dump(
+        mapping, default_flow_style=False, sort_keys=False, allow_unicode=True, width=100000
+    )
+    return "".join(f"  {line}\n" for line in dumped.rstrip("\n").split("\n"))
+
+
+def _set_scalar(text: str, key: str, raw: str) -> str:
+    from coordinator_core.frontmatter.primitives import (
+        insert_fm_field_raw,
+        read_fm_field,
+        replace_fm_field_raw,
+    )
+
+    if read_fm_field(text, key) is None:
+        return insert_fm_field_raw(text, key, raw)
+    return replace_fm_field_raw(text, key, raw)
+
+
+def write_back(
+    root: Path,
+    sizing: str,
+    decision: dict[str, Any],
+    *,
+    exit_criterion: Optional[str] = None,
+    interaction_mode: Optional[str] = None,
+    premise_provenance: Optional[str] = None,
+    premise_evidence: Optional[str] = None,
+    scout_evidence: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Apply a `route()` decision to an existing `state/sizings/` sizing under
+    `locked_rmw`, schema-validated before the write.
+
+    Sets estimate.tshirt, route, detents, fork/xl_exit (only when the decision
+    resolved one), scout_evidence and premise (only when given), and status
+    `draft` -> `sized`. exit_criterion.statement is written only while
+    `accepted` is null; interaction_mode only while absent. Raises
+    `SizingAssembleError` on any refusal, with nothing written.
+    """
+    import json
+
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import write_fm_nested_field
+    from coordinator_core.frontmatter.schema_validate import (
+        format_validation_errors,
+        validate_frontmatter,
+    )
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops._path_guard import contained_path
+
+    schema = (
+        Path(__file__).resolve().parent.parent
+        / "frontmatter"
+        / "schemas"
+        / "sizing-object.schema.json"
+    )
+    candidate = Path(sizing)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    target = contained_path(candidate, [root / "state" / "sizings"])
+    if target is None:
+        raise SizingAssembleError(f"{sizing!r} escapes state/sizings/")
+    if not target.is_file():
+        raise SizingAssembleError(f"sizing-object not found on disk: {sizing}")
+    record_premise = premise_provenance not in (None, "unrecorded")
+    if record_premise and not (premise_evidence or "").strip():
+        raise SizingAssembleError("--premise-provenance given without --premise-evidence")
+
+    def mutate(old: str) -> str:
+        try:
+            doc = yaml.safe_load(old) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(f"YAML parse error: {exc}") from exc
+        if not isinstance(doc, dict):
+            raise MutateAbort("sizing-object is not a YAML mapping")
+        text = old
+
+        estimate = dict(doc.get("estimate") or {})
+        estimate["tshirt"] = decision["resolved_estimate"]["tshirt"]
+        estimate.setdefault("provisional", True)
+        text = write_fm_nested_field(text, "estimate", _render_block(estimate))
+        text = _set_scalar(text, "route", decision["route"])
+        text = _set_scalar(text, "detents", json.dumps(list(decision["detents"])))
+        for key in ("fork", "xl_exit"):
+            if decision.get(key) is not None:
+                text = _set_scalar(text, key, decision[key])
+        if scout_evidence:
+            text = _set_scalar(text, "scout_evidence", json.dumps(list(scout_evidence)))
+        if record_premise:
+            text = write_fm_nested_field(
+                text,
+                "premise",
+                _render_block(
+                    {
+                        **(doc.get("premise") or {}),
+                        "provenance": premise_provenance,
+                        "evidence": premise_evidence.strip(),
+                    }
+                ),
+            )
+        if exit_criterion and exit_criterion.strip():
+            existing = doc.get("exit_criterion")
+            existing = dict(existing) if isinstance(existing, dict) else {}
+            if existing.get("accepted") is None:
+                existing["statement"] = exit_criterion.strip()
+                existing["accepted"] = None
+                text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
+        if interaction_mode and not doc.get("interaction_mode"):
+            text = _set_scalar(text, "interaction_mode", interaction_mode)
+        if doc.get("status") == "draft":
+            text = _set_scalar(text, "status", "sized")
+
+        try:
+            new_doc = yaml.safe_load(text) or {}
+        except Exception as exc:  # noqa: BLE001
+            raise MutateAbort(f"post-mutation YAML parse error: {exc}") from exc
+        errors = validate_frontmatter(new_doc, schema)
+        if errors:
+            raise MutateAbort(
+                f"post-mutation schema validation failed: {format_validation_errors(errors)}"
+            )
+        return text
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort as exc:
+        raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
+    except LockTimeout as exc:
+        raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
+    return {"path": str(target), "status": "written"}
 
 
 EXIT_OK = 0
@@ -1225,6 +1408,7 @@ def _usage(prog: str, stream=None) -> int:
         "[--express-lane] [--probe-signal collapse|raise] [--jtbd-unclear] "
         "[--well-trodden-step-change] "
         "[--premise-provenance executed|read|not-applicable|unrecorded] "
+        "[--premise-evidence <str>] "
         "[--boundary-in-notch yes|no] "
         "[--scout-evidence-kind mention-count|change-set|site-count] "
         "[--scout-evidence <str> ...] "
@@ -1233,7 +1417,8 @@ def _usage(prog: str, stream=None) -> int:
         "[--precedent shipped-before|novel] "
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
         "[--exit-criterion <str>] "
-        "[--interaction-mode hands-on|pm|ceo]",
+        "[--interaction-mode hands-on|pm|ceo] "
+        "[--write <state/sizings/x.yaml>]",
         file=stream,
     )
     return EXIT_USAGE
@@ -1286,6 +1471,8 @@ def main(argv: list[str]) -> int:
     scout_evidence: list[str] = []
     exit_criterion = None
     interaction_mode_flag = None
+    premise_evidence = None
+    write_path = None
 
     i = 0
     while i < len(argv):
@@ -1313,6 +1500,12 @@ def main(argv: list[str]) -> int:
             i += 1
         elif tok == "--premise-provenance" and i + 1 < len(argv):
             premise_provenance = argv[i + 1]
+            i += 2
+        elif tok == "--premise-evidence" and i + 1 < len(argv):
+            premise_evidence = argv[i + 1]
+            i += 2
+        elif tok == "--write" and i + 1 < len(argv):
+            write_path = argv[i + 1]
             i += 2
         elif tok == "--boundary-in-notch" and i + 1 < len(argv):
             boundary_in_notch = argv[i + 1]
@@ -1377,6 +1570,7 @@ def main(argv: list[str]) -> int:
             exit_criterion=exit_criterion,
             interaction_mode=interaction_mode,
             interaction_mode_source=interaction_mode_source,
+            premise_evidence=premise_evidence,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
@@ -1384,6 +1578,24 @@ def main(argv: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
+
+    if write_path is not None:
+        try:
+            decision["write"] = write_back(
+                Path.cwd(),
+                write_path,
+                decision,
+                exit_criterion=exit_criterion,
+                interaction_mode=(
+                    interaction_mode if interaction_mode_source in ("flag", "fleet") else None
+                ),
+                premise_provenance=premise_provenance,
+                premise_evidence=premise_evidence,
+                scout_evidence=scout_evidence,
+            )
+        except SizingAssembleError as exc:
+            print(f"{prog}: --write refused: {exc}", file=sys.stderr)
+            return EXIT_BUSINESS_FAIL
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK

@@ -30,6 +30,8 @@ Negative-spec:
   - Does NOT compare head_sha: peers commit to the shared branch mid-run.
     Only the branch NAME is checked (detached, unreadable, or differing from
     the marker's ``expected_branch`` refuses before any write).
+  - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
+    reports it, because widening the pathspec would hide a wrong spine.
   - Does NOT write a receipt when there is nothing to commit.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
@@ -58,6 +60,7 @@ Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -81,6 +84,7 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.git.commit import partition_declared_deletions
 from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.git.git_state import head_branch
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
@@ -110,6 +114,7 @@ from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
 _PARAM_FIELDS = (
     Field("script_path", "nonempty_str", required=True),
     Field("incomplete_chunks", "str_list", required=True),
+    Field("landed_chunks", "str_list"),
     Field("inline_review", "dict"),
 )
 
@@ -177,8 +182,12 @@ def _source_rows_by_plan(
 
     if not plan_path.endswith(_SPINE_SUFFIX):
         return {}
-    inventory_rel = plan_path[: -len(_SPINE_SUFFIX)] + ".md"
+    stem = plan_path[: -len(_SPINE_SUFFIX)]
+    inventory_rel = stem + ".md"
     inventory_text = _read_rel(worktree_root, inventory_rel)
+    if inventory_text is None and re.search(r"-p\d+$", stem):
+        inventory_rel = re.sub(r"-p\d+$", "", stem) + ".md"
+        inventory_text = _read_rel(worktree_root, inventory_rel)
     if inventory_text is None:
         return {}
     try:
@@ -389,12 +398,17 @@ def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optiona
     claims = _parse_prefix_claims(report_text)
     if claims is None:
         return None
-    kept = [
+    # Match on whole path segments: a bare prefix ``src/foo`` must not admit
+    # the leading-string sibling ``src/foobar/x``.
+    bounded = [
+        (prefix, prefix if prefix.endswith("/") else prefix + "/")
+        for prefix in chunk.prefixes
+    ]
+    return [
         path
         for path in claims
-        if any(path == prefix or path.startswith(prefix) for prefix in chunk.prefixes)
+        if any(path == prefix or path.startswith(under) for prefix, under in bounded)
     ]
-    return kept
 
 
 def _stage_returns(inline_review: dict) -> Optional[dict]:
@@ -477,6 +491,65 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
     return {"plan_status": "implemented"}
 
 
+_UNDECLARED_DIRTY_CAP = 100
+
+
+def _glob_literal(text: str) -> str:
+    return "".join("\\" + ch if ch in "*?[]\\" else ch for ch in text)
+
+
+def _scope_pathspecs(request: CommitRequest) -> list:
+    """Git pathspecs naming the directories a run's declared writes sit in:
+    each declared path's own directory, non-recursive, and each declared
+    prefix, recursive."""
+    specs: dict = {}
+    for chunk in request.chunks:
+        for path in chunk.paths:
+            parent = path.rpartition("/")[0]
+            specs[f":(glob){_glob_literal(parent + '/') if parent else ''}*"] = None
+        for prefix in chunk.prefixes:
+            specs[f":(literal){prefix.rstrip('/')}/"] = None
+    return list(specs)
+
+
+def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
+    """Dirty files beside the run's declared writes that no chunk declares.
+
+    The terminal commit lands only declared paths and own-report prefix
+    claims, so an executor-written file at an undeclared path is never staged
+    by anything. It is reported, never committed: a wrong spine is the
+    signal. One scoped ``git status`` spawn; the shared tree means a peer's
+    dirt in the same directory is listed too, so a row is a candidate for
+    inspection, not proof of this run's authorship. ``undeclared_dirty`` is
+    ``None`` when git could not answer.
+    """
+    specs = _scope_pathspecs(request)
+    if not specs:
+        return {"undeclared_dirty": []}
+    result = run_git(
+        [
+            "-C", str(worktree_root), "--no-optional-locks", "status",
+            "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *specs,
+        ],
+        binary=True,
+    )
+    if not result.ok:
+        return {"undeclared_dirty": None}
+    declared = {p for c in request.chunks for p in c.paths}
+    dirty = sorted(
+        {
+            entry[3:].decode("utf-8", "surrogateescape")
+            for entry in result.stdout_bytes.split(b"\0")
+            if len(entry) > 3
+        }
+        - declared
+    )
+    out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
+    if len(dirty) > _UNDECLARED_DIRTY_CAP:
+        out["undeclared_dirty_total"] = len(dirty)
+    return out
+
+
 def _subject(contributing: list) -> str:
     ids = ", ".join(c.id for c in contributing)
     titles = "; ".join(c.title for c in contributing)
@@ -497,6 +570,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              run did NOT finish DONE. Any id
                                              not present in the marker's
                                              request refuses the call.
+        landed_chunks (list[str], optional)  -- chunk ids the digest listed
+                                             incomplete that the driver landed
+                                             during recovery (a resumed run
+                                             replays their cached BLOCKED
+                                             report). Treated as DONE: removed
+                                             from the incomplete set before
+                                             the commit and receipts are built.
         inline_review (dict, required when the script carries a marker) --
                                              ``{integration_stem, slices,
                                              fixes}``, relayed verbatim from
@@ -511,7 +591,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns: ``ceremony.commit_v2``'s reply dict plus ``chunks_committed``
     (ids), ``dropped_absent`` (paths dropped as absent-and-untracked) and
-    ``prefix_files`` (own-prefix-claimed files folded into the commit) and
+    ``prefix_files`` (own-prefix-claimed files folded into the commit),
+    ``incomplete_chunks`` (present only when ``landed_chunks`` was passed: the
+    digest's incomplete list minus them) and
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
     when that second step failed -- the product commit stands regardless.
@@ -522,8 +604,32 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     script with no marker returns ``{"committed": False, "nothing_to_commit":
     True}`` without error. ``commit_v2``'s own ``nothing_to_commit: True``
     (a peer already landed the bytes) passes through unmodified, as a
-    non-error.
+    non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
+    paths]}`` for each ``incomplete_chunks`` id the request marker names, the
+    work the commit left uncommitted; ``{}`` when none, or when no marker was read.
+    Once the run reaches its commit (every refusal and no-op before that omits it),
+    the reply also carries ``undeclared_dirty`` -- the
+    dirty files (modified or untracked) in the directories of the run's declared
+    writes, or under its declared prefixes, that no chunk declares: work the
+    commit could never see. Reported, never committed. ``None`` when git could
+    not answer; ``undeclared_dirty_total`` appears when the list is capped.
     """
+    stranded: dict = {}
+    scope: dict = {}
+    reply = _terminal_commit(params, repo_root, stranded, scope)
+    reply["stranded"] = stranded
+    if scope:
+        reply.update(_undeclared_dirty(scope["root"], scope["request"]))
+    incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
+    landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
+    if landed and isinstance(incomplete, list) and isinstance(landed, list):
+        reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed))
+    return reply
+
+
+def _terminal_commit(
+    params: dict, repo_root: Optional[Path], stranded: dict, scope: dict
+) -> dict:
     if repo_root is None:
         return _error(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
@@ -535,7 +641,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error(refusal["error"])
 
     script_path_raw = params["script_path"]
-    incomplete_chunks = set(params["incomplete_chunks"])
+    incomplete_chunks = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
     inline_review = params.get("inline_review")
 
     session_id = params.get("session_id")
@@ -725,6 +831,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # started and so never reached the marker; those carry no paths to hold
     # back, so they are reported, not refused.
     unmarked_incomplete = sorted(incomplete_chunks - known_ids)
+    stranded.update(
+        {c.id: list(c.paths) for c in request.chunks if c.id in incomplete_chunks}
+    )
 
     done_chunks = [c for c in request.chunks if c.id not in incomplete_chunks]
 
@@ -776,6 +885,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not all_paths and not deleted_paths:
         return {"committed": False, "nothing_to_commit": True}
 
+    scope.update(root=worktree_root, request=request)
     final_paths_set = set(all_paths)
     contributing_chunks = [
         c

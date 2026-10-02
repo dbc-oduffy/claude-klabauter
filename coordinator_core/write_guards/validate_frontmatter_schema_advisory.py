@@ -77,12 +77,9 @@ resolve is the reverse one: the coordinator-content-repo sibling checkout, for
 ``coordinator/schemas/`` (the schema corpus, contract-owned by DoE, not
 Claude-klabauter) and ``coordinator/schemas/coordinator-registry.manifest.json`` (the
 registry manifest). That resolution goes through
-``coordinator_core.ops.coordinator_content_root.coordinator_content_root()`` — the
-same ratified "resolve the coordinator-content-repo sibling root" ladder the reference
-hook's own DoE-side callers use elsewhere, now called natively in-process
-rather than via the ``machine-local get repos.content_root`` subprocess the
-reference hook shells out to. Same target, same effective resolution (that
-subprocess call is rung 2 of this very ladder), no behavior change.
+``coordinator_core.content_root.read_content_root()`` — the
+Content-root ladder, called natively in-process
+rather than via a ``machine-local get`` subprocess.
 
 Import-safety: per INTERFACE.md rule 7, no resolution work (content-root
 lookup, manifest load, schema load, git-root subprocess) happens at import
@@ -122,7 +119,7 @@ from coordinator_core.frontmatter.schema_validate import (
     plan_tasks_spine_errors as _plan_tasks_spine_errors_driver,
     validate_frontmatter_obj,
 )
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import (
     resolve_repo_root as _shared_resolve_repo_root,
@@ -501,12 +498,12 @@ def _load_doe_registry() -> dict:
     schema-validation ones.
     """
     try:
-        content_root = coordinator_content_root()
+        base = read_content_root() or None
     except Exception:  # noqa: BLE001 — degrade-open, never block
-        content_root = None
+        base = None
 
     manifest: Optional[dict] = None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(base)
     if content_root is not None:
         manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         try:
@@ -552,7 +549,7 @@ def _load_doe_registry() -> dict:
             central_canonical_id = None
 
     return {
-        "content_root": content_root,
+        "content_root": base,
         "manifest": manifest or {},
         "repo_basename_to_em_shortname": repo_basename_to_em_shortname,
         "scaffold_offer_map": scaffold_offer_map,

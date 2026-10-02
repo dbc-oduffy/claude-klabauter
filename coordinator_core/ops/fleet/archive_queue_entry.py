@@ -43,7 +43,9 @@ contract's history and not a live caller) is untouched:
                  (dry_run:false — act; exit_code 1 iff any item failed to
                  archive, per-item detail always in items[], never
                  collapsed to one boolean the caller has to re-diff against
-                 its own request)
+                 its own request; a repeated entry is moved once, and a
+                 differently-spelled repeat carries `duplicate_of` and
+                 mirrors that item's `archived`)
 
 Archive destination: archive/improvement-queue/YYYY-MM/<filename> where
 YYYY-MM is derived from the filename prefix (YYYY-MM-DD-slug.yaml); falls
@@ -160,6 +162,10 @@ def _reply(*, exit_code: int, archived: bool, dest: Optional[str], error: Option
 async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_run: bool) -> dict:
     items: List[dict] = []
     resolved: List[Tuple[str, Path, Path]] = []
+    # One Move per source file: a repeated entry (same or different spelling)
+    # would otherwise fail its second move and mask the first one's archive.
+    first_raw_by_src: dict = {}
+    duplicates: List[dict] = []
 
     for entry_path_raw in entry_paths:
         raw = entry_path_raw.strip() if isinstance(entry_path_raw, str) else ""
@@ -182,6 +188,14 @@ async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_
         ym = _archive_month(contained)
         dest = worktree / "archive" / "improvement-queue" / ym / contained.name
         dest_rel = rel_id(dest, worktree)
+        first_raw = first_raw_by_src.get(contained)
+        if first_raw is not None:
+            if first_raw != raw:
+                dup = {"id": raw, "dest": dest_rel, "error": None, "duplicate_of": first_raw}
+                items.append(dup)
+                duplicates.append(dup)
+            continue
+        first_raw_by_src[contained] = raw
         items.append({"id": raw, "dest": dest_rel, "error": None})
         resolved.append((raw, contained, dest))
 
@@ -213,6 +227,8 @@ async def _handle_batch(worktree: Path, queue_dir: Path, entry_paths: list, dry_
     for it in items:
         if "archived" not in it:
             it["archived"] = False
+    for dup in duplicates:
+        dup["archived"] = by_id[dup["duplicate_of"]]["archived"]
 
     exit_code = 1 if any(it.get("error") for it in items) else 0
     return {"exit_code": exit_code, "archived": None, "dest": None, "items": items}

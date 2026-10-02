@@ -47,10 +47,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from coordinator_core.benchmarks.bash_dispatch_probe import (
     CORPUS_PAYLOADS,
-    _INERT_PAYLOAD,
     _REPO_ROOT,
     _dispatch_cmd,
     _verify_single_invocation_succeeds,
+    inert_payload,
 )
 from coordinator_core.benchmarks.process_time import (
     IS_DARWIN,
@@ -81,7 +81,7 @@ def _stage_argv_env(label: str) -> Tuple[list, Dict[str, str]]:
             dict(os.environ),
         )
     if label == "chain_spawns_nothing":
-        return _dispatch_cmd(_INERT_PAYLOAD)
+        return _dispatch_cmd(inert_payload())
     raise ValueError(f"hook_entry_cost: unknown stage label {label!r}")
 
 

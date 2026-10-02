@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble.apply as pa_apply
+from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: AC10's scoped-commit test proves the
@@ -62,14 +63,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "work/test/2026-01-01")
-    _git(repo, "config", "commit.gpgsign", "false")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+    seeded_repo(repo, branch="work/test/2026-01-01", email="test@example.com", name="Test")
 
 
 def _seed_handoff(repo: Path, name: str) -> Path:

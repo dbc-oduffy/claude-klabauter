@@ -78,6 +78,7 @@ def main(argv: List[str]) -> int:
     try:
         # actually breaks it: on Windows, CREATE_NO_WINDOW on the git-bash
         result = subprocess.run(
+            # popup-intentional-last-resort: console behaviour is the property under test
             [*resolve_launchable(sibling), *passthrough],
         )
     except OSError as exc:

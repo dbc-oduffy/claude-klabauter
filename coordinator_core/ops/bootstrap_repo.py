@@ -48,7 +48,7 @@ NOT part of this port. The caller computes its own coordinator root and sets
 `main()` — mirroring the rung-1
 env-override convention already used by `coordinator_core.ops.
 learn_lessons_roots._resolve_doe_content_root` / `coordinator_core.ops.
-coordinator_content_root`. This module re-derives the same 4-rung fallback ladder
+Content_root`. This module re-derives the same 4-rung fallback ladder
 locally (env override -> `~/.claude/.coordinator-content-root` pointer -> machine-local
 registry -> unconditional flat-layout fallback) rather than importing those
 modules' private underscore-prefixed helpers, consistent with how those two
@@ -107,7 +107,7 @@ from coordinator_core.install.scaffold_structure import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.data_root import content_root_for
-from coordinator_core.content_root_pointer import read_content_root_pointer_file
+from coordinator_core.content_root import read_pointer_files
 from coordinator_core import launchable
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -212,9 +212,9 @@ def _claude_home() -> str:
 
 
 def _content_root_rungs_2_to_4(claude_home: str) -> str:
-    content_root = read_content_root_pointer_file(os.path.expanduser("~"))
-    if content_root:
-        content_root = content_root_for(content_root)
+    pointed_root = read_pointer_files(os.path.expanduser("~"))
+    if pointed_root:
+        content_root = content_root_for(pointed_root)
         if content_root is not None:
             return str(content_root)
 

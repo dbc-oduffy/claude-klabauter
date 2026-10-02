@@ -313,6 +313,40 @@ class TestInvokeLatencyProbe:
 
         return ptm
 
+    def test_smoke_and_latency_share_one_cold_ping_spawn(
+        self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
+    ) -> None:
+        """Both invoke probes in one doctor run answer from ONE cold ping spawn,
+        and both keep their own probe id and result shape."""
+        mod = _require_module()
+        spawns: list[int] = []
+
+        def _fake_measure(*a, **kw):
+            spawns.append(1)
+            return {
+                "process_time_ms": 50.0, "wall_ms": 60.0, "procs": 1, "rc": 0,
+                "k": 1, "stdout_path": kw.get("stdout_path"),
+                "stderr_path": kw.get("stderr_path"),
+            }
+
+        monkeypatch.setattr(
+            process_time_mod, "single_invocation_tree_process_time", _fake_measure
+        )
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **kw: spawns.append(1),
+        )
+
+        mod._COLD_PING_MEMO.clear()
+        latency = mod._run_probe_invoke_latency(stamped_root)
+        smoke = mod._run_probe_invoke_smoke(stamped_root)
+
+        assert len(spawns) == 1
+        assert latency.probe == "claude-klabauter.invoke.latency"
+        assert latency.status == mod._PASS
+        assert smoke.probe == "claude-klabauter.invoke.smoke"
+        assert smoke.required is False
+
     def test_latency_under_budget_is_pass(
         self, monkeypatch: pytest.MonkeyPatch, stamped_root: Path, process_time_mod
     ) -> None:
@@ -582,16 +616,28 @@ class TestInvokeLatencyDispatchRoot:
 # C4 sentinel — "Question the sink cannot answer:" per retained probe
 # ---------------------------------------------------------------------------
 
-# The three probes RETAINED by pln-2026-08-27-the-undeclared-harness-and-the-
-# redundant-probes § C4 — each MUST carry the literal heading
-# "Question the sink cannot answer:" in its own docstring. This is the
-# constant the plan's Clause B falsifies on: any id here without a matching
-# docstring block fails the assertion below.
-_IMPLEMENTED_IDS = {
-    "claude-klabauter.invoke.smoke": "_run_probe_invoke_smoke",
-    "claude-klabauter.invoke.latency": "_run_probe_invoke_latency",
-    "claude-klabauter.warm.roundtrip": "_run_probe_warm_roundtrip",
-}
+# The subject set is the doctor's own liveness-probe registry (probes that spawn
+# or dial the engine), so a new liveness probe inherits the sentinel obligation.
+def _unregistered_liveness_probes(
+    source: str, helpers: frozenset, registered: set
+) -> set:
+    """`_run_probe_*` functions whose body names a liveness spawn helper but are not registered."""
+    import ast
+
+    found = set()
+    for node in ast.parse(source).body:
+        if not (isinstance(node, ast.FunctionDef) and node.name.startswith("_run_probe_")):
+            continue
+        names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+            n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+        }
+        if names & helpers and node.name not in registered:
+            found.add(node.name)
+    return found
+
+
+_PROBE_MOD = _load_probe_module()
+_IMPLEMENTED_IDS = dict(_PROBE_MOD.LIVENESS_PROBES) if _PROBE_MOD else {}
 
 _SENTINEL_HEADING = "Question the sink cannot answer:"
 
@@ -605,13 +651,7 @@ class TestQuestionTheSinkCannotAnswerSentinel:
         """_IMPLEMENTED_IDS's function names must all exist as real `_run_probe_*`
         functions on the loaded module.
 
-        This does not (and cannot, without inventing a derivable "retained"
-        category — see state/debt-backlog/2026-08-28-the-origin-guard-stops-at-
-        the-benchmarks-e72083a938e5.yaml) assert the dict is exhaustive over the
-        probe population. It only catches the cheap, mechanical failure: a
-        function named in the dict gets renamed or deleted and the parametrized
-        test below silently stops covering anything (an AttributeError inside a
-        fixture setup, not a red assertion on the sentinel itself).
+        Exhaustiveness is `test_every_probe_reaching_a_spawn_helper_is_registered`'s job.
         """
         mod = _require_module()
 
@@ -623,6 +663,29 @@ class TestQuestionTheSinkCannotAnswerSentinel:
             f"_IMPLEMENTED_IDS names function(s) no longer present on the module: "
             f"{sorted(missing)!r} — renamed or deleted without updating the dict"
         )
+
+    def test_every_probe_reaching_a_spawn_helper_is_registered(self) -> None:
+        mod = _require_module()
+        source = _BIN_PROBE.read_text(encoding="utf-8")
+        unregistered = _unregistered_liveness_probes(
+            source, mod._LIVENESS_SPAWN_HELPERS, set(mod.LIVENESS_PROBES.values())
+        )
+        assert not unregistered, (
+            f"probe(s) {sorted(unregistered)!r} spawn or dial the engine but are not "
+            "registered via @_liveness_probe, so they carry no sentinel obligation"
+        )
+
+    def test_planted_spawning_probe_without_registration_is_caught(self) -> None:
+        mod = _require_module()
+        planted = (
+            "def _run_probe_planted(root):\n"
+            "    return _cold_ping(root)\n"
+            "def _run_probe_quiet(root):\n"
+            "    return 1\n"
+        )
+        assert _unregistered_liveness_probes(
+            planted, mod._LIVENESS_SPAWN_HELPERS, set()
+        ) == {"_run_probe_planted"}
 
     @pytest.mark.parametrize("probe_id,fn_name", sorted(_IMPLEMENTED_IDS.items()))
     def test_retained_probe_carries_sentinel_heading(
@@ -646,7 +709,7 @@ class TestQuestionTheSinkCannotAnswerSentinel:
 
         # The prose following the heading must be non-trivial, not a bare label.
         #
-        # Ceiling, stated honestly: this is a length floor only (> 40 chars),
+        # Known ceiling: this is a length floor only (> 40 chars),
         # not semantic enforcement. It blocks a bare label following the
         # heading, but does not check the prose is actually phrased as a
         # question, names a concrete reason the sink cannot answer it, or

@@ -337,9 +337,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_oracle_post_commit_tail_resolves_named_ops():
     entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/ceremony/post_commit_tail.py")
-    assert "handoff.transition" in entry["lookups"]
-    assert "deliverable.cascade_terminal" not in entry["lookups"]
-    assert "handoff.close_origin_stub" not in entry["lookups"]
+    # Op names here live in module-scope constants used only as skip/fail labels
+    # (OP_CLOSE_ORIGIN_STUB, OP_COMPLETION_ENTRY_FOLD), so none is a lookup edge;
+    # deliverable.cascade_terminal is bound directly and close_origin_stub is caller-injected.
+    assert entry["lookups"] == []
+    assert entry["dispatches"] == []
 
 
 def test_oracle_guard_roster_ops_resolves_ported_advisory_hook_names():

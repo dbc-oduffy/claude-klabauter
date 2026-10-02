@@ -15,6 +15,7 @@ from pathlib import Path
 import ast
 
 from coordinator_core.ops.generator_provenance import (
+    _extract_declaration,
     _extract_generates,
     _extract_mutates,
     _mutates_concrete_patterns,
@@ -1882,12 +1883,9 @@ def run():
     assert "concrete path" in record.detail
 
 
-# P012-C5 (docs/plans/2026-08-26-seven-generators-owe-a-staleness-contrac.md)
-# -- the two live UNDECLARED modules, read directly off the real repo files
-# rather than derived from a sweep (AC12): each keeps its concrete MUTATES
-# path (append-only ledger / surgical shared-file edit is not a generated
-# artifact) and stays UNDECLARED by design, with the reason recorded at the
-# declaration site.
+# The two modules whose concrete append-only ledger / shared-file path is a
+# `MUTATES_APPEND` declaration, read directly off the real repo files rather
+# than derived from a sweep.
 _C5_UNDECLARED_TARGETS = (
     ("coordinator_core/ops/distill_apply_disposal.py", "state/distillation-log.md"),
     ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", ".gitignore"),
@@ -1895,35 +1893,82 @@ _C5_UNDECLARED_TARGETS = (
 
 
 @pytest.mark.parametrize("rel_path,concrete_path", _C5_UNDECLARED_TARGETS)
-def test_c5_modules_keep_concrete_mutates_undeclared(rel_path, concrete_path):
+def test_c5_modules_declare_their_concrete_path_as_mutates_append(rel_path, concrete_path):
+    """The concrete ledger/shared-file path is `MUTATES_APPEND`, never a
+    `MUTATES` entry and never a `GENERATES` pair (neither module emits a fixed
+    artifact for it)."""
     tree = ast.parse((_REPO_ROOT / rel_path).read_text(encoding="utf-8"))
-    generates = _extract_generates(tree)
-    mutates = _extract_mutates(tree)
-    assert generates is None, (
-        f"{rel_path}: GENERATES must stay absent -- neither module emits a "
-        "fixed artifact for the site named here (see P012-C5 site comment)"
-    )
-    assert isinstance(mutates, list) and concrete_path in mutates
-    assert _mutates_concrete_patterns(mutates) == [concrete_path] or concrete_path in _mutates_concrete_patterns(
-        mutates
-    )
-
-
-@pytest.mark.parametrize(
-    ("module", "concrete_path"),
-    [
-        ("coordinator_core/ops/distill_apply_disposal.py", "state/distillation-log.md"),
-        ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", ".gitignore"),
-    ],
-)
-def test_c5_reasoned_at_site_modules_keep_concrete_mutates_without_generates(module, concrete_path):
-    """The two C5 modules take the reasoned-at-site outcome: the concrete path
-    stays in MUTATES, no GENERATES is declared, and the reasoning is recorded
-    above the declaration."""
-    source = (_REPO_ROOT / module).read_text(encoding="utf-8")
-    tree = ast.parse(source)
     assert _extract_generates(tree) is None
+    assert _extract_declaration(tree, "MUTATES_APPEND") == [concrete_path]
     mutates = _extract_mutates(tree)
-    assert isinstance(mutates, list)
-    assert _mutates_concrete_patterns(mutates) == [concrete_path]
-    assert "stays a concrete `MUTATES` path" in source
+    assert isinstance(mutates, list) and concrete_path not in mutates
+    assert _mutates_concrete_patterns(mutates) == []
+
+
+@pytest.mark.parametrize("prefix", ["state", ".coordinator-local"])
+def test_mutates_glob_matching_no_tracked_path_under_a_runtime_tree_is_a_runtime_ledger(tmp_path, prefix):
+    _write(
+        tmp_path,
+        "coordinator_core/ledger_writer.py",
+        f"""
+from pathlib import Path
+
+MUTATES = ["{prefix}/runtime/*.jsonl"]
+
+def run(target):
+    Path(target).write_text("{{}}")
+""",
+    )
+    _write(tmp_path, "docs/plans/foo.md", "x\n")
+    _git_init_and_commit_all(tmp_path)
+
+    matches = [r for r in discover_generators(tmp_path) if r.generator == "coordinator_core/ledger_writer.py"]
+
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.MUTATES_DECLARED
+    assert "runtime-ledger" in matches[0].detail
+
+
+def test_runtime_ledger_rule_is_keyed_on_path_shape_not_gitignore(tmp_path):
+    _write(
+        tmp_path,
+        "coordinator_core/elsewhere_writer.py",
+        """
+from pathlib import Path
+
+MUTATES = ["docs/runtime/*.jsonl"]
+
+def run(target):
+    Path(target).write_text("{}")
+""",
+    )
+    _write(tmp_path, ".gitignore", "docs/runtime/\n")
+    _write(tmp_path, "state/foo.yaml", "x: 1\n")
+    _git_init_and_commit_all(tmp_path)
+
+    matches = [r for r in discover_generators(tmp_path) if r.generator == "coordinator_core/elsewhere_writer.py"]
+
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.UNDECLARED
+
+
+def test_mixed_runtime_and_other_unmatched_globs_stay_undeclared(tmp_path):
+    _write(
+        tmp_path,
+        "coordinator_core/mixed_writer.py",
+        """
+from pathlib import Path
+
+MUTATES = ["state/runtime/*.jsonl", "docs/runtime/*.jsonl"]
+
+def run(target):
+    Path(target).write_text("{}")
+""",
+    )
+    _write(tmp_path, "state/foo.yaml", "x: 1\n")
+    _git_init_and_commit_all(tmp_path)
+
+    matches = [r for r in discover_generators(tmp_path) if r.generator == "coordinator_core/mixed_writer.py"]
+
+    assert len(matches) == 1
+    assert matches[0].verdict == Verdict.UNDECLARED

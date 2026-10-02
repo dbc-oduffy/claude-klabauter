@@ -115,9 +115,8 @@ from coordinator_core.telemetry.composition_record import (
 
 # Import side-effect only: triggers each op module's register_op(...) so
 # _invoke_op_in_process's entry-seam dispatch below resolves via a direct
-# registry hit rather than a lazy-import fallback -- mirrors the established
-# pattern in ops/handoff_ship_archive.py, ops/ceremony/wsc_tail.py,
-# ops/cutover_advance.py, et al. Originally added
+# registry hit rather than a lazy-import fallback -- the established
+# pattern in ops/cutover_advance.py, et al. Originally added
 # to fix a live break (get_op_handler() alone, with no import trigger, returned
 # None for an op whose owning module was never otherwise imported in this
 # process -- `{"error": "unrecognized op 'handoff.stamp_phase'", "failed_directive":

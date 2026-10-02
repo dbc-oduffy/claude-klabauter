@@ -394,6 +394,10 @@ def _find_indirect_blocking_calls_in_async_fn(
 def _find_violations_in_file(path: pathlib.Path) -> list[tuple[str, int, str]]:
     """Return (fn_name, lineno, call_str) for every violation in a source file."""
     src = path.read_text(encoding="utf-8")
+    # Every violation is reported from an `ast.AsyncFunctionDef`, whose source
+    # carries the `async` keyword.
+    if "async" not in src:
+        return []
     try:
         tree = ast.parse(src, filename=str(path))
     except SyntaxError:

@@ -28,6 +28,7 @@ from coordinator_core.warm import env_forwarding
 from coordinator_core.warm.entry_seam import per_request_state
 from coordinator_core.warm.env_forwarding import CALLER_PREFIXES, FORWARDING_SET, is_caller_prefixed
 from coordinator_core.warm.tests.test_door_read_deadline_posix import runtime_base  # noqa: F401 -- fixture
+from coordinator_core.win_portability import no_console_creationflags
 
 _DOOR_DIR = Path(__file__).resolve().parents[1] / "door"
 
@@ -118,7 +119,7 @@ def test_the_posix_door_carries_prefixed_names_and_nothing_else(tmp_path, runtim
     subprocess.run(
         [cc, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""',
          "-o", str(door), str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
-        check=True, capture_output=True,
+        check=True, capture_output=True, **no_console_creationflags(),
     )
 
     root = _make_stub_engine_root(tmp_path)
@@ -138,7 +139,7 @@ def test_the_posix_door_carries_prefixed_names_and_nothing_else(tmp_path, runtim
     )
     server = _ReplyingServer(sock_path, reply)
     try:
-        subprocess.run([str(door), "ping"], env=env, cwd=str(root), capture_output=True, timeout=60)
+        subprocess.run([str(door), "ping"], env=env, cwd=str(root), capture_output=True, timeout=60, **no_console_creationflags())
     finally:
         server.close()
 
@@ -158,7 +159,10 @@ def client_request(monkeypatch, tmp_path):
     nothing here can reach or start a real server."""
     import coordinator_core.warm.client as client
 
-    for key in [k for k in os.environ if is_caller_prefixed(k)]:
+    from coordinator_core.warm.env_forwarding import FORWARDING_SET
+
+    declared = {entry.name for entry in FORWARDING_SET}
+    for key in [k for k in os.environ if is_caller_prefixed(k) or k in declared]:
         monkeypatch.delenv(key)
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path))
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)

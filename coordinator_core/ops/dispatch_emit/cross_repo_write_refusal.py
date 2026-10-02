@@ -24,23 +24,72 @@ plans, one per repo, and use ``external_gate`` to sequence them -- exactly
 the convention ``spine_read.py`` already documents for cross-repo
 blockers.
 
+A path is outside ``repo_root`` when it is absolute (drive-letter or POSIX)
+and not under ``repo_root``, when its normalised relative form escapes via
+``..``, or when its first segment names a sibling git checkout.
+
 Negative-spec: this module does not walk the tree or call ``git status``.
-It only checks each row's OWN declared ``writes:`` path's first segment
-against the immediate children of ``repo_root``'s PARENT directory --
-targeted existence/``.git``-presence checks on a candidate the row itself
-named, never a directory scan for what "might" be a sibling repo.
+It is pure path arithmetic plus one targeted ``.git``-presence probe on the
+sibling candidate a row itself named -- never a directory scan for what
+"might" be a sibling repo.
+
+``check_external_gate_exclusions`` is the second refusal here: it reads the
+``exclusions`` ledger ``read_spine`` fills and never re-derives gating.
 """
 
 from __future__ import annotations
 
+import posixpath
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+_DRIVE_ABS = re.compile(r"^[A-Za-z]:/")
 
 
 class CrossRepoWriteError(ValueError):
     pass
+
+
+def _posix(path: str) -> str:
+    return path.replace("\\", "/")
+
+
+def _is_absolute(posix_path: str) -> bool:
+    return posix_path.startswith("/") or bool(_DRIVE_ABS.match(posix_path))
+
+
+def _under_root(posix_path: str, root_posix: str) -> bool:
+    candidate = posixpath.normpath(posix_path)
+    root = posixpath.normpath(root_posix)
+    if _DRIVE_ABS.match(root):
+        candidate, root = candidate.casefold(), root.casefold()
+    return candidate == root or candidate.startswith(root.rstrip("/") + "/")
+
+
+def paths_outside_repo_root(paths: Iterable[str], repo_root: Path) -> list[str]:
+    """The paths a terminal commit keyed on ``repo_root`` cannot reach, in
+    input order: absolute and not under ``repo_root``, ``..``-escaping, or
+    first-segment-sibling-repo."""
+    root_posix = _posix(str(repo_root))
+    repo_root = Path(repo_root)
+    out: list[str] = []
+    for raw in paths:
+        posix = _posix(raw)
+        if _is_absolute(posix):
+            if not _under_root(posix, root_posix):
+                out.append(raw)
+            continue
+        normalized = posixpath.normpath(posix)
+        if normalized == ".." or normalized.startswith("../"):
+            out.append(raw)
+            continue
+        segment = _first_segment(normalized)
+        if segment is not None and _is_sibling_repo_dir(repo_root, segment):
+            out.append(raw)
+    return out
 
 
 def _first_segment(path: str) -> Optional[str]:
@@ -74,31 +123,74 @@ def check_cross_repo_writes(rows, repo_root: Optional[Path]) -> None:
         return
     repo_root = Path(repo_root)
 
-    offenders: dict[str, list[str]] = {}
+    offenders: list[str] = []
     for row in rows:
         candidates: list[str] = []
         writes = getattr(row, "writes", UNDECLARED)
         if writes is not UNDECLARED and isinstance(writes, list):
             candidates.extend(p for p in writes if isinstance(p, str) and p)
         candidates.extend(getattr(row, "writes_under", ()) or ())
-        for raw_path in candidates:
-            segment = _first_segment(raw_path)
-            if segment is None:
-                continue
-            if _is_sibling_repo_dir(repo_root, segment):
-                offenders.setdefault(segment, []).append(f"{row.id} ({raw_path!r})")
+        offenders.extend(
+            f"{row.id} ({p!r})" for p in paths_outside_repo_root(candidates, repo_root)
+        )
 
     if not offenders:
         return
 
-    parts = [
-        f"repo '{repo}': {', '.join(rows_for_repo)}"
-        for repo, rows_for_repo in sorted(offenders.items())
-    ]
     raise CrossRepoWriteError(
-        "writes: resolve outside repoRoot "
-        f"({repo_root}) into a sibling repo checkout -- {'; '.join(parts)}. "
+        f"writes: resolve outside repoRoot ({repo_root}) -- {'; '.join(offenders)}. "
         "The terminal commit is scoped to this worktree and can never land "
         "these paths; split into a per-repo plan and sequence with "
         "external_gate instead."
+    )
+
+
+class ExternalGateRowsRefused(CrossRepoWriteError):
+    """Raised when ``read_spine`` dropped a row for an uncleared
+    ``external_gate``. ``rows`` holds every named id (gated rows and
+    transitively gated dependents) in exclusion order."""
+
+    def __init__(self, message: str, rows: list[str]):
+        super().__init__(message)
+        self.rows = rows
+
+
+def _gate_description(raw: Optional[Mapping]) -> str:
+    gates = raw.get("external_gate") if isinstance(raw, Mapping) else None
+    parts: list[str] = []
+    for gate in gates if isinstance(gates, list) else ():
+        if not isinstance(gate, Mapping):
+            continue
+        for key in ("owner_repo", "requires"):
+            if gate.get(key):
+                parts.append(f"{key}={gate[key]}")
+    return " ".join(parts)
+
+
+def check_external_gate_exclusions(
+    exclusions: Sequence[Mapping], raw_by_id: Mapping[str, Mapping]
+) -> None:
+    """Refuse when any ``read_spine`` exclusion has reason ``external_gate``,
+    naming every such row and every ``transitive_gate_closure`` row.
+
+    Negative-spec: reasons other than those two never raise on their own,
+    and exclusion ``detail`` strings are not parsed."""
+    if not any(e.get("reason") == "external_gate" for e in exclusions):
+        return
+    lines: list[str] = []
+    rows: list[str] = []
+    for entry in exclusions:
+        reason = entry.get("reason")
+        row_id = entry.get("id")
+        if reason == "external_gate":
+            gate = _gate_description(raw_by_id.get(row_id))
+            lines.append(f"{row_id}: {gate}" if gate else f"{row_id}: external_gate")
+        elif reason == "transitive_gate_closure":
+            lines.append(f"{row_id}: transitively gated ({entry.get('detail', '')})")
+        else:
+            continue
+        rows.append(row_id)
+    raise ExternalGateRowsRefused(
+        "external_gate rows cannot run in this workflow:\n" + "\n".join(lines),
+        rows,
     )

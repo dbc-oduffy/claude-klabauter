@@ -66,12 +66,13 @@ from coordinator_core.benchmarks.isolated_clone import (
     reap_processes_under,
     rmtree_or_raise,
 )
-from coordinator_core.warm import breadcrumb
+from coordinator_core.warm import breadcrumb, supervisor
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _BOOT_WAIT_SECS = 90.0
 _POLL_SECS = 0.2
 _SUBPROCESS_TIMEOUT_S = 120
+_LISTENER_RETIRE_SECS = 30.0
 
 WINDOW_N = 40
 """Dispatches per job window. The tick is ~15.625ms, so N=40 divides the
@@ -146,6 +147,30 @@ def _env(engine_root: Path) -> dict:
     return env
 
 
+def _retire_detached_listener(engine_root: Path) -> None:
+    """Retire the http listener the isolated server's boot spawned DETACHED.
+
+    It is rooted in the clone but reparented out of this test's process tree,
+    so `reap_processes_under`'s terminate on it trips conftest's
+    `ForeignProcessKill` tripwire (a test may only signal processes it
+    spawned). Rotating the clone's `_engine_stamp` makes the listener's own skew
+    watchdog (`_SKEW_WATCHDOG_POLL_SECS`) self-evict through the sanctioned
+    shutdown sequence; this waits for that exit so the reaper finds nothing
+    foreign left to signal. Call after the pipe server is down, or a respawn
+    could outlive the wait.
+    """
+    import psutil
+
+    record = supervisor.read_discovery(engine_root)
+    pid = record.get("pid") if record else None
+    if not isinstance(pid, int):
+        return
+    _write_isolated_stamp(engine_root)
+    deadline = time.time() + _LISTENER_RETIRE_SECS
+    while time.time() < deadline and psutil.pid_exists(pid):
+        time.sleep(_POLL_SECS)
+
+
 @pytest.fixture(scope="module")
 def warm_root() -> Iterator[tuple]:
     _require_windows()
@@ -191,6 +216,7 @@ def warm_root() -> Iterator[tuple]:
                 pass
         elif proc is not None and proc.poll() is None:
             proc.terminate()
+        _retire_detached_listener(root)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="commit_v2_floor_spike", reaped=reaped)

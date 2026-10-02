@@ -261,7 +261,7 @@ class TestReasonClassSpecificMessages:
         reason = _reason(out)
         assert "creates/modifies a worktree-ban override file" not in reason
         assert "unreadable" in reason
-        assert "override file" in reason
+        assert "override-file guard" in reason
         assert "[worktree guard]" not in reason
         assert SENTINEL not in reason
 
@@ -282,7 +282,6 @@ class TestReasonClassSpecificMessages:
         # same guard allows it.
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
-        assert "machine-local set coordinator.guard_level warn" in reason
         recommended = next(
             c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
         )
@@ -489,11 +488,6 @@ class TestReadOnlyCompoundsAndGuardLevel:
     def test_deny_names_what_was_blocked_and_the_route_is_well_formed(self):
         reason = _reason(guard.check(_payload('echo hi | sh -c "touch foo"')))
         assert "worktree guard" not in reason
-        assert "machine-local set coordinator.guard_level warn" in reason
-        heads = [c for c in _BACKTICK_RE.findall(reason) if c in ("jq", "cat", "echo", "grep")]
-        assert heads
-        for head in heads:
-            assert guard.check(_payload('echo x | sh -c "%s"' % head)) is None
         script = next(c for c in _BACKTICK_RE.findall(reason) if c.startswith("./"))
         assert guard.check(_payload(script)) is None
 

@@ -194,10 +194,10 @@ def _tip_sha_for(branch: str, cwd: _PathLike = None) -> str | None:
     return None
 
 
-def _main_ref() -> str | None:
-    if _ref_exists("origin/main"):
+def _main_ref(cwd: _PathLike = None) -> str | None:
+    if _ref_exists("origin/main", cwd=cwd):
         return "origin/main"
-    if _ref_exists("main"):
+    if _ref_exists("main", cwd=cwd):
         return "main"
     return None
 
@@ -249,6 +249,7 @@ Options:
   --severity-min ok|warning|critical  Minimum severity to emit (default: ok)
   --include-remote / --no-include-remote  Include origin/* branches (default: on)
   --max-age-days N            Ignore branches older than N days (default: 30)
+  --repo-root DIR             Repo to sweep (default: the current directory)
   --help                      Show this help
 
 Outputs one line per qualifying branch. Exits 0 always (even when gh unavailable).
@@ -260,6 +261,7 @@ def main(argv: list[str]) -> int:
     severity_min = "ok"
     include_remote = True
     max_age_days = 30
+    cwd: str | None = None
 
     i = 0
     while i < len(argv):
@@ -292,6 +294,12 @@ def main(argv: list[str]) -> int:
                 print(f"Unknown argument: {arg}", file=sys.stderr)
                 return 1
             i += 2
+        elif arg == "--repo-root":
+            if i + 1 >= len(argv):
+                print(f"Unknown argument: {arg}", file=sys.stderr)
+                return 1
+            cwd = argv[i + 1]
+            i += 2
         elif arg in ("--help", "-h"):
             print(_HELP_TEXT, end="")
             return 0
@@ -299,39 +307,41 @@ def main(argv: list[str]) -> int:
             print(f"Unknown argument: {arg}", file=sys.stderr)
             return 1
 
-    if _run(["git", "rev-parse", "--is-inside-work-tree"]).returncode != 0:
+    if _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=cwd).returncode != 0:
         return 0
 
     gh_available = shutil.which("gh") is not None
 
     min_rank = _severity_rank(severity_min.upper())
 
-    user_email_res = _git(["config", "user.email"])
+    user_email_res = _git(["config", "user.email"], cwd=cwd)
     user_email = user_email_res.stdout.strip() if user_email_res.returncode == 0 else ""
 
     seen_branches: set[str] = set()
-    local_res = _git(["branch", "--list", "work/*", "feature/*"])
+    local_res = _git(["branch", "--list", "work/*", "feature/*"], cwd=cwd)
     if local_res.returncode == 0:
         _collect_branches(local_res.stdout, seen_branches)
     if include_remote:
-        remote_res = _git(["branch", "--list", "-r", "origin/work/*", "origin/feature/*"])
+        remote_res = _git(["branch", "--list", "-r", "origin/work/*", "origin/feature/*"], cwd=cwd)
         if remote_res.returncode == 0:
             _collect_branches(remote_res.stdout, seen_branches)
 
     now = int(time.time())
     max_age_secs = max_age_days * 86400
-    main_ref = _main_ref()
-    head_sha = _rev_parse("HEAD")
+    main_ref = _main_ref(cwd)
+    head_sha = _rev_parse("HEAD", cwd=cwd)
 
     branch_tip_sha: dict[str, str | None] = {
-        branch: _tip_sha_for(branch) for branch in sorted(seen_branches)
+        branch: _tip_sha_for(branch, cwd=cwd) for branch in sorted(seen_branches)
     }
 
     distinct_shas = sorted({sha for sha in branch_tip_sha.values() if sha})
     tip_meta: dict[str, tuple[str, str]] = {}
     batch_ok = False
     if distinct_shas:
-        meta_res = _git(["log", "--no-walk", "--format=%H%x1f%ae%x1f%ct", *distinct_shas])
+        meta_res = _git(
+            ["log", "--no-walk", "--format=%H%x1f%ae%x1f%ct", *distinct_shas], cwd=cwd
+        )
         if meta_res.returncode == 0:
             batch_ok = True
             for line in meta_res.stdout.splitlines():
@@ -350,7 +360,8 @@ def main(argv: list[str]) -> int:
         for b in sorted(seen_branches):
             ref_patterns.append(f"refs/remotes/origin/{b}")
         fer_res = _git(
-            ["for-each-ref", f"--format=%(refname)%09%(ahead-behind:{main_ref})", *ref_patterns]
+            ["for-each-ref", f"--format=%(refname)%09%(ahead-behind:{main_ref})", *ref_patterns],
+            cwd=cwd,
         )
         if fer_res.returncode == 0:
             ahead_by_ref: dict[str, int] = {}
@@ -379,8 +390,14 @@ def main(argv: list[str]) -> int:
                     elif f"refs/remotes/origin/{b}" in ahead_by_ref:
                         branch_ahead[b] = ahead_by_ref[f"refs/remotes/origin/{b}"]
 
+    # One unscoped listing serves every branch; there is no per-branch `gh pr list --head`
+    # fallback. Every way this call fails (no auth, no GitHub remote, network, rate limit)
+    # fails a per-branch call identically, so a fallback only multiplied the failure by N,
+    # each up to `_GH_TIMEOUT`. A failed listing degrades to "no PR data" -- the same verdict
+    # as `gh` absent from PATH.
+    # Trap: `--limit` drops the oldest PRs (listing is newest-first), so a branch whose only
+    # PR falls past the window reads as having none.
     prs_by_branch: dict[str, list[dict]] = {}
-    gh_batch_ok = False
     if gh_available and seen_branches:
         batch_res = _run(
             [
@@ -388,18 +405,17 @@ def main(argv: list[str]) -> int:
                 "--json", "number,state,mergedAt,mergeCommit,headRefName",
             ],
             timeout=_GH_TIMEOUT,
+            cwd=cwd,
         )
         if batch_res.returncode == 0:
             batch_raw = batch_res.stdout.strip()
             try:
                 all_prs = json.loads(batch_raw) if batch_raw else []
             except json.JSONDecodeError:
-                all_prs = None
-            if all_prs is not None:
-                gh_batch_ok = True
-                for p in all_prs:
-                    head = p.get("headRefName") or ""
-                    prs_by_branch.setdefault(head, []).append(p)
+                all_prs = []
+            for p in all_prs:
+                head = p.get("headRefName") or ""
+                prs_by_branch.setdefault(head, []).append(p)
 
     for branch in sorted(seen_branches):
         tip_sha = branch_tip_sha.get(branch)
@@ -411,7 +427,7 @@ def main(argv: list[str]) -> int:
                 meta = tip_meta.get(tip_sha)
                 tip_author = meta[0] if meta else ""
             else:
-                author_res = _git(["log", "-1", "--format=%ae", tip_sha])
+                author_res = _git(["log", "-1", "--format=%ae", tip_sha], cwd=cwd)
                 tip_author = author_res.stdout.strip() if author_res.returncode == 0 else ""
             if tip_author != user_email:
                 continue
@@ -423,7 +439,7 @@ def main(argv: list[str]) -> int:
             except (ValueError, TypeError):
                 tip_ct = now
         else:
-            ct_res = _git(["log", "-1", "--format=%ct", tip_sha])
+            ct_res = _git(["log", "-1", "--format=%ct", tip_sha], cwd=cwd)
             try:
                 tip_ct = int(ct_res.stdout.strip()) if ct_res.returncode == 0 else now
             except ValueError:
@@ -440,82 +456,57 @@ def main(argv: list[str]) -> int:
             if ahead_batch_ok and branch in branch_ahead:
                 ahead = branch_ahead[branch]
             else:
-                ahead = _rev_list_count(f"{main_ref}..{tip_sha}")
+                ahead = _rev_list_count(f"{main_ref}..{tip_sha}", cwd=cwd)
 
         pr_json: dict[str, Any] | None = None
         pr_state = ""
         pr_merged_at = ""
         orphan_after_merge = 0
 
-        if gh_available:
-            if gh_batch_ok:
-                prs = prs_by_branch.get(branch, [])[:5]
-            else:
-                pr_res = _run(
-                    [
-                        "gh", "pr", "list", "--head", branch, "--state", "all",
-                        "--limit", "5", "--json", "number,state,mergedAt,mergeCommit",
-                    ],
-                    timeout=_GH_TIMEOUT,
-                )
-                pr_raw = pr_res.stdout.strip() if pr_res.returncode == 0 else ""
-                if pr_raw and pr_raw != "[]":
-                    try:
-                        prs = json.loads(pr_raw)
-                    except json.JSONDecodeError:
-                        prs = []
-                else:
-                    prs = []
-            if prs:
-                # Highest PR number, never a list position. `gh pr list` orders
-                # newest-first, so the `prs[-1]` this replaces selected the
-                # OLDEST of the five most recent PRs for the branch -- which
-                # made the CRITICAL classification unclearable by its own
-                # remedy: opening a fresh PR for the post-merge commits prepends
-                # to the list and is never the element read, so the sweep kept
-                # reporting the long-merged PR and kept firing. Selecting by
-                # `number` is also order-independent, which matters because the
-                # batched and per-branch `gh` paths above are not guaranteed to
-                # agree on ordering.
-                p = max(prs, key=lambda pr: pr.get("number") or 0)
-                pr_number = p.get("number", "")
-                pr_state = p.get("state", "") or ""
-                pr_merged_at = p.get("mergedAt") or ""
-                pr_json = {
-                    "number": pr_number if pr_number != "" else 0,
-                    "state": pr_state,
-                    "merged_at": pr_merged_at,
-                }
+        prs = prs_by_branch.get(branch, [])
+        if prs:
+            # Highest PR number, never a list position: a fresh PR opened for
+            # post-merge commits must be the one read, or the CRITICAL
+            # classification cannot be cleared by its own remedy.
+            p = max(prs, key=lambda pr: pr.get("number") or 0)
+            pr_number = p.get("number", "")
+            pr_state = p.get("state", "") or ""
+            pr_merged_at = p.get("mergedAt") or ""
+            pr_json = {
+                "number": pr_number if pr_number != "" else 0,
+                "state": pr_state,
+                "merged_at": pr_merged_at,
+            }
 
-                if pr_state == "MERGED" and pr_merged_at:
-                    log_res = _git(
-                        ["log", tip_sha, f"--after={pr_merged_at}", "--format=%H"]
+            if pr_state == "MERGED" and pr_merged_at:
+                log_res = _git(
+                    ["log", tip_sha, f"--after={pr_merged_at}", "--format=%H"], cwd=cwd
+                )
+                if log_res.returncode == 0:
+                    orphan_after_merge = len(
+                        [ln for ln in log_res.stdout.splitlines() if ln.strip()]
                     )
-                    if log_res.returncode == 0:
-                        orphan_after_merge = len(
-                            [ln for ln in log_res.stdout.splitlines() if ln.strip()]
-                        )
 
         severity = "OK"
 
         if pr_state == "MERGED" and orphan_after_merge > 0:
             unmerged = 0
             if main_ref is not None:
-                unmerged = _rev_list_count(tip_sha, f"^{main_ref}")
+                unmerged = _rev_list_count(tip_sha, f"^{main_ref}", cwd=cwd)
 
             if unmerged > 0:
                 carried_forward = False
                 if head_sha and head_sha != tip_sha:
-                    if _is_ancestor(tip_sha, head_sha):
+                    if _is_ancestor(tip_sha, head_sha, cwd=cwd):
                         carried_forward = True
                 if not carried_forward:
                     for other in seen_branches:
                         if other == branch:
                             continue
-                        other_tip = _tip_sha_for(other)
+                        other_tip = _tip_sha_for(other, cwd=cwd)
                         if not other_tip or other_tip == tip_sha:
                             continue
-                        if _is_ancestor(tip_sha, other_tip):
+                        if _is_ancestor(tip_sha, other_tip, cwd=cwd):
                             carried_forward = True
                             break
                 severity = "OK" if carried_forward else "CRITICAL"

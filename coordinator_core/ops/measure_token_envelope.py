@@ -9,7 +9,7 @@ automatically at start, such as the CLAUDE.md-class files enumerated in
 `check-claude-md-size.py` hook, claude-klabauter's Check 7 in
 `coordinator_core.bash_guards.dispatch_checks`) counts BYTES only — nothing in
 either repo answers "how many tokens does this cost," even though
-`docs/wiki/tiered-context-loading.md`'s Tier-0 budget is stated in TOKENS
+`coordinator-content-repo coordinator/docs/wiki/skills-corpus/tiered-context-loading.md`'s Tier-0 budget is stated in TOKENS
 ("<=2K tokens, always loaded"). This module is that missing oracle.
 
 Token counting here is an ESTIMATE, not an exact tokenizer count: no tokenizer

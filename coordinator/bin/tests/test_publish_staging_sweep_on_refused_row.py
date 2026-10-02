@@ -65,6 +65,8 @@ def _seed_stale_orphan(dest_dir: Path, *, age_seconds: float = 7200.0) -> Path:
     one-hour `max_age_seconds` default so it reads as orphaned rather than a
     live concurrent row."""
     orphan = publish._create_publish_staging_dir(dest_dir)
+    # A prior run's dir: this process did not mint it.
+    publish._MINTED_STAGING_DIRS.discard(orphan.resolve())
     stale_time = time.time() - age_seconds
     os.utime(orphan, (stale_time, stale_time))
     return orphan

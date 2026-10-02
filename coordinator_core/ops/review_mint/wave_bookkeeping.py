@@ -126,7 +126,7 @@ def stamp_plan_id(sidecar_path: Path, plan_id: str) -> bool:
         from coordinator_core.frontmatter.primitives import replace_fm_field_raw
 
         new_fm = replace_fm_field_raw(split.fm_text, "plan_id", repr(plan_id).replace("'", '"'))
-    sidecar_path.write_text(rebuild(split, new_fm), encoding="utf-8")
+    sidecar_path.write_text(rebuild(split, new_fm), encoding="utf-8", newline="\n")
     return True
 
 
@@ -258,6 +258,7 @@ def bookkeep_wave(
         "## Wave bookkeeping\n\n"
         "Mechanical, no-agent record: review_mint.wave_bookkeeping.bookkeep_wave.\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     record["sidecar_path"] = str(record_path)

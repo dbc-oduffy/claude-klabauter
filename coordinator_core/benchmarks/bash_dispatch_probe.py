@@ -59,19 +59,86 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from coordinator_core.benchmarks.process_time import (
     IS_DARWIN,
     IS_WINDOWS,
     batched_process_time_ms,
 )
+from coordinator_core.git.run import run_git
+from coordinator_core.locked_write import held_lock
 
 _ENV_PAYLOAD_KEY = "BASH_DISPATCH_PROBE_PAYLOAD"
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Ceiling for one full-tree checkout by the lock holder; waiters queue behind it.
+_SANDBOX_LOCK_TIMEOUT_SECS = 120.0
+
+
+def _git(*args: str, check: bool = True, remote: bool = False) -> str:
+    result = run_git(list(args), remote=remote)
+    if check and not result.ok:
+        raise subprocess.CalledProcessError(result.returncode, list(args), result.stdout, result.stderr)
+    return result.stdout.strip()
+
+
+def _sandbox_root() -> str:
+    """A full-size shared clone of the live repo, checked out at its HEAD.
+
+    Trap: the dispatcher's post-verdict recording leg appends a touch claim
+    under `<payload cwd>/.git/coordinator-sessions/<session_id>/`. Naming the
+    live checkout there plants phantom `bash-dispatch-probe-*` sessions in its
+    hub. Invariant: the clone is the live tree's size (objects shared via
+    alternates, no worktree), so the gate still measures the real git cost.
+    Re-checked out only when the live HEAD moves.
+
+    Trap: every xdist worker (plus every concurrent session on the box) calls
+    this at once against one shared temp path. Unserialised, the losers of
+    the clone race die with git exit 128 ("destination path ... already
+    exists"), or collide on the clone's index.lock during checkout.
+    Invariant: the whole clone/fetch/checkout sequence runs under a
+    machine-wide lock.
+
+    Invariant: nothing here runs at import or collection; `probe_root()` is
+    the lazy entry. Raises `ProbeRootUnavailable` when `_REPO_ROOT` has no
+    git HEAD to clone from (an assembled publish mirror)."""
+    root = os.path.join(tempfile.gettempdir(), "bash-dispatch-probe-root")
+    try:
+        head = _git("-C", _REPO_ROOT, "rev-parse", "HEAD")
+    except subprocess.CalledProcessError as exc:
+        raise ProbeRootUnavailable(
+            f"no git HEAD at {_REPO_ROOT} to clone the probe root from"
+        ) from exc
+    with held_lock(Path(root), timeout=_SANDBOX_LOCK_TIMEOUT_SECS, holder_label="bash_dispatch_probe"):
+        if not os.path.isdir(os.path.join(root, ".git")):
+            _git("clone", "-q", "--shared", "--no-checkout", _REPO_ROOT, root, remote=True)
+        elif _git("-C", root, "rev-parse", "--verify", "-q", "HEAD^{commit}", check=False) == head:
+            return root
+        else:
+            _git("-C", root, "fetch", "-q", "origin", head, remote=True)
+        _git("-C", root, "checkout", "-q", "-f", "--detach", head)
+    return root
+
+
+class ProbeRootUnavailable(RuntimeError):
+    """The probe sandbox cannot be built here (no git repo to clone from)."""
+
+
+_probe_root_cache: Optional[str] = None
+
+
+def probe_root() -> str:
+    """Lazily builds (once per process) and returns the sandbox clone path."""
+    global _probe_root_cache
+    if _probe_root_cache is None:
+        _probe_root_cache = _sandbox_root()
+    return _probe_root_cache
 
 
 def _payload(tool_name: str, command: str, session_id: str) -> Dict[str, Any]:
@@ -79,32 +146,49 @@ def _payload(tool_name: str, command: str, session_id: str) -> Dict[str, Any]:
         "tool_name": tool_name,
         "tool_input": {"command": command},
         "session_id": session_id,
-        "cwd": _REPO_ROOT,
+        "cwd": probe_root(),
     }
 
 
-CORPUS_PAYLOADS: Dict[str, Dict[str, Any]] = {
-    "bash_echo_hello": _payload("Bash", "echo hello", "bash-dispatch-probe-echo-hello"),
-    "bash_cat_pyproject_head": _payload(
+_CORPUS_SPECS: Dict[str, Tuple[str, str, str]] = {
+    "bash_echo_hello": ("Bash", "echo hello", "bash-dispatch-probe-echo-hello"),
+    "bash_cat_pyproject_head": (
         "Bash", "cat pyproject.toml | head -5", "bash-dispatch-probe-cat-head"
     ),
-    "powershell_get_childitem": _payload(
+    "powershell_get_childitem": (
         "PowerShell", "Get-ChildItem", "bash-dispatch-probe-get-childitem"
     ),
 }
+
+
+class _LazyCorpus(Mapping):
+    """Label -> payload mapping. Keys are static; a payload is built (and the
+    probe root resolved) only on value access, never at import."""
+
+    def __iter__(self):
+        return iter(_CORPUS_SPECS)
+
+    def __len__(self) -> int:
+        return len(_CORPUS_SPECS)
+
+    def __getitem__(self, label: str) -> Dict[str, Any]:
+        return _payload(*_CORPUS_SPECS[label])
+
+
+CORPUS_PAYLOADS: Mapping = _LazyCorpus()
 """AC3/AC4/AC5's three command shapes, one entry per criterion, keyed by a
 stable label every function below reuses -- so a later chunk comparing its
 own post-fix measurement against C1's baseline never has to guess which
 corpus row corresponds to which AC."""
 
 
-#: A payload whose `tool_name` is not in `_tool_names.COMMAND_TOOL_NAMES`,
-#: so `evaluate_payload_json`'s own C1 master gate (dispatch.py's own
-#: "union check against the DECLARED-matchers set") returns before the
-#: guard chain is even built -- the "chain that spawns nothing" floor leg
-#: AC2 asks for: dispatcher call overhead over the bare interpreter +
-#: import closure, with the guard chain itself never entered.
-_INERT_PAYLOAD: Dict[str, Any] = _payload("Write", "n/a", "bash-dispatch-probe-inert")
+def inert_payload() -> Dict[str, Any]:
+    """A payload whose `tool_name` is not in `_tool_names.COMMAND_TOOL_NAMES`,
+    so `evaluate_payload_json`'s own C1 master gate returns before the guard
+    chain is even built -- the "chain that spawns nothing" floor leg AC2 asks
+    for: dispatcher call overhead over the bare interpreter + import closure,
+    with the guard chain itself never entered."""
+    return _payload("Write", "n/a", "bash-dispatch-probe-inert")
 
 
 def _dispatch_cmd(payload: Dict[str, Any]) -> Tuple[list, dict]:
@@ -151,7 +235,7 @@ def measure_derived_floor(k: int = 20) -> FloorMeasurement:
          but it is still part of the floor a later threshold is measured
          against).
       3. `chain_spawns_nothing` -- `evaluate_payload_json` invoked against
-         `_INERT_PAYLOAD` (a `tool_name` outside `COMMAND_TOOL_NAMES`, so the
+         `inert_payload()` (a `tool_name` outside `COMMAND_TOOL_NAMES`, so the
          dispatcher's own C1 master gate returns before the guard chain is
          even built): (2) plus the marginal cost of reaching and returning
          from the dispatcher call itself, with the guard chain never
@@ -183,7 +267,7 @@ def measure_derived_floor(k: int = 20) -> FloorMeasurement:
     import_env = dict(os.environ)
     closure = batched_process_time_ms(import_argv, k=k, env=import_env, cwd=_REPO_ROOT)
 
-    inert_argv, inert_env = _dispatch_cmd(_INERT_PAYLOAD)
+    inert_argv, inert_env = _dispatch_cmd(inert_payload())
     _verify_single_invocation_succeeds(inert_argv, inert_env)
     chain_nothing = batched_process_time_ms(inert_argv, k=k, env=inert_env, cwd=_REPO_ROOT)
 

@@ -213,7 +213,7 @@ def test_format_oneline_row_import_failure_returns_none(tmp_path):
 def test_format_oneline_row_delegates_to_aggregate_chain_loe():
     root = _mod._resolve_claude_klabauter_root()
     row = _mod._format_oneline_row(root, "abc123def456", "L", 26, 4, "2026-07-25T10:00:00Z")
-    assert row == "2026-07-25 | def456 | L | 26d / 4o | <one-line summary — fill in>"
+    assert row == "2026-07-25 | abc123 | L | 26d / 4o | <one-line summary — fill in>"
 
 
 def test_oneline_row_round_trips_through_parse_session_ledgers():
@@ -231,12 +231,13 @@ def test_oneline_row_round_trips_through_parse_session_ledgers():
     records = aggregate_chain_loe.parse_session_ledgers(handoff_body)
     assert records == [
         {
-            "session_id": "beef01",
+            "session_id": "deadbe",
             "agent_dispatches": "12",
             "opus_dispatches": "3",
             "em_tokens": "null",
             "commits": "",
             "created": "2026-07-25",
+            "summary": _mod._SUMMARY_PLACEHOLDER,
         }
     ]
 

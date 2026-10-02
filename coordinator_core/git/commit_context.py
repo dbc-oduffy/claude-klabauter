@@ -34,7 +34,7 @@ narrower than the spike prose's six-fact list reads at a glance. The scoped
 reader this module is built on,
 `coordinator_core.git.git_index.parse_index_identity`, does not surface
 `stage` at all (its whole existing consumer set --
-`scoped_status`/`diff_index_name_status` -- has never needed it, and its own
+`scoped_status` -- has never needed it, and its own
 module docstring documents no stage handling); adding stage extraction
 would mean editing that module, which sits outside this chunk's declared
 `writes:` scope. The spike's own reference implementation reads the same

@@ -769,6 +769,9 @@ def _trailer_reliable(
     count probe itself is degraded (``session_commit_count_attributed`` reports
     ``degraded: True``) — "could not count" is indeterminate, never a computed zero.
 
+    UNRELIABLE (returns False) also when the commit-count probe itself degraded
+    (it could not run, so its zero is not a computed zero).
+
     RELIABLE (returns True) when either at least one trailer-tagged commit
     exists, OR started_at is absent/unparseable (nothing to compare HEAD
     against — trailer absence is not distinguishable from "no work happened",

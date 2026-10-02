@@ -51,10 +51,15 @@ def _git_replay_supports_ref_action() -> bool:
     return "--ref-action" in (probe.stdout + probe.stderr)
 
 
-_REQUIRES_GIT_REPLAY = pytest.mark.skipif(
-    not _git_replay_supports_ref_action(),
-    reason="installed git has no `git replay --ref-action`; replay recovery is unavailable",
-)
+@pytest.fixture
+def _requires_git_replay():
+    # Probed at test time, never at import: a module-level spawn fires during
+    # collection, before -k or --collect-only can skip it.
+    if not _git_replay_supports_ref_action():
+        pytest.skip("installed git has no `git replay --ref-action`; replay recovery is unavailable")
+
+
+_REQUIRES_GIT_REPLAY = pytest.mark.usefixtures("_requires_git_replay")
 
 
 _NON_FAST_FORWARD_STDERR = (

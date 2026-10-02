@@ -29,7 +29,9 @@ fixer can surface a tradeoff triage missed); ``NEEDS_PLAN`` maps to
 retry over the union of its locked files plus every extra file, then
 ``widen-exhausted``; ``PEER_DIRTY`` hands back ``peer-dirty`` directly; a
 ``verify`` failure gets exactly one retry then ``undo`` then
-``rejected-after-retry``; a node's ``on_fail`` back-edge is traversed at
+``rejected-after-retry`` -- or ``stage-dead`` (``undo-failed:``) when
+``undo`` does not return ``undone``, so a row whose edits may remain in the
+tree is never reported as an ordinary rejection; a node's ``on_fail`` back-edge is traversed at
 most once per row.
 
 STAGE_OUTPUT_TOKENS / batch_reserve live here, not a separate module.
@@ -203,6 +205,15 @@ _SCHEMA_REFUSAL_MARKER = "schema validation failed"
 def _commit_result_is_schema_refused(commit_result: Mapping[str, Any]) -> bool:
     reason = commit_result.get("reason") or ""
     return _SCHEMA_REFUSAL_MARKER in str(reason)
+
+
+_UNDO_FAILED_HEAD = "undo-failed: verify rejected the fix twice and its edits may remain in the tree"
+_UNDO_FAILED_TAIL = " -- the row stays open; restore the touched files by hand"
+
+
+def _undo_failed_reason(undo_result: Mapping[str, Any]) -> str:
+    detail = undo_result.get("reason")
+    return _UNDO_FAILED_HEAD + (f" ({detail})" if detail else "") + _UNDO_FAILED_TAIL
 
 
 def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "Row") -> tuple[str, str]:
@@ -488,7 +499,10 @@ def run_admission(
                 row.verify_feedback = result.get("reason", "")
                 row.node = row.fix_node or row.node
                 return
-            _record_call("undo", row.row_id)
+            undo_result = _record_call("undo", row.row_id) or {}
+            if undo_result.get("outcome") != "undone":
+                _handback(row, "stage-dead", _undo_failed_reason(undo_result))
+                return
             _handback(row, "rejected-after-retry", "verify failed twice")
             return
         _apply_route(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
@@ -773,6 +787,16 @@ _FIRE_ARGS_CHECK = (
 )
 
 
+#: JS port of `grind_rows.archive_destination`; the commit stage's archive
+#: path is computed here, never relayed from the close stage's agent text.
+ARCHIVE_DESTINATION_JS = (
+    "function _archiveDestination(rowPath) {\n"
+    "  const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);\n"
+    "  return ARCHIVE_PATH.replace(/\\/+$/, '') + '/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '/' + String(rowPath).split(/[\\\\/]/).pop();\n"
+    "}"
+)
+
+
 def compose_grind_script(
     manifest: Manifest,
     profile: Profile,
@@ -884,7 +908,7 @@ def compose_grind_script(
 
     lines: list[str] = []
     lines.append(_NODE_CHECK_COMMENT)
-    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", *review_phase_titles, _REVIEW_FIX_PHASE, "Adjudicate"]))
+    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", *review_phase_titles, _REVIEW_FIX_PHASE, pm_adjudication.ADJUDICATE_PHASE_TITLE]))
     lines.append(_manifest_const(manifest))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
@@ -913,6 +937,8 @@ def compose_grind_script(
     lines.append(f"const RUN_ID = args.run_stamp;")
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
+    lines.append(f"const ARCHIVE_PATH = {_js_string_literal(profile.archive_path)};")
+    lines.append(ARCHIVE_DESTINATION_JS)
     lines.append("const PROFILE_DIR = args.profile_dir;")
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
@@ -1181,8 +1207,9 @@ def compose_grind_script(
         "    if (!row || row.done || !row.node) continue;\n"
         "    _bumpRefuteOrigin(row.origin, 'confirmed');\n"
         "    row.removedFiles = row.removedFiles.concat([row.path]);\n"
-        "    row.touchedFiles = row.touchedFiles.concat([item.new_path]);\n"
-        "    row.closeResult = { old: row.path, new: item.new_path };\n"
+        "    const _archived = _archiveDestination(row.path);\n"
+        "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
+        "    row.closeResult = { old: row.path, new: _archived };\n"
         "    row.lastOutcome = 'confirmed';\n"
         "    const route = followEdge(row.node, 'confirmed', row);\n"
         "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
@@ -1262,8 +1289,10 @@ def compose_grind_script(
         "      row.node = row.fixNode || row.node;\n"
         "      return;\n"
         "    }\n"
-        "    await withLock(lockKeys, async () => _undoCall(row));\n"
-        "    row.done = true; _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
+        "    const _undone = await withLock(lockKeys, async () => _undoCall(row));\n"
+        "    row.done = true;\n"
+        "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : '') + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
+        "    _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
         "  }\n"
         "  applyRoute(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
         "}"

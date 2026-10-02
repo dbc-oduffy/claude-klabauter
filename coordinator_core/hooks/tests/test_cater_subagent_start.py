@@ -1096,7 +1096,7 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(
     )
 
     # The suite-root quarantine (`coordinator_core/conftest.py ::
-    # _quarantine_real_home`) deliberately seeds `.coordinator-content-root` with a
+    # _quarantine_real_home`) deliberately seeds the content-root pointer with a
     # throwaway stub, not the real sibling checkout, so
     # `resolve_plugin_root()`'s rungs 2/3 cannot see the real corpus this
     # test exists to exercise. Point its rung-1 `CLAUDE_PLUGIN_ROOT`
@@ -1186,7 +1186,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
     import shutil
 
     # See the sibling AC1 test above for why this override is required:
-    # the suite-root quarantine stubs `.coordinator-content-root` so `resolve_plugin_root()`
+    # the suite-root quarantine stubs the content-root pointer so `resolve_plugin_root()`
     # cannot otherwise see the real corpus.
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(CONTENT_ROOT) / "coordinator"))
 

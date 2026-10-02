@@ -146,7 +146,12 @@ _CONSUMERS: list[tuple[str, bool]] = [
     # above went with it; the same literal survives in this module's own
     # self-exemption, which is where the fixed point needs it. Recover via
     # `git show 9621d374e1:coordinator/bin/tests/test-initiative-shape.mjs`.
-    ("coordinator/bin/tests/test-query-handoff-ledger.js", True),  # touches deployment_state, but only a fixed non-terminal fixture value ("ready_to_fire")
+    # Re-triaged 2026-10-02, NOT silently dropped: test-query-handoff-ledger.js was
+    # deleted in 0b9152a28f with the other Node-oracle .js tests of the 2026-07-24
+    # de-node cutover. Its deployment_state touch was only a fixed non-terminal
+    # fixture value ("ready_to_fire"), so it never enumerated the terminal
+    # vocabulary and no replacement coverage is owed. Recover via
+    # `git show 0b9152a28f~1:coordinator/bin/tests/test-query-handoff-ledger.js`.
     # Reconciled 2026-08-02 (stale-test cleanup, triage-F): commit 5310420b2
     # ("C13: cmd_supersede confirms its own write instead of trusting the
     # op's self-report") added a post-write re-read that asserts

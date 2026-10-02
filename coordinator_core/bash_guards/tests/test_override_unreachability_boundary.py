@@ -73,7 +73,7 @@ import os
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.warm import hook_http
 
 
@@ -167,12 +167,12 @@ class TestHookEntryPointStdinOnlyNoShellExec:
 
     ``real_home`` because these are live-tree read-only oracles: the DoE
     checkout is resolved through the machine-local registry rung of
-    ``read_content_root_pointer``, and conftest's home quarantine points that
+    ``read_content_root``, and conftest's home quarantine points that
     rung at a throwaway dir, which would turn every method here into a
     permanent skip. Nothing in this class writes."""
 
     def _source(self) -> str:
-        content_root = read_content_root_pointer()
+        content_root = read_content_root()
         candidate = (
             os.path.join(content_root, "coordinator", "hooks", "scripts", "preuse-bash-dispatch.py")
             if content_root
@@ -180,8 +180,8 @@ class TestHookEntryPointStdinOnlyNoShellExec:
         )
         if not candidate or not os.path.isfile(candidate):
             pytest.skip(
-                "coordinator-content-repo checkout not resolvable via the content_root_pointer "
-                "ladder (registry `repos.content_root`, durable `.coordinator-content-root`, "
+                "coordinator-content-repo checkout not resolvable via the content_root "
+                "ladder (registry `repos.content_root`, durable and "
                 "legacy `.coordinator-content-root`); resolved root was %r, hook candidate "
                 "%r." % (content_root, candidate)
             )

@@ -291,6 +291,7 @@ from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete import judgments as _judgments
 from coordinator_core.contract.apply_base import assert_dispatchable
+from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
 
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
@@ -733,10 +734,6 @@ def _dispatch_directive(
 # Composed from `ceremony_common.apply_halt` (`_directive_gate_open`), never
 # re-derived locally.
 # ---------------------------------------------------------------------------
-
-
-def _judgment_points_by_id(judgment_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {jp["id"]: jp for jp in judgment_points}
 
 
 def _first_blocking_judgment_point_id(

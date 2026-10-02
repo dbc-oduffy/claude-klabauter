@@ -722,6 +722,10 @@ class _PendingRead:
             self._result["line"] = fh.readline()
         except OSError as exc:
             self._result["exc"] = exc
+        except ValueError as exc:
+            # The caller closed `fh` under an abandoned read ("peek of closed
+            # file"). Uncaught, it lands on stderr as a thread traceback.
+            self._result["exc"] = ConnectionAbortedError(str(exc))
 
     def wait(self, deadline_secs: float) -> Any:
         """The frame, or `_TIMED_OUT`. Re-raises an `OSError` the read itself
@@ -1188,9 +1192,16 @@ def _try_warm_dispatch_inner(
     # reason as every seam above: the server's own values are its spawner's, and
     # it scrubs them at boot. Carried in `_env`, the door's own envelope object,
     # and only when one is set -- an ordinary call is unchanged byte-for-byte.
-    from coordinator_core.warm.env_forwarding import is_caller_prefixed
+    # The declared `FORWARDING_SET` names ride the same object, set and non-empty
+    # only, exactly as the doors stamp them: without them a CALLER-mode name pops
+    # on the server and the op reads the server's cwd/env instead of the caller's.
+    from coordinator_core.warm.env_forwarding import FORWARDING_SET, is_caller_prefixed
 
     overrides = {k: v for k, v in os.environ.items() if v and is_caller_prefixed(k)}
+    for entry in FORWARDING_SET:
+        value = os.environ.get(entry.name)
+        if value:
+            overrides[entry.name] = value
     if overrides:
         request["_env"] = overrides
 

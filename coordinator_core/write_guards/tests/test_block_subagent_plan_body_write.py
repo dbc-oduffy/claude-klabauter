@@ -508,3 +508,17 @@ class TestAmbiguousBranchMessageNamesIdentifyingDetail:
         assert "probe2-teammate@session-3819c0e9" in reason
         assert "ambiguous agent identity" in reason
 
+
+
+@pytest.mark.parametrize(
+    "path,is_body",
+    [
+        ("docs/plans/evidence/2026-09-11-sidecar.md", False),
+        ("/abs/repo/docs/problems/evidence/x.md", False),
+        ("docs/plans/2026-09-11-plan.md", True),
+        ("docs/plans/archive/2026-09-11-plan.md", True),
+        ("docs/plans/sub/evidence/x.md", True),
+    ],
+)
+def test_plan_body_regex_carves_out_only_the_evidence_segment(path, is_body):
+    assert bool(guard._PLAN_BODY_RE.search(path)) is is_body

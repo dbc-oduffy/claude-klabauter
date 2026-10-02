@@ -56,7 +56,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -64,6 +63,15 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.warm.tests.door_test_support import (
+    DOOR_WINDOWS_C,
+    FALLBACK_EXIT,
+    FALLBACK_MARKER,
+    ReplyingServer,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
@@ -73,67 +81,15 @@ pytestmark = [
     pytest.mark.skipif(os.name != "nt", reason="door.exe is a Windows binary"),
 ]
 
-_DOOR_DIR = Path(__file__).resolve().parents[1] / "door"
-_DOOR_EXE = _DOOR_DIR / "door.exe"
-_DOOR_C = _DOOR_DIR / "door.c"
-
-#: Printed by the stub `coordinator-invoke.py` the door falls through to.
-#: Its presence is proof of a fallback spawn; its absence, proof of a refusal.
-_FALLBACK_MARKER = "DOOR-TEST-FALLBACK-RAN"
-_FALLBACK_EXIT = 42
-
 
 def _door_deadline_ms(macro: str) -> int:
     """Reads a deadline macro's value out of `door.c`, so this file asserts
     against the number the shipped binary was built from rather than a
     literal that can silently drift away from it."""
-    source = _DOOR_C.read_text(encoding="utf-8")
+    source = DOOR_WINDOWS_C.read_text(encoding="utf-8")
     match = re.search(rf"^#define\s+{macro}\s+(\d+)\s*$", source, re.MULTILINE)
-    assert match, f"{macro} not found in {_DOOR_C} -- the deadline was renamed or removed"
+    assert match, f"{macro} not found in {DOOR_WINDOWS_C} -- the deadline was renamed or removed"
     return int(match.group(1))
-
-
-def _door_default_entrypoint() -> str:
-    """The door's default entrypoint name, read out of `door.c` for the same
-    reason the deadlines are: the shipped binary compares its own basename
-    against this constant, and a literal here can drift away from it."""
-    source = _DOOR_C.read_text(encoding="utf-8")
-    match = re.search(r'^#define\s+DOOR_DEFAULT_ENTRYPOINT_W\s+L"([^"]+)"\s*$', source, re.MULTILINE)
-    assert match, f"DOOR_DEFAULT_ENTRYPOINT_W not found in {_DOOR_C} -- renamed or removed"
-    return match.group(1)
-
-
-def _make_stub_engine_root(tmp_path: Path) -> Path:
-    """A throwaway directory shaped enough like a published engine for the
-    door to accept it: a non-empty `coordinator_core/_engine_stamp` (what
-    `is_valid_engine_root_w` checks) plus a `coordinator/bin/
-    coordinator-invoke.py` that announces itself instead of running an op.
-
-    The stamp bytes are unique per test run, so `compute_client_token` yields
-    a token -- and therefore a pipe name -- no other process on this box is
-    using."""
-    root = tmp_path / "stub-engine"
-    (root / "coordinator_core").mkdir(parents=True)
-    (root / "coordinator_core" / "_engine_stamp").write_text(
-        f"door-read-deadline-test-{os.getpid()}-{time.time_ns()}\n", encoding="utf-8"
-    )
-    bin_dir = root / "coordinator" / "bin"
-    bin_dir.mkdir(parents=True)
-    (bin_dir / "coordinator-invoke.py").write_text(
-        "import sys\n"
-        f"print({_FALLBACK_MARKER!r})\n"
-        f"raise SystemExit({_FALLBACK_EXIT})\n",
-        encoding="utf-8",
-    )
-    return root.resolve()
-
-
-def _pipe_name_for(root: Path) -> str:
-    from coordinator_core.warm import election, skew
-
-    return election.pipe_name(
-        skew.compute_client_token(root), engine_clone=root
-    )
 
 
 class _WedgedServer:
@@ -173,67 +129,6 @@ class _WedgedServer:
             pass
 
 
-class _ReplyingServer:
-    """A named pipe that reads one request frame and answers it verbatim
-    with `reply`.
-
-    This is the control the deadline tests need to be worth anything: the
-    read mechanism changed from a synchronous `ReadFile` to overlapped I/O,
-    and a bound on a read that no longer reads correctly is not a fix. These
-    exercise the ORDINARY outcomes -- a success envelope and a
-    provably-undispatched error -- through the new mechanism, end to end,
-    with no live warm server involved."""
-
-    def __init__(self, name: str, reply: bytes) -> None:
-        import _winapi
-        from coordinator_core.warm import election
-
-        self._winapi = _winapi
-        self._handle = election.elect(name)
-        self._reply = reply
-        self.request = b""
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
-
-    def _serve(self) -> None:
-        try:
-            self._winapi.ConnectNamedPipe(self._handle, False)
-            while b"\n" not in self.request:
-                chunk, _ = self._winapi.ReadFile(self._handle, 65536)
-                if not chunk:
-                    return
-                self.request += chunk
-            self._winapi.WriteFile(self._handle, self._reply)
-        except OSError:
-            pass
-
-    def close(self) -> None:
-        self._thread.join(timeout=10)
-        try:
-            self._winapi.CloseHandle(self._handle)
-        except OSError:
-            pass
-
-
-def _door_under_default_name(engine_root: Path) -> Path:
-    """A copy of the built door at `coordinator-invoke.exe`, the name these
-    tests' fixture is written against.
-
-    `door.c` C0 made the door name-aware: `resolve_own_basename` reads the
-    running image's own basename, `fall_through` targets
-    `<basename>.py` in `coordinator/bin/`, and any basename other than
-    the door's default entrypoint name also puts `entrypoint` on the wire. The build
-    artifact is named `door.exe`, so invoking it directly exercises neither
-    the cold script the stub root provides nor the default-name wire frame --
-    it looks for a `coordinator/bin/door.py` that no tree has. Production
-    installs the image under its entrypoint's name; so does this.
-    """
-    installed = engine_root / (_door_default_entrypoint() + ".exe")
-    if not installed.exists():
-        shutil.copy2(_DOOR_EXE, installed)
-    return installed
-
-
 def _run_door(engine_root: Path, timeout: float) -> subprocess.CompletedProcess:
     """Runs `door.exe ping` pointed at `engine_root` via the documented
     `COORDINATOR_DOOR_ENGINE_ROOT` override. The override is used rather than
@@ -244,7 +139,7 @@ def _run_door(engine_root: Path, timeout: float) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
     return subprocess.run(
-        [str(_door_under_default_name(engine_root)), "ping"],
+        [str(door_under_default_name(engine_root)), "ping"],
         capture_output=True,
         text=True,
         env=env,
@@ -263,11 +158,11 @@ def test_pre_delivery_failure_still_falls_through(tmp_path: Path) -> None:
     This also establishes that the fallback is genuinely reachable from this
     fixture -- which is what makes the wedged test's assertion that it did NOT
     fire mean something."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     proc = _run_door(root, timeout=60)
 
-    assert _FALLBACK_MARKER in proc.stdout
-    assert proc.returncode == _FALLBACK_EXIT
+    assert FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == FALLBACK_EXIT
     assert "-32004" not in proc.stdout
     assert "warm dispatch indeterminate" not in proc.stdout
 
@@ -278,13 +173,13 @@ def test_a_served_reply_still_round_trips(tmp_path: Path) -> None:
     this asserts the whole exchange: the request the server received is a
     parseable `invoke.from_argv` frame (proving the bounded WRITE delivered
     it intact), and the door relays the reply's three result fields."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     reply = (
         '{"jsonrpc":"2.0","id":1,"result":'
         '{"stdout":"pong\\n","stderr":"","exit_code":0}}\n'
     ).encode("utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = _run_door(root, timeout=60)
     finally:
@@ -298,7 +193,7 @@ def test_a_served_reply_still_round_trips(tmp_path: Path) -> None:
 
     assert proc.returncode == 0
     assert proc.stdout == "pong\n"
-    assert _FALLBACK_MARKER not in proc.stdout
+    assert FALLBACK_MARKER not in proc.stdout
 
 
 def test_provably_undispatched_error_still_falls_through(tmp_path: Path) -> None:
@@ -306,20 +201,20 @@ def test_provably_undispatched_error_still_falls_through(tmp_path: Path) -> None
     an error code `is_provably_undispatched` recognises as proof the server
     never invoked a handler. The deadline work must not have collapsed this
     into the refusal branch."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     reply = (
         '{"jsonrpc":"2.0","id":1,"error":'
         '{"code":-32601,"message":"Method not found"}}\n'
     ).encode("utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = _run_door(root, timeout=60)
     finally:
         server.close()
 
-    assert _FALLBACK_MARKER in proc.stdout
-    assert proc.returncode == _FALLBACK_EXIT
+    assert FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == FALLBACK_EXIT
     assert "-32004" not in proc.stdout
 
 
@@ -342,20 +237,20 @@ def test_a_suspended_op_refusal_never_reads_as_a_maybe_completed_mutation(
     cold engine, and it is the cold engine's own `_dispatch_message_impl`
     -- the same one that refused here -- that renders the message. What
     this door owes is not swallowing it."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     reply = (
         '{"jsonrpc":"2.0","id":1,"error":{"code":-32006,'
         '"message":"ceremony.scoped_git_commit is suspended: over the 2s max bar."}}\n'
     ).encode("utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = _run_door(root, timeout=60)
     finally:
         server.close()
 
-    assert _FALLBACK_MARKER in proc.stdout
-    assert proc.returncode == _FALLBACK_EXIT
+    assert FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == FALLBACK_EXIT
     assert "-32004" not in proc.stdout
     assert "may have COMPLETED" not in proc.stdout
 
@@ -367,11 +262,11 @@ def test_a_suspended_op_refusal_never_reads_as_a_maybe_completed_mutation(
 def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path) -> None:
     """The server accepts and never answers. The door must stop -- and must
     stop by REFUSING, never by re-running a request it already delivered."""
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     deadline_ms = _door_deadline_ms("DOOR_READ_DEADLINE_MS")
     deadline_s = deadline_ms / 1000.0
 
-    server = _WedgedServer(_pipe_name_for(root))
+    server = _WedgedServer(pipe_name_for(root))
     try:
         started = time.monotonic()
         # The backstop is generously above the deadline: it exists to fail the
@@ -400,7 +295,7 @@ def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path) -> 
 
     # Property 2, the half that actually guards the 2026-08-19 incident: the
     # delivered request was NOT re-run cold.
-    assert _FALLBACK_MARKER not in proc.stdout, (
+    assert FALLBACK_MARKER not in proc.stdout, (
         "the door fell through AFTER delivering the request -- this is the "
         "double-execution the -32004 envelope exists to prevent"
     )

@@ -70,7 +70,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `handoff_lineage_ancestry.py` | `handoff.lineage_ancestry` | Read-only — walks a fork handoff's `origin_handoff` chain to compute ancestry |
 | `handoff_match.py` | `handoff.match_candidates` | Read-only ranked resolver over `state/handoffs/*.md` |
 | `handoff_normalize.py` | `handoff.normalize` | Port of `normalize-handoff-frontmatter.js` |
-| `handoff_reconcile.py` | `handoff.reconcile_open` | Auto-reconcile orchestrator — enumerates the widened consumed+non-terminal dead zone (`consumed`+`in_flight`, not only `active`) and reconciles pinned predecessor chains on ship, routing C3 (`gate_eval`) verdicts to `ship_and_archive`/`gate-cascade-clear` or `surfaced[]`; the C2 (`commit_reality`) route is DELETED (C10, `state/kill-ledger.md`, 2026-08-26) — no longer "turnable-on"; op name RATIFIED (DoE 2026-07-13); forward-compatible subset of DoE's lvv-04/C3 fleet-archive fix (cc'd, not colliding) |
+| `handoff_reconcile.py` | `handoff.reconcile_open` | Auto-reconcile orchestrator — enumerates the widened consumed+non-terminal dead zone (`consumed`+`in_flight`, not only `active`) and reconciles pinned predecessor chains on ship, routing C3 (`gate_eval`) verdicts to `gate-cascade-clear` or `surfaced[]`; the C2 (`commit_reality`) route is DELETED (C10, `state/kill-ledger.md`, 2026-08-26) — no longer "turnable-on"; op name RATIFIED (DoE 2026-07-13); forward-compatible subset of DoE's lvv-04/C3 fleet-archive fix (cc'd, not colliding) |
 | `handoff_stamp.py` | `handoff.stamp` | Port of `stamp-shipped-in.js` |
 | `handoff_transition.py` | `handoff.transition` | Port of `handoff-transition.js` — atomic lifecycle frontmatter mutation |
 | `hibernate_machine.py` | `machine.hibernate` | Cross-platform (macOS pmset/Windows/Linux systemctl) machine hibernate dispatch, no shell-out |
@@ -233,7 +233,7 @@ and is not yet reconciled (see the top-of-file Coverage note).
 
 ### `reconcile/` — auto-reconcile compute engines (COMPUTE_ONLY, DR-208)
 Pure read+compute modules consumed by `ops/handoff_reconcile.py`'s orchestrator; none of these
-write files, git objects, or frontmatter — `handoff.reconcile_open` (via `ship_and_archive`/C8's
+write files, git objects, or frontmatter — `handoff.reconcile_open` (via C8's
 `gate-cascade-clear`) is the only authorized actor on their verdicts. See
 `coordinator_core/contract/handoff-reconcile-producer-contract.md` for the wire-level pin.
 

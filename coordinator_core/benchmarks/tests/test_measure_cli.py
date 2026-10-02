@@ -4,7 +4,18 @@ from __future__ import annotations
 import re
 import sys
 
+import pytest
+
 from coordinator_core.benchmarks import measure
+from coordinator_core.telemetry import op_latency
+
+
+@pytest.fixture(autouse=True)
+def _restore_benchmark_origin_env(monkeypatch):
+    # measure.main declares benchmark origin into the process-global env;
+    # monkeypatch restores the pre-test value on teardown.
+    monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
+
 
 _STAMPED_RE = re.compile(
     r"^process_time_ms=\S+ procs_per_call=\S+ instrument=\S+ k=\d+ "

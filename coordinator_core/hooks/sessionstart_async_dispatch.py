@@ -126,7 +126,7 @@ def _unmatched_source_breadcrumb(source: object) -> str:
 
 @register_op("hooks.sessionstart_async_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    payload = dict(payload_of(params))
+    payload = payload_of(params)
     leg_params = {"payload": payload}
 
     source = payload.get("source")

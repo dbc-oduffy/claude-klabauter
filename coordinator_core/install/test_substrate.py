@@ -1183,3 +1183,19 @@ def test_c13_target_map_and_publish_allowlist_agree_on_measured_gap_names():
             "_derive_agent_helper_target_map but that on-disk filename is "
             "absent from publish-targets.portable's allowlist"
         )
+
+
+def test_duplicate_cli_pair_warning_goes_to_stderr_not_stdout(tmp_path, capsys):
+    """The duplicate-pair WARNING fires on the clean path; stdout carries the
+    doctor probe's JSON contract, so the warning must never land there."""
+    agent_bin = tmp_path / "bin"
+    agent_bin.mkdir()
+    (agent_bin / "some-cli").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (agent_bin / "some-cli.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    target_map = _derive_agent_helper_target_map(agent_bin)
+
+    captured = capsys.readouterr()
+    assert target_map.get("some-cli") == "some-cli.py"
+    assert captured.out == ""
+    assert "duplicate CLI pair" in captured.err

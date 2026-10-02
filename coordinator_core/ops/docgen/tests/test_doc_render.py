@@ -44,6 +44,9 @@ FULL_VALUES: dict = {
     "scope": "coordinator_core/ops/docgen/",
     "spawned_at": "2026-07-21T12:00:00Z",
     "lead_session_id": "sid-example",
+    "authoring_session": "sid-example",
+    "workstream": "example-workstream",
+    "spinoff_marker_who": "example-em",
 }
 
 

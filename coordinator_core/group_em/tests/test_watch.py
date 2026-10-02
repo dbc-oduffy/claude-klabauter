@@ -839,6 +839,18 @@ def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
     assert "transcript_idle=120s" in line
 
 
+def test_parked_line_carries_a_wall_clock_stamp():
+    """The stamp is the pipe's delivery instrument: a reader compares it to
+    now to tell a silent pipe from a quiet fleet."""
+    now = datetime(2026, 8, 31, 16, 0, 0, tzinfo=timezone.utc)
+    verdict = {"session_id": "peer-1", "candidate": True, "reason": "turn-ended",
+               "activity_epoch": now.timestamp() - 60.0}
+    with mock.patch.object(watch, "_stamped_age_seconds", return_value=None), \
+            mock.patch.object(watch, "_obligation_summary", return_value="none"):
+        line = watch._parked_line(REPO_ROOT, "peer-1", verdict, REPO_ROOT, now)
+    assert f" at={watch.watch_heartbeat.iso_instant(now.timestamp())} " in line
+
+
 # --- the single-tick wake (`--once` / `tick_once`) -------------------------
 #
 # The mode exists because a watch that must HOLD a process to be watching has

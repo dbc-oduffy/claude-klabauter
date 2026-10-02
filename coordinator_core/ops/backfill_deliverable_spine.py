@@ -1485,8 +1485,8 @@ def main(
         coordinator_root = default_coordinator_root
     else:
         # No --root, and the caller (the coordinator/bin/backfill-deliverable-spine.py
-        # trampoline) could not resolve a default either (e.g. CONTENT_ROOT /
-        # repos.content_root unresolvable on this machine). Do NOT fall back to
+        # trampoline) could not resolve a default either (e.g. the content root
+        # unresolvable on this machine). Do NOT fall back to
         # this module's OWN directory (coordinator_core/ops/) — that is a
         # nonsense corpus root (no state/handoffs, docs/plans, etc. live there)
         # and would silently enumerate an empty corpus instead of failing loud.
@@ -1494,7 +1494,7 @@ def main(
         # "corpus root unreadable" contract.
         print(
             "ERROR: no corpus root available — pass --root <path> explicitly, "
-            "or resolve CONTENT_ROOT / repos.content_root in the machine-local "
+            "or resolve repos.content_root in the machine-local "
             "registry so the trampoline can derive a default.",
             file=err,
         )

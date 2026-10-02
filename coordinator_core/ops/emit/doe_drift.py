@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
+from coordinator_core.content_root import read_content_root
 from coordinator_core.git_scope import (
     FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
     PROBE_UNKNOWN,
@@ -198,29 +199,39 @@ def _read_toml_file(path: Path) -> Optional[dict]:
     return _parse_toml_text(path.read_text(encoding="utf-8"))
 
 
+# The working checkout's key first; `repos.content_root` is the legacy spelling no
+# current writer emits, kept so an older registry still resolves.
+_DOE_CLONE_KEYS = ("engine.working_repos.content_root", "repos.content_root")
+
+
+def _lookup_dotted(data: dict, key: str) -> Optional[str]:
+    """`key` as a top-level quoted-dotted key, else as nested tables."""
+    v = data.get(key)
+    if isinstance(v, str) and v:
+        return v
+    node: object = data
+    for part in key.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node if isinstance(node, str) and node else None
+
+
 def _extract_repos_content_root_from_toml(data: dict) -> Optional[str]:
-    """Walk the nested TOML dict looking for 'repos.content_root'."""
-    # Two forms the registry CLI writes:
-    #   1. Top-level quoted-dotted key: "repos.content_root" = "/path"
-    #   2. Nested table: [repos] ... Content_root = "/path"  (less common in this registry)
-    # Check top-level flat dotted key first (most common form).
-    for k, v in data.items():
-        if k == "repos.content_root" and isinstance(v, str) and v:
-            return v
-    # Nested table form.
-    repos = data.get("repos")
-    if isinstance(repos, dict):
-        val = repos.get("content_root")
-        if isinstance(val, str) and val:
+    """The DoE clone path from a parsed registry, first hit in `_DOE_CLONE_KEYS`."""
+    for key in _DOE_CLONE_KEYS:
+        val = _lookup_dotted(data, key)
+        if val:
             return val
     return None
 
 
 def _extract_repos_content_root_regex(text: str) -> Optional[str]:
     """Regex fallback for quoted-key form when TOML parser unavailable."""
-    m = re.search(r'"repos\.content_root"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
-    if m:
-        return m.group(1).strip()
+    for key in _DOE_CLONE_KEYS:
+        m = re.search(r'"' + re.escape(key) + r'"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
+        if m:
+            return m.group(1).strip()
     return None
 
 
@@ -235,7 +246,8 @@ def resolve_doe_clone() -> Path:
     env/home read, no subprocess) rather than a hardcoded ``~/.claude/machine-local``
     literal — the settings-home indirection does NOT reintroduce a CLI dependency.
 
-    Raises DoeResolveError when the key is unset or the resolved path does not exist.
+    Keys tried, per file: `_DOE_CLONE_KEYS`, then `read_content_root()`. Raises DoeResolveError when none is
+    set or the resolved path does not exist.
     """
     for registry_path in _registry_paths():
         if not registry_path.exists():
@@ -254,10 +266,16 @@ def resolve_doe_clone() -> Path:
             if candidate.is_dir():
                 return candidate
 
+    pointed = read_content_root()
+    if pointed:
+        pointed_path = normalize_native_path(pointed).expanduser()
+        if pointed_path.is_dir():
+            return pointed_path
+
     raise DoeResolveError(
-        "Cannot locate DoE clone: 'repos.content_root' unset or path absent in "
+        "Cannot locate DoE clone: 'engine.working_repos.content_root' unset or path absent in "
         f"{_registry_paths()[0]} and {_registry_paths()[1]}.  "
-        "Set it with: machine-local set repos.content_root /path/to/coordinator-content-repo"
+        "Set it with: machine-local set engine.working_repos.content_root /path/to/coordinator-content-repo"
     )
 
 

@@ -376,7 +376,7 @@ def env_from_headers(
     return dict(candidates), None
 
 
-def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
+def forwardable_env(environ: Mapping[str, str], names: frozenset = frozenset()) -> Dict[str, str]:
     """The subset of a CALLER's environment that guard evaluation is entitled to see.
 
     Called against the environ carried ON THE EVENT, never against `os.environ` -- reading
@@ -395,12 +395,14 @@ def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
     It also does not consult `FORWARDED_ENV_NAMES`. Those five are OS/harness names present
     in essentially every ambient environment; admitting them here would forward a real
     session's `HOME` off any caller that passed its own environ, which is the invisible-
-    disarm case one layer up. They are reachable only by explicit header.
+    disarm case one layer up. They are reachable only by explicit header, or by a caller
+    that vouches its environ IS the session's by passing `names=FORWARDED_ENV_NAMES`
+    (`coordinator/bin/hook-run.py`, whose environ is the firing session's own).
     """
-    return {k: v for k, v in environ.items() if is_caller_prefixed(k)}
+    return {k: v for k, v in environ.items() if is_caller_prefixed(k) or k in names}
 
 
-def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
+def payload_from_event(event: Mapping[str, Any], names: frozenset = frozenset()) -> Dict[str, Any]:
     """Build the per-call payload guard code reads, from the forwarded event alone.
 
     `env` is populated from `event["env"]` and NOT from `os.environ`. If the event carries
@@ -446,7 +448,7 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     """
     raw_env = event.get("env")
     payload = {k: v for k, v in event.items() if k != "env"}
-    payload["env"] = forwardable_env(raw_env) if isinstance(raw_env, Mapping) else {}
+    payload["env"] = forwardable_env(raw_env, names) if isinstance(raw_env, Mapping) else {}
     for key in ("session_id", "cwd", "hook_event_name", "permission_mode", "tool_name", "tool_input"):
         payload.setdefault(key, None)
     payload["plugin_root"] = resolve_caller_context(payload).plugin_root

@@ -52,6 +52,7 @@ Output contract (two deliberate departures from the oracle, 2026-08-14):
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -396,8 +397,69 @@ def discover_repo_paths() -> List[str]:
     return []
 
 
+_DASH_PATH_ENTRY_RE = re.compile(r"^[ \t]*-[ \t]+path:[ \t]*(.*?)[ \t]*$")
+
+
+def working_repos_yaml_path() -> Path:
+    """``<home>/.claude/working-repos.yaml``, the location every reader resolves."""
+    home = (
+        os.environ.get("CLAUDE_HOME")
+        or os.environ.get("HOME")
+        or os.environ.get("USERPROFILE")
+        or os.path.expanduser("~")
+    )
+    return Path(home) / ".claude" / "working-repos.yaml"
+
+
+def write_working_repos_yaml(paths: Iterable[str], target: Optional[Path] = None) -> List[str]:
+    """Append every path not already listed to ``working-repos.yaml``; return the paths added.
+
+    Existing text is preserved byte-for-byte (operator-added ``github:`` /
+    ``board_member:`` keys survive), so a rerun with the same paths is a no-op.
+    Paths are emitted JSON-quoted, which is valid YAML and safe for any
+    forward-slash path. Honours ``COORDINATOR_DISABLE_MACHINE_MUTATION``.
+    """
+    from coordinator_core.install import substrate as _substrate
+
+    target = target if target is not None else working_repos_yaml_path()
+    blocked = _substrate._refuse_machine_mutation(
+        str(target), what="write working-repos.yaml", check_temp_path=False
+    )
+    if blocked:
+        print(f"discover-working-repos: {blocked}", file=sys.stderr)
+        return []
+
+    existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+    listed = set()
+    for line in existing.splitlines():
+        m = _DASH_PATH_ENTRY_RE.match(line.replace("\r", ""))
+        if m:
+            listed.add(m.group(1).strip().strip("\"'"))
+    added = [p for p in paths if p not in listed]
+    if not added:
+        return []
+
+    body = existing
+    if not re.search(r"^repos:", body, re.MULTILINE):
+        body = body + ("" if not body or body.endswith("\n") else "\n") + "repos:\n"
+    elif not body.endswith("\n"):
+        body += "\n"
+    for p in added:
+        body += f"  - path: {json.dumps(p)}\n"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.tmp-{os.getpid()}")
+    tmp.write_text(body, encoding="utf-8", newline="\n")
+    os.replace(tmp, target)
+    return added
+
+
 def main(argv: Sequence[str]) -> int:
     """Port of discover-working-repos.sh's top-level tier dispatch.
+
+    ``--write`` additionally persists the discovered paths via
+    ``write_working_repos_yaml``; a write failure is reported to stderr and
+    never changes the exit code.
 
     Exit-code contract: ALWAYS returns 0 — this is a best-effort discovery
     helper (never a gate); the caller (`/setup` Phase 2 Step 4) falls
@@ -407,9 +469,14 @@ def main(argv: Sequence[str]) -> int:
     swallowed to stderr rather than propagated, preserving that contract
     (advisory / never-block posture per PORTER-BRIEF-ADDENDUM.md § 3b).
     """
-    del argv
-    for line in discover_repo_paths():
+    paths = discover_repo_paths()
+    for line in paths:
         print(line)
+    if "--write" in argv:
+        try:
+            write_working_repos_yaml(paths)
+        except OSError as exc:
+            print(f"discover-working-repos: working-repos.yaml write failed: {exc}", file=sys.stderr)
     return 0
 
 

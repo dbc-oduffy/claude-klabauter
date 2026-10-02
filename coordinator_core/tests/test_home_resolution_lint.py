@@ -312,11 +312,26 @@ def test_rung_order_baseline_has_no_stale_entries():
     )
 
 
-def test_settings_home_module_is_clean():
-    target = _REPO_ROOT / "coordinator_core" / "_settings_home.py"
-    assert target.is_file(), f"expected {target} to exist"
+def test_settings_home_module_is_clean(tmp_path):
+    # Positive control over ONE file. The shared `_engine()` walks the whole
+    # corpus (~6k files, ~75s across these four rules) and every rule is a
+    # per-file pass, so the same engine over a one-file root yields identical
+    # findings for the target in milliseconds. A corpus walk here pinned an
+    # xdist worker for minutes under load.
     relpath = "coordinator_core/_settings_home.py"
-    engine = _engine()
+    target = _REPO_ROOT / relpath
+    assert target.is_file(), f"expected {target} to exist"
+    mirror = tmp_path / relpath
+    mirror.parent.mkdir(parents=True)
+    mirror.write_bytes(target.read_bytes())
+    engine = HomeResolutionLintEngine(
+        repo_root=tmp_path,
+        scan_roots=("coordinator_core",),
+        forward_slash_scope=_FORWARD_SLASH_SCOPE,
+    )
+    # Guards against a vacuous pass: the one file must be scanned and parsed.
+    assert engine.scanned_file_count() == 1
+    assert engine.parse_failure_count() == 0
     assert all(f.path != relpath for f in engine.find_x_ok_checks())
     assert all(f.path != relpath for f in engine.find_colon_path_joins())
     assert all(f.path != relpath for f in engine.find_bare_home_or_chains())

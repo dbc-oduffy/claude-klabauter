@@ -27,22 +27,20 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.warm.tests.door_test_support import (
+    DOOR_CORE_C,
+    DOOR_CORE_H,
+    DOOR_POSIX_C,
+    DOOR_WINDOWS_C,
+    FALLBACK_MARKER,
+    ReplyingServer,
+    WINDOWS_ONLY,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
+    read,
+)
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _make_stub_engine_root,
-    _pipe_name_for,
-    _FALLBACK_MARKER,
-    _ReplyingServer,
-)
-from coordinator_core.warm.door.tests.test_door_stdin_mode import (
-    _DOOR_CORE_C,
-    _DOOR_CORE_H,
-    _DOOR_POSIX_C,
-    _DOOR_WINDOWS_C,
-    _door_under_default_name,
-    _read,
-    _WINDOWS_ONLY,
-)
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -53,7 +51,7 @@ _PREDICATE = "door_argv_declares_params_stdin"
 
 
 def test_the_flag_spelling_lives_only_in_shared_core():
-    header = _read(_DOOR_CORE_H)
+    header = read(DOOR_CORE_H)
     for macro, value in (
         ("DOOR_PARAMS_FILE_FLAG", "--params-file"),
         ("DOOR_PARAMS_FILE_STDIN_VALUE", "-"),
@@ -80,8 +78,8 @@ def test_the_flag_spelling_lives_only_in_shared_core():
         "removed, or re-typed as a standalone literal"
     )
 
-    for door in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
-        source = _read(door)
+    for door in (DOOR_WINDOWS_C, DOOR_POSIX_C):
+        source = read(door)
         assert "--params-file" not in source, (
             f"{door.name} spells the flag itself instead of reading "
             f"DOOR_PARAMS_FILE_FLAG from door_core.h"
@@ -89,10 +87,10 @@ def test_the_flag_spelling_lives_only_in_shared_core():
 
 
 def test_both_doors_gate_on_the_shared_predicate():
-    assert f"int {_PREDICATE}(" in _read(_DOOR_CORE_C)
-    assert f"int {_PREDICATE}(" in _read(_DOOR_CORE_H)
-    for door in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
-        assert _PREDICATE in _read(door), (
+    assert f"int {_PREDICATE}(" in read(DOOR_CORE_C)
+    assert f"int {_PREDICATE}(" in read(DOOR_CORE_H)
+    for door in (DOOR_WINDOWS_C, DOOR_POSIX_C):
+        assert _PREDICATE in read(door), (
             f"{door.name} does not consult {_PREDICATE} -- it will deliver "
             f"a stdin-bound params request warm and answer -32004"
         )
@@ -100,10 +98,10 @@ def test_both_doors_gate_on_the_shared_predicate():
 
 def test_the_gate_precedes_the_transport_in_both_doors():
     for door, call, connect in (
-        (_DOOR_WINDOWS_C, _PREDICATE + "_w(", "CreateFileW(pipe_name"),
-        (_DOOR_POSIX_C, _PREDICATE + "(", "connect_socket(sock_path)"),
+        (DOOR_WINDOWS_C, _PREDICATE + "_w(", "CreateFileW(pipe_name"),
+        (DOOR_POSIX_C, _PREDICATE + "(", "connect_socket(sock_path)"),
     ):
-        source = _read(door)
+        source = read(door)
         main_at = source.index("int main")
         gate_at = source.index(call, main_at)
         connect_at = source.index(connect, main_at)
@@ -114,10 +112,10 @@ def test_the_gate_precedes_the_transport_in_both_doors():
 
 
 def _make_echoing_engine_root(tmp_path: Path) -> Path:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     (root / "coordinator" / "bin" / "coordinator-invoke.py").write_text(
         "import sys\n"
-        f"print({_FALLBACK_MARKER!r})\n"
+        f"print({FALLBACK_MARKER!r})\n"
         "print('ARGV=' + repr(sys.argv[1:]))\n"
         "print('STDIN=' + repr(sys.stdin.buffer.read().decode('utf-8')))\n"
         "raise SystemExit(0)\n",
@@ -141,7 +139,7 @@ def _door_env(root: Path) -> dict:
 
 def _run(root: Path, args: list, payload: bytes) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [str(_door_under_default_name(root)), *args],
+        [str(door_under_default_name(root)), *args],
         input=payload,
         capture_output=True,
         env=_door_env(root),
@@ -151,14 +149,14 @@ def _run(root: Path, args: list, payload: bytes) -> subprocess.CompletedProcess:
     )
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_the_stdin_route_never_reaches_a_server_the_control_route_reaches(
     tmp_path: Path,
 ) -> None:
     root = _make_echoing_engine_root(tmp_path)
     payload = b'{"note":"C1\'s half"}'
 
-    server = _ReplyingServer(_pipe_name_for(root), _WARM_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _WARM_REPLY)
     try:
         subject = _run(root, ["ping", "--params-file", "-"], payload)
         control = _run(root, ["ping", "{}"], b"")
@@ -168,21 +166,21 @@ def test_the_stdin_route_never_reaches_a_server_the_control_route_reaches(
     request = json.loads(server.request.decode("utf-8").strip())
     assert request["params"]["argv"] == ["ping", "{}"]
     assert control.stdout == b"served-warm\n"
-    assert _FALLBACK_MARKER.encode() not in control.stdout
+    assert FALLBACK_MARKER.encode() not in control.stdout
 
-    assert _FALLBACK_MARKER.encode() in subject.stdout
+    assert FALLBACK_MARKER.encode() in subject.stdout
     assert b"-32004" not in subject.stdout
     assert repr(payload.decode("utf-8")).encode() in subject.stdout
     assert b"'--params-file', '-'" in subject.stdout
 
 
-@_WINDOWS_ONLY
+@WINDOWS_ONLY
 def test_a_real_params_file_path_is_served_warm(tmp_path: Path) -> None:
     root = _make_echoing_engine_root(tmp_path)
     params_path = root / "params.json"
     params_path.write_text("{}", encoding="utf-8")
 
-    server = _ReplyingServer(_pipe_name_for(root), _WARM_REPLY)
+    server = ReplyingServer(pipe_name_for(root), _WARM_REPLY)
     try:
         proc = _run(root, ["ping", "--params-file", str(params_path)], b"")
     finally:
@@ -190,4 +188,4 @@ def test_a_real_params_file_path_is_served_warm(tmp_path: Path) -> None:
 
     assert server.request, "a file-form params route did not reach the server"
     assert proc.stdout == b"served-warm\n"
-    assert _FALLBACK_MARKER.encode() not in proc.stdout
+    assert FALLBACK_MARKER.encode() not in proc.stdout

@@ -1120,6 +1120,13 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
         print("[setup]   Declined -- no exclusions applied.")
         return
 
+    blocked = _substrate_plane_check_module._refuse_machine_mutation(
+        "Defender process exclusions", what="add Defender process exclusions", check_temp_path=False
+    )
+    if blocked:
+        print(f"[setup]   {blocked}")
+        return
+
     # One Add-MpPreference call for every target, not one spawn per target --
     # -ExclusionProcess natively takes a list (break_glass.py's own remediation
     # text at check_defender_exclusions() already assembles a comma-joined
@@ -1221,11 +1228,129 @@ _LEGACY_STEM = "claude-" + "doe"
 LEGACY_DOE_LAUNCHERS = (_LEGACY_STEM, f"{_LEGACY_STEM}.cmd", f"{_LEGACY_STEM}.ps1")
 
 
-def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_only: bool) -> List[str]:
-    """Remove the pre-rename launchers from ~/.local/bin and the settings bin.
+LEGACY_DOE_SHIM_FILES = (f"{_LEGACY_STEM}-shim.sh", f"{_LEGACY_STEM}-shim.ps1")
+_LEGACY_SHIM_RC_BEGIN = f"# --- coordinator {_LEGACY_STEM} shim [generated] ---"
+_LEGACY_SHIM_RC_END = f"# --- end coordinator {_LEGACY_STEM} shim ---"
+_LEGACY_MAXIMALIST_BEGIN_PREFIX = "# --- coordinator maximalist launch"
+_LEGACY_MAXIMALIST_END_PREFIX = "# --- end coordinator maximalist launch"
 
-    Left in place, a stale claude-author shadows nothing yet still runs the old
-    wrapper for anyone who types it, and every re-install leaves it behind.
+
+def legacy_doe_shim_files(claude_home_dir: str) -> List[str]:
+    """Paths of the pre-rename rendered shims that exist under ``<home>/.claude/shell``."""
+    shell_dir = os.path.join(claude_home_dir, ".claude", "shell")
+    return [p for p in (os.path.join(shell_dir, n) for n in LEGACY_DOE_SHIM_FILES) if os.path.isfile(p)]
+
+
+def _legacy_rc_files(claude_home_dir: str) -> List[Path]:
+    from coordinator_core.install.shell_rc_guard import applicable_rc_files
+
+    home = Path(claude_home_dir)
+    return [
+        *applicable_rc_files(home),
+        home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1",
+    ]
+
+
+def _legacy_stem_command_re():
+    import re
+
+    return re.compile(rf"(?<![\w-]){re.escape(_LEGACY_STEM)}(?![\w])")
+
+
+def _retire_legacy_rc_blocks(rc_path: Path, check_only: bool) -> List[str]:
+    """Strip the coordinator-sentinel blocks that call the retired launcher from one rc
+    file; advise (never edit) on any remaining non-comment line that still names it."""
+    from coordinator_core.install.shell_rc_guard import _strip_block_text
+    from coordinator_core.install.uninstall_legs import _atomic_write_text
+
+    try:
+        text = rc_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    stem_re = _legacy_stem_command_re()
+    lines = text.split("\n")
+    retired: List[str] = []
+    new_text = text
+
+    if _LEGACY_SHIM_RC_BEGIN in lines:
+        stripped = _strip_block_text(new_text, _LEGACY_SHIM_RC_BEGIN, _LEGACY_SHIM_RC_END)
+        if stripped != new_text:
+            new_text = stripped
+            retired.append(f"{rc_path} (generated `{_LEGACY_STEM}` shim block)")
+
+    cur = new_text.split("\n")
+    begin = next((ln for ln in cur if ln.startswith(_LEGACY_MAXIMALIST_BEGIN_PREFIX)), None)
+    if begin is not None:
+        after = cur[cur.index(begin) + 1:]
+        end = next((ln for ln in after if ln.startswith(_LEGACY_MAXIMALIST_END_PREFIX)), None)
+        if end is not None:
+            body = after[: after.index(end)]
+            if any(stem_re.search(ln) for ln in body):
+                stripped = _strip_block_text(new_text, begin, end)
+                if stripped != new_text:
+                    new_text = stripped
+                    retired.append(f"{rc_path} (`coordinator maximalist launch` block calling `{_LEGACY_STEM}`)")
+
+    if retired and not check_only:
+        if _substrate_plane_check_module._refuse_machine_mutation(
+            str(rc_path), what="retire a legacy rc block", check_temp_path=False
+        ):
+            return []
+        try:
+            _atomic_write_text(rc_path, new_text)
+        except OSError as exc:
+            print(f"WARN: could not retire legacy rc block in {rc_path}: {exc}", file=sys.stderr)
+            return []
+
+    for n, ln in enumerate(new_text.split("\n"), 1):
+        if not ln.lstrip().startswith("#") and stem_re.search(ln):
+            print(
+                f"[ADVISORY] {rc_path}:{n} calls the retired `{_LEGACY_STEM}` launcher outside any "
+                "coordinator sentinel; edit or remove it by hand.",
+                file=sys.stderr,
+            )
+    return retired
+
+
+def retire_legacy_doe_callers(claude_home_dir: str, settings_bin: str, check_only: bool) -> List[str]:
+    """Retire everything that calls the pre-rename launcher: the rendered legacy shim
+    files and the coordinator-sentinel rc blocks that source or exec them.
+
+    Inert while a legacy launcher binary still exists (a failed re-render keeps both
+    halves), so the pair is always retired together. Hand-written rc content outside
+    coordinator's own sentinels is never edited.
+    """
+    for d in (os.path.join(claude_home_dir, ".local", "bin"), settings_bin):
+        if any(os.path.lexists(os.path.join(d, n)) for n in LEGACY_DOE_LAUNCHERS):
+            return []
+    retired: List[str] = []
+    for shim in legacy_doe_shim_files(claude_home_dir):
+        if not check_only:
+            if _substrate_plane_check_module._refuse_machine_mutation(
+                shim, what="retire a legacy shim", check_temp_path=False
+            ):
+                continue
+            try:
+                os.unlink(shim)
+            except OSError as exc:
+                print(f"WARN: could not retire legacy shim {shim}: {exc}", file=sys.stderr)
+                continue
+        retired.append(shim)
+    for rc in _legacy_rc_files(claude_home_dir):
+        if rc.is_file():
+            retired.extend(_retire_legacy_rc_blocks(rc, check_only))
+    verb = "would retire" if check_only else "retired"
+    for item in retired:
+        print(f"legacy_doe_callers: {verb} {item}")
+    return retired
+
+
+def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_only: bool) -> List[str]:
+    """Remove the pre-rename launchers from ~/.local/bin and the settings bin, then
+    their callers (see ``retire_legacy_doe_callers``) in the same step.
+
+    Retiring the binary alone leaves ``claude`` resolving to a command that no longer
+    exists.
     """
     retired = []
     for d in (os.path.join(claude_home_dir, ".local", "bin"), settings_bin):
@@ -1234,6 +1359,10 @@ def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_o
             if not os.path.lexists(path):
                 continue
             if not check_only:
+                if _substrate_plane_check_module._refuse_machine_mutation(
+                    path, what="retire a legacy launcher", check_temp_path=False
+                ):
+                    continue
                 try:
                     os.unlink(path)
                 except OSError as exc:
@@ -1242,6 +1371,8 @@ def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_o
             retired.append(path)
     verb = "would retire" if check_only else "retired"
     print(f"legacy_doe_launchers: {f'{verb} ' + ', '.join(retired) if retired else 'none'}")
+    if not check_only:
+        retired.extend(retire_legacy_doe_callers(claude_home_dir, settings_bin, check_only))
     return retired
 
 
@@ -1332,6 +1463,14 @@ def _install_claude_author_wrapper(
     if not os.path.isfile(wrapper_src):
         print(f"FATAL: expected wrapper source not found: {wrapper_src}", file=sys.stderr)
         sys.exit(1)
+
+    if not check_only:
+        blocked = _substrate_plane_check_module._refuse_machine_mutation(
+            wrapper_dst, what="install the claude-author wrapper", check_temp_path=False
+        )
+        if blocked:
+            print(f"claude_author_wrapper: skipped ({blocked})")
+            return
 
     if os.name == "nt":
         # Byte equality, not existence: a present-but-stale copy launches the
@@ -1674,6 +1813,10 @@ def _run_body(
             rc = _run([*ml_argv, "set", "repos.content_root", doe_clone], env=env)
             if rc == 0:
                 _verify_registry_seed("repos.content_root", doe_clone)
+                from coordinator_core.machine_resolver import retire_paired_content_root_key
+
+                if retire_paired_content_root_key("repos.content_root"):
+                    print("repos.content_root: retired the paired spelling naming the same clone")
             else:
                 print(
                     "WARN: machine-local set repos.content_root failed -- REPO_CONTENT_ROOT env override still in effect for this run",

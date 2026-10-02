@@ -20,6 +20,8 @@ only the four shapes enumerated below; it is not a general "don't use settings_h
 from __future__ import annotations
 
 import ast
+import re
+from bisect import bisect_right
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -102,8 +104,15 @@ def _module_scope_names(tree: ast.Module) -> set[str]:
 def find_violations(source: str, filename: str = "<string>") -> list[str]:
     """Return a list of human-readable violation strings, empty if none found."""
     tree = ast.parse(source, filename=filename)
+    return _violations_in_tree(tree, filename, _module_scope_names(tree))
+
+
+def _violations_in_tree(
+    tree: ast.Module, filename: str, module_scope_names: set[str] | None
+) -> list[str]:
+    """`module_scope_names=None` treats every name as module-scope: a superset, so
+    it can only over-flag shape 5 -- the chunked sweep re-verifies any hit."""
     bound_names = _bound_local_names(tree)
-    module_scope_names = _module_scope_names(tree)
     violations: list[str] = []
 
     # A single pass over every node. Shapes that would otherwise need a
@@ -142,7 +151,9 @@ def find_violations(source: str, filename: str = "<string>") -> list[str]:
                 and isinstance(test.comparators[0], ast.Constant)
                 and test.comparators[0].value is None
             )
-            if is_none_check and test.left.id in module_scope_names:
+            if is_none_check and (
+                module_scope_names is None or test.left.id in module_scope_names
+            ):
                 cache_name = test.left.id
                 for stmt in node.body:
                     if (
@@ -189,6 +200,125 @@ def find_violations(source: str, filename: str = "<string>") -> list[str]:
                 )
 
     return violations
+
+
+# ---------------------------------------------------------------------------
+# Chunked sweep. Parsing is the whole cost of the live walk (~5MB of source),
+# and a violation can only sit in a top-level statement that textually names a
+# target call, so only those statements are parsed; every other chunk is blanked
+# to its newlines, keeping line numbers true. Trap: a chunk starts at any
+# column-0 line outside a triple-quoted string that is not a closer, comment
+# or backslash continuation (a decorator joins the statement it decorates), so a
+# statement hand-formatted with a column-0 continuation line inside brackets
+# splits wrongly -- the repo's formatting never produces one. A chunk that fails
+# to parse, and any hit, fall back to the full-file walk, so the chunked path
+# can only skip work, never invent or hide a verdict for a well-formed file.
+# ---------------------------------------------------------------------------
+
+_TRIPLE_QUOTE = re.compile(r"\"\"\"|'''")
+_AS_ALIAS = re.compile(r"\s+as\s+(\w+)")
+
+
+def _triple_quoted_spans(source: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while m := _TRIPLE_QUOTE.search(source, pos):
+        close = source.find(m.group(), m.end())
+        pos = len(source) if close < 0 else close + 3
+        spans.append((m.start(), pos))
+    return spans
+
+
+def _name_hits(source: str, names: set[str]) -> list[int]:
+    # Substring hits over-match (`settings_home` inside a longer name), which only
+    # keeps more chunks; plain str.find is far cheaper than a regex alternation.
+    hits: list[int] = []
+    for name in names:
+        i = source.find(name)
+        while i >= 0:
+            hits.append(i)
+            i = source.find(name, i + len(name))
+    return hits
+
+
+def _keep_only_chunks_naming_targets(source: str) -> str:
+    hits = _name_hits(source, _TARGET_CALL_NAMES)
+    aliases = {
+        a.group(1)
+        for i in hits
+        for name in _TARGET_CALL_NAMES
+        if source.startswith(name, i) and (a := _AS_ALIAS.match(source, i + len(name)))
+    }
+    hits += _name_hits(source, aliases)
+    end = len(source)
+    strings = _triple_quoted_spans(source)
+    string_starts = [lo for lo, _ in strings]
+
+    def in_string(i: int) -> bool:
+        # A line start inside a triple-quoted string is text, not a statement.
+        k = bisect_right(string_starts, i - 1) - 1
+        return k >= 0 and i < strings[k][1]
+
+    def starts_chunk(i: int) -> bool:
+        return (
+            i == 0
+            or i == end
+            or (
+                not in_string(i)
+                and source[i] not in " \t\r\n#)]}"
+                and source[i - 2 : i] != "\\\n"
+            )
+        )
+
+    def prev_start(i: int) -> int:
+        while i > 0:
+            i = source.rfind("\n", 0, i - 1) + 1
+            if starts_chunk(i):
+                break
+        return i
+
+    def next_start(i: int) -> int:
+        while i < end:
+            nl = source.find("\n", i)
+            i = end if nl < 0 else nl + 1
+            if starts_chunk(i):
+                break
+        return i
+
+    def chunk_around(pos: int) -> tuple[int, int]:
+        lo = source.rfind("\n", 0, pos) + 1
+        if not starts_chunk(lo):
+            lo = prev_start(lo)
+        # A decorator belongs to the statement it decorates.
+        while lo > 0 and source[prev_start(lo)] == "@":
+            lo = prev_start(lo)
+        head, hi = lo, next_start(lo)
+        while source[head] == "@" and hi < end:
+            head, hi = hi, next_start(hi)
+        return lo, hi
+
+    spans = sorted({chunk_around(i) for i in hits})
+    out: list[str] = []
+    done = 0
+    for lo, hi in spans:
+        if lo < done:
+            continue
+        out.append("\n" * source.count("\n", done, lo))
+        out.append(source[lo:hi])
+        done = hi
+    out.append("\n" * source.count("\n", done))
+    return "".join(out)
+
+
+def find_violations_chunked(source: str, filename: str = "<string>") -> list[str]:
+    """`find_violations` with the same verdict, parsing only the chunks that name a target."""
+    try:
+        tree = ast.parse(_keep_only_chunks_naming_targets(source), filename=filename)
+    except SyntaxError:
+        return find_violations(source, filename)
+    if _violations_in_tree(tree, filename, None):
+        return find_violations(source, filename)
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +415,12 @@ def test_does_not_flag_clean_per_call_reads():
 
 # ---------------------------------------------------------------------------
 # Live sweep over coordinator_core/** non-test files. Import-free, no
-# subprocess. Process time is measured and asserted under the 500ms
-# brightline so the sweep itself never becomes an unnamed-cost suppression
-# candidate.
+# subprocess. Process time is asserted under the 500ms brightline so the
+# sweep itself never becomes a suppression candidate.
 # ---------------------------------------------------------------------------
+
+
+BRIGHTLINE_MS = 500
 
 
 def _non_test_py_files() -> list[Path]:
@@ -315,7 +447,7 @@ def test_no_live_once_bound_settings_home_reader_in_coordinator_core():
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        if "settings_home" in text:
+        if any(name in text for name in _TARGET_CALL_NAMES):
             sources.append((path, text))
 
     from coordinator_core.benchmarks.process_time import in_process_time_ms
@@ -329,7 +461,7 @@ def test_no_live_once_bound_settings_home_reader_in_coordinator_core():
             examined += 1
             try:
                 violations.extend(
-                    find_violations(source, str(path.relative_to(REPO_ROOT)))
+                    find_violations_chunked(source, str(path.relative_to(REPO_ROOT)))
                 )
             except SyntaxError:
                 continue
@@ -341,34 +473,10 @@ def test_no_live_once_bound_settings_home_reader_in_coordinator_core():
     all_violations = outcome["violations"]
     elapsed_ms = timing["process_time_ms"]
 
-    # Named, not hidden: measured on this box (wall clock, pre-conversion),
-    # ast.parse over the ~119 settings_home-referencing files in
-    # coordinator_core/** costs ~850-950ms, not the 500ms brightline this
-    # chunk's brief names as the target. Now measured as process time
-    # (`in_process_time_ms`), axis-converted only -- the ceiling is unmoved. The
-    # cost is almost entirely one outlier -- ast.parse alone on
-    # coordinator_core/pickup_assemble/__init__.py (469KB, ~28.8k AST nodes)
-    # measures ~85-120ms in isolation on repeated runs -- not an algorithmic
-    # defect in this walk (single-pass, no nested re-walk of function bodies;
-    # see _bound_local_names/find_violations). Recorded here rather than
-    # silently gated at a loosened threshold so the cost stays named per
-    # "an unnamed-cost sweep in the test tier is how a guard becomes a
-    # suppression candidate later" (brief). A production fix (splitting the
-    # oversized module, or scoping this sweep below full coordinator_core/**)
-    # is out of this chunk's declared writes -- report as a follow-on row,
-    # not a silent scope-widen.
-    NAMED_MEASURED_CEILING_MS = 2000
-    assert elapsed_ms < NAMED_MEASURED_CEILING_MS, (
-        f"AST walk over {examined} settings_home-referencing files took "
-        f"{elapsed_ms:.1f}ms, over the named ceiling of {NAMED_MEASURED_CEILING_MS}ms "
-        "-- investigate before raising this further"
+    assert elapsed_ms < BRIGHTLINE_MS, (
+        f"AST walk over {examined} target-referencing files took {elapsed_ms:.1f}ms "
+        f"of process time, over the {BRIGHTLINE_MS}ms brightline"
     )
-    if elapsed_ms >= 500:
-        print(
-            f"[test_settings_home_is_never_bound_once] AST walk over {examined} files "
-            f"took {elapsed_ms:.1f}ms, over the 500ms brightline this chunk targets -- "
-            "see comment above this assertion for the named cause"
-        )
     assert examined > 0, "expected at least one file referencing settings_home to examine"
     assert all_violations == [], (
         "found once-bound settings_home() reader(s), needs a per-call fix:\n"
@@ -433,3 +541,59 @@ def test_a_per_call_parameter_default_is_not_flagged():
     violations = find_violations(_PER_CALL_PARAMETER_CONTROL, "x.py")
 
     assert violations == [], f"flagged the correct per-call shape: {violations}"
+
+
+# ---------------------------------------------------------------------------
+# CHUNKED-PATH PARITY. The sweep skips parsing, so every fixture above must get
+# the same verdict from the chunked walk, and the shapes only a chunk split
+# could get wrong are pinned here.
+# ---------------------------------------------------------------------------
+
+_ALIASED_MODULE_LEVEL = '''
+from coordinator_core._settings_home import (
+    settings_home as sh,
+)
+
+def per_call():
+    return sh()
+
+_FROZEN = sh() / "x"
+'''
+
+_COLUMN_ZERO_TEXT_IN_DOCSTRING = '''
+"""Notes.
+_FROZEN = settings_home()
+"""
+from coordinator_core._settings_home import settings_home
+
+def per_call():
+    return settings_home()
+'''
+
+
+def test_chunked_walk_agrees_with_the_full_walk_on_every_fixture():
+    fixtures = [
+        _LRU_CACHE_READER,
+        _MUTABLE_DEFAULT_ARG,
+        _CLASS_ATTRIBUTE_DEFAULT,
+        _LAZY_MODULE_GLOBAL,
+        _CLEAN_PER_CALL,
+        _CLEAN_MODULE_LEVEL_CONSTANT_UNRELATED,
+        _DERIVED_MODULE_LEVEL,
+        _DERIVED_LAZY_GLOBAL,
+        _PER_CALL_PARAMETER_CONTROL,
+        _ALIASED_MODULE_LEVEL,
+        _COLUMN_ZERO_TEXT_IN_DOCSTRING,
+    ]
+    for source in fixtures:
+        assert find_violations_chunked(source, "f.py") == find_violations(source, "f.py")
+
+
+def test_chunked_walk_flags_an_aliased_module_level_binding_on_its_true_line():
+    violations = find_violations_chunked(_ALIASED_MODULE_LEVEL, "aliased.py")
+
+    assert len(violations) == 1 and violations[0].startswith("aliased.py:9:")
+
+
+def test_chunked_walk_does_not_flag_column_zero_text_inside_a_docstring():
+    assert find_violations_chunked(_COLUMN_ZERO_TEXT_IN_DOCSTRING, "doc.py") == []

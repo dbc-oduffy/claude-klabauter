@@ -221,3 +221,20 @@ class TestHandoffClaimHumanClaimant:
         text = hp.read_text(encoding="utf-8")
         assert "claimed_by: sess-h2" in text
         assert "human_claimant" not in text
+
+
+class TestMemoClaimHeldByAnotherSession:
+    def test_refusal_names_the_release_remedy(self, tmp_path, monkeypatch, capsys):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        mp = _seed_memo(repo, "m3.md", "in_progress", extra="picked_up_by: dead-session\n")
+        monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-new")
+        monkeypatch.setattr(arstamp, "resolve_operating_person", lambda: {})
+
+        rc = arstamp.cs_claim_memo_stamp(str(mp))
+
+        assert rc != 0
+        out = capsys.readouterr()
+        message = out.out + out.err
+        assert "held by dead-session" in message
+        assert "verb=release" in message

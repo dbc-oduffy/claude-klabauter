@@ -840,12 +840,18 @@ def test_orchestrate_full_success_sequences_all_four_legs_and_completes(capsys):
         calls.append("endstate")
         return True
 
+    def _ok_sampler():
+        calls.append("sampler")
+        return True
+
     orig = {
+        "sampler": uninstall_legs.uninstall_strip_host_sampler_task,
         "strip": uninstall_legs.uninstall_strip_settings_hooks,
         "shim": uninstall_legs.uninstall_remove_shim,
         "substrate": uninstall_legs.uninstall_remove_substrate,
         "endstate": uninstall_legs.uninstall_set_plugin_endstate,
     }
+    uninstall_legs.uninstall_strip_host_sampler_task = _ok_sampler
     uninstall_legs.uninstall_strip_settings_hooks = _ok_strip
     uninstall_legs.uninstall_remove_shim = _ok_shim
     uninstall_legs.uninstall_remove_substrate = _ok_substrate
@@ -859,7 +865,7 @@ def test_orchestrate_full_success_sequences_all_four_legs_and_completes(capsys):
         uninstall_legs.uninstall_set_plugin_endstate = orig["endstate"]
 
     assert rc == 0
-    assert calls == ["strip", "shim", "substrate", "endstate"]
+    assert calls == ["strip", "shim", "sampler", "substrate", "endstate"]
     out = capsys.readouterr().out
     assert "coordinator-uninstall: complete (mode=full-remove)." in out
 
@@ -1715,3 +1721,10 @@ def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkey
     assert json.loads(decoy.read_text(encoding="utf-8"))["hooks"] != {}, (
         "the leg stripped a file beside .claude — the pre-fix target"
     )
+
+
+def test_dry_run_banner_names_the_sampler_leg_platform_neutrally(capsys):
+    assert uninstall_legs.orchestrate_uninstall(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "host-sampler scheduler registration" in out
+    assert "Task Scheduler" not in out

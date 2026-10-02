@@ -86,25 +86,13 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks import nudge_unauthorized_handoff
-from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: F401 -- back-compat monkeypatch target, see below
+from coordinator_core.session.autonomous_sentinel import sentinel_path
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
 
-# Comment was stale: `sentinel_path` IS called directly by this
-# module's own logic now, in the mise-en-place CONTINUANCE detection below (reads
-# the sentinel's own `mode` field to distinguish autonomous from mise-en-place runs;
-# `resolve_mode("autonomous", ...)` only answers presence, not that distinction --
-# see the block starting "mise-en-place CONTINUANCE detection" further down).
-# `sentinel_path` remains a live module attribute for two reasons now: (1) that real
-# call site, and (2)
-# coordinator_core/hooks/tests/test_postuse_context_pressure.py's `_under_sentinel`
-# helper (out of this chunk's file scope) monkeypatches BOTH
-# `autonomous_sentinel.sentinel_path` (which resolve_mode's `_autonomous_session_value`
-# actually reads, module-qualified, so this patch is what changes THAT behaviour) AND
-# this module's own `sentinel_path` name, redundantly -- removing this import would
-# raise AttributeError on that second, now-inert-for-resolve_mode patch, independent
-# of the real call site above. Do not remove without updating that test file in its
-# own chunk.
+# `sentinel_path` is read directly by the mise-en-place CONTINUANCE detection
+# below: `resolve_mode("autonomous", ...)` answers presence only, not the
+# sentinel's `mode` field that separates autonomous from mise-en-place runs.
 
 
 def _tempfile():
@@ -1162,7 +1150,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     #   rt-bark-once-{session_id} sentinel above (touch-once, not an append log).
 
     # --- Emit WRAP-SHAPE prescription ---
-    # CANONICAL TEXT — DO NOT REWORD without updating docs/wiki/runtime-tripwire.md §3.
+    # CANONICAL TEXT — DO NOT REWORD without updating coordinator-content-repo coordinator/docs/wiki/hook-best-practices/runtime-tripwire.md §3.
     # AC5 grep targets embedded verbatim: "stop starting new work",
     # "persist any partial state to disk", "write a successor-handoff stub", "return".
     if autonomous:
@@ -1839,13 +1827,10 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
 # exit-status field available from the payload at all today, so
 # landed-detection has exactly one path in production:
 #
-#   Fall through to a single git spawn: `git diff --cached --name-only --
-#   <paths>`. A landed commit leaves the index clean for those paths
-#   (nothing left to diff against HEAD); a failed commit (non-zero exit,
-#   e.g. a failing pre-commit hook, or `nothing to commit`) leaves them
-#   staged and still reported. One spawn, gated strictly behind the `git
-#   commit ... -- <paths>` match below -- never paid on a non-commit Bash
-#   call, and never paid twice per fire.
+#   Fall through to a spawn-free index-vs-HEAD comparison for the named
+#   paths. A landed commit leaves the index equal to HEAD for those paths;
+#   a failed commit (non-zero exit, e.g. a failing pre-commit hook, or
+#   `nothing to commit`) leaves them staged and diverging.
 #
 # `_bash_commit_landed`'s `exit_code_field` parameter is forward defense only
 # (kept for the day the harness starts emitting one on the payload) -- no
@@ -1901,34 +1886,51 @@ def _bash_commit_landed(
     Prefers an explicit exit-status field where the payload carries one
     (`"0"` only counts as landed -- an unparseable or non-zero value is NOT
     landed, fail-closed toward "do not release a claim the commit may not
-    have actually discharged"). Falls back to one `git diff --cached
-    --name-only -- <paths>` spawn: empty output means the index no longer
-    diverges from HEAD for those paths, i.e. they left the index (either
-    committed, or reverted -- either way the claim's `stage_paths` no longer
-    describes live staged content, so holding it serves no one). A non-empty
-    result, or a git failure of any kind, is NOT landed -- fail-closed, this
-    check may only WITHHOLD a release, never wrongly issue one.
+    have actually discharged"). Otherwise ZERO spawns: every named path's
+    index entry (mode, sha) must equal its entry in HEAD's tree, or be absent
+    from both -- the index no longer diverges from HEAD for those paths, so
+    they were committed or reverted, and either way holding the claim serves
+    no one. Any unreadable index or tree, a path outside the repo, or a
+    pathspec naming a directory is NOT landed -- fail-closed, this check may
+    only WITHHOLD a release, never wrongly issue one.
     """
     if exit_code_field:
         return exit_code_field.strip() == "0"
     if not paths:
         return False
     try:
-        import subprocess
+        from coordinator_core.git.git_state import read_index, read_tree_spine
+        from coordinator_core.git.repo_root import show_toplevel
 
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--", *paths],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        root = show_toplevel(cwd)
+        if root is None:
+            return False
+        base = os.path.abspath(cwd or root)
+        rels = []
+        for p in paths:
+            rel = os.path.relpath(os.path.join(base, p), root).replace(os.sep, "/")
+            if rel == "." or rel.startswith("../"):
+                return False
+            rels.append(rel)
+        index = read_index(root)
+        spine = read_tree_spine(root, rels)
+        if spine is None:
+            return False
+        for rel in rels:
+            prefix = rel + "/"
+            if any(name.startswith(prefix) for name in index):
+                return False
+            dirpath, _, leaf = rel.rpartition("/")
+            head_entry = spine.get(dirpath, {}).get(leaf)
+            if head_entry is not None and head_entry[0] == 0o40000:
+                return False
+            staged = index.get(rel)
+            staged_id = None if staged is None else (staged.mode, staged.sha)
+            if staged_id != head_entry:
+                return False
+        return True
     except Exception:
         return False
-    if result.returncode != 0:
-        return False
-    return result.stdout.strip() == ""
 
 
 def _release_claims_on_bash_commit_sync(
@@ -2018,6 +2020,27 @@ async def _leg_text(label: str, coro) -> str:
 # ---------------------------------------------------------------------------
 # Op handler
 # ---------------------------------------------------------------------------
+
+
+_TOUCH_RECORDING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+
+def _touched_path(params: dict) -> str:
+    """The written path: a flat ``file_path`` (stub-mapped route), else the raw
+    hook event's ``tool_input`` (HTTP route, which forwards the event verbatim)."""
+    flat = field(params, "file_path")
+    if flat:
+        return flat
+    tool_input = params.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return ""
+    return str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+
+
+async def _record_write_touch(params: dict, touch_path: str, repo_root) -> None:
+    from coordinator_core.hooks import track_touched_files  # noqa: PLC0415 -- leg-local
+
+    await track_touched_files._handler({**params, "file_path": touch_path}, repo_root=repo_root)
 
 
 @register_op("hooks.postuse_advisory_dispatch")
@@ -2115,6 +2138,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
     file_path = field(params, "file_path")
     content = field(params, "content")
     command = field(params, "command")
+    # `tool_input` is read only for a write tool: the stub-mapped route
+    # carries seven flat fields, the HTTP route the raw event.
+    touch_path = _touched_path(params) if tool_name in _TOUCH_RECORDING_TOOLS else ""
+    if touch_path and not file_path:
+        file_path = touch_path
+        raw_input = params.get("tool_input")
+        if not content and isinstance(raw_input, dict):
+            content = str(raw_input.get("content") or "")
 
     # The unauthorized-handoff nudge is the one check that does NOT depend on
     # session_id — its predicate is the Write payload alone — so it runs even
@@ -2196,6 +2227,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if tool_name == "Bash" and command
             else _idle()
         ),
+        # The write-claim record. The HTTP hook route calls only this op, so
+        # the claim must be written here; without it no Edit/Write ever
+        # claims its path and peers' commits orphan it.
+        (
+            _record_write_touch(params, touch_path, repo_root)
+            if tool_name in _TOUCH_RECORDING_TOOLS and touch_path
+            else _idle()
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -2218,6 +2257,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     release_result = results[6]
     if isinstance(release_result, BaseException):
         _text_or_breadcrumb("bash_commit_release", release_result)
+    touch_result = results[7]
+    if isinstance(touch_result, BaseException):
+        _text_or_breadcrumb("write_touch_record", touch_result)
 
     texts = [text for text in (cp_text, rt_text, ad_text, uh_text, ge_text) if text]
     if texts:

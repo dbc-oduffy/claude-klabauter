@@ -270,7 +270,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.propagate":                     "common_dir",
     "plan.propagate":                        "common_dir",
     "handoff.stamp_phase":                   "common_dir",
-    "handoff.ship_and_archive":              "common_dir",
     "handoff.discharge_landed":               "common_dir",
     "handoff.backfill_claim_stamp":          "common_dir",
     "handoff.repoint_origin":                "common_dir",

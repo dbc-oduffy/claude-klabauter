@@ -77,10 +77,10 @@ def isolated_plugin_root(tmp_path, monkeypatch):
 
 
 def test_resolve_plugin_root_content_root_rung_uses_userprofile(tmp_path, monkeypatch):
-    """Native-Windows condition for the ``.coordinator-content-root`` legacy rung
+    """Native-Windows condition for the ``.coordinator-content-root`` pointer rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): CLAUDE_PLUGIN_ROOT
     unset, CLAUDE_HOME/HOME both absent, only USERPROFILE set. The rung now
-    delegates to ``read_content_root_pointer_file()``'s own default (which falls
+    delegates to ``read_pointer_files()``'s own default (which falls
     through to ``os.path.expanduser("~")``, Windows-safe) instead of a
     hand-rolled two-rung ``CLAUDE_HOME or HOME`` chain that degraded to a
     cwd-relative pointer path in exactly this condition."""
@@ -97,9 +97,9 @@ def test_resolve_plugin_root_content_root_rung_uses_userprofile(tmp_path, monkey
     doe_repo = tmp_path / "doe-repo"
     coordinator_dir = doe_repo / "coordinator"
     coordinator_dir.mkdir(parents=True)
-    content_root_dir = userprofile_home / ".claude"
-    content_root_dir.mkdir(parents=True)
-    (content_root_dir / ".coordinator-content-root").write_text(str(doe_repo), encoding="utf-8")
+    pointer_dir = userprofile_home / ".claude"
+    pointer_dir.mkdir(parents=True)
+    (pointer_dir / ".coordinator-content-root").write_text(str(doe_repo), encoding="utf-8")
 
     plugin_root, err = _resolve_plugin_root()
     assert err is None, err
@@ -178,6 +178,24 @@ def test_unattributable_untracked_case_c_exits_three(tmp_path, isolated_plugin_r
     rc, out = _run_gate(repo, "--terminator", "test", capsys=capsys)
     assert rc == 3
     assert "orphan.txt" in out
+
+
+def test_case_c_refusal_never_offers_git_stash(tmp_path, isolated_plugin_root, capsys):
+    # An agent meeting this gate follows its offered dispositions; a stash on a
+    # shared tree swallows every peer's uncommitted work.
+    repo = _make_repo(tmp_path, "t3s")
+    (repo / "orphan.txt").write_text("orphaned content\n")
+    cwd = os.getcwd()
+    os.chdir(repo)
+    try:
+        rc = main(["--terminator", "test"])
+    finally:
+        os.chdir(cwd)
+    err = capsys.readouterr().err
+    assert rc == 3
+    assert "git stash push" not in err
+    assert "/ stash /" not in err
+    assert "stash-with-provenance" not in err
 
 
 def test_new_directory_reports_every_file_not_the_collapsed_dir(

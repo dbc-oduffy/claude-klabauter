@@ -22,9 +22,9 @@ Consumes-manifest (C1 census, plan § Tasks C1 body) — orchestrates, reimpleme
 none of the following existing atomic CLIs (every `directives[].cli` value below
 is a literal name drawn from exactly this set):
     workday-complete-args-and-validate, workday-complete-reconcile,
-    workday-complete-step2_5-dirty-tree, reap-orphaned-in-flight-handoffs,
-    workday-complete-step3-consolidate, workday-complete-backfill-scan,
-    workday-complete-backfill-anchor, workday-complete-close, standup,
+    workday-complete-step2_5-dirty-tree, workday-complete-step3-consolidate,
+    workday-complete-backfill-scan, workday-complete-backfill-anchor,
+    workday-complete-close, standup,
     query-completions, coordinator-queue-append, prune-closed-bugs,
     workday-start-advisory-counters, check-weekly-staleness, goal-close-day,
     coordinator-ceremony-hook, emit-cadence
@@ -140,7 +140,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "workday-complete-args-and-validate",
     "workday-complete-reconcile",
     "workday-complete-step2_5-dirty-tree",
-    "reap-orphaned-in-flight-handoffs",
     "reap-claims-for-repos",
     "handoff-housekeeping",
     "workday-complete-step3-consolidate",
@@ -411,11 +410,6 @@ def _build_directives(
         _directive(
             "d_step2_5_dirty_tree_scan",
             cli="workday-complete-step2_5-dirty-tree",
-            args=[],
-        ),
-        _directive(
-            "d_step2_65_reap_orphans",
-            cli="reap-orphaned-in-flight-handoffs",
             args=[],
         ),
         _directive(

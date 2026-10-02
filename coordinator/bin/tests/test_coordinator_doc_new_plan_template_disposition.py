@@ -4,7 +4,7 @@ vocabulary, not the legacy `deferred`/`pm_approved` shape.
 
 Purpose: `coordinator-doc-new --type plan`'s sample `## Tasks` rows are the
 first thing every plan author sees. Before this change they emitted
-`deferred: true` / `pm_approved: false` -- the shape docs/wiki/writing-plans.md
+`deferred: true` / `pm_approved: false` -- the shape coordinator-content-repo coordinator/docs/wiki/planning/writing-plans.md
 § 378 marks LEGACY, read-tolerance only, no live authoring path -- so the
 scaffold taught authors the retired vocabulary before they could read the
 doctrine that would tell them otherwise. This suite asserts the scaffold now

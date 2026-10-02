@@ -444,3 +444,29 @@ def test_absent_venv_is_demanded_while_an_interpreter_pin_names_it(
         line for line in format_report_lines(report) if ".coordinator-venv" in line
     )
     assert line.strip().startswith("FAIL")
+
+
+def test_retired_whoami_present_is_residue_never_a_pass(tmp_path: Path, claude_klabauter_root: Path) -> None:
+    sh = _populate_full_settings_home(tmp_path)
+
+    lines = [ln for ln in format_report_lines(check_settings_home(sh, claude_klabauter_root)) if "coordinator-whoami" in ln]
+
+    assert len(lines) == 1
+    assert lines[0].lstrip().startswith("RESIDUE") and "PASS" not in lines[0]
+
+
+def test_retired_whoami_absent_is_the_pass(tmp_path: Path, claude_klabauter_root: Path) -> None:
+    sh = _populate_full_settings_home(tmp_path)
+    (sh / "coordinator-whoami").rmdir()
+
+    lines = [ln for ln in format_report_lines(check_settings_home(sh, claude_klabauter_root)) if "coordinator-whoami" in ln]
+
+    assert len(lines) == 1 and lines[0].lstrip().startswith("PASS") and "absent" in lines[0]
+
+
+def test_percolate_identity_row_names_the_rung_the_engine_reads(tmp_path: Path, claude_klabauter_root: Path) -> None:
+    sh = _populate_full_settings_home(tmp_path)
+
+    lines = [ln for ln in format_report_lines(check_settings_home(sh, claude_klabauter_root)) if ".percolate-identity" in ln]
+
+    assert len(lines) == 1 and "rung 2" in lines[0] and "resolve_percolate_identity_path" in lines[0]

@@ -37,7 +37,7 @@ the given text, not whether it equals it, so a repeat append cannot grow
 the field without bound.
 
 Canonical hashing recipe (byte-identical to
-`docs/wiki/plan-execute-session-split.md` § Pinned conventions and to
+`coordinator-content-repo coordinator/docs/wiki/planning/plan-execute-session-split.md` § Pinned conventions and to
 `coordinator_core.pickup_brief.compute_execution_stamp_match`'s own
 recipe): the plan BODY is everything below the second `---` frontmatter
 delimiter line, hashed via the literal `git hash-object --stdin` blob-hash
@@ -94,7 +94,7 @@ quartet, since a landed write is itself a fresh witness of the current body.
 Negative-spec:
   - Does NOT enforce the write-bar (has the PM actually named execution?).
     That judgment call stays the calling skill's, per
-    `docs/wiki/plan-execute-session-split.md` § Write-bar -- this op is a
+    `coordinator-content-repo coordinator/docs/wiki/planning/plan-execute-session-split.md` § Write-bar -- this op is a
     pure mutation once the skill has already decided to write.
   - Does NOT git-commit. Frontmatter mutation only, via `locked_rmw`.
   - Does NOT touch any file other than the single target plan.
@@ -794,6 +794,17 @@ def stamp_invocation_authorization(
     if split is None:
         return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: no parseable frontmatter"}
 
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_CHANGED,
+        APPROVED_BODY_UNVERIFIABLE,
+        check_approved_body,
+    )
+
+    approved_state, approved_msg = check_approved_body(text)
+    if approved_state == APPROVED_BODY_CHANGED:
+        return EXIT_BUSINESS_FAIL, {"error": f"refusing to mint: {plan_path}: {approved_msg}"}
+    approved_warning = approved_msg if approved_state == APPROVED_BODY_UNVERIFIABLE else None
+
     try:
         sha = _canonical_body_sha(text, root)
     except RuntimeError as exc:
@@ -837,6 +848,8 @@ def stamp_invocation_authorization(
     )
     if exit_code == EXIT_OK:
         result["note"] = note
+        if approved_warning:
+            result["warning"] = approved_warning
     return exit_code, result
 
 

@@ -74,7 +74,11 @@ def test_measure_cold_process_time_n_rejects_n_below_one():
 
 def test_measure_cold_process_time_n_counts_one_process_per_bare_invocation():
     result = measure_cold_process_time_n([sys.executable, "-c", "pass"], n=3)
-    assert all(p == pytest.approx(1.0) for p in result.procs_per_call_samples)
+    # Exact, platform-keyed: Windows spawns python.exe plus a conhost.exe for
+    # every CREATE_NO_WINDOW child (DR-373), so a bare call is 2 processes; Darwin
+    # has no console host. One extra spawned process still fails the equality.
+    expected = 2.0 if IS_WINDOWS else 1.0
+    assert all(p == pytest.approx(expected) for p in result.procs_per_call_samples)
 
 
 def test_measure_import_set_reports_a_positive_module_count_for_a_real_module():

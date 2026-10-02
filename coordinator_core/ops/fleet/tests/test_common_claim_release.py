@@ -140,3 +140,54 @@ def test_rm_and_commit_releases_claim_on_reaped_path(repo, monkeypatch):
 
     released = _released_paths(repo, sid)
     assert rel in released or Path(rel).name in {Path(p).name for p in released}
+
+
+def _seed_many(repo: Path, n: int) -> list:
+    (repo / "state" / "scratch").mkdir(parents=True, exist_ok=True)
+    rels = [f"state/scratch/f{i}.md" for i in range(n)]
+    for rel in rels:
+        (repo / rel).write_text("v1\n", encoding="utf-8")
+    _git(["add", "--", *rels], repo)
+    _git(["commit", "-q", "-m", "seed many"], repo)
+    return rels
+
+
+def _count_git_rm_spawns(monkeypatch) -> list:
+    spawns: list = []
+    orig = asyncio.create_subprocess_exec
+
+    async def _spy(*args, **kwargs):
+        if len(args) >= 2 and args[0] == "git" and args[1] == "rm":
+            spawns.append(args)
+        return await orig(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _spy)
+    return spawns
+
+
+@pytest.mark.parametrize("n", [2, 12])
+def test_rm_and_commit_git_rm_spawn_count_is_independent_of_n(repo, monkeypatch, n):
+    _own_sid(monkeypatch, f"rm-spawn-count-{n}")
+    rels = _seed_many(repo, n)
+    spawns = _count_git_rm_spawns(monkeypatch)
+
+    reaped, failed = _run(rm_and_commit(repo, [repo / r for r in rels], "test: reap many"))
+
+    assert failed == []
+    assert len(reaped) == n
+    assert len(spawns) == 1
+    assert not any((repo / r).exists() for r in rels)
+
+
+def test_rm_and_commit_batch_refusal_falls_back_per_item(repo, monkeypatch):
+    _own_sid(monkeypatch, "rm-batch-refusal")
+    rels = _seed_many(repo, 3)
+    (repo / rels[1]).write_text("locally modified\n", encoding="utf-8")
+    spawns = _count_git_rm_spawns(monkeypatch)
+
+    reaped, failed = _run(rm_and_commit(repo, [repo / r for r in rels], "test: reap some"))
+
+    assert sorted(r["id"] for r in reaped) == [rels[0], rels[2]]
+    assert [f["id"] for f in failed] == [rels[1]]
+    assert (repo / rels[1]).exists()
+    assert len(spawns) == 1 + len(rels)

@@ -25,13 +25,14 @@ decide whether to LOOK.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-CWD = str(Path(__file__).resolve().parents[3])
 TARGET = "state/handoffs"
 
 SPLIT_VERB_CASES = [
@@ -49,6 +50,29 @@ ALLOWED_CASES = [
     ("words that merely contain the letters", "echo 'form' 'perms' > /tmp/x"),
     ("rm as prose in a commit message", 'git commit -m "drop the rm wrapper"'),
 ]
+
+
+@pytest.fixture(scope="module")
+def _dirty_repo(tmp_path_factory: pytest.TempPathFactory) -> str:
+    # Trap: the guard records a touch claim under <cwd>/.git/coordinator-sessions/
+    # <sid>; pointing it at the real checkout leaks a phantom `test-session`.
+    root = tmp_path_factory.mktemp("rm-split-verb")
+    subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_passthrough_kwargs())
+    work = root / TARGET / "in-flight.md"
+    work.parent.mkdir(parents=True)
+    work.write_text("uncommitted work\n", encoding="utf-8")
+    return str(root)
+
+
+@pytest.fixture(autouse=True)
+def _cwd(_dirty_repo: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The guard resolves its repo from the process cwd, not payload["cwd"].
+    global CWD
+    CWD = _dirty_repo
+    monkeypatch.chdir(_dirty_repo)
+
+
+CWD = ""
 
 
 def _verdict(cmd: str):

@@ -106,6 +106,7 @@ GENERATES = [
         "sources": ["coordinator_core/ops/extract_cited_sidecars.py"],
     },
 ]
+UNSTAMPED_BY_DESIGN = ["state/audits/2026-09-02-*.md"]
 
 
 def _resolve_root(root: Optional[str]) -> str:

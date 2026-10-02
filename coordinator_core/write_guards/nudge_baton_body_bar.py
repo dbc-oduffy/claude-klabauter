@@ -76,6 +76,7 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.write_guards._post_write_body import post_write_body, read_pre_image
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -87,8 +88,6 @@ _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_BATON_BODY_PUNT"
 
 _BATON_PATH_GLOB = "*/state/handoffs/*.md"
 _BATON_PATH_PREFIX = "state/handoffs/"
-
-_MAX_WHOLE_FILE_BYTES = 256 * 1024
 
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
@@ -133,80 +132,6 @@ def _matches_baton_path(file_path_norm: str) -> bool:
     return fnmatch.fnmatchcase(file_path_norm, _BATON_PATH_GLOB) or file_path_norm.startswith(
         _BATON_PATH_PREFIX
     )
-
-
-def _extract_str(tool_input: Dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = tool_input.get(key)
-        if value:
-            return str(value)
-    return ""
-
-
-def _read_file_safely(file_path: str) -> Optional[str]:
-    try:
-        if os.path.getsize(file_path) > _MAX_WHOLE_FILE_BYTES:
-            return None
-        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read()
-    except OSError:
-        return None
-
-
-def _apply_one_edit(
-    content: str, old_string: Any, new_string: Any, replace_all: Any
-) -> Optional[str]:
-    if not isinstance(old_string, str) or not old_string:
-        return None
-    if old_string not in content:
-        return None
-    new_string = new_string if isinstance(new_string, str) else ""
-    if replace_all:
-        return content.replace(old_string, new_string)
-    return content.replace(old_string, new_string, 1)
-
-
-def _reconstruct_whole_file(
-    tool_name: str, tool_input: Dict[str, Any], file_path: str
-) -> Optional[str]:
-    """Reconstruct the POST-EDIT whole file for Edit/MultiEdit; Write already
-    carries the whole file. Returns None (skip the advisory) on any failure —
-    never falls back to fragment-scoped detection, since a fragment cannot
-    tell whether the REST of the body already has authored prose."""
-    if tool_name == "Write":
-        return _extract_str(tool_input, "content")
-
-    current = _read_file_safely(file_path)
-    if current is None:
-        return None
-
-    if tool_name == "Edit":
-        return _apply_one_edit(
-            current,
-            tool_input.get("old_string"),
-            tool_input.get("new_string"),
-            tool_input.get("replace_all"),
-        )
-
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits")
-        if not isinstance(edits, list) or not edits:
-            return None
-        for edit in edits:
-            if not isinstance(edit, dict):
-                return None
-            result = _apply_one_edit(
-                current,
-                edit.get("old_string"),
-                edit.get("new_string"),
-                edit.get("replace_all"),
-            )
-            if result is None:
-                return None
-            current = result
-        return current
-
-    return None
 
 
 def _classify_line(line: str) -> str:
@@ -255,7 +180,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not _matches_baton_path(file_path_norm):
             return None
 
-        whole_file = _reconstruct_whole_file(tool_name, tool_input, file_path)
+        whole_file = post_write_body(
+            tool_name,
+            tool_input,
+            read_pre_image(file_path) if tool_name != "Write" else None,
+        )
         if not whole_file:
             return None
 

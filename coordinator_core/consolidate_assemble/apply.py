@@ -103,10 +103,50 @@ def _branch_exists_locally(name: str, repo_root: Path) -> bool:
     return _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{name}"], repo_root).returncode == 0
 
 
+def _refuse_unmerged_tips(name: str, remote: bool, repo_root: Path) -> Optional[str]:
+    """None when every tip about to be deleted is reachable from
+    `origin/<base>`; else a refusal naming each unreachable tip and its
+    commit count. Counts by patch (`--cherry-pick`), so commits landed under
+    new SHAs count as landed. Spawns: one ref lookup + one `rev-list` per
+    distinct tip (local and remote usually share one)."""
+    wanted = [f"refs/heads/{name}"] + ([f"refs/remotes/origin/{name}"] if remote else [])
+    probe = _run_git(
+        ["for-each-ref", "--format=%(refname) %(objectname)", *wanted,
+         "refs/remotes/origin/main", "refs/remotes/origin/master"],
+        repo_root,
+    )
+    _fail("for-each-ref", probe)
+    refs = dict(line.split(" ", 1) for line in probe.stdout.splitlines() if " " in line)
+    base = next((f"origin/{b}" for b in ("main", "master") if f"refs/remotes/origin/{b}" in refs), None)
+    tips = {r: refs[r] for r in wanted if r in refs}
+    if not tips:
+        return None
+    if base is None:
+        return f"{name}: no origin/main or origin/master to verify against"
+    counts: dict[str, str] = {}
+    for sha in sorted(set(tips.values())):
+        proc = _run_git(
+            ["rev-list", "--cherry-pick", "--right-only", "--no-merges", "--count", f"{base}...{sha}"],
+            repo_root,
+        )
+        _fail("rev-list", proc)
+        counts[sha] = proc.stdout.strip()
+    parts = [
+        f"{ref.removeprefix('refs/')} {sha} has {counts[sha]} commits not in {base}"
+        for ref, sha in tips.items()
+        if counts[sha] != "0"
+    ]
+    return f"{name}: refusing delete: " + "; ".join(parts) if parts else None
+
+
 def _delete_branch(name: str, remote: bool, repo_root: Path) -> dict[str, Any]:
     import os
 
     force = os.environ.get("COORDINATOR_OVERRIDE_BRANCH", "") == name
+    if not force:
+        refusal = _refuse_unmerged_tips(name, remote, repo_root)
+        if refusal is not None:
+            raise RuntimeError(refusal)
     flag = "-D" if force else "-d"
     detail: dict[str, Any] = {"local_deleted": None, "forced": force}
     if _branch_exists_locally(name, repo_root):

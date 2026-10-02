@@ -10,7 +10,7 @@ real schema content, not a synthetic stand-in, follow this same pattern
 elsewhere in this tree; see orient_assemble/tests/test_envelope_schema_
 conformance.py).
 
-`coordinator_content_root` is monkeypatched to the resolved sibling root for
+`read_content_root` is monkeypatched to the resolved sibling root for
 every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
@@ -51,7 +51,7 @@ _content_root, _doe_present = content_root_and_present()
 def _pin_content_root(monkeypatch):
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
-    monkeypatch.setattr(guard, "coordinator_content_root", lambda: _content_root)
+    monkeypatch.setattr(guard, "read_content_root", lambda: _content_root)
 
 
 def _payload(tool_name, file_path, cwd, **tool_input_extra):
@@ -94,7 +94,7 @@ class TestGateOnToolAndPayloadShape:
         # which need the offerable-doc-types map) still degrades silently,
         # which is why this hits the schema-warning path rather than the
         # scaffold-offer path for a brand-new file.
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
         result = guard.check(
             _payload("Write", str(tmp_path / "state" / "handoffs" / "x.md"), str(tmp_path),
                      content="---\ntitle: t\n---\nbody")
@@ -115,7 +115,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
     """
 
     def _absent_content_root(self, monkeypatch):
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
 
     def test_schema_shape_warning_still_fires_with_sibling_absent(self, tmp_path, monkeypatch):
         self._absent_content_root(monkeypatch)
@@ -159,7 +159,7 @@ class TestSchemaCorpusResolutionWithDoeSiblingAbsent:
 class TestSchemaCorpusSourcePinned:
     """AC3 twin: pins the resolution SOURCE, not just behaviour — asserts
     the guard's resolved schemas directory is the in-repo vendored path and
-    is never derived from `coordinator_content_root()`.
+    is never derived from `read_content_root()`.
     """
 
     def test_resolved_schemas_dir_is_the_vendored_in_repo_path(self):
@@ -170,16 +170,16 @@ class TestSchemaCorpusSourcePinned:
 
     def test_resolved_schemas_dir_does_not_move_when_content_root_changes(self, tmp_path, monkeypatch):
         fake_content_root = str(tmp_path / "not-a-real-coordinator-content-repo-checkout")
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_content_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: fake_content_root)
         # _VENDORED_SCHEMAS_DIR is a module-level constant -- re-pointing
-        # coordinator_content_root() cannot move it, unlike the old
+        # read_content_root() cannot move it, unlike the old
         # content_root-derived schemas_dir it replaces.
         assert guard._VENDORED_SCHEMAS_DIR == (
             Path(guard.__file__).resolve().parents[1] / "frontmatter" / "schemas"
         )
         assert "coordinator" not in guard._VENDORED_SCHEMAS_DIR.parts
 
-    def test_resolved_schemas_dir_is_never_derived_from_coordinator_content_root(self):
+    def test_resolved_schemas_dir_is_never_derived_from_read_content_root(self):
         assert str(guard._VENDORED_SCHEMAS_DIR) != str(Path(_content_root) / "coordinator" / "schemas")
         assert guard._VENDORED_SCHEMAS_DIR.resolve().is_relative_to(
             Path(guard.__file__).resolve().parents[1]
@@ -304,7 +304,7 @@ class TestTornWriteRetry:
         sleep_calls = {"n": 0}
         monkeypatch.setattr(guard.time, "sleep", lambda secs: sleep_calls.__setitem__("n", sleep_calls["n"] + 1))
         fake_root = str(tmp_path / "nonexistent-coordinator-content-repo-root")
-        monkeypatch.setattr(guard, "coordinator_content_root", lambda: fake_root)
+        monkeypatch.setattr(guard, "read_content_root", lambda: fake_root)
         result = guard.check(
             _payload("Write", "/tmp/state/handoffs/x.md", "/tmp", content="---\ntitle: t\n---\nbody")
         )
@@ -846,7 +846,7 @@ class TestPlanTasksSpineWarn:
             # dispositions. Present so the ONLY variable this test isolates stays the
             # pm_approved-required branch. NOTE: this fixture tracks DoE's LIVE tree,
             # not claude-klabauter's vendored copy -- these guards resolve schemas_dir from
-            # coordinator_content_root(), so a DoE-side bump reaches them with no re-vendor.
+            # read_content_root(), so a DoE-side bump reaches them with no re-vendor.
             "  case_against: Superseded by the C4 rewrite; carrying it forward would\n"
             "    duplicate that surface.\n"
         )

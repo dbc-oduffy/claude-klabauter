@@ -149,7 +149,47 @@ def test_dest_mismatch_names_track_ref_and_the_checkout_fix(tmp_path, monkeypatc
     assert f"git -C {dest} checkout candidate" in combined
 
 
-def test_absent_track_ref_defaults_to_remote_default_branch(tmp_path, monkeypatch):
+def test_absent_track_ref_follows_source_branch_head(tmp_path, monkeypatch):
+    """An absent `track_ref` follows the HEAD of the source branch being
+    percolated, never a fixed `main`."""
+    src = tmp_path / "src"
+    _init_git_repo(src, branch="feature/x")
+    registry_dir = tmp_path / "registry"
+
+    dest_ok = tmp_path / "dest-ok"
+    _init_git_repo(dest_ok, branch="feature/x")
+    _write_registry(registry_dir, dest=dest_ok, track_ref=None)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+    assert publish.assert_dest_on_declared_ref(
+        _make_target("row-follow-ok", src, dest_ok), publish.RunTotals()
+    ) is True
+
+    dest_main = tmp_path / "dest-main"
+    _init_git_repo(dest_main, branch="main")
+    _git("branch", "feature/x", cwd=dest_main)
+    _write_registry(registry_dir, dest=dest_main, track_ref=None)
+    assert publish.assert_dest_on_declared_ref(
+        _make_target("row-follow-main", src, dest_main), publish.RunTotals()
+    ) is False
+
+
+def test_declared_track_ref_wins_over_source_branch_head(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    _init_git_repo(src, branch="feature/x")
+    dest = tmp_path / "dest"
+    _init_git_repo(dest, branch="feature/x")
+    registry_dir = tmp_path / "registry"
+    _write_registry(registry_dir, dest=dest, track_ref="origin/staging")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+
+    assert publish.assert_dest_on_declared_ref(
+        _make_target("row-declared-wins", src, dest), publish.RunTotals()
+    ) is False
+
+
+def test_absent_track_ref_without_source_head_falls_back_to_remote_default(tmp_path, monkeypatch):
+    """A source with no readable branch HEAD (not a repo, or a detached CI
+    checkout) falls back to the dest's remote default, then `origin/main`."""
     dest_ok = tmp_path / "dest-ok"
     _init_git_repo(dest_ok, branch="main")
     registry_dir = tmp_path / "registry"
@@ -285,25 +325,36 @@ def _engine_setup_dir(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("branch", "track_ref", "accepted"),
+    ("source_branch", "branch", "track_ref", "accepted"),
     [
-        ("main", None, False),
-        ("candidate", None, True),
-        ("main", "origin/main", False),
-        ("candidate", "origin/candidate", True),
+        (None, "main", None, False),
+        (None, "candidate", None, True),
+        ("main", "candidate", None, True),
+        ("main", "main", None, False),
+        ("feature/x", "feature/x", None, True),
+        ("feature/x", "candidate", None, True),
+        (None, "main", "origin/main", False),
+        ("main", "main", "origin/main", False),
+        (None, "candidate", "origin/candidate", True),
     ],
 )
-def test_engine_mirror_publishes_to_candidate_only(
-    tmp_path, monkeypatch, capsys, branch, track_ref, accepted
+def test_engine_mirror_never_publishes_to_main(
+    tmp_path, monkeypatch, capsys, source_branch, branch, track_ref, accepted
 ):
+    """An engine mirror follows the source branch HEAD like any mirror, but
+    never lands on main (only promotion moves it): a source on main, or one
+    with no readable HEAD, resolves to candidate."""
     monkeypatch.delenv("PORTABLE_TARGETS_FILE", raising=False)
+    src = tmp_path / "src"
+    if source_branch is not None:
+        _init_git_repo(src, branch=source_branch)
     dest = tmp_path / "dest"
     _init_git_repo(dest, branch=branch)
     registry_dir = tmp_path / "registry"
     _write_registry(registry_dir, dest=dest, track_ref=track_ref)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
 
-    target = _make_target("row-engine", tmp_path / "src", dest)
+    target = _make_target("row-engine", src, dest)
     result = publish.assert_dest_on_declared_ref(
         target, publish.RunTotals(), setup_dir=_engine_setup_dir(tmp_path)
     )
@@ -311,5 +362,19 @@ def test_engine_mirror_publishes_to_candidate_only(
 
     assert result is accepted
     if not accepted:
-        assert "candidate" in combined
-        assert "main" in combined
+        assert branch in combined
+
+
+def test_absent_track_ref_ignores_a_source_branch_the_dest_never_carried(tmp_path, monkeypatch):
+    """A source work branch the mirror has no ref for is not a branch it can
+    check out: the dest keeps its standing channel instead of being refused."""
+    src = tmp_path / "src"
+    _init_git_repo(src, branch="work/box/2026-10-02")
+    dest = tmp_path / "dest"
+    _init_git_repo(dest, branch="main")
+    registry_dir = tmp_path / "registry"
+    _write_registry(registry_dir, dest=dest, track_ref=None)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+    assert publish.assert_dest_on_declared_ref(
+        _make_target("row-unknown-branch", src, dest), publish.RunTotals()
+    ) is True

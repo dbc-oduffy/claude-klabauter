@@ -73,7 +73,7 @@ class TestCheckSchemaVersionBump:
         (tmp_path / "canonical-structure.yaml").write_text("a: 2\n", encoding="utf-8")
         _git(root, "add", "canonical-structure.yaml")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         result = commit_tripwires.check_schema_version_bump()
         assert result is not None
@@ -91,7 +91,7 @@ class TestCheckSchemaVersionBump:
         (tmp_path / "coordinator-schema-version").write_text("4\n", encoding="utf-8")
         _git(root, "add", "canonical-structure.yaml", "coordinator-schema-version")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_schema_version_bump() is None
 
@@ -100,12 +100,12 @@ class TestCheckSchemaVersionBump:
         (tmp_path / "other.txt").write_text("x\n", encoding="utf-8")
         _git(root, "add", "other.txt")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_schema_version_bump() is None
 
     def test_content_root_unresolvable_fails_open(self, monkeypatch):
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: None)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: None)
         assert commit_tripwires.check_schema_version_bump() is None
 
 
@@ -133,7 +133,7 @@ class TestCheckBinShPolyglot:
         _write_polyglot(bin_dir / "some-tool", shebang="#!/usr/bin/env python3")
         _git(root, "add", "bin/some-tool")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         result = commit_tripwires.check_bin_sh_polyglot()
         assert result is not None
@@ -147,7 +147,7 @@ class TestCheckBinShPolyglot:
         _write_polyglot(bin_dir / "some-tool", shebang="#!/bin/sh")
         _git(root, "add", "bin/some-tool")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
@@ -158,7 +158,7 @@ class TestCheckBinShPolyglot:
         (bin_dir / "plain-tool.py").write_text("#!/usr/bin/env python3\nprint('hi')\n", encoding="utf-8")
         _git(root, "add", "bin/plain-tool.py")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
@@ -169,7 +169,7 @@ class TestCheckBinShPolyglot:
         _write_polyglot(bin_dir / "check-bin-sh-polyglot.py", shebang="#!/usr/bin/env python3")
         _git(root, "add", "bin/check-bin-sh-polyglot.py")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
@@ -188,17 +188,17 @@ class TestCheckBinShPolyglot:
         _write_polyglot(bin_dir / "check-sh-suffix-polyglot.py", shebang="#!/usr/bin/env python3")
         _git(root, "add", "bin/check-sh-suffix-polyglot.py")
 
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
     def test_content_root_unresolvable_fails_open(self, monkeypatch):
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: None)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: None)
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
     def test_no_bin_dir_fails_open(self, tmp_path, monkeypatch):
         root = _init_repo(tmp_path)
-        monkeypatch.setattr(commit_tripwires, "_resolve_doe_coordinator_root", lambda: root)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
 

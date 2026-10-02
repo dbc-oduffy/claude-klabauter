@@ -22,12 +22,6 @@ RAISES `IndexV4Unsupported` rather than attempting the varint-prefix walk;
 a caller hitting it falls back to its spawn, same as any other
 `IndexParseError` from the sibling module.
 
-`diff_index_name_status` is the exception to the
-"narrower than git_state, no sha" framing above: a HEAD-vs-index
-add/modified/deleted verdict needs sha identity, not a stat, so it goes
-through `git_state.read_index` (full v2/v3/v4 parse) and `git_state.
-head_blobs` directly rather than this module's own stat-only parser.
-
 Negative-spec:
     - NO worktree hashing. Same rationale as `git_state`'s "THE WORKTREE
       HASH DOES NOT WORK" section: a `candidate` verdict (stat mismatch)
@@ -37,16 +31,9 @@ Negative-spec:
       re-reads `.git/index` and re-stats the worktree paths fresh -- see
       `git_state.read_index`'s identical rationale (a cached scoped-status
       answer is the same partial-stage hazard class as a cached
-      full-index snapshot). `diff_index_name_status` inherits this: it
-      re-reads the index and re-calls `head_blobs` on every invocation,
-      relying solely on `head_blobs`'s OWN memoisation for spawn-avoidance
-      -- see that function's docstring for why serving two call sites
-      (with a `git add` landing between them) from one cached diff result
-      here would be a silent correctness bug, not an optimization.
+      full-index snapshot).
     - `scoped_status`/`parse_index_stat` do NOT spawn `git` -- every path
-      there is a file read or an `os.stat`. `diff_index_name_status` is
-      the one function in this module that reaches `git_state.head_blobs`,
-      whose own docstring documents its single retained, memoised spawn.
+      there is a file read or an `os.stat`.
 """
 
 from __future__ import annotations
@@ -57,8 +44,6 @@ from typing import Collection, Dict, NamedTuple, Optional, Sequence, Union
 
 from coordinator_core.git.git_objects import _retry_transient_read
 from coordinator_core.git.git_dir import resolve_git_dir
-from coordinator_core.git.git_state import head_blobs
-from coordinator_core.git.git_state import read_index as _read_full_index
 
 __all__ = [
     "IndexStatusEntry",
@@ -68,7 +53,6 @@ __all__ = [
     "parse_index_stat",
     "parse_index_identity",
     "scoped_status",
-    "diff_index_name_status",
 ]
 
 _SIGNATURE = b"DIRC"
@@ -364,23 +348,3 @@ def scoped_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str
 
     return verdicts
 
-
-def diff_index_name_status(repo: Union[str, Path], paths: Sequence[str]) -> Dict[str, str]:
-    index_snapshot = _read_full_index(repo)
-    head_entries = head_blobs(repo, paths)
-
-    verdicts: Dict[str, str] = {}
-    for p in paths:
-        idx_entry = index_snapshot.get(p)
-        head_entry = head_entries.get(p)
-
-        if idx_entry is None and head_entry is None:
-            continue
-        if idx_entry is None:
-            verdicts[p] = "D"
-        elif head_entry is None:
-            verdicts[p] = "A"
-        elif (idx_entry.mode, idx_entry.sha) != head_entry:
-            verdicts[p] = "M"
-
-    return verdicts

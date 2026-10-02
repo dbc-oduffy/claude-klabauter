@@ -136,8 +136,8 @@ def scoped_to_errors(
         return []
     return [
         "scoped_to is incomplete — when any of artifact/version/sha/seam is "
-        "set, all of scoped_to_artifact, exactly one of "
-        "scoped_to_version/scoped_to_sha, and scoped_to_seam are required. "
+        "set, all of scoped_to.artifact, exactly one of "
+        "scoped_to.version/scoped_to.sha, and scoped_to.seam are required. "
         f"Problems found: {'; '.join(problems)}."
     ]
 
@@ -157,6 +157,8 @@ def validate_outbox_frontmatter(fm: dict) -> list[str]:
     summary is allowed to be present-but-empty at draft time (user fills in
     body later via `compose`); only its KEY must be present. All other
     required fields must be present and non-empty.
+
+    scoped_to is the nested mapping; the flat ``scoped_to_*`` keys are an authoring alias.
 
     kind is OPTIONAL — absent/None is valid (reader applies an 'ask'
     default); only a PRESENT value outside the enum is rejected.
@@ -180,15 +182,10 @@ def validate_outbox_frontmatter(fm: dict) -> list[str]:
             f"(must be one of: {', '.join(VALID_KINDS)}). "
             f"Note: 'ack' is not a kind — acknowledgement is receipt-state."
         )
-    errors.extend(
-        scoped_to_errors(
-            kind,
-            {
-                "artifact": fm.get("scoped_to_artifact"),
-                "version": fm.get("scoped_to_version"),
-                "sha": fm.get("scoped_to_sha"),
-                "seam": fm.get("scoped_to_seam"),
-            },
-        )
-    )
+    nested = fm.get("scoped_to")
+    if isinstance(nested, dict):
+        scoped_to = {key: nested.get(key) for key in ("artifact", "version", "sha", "seam")}
+    else:
+        scoped_to = {key: fm.get(f"scoped_to_{key}") for key in ("artifact", "version", "sha", "seam")}
+    errors.extend(scoped_to_errors(kind, scoped_to))
     return errors

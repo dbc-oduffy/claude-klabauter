@@ -103,7 +103,7 @@ time, never hoisted to module scope (F2 discipline — recipe §(e), "every
 call inside the check function body").
 
 Spec backlink: docs/plans/2026-06-30-cross-platform-file-naming-helper.md § D1
-Tripwire entry: docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
+Tripwire entry: coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md § BLOCK-ILLEGAL-FILENAME
 Port of: block-illegal-filename.sh (Bash arm; DoE e91827a7, 2026-07-20)
          ; coordinator-safe-name.sh (csn_check) (DoE 721a71f4, 2026-07-21)
 """

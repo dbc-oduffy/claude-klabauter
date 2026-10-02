@@ -426,6 +426,11 @@ _READ_VALUE_TAKING_FLAGS_BY_VERB = {
 }
 
 
+#: A shell redirection operator, bare (`>`, `>>`, `<<`, `2>`) or glued to its
+#: operand (`>out`, `<<EOF`, `2>/dev/null`).
+_READ_REDIRECT_RE = re.compile(r"^\d*(?:<<-?|<>|>>|>\||&>|>&|<&|<|>)")
+
+
 def _is_literal_read_token(token: str) -> bool:
     if not token:
         return False
@@ -482,6 +487,7 @@ def resolve_read_targets(command_text: str) -> List[str]:
         return []
 
     targets: List[str] = []
+    cwd_moved = False
     for seg in segments:
         if seg.depth != 0 or seg.confidence == ResolutionConfidence.UNRESOLVED:
             continue
@@ -489,6 +495,12 @@ def resolve_read_targets(command_text: str) -> List[str]:
         if not tokens:
             continue
         head_base = normalize_executable_basename(tokens[0])
+        if head_base in ("cd", "pushd"):
+            # Later relative operands resolve against a directory the caller
+            # cannot see; claiming them against the repo root names the wrong
+            # file. Absolute operands stay resolvable.
+            cwd_moved = True
+            continue
         if head_base not in _READ_HEAD_VERBS:
             continue
         args = tokens[1:]
@@ -505,6 +517,18 @@ def resolve_read_targets(command_text: str) -> List[str]:
             if skip_next:
                 skip_next = False
                 continue
+            redirect = _READ_REDIRECT_RE.match(a)
+            if redirect:
+                # An operator is never a file. Its bare form's target is the
+                # next token: a write sink or heredoc marker, except `<`, whose
+                # operand is a genuine read.
+                if redirect.group(0) == a and a.lstrip("0123456789") != "<":
+                    skip_next = True
+                elif a.lstrip("0123456789").startswith("<") and not a.lstrip("0123456789").startswith("<<"):
+                    operand = a.lstrip("0123456789")[1:]
+                    if operand and _is_literal_read_token(operand):
+                        positional.append(operand)
+                continue
             if a in value_taking_flags:
                 skip_next = True
                 continue
@@ -519,6 +543,8 @@ def resolve_read_targets(command_text: str) -> List[str]:
 
         if head_base == "sed":
             positional = positional[1:]
+        if cwd_moved:
+            positional = [p for p in positional if os.path.isabs(p)]
 
         targets.extend(positional)
 

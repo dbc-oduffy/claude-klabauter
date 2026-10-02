@@ -62,59 +62,52 @@ class Finding:
 # it does not build an AST or understand statements, only span membership.
 
 
-def _scrub_template(script: str, i: int, out: List[str], placeholder: str) -> int:
-    """Mask the template literal opening at `script[i]` (a backtick) into
-    `out`; return the index after its closing backtick. A `${...}` body is
-    skipped by brace depth, with nested quotes and templates consumed whole,
-    so a backtick inside an interpolation does not end the outer template."""
+def _quoted_end(script: str, i: int, quote: str) -> int:
+    """Index of the `quote` closing a string whose body starts at `i`
+    (len(script) when unterminated). Escapes are honored."""
     n = len(script)
-    out.append("`")
-    i += 1
+    while i < n and script[i] != quote:
+        i += 2 if script[i] == "\\" else 1
+    return min(i, n)
 
-    def mask(c: str) -> str:
-        return "\n" if c == "\n" else placeholder
 
-    while i < n and script[i] != "`":
+def _template_end(script: str, i: int) -> int:
+    """Index of the backtick closing a template literal whose body starts at
+    `i` (len(script) when unterminated).
+
+    Trap: a `${...}` interpolation is code, so a backtick inside it opens a
+    NESTED template rather than closing the outer one; braces, strings and
+    comments inside the interpolation are tracked so its closing `}` is found."""
+    n = len(script)
+    while i < n:
         c = script[i]
-        if c == "\\" and i + 1 < n:
-            out.append(placeholder)
-            out.append(mask(script[i + 1]))
+        if c == "\\":
             i += 2
-        elif c == "$" and i + 1 < n and script[i + 1] == "{":
-            out.append(placeholder * 2)
+            continue
+        if c == "`":
+            return i
+        if c == "$" and i + 1 < n and script[i + 1] == "{":
             i += 2
             depth = 1
             while i < n and depth:
-                d = script[i]
-                if d == "`":
-                    sub: List[str] = []
-                    i = _scrub_template(script, i, sub, placeholder)
-                    out.append("".join(mask(x) if x != "`" else placeholder for x in sub))
-                    continue
-                if d in ("'", '"'):
-                    out.append(placeholder)
-                    i += 1
-                    while i < n and script[i] != d:
-                        step = 2 if script[i] == "\\" and i + 1 < n else 1
-                        out.extend(mask(x) for x in script[i : i + step])
-                        i += step
-                    if i < n:
-                        out.append(placeholder)
+                c = script[i]
+                nxt = script[i + 1] if i + 1 < n else ""
+                if c == "`":
+                    i = _template_end(script, i + 1) + 1
+                elif c in ("'", '"'):
+                    i = _quoted_end(script, i + 1, c) + 1
+                elif c == "/" and nxt == "/":
+                    while i < n and script[i] != "\n":
                         i += 1
-                    continue
-                if d == "{":
-                    depth += 1
-                elif d == "}":
-                    depth -= 1
-                out.append(mask(d))
-                i += 1
-        else:
-            out.append(mask(c))
-            i += 1
-    if i < n:
-        out.append("`")
+                elif c == "/" and nxt == "*":
+                    j = script.find("*/", i + 2)
+                    i = n if j < 0 else j + 2
+                else:
+                    depth += {"{": 1, "}": -1}.get(c, 0)
+                    i += 1
+            continue
         i += 1
-    return i
+    return n
 
 
 def scrub(script: str) -> str:
@@ -172,7 +165,12 @@ def scrub(script: str) -> str:
             continue
 
         if ch == "`":
-            i = _scrub_template(script, i, out, placeholder)
+            end = _template_end(script, i + 1)
+            out.append("`")
+            out.extend("\n" if c == "\n" else placeholder for c in script[i + 1 : end])
+            if end < n:
+                out.append("`")
+            i = end + 1
             continue
 
         if ch in ("'", '"'):
@@ -571,13 +569,20 @@ def _find_matching_paren(scrubbed: str, open_paren_idx: int) -> int:
 
 
 def _has_top_level_option_key(args: str, key: str) -> bool:
-    """True only when `key:` sits in an object literal passed directly to the
-    call whose `(` opens `args` — paren depth 1, brace depth 1, bracket depth 0.
+    """True only when `key:` sits in the call's options object literal — brace
+    depth 1, bracket depth 0 — passed directly (paren depth 1) or, after the
+    prompt argument, through a pass-through wrapper call such as
+    `withRole(type, { model })` (deeper paren, still the only brace). A wrapper
+    in the prompt position never counts. A key in a nested object (`schema: {...}`)
+    or a function body sits at brace depth >= 2 and never counts.
     `args` must be scrubbed text."""
     pattern = re.compile(r"\b" + re.escape(key) + r"\s*:")
     paren = brace = bracket = 0
+    past_prompt = False
     for i, ch in enumerate(args):
-        if ch == "(":
+        if ch == "," and paren == 1 and brace == 0 and bracket == 0:
+            past_prompt = True
+        elif ch == "(":
             paren += 1
         elif ch == ")":
             paren -= 1
@@ -589,7 +594,11 @@ def _has_top_level_option_key(args: str, key: str) -> bool:
             bracket += 1
         elif ch == "]":
             bracket -= 1
-        elif paren == 1 and brace == 1 and bracket == 0:
+        elif (
+            (paren == 1 or (paren > 1 and past_prompt))
+            and brace == 1
+            and bracket == 0
+        ):
             # A top-level spread (`...withRole('x', { model: 'opus' })`) may
             # supply the key; the scanner cannot evaluate it, so it is
             # treated as supplying it. Trade-off: a spread that omits the

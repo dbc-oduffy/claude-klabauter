@@ -77,7 +77,6 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "workday-complete-args-and-validate",
         "workday-complete-reconcile",
         "workday-complete-step2_5-dirty-tree",
-        "reap-orphaned-in-flight-handoffs",
         "reap-claims-for-repos",
         "handoff-housekeeping",
         "workday-complete-step3-consolidate",

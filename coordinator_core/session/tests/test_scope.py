@@ -37,6 +37,7 @@ Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c0929
 
 from __future__ import annotations
 
+from coordinator_core.tests.git_seed import seeded_repo
 import json
 import os
 import re
@@ -101,20 +102,7 @@ def _agent_claim(agent_dir, *paths, owner_sid=None):
 
 
 def _make_repo(tmp_path):
-    # check=True on every fixture-setup git call: a
-    # silent fixture-setup failure (e.g. a misconfigured test-runner git)
-    # must not masquerade as a passing test exercising an empty/unstaged
-    # repo; fail loud at setup instead.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
-        **no_console_passthrough_kwargs(),
-    )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    return tmp_path
+    return seeded_repo(tmp_path, readme="x")
 
 
 def _sdir(repo, sid):

@@ -123,13 +123,15 @@ def test_dispatch_denies_unstamped_engine_falls_through_to_live_tree(tmp_path, _
     )
 
     shim = _load_shim()
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
 
     assert resolution_class == shim.RESOLUTION_LIVE_WORKING_TREE
     assert root == live_root.as_posix()
 
 
-def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _registry):
+def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _registry, monkeypatch):
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
 
@@ -139,11 +141,13 @@ def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _re
     )
 
     shim = _load_shim()
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     with pytest.raises(shim.ClaudeKlabauterResolutionError):
         shim.resolve_claude_klabauter_root_with_class()
 
 
-def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry):
+def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry, monkeypatch):
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
     _write_stamp(published_root)
@@ -154,13 +158,15 @@ def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry):
     )
 
     shim = _load_shim()
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
 
     assert resolution_class == shim.RESOLUTION_RESOLVED_ENGINE
     assert root == published_root.as_posix()
 
 
-def test_resolve_claude_klabauter_bin_dir_locator_axis_unaffected_by_stamp(tmp_path, _registry):
+def test_resolve_claude_klabauter_bin_dir_locator_axis_unaffected_by_stamp(tmp_path, _registry, monkeypatch):
     live_root = tmp_path / "live"
     live_root.mkdir()
     (_registry.ml_dir / "registry.local.toml").write_text(
@@ -169,6 +175,8 @@ def test_resolve_claude_klabauter_bin_dir_locator_axis_unaffected_by_stamp(tmp_p
     )
 
     shim = _load_shim()
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
     with pytest.raises(shim.ClaudeKlabauterResolutionError) as excinfo:
         shim.resolve_claude_klabauter_bin_dir()
 

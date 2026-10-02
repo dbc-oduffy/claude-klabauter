@@ -16,7 +16,7 @@ was not itself ported here — its read/write/probe logic is reproduced standalo
 so this module has no bash dependency).
 
 Spec backlink: docs/plans/2026-05-29-it-just-works-agentic-install-currency.md § Chunk 1.
-Doctrine: docs/wiki/doctor-probe-design.md § inconclusive Is a First-Class Probe Status.
+Doctrine: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/doctor-probe-design.md § inconclusive Is a First-Class Probe Status.
 
 Exit codes:
     0 — probe ran and produced a classification (the overwhelmingly common case;

@@ -23,7 +23,9 @@
   {
     "detail": "bin/claude-klabauter-revendor-schema.py writes tracked path 'coordinator_core/frontmatter/tests/test_schema_validate.py' but declares no GENERATES",
     "generator": "bin/claude-klabauter-revendor-schema.py",
-    "mutates": [],
+    "mutates": [
+      "coordinator_core/frontmatter/tests/test_schema_validate.py"
+    ],
     "pairs": [],
     "verdict": "UNDECLARED"
   },
@@ -656,11 +658,13 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/bash_guards/chain_arrival_ledger.py MUTATES pattern(s) match no currently-tracked path: ['state/chain-arrival-ledger/**/chain-arrival-ledger.jsonl*']",
+    "detail": "coordinator_core/bash_guards/chain_arrival_ledger.py declares runtime-ledger: MUTATES ['state/chain-arrival-ledger/**/chain-arrival-ledger.jsonl*'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/bash_guards/chain_arrival_ledger.py",
-    "mutates": [],
+    "mutates": [
+      "state/chain-arrival-ledger/**/chain-arrival-ledger.jsonl*"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/bash_guards/commit_tripwires.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -788,7 +792,16 @@
     "generator": "coordinator_core/engine_provenance_counter.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/engine_provenance_counter.py declares runtime-ledger: MUTATES ['state/engine-provenance-counts.jsonl'] matches no tracked path (no staleness contract)",
+    "generator": "coordinator_core/engine_provenance_counter.py",
+    "mutates": [
+      "state/engine-provenance-counts.jsonl"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/engine_root_census.py writes through an unresolved path expression and declares no GENERATES",
@@ -869,7 +882,16 @@
     "generator": "coordinator_core/group_em/baseline.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/group_em/baseline.py declares runtime-ledger: MUTATES ['.coordinator-local/subagent-share/**/*.json'] matches no tracked path (no staleness contract)",
+    "generator": "coordinator_core/group_em/baseline.py",
+    "mutates": [
+      ".coordinator-local/subagent-share/**/*.json"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/group_em/nomination.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -879,18 +901,22 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/group_em/obligations.py MUTATES pattern(s) match no currently-tracked path: ['.coordinator-local/subagent-share/**/*.jsonl']",
+    "detail": "coordinator_core/group_em/obligations.py declares runtime-ledger: MUTATES ['.coordinator-local/subagent-share/**/*.jsonl'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/group_em/obligations.py",
-    "mutates": [],
+    "mutates": [
+      ".coordinator-local/subagent-share/**/*.jsonl"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/group_em/send_pass.py MUTATES pattern(s) match no currently-tracked path: ['.coordinator-local/subagent-share/**/*.jsonl']",
+    "detail": "coordinator_core/group_em/send_pass.py declares runtime-ledger: MUTATES ['.coordinator-local/subagent-share/**/*.jsonl'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/group_em/send_pass.py",
-    "mutates": [],
+    "mutates": [
+      ".coordinator-local/subagent-share/**/*.jsonl"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/group_em/watch_heartbeat.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -907,11 +933,13 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/guard_advisory_counter.py MUTATES pattern(s) match no currently-tracked path: ['.coordinator-local/subagent-share/**/*.jsonl']",
+    "detail": "coordinator_core/guard_advisory_counter.py declares runtime-ledger: MUTATES ['.coordinator-local/subagent-share/**/*.jsonl'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/guard_advisory_counter.py",
-    "mutates": [],
+    "mutates": [
+      ".coordinator-local/subagent-share/**/*.jsonl"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/hooks/agent_completion_log.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1131,11 +1159,13 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/hooks/watchdog_undischarged_next_move.py MUTATES pattern(s) match no currently-tracked path: ['.coordinator-local/subagent-share/**/*.jsonl']",
+    "detail": "coordinator_core/hooks/watchdog_undischarged_next_move.py declares runtime-ledger: MUTATES ['.coordinator-local/subagent-share/**/*.jsonl'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/hooks/watchdog_undischarged_next_move.py",
-    "mutates": [],
+    "mutates": [
+      ".coordinator-local/subagent-share/**/*.jsonl"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/housekeeping/archive_index.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1177,7 +1207,7 @@
     "generator": "coordinator_core/install/forwarder_door_census.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": null
   },
   {
     "detail": "coordinator_core/install/forwarder_self_heal.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1337,11 +1367,13 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/ops/ceremony/receipt_emit.py MUTATES pattern(s) match no currently-tracked path: ['state/ceremony/**/*.json']",
+    "detail": "coordinator_core/ops/ceremony/receipt_emit.py declares runtime-ledger: MUTATES ['state/ceremony/**/*.json'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/ops/ceremony/receipt_emit.py",
-    "mutates": [],
+    "mutates": [
+      "state/ceremony/**/*.json"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/ops/ceremony/renderers.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1460,7 +1492,34 @@
     "generator": "coordinator_core/ops/distill_apply_disposal.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/terminal_commit.py writes through an unresolved path expression and declares no GENERATES",
+    "generator": "coordinator_core/ops/dispatch_emit/terminal_commit.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": "WRITE_TARGET_UNRESOLVED"
+  },
+  {
+    "detail": "coordinator_core/ops/distill_apply_disposal.py declares MUTATES = ['state/handoffs/**/*.md', 'docs/wiki/**/*.md']; MUTATES_APPEND = ['state/distillation-log.md'] (append-only ledger or surgical edit) (no staleness contract)",
+    "generator": "coordinator_core/ops/distill_apply_disposal.py",
+    "mutates": [
+      "state/distillation-log.md",
+      "state/handoffs/**/*.md",
+      "docs/wiki/**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/docindex_emit.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/docindex_emit.py",
+    "mutates": [
+      "**/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/ops/docindex_emit.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
@@ -1514,27 +1573,10 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/extract_cited_sidecars.py declares 2 pair(s)",
+    "detail": "coordinator_core/ops/extract_cited_sidecars.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['state/audits/2026-09-02-*.md'] exempts ['state/audits/2026-09-02-cited-subagent-share-sidecars.md', 'state/audits/2026-09-02-cited-commit-shas.md'] from staleness comparison",
     "generator": "coordinator_core/ops/extract_cited_sidecars.py",
     "mutates": [],
-    "pairs": [
-      {
-        "artifact": "state/audits/2026-09-02-cited-subagent-share-sidecars.md",
-        "generator": "coordinator_core/ops/extract_cited_sidecars.py",
-        "sources": [
-          "coordinator_core/ops/extract_cited_sidecars.py"
-        ],
-        "stamp_key": "generated_at"
-      },
-      {
-        "artifact": "state/audits/2026-09-02-cited-commit-shas.md",
-        "generator": "coordinator_core/ops/extract_cited_sidecars.py",
-        "sources": [
-          "coordinator_core/ops/extract_cited_sidecars.py"
-        ],
-        "stamp_key": "generated_at"
-      }
-    ],
+    "pairs": [],
     "verdict": null
   },
   {
@@ -1585,11 +1627,16 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/ops/fleet/memo_send.py MUTATES pattern '.coordinator-local/memo-outbox/sent-ledger.jsonl' names a concrete path; a fixed artifact declares GENERATES",
+    "detail": "coordinator_core/ops/fleet/memo_send.py declares MUTATES = ['state/memo-outbox/*.md', 'cross-repo/inbox/*.md', 'state/cross-repo/inbox/*.md']; MUTATES_APPEND = ['.coordinator-local/memo-outbox/sent-ledger.jsonl'] (append-only ledger or surgical edit) (no staleness contract)",
     "generator": "coordinator_core/ops/fleet/memo_send.py",
-    "mutates": [],
+    "mutates": [
+      ".coordinator-local/memo-outbox/sent-ledger.jsonl",
+      "state/memo-outbox/*.md",
+      "cross-repo/inbox/*.md",
+      "state/cross-repo/inbox/*.md"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/ops/fleet/migrate_handoff_vocabulary.py declares MUTATES = ['state/handoffs/**/*.md', 'archive/handoffs/**/*.md'] (corpus mutator, no staleness contract)",
@@ -2070,11 +2117,26 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py MUTATES pattern '.gitignore' names a concrete path; a fixed artifact declares GENERATES",
+    "detail": "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py declares MUTATES = ['cross-repo/inbox/**', 'cross-repo/archive/**', 'state/review-trail/**', 'state/memos/**', 'state/lessons-outbox/**', 'state/improvement-queue/**', 'state/debt-backlog/**', 'state/bug-backlog/**', 'tasks/learn-lessons-**', 'tasks/audits/**', 'tasks/daily-review-scratch/**', 'archive/**', 'docs/plans/*-check.md']; MUTATES_APPEND = ['.gitignore'] (append-only ledger or surgical edit) (no staleness contract)",
     "generator": "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py",
-    "mutates": [],
+    "mutates": [
+      ".gitignore",
+      "cross-repo/inbox/**",
+      "cross-repo/archive/**",
+      "state/review-trail/**",
+      "state/memos/**",
+      "state/lessons-outbox/**",
+      "state/improvement-queue/**",
+      "state/debt-backlog/**",
+      "state/bug-backlog/**",
+      "tasks/learn-lessons-**",
+      "tasks/audits/**",
+      "tasks/daily-review-scratch/**",
+      "archive/**",
+      "docs/plans/*-check.md"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/ops/workflow_fire/fire.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -2444,11 +2506,13 @@
     "verdict": "WRITE_TARGET_UNRESOLVED"
   },
   {
-    "detail": "coordinator_core/workstream_complete/directives_review.py MUTATES pattern(s) match no currently-tracked path: ['state/ceremony/wsc-gate-verdict-memo/*.json']",
+    "detail": "coordinator_core/workstream_complete/directives_review.py declares runtime-ledger: MUTATES ['state/ceremony/wsc-gate-verdict-memo/*.json'] matches no tracked path (no staleness contract)",
     "generator": "coordinator_core/workstream_complete/directives_review.py",
-    "mutates": [],
+    "mutates": [
+      "state/ceremony/wsc-gate-verdict-memo/*.json"
+    ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/write_guards/block_confined_agent_write.py declares GENERATES = [] (declared-empty, no artifacts)",

@@ -2684,11 +2684,21 @@ async def dispatch_message(
             new_correlation_id,
             record_op_started,
         )
-        from coordinator_core.session.core import resolve_session_id
+        from coordinator_core.session.core import (
+            carried_session_id,
+            in_warm_served_request,
+            resolve_session_id,
+        )
 
         if corr_id is None:
             corr_id = new_correlation_id()
         sid = resolve_session_id() or None
+        if carried_session_id():
+            sid_source = "carried"
+        elif in_warm_served_request():
+            sid_source = "spawner-env"
+        else:
+            sid_source = "env"
         record_op_started(
             op=method if isinstance(method, str) else "<unknown>",
             t_start=t_start,
@@ -2696,6 +2706,7 @@ async def dispatch_message(
             repo_root=telemetry_repo_root,
             sid=sid,
             caller=caller,
+            sid_source=sid_source,
         )
     except Exception:
         _log().debug(

@@ -55,7 +55,7 @@ def test_all_missing_fields_yield_one_refusal_list():
     joined = " | ".join(out)
     assert "statement" in joined and "accepted" in joined and "interaction_mode" in joined
     assert len(out) == 3
-    assert 'coordinator-invoke sizing.accept_exit_criterion \'{"sizing": "state/sizings/a.yaml"' in joined
+    assert "sizing-accept-exit-criterion --sizing state/sizings/a.yaml" in joined  # C2/C9: launcher hint
 
 
 def test_xs_without_writes_refuses():

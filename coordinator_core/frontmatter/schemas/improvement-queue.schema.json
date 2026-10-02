@@ -4,7 +4,7 @@
   "x-schema-name": "improvement-queue",
   "x-schema-version": "1.4.0",
   "x-bump-class": "major",
-  "x-bump-note": "1.3.0 -> 1.4.0 adds the status:deferred conditional the four grant fields existed for but nothing tied together, plus case_against where it was missing. Requested by claude-klabauter-em, who cannot author it in their vendored copy: a shape change under an unmoved x-schema-version is red on their parity test, check_schema_drift byte-compares against a pinned DoE ref, and the consumer-ahead gate blocks a local bump. Presence-only by contract -- truthiness and refusal are theirs. Zero records in either tree carry status: deferred today (727 measured across the three DoE queues), so nothing existing is invalidated. ON THE CLASS, corrected after review: this is recorded `major`, not `nested-field-additive` as first committed at 17e73ce67. The additive test is 'every document valid under the prior version still validates', and this bump FAILS it -- a row carrying `status: deferred` and none of the grant fields validated at the prior version and does not validate here. That is the whole point of the branch. The vocabulary in docs/wiki/schema-version-gate.md offers no `narrowing` term (`major`, `nested-field-additive`, `enum-value-additive`, `top-level-array-additive`), so this follows peer-set-entry.schema.json's precedent for a change none of the four describes: take the nearest fit on the SAFE side, since over-stating the duty makes a vendoring sibling wait longer than needed while under-stating it lets them skip a hold they owed. NO document is actually invalidated -- 727 records measured across the three DoE queues and claude-klabauter's own count, zero carrying `status: deferred` in either tree -- so the narrowing is real in the schema and empty in the corpus. `major`'s hold duty is DISCHARGED rather than skipped: claude-klabauter-em asked for this exact shape, has accepted the re-vendor leg via bin/claude-klabauter-revendor-schema.py, and is the only sibling vendoring it. Bilateral sequencing is what the hold exists to arrange, and it was arranged before the bump.",
+  "x-bump-note": "1.3.0 -> 1.4.0 adds the status:deferred conditional the four grant fields existed for but nothing tied together, plus case_against where it was missing. Requested by the engine repo's EM, who cannot author it in their vendored copy: a shape change under an unmoved x-schema-version is red on their parity test, check_schema_drift byte-compares against a pinned DoE ref, and the consumer-ahead gate blocks a local bump. Presence-only by contract -- truthiness and refusal are theirs. Zero records in either tree carry status: deferred today (727 measured across the three DoE queues), so nothing existing is invalidated. ON THE CLASS, corrected after review: this is recorded `major`, not `nested-field-additive` as first committed at 17e73ce67. The additive test is 'every document valid under the prior version still validates', and this bump FAILS it -- a row carrying `status: deferred` and none of the grant fields validated at the prior version and does not validate here. That is the whole point of the branch. The vocabulary in docs/wiki/schema-and-validation-contracts/schema-version-gate.md offers no `narrowing` term (`major`, `nested-field-additive`, `enum-value-additive`, `top-level-array-additive`), so this follows peer-set-entry.schema.json's precedent for a change none of the four describes: take the nearest fit on the SAFE side, since over-stating the duty makes a vendoring sibling wait longer than needed while under-stating it lets them skip a hold they owed. NO document is actually invalidated -- 727 records measured across the three DoE queues and the engine repo's own count, zero carrying `status: deferred` in either tree -- so the narrowing is real in the schema and empty in the corpus. `major`'s hold duty is DISCHARGED rather than skipped: the engine repo's EM asked for this exact shape, has accepted the re-vendor leg via bin/engine-revendor-schema.py, and is the only sibling vendoring it. Bilateral sequencing is what the hold exists to arrange, and it was arranged before the bump.",
   "applies_to": "state/improvement-queue/*.yaml",
   "match_mode": "whole-document-yaml",
   "description": "Improvement-queue record — a captured universal or project-scoped improvement pattern awaiting triage. Unknown fields are tolerated (not rejected): this preserves forward-compatibility as new optional fields are added without invalidating existing records. Decision: keep open; tighten only if strict-mode corpus conformance enforcement is required at a future governance stage.",
@@ -70,7 +70,7 @@
         "config-edit",
         "verification"
       ],
-      "description": "Category of change the proposed_action implies — routes triage to the appropriate handling. SSOT for the enum: docs/wiki/lessons-outbox-schema.md § Change-kind enum. 'verification' is the one member whose deliverable is evidence rather than a diff (a hardware- or environment-gated re-run); a defect it finds gets its own entry with a change-shaped kind."
+      "description": "Category of change the proposed_action implies — routes triage to the appropriate handling. SSOT for the enum: docs/wiki/schema-and-validation-contracts/lessons-outbox-schema.md § Change-kind enum. 'verification' is the one member whose deliverable is evidence rather than a diff (a hardware- or environment-gated re-run); a defect it finds gets its own entry with a change-shaped kind."
     },
     "closed_at": {
       "type": "string",
@@ -79,7 +79,7 @@
     },
     "closed_by": {
       "type": "string",
-      "description": "Session or agent identifier that closed this entry."
+      "description": "The settling commit sha for a fix/refute-close, or free text naming the closing session/agent for a hand-authored close. Already-archived rows carry both shapes; this is not restricted to a session or agent identifier. A session is cited as `<8-hex session-id prefix> (<display-name>)` (A-PEER-NAME-IS-NOT-A-STABLE-ADDRESS)."
     },
     "tags": {
       "type": "array",
@@ -94,7 +94,7 @@
     },
     "case_against": {
       "type": "string",
-      "description": "OPTIONAL. The argument that lost — carried through from a plan deferral this entry was harvested from, so a triager sees both the case for doing the work (proposed_action/body) and the case against it. Populated by the claude-klabauter-side harvest carry-through as of claude-klabauter 697b7d451, and it MUST stay optional even so: the carry-through OMITS the field entirely when the source row has none rather than writing an empty string, because an omitted optional field says nothing was carried while an empty string asserts there was no argument. Pre-1.6.0 plan rows are the common case there. A required field here would reject exactly those legitimately-omitting entries. This top-level optionality coexists with the deferred-grant branch below, which requires the field only when status is deferred."
+      "description": "OPTIONAL. The argument that lost — carried through from a plan deferral this entry was harvested from, so a triager sees both the case for doing the work (proposed_action/body) and the case against it. Populated by the engine-side harvest carry-through as of the engine repo 697b7d451, and it MUST stay optional even so: the carry-through OMITS the field entirely when the source row has none rather than writing an empty string, because an omitted optional field says nothing was carried while an empty string asserts there was no argument. Pre-1.6.0 plan rows are the common case there. A required field here would reject exactly those legitimately-omitting entries. This top-level optionality coexists with the deferred-grant branch below, which requires the field only when status is deferred."
     },
     "queue_scope": {
       "type": "string",
@@ -102,7 +102,7 @@
         "central",
         "project"
       ],
-      "description": "central=universal pattern routed to the central improvement queue (claude-klabauter-resident); project=project-scoped entry local to this repo's state/improvement-queue/."
+      "description": "central=universal pattern routed to the central improvement queue (engine-resident); project=project-scoped entry local to this repo's state/improvement-queue/."
     },
     "initiative": {
       "anyOf": [
@@ -121,18 +121,18 @@
       "properties": {
         "created_by_session": {
           "type": "string",
-          "description": "Session identifier that authored this entry."
+          "description": "Session identifier that authored this entry. Full session id ($CLAUDE_CODE_SESSION_ID), never a display name (A-PEER-NAME-IS-NOT-A-STABLE-ADDRESS)."
         },
         "created_by_agent": {
           "type": "string",
-          "description": "Agent type/persona that authored this entry."
+          "description": "Agent type/persona that authored this entry; never a session display name (A-PEER-NAME-IS-NOT-A-STABLE-ADDRESS)."
         },
         "linked_sessions": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Session identifiers linked to this entry's history."
+          "description": "Session identifiers linked to this entry's history. Each is a full session id ($CLAUDE_CODE_SESSION_ID), never a display name (A-PEER-NAME-IS-NOT-A-STABLE-ADDRESS)."
         },
         "linked_commits": {
           "type": "array",
@@ -170,7 +170,7 @@
   },
   "allOf": [
     {
-      "$comment": "Cross-field rule: a deferral is a GRANT, not a state. When `status` is `deferred` the four grant fields plus `case_against` must be PRESENT. Presence, not truthiness -- a row with `pm_approved: false` or a blank `why_blocked` still validates here; this schema does not hard-fail it. The truthiness floor (pm_approved must be literal true, non-blank case_against/why_blocked, parseable deferred_until, non-empty deferred_by) lives in claude-klabauter's schema_validate.py cross-field rule, and refusal lives in their write guard. Reading this branch as the enforcement point is the misread the $comment exists to prevent. Shape copied from plan-tasks.schema.json's own allOf[0], on claude-klabauter-em's ask (cross-repo/inbox/2026-08-28-claude-klabauter-em-queue-deferral-grant-conditional-on-the-three-backlog-schemas.md) -- they cannot author it locally without tripping three vendor-drift gates.",
+      "$comment": "Cross-field rule: a deferral is a GRANT, not a state. When `status` is `deferred` the four grant fields plus `case_against` must be PRESENT. Presence, not truthiness -- a row with `pm_approved: false` or a blank `why_blocked` still validates here; this schema does not hard-fail it. The truthiness floor (pm_approved must be literal true, non-blank case_against/why_blocked, parseable deferred_until, non-empty deferred_by) lives in the engine repo's schema_validate.py cross-field rule, and refusal lives in their write guard. Reading this branch as the enforcement point is the misread the $comment exists to prevent. Shape copied from plan-tasks.schema.json's own allOf[0], on the engine repo's EM's ask (cross-repo/inbox/2026-08-28-the engine repo's EM-queue-deferral-grant-conditional-on-the-three-backlog-schemas.md) -- they cannot author it locally without tripping three vendor-drift gates.",
       "if": {
         "properties": {
           "status": {

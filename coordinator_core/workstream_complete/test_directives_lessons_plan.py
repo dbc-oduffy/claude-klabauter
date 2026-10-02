@@ -519,6 +519,28 @@ def test_build_directives_forwards_repo_root_to_lesson_capture():
     )
 
 
+def test_stale_docs_plans_pointer_resolves_to_the_archived_plan(tmp_path):
+    """A baton stamped `docs/plans/<slug>.md` before an archiver moved the plan
+    resolves to the archived file instead of dangling."""
+    slug = "2026-08-01-some-terminal-plan"
+    archived = tmp_path / "archive" / "specs" / "2026-08"
+    archived.mkdir(parents=True)
+    (archived / f"{slug}.md").write_text("---\n---\n", encoding="utf-8")
+
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{slug}.md"
+    )
+    assert source == "handoff_frontmatter_archived"
+    assert resolved is not None and resolved.rel == f"archive/specs/2026-08/{slug}.md"
+
+
+def test_pointer_missing_everywhere_still_reports_not_found(tmp_path):
+    resolved, source = resolve_governing_plan_with_source(
+        tmp_path, decisions={}, handoff_governing_plan_field="docs/plans/2026-08-01-nowhere.md"
+    )
+    assert (resolved, source) == (None, "handoff_frontmatter_not_found")
+
+
 # ---------------------------------------------------------------------------
 # An archived plan is followed; claim+stamp are not emitted for it.
 # ---------------------------------------------------------------------------

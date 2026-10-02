@@ -39,6 +39,7 @@ import pytest
 # The ops are NOT yet in ops/__init__.py (that lands in C3).
 # ---------------------------------------------------------------------------
 
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.ops.completion_ops import (
     _apply_session_append,
     append_plan_session,
@@ -50,18 +51,13 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 # Oracle / content-root path resolution
 # ---------------------------------------------------------------------------
 
-_CONTENT_ROOT_SENTINEL = Path.home() / ".claude" / ".coordinator-content-root"
 _ORACLE_APPEND_SESSION: Optional[Path] = None
 
-if _CONTENT_ROOT_SENTINEL.exists():
-    try:
-        _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding="utf-8").strip()
-        _ORACLE_APPEND_SESSION = (
-            Path(_content_root) / "coordinator" / "bin" / "append-plan-session.py"
-        )
-    except OSError:
-        print(f"skip: <module>: _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding=\"utf-8\").strip() failed: {sys.exc_info()[1]}", file=sys.stderr)
-        pass
+_content_root = resolve_content_root()
+if _content_root:
+    _ORACLE_APPEND_SESSION = (
+        Path(_content_root) / "coordinator" / "bin" / "append-plan-session.py"
+    )
 
 # ---------------------------------------------------------------------------
 # Availability checks

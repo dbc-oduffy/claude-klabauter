@@ -11,7 +11,7 @@ platform assertions). This file closes the parity gap only — it does not
 attempt to backfill unit coverage of the assembler's own parse/gate logic,
 which is out of scope for this dispatch.
 
-See docs/wiki/cross-platform-invocation-parity.md — the canonical shape is
+See coordinator-content-repo coordinator/docs/wiki/portability/cross-platform-invocation-parity.md — the canonical shape is
 a `#!/usr/bin/env python3`-shebang entrypoint plus a co-located `.cmd`
 sibling, never a bareword-through-a-shell. The repo-wide guards
 (coordinator_core/test_bin_launcher_parity.py,

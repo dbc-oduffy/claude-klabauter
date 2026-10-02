@@ -20,6 +20,21 @@ def _count(value: Any) -> int:
     return len(value) if isinstance(value, (list, tuple, dict)) else 0
 
 
+def superseding_delivery(record: dict, delivery: dict) -> dict:
+    """The delivery block a superseding record is minted against: its own when it carries a
+    verdict, else PASS read off a `met` criterion with an observation (the fresh review's
+    judgment), since a stranded run has no delivery stage to return one. A recorded FAIL stands."""
+    if delivery.get("verdict") is not None:
+        return delivery
+    criterion = record.get("criterion")
+    if not isinstance(criterion, dict) or criterion.get("status") != "met":
+        return delivery
+    observation = criterion.get("observation")
+    if not isinstance(observation, str) or not observation.strip():
+        return delivery
+    return {**delivery, "verdict": "PASS"}
+
+
 def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
     """The first mint refusal message that applies to this record, else `None`."""
     footprint = prep.get("slice_files")

@@ -192,22 +192,14 @@ Negative-spec:
 from __future__ import annotations
 
 import os
-import subprocess
 from typing import Optional, Sequence, Tuple
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
-from coordinator_core.win_portability import no_console_creationflags
-
-#: Bound on the orphan-adoption dirtiness probe (state/bug-backlog/
-#: 2026-08-29-orphan-adoption-admits-a-clean-path.yaml). A single `git
-#: status --porcelain` call over the small, caller-supplied set of
-#: OWNERSHIP_UNCLAIMED candidates -- never a tree enumeration -- so a slow
-#: or wedged git cannot stall the commit hot path past the brightline.
-_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Optional[set]:
@@ -223,17 +215,7 @@ def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Opt
     """
     if not candidates:
         return set()
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain", "--", *candidates],
-            cwd=cwd or os.getcwd(),
-            capture_output=True,
-            text=True,
-            timeout=_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    result = run_git(["status", "--porcelain", "--", *candidates], cwd=cwd or os.getcwd())
     if result.returncode != 0:
         return None
     dirty: set = set()

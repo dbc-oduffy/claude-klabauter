@@ -1756,8 +1756,6 @@ def test_idempotence_table_directive_ids_are_still_emitted_by_their_builders() -
         "directives_review.py": [
             ("d-run-review-brightline-gate", False),
             ("d-freeze-and-dispatch-review-partition-", True),
-            ("d-freeze-and-dispatch-review-partition-integrator", False),
-            ("d-write-review-trail", False),
             # d-run-ubt-pending-check removed with review_trail.scan_unresolved_ubt
             # (DR-374 follow-on deletion): its builder is gone from
             # directives_review.py, so the table must stop naming it.

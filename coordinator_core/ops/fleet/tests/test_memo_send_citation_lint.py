@@ -182,15 +182,36 @@ class TestCitationOwnerDecisionTable:
         assert "claude-klabauter-engine:docs/s.md" in delivered
         assert "citations_unresolved" not in acted
 
-    def test_receiver_only_qualified_as_receiver(self, sender_and_receiver):
+    def test_receiver_only_no_sender_ancestor_qualified_as_sender(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
         _touch(receiver_repo, "docs/r.md")
         acted, delivered = _send_and_read(
             sender_repo, receiver_repo, "owner-receiver", "See docs/r.md here.\n",
         )
-        assert f"{receiver_repo.name.lower()}:docs/r.md" in delivered
-        assert "claude-klabauter-engine:docs/r.md" not in delivered
+        assert "claude-klabauter-engine:docs/r.md" in delivered
+        assert f"{receiver_repo.name.lower()}:docs/r.md" not in delivered
         assert "citations_unresolved" not in acted
+
+    def test_absent_in_sender_present_in_receiver_with_sender_ancestor(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
+        _touch(receiver_repo, "state/queue-grind/bug/runs/r.json")
+        acted, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-absent",
+            "Missing: state/queue-grind/bug/runs/r.json never written.\n",
+        )
+        assert "claude-klabauter-engine:state/queue-grind/bug/runs/r.json" in delivered
+        assert f"{receiver_repo.name.lower()}:state" not in delivered
+        assert "citations_unresolved" not in acted
+
+    def test_explicit_peer_qualifier_untouched(self, sender_and_receiver):
+        sender_repo, receiver_repo = sender_and_receiver
+        _touch(receiver_repo, "docs/q.md")
+        _, delivered = _send_and_read(
+            sender_repo, receiver_repo, "owner-explicit", "See example-retrieval-repo:docs/q.md here.\n",
+        )
+        assert "See example-retrieval-repo:docs/q.md here." in delivered
+        assert "claude-klabauter-engine:" not in delivered
 
     def test_both_left_bare_and_reported(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver

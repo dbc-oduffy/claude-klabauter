@@ -414,6 +414,8 @@ def probe_armed(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             **_NO_CONSOLE,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

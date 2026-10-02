@@ -456,8 +456,8 @@ Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
 BLOCKED verdict this closes): part 6's ``_COMMITTING_OP_NAMES`` shipped
 incomplete -- fourteen more registered, directly-invocable committing ops
 were missing (``commit.exec_bit_change``, ``ceremony.post_commit_tail``,
-five more ``fleet.*``/``handoff.*`` archive/reap/prune ops, and
-``handoff.ship_and_archive``, which reaches a commit only by delegating to
+five more ``fleet.*``/``handoff.*`` archive/reap/prune ops, and one op
+that reached a commit only by delegating to
 ``fleet.archive_shipped_handoffs``'s own handler rather than calling
 ``archive_and_commit`` itself). ``fleet.archive_shipped_handoffs`` alone was
 confirmed to have landed a real commit (``d9282543f``) this session while
@@ -476,11 +476,10 @@ mechanically for the direct-call case on every test run -- a new op whose
 handler calls a sink directly and is not added to this set fails that test.
 STATED LIMIT (do not treat this as full coverage): the check is a
 single-module static source scan, so it does NOT catch an op that reaches a
-commit only by delegating to ANOTHER op module's helper function
-(``handoff.ship_and_archive``'s route through ``archive_shipped_handoffs.
-_handle_act`` is exactly this shape, and was added here by hand, not by the
-test) -- that class of gap still needs a human re-grep like the one that
-found it, same as this file's history has needed three times before.
+commit only by delegating to ANOTHER op module's helper function (e.g. a
+handler that routes through ``archive_shipped_handoffs._handle_act``) -- such
+an op must be added here by hand, and that class of gap needs a human
+re-grep, same as this file's history has needed three times before.
 
 2026-08-03 update, part 9 (C1 of
 ``docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md``
@@ -1789,6 +1788,71 @@ def _has_python_heredoc_or_stdin_git_commit_import(
     )
     for body in bodies:
         if _GIT_COMMIT_IMPORT_RE.search(body):
+            if legs is not None:
+                legs.add(_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT)
+            return True
+    return False
+
+
+#: Bytes read from one interpreter-named script file. A commit import sits in
+#: a script's header; a file past this is read only up to it.
+_SCRIPT_FILE_READ_CAP_BYTES = 256 * 1024
+
+_SHELL_SEGMENT_OPERATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
+
+
+def _python_script_paths(cmd: str, cwd: Optional[str]) -> List[str]:
+    """Absolute paths of script files a Python interpreter in ``cmd`` runs,
+    as ``python3 [flags] <file>`` or ``python3 < <file>``. A preceding
+    ``cd <dir>`` moves the base the file resolves against. ``-c``/``-m``
+    name no file and end the walk for that interpreter.
+    """
+    tokens = _tokenize_full_command(cmd) or []
+    base = cwd or ""
+    out: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "cd" and i + 1 < len(tokens):
+            base = os.path.join(base, tokens[i + 1]) if base else tokens[i + 1]
+            i += 2
+            continue
+        if _normalized_interpreter_head(tok) in _PYTHON_INTERPRETER_HEADS:
+            j = i + 1
+            while j < len(tokens) and tokens[j] not in _SHELL_SEGMENT_OPERATORS:
+                arg = tokens[j]
+                if arg == "<" and j + 1 < len(tokens):
+                    out.append(os.path.join(base, tokens[j + 1]))
+                    break
+                if arg in ("-c", "-m"):
+                    break
+                if not arg.startswith("-"):
+                    out.append(os.path.join(base, arg))
+                    break
+                j += 1
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _has_python_script_file_git_commit_import(
+    cmd: str, cwd: Optional[str], *, legs: Optional[Set[str]] = None
+) -> bool:
+    """Does a script FILE a Python interpreter in ``cmd`` runs import
+    ``coordinator_core.git.commit``. Partial cover by design: a script that
+    reaches the primitive through a second file, or a non-Python launcher,
+    is not seen -- the primitive cannot tell a dispatched caller from the EM,
+    so this argv-named file is the last seam that can. Unreadable files
+    allow (fail-open, as every unevaluable input here does).
+    """
+    for path in _python_script_paths(cmd, cwd):
+        try:
+            with open(path, "rb") as fh:
+                text = fh.read(_SCRIPT_FILE_READ_CAP_BYTES).decode("utf-8", "replace")
+        except OSError:
+            continue
+        if _GIT_COMMIT_IMPORT_RE.search(text):
             if legs is not None:
                 legs.add(_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT)
             return True
@@ -3268,7 +3332,6 @@ _COMMITTING_OP_NAMES = frozenset(
         "fleet.archive_paper_trail",
         "fleet.archive_queue_entry",
         "fleet.prune_closed_bugs",
-        "handoff.ship_and_archive",
         "fleet.archive_terminal_sizings",
         # NOTE: "repo_setup.validate_target_root" was added here in the
         # fourth pass above and then removed (coordinator:code-reviewer,
@@ -5934,33 +5997,66 @@ def _explicit_git_dash_c_value(seg_tokens: "Sequence[str]") -> Optional[str]:
     return _git_commit_chain_scan(tokens)[1]
 
 
-def _explicit_absolute_root_from_cmd(cmd: str) -> Optional[str]:
-    """The explicit ABSOLUTE root a commit command names (``git -C <abs>``,
-    or invoke ``--repo <abs>`` on a committing op), slash-normalized; else
-    ``None``. A relative root cannot be anchored without the cwd that
-    already failed. A JSON ``repo_root`` is not read: commit_v2 treats it
-    as an assertion, never the worktree source.
+def _committing_segment_roots(cmd: str) -> "Optional[List[Tuple[int, Optional[str]]]]":
+    """``(segment_index, root)`` for every committing segment of ``cmd``.
+
+    ``root`` is the explicit ABSOLUTE root that segment names (``git -C <abs>``,
+    or invoke ``--repo <abs>`` on a committing op), slash-normalized, else
+    ``None``. A relative root cannot be anchored without the cwd that already
+    failed. A JSON ``repo_root`` is not read: commit_v2 treats it as an
+    assertion, never the worktree source. ``None`` on an unparseable command.
     """
     tokens = _tokenize_full_command(cmd)
     if tokens is None:
         return None
-    for seg_tokens in _segments_from_tokens(tokens):
+    out: "List[Tuple[int, Optional[str]]]" = []
+    for index, seg_tokens in enumerate(_segments_from_tokens(tokens)):
         if not seg_tokens:
             continue
+        committing = False
+        root: Optional[str] = None
         for op_idx, seq in _invoke_op_token_indices(seg_tokens):
             if seq[op_idx] not in _COMMITTING_OP_NAMES:
                 continue
+            committing = True
             candidate = _explicit_invoke_repo_flag_value(op_idx, seq)
             if candidate:
                 candidate_posix = candidate.replace("\\", "/")
                 if _pathspec_element_is_absolute(candidate_posix):
-                    return candidate_posix
-        candidate = _explicit_git_dash_c_value(seg_tokens)
-        if candidate:
-            candidate_posix = candidate.replace("\\", "/")
-            if _pathspec_element_is_absolute(candidate_posix):
-                return candidate_posix
-    return None
+                    root = candidate_posix
+                    break
+        if root is None:
+            is_commit, candidate = _git_commit_chain_scan(
+                _peeled_effective_tokens(seg_tokens) or ()
+            )
+            committing = committing or is_commit
+            if candidate:
+                candidate_posix = candidate.replace("\\", "/")
+                if _pathspec_element_is_absolute(candidate_posix):
+                    root = candidate_posix
+        if committing:
+            out.append((index, root))
+    return out
+
+
+def _explicit_absolute_root_from_cmd(cmd: str) -> Optional[str]:
+    """The one explicit ABSOLUTE root every committing segment of ``cmd`` names.
+
+    ``None`` when no committing segment names one, and also when committing
+    segments disagree -- one naming a different root, or one naming none --
+    so a root validated for one segment never vouches for another.
+    """
+    segments = _committing_segment_roots(cmd)
+    if not segments:
+        return None
+    roots = [root for _index, root in segments]
+    if roots[0] is None:
+        return None
+    anchor = os.path.normcase(os.path.normpath(roots[0]))
+    for root in roots:
+        if root is None or os.path.normcase(os.path.normpath(root)) != anchor:
+            return None
+    return roots[0]
 
 
 def _git_commit_agent_may_commit(
@@ -6313,7 +6409,7 @@ _PYTHON_C_OPAQUE_SINK_DENY_REASON = (
 #: The deny message for `_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT` (part 22)
 #: -- stays inside `_message_size.MESSAGE_PROSE_CAP_BYTES`.
 _PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON = (
-    "BLOCKED: a stdin- or heredoc-fed Python interpreter body imports "
+    "BLOCKED: a Python body (heredoc, stdin, or script file) imports "
     "`coordinator_core.git.commit` -- that reaches the commit primitive the "
     "same as a `-c` payload naming it would. Finish your edits and report "
     "to the EM instead; the EM runs `git commit`."
@@ -6402,10 +6498,10 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "each file relative to the repo root; path scope was never checked."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
-        "BLOCKED: git-commit-agent resolved no repo root from this call's "
-        "cwd, so no pathspec can be checked. Pathspec never read -- do not "
-        "re-check or re-issue. Report upward: this session is anchored "
-        "outside its repos."
+        "BLOCKED: git-commit-agent: no repo root at this cwd; pathspec "
+        "never read -- do not re-check. The cwd is the dispatching "
+        "session's, shared by all its agents. Fix: EM `cd`s into "
+        "the repo, or commit via `git -C <abs-root>`."
     ),
 }
 
@@ -6436,7 +6532,44 @@ _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON = (
 )
 
 
+#: `'<path>' (<classification>)` -- the shape `assert_paths_in_session_scope`
+#: writes after its `scope: ` marker. The classification is the cause and is
+#: short; the path is what grows, so the path is what gets elided.
+_OWNERSHIP_FRAGMENT_RE = re.compile(r"^(?P<path>'.*'|\".*\")\s+\((?P<cls>.*)\)$", re.DOTALL)
+
+#: Remedy tail and detail clauses the classification carries for a reader of
+#: the FULL reason; the capped reader needs only the discriminating head.
+_OWNERSHIP_CLASSIFICATION_TAIL_RE = re.compile(r" — run: |; ")
+
+#: Floor on the path's share of the budget, so an elided path stays
+#: recognisable (`head...tail`) even when the cause is long.
+_OWNERSHIP_PATH_MIN_BYTES = 24
+
+
+def _clip_bytes(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore") + "..."
+
+
+def _elide_middle(text: str, max_bytes: int) -> str:
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    keep = max(max_bytes - 3, 2)
+    head_n = min(keep // 3, 8)
+    tail_n = keep - head_n
+    return text[:head_n] + "..." + text[len(text) - tail_n:]
+
+
 def _ownership_leg_summary(reason: str, *, max_bytes: int = _OWNERSHIP_LEG_SUMMARY_MAX_BYTES) -> str:
+    """First denied path plus its cause, within ``max_bytes``.
+
+    Invariant: the parenthesised cause is never what gets cut -- the path's
+    middle is elided first. Three causes (orphan, out-of-scope, peer claim)
+    carry three different remedies, and a reader who cannot see which one
+    fired cannot act.
+    """
     if not reason:
         return ""
     head = reason.split(_OWNERSHIP_LEG_REASON_ENUMERATION_MARKER, 1)[0]
@@ -6447,10 +6580,15 @@ def _ownership_leg_summary(reason: str, *, max_bytes: int = _OWNERSHIP_LEG_SUMMA
         else head
     )
     fragment = fragment.strip()
-    encoded = fragment.encode("utf-8")
-    if len(encoded) > max_bytes:
-        fragment = encoded[:max_bytes].decode("utf-8", errors="ignore") + "..."
-    return fragment
+    if len(fragment.encode("utf-8")) <= max_bytes:
+        return fragment
+    match = _OWNERSHIP_FRAGMENT_RE.match(fragment)
+    if not match:
+        return _clip_bytes(fragment, max_bytes)
+    cause = _OWNERSHIP_CLASSIFICATION_TAIL_RE.split(match.group("cls"), 1)[0].strip()
+    cause = _clip_bytes(cause, max(max_bytes - _OWNERSHIP_PATH_MIN_BYTES - 3, 8))
+    path_budget = max(max_bytes - len(cause.encode("utf-8")) - 3, _OWNERSHIP_PATH_MIN_BYTES)
+    return "%s (%s)" % (_elide_middle(match.group("path"), path_budget), cause)
 
 
 def _deny_reason(
@@ -6625,6 +6763,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     heredoc_stdin_import_hit = _has_python_heredoc_or_stdin_git_commit_import(
         cmd, legs=payload_legs
     )
+    if not heredoc_stdin_import_hit and "python" in cmd_for_scan.lower():
+        heredoc_stdin_import_hit = _has_python_script_file_git_commit_import(
+            cmd_for_scan, payload.get("cwd"), legs=payload_legs
+        )
 
     if not _prefilter_mentions_commit(cmd_for_scan) and not heredoc_stdin_import_hit:
         return None

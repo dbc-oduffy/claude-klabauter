@@ -52,7 +52,7 @@ pytestmark = [
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-safe-env-suppressed
 
 
 def _venv_python(venv_dir: Path) -> Path:

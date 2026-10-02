@@ -329,6 +329,9 @@ def find_dead_bin_references(
         if _is_excluded_source_path(path):
             continue
         source = path.read_text(encoding="utf-8")
+        # A candidate's root is a Name spelled as one of the convention names.
+        if not any(name in source for name in _REPO_ROOT_CONVENTION_NAMES):
+            continue
         try:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError:

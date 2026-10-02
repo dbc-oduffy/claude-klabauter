@@ -119,6 +119,15 @@ class _ThrowawayP4d:
         against this box's p4d build."""
         monkeypatch.setenv("P4TICKETS", str(tickets_path))
         proc = subprocess.run(
+            ["p4", "-p", self.p4port, "-u", user, "user", "-f", "-i"],
+            input=f"User: {user}\nEmail: {user}@example.invalid\nFullName: {user}\n",
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **_NO_WINDOW,
+        )
+        assert proc.returncode == 0, proc.stderr
+        proc = subprocess.run(
             ["p4", "-p", self.p4port, "-u", user, "passwd"],
             input=f"{password}\n{password}\n",
             capture_output=True,
@@ -454,6 +463,77 @@ class TestClosedCLReMintsRatherThanFailing:
         changes_after = _shelved_changes(p4d, user, client)
         assert len(changes_after) == 1, changes_after
         assert changes_after[0]["change"] != session_cl
+
+
+def _setup_pushable_workspace(monkeypatch, tmp_path, p4d, client, repo_key):
+    user = "bob"
+    client_root = tmp_path / "workspace"
+    _init_client_and_seed(p4d, client_root, client, user)
+    _init_git_repo(client_root)
+    _add_bare_remote(client_root, tmp_path)
+    _write_local_md_p4(client_root, repo_key)
+    _register_identity(monkeypatch, tmp_path, repo_key, p4d, client, user, client_root, client_root)
+    sid = str(uuid.uuid4())
+    _prime_session_cl(client_root, sid)
+    return user, client_root, sid
+
+
+class TestOrphanedOpenIsAdoptedIntoTheSessionCL:
+    def test_file_opened_in_the_default_cl_is_shelved_with_the_session_cl(
+        self, monkeypatch, tmp_path, p4d
+    ):
+        client = "e2e-orphan-client"
+        user, client_root, sid = _setup_pushable_workspace(
+            monkeypatch, tmp_path, p4d, client, "p4-studio/e2e-orphan"
+        )
+
+        _p4(p4d, user, client, ["edit", "a.txt"], cwd=client_root).check_returncode()
+        opened = _p4(p4d, user, client, ["-ztag", "opened", "a.txt"], cwd=client_root).stdout
+        assert "... change default" in opened, opened
+        (client_root / "a.txt").write_text("a-changed\n", encoding="utf-8")
+
+        _, outcome = _commit_and_push(
+            monkeypatch, client_root, sid, paths=["a.txt"], deleted_paths=[], message="edit a"
+        )
+
+        changes = _shelved_changes(p4d, user, client)
+        assert len(changes) == 1, (changes, outcome)
+        assert _shelved_paths(p4d, user, client, changes[0]["change"]) == ["a.txt"]
+
+
+class TestRealFstatOutputKeysToRestoreCandidates:
+    def test_unopened_path_is_a_restore_candidate_and_opened_path_is_not(
+        self, monkeypatch, tmp_path, p4d
+    ):
+        from coordinator_core.p4 import runner
+        from coordinator_core.p4 import shelve as p4_shelve
+
+        client = "e2e-readonly-client"
+        user, client_root, _sid = _setup_pushable_workspace(
+            monkeypatch, tmp_path, p4d, client, "p4-studio/e2e-readonly"
+        )
+        _make_writable(client_root / "a.txt")
+        (client_root / "a.txt").write_text("a-changed\n", encoding="utf-8")
+        _p4(p4d, user, client, ["edit", "b.txt"], cwd=client_root).check_returncode()
+
+        result = runner.run(
+            p4d.p4port,
+            user,
+            client,
+            ["-d", str(client_root), "-ztag", "fstat", "-T", "clientFile,haveRev,change,action",
+             "a.txt", "b.txt"],
+        )
+        assert result.ok, result.error
+        per_path, unreconciled = p4_shelve._key_fstat_records_by_path(
+            p4_shelve._fstat_records(result.stdout), ["a.txt", "b.txt"], str(client_root)
+        )
+
+        assert unreconciled == [], result.stdout
+        assert per_path["a.txt"] is not None, result.stdout
+        assert per_path["a.txt"] is not None and per_path["a.txt"].get("haveRev")
+        assert not per_path["a.txt"].get("action")
+        assert per_path["b.txt"] is not None and per_path["b.txt"].get("action") == "edit"
+        assert per_path["b.txt"].get("change") == "default"
 
 
 class TestRegisterWorkspaceAgainstRealServer:

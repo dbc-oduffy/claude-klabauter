@@ -48,7 +48,7 @@ port):
   `cater_subagent_start._resolve_role_append_snippet_path` already resolve
   their own doctrine-plane artifacts: probe
   `<claude-config-dir>/plugins/coordinator-claude/coordinator/<rel>` and
-  the marketplace-root sibling shape, then fall back to the `.coordinator-content-root`
+  the marketplace-root sibling shape, then fall back to the content-root
   pointer + `coordinator_core.data_root.content_root_for` rung for a
   dev-clone box. Fail-open to `None`/absent on any miss — `_resolve_call_
   site_tier`, `_tier_walked_agent_types`, `_signal_selected_agent_types`
@@ -114,7 +114,7 @@ def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:
     try:
         from coordinator_core._settings_home import claude_config_dir
         from coordinator_core.data_root import content_root_for
-        from coordinator_core.content_root_pointer import read_content_root_pointer
+        from coordinator_core.content_root import read_content_root
     except Exception:
         return None
 
@@ -126,11 +126,11 @@ def _resolve_doctrine_asset(*rel_parts: str) -> Optional[Path]:
             return candidate
 
     try:
-        content_root = read_content_root_pointer()
+        base = read_content_root()
     except Exception:
-        content_root = ""
-    if content_root:
-        content_root = content_root_for(content_root)
+        base = ""
+    if base:
+        content_root = content_root_for(base)
         if content_root is not None:
             candidate = content_root / rel
             if candidate.exists():

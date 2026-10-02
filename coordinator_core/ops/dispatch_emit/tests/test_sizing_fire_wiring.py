@@ -32,9 +32,22 @@ def env(tmp_path, monkeypatch):
     return types.SimpleNamespace(root=tmp_path, calls=calls)
 
 
+_FIREABLE_S = {
+    "schema": "sizing-object",
+    "name": "wiring fixture",
+    "intent": "exercise the wiring",
+    "estimate": {"tshirt": "S", "provisional": True},
+    "route": "spec-dispatch",
+    "status": "sized",
+    "premise": {"provenance": "not-applicable", "evidence": "fixture"},
+    "interaction_mode": "pm",
+    "exit_criterion": {"statement": "done", "accepted": {"pm_quote": "yes", "on": "2026-10-01", "mode": "pm"}},
+}
+
+
 def _sizing_rel(env, name: str = "a.yaml") -> str:
     (env.root / "state" / "sizings" / name).write_text(
-        yaml.safe_dump({"estimate": {"tshirt": "S"}}), encoding="utf-8"
+        yaml.safe_dump(_FIREABLE_S), encoding="utf-8"  # C5: emit runs the gate, so the fixture must be fireable
     )
     return f"state/sizings/{name}"
 

@@ -204,13 +204,14 @@ _SPAWN_COUNT_HIGH_WATER = {
     },
     "memo.send": {
         "green_path": {
-            "ceiling": 1,
+            "ceiling": 0,
             "reason": (
-                "First measured 2026-09-24, docs/plans/2026-09-12-memo-send-"
-                "enrolled-in-the-composition-gate.md C1: an ordinary delivery "
-                "issues one git_native.py::_git._invoke update-index refresh "
-                "(commit.gpgsign is false in the fixture repo, so "
-                "write_signed_commit_object never fires on this path)."
+                "An ordinary delivery spawns nothing: the receiver index "
+                "entry is spliced in process "
+                "(memo_send.py::_record_delivery_in_receiver_index), which "
+                "retired the update-index refresh (commit.gpgsign is false in "
+                "the fixture repo, so write_signed_commit_object never fires "
+                "on this path)."
             ),
         },
         "head_spine_unreadable_refused": {
@@ -224,14 +225,22 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
         "receiver_signing_enabled": {
-            "ceiling": 2,
+            "ceiling": 1,
             "reason": (
-                "First measured 2026-09-24: receiver commit.gpgsign=true (a "
-                "natural fixture precondition) spawns one "
+                "Receiver commit.gpgsign=true (a natural fixture "
+                "precondition) spawns one "
                 "commit_signing.py::write_signed_commit_object (the "
                 "commit-tree -S signing attempt, counted regardless of "
-                "whether a usable key exists) plus the one _git._invoke "
-                "update-index refresh the green path also pays."
+                "whether a usable key exists) and nothing else."
+            ),
+        },
+        "receiver_index_unspliceable": {
+            "ceiling": 1,
+            "reason": (
+                "A v4 receiver index (a natural fixture precondition) is "
+                "refused by index_write.splice_index, so the delivery's index "
+                "entry falls back to one hookless git_native.py::_git._invoke "
+                "update-index."
             ),
         },
     },

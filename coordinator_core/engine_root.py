@@ -119,10 +119,19 @@ def _reset_root_memo() -> None:
     _ROOT_MEMO.clear()
 
 
+#: The checkout root this package was imported from, derived once from this
+#: file's own location (`<root>/coordinator_core/engine_root.py`). Sibling
+#: modules import this instead of climbing `Path(__file__).parents[N]`
+#: themselves: their depth under `coordinator_core/` is free to change, this
+#: file's is not. Unlike `coordinator_engine_root()` it is pure (no env, no
+#: registry, no subprocess) and does not check that the root is a real engine.
+ENGINE_CHECKOUT_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _self_located_root() -> Optional[str]:
     """The checkout this module was imported from, when it is an engine root
     (`coordinator_core/` beside a `pyproject.toml`); None otherwise."""
-    root = Path(__file__).resolve().parent.parent
+    root = ENGINE_CHECKOUT_ROOT
     if (root / "coordinator_core").is_dir() and (root / "pyproject.toml").is_file():
         return str(root)
     return None
@@ -624,7 +633,7 @@ def _maybe_emit_engine_root_retired(site: str, root_value: str = "") -> None:
         from coordinator_core.engine_root_census import record_fallback_read
 
         record_fallback_read(site, root_value=root_value)
-    except Exception:
+    except ImportError:
         pass
 
 

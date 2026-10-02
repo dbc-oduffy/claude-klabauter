@@ -88,6 +88,12 @@ def _render_exit_criterion(mapping: dict) -> str:
     return "".join(f"  {line}\n" for line in dumped.rstrip("\n").split("\n"))
 
 
+_PARAMS_HINT = (
+    "params: sizing (required, path under state/sizings/), pm_quote (required), "
+    "statement, mode, supersede"
+)
+
+
 def _err(msg: str) -> dict:
     msg = msg or "accept_exit_criterion: refused with no detail"
     return {"exit_code": 1, "applied": False, "error": msg, "message": msg}
@@ -136,11 +142,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     supersede: bool = bool(params.get("supersede"))
 
     if not sizing_raw:
-        return _err("missing required param: sizing")
+        return _err(
+            f"missing required param: sizing — {_PARAMS_HINT}"
+        )
     if not pm_quote:
         return _err(
-            "missing required param: pm_quote — this op records the PM's own verbatim "
-            "acceptance of the exit criterion; it never composes or infers one"
+            "missing required param: pm_quote — the PM's verbatim acceptance; this op "
+            f"never composes or infers one; {_PARAMS_HINT}"
         )
     if mode and mode not in INTERACTION_MODES:
         return _err(

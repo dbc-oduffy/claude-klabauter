@@ -250,7 +250,7 @@ class TestReasonClassSpecificMessages:
         reason = _reason(out)
         assert "creates/modifies the PM-approval sentinel" not in reason
         assert "unreadable" in reason
-        assert "might create the PM-approval sentinel" in reason
+        assert "approval-sentinel guard" in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_surfaces_the_shape(self):
@@ -259,19 +259,15 @@ class TestReasonClassSpecificMessages:
         assert "interpreter-invoked script" in reason
         assert "indirection wrapper" in reason
 
-    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self, tmp_path):
+    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self):
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
-        assert "machine-local set coordinator.guard_level warn" in reason
         recommended = next(
-            c for c in _BACKTICK_RE.findall(reason) if c.startswith("python3 path/")
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
         )
-        assert "`./path/to/script` needs an executable file with a shebang" in reason
-        script = tmp_path / "clean.py"
-        script.write_text("print('ok')\n")
-        runnable = recommended.replace("path/to/script.py", script.as_posix())
-        assert guard.check(_payload(runnable)) is None
+        assert "executable, shebang" in reason
+        assert guard.check(_payload(recommended)) is None
 
     def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
         assert guard.check(_payload("./bin/install-git-hooks.sh")) is None

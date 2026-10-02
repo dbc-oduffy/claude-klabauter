@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.fleet import capability_index as cap_index
@@ -422,7 +422,7 @@ def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
     """Resolve a sibling repo root for a skip-when-absent fixture test.
 
     Env override first (pins the checkout for a specific run), then the
-    sanctioned registry resolver (`content_root_pointer.read_content_root_pointer()`
+    sanctioned registry resolver (`content_root.read_content_root()`
     for `content_root`, `machine_resolver.registry_get("repos.<id>")` for
     everything else — see `sibling_fact.py`'s § REPO ROOT RESOLUTION) —
     never a `__file__`-anchored guess at a flat-sibling checkout layout."""
@@ -435,7 +435,7 @@ def _candidate_repo_root(env_var: str, registry_resolver) -> Path | None:
     return None
 
 
-_CONTENT_ROOT = _candidate_repo_root("CONTENT_ROOT_ROOT", read_content_root_pointer)
+_CONTENT_ROOT = _candidate_repo_root("CONTENT_ROOT_ROOT", read_content_root)
 _EXAMPLE_RETRIEVAL_REPO_ROOT = _candidate_repo_root("EXAMPLE_RETRIEVAL_REPO_ROOT", lambda: registry_get("repos.project_rag"))
 
 

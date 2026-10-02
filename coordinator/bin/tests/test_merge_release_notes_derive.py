@@ -359,3 +359,95 @@ class TestTagAncestorCache:
         # v1.0.0 a second time would still pass a `<= 2` bound as long as
         # v2.0.0 stayed untouched.
         assert rev_list_tag_calls == ["v1.0.0"], rev_list_tag_calls
+
+
+class TestMissedReleases:
+    def test_names_an_entry_an_earlier_tag_already_shipped(self, repo: Path, capsys):
+        old_sha = _commit(repo, "a.txt", "a")
+        _tag(repo, "v1.0.0")
+        new_sha = _commit(repo, "b.txt", "b")
+
+        skipped = repo / "skipped.md"
+        skipped.write_text(_entry_text("pending-release", [old_sha]), encoding="utf-8")
+        current = repo / "current.md"
+        current.write_text(_entry_text("pending-release", [new_sha]), encoding="utf-8")
+
+        import os
+
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            rc = _mod.main(["missed-releases", "v2.0.0", str(skipped), str(current)])
+        finally:
+            os.chdir(cwd)
+
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert f"{skipped}: already in v1.0.0" in out
+        assert str(current) not in out
+
+    def test_clean_when_every_pending_entry_is_new(self, repo: Path):
+        _commit(repo, "a.txt", "a")
+        _tag(repo, "v1.0.0")
+        new_sha = _commit(repo, "b.txt", "b")
+        entry = repo / "e.md"
+        entry.write_text(_entry_text("pending-release", [new_sha]), encoding="utf-8")
+
+        import os
+
+        cwd = os.getcwd()
+        os.chdir(repo)
+        try:
+            assert _mod.main(["missed-releases", "v2.0.0", str(entry)]) == 0
+        finally:
+            os.chdir(cwd)
+
+
+# ---------------------------------------------------------------------------
+# --repo-root: operate on the named repo with the process cwd elsewhere
+# ---------------------------------------------------------------------------
+
+
+def test_flip_tags_acts_on_the_named_repo_root_not_the_process_cwd(
+    repo: Path, tmp_path: Path, monkeypatch, capsys
+):
+    old_sha = _commit(repo, "a.txt", "a")
+    _tag(repo, "v1.0.0")
+    entries = repo / "entries"
+    entries.mkdir()
+    (entries / "old.md").write_text(_entry_text("pending-release", [old_sha[:8]]), encoding="utf-8")
+
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    rc = _mod.main(
+        [
+            "flip-tags", "v2.0.0", "deadbeef", "2026-01-01",
+            "entries/old.md", "--repo-root", str(repo),
+        ]
+    )
+
+    assert rc == 0
+    assert "entries/old.md: released_in=v1.0.0" in capsys.readouterr().out
+    assert "status: released" in (entries / "old.md").read_text(encoding="utf-8")
+    assert not (unrelated / "entries").exists()
+    assert _mod._REPO_ROOT.get() is None
+
+
+def test_missed_releases_reads_the_named_repo_root_not_the_process_cwd(
+    repo: Path, tmp_path: Path, monkeypatch, capsys
+):
+    old_sha = _commit(repo, "a.txt", "a")
+    _tag(repo, "v1.0.0")
+    (repo / "skipped.md").write_text(_entry_text("pending-release", [old_sha]), encoding="utf-8")
+
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+
+    rc = _mod.main(["missed-releases", "v2.0.0", "skipped.md", "--repo-root", str(repo)])
+
+    assert rc == 1
+    assert "skipped.md: already in v1.0.0" in capsys.readouterr().out
+    assert _mod._REPO_ROOT.get() is None

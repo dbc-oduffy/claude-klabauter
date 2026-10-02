@@ -32,13 +32,13 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import settings_home_claim
-from coordinator_core.warm.tests.test_door_read_deadline import (
-    _FALLBACK_EXIT,
-    _FALLBACK_MARKER,
-    _ReplyingServer,
-    _door_under_default_name,
-    _make_stub_engine_root,
-    _pipe_name_for,
+from coordinator_core.warm.tests.door_test_support import (
+    FALLBACK_EXIT,
+    FALLBACK_MARKER,
+    ReplyingServer,
+    door_under_default_name,
+    make_stub_engine_root,
+    pipe_name_for,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -68,10 +68,10 @@ def _exchange(root: Path, settings_home: str | None, reply: bytes = _OK_REPLY):
     else:
         env[settings_home_claim.SETTINGS_HOME_ENV] = settings_home
 
-    server = _ReplyingServer(_pipe_name_for(root), reply)
+    server = ReplyingServer(pipe_name_for(root), reply)
     try:
         proc = subprocess.run(
-            [str(_door_under_default_name(root)), "ping"],
+            [str(door_under_default_name(root)), "ping"],
             capture_output=True,
             text=True,
             env=env,
@@ -90,7 +90,7 @@ _SETTINGS_HOME_ENV_KEY = "COORDINATOR_SETTINGS_HOME"
 
 
 def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     named_home = str(tmp_path / "an-overridden-settings-home")
 
     request, _ = _exchange(root, named_home)
@@ -99,7 +99,7 @@ def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, _ = _exchange(root, str(tmp_path / "home"))
 
@@ -107,7 +107,7 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
 
 def test_no_override_stamps_nothing(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
 
@@ -118,7 +118,7 @@ def test_no_override_stamps_nothing(tmp_path: Path) -> None:
 
 
 def test_a_refused_mismatch_runs_the_call_cold(tmp_path: Path) -> None:
-    root = _make_stub_engine_root(tmp_path)
+    root = make_stub_engine_root(tmp_path)
     refusal = (
         '{"jsonrpc":"2.0","id":1,"error":'
         '{"code":-32008,"message":"warm dispatch refused: settings home"}}\n'
@@ -126,6 +126,6 @@ def test_a_refused_mismatch_runs_the_call_cold(tmp_path: Path) -> None:
 
     _, proc = _exchange(root, str(tmp_path / "home"), reply=refusal)
 
-    assert _FALLBACK_MARKER in proc.stdout
-    assert proc.returncode == _FALLBACK_EXIT
+    assert FALLBACK_MARKER in proc.stdout
+    assert proc.returncode == FALLBACK_EXIT
     assert "-32004" not in proc.stdout

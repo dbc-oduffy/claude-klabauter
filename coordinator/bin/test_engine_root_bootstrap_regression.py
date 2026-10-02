@@ -779,7 +779,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "publish.py": frozenset({"env_first"}),
     "queue-triage.py": frozenset({"env_first"}),
     "reap-integrated-review-findings.py": frozenset({"env_first"}),
-    "reap-orphaned-in-flight-handoffs.py": frozenset({"env_first"}),
     "reaper-resting-batons.py": frozenset({"env_first"}),
     "record-platform-outcome.py": frozenset({"env_first"}),
     "recycle-check.py": frozenset({"self_location"}),

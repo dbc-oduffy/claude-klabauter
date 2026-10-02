@@ -166,6 +166,11 @@ _SESSION_STALE_SECONDS: int = 24 * 3600   # 24h inactivity → stale session
 _AGENT_STALE_SECONDS: int = 24 * 3600     # 24h mtime → stale agent dir
 _CADENCE_SECONDS: int = 12 * 3600         # 12h minimum between reap runs
 _AGENT_ARCHIVE_RETENTION_SECONDS: int = 14 * 24 * 3600  # 14d mtime → prune .archive/_agents-*
+# Session archives hold dispatched-agents.txt/meta.json that attribution and
+# LoE rollups read, so they keep a longer window than agent ledgers. EM
+# default, reversible: widen here if a reader needs deeper history.
+_SESSION_ARCHIVE_RETENTION_SECONDS: int = 30 * 24 * 3600
+_SESSION_ARCHIVE_NAME_RE = re.compile(r"^[^_.].*-\d{4}-\d{2}-\d{2}$")
 
 # _CLAIM_SUBDIRS / _sessions_dir: imported above from ops.fleet._common (single
 # shared source of truth with archive_handoffs.py's Check 4 — code-reviewer F1,
@@ -788,6 +793,17 @@ def _reap_stale_agents(
 # Sub-reaper (iv): stale agent-archive prune
 # ---------------------------------------------------------------------------
 
+def _prune_stale_session_archive(sessions_dir: Path) -> Tuple[List[str], List[dict]]:
+    """Sub-reap (v): delete `.archive/<sid>-<YYYY-MM-DD>/` session archives
+    older than `_SESSION_ARCHIVE_RETENTION_SECONDS`. `_agents-*` entries and
+    any name not matching the session-archive shape are never touched."""
+    return _prune_archive_entries(
+        sessions_dir,
+        lambda name: bool(_SESSION_ARCHIVE_NAME_RE.match(name)),
+        _SESSION_ARCHIVE_RETENTION_SECONDS,
+    )
+
+
 def _prune_stale_agent_archive(sessions_dir: Path) -> Tuple[List[str], List[dict]]:
     """Sync: delete .archive/_agents-* entries older than the retention window.
 
@@ -804,6 +820,12 @@ def _prune_stale_agent_archive(sessions_dir: Path) -> Tuple[List[str], List[dict
 
     Returns (pruned, failed).
     """
+    return _prune_archive_entries(
+        sessions_dir, lambda name: name.startswith("_agents-"), _AGENT_ARCHIVE_RETENTION_SECONDS
+    )
+
+
+def _prune_archive_entries(sessions_dir: Path, select, retention_seconds: int) -> Tuple[List[str], List[dict]]:
     pruned: List[str] = []
     failed: List[dict] = []
 
@@ -813,8 +835,10 @@ def _prune_stale_agent_archive(sessions_dir: Path) -> Tuple[List[str], List[dict
 
     now_epoch = _now_utc_epoch()
 
-    for entry in sorted(archive_root.glob("_agents-*")):
+    for entry in sorted(archive_root.iterdir()):
         name = entry.name
+        if not select(name):
+            continue
         try:
             mtime = entry.stat().st_mtime
         except OSError as exc:
@@ -828,7 +852,7 @@ def _prune_stale_agent_archive(sessions_dir: Path) -> Tuple[List[str], List[dict
         if age < 0:
             age = 0.0  # clock-skew clamp (mirrors sub-reaps (i)/(ii))
 
-        if age <= _AGENT_ARCHIVE_RETENTION_SECONDS:
+        if age <= retention_seconds:
             continue  # within retention window — keep
 
         try:
@@ -1207,6 +1231,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     pruned_agent_archive, failed_prune = await asyncio.to_thread(
         _prune_stale_agent_archive, sessions_dir
     )
+    # --- Sub-reap (v): stale session-archive prune (same cadence gate) ---
+    pruned_session_archive, failed_session_prune = await asyncio.to_thread(
+        _prune_stale_session_archive, sessions_dir
+    )
+    pruned_agent_archive = pruned_agent_archive + pruned_session_archive
+    failed_prune = failed_prune + failed_session_prune
 
     # Update .last-reap cadence marker to now (regardless of partial failures).
     # Only reached on a full run (force OR cadence-elapsed) — the gated fast

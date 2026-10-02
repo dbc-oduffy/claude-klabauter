@@ -71,10 +71,10 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C7
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.hooks.phantom_staged_deletion import (
     classify,
     parse_name_status_z,
@@ -84,13 +84,8 @@ from coordinator_core.hooks.phantom_staged_deletion import (
 OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PHANTOM_STAGED_DELETION"
 
 
-def _git(*args: str) -> "subprocess.CompletedProcess[bytes]":
-    return subprocess.run(
-        ["git", "--no-optional-locks", *args],
-        capture_output=True,
-        check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+def _git(*args: str) -> GitResult:
+    return run_git(["--no-optional-locks", *args], binary=True)
 
 
 def main() -> int:
@@ -106,7 +101,7 @@ def main() -> int:
         )
         return 0
 
-    rows = parse_name_status_z(staged.stdout.decode("utf-8", "surrogateescape"))
+    rows = parse_name_status_z(staged.stdout_bytes.decode("utf-8", "surrogateescape"))
     if not any(status == "D" for status, _ in rows):
         return 0
 
@@ -118,7 +113,7 @@ def main() -> int:
         if head.returncode != 0:
             return None
         try:
-            return Path(path).read_bytes() == head.stdout
+            return Path(path).read_bytes() == head.stdout_bytes
         except OSError:
             return None
 

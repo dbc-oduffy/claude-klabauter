@@ -38,6 +38,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session import record_homes
 
 _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
@@ -96,7 +97,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     p = Path(sizing_raw)
     if not p.is_absolute():
         p = worktree / p
-    p = contained_path(p, [worktree / "state" / "sizings"])
+    p = contained_path(p, [Path(record_homes.home_dir(str(worktree), "sizings"))])
     if p is None:
         return _err(f"sizing escapes state/sizings/: {sizing_raw!r}")
     if not p.is_file():

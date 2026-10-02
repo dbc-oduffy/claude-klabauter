@@ -153,7 +153,7 @@ class TestSharedResolver:
 
         def _failing_spawn(args, cwd):
             outcomes.append("failed")
-            return False, None
+            return _git_repo_root._SpawnResult(False, None, "stub failure")
 
         monkeypatch.setattr(_git_repo_root, "_spawn_rev_parse", _failing_spawn)
         assert _git_repo_root.show_prefix(str(scratch_repo)) is None

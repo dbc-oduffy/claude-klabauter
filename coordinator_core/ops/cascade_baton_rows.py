@@ -5,7 +5,7 @@ coordinator_core.ops.cascade_baton_rows — AC6g baton-row depth for
 Purpose: R1a's cascade depth is NOT satisfied by flipping a roadmap-baton
 handoff terminal alone — the baton carries its own `## Tasks` row spine
 (same fenced-YAML shape and parser `execute_plan_assemble/close_out_and_stamp.py`
-already established for a plan's spine, see `docs/wiki/writing-plans.md`
+already established for a plan's spine, see `coordinator-content-repo coordinator/docs/wiki/planning/writing-plans.md`
 § Machine-Parseable Task Spine), and a row inside it can be genuinely
 uncommitted, deferred, or ruled-out even after the baton itself ships. This
 module closes the gap `deliverable_cascade.py`'s own docstring names and

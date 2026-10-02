@@ -395,13 +395,9 @@ def _commit_terminal_write(
     # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
     # _release_committed_claims_step`): runs AFTER the commit has landed and
     # cannot fail it -- the commit is already history by this line.
-    if attributed_session_id:
-        try:
-            session_scope.release_committed_claims(
-                attributed_session_id, [pathspec], cwd=str(git_root)
-            )
-        except Exception:  # noqa: BLE001 -- see NEGATIVE SPEC above
-            pass
+    session_scope.release_committed_claims_or_retain(
+        git_root, [pathspec], attributed_session_id, "memo.transition"
+    )
 
     return commit_result.stdout.strip(), None
 
@@ -747,8 +743,8 @@ def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
 
         if status == "in_progress":
             raise MutateAbort(
-                f"memo is already in_progress (held by {picked_up_by or '(empty)'}); "
-                "release it first or use a different session"
+                f"memo is already in_progress (held by {picked_up_by or '(empty)'}). "
+                "Holder session dead: memo.transition verb=release, then claim."
             )
 
         if status not in ("open", "delivered", None):

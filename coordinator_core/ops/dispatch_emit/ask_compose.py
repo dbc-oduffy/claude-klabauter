@@ -2,7 +2,8 @@
 
 The script sizes (raw ask only), asks the engine for a gate verdict, halts or runs the routed arm
 (XS stage; S plan-author then stage; M+ plan-blitz then stage), executes the staged manifest rows
-and composes the review wave once. Rows, briefs and pathspecs are Python-composed by
+and composes the review wave once. Every early exit assigns the typed `_halted` and later phases
+run under `if (!_halted)`: the terminal return is the script's one exit. Rows, briefs and pathspecs are Python-composed by
 dispatch.ask_stage; the script only interprets the manifest. Pure composition: no spawn.
 """
 
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops.dispatch_emit import emit as _emit
@@ -34,7 +35,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
 from coordinator_core.ops.dispatch_emit.wake_digest import next_action_parts
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
-from coordinator_core.ops.review_mint.roster import parse_execute_review
+from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -143,6 +144,26 @@ def _phase_titles(*, with_size: bool, blitz_phases: list[str], review_titles: li
     return titles
 
 
+_REVIEW_NOOP_EXIT = "return { halted: 'no-op',"
+_REVIEW_NOOP_TAIL = "wave: null, integration: null }; }"
+_REVIEW_SLICES_GUARD = "  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length) {"
+
+
+def _single_exit_review(blocks: list[str]) -> str:
+    """The review blocks with prep's no-op `return` turned into a `_halted` assignment.
+
+    Everything after the no-op check, the rest of prep and every later block, runs under
+    `if (!_halted)`, so the no-op reaches the terminal return like any other halt.
+    """
+    prep = blocks[0]
+    if prep.count(_REVIEW_NOOP_EXIT) != 1 or _REVIEW_NOOP_TAIL not in prep or _REVIEW_SLICES_GUARD not in prep:
+        raise AskComposeRefused("review prep block no longer has the no-op exit shape single-exit composition rewrites")
+    prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
+    prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || !(_reviewPrep.slices ?? []).length)) {", 1)
+    rest = "\n\n".join(blocks[1:])
+    return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
+
+
 def _row_runner_js() -> str:
     """Declarations `_emit._run_row_helper_js` reads, with no plan-scoped halting (one run, one plan)."""
     return "\n".join(
@@ -175,6 +196,8 @@ def compose_ask_script(
     wrap_stage: Optional[Callable[[str], tuple[str, list[str]]]] = None,
     plan_blitz_text: Optional[str] = None,
     script_path: Optional[str] = None,
+    plan_blitz_args: Optional[dict] = None,
+    writes: Sequence[str] = (),
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -182,6 +205,8 @@ def compose_ask_script(
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
     is embedded only when the arm can be M+. `script_path` is the repo-relative path the script
     is written to, carried into `next_action.params` for `dispatch.terminal_commit`.
+    `plan_blitz_args` is spread first into the planBlitz call, so `mode`, `repoRoot` and `batons`
+    always win; `writes` seeds the emit-time write set the gate and stage ops receive.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -189,7 +214,7 @@ def compose_ask_script(
     if review_roster_fragment is None or review_stage_schemas is None:
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
 
-        review_roster_fragment, review_stage_schemas = _load_review_inputs(_emit.EMIT_ROUTE_PLAN)
+        review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     review = parse_execute_review(review_roster_fragment)
 
     known_arm = _known_arm(repo_root, sizing_rel)
@@ -230,8 +255,10 @@ def compose_ask_script(
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
     b.append(f"  const _runId = {_lit(run_id)};")
     b.append(f"  let _sizingRel = {_lit(sizing_rel) if sizing_rel else 'null'};")
-    b.append("  let _writes = [];")
+    writes_literal = json.dumps(list(writes))
+    b.append(f"  let _writes = {writes_literal};")
     b.append("  let _planRel = null;")
+    b.append("  let _manifest = null;")
     if blitz_fn:
         b.append(blitz_fn)
     b.append(_row_runner_js())
@@ -273,7 +300,7 @@ def compose_ask_script(
         f"  const _gate = await {_agent(gate_prompt, label='gate', phase='gate', agent_type=agent_type, schema=_GATE_SCHEMA)};"
     )
     b.append(
-        "  if (_gate.halt || !_gate.arm) { return { halted: (_gate.halt && _gate.halt.kind) || "
+        "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
         f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
     )
 
@@ -294,19 +321,25 @@ def compose_ask_script(
         "js:_sizingRel",
         ": scaffold `docs/plans/<sizing-stem>.md` with `scope_mode: spec-dispatch` through the plan "
         "skill (never hand-write frontmatter), derive its spine from the sizing, and return its "
-        "repo-relative path as plan_rel.",
+        "repo-relative path as plan_rel."
+        + (
+            " Read the sizing's `scout_evidence` entries before deriving the spine."
+            if plan_blitz_args
+            else ""
+        ),
     )
-    b.append(f"  if (_gate.arm === {_lit(ARM_S)}) {{")
+    b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
     b.append("    phase('plan');")
     b.append(
         f"    _planRel = (await {_agent(plan_author, label='plan', phase='plan', agent_type=agent_type, schema=_PLAN_SCHEMA)}).plan_rel;"
     )
     b.append("  }")
     if blitz_fn:
-        b.append(f"  if (_gate.arm === {_lit(ARM_M_PLUS)}) {{")
+        b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{")
         b.append("    phase('plan');")
+        blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
         b.append(
-            f"    const _blitz = await {_PLAN_BLITZ_FN}({{ mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
+            f"    const _blitz = await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
             f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
             "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.route, "
             "planPath: null, executionOpen: true }] });"
@@ -314,27 +347,30 @@ def compose_ask_script(
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         b.append(
-            f"    if (!_planRel) {{ return {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
         )
         b.append("  }")
     else:
         b.append(
-            f"  if (_gate.arm === {_lit(ARM_M_PLUS)}) {{ return {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'sizing resolved to M+ at emit time but the plan-blitz stage was not embedded', "
             "sizing: _sizingRel, run_id: _runId }; }"
         )
 
+    b.append("  if (!_halted) {")
     b.append("  phase('stage');")
     b.append(
-        f"  const _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA)};"
+        f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA)};"
     )
     b.append(
-        "  if (_manifest.error || !(_manifest.rows ?? []).length) { return { halted: "
+        "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
         "'stage staged no rows', sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
     )
+    b.append("  }")
 
+    b.append("  if (!_halted) {")
     b.append("  phase('execute');")
     b.append("  const _rows = {};")
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
@@ -359,8 +395,11 @@ def compose_ask_script(
     b.append("  }")
     b.append("  await Promise.all(Object.values(_rows));")
     b.append("  await Promise.all(_verifications);")
+    b.append("  }")
 
-    review_text = "\n\n".join(_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks)
+    review_text = _single_exit_review(
+        [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
+    )
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
     review_vars = _emit.review_stage_vars(
@@ -380,7 +419,7 @@ def compose_ask_script(
     )
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
-        f"manifest: {_lit(manifest_rel)}, rows: _manifest.rows.map((r) => r.id), "
+        f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, blocked: _blockedChunks, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "

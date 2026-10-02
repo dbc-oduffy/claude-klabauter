@@ -54,6 +54,8 @@ def _select(**kwargs):
     kwargs.setdefault("batch_sizes", {"P0": 2, "P1": 6, "P2": 10, "P3": 12, "@unkeyed": 4})
     kwargs.setdefault("row_id_key", "@stem")
     kwargs.setdefault("profile", "fixture")
+    if kwargs.get("source") is not None:
+        kwargs.setdefault("source_row_dir", Path(kwargs["repo_root"]) / "run" / "source-rows")
     return select_rows(**kwargs)
 
 
@@ -243,6 +245,29 @@ def test_source_record_at_stem_duplicate_content_refused(tmp_path, monkeypatch):
             row_id_key="@stem",
             source={"op": "fake.source", "args": {}},
         )
+
+
+def test_source_replaces_queue_read_and_materialises_closable_rows(tmp_path, monkeypatch):
+    from coordinator_core.contract import grind_vocab as _grind_vocab
+    from coordinator_core.ops.dispatch_emit import queue_select as _qs
+
+    monkeypatch.setattr(_grind_vocab, "SOURCE_OPS", frozenset({"fake.source"}))
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "a.yaml", **_base_row())
+    _write_row(queue_dir / "b.yaml", **_base_row())
+    monkeypatch.setattr(
+        _qs, "_call_source_op", lambda op, args, root: {"records": [{"title": "x"}, {"title": "y"}]}
+    )
+    source = {"op": "fake.source", "args": {}}
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, source=source)
+    assert len(manifest.entries) == 2
+    for entry in manifest.entries:
+        row_file = tmp_path / entry.path
+        assert row_file.is_file() and row_file.stem == entry.row_id
+    assert _qs.live_row_ids([queue_dir], row_id_key="@stem", repo_root=tmp_path, source=source) == {
+        e.row_id for e in manifest.entries
+    }
 
 
 def test_unparseable_row_raises_named_error(tmp_path):

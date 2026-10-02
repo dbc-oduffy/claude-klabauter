@@ -34,7 +34,7 @@ deny-text parity only, per the plan body's own statement of "the oracle's
 real job"), and none of its four fixture commands are commit-shaped.
 
 Opt-in on ANOTHER axis too: every case below needs the actual coordinator-content-repo
-sibling checkout on disk (`coordinator_content_root()`) to run the cold oracle
+sibling checkout on disk (`resolve_content_root()`) to run the cold oracle
 subprocess against. On an install without that sibling repo present (e.g. a
 published OSS mirror), every case in this module skips rather than either
 silently passing (false parity) or hard-failing a suite that has no way to
@@ -57,7 +57,7 @@ import pytest
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.bash_guards._shape_classifier import Shape, SHAPE_PRECEDENCE
 from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -66,19 +66,19 @@ pytestmark = [
 
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-_CONTENT_ROOT = coordinator_content_root()
-_DOE_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
+_CONTENT_ROOT = resolve_content_root() or None
+_CONTENT_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
 
 _SKIP_REASON = (
     "opt-in fixture: no coordinator-content-repo sibling checkout resolved by "
-    "coordinator_content_root() -- the cold oracle scripts this parity check "
+    "resolve_content_root() -- the cold oracle scripts this parity check "
     "compares against live only in that sibling repo."
 )
 
 
 def _cold_script(name: str) -> Path:
-    assert _DOE_HOOKS_DIR is not None
-    return _DOE_HOOKS_DIR / name
+    assert _CONTENT_HOOKS_DIR is not None
+    return _CONTENT_HOOKS_DIR / name
 
 
 def _fixture_plugin_root() -> Optional[str]:
@@ -262,7 +262,7 @@ def test_case1_doctrine_surface_bash_write_parity() -> None:
         "cwd": cwd,
         # `plugin_root` rides the payload directly (C1) rather than being
         # left to the ambient ladder (env var / installed-plugin-dir /
-        # `.coordinator-content-root` pointer): a payload whose `cwd` points at the
+        # content-root pointer): a payload whose `cwd` points at the
         # coordinator-content-repo checkout but omits `plugin_root` can still fail that
         # ladder on a host with no `CLAUDE_PLUGIN_ROOT` set and no installed
         # `coordinator-claude` plugin dir -- measured directly (2026-08-28)

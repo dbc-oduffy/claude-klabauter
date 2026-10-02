@@ -220,7 +220,7 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
 #: `status:` values a run-report sidecar's frontmatter carries that mark it
 #: terminal-but-unresolved — never folded/deleted regardless of session
 #: liveness or fold outcome (mirrors `reap-stale-subagent-sidecars.py`'s
-#: own carve-out and `docs/wiki/scratch-lifecycle.md` Pattern A).
+#: own carve-out and `coordinator-content-repo coordinator/docs/wiki/hook-best-practices/scratch-lifecycle.md` Pattern A).
 _PRESERVED_SIDECAR_STATUSES = frozenset({"blocked", "thrashing"})
 
 

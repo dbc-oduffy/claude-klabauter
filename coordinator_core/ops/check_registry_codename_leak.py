@@ -53,8 +53,8 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # D1 keep-set — prefix-matched against slug (strip repos. prefix first).
 # 'coordinator' matches 'coordinator_claude'; 'deep_research' matches
 # 'deep_research_claude'; 'project_rag' matches 'example_retrieval_repo_ue_addon'.
-# 'content_root' kept: OSS resolve-coordinator-clone.sh reads repos.content_root
-# at runtime (PM-ratified 2026-07-10).
+# 'content_root' kept: OSS resolve-coordinator-clone.sh reads the legacy
+# content_root registry key at runtime (PM-ratified 2026-07-10).
 # 'example_doctrine_repo' kept: a SECOND machine-local registry alias for the
 # same coordinator-content-repo clone (`machine-local get repos.example_doctrine_repo` ==
 # `machine-local get repos.content_root`, both resolving to this machine's
@@ -69,7 +69,7 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # output anymore, the guard correctly starts treating it as a bare registered
 # `repos.*` slug and flags every source-comment citation of the incident it
 # documents (e.g. coordinator_core/ops/percolate_run.py's own docstring,
-# coordinator_core/ops/coordinator_content_root.py). Same sibling, same ruling,
+# coordinator_core/content_root.py). Same sibling, same ruling,
 # same disclosure -- KEEPSET is the narrow, named fix; not a pattern loosen.
 # 'fleet_root' kept: `repos.fleet_root` is not a private repo codename -- it
 # names the CONTAINER directory the fleet's repos live under.

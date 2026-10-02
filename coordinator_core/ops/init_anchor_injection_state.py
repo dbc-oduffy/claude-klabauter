@@ -16,7 +16,7 @@ Contract (op-classification.tsv): params: {} -> {content_root: str, today: str,
     injected_dates: list[str], content_gap_dates: list[str]}
 
 Idempotency (AC7, manifest-rated idempotency-hazard: none): every field is
-either a pure resolution (content_root via coordinator_content_root()), a pure
+either a pure resolution (content_root via read_content_root()), a pure
 computation of the current date (today), or a fixed empty-list literal
 (injected_dates / content_gap_dates). Two invocations on the same calendar day
 with the same params ({}) are byte-identical; no disk state is read beyond the
@@ -30,7 +30,7 @@ Negative-spec:
     - Does NOT write any file — this is a pure in-memory resolve/init step;
       the accumulator lists start and stay empty here.
     - Does NOT derive content_root via __file__/parents[n] traversal — resolves
-      exclusively through coordinator_content_root() (plan § Mandated resolvers),
+      exclusively through read_content_root() (plan § Mandated resolvers),
       never a literal or dynamically-joined path.
     - Does NOT accept or require any params — the manifest contract is
       params: {}.
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 
 
 @register_op("ceremony.init_anchor_injection_state")
@@ -63,19 +63,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         }
 
     Raises:
-        RuntimeError — coordinator_content_root() could not resolve the coordinator-content-repo
+        RuntimeError — read_content_root() could not resolve the coordinator-content-repo
         root. Fails loud rather than degrading to an empty/placeholder
         content_root: the manifest contract types content_root as `str`, and a
         ceremony phase silently anchoring against "" would misbehave far
         downstream of this op rather than at the point of failure.
     """
-    content_root = coordinator_content_root()
-    if content_root is None:
+    content_root = read_content_root()
+    if not content_root:
         raise RuntimeError(
             "ceremony.init_anchor_injection_state: cannot resolve the coordinator "
-            "root — coordinator_content_root() returned no result. Set "
-            "repos.content_root in the machine-local registry, or set the "
-            "CONTENT_ROOT/REPO_CONTENT_ROOT env var."
+            "root — read_content_root() returned no result. Set "
+            "repos.content_root in the machine-local registry."
         )
     return {
         "content_root": content_root,

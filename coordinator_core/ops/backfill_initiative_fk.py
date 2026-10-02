@@ -24,11 +24,11 @@ Public API:
         trampoline's own bin/ directory — used to resolve the sibling
         `coordinator-initiative` executable via a plain same-directory join, exactly
         as the bash oracle's `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`
-        did. This is a SAME-DIRECTORY SIBLING lookup, not a cross-repo CONTENT_ROOT
+        did. This is a SAME-DIRECTORY SIBLING lookup, not a cross-repo content-root
         resolution — this module is always invoked in-process by a trampoline that
         already knows its own location, so reusing that location is both simpler and
-        more byte-faithful to the oracle than re-deriving CONTENT_ROOT via
-        `coordinator_core.ops.coordinator_content_root` (which is the right tool for a
+        more byte-faithful to the oracle than re-deriving the content root via
+        `coordinator_core.content_root.read_content_root` (which is the right tool for a
         genuinely cross-repo caller, not this one). If neither is supplied, this
         module's own directory is used as a fallback (not a faithful mirror of the
         oracle's behavior when invoked from a repo layout other than co-located

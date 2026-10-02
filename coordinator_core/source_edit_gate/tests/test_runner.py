@@ -303,7 +303,7 @@ def test_terminate_group_kills_grandchild_spawned_under_child(tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
-        **runner_module._popen_group_kwargs(),
+        **runner_module._no_console_group_popen_kwargs(),
     )
     try:
         grandchild_pid = int(proc.stdout.readline().strip())

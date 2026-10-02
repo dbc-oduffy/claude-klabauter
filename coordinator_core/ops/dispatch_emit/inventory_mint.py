@@ -119,7 +119,11 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
-from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, read_spine
+from coordinator_core.ops.dispatch_emit.spine_read import (
+    SpineReadError,
+    read_spine,
+    with_canonical_disposition,
+)
 
 #: Repo root the `os.path.isdir` rung in `_refuse_if_directory_shaped`
 #: resolves a footprint entry against -- never the process cwd (issue
@@ -782,7 +786,10 @@ def _plan_sub_rows(
 
 
 def mint_rows(
-    chunk_rows: List[Dict[str, str]], inventory_path: Optional[Path] = None
+    chunk_rows: List[Dict[str, str]],
+    inventory_path: Optional[Path] = None,
+    skip_landed: bool = False,
+    skipped_out: Optional[List[str]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -806,6 +813,20 @@ def mint_rows(
     prior behaviour unchanged.
     """
     dep_kinds = _resolve_dep_kinds(chunk_rows)
+    plan_cache: Dict[Path, Dict[str, dict]] = {}
+    if skip_landed and inventory_path is not None:
+        for row in chunk_rows:
+            row_id = _strip_backtick(row["id"])
+            if dep_kinds[row_id] != _DEP_KIND_LIVE:
+                continue
+            raw_rows = _plan_raw_rows_by_id(
+                inventory_path, _strip_backtick(row["spec path"]), plan_cache
+            )
+            named = raw_rows.get(row_id) or raw_rows.get(_bare_plan_row_id(row_id))
+            if named is not None and with_canonical_disposition(named).get("disposition") == "coded":
+                dep_kinds[row_id] = _DEP_KIND_CLOSED_SATISFIED
+                if skipped_out is not None:
+                    skipped_out.append(row_id)
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
     writes_by_id: Dict[str, set] = {}
     writes_under_by_id: Dict[str, List[str]] = {}
@@ -826,7 +847,6 @@ def mint_rows(
         writes_under_by_id[row_id] = writes_under
         live.append((row_id, row, writes))
 
-    plan_cache: Dict[Path, Dict[str, dict]] = {}
     spine_cache: Dict[Path, Optional[list]] = {}
     minted: List[dict] = []
     preceding_ids: set = set()
@@ -1049,7 +1069,77 @@ def spine_path_for(inventory_path: Path, run_id: str) -> Path:
     return inventory_path.parent / f"{run_id}.spine.md"
 
 
-def mint_spine(inventory_path: str, max_rows: Optional[int] = None) -> Tuple[str, Path]:
+class NothingUnlandedError(InventoryMintError):
+    """`skip_landed` left no live row: every plan row the inventory names has landed."""
+
+
+class InventoryPartError(InventoryMintError):
+    """An inventory cannot be cut into the requested number of parts: fewer
+    plan items than parts, or a row depending on a row in a LATER part."""
+
+
+def _row_item_ids(rows: List[dict], item_ids: List[str]) -> List[str]:
+    """Each minted row's owning Chunk-table item: the longest item id equal to
+    the row id or a `<item>.` prefix of it (plan-sourced expansion)."""
+    ordered = sorted(item_ids, key=len, reverse=True)
+    owners: List[str] = []
+    for row in rows:
+        rid = row["id"]
+        owners.append(next(i for i in ordered if rid == i or rid.startswith(i + ".")))
+    return owners
+
+
+def select_part(rows: List[dict], item_ids: List[str], index: int, count: int) -> List[dict]:
+    """The rows of part `index` (1-based) of `count`: whole plan items in table
+    order, balanced by row count. An edge onto a row in an EARLIER part is
+    dropped (parts are fired in order, so it is discharged); an edge onto a
+    later part raises `InventoryPartError`."""
+    owners = _row_item_ids(rows, item_ids)
+    items: List[str] = list(dict.fromkeys(owners))
+    if count > len(items):
+        raise InventoryPartError(
+            f"cannot cut {len(items)} plan item(s) into {count} parts"
+        )
+    total = len(rows)
+    part_of_item: Dict[str, int] = {}
+    seen = 0
+    for item in items:
+        n = owners.count(item)
+        part_of_item[item] = min(count, int((seen + n / 2) / total * count) + 1)
+        seen += n
+    part_of_row = {row["id"]: part_of_item[o] for row, o in zip(rows, owners)}
+    selected: List[dict] = []
+    for row in rows:
+        if part_of_row[row["id"]] != index:
+            continue
+        kept = []
+        for edge in row.get("depends_on", []):
+            target_part = part_of_row.get(edge["chunk"])
+            if target_part is None or target_part == index:
+                kept.append(edge)
+            elif target_part > index:
+                raise InventoryPartError(
+                    f"row {row['id']!r} depends on {edge['chunk']!r}, which falls in "
+                    f"part {target_part} of {count}; reorder the Chunk table so "
+                    "dependencies precede their dependents"
+                )
+        entry = dict(row)
+        entry.pop("depends_on", None)
+        if kept:
+            entry["depends_on"] = kept
+        selected.append(entry)
+    if not selected:
+        raise InventoryPartError(f"part {index} of {count} holds no rows")
+    return selected
+
+
+def mint_spine(
+    inventory_path: str,
+    max_rows: Optional[int] = None,
+    part: Optional[Tuple[int, int]] = None,
+    skip_landed: bool = False,
+    skipped_out: Optional[List[str]] = None,
+) -> Tuple[str, Path]:
     """The `--inventory` mint leg's one entry point.
 
     Reads `inventory_path` (a mise-inventory record), derives a
@@ -1070,7 +1160,15 @@ def mint_spine(inventory_path: str, max_rows: Optional[int] = None) -> Tuple[str
     deliverable_id = _inherited_deliverable_id(path, text)
 
     chunk_rows = parse_chunk_table(text)
-    rows = mint_rows(chunk_rows, inventory_path=path)
+    rows = mint_rows(
+        chunk_rows, inventory_path=path, skip_landed=skip_landed, skipped_out=skipped_out
+    )
+    if skip_landed and not rows:
+        raise NothingUnlandedError(f"inventory {path.name}: every row has already landed")
+    if part is not None:
+        index, count = part
+        rows = select_part(rows, [_strip_backtick(r["id"]) for r in chunk_rows], index, count)
+        run_id = f"{run_id}-p{index}"
     if max_rows is not None and len(rows) > max_rows:
         raise InventoryTooLargeError(
             f"inventory {path.name} mints {len(rows)} live rows, over max_rows "

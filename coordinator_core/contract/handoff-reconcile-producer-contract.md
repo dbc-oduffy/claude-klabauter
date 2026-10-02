@@ -80,7 +80,7 @@
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `dry_run` | bool | no | **`true`** | When true (the default), the op computes every verdict but performs ZERO transitions — no `gate-cascade-clear` call. (Pre-rebuild this also gated a `ship_and_archive` call; that call site is gone with the auto-ship path — § 1.2/§ 1.3.) Caller must pass `dry_run=false` explicitly to transition anything. Non-bool values are coerced to `true` (fail-conservative on malformed input). |
+| `dry_run` | bool | no | **`true`** | When true (the default), the op computes every verdict but performs ZERO transitions — no `gate-cascade-clear` call. Caller must pass `dry_run=false` explicitly to transition anything. Non-bool values are coerced to `true` (fail-conservative on malformed input). |
 | `policy_path` | str | no | — | Override path forwarded to `reconcile.policy_loader.load_policy`. Test/CLI injection seam; production callers omit this and let the loader resolve via its own env-var/default-path chain (see the grammar pin doc § "Fail-closed contract"). |
 
 `dry_run` **defaults to `true`** — this is the resolved outcome of the Staff Engineer review finding index 4:
@@ -139,8 +139,7 @@ DoE alignment reply's item 3.
 
 `handoff.reconcile_open` loops over every open handoff and, per handoff, invokes
 `handoff.transition gate-cascade-clear` — an orchestrating op calling a per-file mutator in a
-loop. (Pre-rebuild, this also invoked `handoff.ship_and_archive` on the now-deleted auto-ship
-path; that call site is gone with C10, § 1.3.) This is **DR-212-compliant**, and is **NOT** the
+loop. This is **DR-212-compliant**, and is **NOT** the
 batch-mutation pattern DR-212 reserves solely for `handoff.normalize` (D2(ii)/Invariant-3:
 *"Future batch-mutation ops with different semantics or different target nouns would require
 their own DR and cannot inherit this carve-out"*):
@@ -328,7 +327,7 @@ BOTH keys, and only one of them died:
 
 | key | gates | status |
 |---|---|---|
-| `auto_ship_enabled` | the auto-ship route (shipped-ness verdict → `ship_and_archive`) | **DEAD** — C10 deleted the verdict; nothing computes `auto-ship`, so the key has nothing to trigger |
+| `auto_ship_enabled` | the auto-ship route (shipped-ness verdict → ship + archive) | **DEAD** — C10 deleted the verdict; nothing computes `auto-ship`, so the key has nothing to trigger |
 | `dry_run` | **every mutation**, i.e. whether `_gate_cascade_clear` is actually invoked | **LIVE** — the rebuilt op still calls it (`handoff_reconcile.py :: _resolve_dry_run` → `_gate_cascade_clear`), policy-authoritative, fail-closed default `true` |
 
 So arming is still a real, open decision — it is just a NARROWER one than before the kill:

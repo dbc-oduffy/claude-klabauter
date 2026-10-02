@@ -47,8 +47,8 @@ obvious single move already visible in its own state):
      (`review-trail.schema.json`) with `scope_kind: "plan"` whose `sha_range`
      resolves to a commit that touched this plan's own file path. This is
      the same kind-aware plan-crediting shape `coordinator_core.coverage`
-     already establishes for the coverage gate (see that module's
-     `_credit_from_kind_partition` and its own "13 on-disk scope_kind:'plan'
+     already establishes for the coverage gate (see
+     `review_trail.backfill._resolve_special` and coverage's own "13 on-disk scope_kind:'plan'
      records" note) — reused as a correlation check here, not
      re-implemented as a second, divergent notion of "this plan was
      reviewed." Supplied by dispatching `coordinator:review` against the

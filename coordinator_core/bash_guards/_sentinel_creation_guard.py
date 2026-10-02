@@ -195,18 +195,21 @@ from typing import List, Optional, Tuple
 REASON_DIRECT = "direct"
 REASON_INDIRECTION = "indirection"
 
-INDIRECTION_REMEDY = (
-    # Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window deliberately:
-    # `_message_size` exempts a backticked command only inside one, so the
-    # earlier "rather than naming an interpreter" phrasing was charged 295
-    # prose bytes against a 220 cap for saying the same thing. Measured
-    # 2026-09-12: 252 total / 45 exempt / 207 prose.
-    "Use instead: `./path/to/script.sh` -- invoke the script, do not name "
-    "an interpreter (`bash path/to/script.sh` is what denies); this works "
-    "only when the file is executable and has a shebang. For a "
-    "non-script payload, run its steps directly, not through an "
-    "interpreter/stdin/xargs wrapper, or ask the EM/PM to run it."
-)
+#: Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window so `_message_size`
+#: exempts the backticked route from the prose cap.
+INDIRECTION_REMEDY = "Use instead: `./path/to/script.sh` (executable, shebang)."
+
+
+def indirection_deny_reason(label: str, safe_shape: str) -> str:
+    """The shared indirection-deny text: one fact (the payload is unreadable,
+    and its shape) plus the offered route. `safe_shape` must already have the
+    target basename redacted."""
+    return "BLOCKED (%s): unreadable payload (%s).\n\n%s" % (
+        label,
+        safe_shape,
+        INDIRECTION_REMEDY,
+    )
+
 
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,

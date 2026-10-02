@@ -115,3 +115,21 @@ def test_non_yaml_extension_under_sizings_unchanged(tmp_path):
 def test_non_write_tool_unchanged(tmp_path):
     result = guard.check({"tool_name": "Read", "tool_input": {}, "cwd": str(tmp_path)})
     assert result is None
+
+
+def test_quoted_on_key_written_by_accept_exit_criterion_passes(tmp_path):
+    """The op quotes the YAML-1.1 boolean key ``'on'``; the guard must read it as ``on``."""
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    sizing_path = tmp_path / "state" / "sizings" / "2026-10-01-x.yaml"
+    content = _VALID_SIZING + (
+        "exit_criterion:\n"
+        "  statement: \"It works.\"\n"
+        "  accepted:\n"
+        "    pm_quote: \"yes\"\n"
+        "    'on': '2026-10-01'\n"
+        "    mode: hands-on\n"
+    )
+    result = guard.check(
+        _payload("Write", str(sizing_path), str(tmp_path), content=content)
+    )
+    assert result is None

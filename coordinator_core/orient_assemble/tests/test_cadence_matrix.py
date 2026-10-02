@@ -65,26 +65,6 @@ def test_clean_ops_runs_the_same_five_readers_for_every_cadence(monkeypatch):
     assert seen == {"em": 3, "memo": 3, "rag": 3, "worktree": 3}
 
 
-def test_health_reaper_dry_run_fires_on_day_cadence_only(monkeypatch):
-    calls = {"reaper": 0}
-
-    monkeypatch.setattr(rhr, "_read_claude_klabauter_bin_sentinel", lambda: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_working_repo_registration", lambda: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_ceremony_hook", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(
-        rhr, "_read_reaper_dry_run",
-        lambda repo_root=None: (calls.__setitem__("reaper", calls["reaper"] + 1), ReaderResult())[1],
-    )
-
-    rhr.collect("session")
-    rhr.collect("week")
-    assert calls["reaper"] == 0
-
-    rhr.collect("day")
-    assert calls["reaper"] == 1
-
-
 def test_health_reaper_ceremony_hook_receives_the_cadence(monkeypatch):
     received: list[str] = []
     monkeypatch.setattr(rhr, "_read_claude_klabauter_bin_sentinel", lambda: ReaderResult())
@@ -94,7 +74,6 @@ def test_health_reaper_ceremony_hook_receives_the_cadence(monkeypatch):
         lambda cadence: (received.append(cadence), ReaderResult())[1],
     )
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rhr.collect(cadence)
@@ -111,7 +90,6 @@ def test_health_reaper_working_repo_registration_runs_every_cadence(monkeypatch)
     )
     monkeypatch.setattr(rhr, "_read_ceremony_hook", lambda cadence: ReaderResult())
     monkeypatch.setattr(rhr, "_read_marker_freshness", lambda cadence: ReaderResult())
-    monkeypatch.setattr(rhr, "_read_reaper_dry_run", lambda repo_root=None: ReaderResult())
 
     for cadence in ("session", "day", "week"):
         rhr.collect(cadence)
@@ -124,6 +102,9 @@ def test_marker_freshness_day_and_session_read_the_workday_marker_at_different_s
 ):
     monkeypatch.setattr(check_weekly_staleness, "_resolve_state_root", lambda: str(tmp_path))
     monkeypatch.setattr(daily_day, "local_day", lambda: "2026-07-24")
+    # The session judgment point is gated on the cwd repo's standing; pin it so the
+    # test does not depend on which repo pytest runs from.
+    monkeypatch.setattr(rhr, "_cwd_has_workday_standing", lambda: True)
 
     marker = tmp_path / ".workday-start-marker"
     marker.write_text("2026-07-23", encoding="utf-8")

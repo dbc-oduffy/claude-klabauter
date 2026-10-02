@@ -71,7 +71,7 @@
       "properties": {
         "consumer": {
           "type": "string",
-          "description": "The sibling repo (or named receiver) this declaration is notifying — e.g. Claude-klabauter."
+          "description": "The sibling repo (or named receiver) this declaration is notifying — e.g. the engine repo."
         },
         "artifact": {
           "type": "string",

@@ -20,7 +20,7 @@ Content-root-pointer-test-clobbers-real-home.md and
 HOME, CLAUDE_HOME, and COORDINATOR_SETTINGS_HOME to tmp_path via monkeypatch,
 and never touches the real machine's settings-home or ~/.claude.
 
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md [DEAD-CITATION: plan file never committed to this repo]
+Spec backlink: example-retrieval-repo archive/specs/2026-05/2026-05-21-plugin-source-live-mirror-doctrine.md
 DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-registry-content-root-demoted-to-cache.md (coordinator-content-repo)
 """
 

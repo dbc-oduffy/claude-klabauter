@@ -16,7 +16,7 @@ Citation conventions this module reads (documented here because the
 contract's rows name a "grep the plan body" shape without a fixed format;
 these are this module's own, chosen and applied consistently):
   - A `## Fix locus` (any heading level, case-insensitive) section holds an
-    optional `path:line`-shaped citation (`:111`) and an optional
+    optional `path:line` or `path::function` citation (`:111`) and an optional
     `Gate type: `<name>`` line (`:112`).
   - `Symbol to replace: `<symbol>`` anywhere in the body names the `:116`
     liveness-check target.
@@ -91,8 +91,10 @@ _SCAFFOLD_CHECKLIST_HEADING_RE = re.compile(
 )
 _HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
 
-# A locator is required: `path.ext:LINE` or `path.ext::enclosing_function`
-# (optionally `Class.method`); a bare path does not satisfy the gate.
+#: A locator is required: `path.ext:LINE` or `path.ext::enclosing_function`
+#: (optionally `Class.method`); a bare path does not satisfy the gate. The
+#: symbol form is the one repo doctrine requires (line numbers go stale on a
+#: shared branch).
 _FIX_LOCUS_CITATION_RE = re.compile(
     r"([\w./-]+\.\w+(?::\d+|::[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*))"
 )

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from coordinator_core.install import setup_check
 from coordinator_core.install.setup_check import CheckItem
+from coordinator_core.win_portability import no_console_creationflags
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -71,7 +72,7 @@ def test_setup_check_cli_fails_on_a_bare_settings_home(tmp_path):
     }
     proc = subprocess.run(
         ["python3", str(REPO_ROOT / "scripts" / "setup.py"), "--check", "--claude-klabauter-live-root", str(REPO_ROOT)],
-        capture_output=True, text=True, env=env, timeout=120, check=False,
+        capture_output=True, text=True, env=env, timeout=120, check=False, **no_console_creationflags(),
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "FAIL [door]" in proc.stdout

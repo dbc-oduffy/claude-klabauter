@@ -1041,3 +1041,49 @@ def test_own_repo_write_gitdir_returns_none_when_nothing_resolves(tmp_path):
 def test_own_repo_write_gitdir_returns_none_for_empty_cwd_and_no_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     assert applicability.own_repo_write_gitdir("", {}) is None
+
+
+_WINDOWS_MAX_PATH = 260
+
+
+def _make_dir_past_max_path(base: Path) -> str:
+    """Create nested real directories under `base` until the path is over
+    MAX_PATH, and return that path. On Windows each `mkdir` goes through the
+    extended-length form, because the bare form fails past MAX_PATH."""
+    path = str(base)
+    segment = "d" * 60
+    while len(path) <= _WINDOWS_MAX_PATH + 10:
+        path = os.path.join(path, segment)
+    create = ("\\\\?\\" + path) if os.name == "nt" else path
+    os.makedirs(create, exist_ok=True)
+    return path
+
+
+def test_a_deep_fixture_path_is_past_max_path_and_exists(tmp_path):
+    deep = _make_dir_past_max_path(tmp_path)
+    assert len(deep) > _WINDOWS_MAX_PATH
+    prefix = "\\\\?\\" if os.name == "nt" else ""
+    assert os.path.isdir(prefix + deep)
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="AC11 native repro: needs GetFinalPathNameByHandle-backed resolution on a real on-disk path past MAX_PATH",
+)
+def test_ac11_native_prefixed_equals_bare_on_a_real_path_past_max_path(tmp_path):
+    deep = _make_dir_past_max_path(tmp_path)
+    assert applicability._resolve_path("\\\\?\\" + deep) == applicability._resolve_path(deep)
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="AC11 native isolation probe: only meaningful where ntpath.realpath resolves real handles",
+)
+def test_ac11_native_pre_realpath_strip_isolation_probe(tmp_path, monkeypatch):
+    deep = _make_dir_past_max_path(tmp_path)
+    monkeypatch.setattr(applicability, "strip_extended_length_prefix", lambda p: p)
+    bare = applicability._resolve_path(deep)
+    prefixed = applicability._resolve_path("\\\\?\\" + deep)
+    if bare == prefixed:
+        pytest.skip("no native asymmetry without the pre-strip; the skipif on the POSIX-mechanism test stays")
+    assert bare != prefixed

@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
+from coordinator_core.git.run import GitResult
+from coordinator_core.ops.memo import surface_advisory as _surface_advisory_module
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.memo.surface_advisory import (
     declared_surface,
@@ -179,19 +181,19 @@ def test_no_declared_surface_zero_spawns(tmp_path):
 def test_one_spawn_for_ok_verdict(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     sha = _commit(repo, {"a.py": "x"}, "c")
-    real_run = subprocess.run
+    real_run_git = _surface_advisory_module.run_git
     calls = []
 
-    def _counting_run(*args, **kwargs):
+    def _counting_run_git(*args, **kwargs):
         calls.append((args, kwargs))
-        return real_run(*args, **kwargs)
+        return real_run_git(*args, **kwargs)
 
-    with patch("subprocess.run", side_effect=_counting_run):
+    with patch.object(_surface_advisory_module, "run_git", side_effect=_counting_run_git):
         result = surface_advisory({"surface": "a.py", "realized_by": sha}, repo)
     assert result["verdict"] == "ok"
     assert len(calls) == 1
     argv = calls[0][0][0]
-    assert argv[:2] == ["git", "log"]
+    assert argv[0] == "log"
     assert "--root" in argv
     assert "--diff-merges=first-parent" in argv
     assert "--name-only" in argv
@@ -267,18 +269,23 @@ class TestGitFixtures:
     def test_timeout_is_advisory_failed(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
         sha = _commit(repo, {"real_file.py": "x"}, "base")
-        with patch(
-            "subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=3),
+        with patch.object(
+            _surface_advisory_module,
+            "run_git",
+            return_value=GitResult(returncode=-1, stdout="", stderr="", timed_out=True),
         ):
             result = surface_advisory({"surface": "real_file.py", "realized_by": sha}, repo)
         assert result["verdict"] == "unresolved-sha"
         assert result["reason"] == "advisory-failed"
 
-    def test_unexpected_exception_is_advisory_failed(self, tmp_path):
+    def test_git_that_never_ran_is_advisory_failed(self, tmp_path):
         repo = _init_repo(tmp_path / "repo")
         sha = _commit(repo, {"real_file.py": "x"}, "base")
-        with patch("subprocess.run", side_effect=RuntimeError("boom")):
+        with patch.object(
+            _surface_advisory_module,
+            "run_git",
+            return_value=GitResult(returncode=127, stdout="", stderr="", timed_out=False),
+        ):
             result = surface_advisory({"surface": "real_file.py", "realized_by": sha}, repo)
         assert result["verdict"] == "unresolved-sha"
         assert result["reason"] == "advisory-failed"

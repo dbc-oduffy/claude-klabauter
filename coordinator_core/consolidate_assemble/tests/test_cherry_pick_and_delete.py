@@ -124,6 +124,7 @@ def test_empty_shas_guard_skips_cherry_pick_and_only_deletes(tmp_path: Path) -> 
     # "already-merged" branches at the exact same commit as work -- no
     # commits in `work..already-merged`, so `_unique_commit_shas` returns [].
     _git(root, "branch", "already-merged")
+    _git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
 
     result = apply_mod._dispatch_cherry_pick_and_delete(
         ["already-merged", "already-merged"], root
@@ -208,3 +209,98 @@ def test_quit_failure_is_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError, match="cherry-pick --quit"):
         apply_mod._dispatch_cherry_pick_and_delete(["feature", "feature"], root)
+
+
+# ---------------------------------------------------------------------------
+# Delete only when the tip is reachable from origin/<base>
+# ---------------------------------------------------------------------------
+
+def _origin_with_branch(tmp_path: Path) -> Path:
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    root = _init_repo(tmp_path)
+    _git(root, "branch", "-M", "main")
+    _write(root, "base.txt", "base\n")
+    _commit_all(root, "seed")
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "checkout", "-q", "-b", "feat")
+    _write(root, "a.txt", "a\n")
+    _commit_all(root, "a")
+    _git(root, "checkout", "-q", "main")
+    _git(root, "merge", "-q", "--ff-only", "feat")
+    _git(root, "push", "-q", "origin", "main", "feat")
+    return root
+
+
+def test_snapshot_merged_then_advanced_branch_is_refused(tmp_path: Path) -> None:
+    root = _origin_with_branch(tmp_path)
+    _git(root, "checkout", "-q", "feat")
+    for n in ("b", "c"):
+        _write(root, f"{n}.txt", n)
+        _commit_all(root, n)
+    _git(root, "push", "-q", "origin", "feat")
+    _git(root, "checkout", "-q", "main")
+    tip = _git(root, "rev-parse", "origin/feat").stdout.strip()
+
+    with pytest.raises(RuntimeError) as exc:
+        apply_mod._delete_branch("feat", True, root)
+
+    assert tip in str(exc.value)
+    assert "has 2 commits" in str(exc.value)
+    assert _git(root, "ls-remote", "origin", "feat").stdout.strip()
+    assert "feat" in _git(root, "branch").stdout
+
+
+def test_fully_merged_branch_is_deleted_local_and_remote(tmp_path: Path) -> None:
+    root = _origin_with_branch(tmp_path)
+
+    detail = apply_mod._delete_branch("feat", True, root)
+
+    assert detail["local_deleted"] == "feat"
+    assert detail["remote_deleted"] == "feat"
+    assert not _git(root, "ls-remote", "origin", "feat").stdout.strip()
+
+
+def test_clean_path_check_is_two_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _origin_with_branch(tmp_path)
+    calls: list[list[str]] = []
+    real = apply_mod._run_git
+    monkeypatch.setattr(apply_mod, "_run_git", lambda a, c: (calls.append(a), real(a, c))[1])
+
+    assert apply_mod._refuse_unmerged_tips("feat", True, root) is None
+    assert len(calls) == 2  # lookup + one rev-list (local and remote tips equal)
+
+
+def _feat_cherry_picked_to_origin_main(tmp_path: Path, extra: bool) -> Path:
+    root = _origin_with_branch(tmp_path)
+    _git(root, "checkout", "-q", "feat")
+    for n in ("b", "c"):
+        _write(root, f"{n}.txt", n)
+        _commit_all(root, n)
+    picked = _git(root, "rev-list", "--reverse", "main..feat").stdout.split()
+    if extra:
+        _write(root, "d.txt", "d")
+        _commit_all(root, "d")
+    _git(root, "push", "-q", "origin", "feat")
+    _git(root, "checkout", "-q", "main")
+    _git(root, "cherry-pick", *picked)
+    _git(root, "push", "-q", "origin", "main")
+    return root
+
+
+def test_branch_cherry_picked_onto_origin_main_under_new_shas_is_deleted(tmp_path: Path) -> None:
+    root = _feat_cherry_picked_to_origin_main(tmp_path, extra=False)
+
+    detail = apply_mod._delete_branch("feat", True, root)
+
+    assert detail["remote_deleted"] == "feat"
+    assert not _git(root, "ls-remote", "origin", "feat").stdout.strip()
+
+
+def test_branch_with_one_uncherry_picked_commit_is_refused(tmp_path: Path) -> None:
+    root = _feat_cherry_picked_to_origin_main(tmp_path, extra=True)
+
+    with pytest.raises(RuntimeError, match="has 1 commits"):
+        apply_mod._delete_branch("feat", True, root)
+
+    assert _git(root, "ls-remote", "origin", "feat").stdout.strip()

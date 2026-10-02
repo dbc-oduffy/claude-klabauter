@@ -159,6 +159,12 @@ def test_declared_writes_are_rendered_with_the_test_path_in_scope():
     assert "IN SCOPE and is expected to be written" in out
 
 
+def test_brief_names_an_existing_listed_path_as_an_incumbent_to_read_first():
+    out = emit._declared_scope_block(_wave_row("C1", ["a/one.py"]))
+    assert "already exists is an incumbent" in out
+    assert "BEFORE writing" in out
+
+
 def test_brief_requires_examined_and_changed_as_separate_counts():
     row = _wave_row("C1", ["a/one.py", "a/two.py", "a/three.py"])
     out = emit._declared_scope_block(row)

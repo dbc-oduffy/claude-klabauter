@@ -124,6 +124,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.write_guards._post_write_body import post_write_body, read_pre_image
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._slash_normalize import collapse_slashes as _collapse_slashes
 
@@ -134,8 +135,6 @@ PRIORITY = 220
 _TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")
 
 _HANDOFF_RE = re.compile(r"(^|/)state/handoffs/[^/]+\.md$", re.IGNORECASE)
-
-_MAX_WHOLE_FILE_BYTES = 256 * 1024
 
 
 def _extract_candidates(payload: Dict[str, Any]) -> List[str]:
@@ -174,73 +173,6 @@ def _normalize_and_gate(cand: str) -> Optional[str]:
     return cn
 
 
-def _resulting_body(tool_name: str, tool_input: Dict[str, Any], pre_image: Optional[str]) -> Optional[str]:
-    """The full post-write body text this tool call would produce, or
-    ``None`` if it cannot be determined (fails open to silent).
-
-    ``Write`` supplies a full ``content`` replacement outright. ``Edit``
-    applies its single old/new fragment to ``pre_image``. ``MultiEdit``
-    applies every fragment targeting this candidate, in order, to
-    ``pre_image``. A fragment that does not match the current text (stale
-    ``old_string``) degrades to ``None`` — this guard never guesses at a
-    body it cannot construct. ``replace_all`` (Edit/MultiEdit fragments) is
-    honored the same way `nudge_baton_body_bar`, `nudge_prose_queue_append`,
-    and `guard_memory_store_cap` already do: truthy -> replace every
-    occurrence, falsy/absent -> replace only the first.
-
-    This is a near-duplicate of `nudge_baton_body_bar._reconstruct_whole_file`
-    / `_apply_one_edit` (Review: coordinatorstaff-eng-0839d50e Finding 2)
-    left un-extracted for now — those helpers are module-private (leading
-    underscore) and this module's PreToolUse hot-path budget did not
-    justify an unreviewed cross-module import of private names in this
-    pass; a shared `write_guards/_post_write_body.py` extraction is the
-    right eventual fix and is recorded for follow-up alongside the
-    containment-gap entry the executor already filed. In the meantime this
-    function also adopts that sibling's read-side size cap
-    (`_MAX_WHOLE_FILE_BYTES`, applied in `check()`'s pre-image read) rather
-    than leaving the PreToolUse read uncapped.
-    """
-    if tool_name == "Write":
-        content = tool_input.get("content")
-        return content if isinstance(content, str) else None
-
-    if pre_image is None:
-        return None
-
-    if tool_name == "Edit":
-        old_s = tool_input.get("old_string")
-        new_s = tool_input.get("new_string")
-        if not isinstance(old_s, str) or not isinstance(new_s, str):
-            return None
-        if old_s not in pre_image:
-            return None
-        if tool_input.get("replace_all"):
-            return pre_image.replace(old_s, new_s)
-        return pre_image.replace(old_s, new_s, 1)
-
-    if tool_name == "MultiEdit":
-        edits = tool_input.get("edits")
-        if not isinstance(edits, list):
-            return None
-        body = pre_image
-        for edit in edits:
-            if not isinstance(edit, dict):
-                continue
-            old_s = edit.get("old_string")
-            new_s = edit.get("new_string")
-            if not isinstance(old_s, str) or not isinstance(new_s, str):
-                continue
-            if old_s not in body:
-                continue
-            if edit.get("replace_all"):
-                body = body.replace(old_s, new_s)
-            else:
-                body = body.replace(old_s, new_s, 1)
-        return body
-
-    return None
-
-
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         tool_name = payload.get("tool_name") or ""
@@ -277,15 +209,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if matched is None:
             return None
 
-        try:
-            if matched.stat().st_size > _MAX_WHOLE_FILE_BYTES:
-                pre_image = None
-            else:
-                pre_image = matched.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            pre_image = None
-
-        body = _resulting_body(tool_name, tool_input, pre_image)
+        pre_image = read_pre_image(matched)
+        body = post_write_body(tool_name, tool_input, pre_image, skip_stale=True)
         if body is None:
             return None
 

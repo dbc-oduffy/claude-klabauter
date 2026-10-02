@@ -28,6 +28,7 @@ _KNOWN_PRODUCERS: frozenset[str] = frozenset(
         "backlogs",
         "branch",
         "commit_closures",
+        "completion_receipts",
         "coordinator_roots",
         "cross_repo_memos",
         "decision_guides",

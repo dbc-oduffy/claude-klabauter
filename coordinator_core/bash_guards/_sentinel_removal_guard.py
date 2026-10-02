@@ -111,10 +111,6 @@ VERDICT_DENY = "deny"
 VERDICT_ADVISORY = "advisory"
 VERDICT_ALLOW = "allow"
 
-from coordinator_core.bash_guards._sentinel_creation_guard import (  # noqa: E402
-    INDIRECTION_REMEDY,
-)
-
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,
     _C_FLAG_INTERPRETERS,

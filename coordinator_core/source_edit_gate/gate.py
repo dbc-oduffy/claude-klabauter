@@ -89,7 +89,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 from .gate_report import TestReport
 from .runner import GroupTimeout, detect_runner, find_runner_root, run_selected
@@ -155,13 +155,10 @@ def _new_failures(base: TestReport, candidate: TestReport) -> tuple:
 
 
 def _list_tracked_files(repo_root: str) -> list:
-    out = subprocess.run(
-        ["git", "-C", repo_root, "ls-files"],
-        capture_output=True,
-        text=True,
-        check=True,
-        **no_console_creationflags(),
-    )
+    argv = ["-C", repo_root, "ls-files"]
+    out = run_git(argv)
+    if not out.ok:
+        raise subprocess.CalledProcessError(out.returncode, argv, out.stdout, out.stderr)
     return [f for f in out.stdout.splitlines() if f]
 
 

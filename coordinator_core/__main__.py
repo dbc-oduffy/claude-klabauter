@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 
-_RETIREMENT_MSG = (
+_RETIREMENT_MSG = (  # popup-safe-env-suppressed: string literal, not a subprocess call
     "coordinator_core resident daemon retired by DR-215"
     " — use: python -m coordinator_core.invoke <op> '<params>'"
 )

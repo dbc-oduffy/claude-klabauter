@@ -52,7 +52,10 @@ than re-deriving a parallel judgment of "is this translatable":
     during this row's adversarial review: it denied common benign commands
     on Windows toward an "Example" that was just the seam's own disclaimer
     text, the exact deny-toward-a-target-that-does-not-exist hazard the
-    sequencing rule exists to prevent.
+    sequencing rule exists to prevent. A bare seam advisory over a
+    single-process upstream with no loop, `xargs` or `find -exec` stays
+    silent (`_upstream_is_single_process`): python3 + sh + generator is
+    more spawns than generator + `tail`.
 
   - FOR_LOOP -> `dispatch_checks.check_find_exec_rewrite`. That check's own
     docstring is explicit that its FOR_LOOP handling is NARROW: it
@@ -427,6 +430,9 @@ def _verbatim_head_tail_alternative(cmd: str) -> Optional[str]:
     caller a runnable alternative with zero need to understand what the
     upstream command means.
 
+    Reached only for a multi-spawn generator (`_upstream_is_single_process`
+    suppresses the advisory otherwise).
+
     WHAT THIS BUYS, STATED HONESTLY -- it is capability and portability, NOT
     a spawn reduction, and the caller-facing message says so rather than
     overclaiming. Accounting for `git log --oneline | head -n 3`: the original
@@ -496,21 +502,55 @@ def _verbatim_head_tail_alternative(cmd: str) -> Optional[str]:
     return "%s -c %s" % (_pl_python3_invocation(), shlex.quote(script))
 
 
+#: Shapes whose presence means the generator feeding `head`/`tail` is itself
+#: multi-spawn (a loop body, an `xargs`/`find -exec` fan-out).
+_MULTI_SPAWN_SHAPES = (Shape.FOR_LOOP, Shape.WHILE_READ_LOOP, Shape.FIND_EXEC_XARGS)
+
+
+def _upstream_is_single_process(classification: Any) -> bool:
+    """True when the command's one pipe feeds `head`/`tail` from a single
+    plain command and no loop, `xargs`, or `find -exec` appears anywhere.
+
+    Every python3 offer for such a command is net-negative: generator + tail
+    is 2 spawns, python3 + sh + generator is 3 and starts an interpreter.
+    Anything else (a second pipe stage, a loop, `||`, unparseable tokens)
+    answers False, which keeps the advisory.
+    """
+    if classification.tokens is None:
+        return False
+    if any(classification.has_shape(shape) for shape in _MULTI_SPAWN_SHAPES):
+        return False
+    segments = _pl_segments_from_tokens_with_pipe_flag(classification.tokens)
+    piped = [i for i, (_tokens, pipe_before) in enumerate(segments) if pipe_before]
+    if len(piped) != 1 or piped[0] == 0:
+        return False
+    head_tail_tokens = segments[piped[0]][0]
+    return _pl_token_matches_binary(head_tail_tokens[0], "head") or (
+        _pl_token_matches_binary(head_tail_tokens[0], "tail")
+    )
+
+
 def _verdict_head_tail(
     cmd: str,
     session_id: str,
     host_is_windows: Optional[bool],
     payload: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    classification: Any = None,
+) -> Optional[Dict[str, Any]]:
     """Platform-conditioned verdict for a HEAD_TAIL_PLUMBING-primary command,
     consuming `check_head_tail_plumbing_rewrite`'s own confirmation of an
     outlet for this exact command (rewrite or advisory-with-skeleton both
     count; ``None`` -- either a genuine shape-classifier/seam disagreement
     or the seam's own override having fired -- degrades to a generic
     advisory rather than a deny toward nothing).
+
+    No confirmed outlet and a single-process upstream returns ``None``: the
+    only alternative on offer would cost more spawns than the command.
     """
     seam_result = check_head_tail_plumbing_rewrite(cmd, session_id, payload=payload)
     if not _seam_confirmed_rewrite(seam_result):
+        if _upstream_is_single_process(classification or classify_command(cmd)):
+            return None
         verbatim_alt = _verbatim_head_tail_alternative(cmd)
         if verbatim_alt is not None:
             return _generic_advisory(
@@ -773,7 +813,9 @@ def check(
 
     verdict: Optional[Dict[str, Any]] = None
     if primary.shape is Shape.HEAD_TAIL_PLUMBING:
-        verdict = _verdict_head_tail(cmd, session_id, host_is_windows, payload)
+        verdict = _verdict_head_tail(
+            cmd, session_id, host_is_windows, payload, classification
+        )
     elif primary.shape is Shape.FOR_LOOP:
         verdict = _verdict_for_loop(cmd, session_id, host_is_windows, payload)
     elif primary.shape is Shape.WHILE_READ_LOOP:

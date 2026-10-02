@@ -124,6 +124,7 @@ from coordinator_core.workweek_complete.brief import (
     brief,
 )
 from coordinator_core.contract.apply_base import assert_dispatchable
+from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
 
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
@@ -232,10 +233,6 @@ def _dispatch_directive(directive: dict[str, Any]) -> dict[str, Any]:
         "stderr": stderr_text,
         "exit_class": exit_class.value,
     }
-
-
-def _judgment_points_by_id(judgment_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {jp["id"]: jp for jp in judgment_points}
 
 
 def _execute_directives(

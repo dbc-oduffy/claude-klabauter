@@ -26,6 +26,7 @@ def author_box(tmp_path, monkeypatch):
         if key.startswith("MACHINE_LOCAL_COORDINATOR_"):
             monkeypatch.delenv(key)
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "author")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))

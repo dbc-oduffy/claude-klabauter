@@ -505,6 +505,41 @@ def _record_digest(record: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(record, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
+def _materialise_source_rows(
+    source: Mapping[str, Any], *, row_id_key: str, repo_root: Path, row_dir: Path
+) -> tuple[SourceOpResult, list[Path]]:
+    """Run the source op and write each record as `<row_dir>/<row_id>.yaml`
+    (JSON text, a YAML subset). The file stem is the row id, so `@stem`
+    profiles resolve the same id `live_row_ids` derives from the op."""
+    op_name = source["op"]
+    args = source.get("args") or {}
+    output = _call_source_op(op_name, args, repo_root)
+    output_sha256 = hashlib.sha256(json.dumps(output, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    records = output.get("records") if isinstance(output, Mapping) else None
+    row_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    seen: dict[str, int] = {}
+    for i, record in enumerate(records or []):
+        if not isinstance(record, Mapping):
+            continue
+        row_id = _source_row_id(op_name, record, _record_digest(record), row_id_key, i)
+        if row_id in seen:
+            error = DuplicateStemError if row_id_key == "@stem" else DuplicateRowIdError
+            raise error(
+                f"queue_select: source rows {seen[row_id]} and {i} from op {op_name!r} "
+                f"resolve to the same row id {row_id!r}"
+            )
+        seen[row_id] = i
+        if any(c in row_id for c in '/\\:') or row_id.startswith("."):
+            raise MissingRowIdError(
+                f"queue_select: source row {i} from op {op_name!r} has row id {row_id!r}, not a portable file stem"
+            )
+        row_path = row_dir / f"{row_id}.yaml"
+        row_path.write_text(json.dumps(record, sort_keys=True, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
+        paths.append(row_path)
+    return SourceOpResult(op=op_name, args=args, output_sha256=output_sha256), paths
+
+
 def live_row_ids(
     queue: Sequence[Path],
     *,
@@ -516,6 +551,14 @@ def live_row_ids(
     `where`/`limit` — the liveness set `grind-row sweep` settles ledgers
     against. A row filtered out by `where` is still live."""
     ids: set[str] = set()
+    if source is not None:
+        # A source REPLACES the queue read (DR-404 § 1: rows come from the op).
+        output = _call_source_op(source["op"], source.get("args") or {}, Path(repo_root))
+        records = output.get("records") if isinstance(output, Mapping) else None
+        for i, record in enumerate(records or []):
+            if isinstance(record, Mapping):
+                ids.add(_source_row_id(source["op"], record, _record_digest(record), row_id_key, i))
+        return ids
     for queue_dir in queue:
         queue_dir = Path(queue_dir)
         for name in sorted(os.listdir(queue_dir)):
@@ -531,12 +574,6 @@ def live_row_ids(
             if not isinstance(parsed, dict):
                 raise UnparseableRowError(f"queue_select: row {row_path!s} did not parse to a mapping")
             ids.add(_file_row_id(row_path, parsed, row_id_key))
-    if source is not None:
-        output = _call_source_op(source["op"], source.get("args") or {}, Path(repo_root))
-        records = output.get("records") if isinstance(output, Mapping) else None
-        for i, record in enumerate(records or []):
-            if isinstance(record, Mapping):
-                ids.add(_source_row_id(source["op"], record, _record_digest(record), row_id_key, i))
     return ids
 
 
@@ -553,6 +590,7 @@ def select_rows(
     repo_root: Path,
     source: Optional[Mapping[str, Any]] = None,
     absent_sentinels: Optional[Mapping[str, Sequence[Any]]] = None,
+    source_row_dir: Optional[Path] = None,
 ) -> Manifest:
     """Turn one or more queue directories into a frozen `Manifest`.
 
@@ -575,7 +613,10 @@ def select_rows(
     (DR-404). `source`, when given, is `{"op": ..., "args":
     ...}`; `op` must be a member of `grind_vocab.SOURCE_OPS` and is resolved
     and called in-process through the op registry (`UnknownSourceOpError`
-    otherwise).
+    otherwise). A source REPLACES the queue read: `queue` is not listed, and
+    each record is materialised as one row file under `source_row_dir`
+    (required with `source`) so every row has a file `grind-row close` can
+    archive, and runs through the same where/order/limit/ledger pipeline.
     """
     absent_sentinels = absent_sentinels or {}
     repo_root = Path(repo_root)
@@ -583,41 +624,52 @@ def select_rows(
     seen_stems: dict[str, Path] = {}
     rows: list[tuple[str, Path, str, dict[str, Any]]] = []  # (row_id, path, digest, normalised)
 
-    for queue_dir in queue:
-        queue_dir = Path(queue_dir)
-        for name in sorted(os.listdir(queue_dir)):
-            if name.startswith(".") or not (name.endswith(".yaml") or name.endswith(".yml")):
-                continue
-            row_path = queue_dir / name
-            if not row_path.is_file():
-                continue
-            raw_bytes = row_path.read_bytes()
-            digest = hashlib.sha256(raw_bytes).hexdigest()
-            try:
-                parsed = schema_validate.parse_yaml(raw_bytes.decode("utf-8"))
-            except Exception as exc:  # noqa: BLE001 -- re-raised, named, never swallowed
-                raise UnparseableRowError(
-                    f"queue_select: row {row_path!s} could not be parsed as YAML: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
-            if not isinstance(parsed, dict):
-                raise UnparseableRowError(
-                    f"queue_select: row {row_path!s} did not parse to a mapping "
-                    f"(got {type(parsed).__name__})"
-                )
+    source_result: Optional[SourceOpResult] = None
+    row_files: list[Path] = []
+    if source is not None:
+        if source_row_dir is None:
+            raise ValueError("queue_select: source requires source_row_dir")
+        source_result, row_files = _materialise_source_rows(
+            source, row_id_key=row_id_key, repo_root=repo_root, row_dir=Path(source_row_dir)
+        )
+    else:
+        for queue_dir in queue:
+            queue_dir = Path(queue_dir)
+            for name in sorted(os.listdir(queue_dir)):
+                if name.startswith(".") or not (name.endswith(".yaml") or name.endswith(".yml")):
+                    continue
+                row_path = queue_dir / name
+                if row_path.is_file():
+                    row_files.append(row_path)
 
-            row_id = _file_row_id(row_path, parsed, row_id_key)
-            if row_id in seen_stems and seen_stems[row_id] != row_path:
-                error = DuplicateStemError if row_id_key == "@stem" else DuplicateRowIdError
-                label = "stem" if row_id_key == "@stem" else "row_id"
-                raise error(
-                    f"queue_select: {label} {row_id!r} is yielded by both "
-                    f"{seen_stems[row_id]!s} and {row_path!s}"
-                )
-            seen_stems[row_id] = row_path
+    for row_path in row_files:
+        raw_bytes = row_path.read_bytes()
+        digest = hashlib.sha256(raw_bytes).hexdigest()
+        try:
+            parsed = schema_validate.parse_yaml(raw_bytes.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 -- re-raised, named, never swallowed
+            raise UnparseableRowError(
+                f"queue_select: row {row_path!s} could not be parsed as YAML: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise UnparseableRowError(
+                f"queue_select: row {row_path!s} did not parse to a mapping "
+                f"(got {type(parsed).__name__})"
+            )
 
-            normalised = _normalise_sentinels(parsed, absent_sentinels)
-            rows.append((row_id, row_path, digest, normalised))
+        row_id = _file_row_id(row_path, parsed, row_id_key)
+        if row_id in seen_stems and seen_stems[row_id] != row_path:
+            error = DuplicateStemError if row_id_key == "@stem" else DuplicateRowIdError
+            label = "stem" if row_id_key == "@stem" else "row_id"
+            raise error(
+                f"queue_select: {label} {row_id!r} is yielded by both "
+                f"{seen_stems[row_id]!s} and {row_path!s}"
+            )
+        seen_stems[row_id] = row_path
+
+        normalised = _normalise_sentinels(parsed, absent_sentinels)
+        rows.append((row_id, row_path, digest, normalised))
 
     checked_where = _check_where(where, absent_sentinels)
     filtered = [r for r in rows if _matches_where(r[3], checked_where)]
@@ -696,67 +748,6 @@ def select_rows(
                 skip_stages=skip_stages,
             )
         )
-
-    source_result: Optional[SourceOpResult] = None
-    if source is not None:
-        op_name = source["op"]
-        args = source.get("args") or {}
-        output = _call_source_op(op_name, args, repo_root)
-        output_sha256 = hashlib.sha256(
-            json.dumps(output, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()
-        source_result = SourceOpResult(op=op_name, args=args, output_sha256=output_sha256)
-
-        # The source op's own output rows enter the SAME manifest as a
-        # queue source (S1) -- `records` is the shape `lessons.extract`
-        # (the one registered SOURCE_OPS member) returns; a source op with
-        # no `records` list contributes no rows, only the recorded
-        # `SourceOpResult` provenance.
-        source_records = output.get("records") if isinstance(output, Mapping) else None
-        if source_records:
-            seen_source_ids: dict[str, int] = {}
-            for i, record in enumerate(source_records):
-                if not isinstance(record, Mapping):
-                    continue
-                normalised = _normalise_sentinels(record, absent_sentinels)
-                if not _matches_where(normalised, checked_where):
-                    continue
-                record_digest = _record_digest(record)
-                row_id = _source_row_id(op_name, record, record_digest, row_id_key, i)
-                if row_id_key == "@stem":
-                    if row_id in seen_source_ids:
-                        raise DuplicateStemError(
-                            f"queue_select: source rows {seen_source_ids[row_id]} and {i} "
-                            f"from op {op_name!r} resolve to the same content-derived id "
-                            f"{row_id!r}"
-                        )
-                    seen_source_ids[row_id] = i
-                source_path = f"@source:{op_name}:{i}"
-                mark = handback_marks.get(row_id, "")
-                if mark.startswith("route-to-"):
-                    declined.append(
-                        DeclinedEntry(
-                            row_id=row_id,
-                            path=source_path,
-                            reason=f"row carries a route-to-* hand-back mark ({mark!r})",
-                        )
-                    )
-                    continue
-                skip_stages, declined_reason = _fold_in_ledger(row_id, record_digest, ledger_by_row)
-                if declined_reason is not None:
-                    declined.append(
-                        DeclinedEntry(row_id=row_id, path=source_path, reason=declined_reason)
-                    )
-                    continue
-                entries.append(
-                    ManifestEntry(
-                        row_id=row_id,
-                        path=source_path,
-                        digest=record_digest,
-                        batch_key=_coalesce_batch_key(normalised, batch_key),
-                        skip_stages=skip_stages,
-                    )
-                )
 
     declined_sorted = tuple(sorted(declined, key=lambda d: d.row_id))
 

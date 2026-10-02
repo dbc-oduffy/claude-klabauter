@@ -187,6 +187,7 @@ def emit_queue_script(
         repo_root=repo_root,
         source=loaded_profile.source,
         absent_sentinels=loaded_profile.absent_sentinels,
+        source_row_dir=Path(guarded_run_dir) / "source-rows",
     )
 
     script = compose_grind_script(

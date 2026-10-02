@@ -2,7 +2,7 @@
 -- the untested guard whose doctrine-cited name has drifted from the real
 symbol.
 
-Doctrine (``docs/wiki/coordinator-tripwires.md`` § BLOCK-BLANKET-GIT-ADD)
+Doctrine (``coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md`` § BLOCK-BLANKET-GIT-ADD)
 cites ``coordinator_core.bash_guards.block_blanket_git_add`` as the
 enforcement point. The real symbol is
 ``coordinator_core.bash_guards.dispatch_checks.check_blanket_git_add`` -- a

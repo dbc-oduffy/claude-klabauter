@@ -42,10 +42,10 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   settles (deletes) every ledger and `_handback` mark whose row id the named
   queue dirs no longer yield — the settle for a row that left the queue by a
   hand closure or a denied committer rather than the committer's own settle.
-- `run-record --profile P --run-id T --record-file F --repo-root D`: writes
+- `run-record --profile P --run-id T [--record-file F|-] --repo-root D`: writes
   `state/queue-grind/<P>/runs/<T>.json` atomically (temp file + `os.replace`),
   contained under `--repo-root`, from the JSON at `--record-file` (or stdin
-  when `F` is `-`). The committer agent has no Write tool, so the drain
+  when `F` is `-` or the flag is absent). The committer agent has no Write tool, so the drain
   commit's run-cost record is written through this verb instead of being
   hand-written, and the write is declared like every other row mutation.
 
@@ -373,6 +373,13 @@ def _archive_month(run_stamp: str) -> str:
     return _stamp_date(run_stamp)[:7]
 
 
+def archive_destination(archive_path: str, run_stamp: str, row_name: str) -> str:
+    """Repo-relative POSIX path a closed row lands at: `<archive_path>/<YYYY-MM>/<row_name>`.
+    The one place the month bucket is decided; `close` writes here and the
+    emitted workflow's commit stage names the same path."""
+    return f"{archive_path.rstrip('/')}/{_archive_month(run_stamp)}/{row_name}"
+
+
 def _stamp_date(run_stamp: str) -> str:
     """YYYY-MM-DD from a run stamp (`20260922T110458Z` or ISO-8601), for a
     stamp field the queue schema types `format: date`.
@@ -512,9 +519,8 @@ def cmd_close(rest: list[str]) -> int:
         print(f"grind-row close: schema validation failed: {result}", file=sys.stderr)
         return EXIT_REFUSAL
 
-    month = _archive_month(flags["run-stamp"])
-    archive_dir = repo_root / profile.archive_path / month
-    new_path = archive_dir / row_path.name
+    new_path = repo_root / archive_destination(profile.archive_path, flags["run-stamp"], row_path.name)
+    archive_dir = new_path.parent
     if new_path.exists():
         # Reconcile a crash between the prior run's os.replace and unlink
         # (S4): if the archive copy already matches what THIS run would
@@ -647,24 +653,25 @@ def cmd_sweep(rest: list[str]) -> int:
 
 
 def cmd_run_record(rest: list[str]) -> int:
-    """`run-record --profile P --run-id T --record-file F --repo-root D`:
+    """`run-record --profile P --run-id T [--record-file F] --repo-root D`:
     atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
-    the JSON at `--record-file` (or stdin when `--record-file -`), contained
+    the JSON at `--record-file`, or from stdin when it is `-` or absent (the
+    drain's op-runner pipes the record; it cannot reliably write a file), contained
     under `--repo-root`. The sole route the committer agent has for the
     drain run record -- it carries no Write tool, so it invokes this verb
     instead of hand-writing the file, and the write is declared like every
     other row-verb mutation (§ Design § Row verbs, `run-record`)."""
     flags = _parse_flags(
-        rest, required=("profile", "run-id", "record-file", "repo-root")
+        rest, required=("profile", "run-id", "repo-root"), optional=("record-file",)
     )
     if flags is None:
         return _usage(
-            "usage: grind-row run-record --profile P --run-id T --record-file F "
+            "usage: grind-row run-record --profile P --run-id T [--record-file F|-] "
             "--repo-root D"
         )
 
     repo_root = Path(flags["repo-root"])
-    record_file = flags["record-file"]
+    record_file = flags.get("record-file", "-")
     if record_file == "-":
         raw_text = sys.stdin.read()
     else:

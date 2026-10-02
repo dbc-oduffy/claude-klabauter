@@ -115,3 +115,23 @@ def test_the_SAME_guard_called_twice_in_one_process_is_still_deduped(monkeypatch
     _dialect._log_dialect_parser_unavailable("check_repeat_guard", "reason b")
 
     assert len(calls) == 1, "same guard, same process: still once, not once-per-call"
+
+
+def test_probe_armed_survives_non_utf8_probe_output(tmp_path):
+    """A probe child emitting bytes the locale codec cannot decode must yield
+    a (False, reason) verdict, not an escaping UnicodeDecodeError."""
+    import sys
+
+    from coordinator_core.bash_guards._dialect import probe_armed
+
+    pkg = tmp_path / "coordinator_core"
+    (pkg / "bash_guards").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "bash_guards" / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "bash_guards" / "_dialect.py").write_text(
+        "import sys\nsys.stdout.buffer.write(b'\\xff\\xfe\\x81 bad')\nsys.stdout.flush()\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    armed, reason = probe_armed(sys.executable, tmp_path)
+    assert armed is False
+    assert "bad" in reason

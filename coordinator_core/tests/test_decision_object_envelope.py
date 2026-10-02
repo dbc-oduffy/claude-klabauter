@@ -222,7 +222,7 @@ def test_decision_object_subpackage_import_does_not_pull_in_forbidden_modules():
         cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         capture_output=True,
         text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),  # popup-safe-env-suppressed
     )
     assert result.returncode == 0, (
         f"stdout={result.stdout!r} stderr={result.stderr!r}"

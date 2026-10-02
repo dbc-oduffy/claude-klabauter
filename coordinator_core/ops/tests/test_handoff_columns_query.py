@@ -11,7 +11,6 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.handoff_columns_query import _handler
-from coordinator_core.ops.emit.sections import handoff_columns as handoff_columns_mod
 from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing: coverage (d) asserts the O(1) git-log
@@ -176,15 +175,17 @@ class TestGitLogSpawnBudget:
             """),
         )
 
-        real_run = subprocess.run
+        from coordinator_core.git import run as git_run_mod
+
+        real_run_git = git_run_mod.run_git
         call_count = {"n": 0}
 
-        def _counting_run(cmd, *args, **kwargs):
-            if isinstance(cmd, list) and len(cmd) > 2 and cmd[0] == "git" and "log" in cmd:
+        def _counting_run_git(args, *a, **kwargs):
+            if "log" in args:
                 call_count["n"] += 1
-            return real_run(cmd, *args, **kwargs)
+            return real_run_git(args, *a, **kwargs)
 
-        monkeypatch.setattr(handoff_columns_mod.subprocess, "run", _counting_run)
+        monkeypatch.setattr(git_run_mod, "run_git", _counting_run_git)
 
         result = _handler(params={"archive": True}, repo_root=git_dir)
 

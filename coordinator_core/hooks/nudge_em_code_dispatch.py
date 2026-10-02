@@ -35,7 +35,7 @@ Negative-spec:
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C5
 Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js
-Design: docs/wiki/eager-agent-calibration.md (design-as-offers)
+Design: coordinator-content-repo coordinator/docs/wiki/dispatching-parallel-agents/eager-agent-calibration.md (design-as-offers)
 Tripwire: coordinator-tripwires.md § NUDGE-EM-CODE-DISPATCH
 """
 

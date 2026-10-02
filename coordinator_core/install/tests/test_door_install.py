@@ -431,18 +431,18 @@ def _unresolvable_fixture(tmp_path, manifest_text):
     engine_bin.mkdir(parents=True)
     (engine_bin / "gen-claude-author-shim.py").write_text("")
     (bin_dst / "_native-forwarder-manifest.json").write_text(manifest_text)
-    for name in ("gen-claude-author-shim", "gen-claude-author-shim", "unrecorded"):
+    for name in ("gen-claude-author-shim", "gen-claude-retired-shim", "unrecorded"):
         door_install.named_forwarder_path(bin_dst, name).write_bytes(b"x")
     return bin_dst, tmp_path / "engine"
 
 
 def test_sweep_unresolvable_named_images_removes_only_recorded_dead_names(tmp_path):
-    manifest = json.dumps({"names": ["gen-claude-author-shim", "gen-claude-author-shim"]})
+    manifest = json.dumps({"names": ["gen-claude-author-shim", "gen-claude-retired-shim"]})
     bin_dst, engine_root = _unresolvable_fixture(tmp_path, manifest)
 
     removed = door_install._sweep_unresolvable_named_images(bin_dst, engine_root)
 
-    dead = door_install.named_forwarder_path(bin_dst, "gen-claude-author-shim")
+    dead = door_install.named_forwarder_path(bin_dst, "gen-claude-retired-shim")
     assert removed == [dead]
     assert not dead.exists()
     assert door_install.named_forwarder_path(bin_dst, "gen-claude-author-shim").exists()
@@ -453,15 +453,15 @@ def test_sweep_unresolvable_named_images_sweeps_nothing_on_unreadable_manifest(t
     bin_dst, engine_root = _unresolvable_fixture(tmp_path, "{not json")
 
     assert door_install._sweep_unresolvable_named_images(bin_dst, engine_root) == []
-    assert door_install.named_forwarder_path(bin_dst, "gen-claude-author-shim").exists()
+    assert door_install.named_forwarder_path(bin_dst, "gen-claude-retired-shim").exists()
 
 
 def test_sweep_unresolvable_named_images_sweeps_nothing_for_a_root_without_bin(tmp_path):
-    manifest = json.dumps({"names": ["gen-claude-author-shim"]})
+    manifest = json.dumps({"names": ["gen-claude-retired-shim"]})
     bin_dst, _ = _unresolvable_fixture(tmp_path, manifest)
 
     assert door_install._sweep_unresolvable_named_images(bin_dst, tmp_path / "nowhere") == []
-    assert door_install.named_forwarder_path(bin_dst, "gen-claude-author-shim").exists()
+    assert door_install.named_forwarder_path(bin_dst, "gen-claude-retired-shim").exists()
 
 
 def test_sweep_unresolvable_named_images_keeps_an_extensionless_script(tmp_path):

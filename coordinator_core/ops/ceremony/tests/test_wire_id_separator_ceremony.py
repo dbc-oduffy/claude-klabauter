@@ -43,12 +43,14 @@ CEREMONY_DIR = Path(__file__).resolve().parent.parent
 # No replacement entry: the op is a REBUILD CANDIDATE, not a rename, so there is
 # no successor module to guard yet. Whatever rebuilds /workstream-complete's tail
 # step joins this tuple deliberately, the same way any new ceremony module does.
+#
+# resolver.py was deleted with the consumed-handoff ship stamp (d7ba4a60e4). No
+# replacement entry: nothing inherited its wire-id construction.
 GUARDED_MODULES = (
     "branch_resolution.py",
     "git_native.py",
     "records_query.py",
     "renderers.py",
-    "resolver.py",
 )
 
 

@@ -134,7 +134,7 @@ def _resolve_mcp_topology_path() -> Optional[Path]:
     try:
         from coordinator_core._settings_home import claude_config_dir
         from coordinator_core.data_root import content_root_for
-        from coordinator_core.content_root_pointer import read_content_root_pointer
+        from coordinator_core.content_root import read_content_root
     except Exception:
         return None
 
@@ -145,11 +145,11 @@ def _resolve_mcp_topology_path() -> Optional[Path]:
             return candidate
 
     try:
-        content_root = read_content_root_pointer()
+        base = read_content_root()
     except Exception:
-        content_root = ""
-    if content_root:
-        content_root = content_root_for(content_root)
+        base = ""
+    if base:
+        content_root = content_root_for(base)
         if content_root is not None:
             candidate = content_root / "mcp-topology.yaml"
             if candidate.is_file():
@@ -206,7 +206,7 @@ def _engine_sibling_record() -> dict:
 #: machine-local registry present (the plan's Anti-scope entry rules out the
 #: candidates: `_ENGINE_REPO_NAME` answers the sibling-routing question, not
 #: the OSS-reachability one; the machine-local `repos.*` registry and
-#: `.coordinator-content-root` are runtime-detected and absent by design on a fresh install;
+#: the content-root pointer are runtime-detected and absent by design on a fresh install;
 #: `percolate-store.yaml`'s keep-set governs the publish transform, not
 #: detector input). The first name below is this repo: private, published
 #: verbatim to the OSS mirror, with no `source_map` row and never one,

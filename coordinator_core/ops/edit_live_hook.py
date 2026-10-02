@@ -18,7 +18,7 @@ FINAL scratch state with `sh -n` and land it via a single atomic
 same-filesystem replace — there is no window where the live path is a
 partially-written file.
 
-See: docs/wiki/concurrent-em-hazards.md (coordinator-content-repo repo) § H33 for the
+See: coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/concurrent-em-hazards.md (coordinator-content-repo repo) § H33 for the
 incident this helper was built to prevent (2026-07-09, block-illegal-filename.sh
 heredoc-fix took down 4 concurrent agents' Bash tool fleet-wide).
 

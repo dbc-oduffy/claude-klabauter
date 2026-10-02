@@ -18,6 +18,9 @@ PM_BOUND_HANDBACK_TYPES: tuple[str, ...] = ("needs-judgment", "unclear-direction
 
 ADJUDICATOR_AGENT_TYPE = "coordinator:apm"
 
+#: Must appear in the grind's meta.phases, or the contract linter warns on every emit.
+ADJUDICATE_PHASE_TITLE = "Adjudicate"
+
 #: Same gate as DoE plan-blitz.mjs: a ruling clears a decision, never a merge, publish or push to main.
 IRREVERSIBLE_GATE_SOURCE = (
     r"\b(merge[ds]? (to|into) main|push(ed|ing)? to main|force-push|publish(ed|ing)?|release"
@@ -61,7 +64,7 @@ def compose_adjudicate_block(*, agent_type_host: Optional[str]) -> str:
     call = stages._agent_call(
         _adjudicate_prompt_expr(),
         label="adjudicate",
-        phase_title="Adjudicate",
+        phase_title=ADJUDICATE_PHASE_TITLE,
         agent_type=ADJUDICATOR_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="high",

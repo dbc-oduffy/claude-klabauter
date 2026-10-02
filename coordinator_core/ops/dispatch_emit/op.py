@@ -95,6 +95,8 @@ Wire params:
                                      defaults to
                                      ``state/scratch/warp/<run-id>.workflow.mjs``.
                                      The reply adds ``run_id``.
+    writes (list[str], optional)  — the ask's file footprint (XS); refused at
+                                     emit when any path is outside repo root.
     sizing_path (str, optional)   — an existing sizing under
                                      ``state/sizings/``; implies the ASK route.
                                      Exclusive of plan/inventory/queue
@@ -207,6 +209,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_type_host,
 )
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
+from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_landed
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.review_mint import op as review_mint_op
@@ -242,6 +245,10 @@ def _load_review_inputs(route: str) -> tuple:
 # Generator-provenance: writes the emitted script to a caller-supplied,
 # path-guarded output_path -- no fixed target, purely caller-named.
 GENERATES = []
+
+
+class InventoryOutsideRepoError(ValueError):
+    """The inventory record sits outside the repo's `state/mise-inventory/`."""
 
 
 class InventoryPathConflictError(ValueError):
@@ -305,6 +312,25 @@ class ForeignEmissionError(ValueError):
     script from disk), so uniqueness would break resume; refusal is the
     mechanism, and ``force`` is the deliberate override.
     """
+
+
+def _refuse_unapproved_body(plan_path: str) -> None:
+    """Refuse a plan whose body changed after plan review; warn when unverifiable."""
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_CHANGED,
+        APPROVED_BODY_UNVERIFIABLE,
+        check_approved_body,
+    )
+
+    try:
+        text = Path(plan_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    state, message = check_approved_body(text)
+    if state == APPROVED_BODY_CHANGED:
+        raise ValueError(f"dispatch.emit: {Path(plan_path).name}: {message}")
+    if state == APPROVED_BODY_UNVERIFIABLE:
+        print(f"dispatch.emit: {Path(plan_path).name}: {message}", file=sys.stderr)
 
 
 def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
@@ -719,11 +745,30 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
+            "inventory_repo_root",
         )
     ),
+    Field("inventory_part", "list"),
     Field("queue", "list"),
     Field("overrides", "dict"),
+    Field("writes", "str_list"),
 )
+
+
+def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
+    """A plan row's `spec path` resolves against the inventory's own
+    `<repo>/state/mise-inventory/` grandparent; an inventory anywhere else
+    expands no plan and emits a script of one-line stubs."""
+    inventory = Path(inventory_path).resolve()
+    root = Path(repo_root).resolve() if repo_root else _repo_root_for_plan(str(inventory))
+    if root is None:
+        return
+    if inventory.parent != root / "state" / "mise-inventory":
+        raise InventoryOutsideRepoError(
+            f"inventory {inventory_path!r} is not under {root / 'state' / 'mise-inventory'}; "
+            "plan specs resolve against that directory's repo, so this emission "
+            "would carry no plan chunks. Move the record there, or pass --repo-root."
+        )
 
 
 @register_op("dispatch.emit")
@@ -824,6 +869,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_path = params.get("sizing_path")
     ask = params.get("ask")
     ask_ctx: Optional[dict] = None
+    receipt_extras: Optional[dict] = None
 
     if ask or sizing_path:
         if plan_path or inventory_path or queue or profile_name:
@@ -837,6 +883,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         if sizing_path:
             ask_root = _sizing_root(params, repo_root, str(sizing_path))
             sizing_rel = _sizing_rel(ask_root, str(sizing_path))
+            ask_sizing = _gate_sizing_at_emit(ask_root, sizing_rel, list(params.get("writes") or []))
         else:
             given_root = repo_root or params.get("target_root")
             if not given_root:
@@ -845,6 +892,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         run_id = f"ask-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {"root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id}
+        if sizing_path:
+            ask_ctx.update(ask_sizing)
+            receipt_extras = {"batons": ask_sizing["batons"], "uncommitted": ask_sizing["uncommitted"]}
         if not aliased_param(params, "output_path", "out_path"):
             default_out = ask_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
             default_out.parent.mkdir(parents=True, exist_ok=True)
@@ -888,8 +938,17 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     if not is_queue_route and ask_ctx is None:
         if inventory_path:
+            _refuse_inventory_outside_repo(
+                inventory_path, params.get("inventory_repo_root") or repo_root
+            )
+            part = params.get("inventory_part")
+            resume_skipped: list = []
             spine_text, spine_path = mint_spine(
-                inventory_path, max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS
+                inventory_path,
+                max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS,
+                part=(int(part[0]), int(part[1])) if part else None,
+                skip_landed=bool(params.get("skip_landed")),
+                skipped_out=resume_skipped,
             )
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
@@ -901,6 +960,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
                 )
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
+            landed_reconciled = reconcile_landed(Path(inventory_path))
 
         if not plan_path:
             raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
@@ -949,7 +1009,6 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
 
     plan_findings: list = []
-    receipt_extras: Optional[dict] = None
     receipt_plan_path: Optional[str] = plan_path
     preamble = params.get("preamble")
 
@@ -959,6 +1018,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     # other param here keeps (does not derive facts a caller already holds).
     if params.get("preamble_path") or params.get("preamble_sha256"):
         receipt_extras = {
+            **(receipt_extras or {}),
             "preamble_path": params.get("preamble_path"),
             "preamble_sha256": params.get("preamble_sha256"),
         }
@@ -1014,13 +1074,17 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             run_id=ask_ctx["run_id"],
             session_id=emitting_session_id,
             script_path=_script_path_under(guarded_path, ask_ctx["root"]),
+            plan_blitz_args=ask_ctx.get("plan_blitz_args"),
+            writes=ask_ctx.get("writes", ()),
         )
         receipt_plan_path = None
     else:
         # AC22: the plan route loads the roster fragment and DoE's stage
-        # schemas itself, through the existing content-root pointer resolution
+        # schemas itself, through the existing content-root resolution
         # -- never a caller-supplied fragment param, and never a guessed
         # roster on an unresolvable sibling root (refuses instead).
+        if not inventory_path:
+            _refuse_unapproved_body(plan_path)
         review_roster_fragment, review_stage_schemas = _load_review_inputs(review_route)
         script = emit_script(
             plan_path,
@@ -1116,6 +1180,14 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     if ask_ctx is not None:
         reply["run_id"] = ask_ctx["run_id"]
+        if "batons" in ask_ctx:
+            reply["batons"] = ask_ctx["batons"]
+            reply["uncommitted"] = ask_ctx["uncommitted"]
+
+    if inventory_path:
+        reply["landed_reconciled"] = landed_reconciled
+        if params.get("skip_landed"):
+            reply["resume_skipped_landed"] = resume_skipped
 
     if not is_queue_route:
         anchor_root = repo_root or (
@@ -1125,6 +1197,48 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
 
     return reply
+
+
+def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
+    """Run the in-run gate and the footprint check before any script is composed.
+
+    Returns ``plan_blitz_args``, ``writes``, ``batons`` and ``uncommitted`` for the emit;
+    raises ``SizingFireRefused`` on any halt. In-process only; ``uncommitted`` is derived
+    from whether the sizing already named a baton, never from git.
+    """
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+    from coordinator_core.ops.dispatch_emit.ask_gate import gate
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
+    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_M_PLUS, SizingFireRefused, load_sizing
+    from coordinator_core.warm.caller_context import resolve_caller_context
+
+    outside = paths_outside_repo_root(writes, root)
+    if outside:
+        raise SizingFireRefused(
+            [f"writes outside repo root {Path(root).as_posix()}: {', '.join(outside)}"]
+        )
+    had_baton = bool(load_sizing(root, sizing_rel).get("baton"))
+    # An XS footprint is authored at run time when --writes is absent; the gate's
+    # "XS needs writes" check re-runs in-run against the seeded set.
+    verdict = gate(root, sizing_rel, writes=writes or ["<footprint authored at run time>"])
+    if verdict.halt is not None:
+        halt = verdict.halt
+        line = f"{halt['kind']}: {halt['reason']}"
+        if halt.get("touchpoint"):
+            line += f" — run: {halt['touchpoint']}"
+        raise SizingFireRefused([line])
+    out: dict = {"writes": writes, "batons": [], "uncommitted": []}
+    if verdict.arm == ARM_M_PLUS:
+        plugin_root = resolve_caller_context().plugin_root
+        out["plan_blitz_args"] = plan_blitz_args.resolve(
+            plugin_root=Path(plugin_root) if plugin_root else None,
+            engine_root=Path(__file__).resolve().parents[3],
+            sizing_abs=(Path(root) / sizing_rel).as_posix(),
+        )
+        baton_path = verdict.baton["path"]
+        out["batons"] = [baton_path]
+        out["uncommitted"] = [] if had_baton else [baton_path, sizing_rel]
+    return out
 
 
 def _sizing_root(params: dict, repo_root: Optional[Path], sizing_path: str) -> Path:

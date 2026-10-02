@@ -137,11 +137,11 @@ from __future__ import annotations
 
 import hashlib
 import re
-import subprocess
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
@@ -380,20 +380,22 @@ def _corpus_files(repo_root: Path) -> list[str]:
     return files
 
 
+def _git_log(repo_root: Path, args: list[str]) -> str:
+    """A history read whose failure must not read as "no history": an empty
+    stdout here would label every artifact author-independent, so a failed
+    or timed-out log raises instead."""
+    result = run_git(args, cwd=str(repo_root))
+    if not result.ok:
+        raise RuntimeError(f"git {args[0]} failed (rc={result.returncode}): {result.stderr.strip()}")
+    return result.stdout
+
+
 def _git_commit_counts(repo_root: Path, corpus_files: set) -> dict[str, int]:
     """One batched `git log --name-only` invocation; counts commits per path,
     restricted to paths currently in the corpus."""
-    proc = subprocess.run(
-        ["git", "log", f"--format={_COMMIT_MARK}%n%H", "--name-only", "--"]
-        + list(CORPUS_DIRS),
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    lines = proc.stdout.splitlines()
+    lines = _git_log(
+        repo_root, ["log", f"--format={_COMMIT_MARK}%n%H", "--name-only", "--", *CORPUS_DIRS]
+    ).splitlines()
     counts: dict[str, set] = {}
     i = 0
     cur_commit = None
@@ -416,21 +418,12 @@ def _git_temporal_signals(
     """One batched `git log -p` invocation; returns (blocking_notes value
     sets per path, paths that ever had a gate_dependency line removed),
     restricted to paths currently in the corpus."""
-    proc = subprocess.run(
-        ["git", "log", "-p", f"--format={_COMMIT_MARK}%n%H", "--"]
-        + list(CORPUS_DIRS),
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    log = _git_log(repo_root, ["log", "-p", f"--format={_COMMIT_MARK}%n%H", "--", *CORPUS_DIRS])
     blocking_notes_values: dict[str, set] = {}
     gate_dep_removed_ever: set = set()
     cur_path = None
     in_corpus = False
-    for line in proc.stdout.splitlines():
+    for line in log.splitlines():
         if line.startswith("diff --git"):
             m = _DIFF_GIT_RE.match(line)
             cur_path = m.group(2) if m else None

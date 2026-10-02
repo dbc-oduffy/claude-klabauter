@@ -94,7 +94,7 @@ Claude-klabauter engine repo explicitly instead of a bare path. And
 captured the header line, never the indented content lines that follow it —
 it now parses the block-scalar shape and gathers those lines as the value.
 
-Spec backlink: docs/wiki/coordinator-tripwires.md (improvement-queue admission rule)
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md (improvement-queue admission rule)
 Five-question detail: docs/reference/queue-admission-five-questions.md (claude-klabauter engine repo)
 Override-key reference: docs/reference/guard-override-keys.md (claude-klabauter engine repo)
 """

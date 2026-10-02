@@ -13,7 +13,7 @@ auto-promoted to `evidence-resolved` — both are a prompt for a human to
 look, never a silent free.
 
 Purpose: mechanizes the aging-reconcile predicate that was pure EM-arithmetic
-prose (pickup/SKILL.md § Step 3.4d, docs/wiki/spinoff-handoffs.md § Awaiting_gate
+prose (pickup/SKILL.md § Step 3.4d, coordinator-content-repo coordinator/docs/wiki/baton-lifecycle/spinoff-handoffs.md § Awaiting_gate
 aging § Thresholds) into a single fail-loud tool call.
 
 RETIREMENT OF THE STANDALONE BATCH NAG (2026-07-27, docs/plans/2026-07-26-

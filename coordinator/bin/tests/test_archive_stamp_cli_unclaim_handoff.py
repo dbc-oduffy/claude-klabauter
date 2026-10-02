@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -180,77 +179,6 @@ class UnclaimHandoffArgvParsingTest(unittest.TestCase):
         )
         self.assertEqual(rc, 0)
         self.assertEqual(self.stub.calls[-1], ("state/handoffs/h.md", "note", "sid1"))
-
-
-class ReaperSkipBranchesNeverPassReapedFromTest(unittest.TestCase):
-    """The reaper's release leg carries `reaped_from` provenance and no other
-    leg does (`docs/plans/2026-08-05-reaper-preserves-closure-evidence.md`).
-
-    RE-POINTED 2026-08-26 (DR-362). This was a static regex scan of
-    `coordinator/bin/reap-orphaned-in-flight-handoffs.py` for
-    `_run_archive_stamp_cli(...)` call sites carrying `--reaped-from`, because
-    at the time "a subprocess-level assertion would require standing up a full
-    reaper fixture". That CLI was deleted at 515.6ms under DR-344 section 6 and
-    the write path now lives in
-    `coordinator_core.ops.reap_in_flight_claims.apply_dispositions`, which takes
-    a plain list of dispositions and calls `archive_stamp`'s verbs in-process.
-    So the fixture excuse is gone and this is now a BEHAVIOURAL assertion over
-    that function, not a grep over source text.
-
-    The property is unchanged and is the point: releasing a crash-orphaned claim
-    must record who it was reaped from, and no skip verdict may write at all."""
-
-    def _run(self, dispositions):
-        from coordinator_core.ops import reap_in_flight_claims as reaper
-
-        calls = []
-        real_unclaim = reaper.cs_unclaim_handoff
-        real_ship = reaper._cs_ship_handoff_core
-
-        reaper.cs_unclaim_handoff = lambda path, reaped_from=None: (
-            calls.append(("unclaim", path, reaped_from)), 0)[1]
-        reaper._cs_ship_handoff_core = lambda path, sha=None: (
-            calls.append(("ship", path, sha)), (0, False))[1]
-        try:
-            reaper.apply_dispositions(dispositions)
-        finally:
-            reaper.cs_unclaim_handoff = real_unclaim
-            reaper._cs_ship_handoff_core = real_ship
-        return calls
-
-    def test_release_leg_carries_reaped_from(self):
-        from coordinator_core.ops import reap_in_flight_claims as reaper
-
-        calls = self._run([
-            reaper.Disposition("state/handoffs/a.md", "dead1", reaper._VERDICT_RELEASE, "d"),
-        ])
-        self.assertEqual(calls, [("unclaim", "state/handoffs/a.md", "dead1")])
-
-    def test_no_other_leg_carries_reaped_from(self):
-        from coordinator_core.ops import reap_in_flight_claims as reaper
-
-        calls = self._run([
-            reaper.Disposition("state/handoffs/b.md", "dead2",
-                               reaper._VERDICT_RECLAIM_SHIPPED, "d", sha="abc123"),
-        ])
-        self.assertNotIn("unclaim", [c[0] for c in calls])
-        # `_cs_ship_handoff_core` ALONE — `apply_dispositions`'s negative-spec
-        # forbids a standalone `stamp_shipped_in` ahead of it, because on a
-        # guard-retained handoff the pre-stamp survives a flip that never
-        # happened and leaves the shipped_in/in_flight half-state the composed
-        # verb exists to close.
-        self.assertEqual([c[0] for c in calls], ["ship"])
-
-    def test_skip_verdicts_write_nothing_at_all(self):
-        from coordinator_core.ops import reap_in_flight_claims as reaper
-
-        calls = self._run([
-            reaper.Disposition("state/handoffs/c.md", "dead3",
-                               reaper._VERDICT_SKIP_LIVE_CHILDREN, "d"),
-            reaper.Disposition("state/handoffs/d.md", "dead4",
-                               reaper._VERDICT_SKIP_GOVERNED_PLAN, "d"),
-        ])
-        self.assertEqual(calls, [])
 
 
 class UnclaimSessionLedgerAdvisoryTest(unittest.TestCase):

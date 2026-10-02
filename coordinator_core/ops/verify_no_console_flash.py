@@ -7,7 +7,7 @@ Purpose: on Windows (git-bash/mintty), spawning any native console-subsystem
 window that briefly flashes. The only reliable suppression is
 CREATE_NO_WINDOW / windowsHide:true at the CreateProcess call — not
 `-WindowStyle Hidden`, which is create-then-hide. See:
-docs/wiki/claude-code-platform-gotchas.md § Windows console window flash
+Coordinator-content-repo coordinator/docs/wiki/claude-md-surfaces/claude-code-platform-gotchas.md § Windows console window flash
 (coordinator-content-repo).
 
 This guard statically scans a coordinator-claude tree (`*.sh`, `*.json`,

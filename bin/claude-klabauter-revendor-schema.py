@@ -136,6 +136,9 @@ _PIN_REGISTRY_FILE = (
     _REPO_ROOT / "coordinator_core" / "frontmatter" / "tests" / "test_schema_validate.py"
 )
 _PIN_REGISTRY_SYMBOL = "_QUEUE_SCHEMA_PINS"
+
+# `_rewrite_pin_registry` edits the pin registry inside a shared test module in place.
+MUTATES_APPEND = ["coordinator_core/frontmatter/tests/test_schema_validate.py"]
 _SCHEMA_SUFFIX = ".schema.json"
 
 _GIT_TIMEOUT = 30

@@ -9,7 +9,7 @@ op): that op's target-dir resolver (`_default_wrapper_bin_dir`) does NOT
 honor `CLAUDE_HOME` — it always resolves against the REAL `Path.home()` on
 POSIX, which would silently break the install-sandbox-check.py harness's
 `CLAUDE_HOME`-isolated dry runs (a live-home write from a sandboxed test is
-exactly the failure class docs/wiki/machine-local-registry.md's dry-run-
+exactly the failure class coordinator-content-repo coordinator/docs/wiki/hook-best-practices/machine-local-registry.md's dry-run-
 safety lessons exist to prevent). This module is a small, deliberately
 separate op that preserves the doc block's own `${CLAUDE_HOME:-$HOME}`
 precedence exactly, rather than repointing the shared generic op (unknown

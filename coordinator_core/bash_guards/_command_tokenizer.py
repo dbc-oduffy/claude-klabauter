@@ -82,7 +82,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 #: only opt-in via `--ps1`, and the project's own tripwire doctrine records
 #: this as explicitly NOT the convention ("`.ps1` twins are not the
 #: convention (3 of 57 entrypoints carry one)" --
-#: `docs/wiki/coordinator-tripwires.md` BIN-ENTRYPOINT-NEEDS-CMD-TWIN) --
+#: `coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md` BIN-ENTRYPOINT-NEEDS-CMD-TWIN) --
 #: recognizing it here would be scoping to a hypothetical rather than a
 #: confirmed carrier, the same mistake `.bat` would be. `git` itself has no
 #: `.cmd`/`.bat` twin (Git for Windows ships `git.exe` only) -- `.exe`

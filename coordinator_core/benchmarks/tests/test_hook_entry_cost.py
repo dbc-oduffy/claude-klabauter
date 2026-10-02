@@ -30,6 +30,19 @@ from coordinator_core.benchmarks.process_time import IS_DARWIN, IS_WINDOWS
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _probe_root_or_skip():
+    from coordinator_core.benchmarks.bash_dispatch_probe import (
+        ProbeRootUnavailable,
+        probe_root,
+    )
+
+    try:
+        return probe_root()
+    except ProbeRootUnavailable as exc:
+        pytest.skip(str(exc))
+
+
 def _require_supported_platform() -> None:
     if not (IS_WINDOWS or IS_DARWIN):
         pytest.skip(

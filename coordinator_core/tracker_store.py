@@ -104,14 +104,14 @@ from coordinator_core.session.claimed_write import replace_text
 
 
 def machine_slug() -> str:
-    """Lazy-imported delegate to ``coordinator_core.ops.emit._slug.machine_slug``.
+    """Lazy-imported delegate to ``coordinator_core.ops.emit._slug.tracker_machine_slug``.
 
     See the module-level NOTE above this function for why the import is
     deferred to call time rather than hoisted to module scope.
     """
-    from coordinator_core.ops.emit._slug import machine_slug as _machine_slug
+    from coordinator_core.ops.emit._slug import tracker_machine_slug
 
-    return _machine_slug()
+    return tracker_machine_slug()
 
 
 EVENTS_DIR_RELPATH = "state/sovereign-tracker"

@@ -497,6 +497,22 @@ def test_plain_modal_contraction_next_move_is_found(tmp_path, projects_dir, now)
     assert row["nudge-shape"] == idle_report.SHAPE_PUSH
 
 
+def test_a_relayed_peer_quote_is_not_the_relayers_next_move(tmp_path, projects_dir, now):
+    """Provenance: a blockquote or quoted span carrying a peer's next move is
+    not the speaker's own."""
+    _write(projects_dir, "5555aaaa-x", [
+        _said('Peer reports: "I\'ll dispatch the wave now." Nothing else here.', 40, now)
+    ], mtime_minutes_ago=40, now=now)
+    row = _row(_report(tmp_path, projects_dir, now,
+                       names={"5555aaaa-x": "claude-klabauter-a9"}), "5555aaaa")
+    assert row["named-next-move"] == idle_report.NEXT_MOVE_UNRESOLVED
+
+
+def test_own_voice_drops_blockquote_and_fence_keeps_own_sentence():
+    text = "> I'll dispatch now\n```\nnext is X\n```\nI'll run the check."
+    assert idle_report._own_voice(text) == "I'll run the check."
+
+
 def test_last_said_is_capped_at_the_emitting_end(tmp_path, projects_dir, now):
     _write(projects_dir, "ffff9999-x", [
         _said("x" * 5000, 40, now)

@@ -251,7 +251,7 @@ class TestAC6bStoredHeadExclusion:
 
 
 # ---------------------------------------------------------------------------
-# AC6c — _credit_from_kind_partition: plan credited only against
+# AC6c — the fold path's plan-kind partition: plan credited only against
 # planning-artifact commits; integration skipped entirely.
 # ---------------------------------------------------------------------------
 

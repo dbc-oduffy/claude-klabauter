@@ -1122,6 +1122,7 @@ _GIT_NO_VALUE_OPTIONS = frozenset({"--no-pager", "--literal-pathspecs", "--no-op
 
 _REQUIRED_TYPE_ARG_END = "--type review-findings"
 _REQUIRED_TYPE_ARG_MID = "--type review-findings "
+_REVIEW_PROBE_TYPE_ARG = "--type review-probe"
 
 _CMD_SAFE_MAX_LEN = 200
 
@@ -2460,8 +2461,20 @@ def _has_required_type_arg(cmd: str, ruleset: Dict[str, Any]) -> bool:
     when no well-formed policy entry exists for the calling
     ``effective_type``.
     """
-    required = ruleset["scaffolder_required_arg"]
-    return cmd.endswith(required) or (required + " ") in cmd
+    return any(
+        cmd.endswith(required) or (required + " ") in cmd
+        for required in (ruleset["scaffolder_required_arg"], _REVIEW_PROBE_TYPE_ARG)
+    )
+
+
+def _is_review_probe_with_out(cmd: str) -> bool:
+    """``--type review-probe`` computes its own path; any ``--out`` form is a
+    caller-chosen write target and is denied."""
+    tokens = _tokenize_segment(cmd)
+    is_probe = any(
+        a == "--type" and b == "review-probe" for a, b in zip(tokens, tokens[1:])
+    )
+    return is_probe and any(t == "--out" or t.startswith("--out=") for t in tokens)
 
 
 _PY_INLINE_CODE_FLAGS = frozenset({"-c", "-e"})
@@ -3114,6 +3127,10 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     if not deny and not _has_required_type_arg(cmd_for_check, ruleset):
         deny = True
         deny_reason = "missing required argument: --type review-findings (exact type value required)"
+
+    if not deny and _is_review_probe_with_out(cmd_for_check):
+        deny = True
+        deny_reason = "--out is not accepted for --type review-probe; the path is computed"
 
     if not deny:
         return None

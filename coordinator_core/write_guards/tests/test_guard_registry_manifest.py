@@ -18,77 +18,23 @@ signal (half 2) — see `coordinator/hooks/scripts/preuse-write-dispatch.py`
 import at actual hook-invocation time, on whatever machine that turns out to
 be.
 
-Maintenance note: adding, removing, or renaming a guard module is expected to
-require updating `_EXPECTED_GUARD_NAMES` below in the same commit — that
-manual step IS the test's job; it converts a should-have-been-noticed change
-into a change that must be noticed.
+Maintenance note: adding, removing, or renaming a guard module requires
+naming it in `test_guard_classification.py`'s HARD_DENY_NAMES or
+ADVISORY_NAMES in the same commit — that manual step IS the test's job; it
+converts a should-have-been-noticed change into one that must be noticed.
 """
 
 from __future__ import annotations
 
 from coordinator_core.write_guards.engine import discover_guard_names
-
-_EXPECTED_GUARD_NAMES = frozenset(
-    {
-        "block_completion_monolith_write",
-        "block_confined_agent_write",
-        "block_consumed_handoff_edit",
-        "block_duplicate_decision_record_id",
-        "bump_out_of_repo_tool_write",
-        "guard_memory_store_cap",
-        "block_cutover_phase_hand_edit",
-        "block_derived_global_doctrine_write",
-        "block_dev_repo_sentinel_write",
-        "block_dev_side_mirror_wiki",
-        "block_disarm_marker_sentinel_write",
-        "block_em_strict_dispatch_code_write",
-        "block_fleet_delegation_write",
-        "block_foreign_family_sidecar_write",
-        "block_goals_log_hand_write",
-        "block_hand_authored_sidecar_creation",
-        "block_home_dir_memo_delivery",
-        "block_illegal_filename",
-        "block_memo_status_hand_edit",
-        "block_oss_mirror_memo_delivery",
-        "block_priority_ledger_edit",
-        "block_sizing_object_schema_violation",
-        "block_subagent_archive_write",
-        "block_subagent_grant_record_write",
-        "block_subagent_guard_grant_write",
-        "block_subagent_plan_body_write",
-        "block_unauthorized_claude_md_write",
-        "block_worktree_sentinel_write",
-        "check_claude_md_size",
-        "guard_concrete_path_citations",
-        "guard_doctrine_surface_edits",
-        "guard_settings_json_write",
-        "nudge_baton_body_bar",
-        "nudge_dangling_sizing_citation",
-        "nudge_em_code_dispatch",
-        "nudge_handoff_ac_shape",
-        "nudge_handoff_author_lint",
-        "nudge_improvement_queue_write",
-        "nudge_new_sh_file_naked_python",
-        "nudge_outbox_draft_frontmatter_shape",
-        "nudge_peer_notice_unread",
-        "nudge_plan_sidecar_family_split",
-        "nudge_private_git_fact_resolver",
-        "nudge_prose_queue_append",
-        "nudge_prose_queue_creation",
-        "nudge_sentinel_retained_review_sidecar",
-        "nudge_session_display_name_as_identifier",
-        "nudge_shell_shaped_spawn",
-        "nudge_tasks_state_folder_split",
-        "nudge_terminal_artifact_edit",
-        "nudge_unattributed_process_time_figure",
-        "nudge_unmarked_spawning_test",
-        "nudge_windows_subprocess_popup",
-        "p4_checkout_before_edit",
-        "validate_frontmatter_schema_advisory",
-        "validate_frontmatter_schema_deny",
-        "wiki_changelog_prose_advisory",
-    }
+from coordinator_core.write_guards.tests.test_guard_classification import (
+    ADVISORY_NAMES,
+    HARD_DENY_NAMES,
 )
+
+# The pinned manifest is the classification lists: one hand-maintained
+# enumeration, so a new guard is named once, with its class.
+_EXPECTED_GUARD_NAMES = frozenset(HARD_DENY_NAMES) | frozenset(ADVISORY_NAMES)
 
 
 def test_discovered_guard_set_matches_manifest() -> None:

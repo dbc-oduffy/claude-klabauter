@@ -590,19 +590,7 @@ def test_draft_premise_check_advisory_fires_and_does_not_crash() -> None:
             "MACHINE_LOCAL_IMPL": mock_impl,
             "CLAUDE_HOME": claude_home,
             "COORDINATOR_SETTINGS_HOME": claude_home,
-            # C14 closed the CLAUDE_KLABAUTER_ROOT dual-read window, and every test in
-            # this file that spawned the real CLI had been failing on it.
-            # CLAUDE_KLABAUTER_ROOT is kept alongside so these runs prove
-            # COORDINATOR_ENGINE_ROOT takes PRECEDENCE over a stale CLAUDE_KLABAUTER_ROOT
-            # -- which is what they demonstrate by passing with both set.
-            # It is NOT the retirement advisory under test: measured
-            # 2026-08-26, `_maybe_emit_engine_root_retired` emits nothing once
-            # COORDINATOR_ENGINE_ROOT resolves, so no assertion here could see
-            # it. An earlier version of this comment claimed the "refusal path
-            # stays exercised"; there is no refusal (the helper advises and
-            # returns None, never raising) and the advisory does not fire.
             "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
-            "CLAUDE_KLABAUTER_ROOT": claude_klabauter_root,
         }
 
         result = _run_dispatcher_in_repo(

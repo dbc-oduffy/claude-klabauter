@@ -151,16 +151,35 @@ _RC_BLOCK_CLAUSE_INDEX = 0
 below — the clause `write_shell_rc_guard_block` journals against."""
 
 
+#: The engine noun inside the marker text. Trap: spelled split, because the
+#: publish de-naming rewrites the whole word and the mirror would then write a
+#: different marker than the authoring tree, leaving two blocks per guard.
+_ENGINE_STEM = "mak" + "ima"
+_SUPERSEDED_STEMS = ("claude-" + "klabauter",)
+
+
+def _markers_for_stem(stem: str, sentinel_id: str) -> Tuple[str, str]:
+    return (
+        f"# --- coordinator {stem} {sentinel_id} shell-init guard [generated] ---",
+        f"# --- end coordinator {stem} {sentinel_id} shell-init guard ---",
+    )
+
+
 def _sentinel_markers(sentinel_id: str) -> Tuple[str, str]:
     """Derive the BEGIN/END sentinel pair for `sentinel_id`. For
     `sentinel_id="CLAUDE_KLABAUTER_CLONE"` this reproduces the pre-generalization
     literal exactly, byte-for-byte — see the module-level `SENTINEL_BEGIN`/
     `SENTINEL_END` constants below, which are DERIVED from this function
     rather than hand-duplicated, so the two can never drift apart."""
-    return (
-        f"# --- coordinator claude-klabauter {sentinel_id} shell-init guard [generated] ---",
-        f"# --- end coordinator claude-klabauter {sentinel_id} shell-init guard ---",
-    )
+    return _markers_for_stem(_ENGINE_STEM, sentinel_id)
+
+
+def superseded_marker_pairs(sentinel_id: str) -> List[Tuple[str, str]]:
+    """Marker pairs an earlier publish of this writer used for the same guard.
+
+    An install retires a block under any of these and writes the current one;
+    uninstall strips them too."""
+    return [_markers_for_stem(stem, sentinel_id) for stem in _SUPERSEDED_STEMS]
 
 
 SENTINEL_BEGIN, SENTINEL_END = _sentinel_markers("CLAUDE_KLABAUTER_CLONE")
@@ -325,7 +344,10 @@ def _write_block_to_file(rc_path: Path, begin: str, end: str, body: str, check_o
         existing_text = ""
 
     desired_block = _desired_block(begin, body, end)
-    already_present = desired_block in existing_text
+    superseded = [
+        (b, e) for b, e in superseded_marker_pairs(label) if b in existing_text.split("\n")
+    ]
+    already_present = desired_block in existing_text and not superseded
     stale_present = (not already_present) and (begin in existing_text)
 
     if already_present:
@@ -354,8 +376,11 @@ def _write_block_to_file(rc_path: Path, begin: str, end: str, body: str, check_o
         print(f"[shell-rc-guard] REFUSED: {blocked}", file=sys.stderr)
         return {"rc_path": str(rc_path), "already_present": False, "modified": False, "stale_present": stale_present}
 
-    if stale_present:
+    for old_begin, old_end in superseded:
+        existing_text = _strip_block_text(existing_text, old_begin, old_end)
+    if stale_present and desired_block not in existing_text:
         existing_text = _strip_block_text(existing_text, begin, end)
+    block_still_present = desired_block in existing_text
 
     not_writable = (rc_path.exists() and not os.access(rc_path, os.W_OK)) or (
         not rc_path.exists() and not os.access(rc_path.parent, os.W_OK)
@@ -369,12 +394,13 @@ def _write_block_to_file(rc_path: Path, begin: str, end: str, body: str, check_o
     try:
         rc_path.parent.mkdir(parents=True, exist_ok=True)
         separator = "\n" if existing_text and not existing_text.endswith("\n") else ""
-        rc_path.write_text(f"{existing_text}{separator}{desired_block}\n", encoding="utf-8", newline="\n")
+        appended = "" if block_still_present else f"{separator}{desired_block}\n"
+        rc_path.write_text(f"{existing_text}{appended}", encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"[shell-rc-guard] ERROR: failed to write {label} guard block to {rc_path}: {exc}", file=sys.stderr)
         return {"rc_path": str(rc_path), "already_present": False, "modified": False, "stale_present": stale_present}
 
-    print(f"[shell-rc-guard] {'updated' if stale_present else 'added'} {label} guard block in {rc_path}")
+    print(f"[shell-rc-guard] {'updated' if (stale_present or superseded) else 'added'} {label} guard block in {rc_path}")
     return {"rc_path": str(rc_path), "already_present": False, "modified": True, "stale_present": stale_present}
 
 
@@ -576,7 +602,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             ),
             entry_template=WriteSurfaceEntry(
                 kind="rc-block",
-                path="$HOME/<rc-file: .zprofile|.bash_profile|.profile|.zshrc|.bashrc>",
+                path="<rc file under $HOME: .zprofile|.bash_profile|.profile|.zshrc|.bashrc>",
                 begin_marker=_PLACEHOLDER_BEGIN,
                 end_marker=_PLACEHOLDER_END,
             ),

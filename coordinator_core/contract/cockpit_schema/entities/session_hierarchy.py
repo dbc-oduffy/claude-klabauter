@@ -14,7 +14,7 @@ projection — so flattening here is safe).
 Spec backlinks:
   - schemas/session-hierarchy.schema.json
   - docs/plans/2026-06-30-ccos-8-cockpit-read-contract-spine-entities.md §Enrichment 3.B
-  - docs/wiki/cockpit-contract-entity-addition-protocol.md §Steps
+  - coordinator-content-repo coordinator/docs/wiki/schema-and-validation-contracts/cockpit-contract-entity-addition-protocol.md §Steps
   - docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md § T4e
 
 D9 nullability discipline: every optional field is `T | None` with no default

@@ -11,7 +11,7 @@ pure string transforms only.
 Port of: step_zero_emit.sh (DoE 290997c7, 2026-07-22) — a byte-parity
 Python-native implementation for Python-side Step Zero consumers.
 
-Spec backlink: docs/wiki/step-zero-emitter-contract.md (canonical contract)
+Spec backlink: coordinator-content-repo coordinator/docs/wiki/hook-best-practices/step-zero-emitter-contract.md (canonical contract)
   + docs/plans/2026-06-22-step-zero-emitter-contract-lib.md
 Conformance fixture: coordinator/tests/fixtures/step-zero-conformance.json
   (the NORMATIVE authority — base64-encoded expected bytes; this module's

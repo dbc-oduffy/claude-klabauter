@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core import _settings_home, engine_root, machine_profile, machine_resolver
+from coordinator_core.session import record_homes
 from coordinator_core.win_portability import same_path
 
 
@@ -33,7 +34,7 @@ def is_onboarded(repo_root: str | os.PathLike) -> bool:
     """
     root = os.fspath(repo_root)
     return os.path.isdir(os.path.join(root, "archive")) or os.path.isdir(
-        os.path.join(root, "state", "workstreams")
+        record_homes.home_dir(root, "workstreams")
     )
 
 

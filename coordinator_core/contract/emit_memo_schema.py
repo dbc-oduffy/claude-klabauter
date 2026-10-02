@@ -81,14 +81,10 @@ MEMO_SCHEMA_VERSION = "1.9.0"
 #: and `summary` descriptions both cite its DEC-1 send-time gate by name, so
 #: a change to that gate makes this module's prose wrong.
 #:
-#: KNOWN GAP, not closed here: `stamp_key` is `x-schema-version`, whose value
-#: is a semver. `check_generator_output_staleness` needs a commit-ish or a
-#: timestamp to open a range, so both pairs resolve INDETERMINATE
-#: ("since_point is neither a resolvable commit-ish nor a parseable
-#: timestamp: '1.8.0'") and this declaration cannot actually fire today.
-#: Closing it means emitting a provenance stamp carrying the source commit,
-#: which changes bytes two repos vendor and re-diffs on every emit — a
-#: contract tradeoff, not a mechanical fix, so it is named rather than taken.
+#: `stamp_key` is `x-schema-version`, a semver, not a commit-ish or timestamp:
+#: the staleness check cannot open a range from it, so both artifacts are
+#: declared unstamped. Stamping a source commit would change bytes two repos
+#: vendor and re-diff on every emit; read the version from MEMO_SCHEMA_VERSION.
 GENERATES = [
     {
         "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
@@ -111,6 +107,7 @@ GENERATES = [
         ],
     },
 ]
+UNSTAMPED_BY_DESIGN = ["coordinator_core/contract/*-memo.schema.json"]
 
 # ---------------------------------------------------------------------------
 # x-bump-class / x-bump-note — DoE's bump-class annotation (memo

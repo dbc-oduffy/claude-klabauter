@@ -819,6 +819,28 @@ def test_trailer_reliable_when_no_work_since_started_at(git_repo):
     assert _trailer_reliable(git_repo.root, sid, started_at) is True
 
 
+def test_trailer_unreliable_when_the_commit_count_probe_degraded(git_repo, monkeypatch):
+    import coordinator_core.ops.ceremony.branch_resolution as br
+
+    sid = "sess-c1-degraded-count"
+    started_at = "2099-01-01T00:00:00Z"
+    git_repo.seed_started_at(sid, started_at)
+    monkeypatch.setattr(
+        br, "session_commit_count_attributed", lambda *_a, **_k: {"degraded": True, "value": 0}
+    )
+
+    assert _trailer_reliable(git_repo.root, sid, started_at) is False
+    assert _trailer_reliable(git_repo.root, sid, None) is False
+
+
+def test_trailer_reliable_when_the_commit_count_probe_computed_a_positive_value(git_repo, monkeypatch):
+    import coordinator_core.ops.ceremony.branch_resolution as br
+
+    monkeypatch.setattr(
+        br, "session_commit_count_attributed", lambda *_a, **_k: {"degraded": False, "value": 2}
+    )
+
+    assert _trailer_reliable(git_repo.root, "sess-c1-count", None) is True
 def test_trailer_reliable_fails_closed_when_count_probe_degraded(git_repo, monkeypatch):
     """A degraded trailer-count probe is indeterminate, never a computed zero: it must
     not fall through to "reliable" (started_at absent / HEAD unmoved), and the

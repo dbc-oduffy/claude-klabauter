@@ -192,9 +192,20 @@ _REAL_JOIN = os.path.join
 try:
     import _pytest.fixtures as _fx
 
+    def _parent_index(node):
+        # A node's ancestor chain is fixed once built, and this runs ~1.4M
+        # times per full collection (once per fixture lookup), so the sets are
+        # cached on the node itself. Keyed by object, never nodeid: duplicate
+        # Packages share a nodeid, which is the very gap this patch handles.
+        cached = node.__dict__.get("_mk_parent_index")
+        if cached is None:
+            parent_nodes = set(node.iter_parents())
+            cached = (parent_nodes, {n.nodeid for n in parent_nodes})
+            node.__dict__["_mk_parent_index"] = cached
+        return cached
+
     def _matchfactories_with_baseid_fallback(self, fixturedefs, node):
-        parent_nodes = set(node.iter_parents())
-        parentnodeids = {n.nodeid for n in parent_nodes}
+        parent_nodes, parentnodeids = _parent_index(node)
         for fixturedef in fixturedefs:
             fixturedef_node = getattr(fixturedef, "node", None)
             if fixturedef_node is not None and fixturedef_node in parent_nodes:
@@ -1196,6 +1207,32 @@ def _no_live_inbox_writes_from_suite():
 # here and must state the value it wants in the subprocess's own inputs —
 # never rely on "no fleet file" meaning `standard`.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Guard level — suite-wide pin to `strict`.
+#
+# The product default is `warn` (machine_profile.guard_level), so an unpinned
+# test sees a guard's deny demoted to an `allow` advisory: `permissionDecision`
+# reads "allow" or is absent. Tests that assert a guard's deny envelope
+# therefore need the level stated, not inherited from the ambient registry.
+# The per-package conftests (bash_guards, hooks, write_guards) pin the same
+# value; this covers every other test directory. A test exercising the warn or
+# off leg sets MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL itself.
+#
+# SCOPE LIMIT: a `monkeypatch` does not cross a process boundary that builds
+# its own env; a test spawning a real hook states the level in the child's env.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pin_guard_level_strict_suite_wide(monkeypatch):
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
+    machine_profile.reset_cache()
+    yield
+    machine_profile.reset_cache()
 
 
 @pytest.fixture(autouse=True)

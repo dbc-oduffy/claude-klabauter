@@ -17,8 +17,10 @@ from typing import Iterable, Sequence
 
 import yaml
 
+from coordinator_core.session import record_homes
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTRY_PATH = REPO_ROOT / "state" / "baselines" / "fast-tier-standing-red.yaml"
+REGISTRY_PATH = Path(record_homes.record_path(str(REPO_ROOT), "baselines", "fast-tier-standing-red.yaml"))
 
 SHAPES = frozenset({"collection-import", "assertion", "fixture-env"})
 DISPOSITIONS = frozenset({"fix", "named-reason-red", "cross-repo"})
@@ -143,7 +145,7 @@ def _cmd_delta(machine: str | None, scope_full: bool) -> int:
     from coordinator_core.machine_resolver import compute_machine
 
     machine = machine or compute_machine()
-    record = REPO_ROOT / "state" / "test-red" / f"{machine}.yaml"
+    record = Path(record_homes.record_path(str(REPO_ROOT), "test-red", f"{machine}.yaml"))
     try:
         data = yaml.safe_load(record.read_text(encoding="utf-8")) or {}
     except OSError:

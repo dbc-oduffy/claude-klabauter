@@ -78,6 +78,25 @@ def test_scrub_handles_backslash_before_backtick_in_template():
     assert "Date.now()" not in out
 
 
+def test_scrub_nested_template_in_interpolation_does_not_close_outer():
+    src = (
+        "const p = `a ${xs.map((x) => `- ${x} }`).join('\\n')} Date.now() b`;\n"
+        "await agent(p, { model: 'sonnet' });\n"
+    )
+    out = scrub(src)
+    assert len(out) == len(src)
+    assert "Date.now()" not in out
+    assert "agent(p, { model: " in out
+    assert out.count("\n") == src.count("\n")
+
+
+def test_model_default_accepts_options_through_a_wrapper_call():
+    ok = "await agent(p, withRole('coordinator:x', { label: 'l', model: 'opus' }));\n"
+    nested = "await agent(p, withRole('x', { schema: { model: 'opus' } }));\n"
+    assert check_model_default(scrub(ok)) == []
+    assert [f.code for f in check_model_default(scrub(nested))] == ["agent-model-default"]
+
+
 def test_extract_meta_block_well_formed():
     src = "export const meta = { name: 'x', description: 'y' };\nphase('p');"
     block = extract_meta_block(src)

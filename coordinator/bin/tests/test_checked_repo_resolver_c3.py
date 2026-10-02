@@ -62,7 +62,6 @@ _MIGRATED_FILES = [
     # IT-DID shape: the module went, its readers stayed, and nothing was red until
     # someone reached for the surface.
     "reap-integrated-review-findings.py",
-    "reap-orphaned-in-flight-handoffs.py",
     "reap-stale-subagent-sidecars.py",
     "coordinator-ceremony-hook.py",
 ]

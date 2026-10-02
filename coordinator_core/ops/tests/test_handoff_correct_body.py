@@ -277,6 +277,36 @@ def test_applies_single_occurrence_correction_frontmatter_byte_identical(tmp_pat
     assert "The count was 29." not in after
 
 
+def test_author_correction_notifies_the_claim_holder(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-07-31-held.md", claimed_by=_HOLDER_SESSION)
+    _set_calling_session(monkeypatch)
+
+    result = _run(_handler(
+        {"handoff_path": str(hpath), "old_string": "The count was 29.", "new_string": "The count was 25."},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    notice = result["holder_notice"]
+    assert notice and notice.startswith(f"state/peer-notices/{_HOLDER_SESSION}/")
+    assert "The count was 25." in (repo / notice).read_text(encoding="utf-8")
+
+
+def test_holder_correction_sends_no_notice(tmp_path, monkeypatch):
+    repo = _make_git_repo(tmp_path)
+    hpath = _seed_claimed_handoff(repo, "2026-07-31-self.md", claimed_by=_AUTHOR_SESSION)
+    _set_calling_session(monkeypatch)
+
+    result = _run(_handler(
+        {"handoff_path": str(hpath), "old_string": "The count was 29.", "new_string": "The count was 25."},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["holder_notice"] is None
+
+
 # ---------------------------------------------------------------------------
 # (c) legacy status: consumed accepted on the same path
 # ---------------------------------------------------------------------------

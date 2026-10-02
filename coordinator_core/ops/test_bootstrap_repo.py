@@ -182,7 +182,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_pointer_files",
         lambda home: None,
     )
     target = tmp_path / "target"
@@ -220,7 +220,7 @@ def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path, mon
 
     isolated_claude_home = tmp_path / "isolated-home" / ".claude"
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_pointer_files",
         lambda home: str(content_root),
     )
     from coordinator_core.ops.bootstrap_repo import _resolve_scaffold_manifest_root
@@ -242,7 +242,7 @@ def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monk
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_pointer_files",
         lambda home: None,
     )
     from coordinator_core.ops.bootstrap_repo import _resolve_scaffold_manifest_root
@@ -505,7 +505,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
         lambda: str(isolated_claude_home),
     )
     monkeypatch.setattr(
-        "coordinator_core.ops.bootstrap_repo.read_content_root_pointer_file",
+        "coordinator_core.ops.bootstrap_repo.read_pointer_files",
         lambda home: None,
     )
 

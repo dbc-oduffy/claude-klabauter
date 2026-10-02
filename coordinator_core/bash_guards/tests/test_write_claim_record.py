@@ -640,3 +640,21 @@ def test_c1_resolve_read_targets_unrecognized_verb_resolves_nothing():
 def test_c1_resolve_read_targets_never_raises_on_garbage_input():
     assert resolve_read_targets("") == []
     assert resolve_read_targets("cat 'unterminated") == []
+
+
+@pytest.mark.parametrize(
+    "cmd, expected",
+    [
+        ("cat <<EOF > run.py\nhi\nEOF", []),
+        ("cat >> touch-record.jsonl", []),
+        ("cat a.py b.py 2>/dev/null", ["a.py", "b.py"]),
+        ("cat a.py > out.txt", ["a.py"]),
+        ("cat < in.txt", ["in.txt"]),
+        ("cd /elsewhere && sed -n 1,5p meta.json", []),
+        ("cd /elsewhere && cat /abs/y.py", ["/abs/y.py"]),
+    ],
+)
+def test_read_targets_never_claim_redirect_tokens_or_cd_relative_paths(cmd, expected):
+    from coordinator_core.bash_guards.write_claim_record import resolve_read_targets
+
+    assert resolve_read_targets(cmd) == expected

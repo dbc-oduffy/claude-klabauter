@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-_TOOLING_PATTERNS = [
+MACHINE_READ_MARKERS = [
+    re.compile(r"popup-(intentional-last-resort|safe-env-suppressed)"),
+    re.compile(r"#\s*type:\s*[A-Za-z_\[(]"),
+]
+
+_TOOLING_PATTERNS = MACHINE_READ_MARKERS + [
     re.compile(r"^#!"),
     re.compile(r"coding[:=]\s*[-\w.]+"),
     re.compile(r"\bnoqa\b", re.I),

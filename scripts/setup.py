@@ -220,6 +220,14 @@ EXIT_ENGINE_AT_DEV_TREE = 97
 # triggers when this installer is invoked from a headless/GUI parent
 # (agent dispatch, packaging installer). getattr(...) resolves to 0 (no-op)
 # on macOS/Linux, where CREATE_NO_WINDOW does not exist.
+def _exit_flushed(code: int) -> None:
+    """`sys.exit(code)` after flushing both streams: under `> log 2>&1` the
+    stdout block buffer and the stderr diagnosis must both land before teardown."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(code)
+
+
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 def _print_child_detail(proc) -> None:
     """Print a failed child's own last line of output, if it left one.
@@ -399,7 +407,8 @@ def parse_args(argv: list[str]) -> Args:
             args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
-        elif tok == "--with-claude-author-launcher":
+        elif tok in ("--with-claude-author-launcher", "--with-claude-" + "doe-launcher"):
+            # The "--with-claude-" + "doe-launcher" spelling is the pre-rename alias, accepted for one release.
             # The DoE-developer opt-in that lets this installer shadow the
             # operator's `claude` command. Deliberately absent from HELP_TEXT:
             # an OSS reader has no DoE clone and must never meet the concept.
@@ -524,7 +533,7 @@ def resolve_python() -> str:
         "aliases) before installing.",
         file=sys.stderr,
     )
-    sys.exit(1)
+    _exit_flushed(1)
 
 
 def _git_version_tuple(timeout: float = 10.0) -> tuple[int, ...] | None:
@@ -622,7 +631,7 @@ def derive_deps(pyproject_path: Path, extra: str | None = None) -> tuple[list[st
         m = re.match(r"^([A-Za-z0-9_.-]+)", dep)
         if not m:
             print(f"could not parse dependency entry: {dep!r}", file=sys.stderr)
-            sys.exit(1)
+            _exit_flushed(1)
         dist_name = m.group(1)
         specs.append(dep)
         normalized = dist_name.lower().replace("-", "_")
@@ -1092,7 +1101,9 @@ def convert_editable_finder_to_plain_path(
     Advisory only: any resolution/read/write failure returns a `skip: ...`
     string rather than raising — this is a startup-cost optimization on an
     install that has already verified `coordinator_core` importable; it must
-    never fail the install that already succeeded."""
+    never fail the install that already succeeded. The rewrite is machine
+    state outside the settings home, so `COORDINATOR_DISABLE_MACHINE_MUTATION`
+    refuses it."""
     program = "import sysconfig; print(sysconfig.get_path('purelib'))"
     try:
         proc = subprocess.run(
@@ -1142,6 +1153,15 @@ def convert_editable_finder_to_plain_path(
             continue
         if "import " not in existing:
             results.append(f"skip ({pth}): not an import-style finder .pth")
+            continue
+        from coordinator_core.install import substrate as _substrate
+
+        blocked = _substrate._refuse_machine_mutation(
+            str(pth), what=f"rewrite {pth.name} in site-packages", check_temp_path=False,
+        )
+        if blocked:
+            print(f"  [editable-finder] REFUSED: {blocked}", file=sys.stderr)
+            results.append(f"skip ({pth}): {blocked}")
             continue
         try:
             pth.write_text(plain_path + "\n", encoding="utf-8", newline="\n")
@@ -1193,18 +1213,18 @@ def _fallback_to_venv(
         )
     except EnsureVenvError as exc:
         print(f"FAIL [deps] settings-home coordinator venv provisioning failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     print(f"  settings-home coordinator venv: {venv_status}")
 
     try:
         venv_pip = _run_pip([str(venv_py), "-m", "pip", "install", *dep_specs])
     except subprocess.TimeoutExpired:
         print(f"FAIL [deps] venv fallback pip install timed out after 600s under {venv_py}.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     print(venv_pip.stdout, end="")
     if venv_pip.returncode != 0 or not deps_importable(str(venv_py), import_names):
         print("FAIL [deps] venv fallback install failed — see output above.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     print(f"PASS [deps] venv fallback install succeeded ({venv_dir}).")
     return str(venv_py)
 
@@ -1300,7 +1320,7 @@ def provision_deps(
     pyproject = claude_klabauter_root / "pyproject.toml"
     if not pyproject.is_file():
         print(f"FAIL [deps] pyproject.toml not found at {pyproject} — cannot derive dependency list.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
 
     dep_specs, import_names = derive_deps(pyproject)
     print(f"Derived dependency specs:  {' '.join(dep_specs)}")
@@ -1326,7 +1346,7 @@ def provision_deps(
     except RuntimeError as exc:
         print(f"FAIL [deps] cannot resolve settings-home: {exc}", file=sys.stderr)
         print("  Remediation: set CLAUDE_HOME (or HOME on POSIX / USERPROFILE on Windows) and re-run.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     venv_dir = settings_home_path / ".coordinator-venv"
     venv_py = venv_python_path(venv_dir)
 
@@ -1350,7 +1370,7 @@ def provision_deps(
                 f"— host is {sys.platform}, euid is {euid if euid is not None else 'unavailable'}.",
                 file=sys.stderr,
             )
-            sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
+            _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
     guarded = [c for c in candidates if _is_externally_managed(c.path)]
     if guarded and container_optin_honoured:
@@ -1409,7 +1429,7 @@ def provision_deps(
                 "not honour it — a PEP-668 guard is swapped, never fallen back from.",
                 file=sys.stderr,
             )
-        sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
+        _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
     def _satisfied(interpreter: str) -> bool:
         if installs_engine:
@@ -1446,7 +1466,7 @@ def provision_deps(
                 pip_proc = _run_pip(pip_argv)
             except subprocess.TimeoutExpired:
                 print(f"FAIL [deps] pip install timed out after 600s under {candidate.path}.", file=sys.stderr)
-                sys.exit(1)
+                _exit_flushed(1)
             print(pip_proc.stdout, end="")
 
             pip_output = pip_proc.stdout.lower()
@@ -1459,7 +1479,7 @@ def provision_deps(
                     "externally-managed (discovered mid-install) — no override flag is ever passed.",
                     file=sys.stderr,
                 )
-                sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
+                _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
             if pip_proc.returncode != 0 or not _satisfied(candidate.path):
                 if not allow_venv_fallback:
@@ -1473,7 +1493,7 @@ def provision_deps(
                         f"--allow-venv-fallback (settings-home venv at {venv_dir}, third-party deps only).",
                         file=sys.stderr,
                     )
-                    sys.exit(1)
+                    _exit_flushed(1)
                 print(
                     f"  --allow-venv-fallback passed — falling back to the settings-home "
                     f"coordinator venv at {venv_dir} for {candidate.label}.",
@@ -1506,7 +1526,7 @@ def provision_deps(
                 f"{candidate.path} -m pip install --no-deps -e <claude-klabauter checkout>.",
                 file=sys.stderr,
             )
-            sys.exit(EXIT_ENGINE_AT_DEV_TREE)
+            _exit_flushed(EXIT_ENGINE_AT_DEV_TREE)
 
         if index == 0:
             engine_py = resolved
@@ -1634,7 +1654,7 @@ def _install_test_deps(engine_py: str, specs: list[str]) -> None:
         proc = _run_pip([engine_py, "-m", "pip", "install", *specs])
     except subprocess.TimeoutExpired:
         print(f"FAIL [test-deps] pip install timed out after 600s under {engine_py}.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     print(proc.stdout, end="")
 
     if proc.returncode != 0:
@@ -1650,7 +1670,7 @@ def _install_test_deps(engine_py: str, specs: list[str]) -> None:
                 "--with-test-deps.",
                 file=sys.stderr,
             )
-        sys.exit(1)
+        _exit_flushed(1)
 
 
 def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args) -> None:
@@ -1674,7 +1694,7 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
                 f"'{TEST_EXTRA}' extra at {pyproject}.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            _exit_flushed(1)
         return
 
     print(f"Derived test specs: {' '.join(specs)}")
@@ -2385,9 +2405,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         # line-buffered, and sys.exit's normal interpreter teardown flush
         # was not enough to guarantee both streams land before the process
         # tears down. Force both explicitly on every hard-fail exit here.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        sys.exit(EXIT_HARD_DEP_MISSING)
+        _exit_flushed(EXIT_HARD_DEP_MISSING)
 
     # functional_probe: a "coordinator-claude" root can be shaped two ways —
     # (a) the OSS mirror clone, which carries .claude-plugin/plugin.json at its
@@ -2425,9 +2443,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
     print(file=sys.stderr)
     # Item 11: see the matching flush comment above in this function.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    sys.exit(EXIT_HARD_DEP_MISSING)
+    _exit_flushed(EXIT_HARD_DEP_MISSING)
 
 
 def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, str]:
@@ -2836,7 +2852,7 @@ def register_claude_klabauter_root(
         print("  Guessing here would write a wrong key into the working-repo discriminant, so", file=sys.stderr)
         print("  this is not overridable via --skip-dep-check/--accept-missing-deps-risk.", file=sys.stderr)
         print(f"  Checked: {repo_root}", file=sys.stderr)
-        sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
+        _exit_flushed(EXIT_REPO_IDENTITY_UNRESOLVED)
 
     key_values.update(_unset_content_root_registration(coord_path, coord_source, plugin_root))
 
@@ -2857,7 +2873,7 @@ def register_claude_klabauter_root(
             print("  cannot be registered without it.", file=sys.stderr)
             print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
             print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
-            sys.exit(EXIT_HARD_DEP_MISSING)
+            _exit_flushed(EXIT_HARD_DEP_MISSING)
         print()
         print("[ADVISORY] machine-local not found — coordinator-claude absent.")
         print(f"  {keys_desc} registration skipped (--skip-dep-check --accept-missing-deps-risk accepted).")
@@ -2890,14 +2906,14 @@ def register_claude_klabauter_root(
             print(f"ERROR: 'machine-local set {key}' failed to launch: {exc}", file=sys.stderr)
             print(f"  Tried to register: {value}", file=sys.stderr)
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
-            sys.exit(1)
+            _exit_flushed(1)
         if proc.returncode != 0:
             print(file=sys.stderr)
             print(f"ERROR: 'machine-local set {key}' failed.", file=sys.stderr)
             _print_child_detail(proc)
             print(f"  Tried to register: {value}", file=sys.stderr)
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
-            sys.exit(1)
+            _exit_flushed(1)
         print(f"PASS [registration] {key} = {value}")
     for advisory in pending_advisories:
         advisory()
@@ -3220,7 +3236,7 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
         print("       python3 scripts/setup.py --claude-klabauter-live-root /path/to/claude-klabauter", file=sys.stderr)
         print(f"    3. If {' '.join(import_names)} are missing under {engine_py}, re-run this script —", file=sys.stderr)
         print("       dependency provisioning above should have installed them.", file=sys.stderr)
-        sys.exit(1)
+        _exit_flushed(1)
     print(f"PASS [verification] coordinator_core importable from {claude_klabauter_root_resolved} ({engine_py})")
 
 
@@ -3803,12 +3819,12 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
     # ambient `Path.cwd()` (eng-director F5, C6 half).
     control = run_cold_control_invocation(op, repo_root=repo_root)
     if control.route == UNRESOLVED:
-        print(
-            f"[ADVISORY] door route {DISCRIMINATOR_UNAVAILABLE} — telemetry sink is inert on this box "
-            "(COORDINATOR_OP_LATENCY_DISABLE, an unresolvable git common dir, or an unwritable sink).",
-            file=sys.stderr,
-        )
-        print("  Remediation: export COORDINATOR_OP_LATENCY_DISABLE=0, then re-run: python3 scripts/setup.py", file=sys.stderr)
+        from coordinator_core.install.door_route_signal import diagnose_inert_sink
+
+        cause, remedy = diagnose_inert_sink(repo_root, control)
+        print(f"[ADVISORY] door route {DISCRIMINATOR_UNAVAILABLE} — telemetry sink is inert: {cause}.", file=sys.stderr)
+        if remedy:
+            print(f"  Remediation: {remedy}, then re-run: python3 scripts/setup.py", file=sys.stderr)
         return
 
     if door_result.route == IN_PROCESS:
@@ -4084,16 +4100,20 @@ def _doe_dev_clone_root() -> Path | None:
 
 
 def _rendered_claude_author_shims() -> list[Path]:
-    """Every rendered `claude()` shim on this box. The rc block only sources a
-    shim that exists, so these files are the whole of the hijack."""
+    """Every rendered `claude()` shim on this box, including one under the
+    pre-rename file name — an earlier opt-in. The rc block only sources a shim
+    that exists, so these files are the whole of the hijack."""
     from coordinator_core.ops.gen_claude_author_shim import _resolve_claude_home_base, _shim_filename
 
+    from coordinator_core.install.maximalist import legacy_doe_shim_files
+
     shell_dir = Path(_resolve_claude_home_base()) / ".claude" / "shell"
-    return [
+    current = [
         shell_dir / _shim_filename(family)
         for family in ("bash", "powershell")
         if (shell_dir / _shim_filename(family)).is_file()
     ]
+    return [*current, *(Path(p) for p in legacy_doe_shim_files(_resolve_claude_home_base()))]
 
 
 def _claude_author_launcher_opted_in(args: Args) -> bool:
@@ -4110,6 +4130,14 @@ def _claude_author_launcher_opted_in(args: Args) -> bool:
     shims = _rendered_claude_author_shims()
     if _doe_dev_clone_root() is None:
         for shim in shims:
+            from coordinator_core.install import substrate as _substrate
+
+            blocked = _substrate._refuse_machine_mutation(
+                str(shim), what=f"remove the claude-author shim {shim}", check_temp_path=False,
+            )
+            if blocked:
+                print(f"[claude-author-chain] REFUSED: {blocked}", file=sys.stderr)
+                continue
             try:
                 shim.unlink()
                 print(f"REMOVED [claude-author-chain] {shim} — `claude` is the real binary again from the next shell")
@@ -4128,6 +4156,75 @@ def _claude_author_launcher_opted_in(args: Args) -> bool:
         print("SKIP [claude-author-chain] not opted in (--with-claude-author-launcher wires the dev-clone `claude()` shim)")
         return False
     return True
+
+
+def _retire_legacy_doe_launchers_and_callers(callers_only: bool = False) -> None:
+    """Retire the pre-rename launcher together with the shims and rc blocks that
+    call it. `callers_only` skips the binaries (a failed re-render keeps them)."""
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install._shared import require_home
+        from coordinator_core.install import maximalist
+
+        fn = maximalist.retire_legacy_doe_callers if callers_only else maximalist.retire_legacy_doe_launchers
+        fn(require_home("setup"), str(settings_home() / "bin"), check_only=False)
+    except Exception as exc:  # noqa: BLE001 -- cleanup of a superseded name never fails setup
+        print(f"[ADVISORY] legacy claude-author launchers not retired: {exc}", file=sys.stderr)
+
+
+_LAUNCHER_OWNED_FLAGS = ("--content-root", "--" + "doe" + "-root", "--dry-run", "--print-plugin-dir", "--vanilla")
+
+
+def _probe_launcher_with_shim_flags(cli: Path, shim: Path, clone_root: Path) -> str | None:
+    """Run the launcher's `main` with `--dry-run` and the flags the rendered shim
+    passes it, in-process: no `claude` launch and no spawn.
+
+    Returns None when the launcher consumed every launcher-owned flag, else the
+    failure reason naming the flag.
+    """
+    try:
+        text = shim.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"cannot read rendered shim {shim}: {exc}"
+    flags: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#") or not re.search(r"\bclaude-author\b", line):
+            continue
+        for tok in re.findall(r"(?<![\w-])--[A-Za-z][\w-]*", line.split("claude-author", 1)[1]):
+            if tok not in flags:
+                flags.append(tok)
+    if not flags:
+        return f"no launcher invocation found in {shim}"
+    argv: list[str] = []
+    for tok in flags:
+        argv.append(tok)
+        if tok in _LAUNCHER_OWNED_FLAGS[:2]:
+            argv.append(str(clone_root))
+    argv.append("--dry-run")
+    shown = " ".join(flags)
+
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    try:
+        spec = importlib.util.spec_from_file_location("_claude_author_probe", cli)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+            code = module.main(argv)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+    except Exception as exc:  # noqa: BLE001 -- a launcher that cannot even load is a FAIL, not a crash
+        return f"launcher --dry-run did not run ({exc})"
+    if code != 0:
+        detail = (err_buf.getvalue().strip().splitlines() or ["no stderr"])[0]
+        return f"launcher rejected the shim's flags ({shown}): {detail}"
+    forwarded: list[str] = []
+    for line in out_buf.getvalue().splitlines():
+        if line.startswith("forwarded-flags:"):
+            forwarded = line.split(":", 1)[1].split()
+    leaked = [f for f in forwarded if f in _LAUNCHER_OWNED_FLAGS]
+    if leaked:
+        return f"launcher forwarded {', '.join(leaked)} to claude instead of consuming it (shim flags: {shown})"
+    return None
 
 
 def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
@@ -4170,6 +4267,7 @@ def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude
     print("--- Install: claude-author launcher chain (coordinator/bin/*claude-author*) ---")
 
     if not _claude_author_launcher_opted_in(args):
+        _retire_legacy_doe_launchers_and_callers()
         return
 
     # In-process, not four subprocess.run children (spike verdict, call shape
@@ -4268,6 +4366,21 @@ def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude
                 )
                 print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
                 continue
+            if cli_name == "gen-claude-author-shim.py":
+                clone = _doe_dev_clone_root()
+                shims = [p for p in _rendered_claude_author_shims() if "claude-author-shim" in p.name]
+                if clone is None or not shims:
+                    failure = "no rendered shim or dev clone to probe the launcher with"
+                else:
+                    failure = _probe_launcher_with_shim_flags(
+                        repo_root / "coordinator" / "bin" / "claude-author.py", shims[0], clone
+                    )
+                if failure:
+                    any_failed = True
+                    print(f"FAIL [claude-author-chain] {label} — {failure}")
+                    continue
+                print(f"PASS [claude-author-chain] {label} (launcher --dry-run accepted the shim's flags)")
+                continue
             print(f"PASS [claude-author-chain] {label}")
 
     if any_failed:
@@ -4276,17 +4389,11 @@ def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude
             "A session started on this box may look like vanilla Claude Code with no error.",
             file=sys.stderr,
         )
+        _retire_legacy_doe_launchers_and_callers(callers_only=True)
         return
     # Only once every step landed: a failed launcher render must not leave the
     # box with neither name.
-    try:
-        from coordinator_core._settings_home import settings_home
-        from coordinator_core.install._shared import require_home
-        from coordinator_core.install.maximalist import retire_legacy_doe_launchers
-
-        retire_legacy_doe_launchers(require_home("setup"), str(settings_home() / "bin"), check_only=False)
-    except Exception as exc:  # noqa: BLE001 -- cleanup of a superseded name never fails setup
-        print(f"[ADVISORY] legacy claude-author launchers not retired: {exc}", file=sys.stderr)
+    _retire_legacy_doe_launchers_and_callers()
 
 
 def _derive_identity_hints(repo_root: Path) -> dict[str, str]:
@@ -4738,6 +4845,21 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwar
 WORKSTATION_VERDICT_RULE = "workstation-install-verdict.md"
 
 
+def write_rule_surface(claude_home: Path, basename: str, body: str | None) -> bool:
+    """Land (or, for a None body, clear) `<claude_home>/rules/<basename>`.
+
+    Returns whether a file was written. Mirrors `cloud_setup._write_rule_surface`,
+    which cannot import this module.
+    """
+    rule_path = Path(claude_home) / "rules" / basename
+    if body is None:
+        rule_path.unlink(missing_ok=True)
+        return False
+    rule_path.parent.mkdir(parents=True, exist_ok=True)
+    rule_path.write_text(body, encoding="utf-8", newline="\n")
+    return True
+
+
 def install_write_hook_plane_verdict(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Install-chain step: land `<home>/.claude/rules/workstation-install-verdict.md`,
     whose first line is `HOOK PLANE: ARMED|UNARMED (delivery: <surface>)`.
@@ -4780,7 +4902,7 @@ def install_write_hook_plane_verdict(repo_root: Path, claude_klabauter_root_reso
         if problems:
             lines.append("")
             lines.extend(f"- {problem}" for problem in problems)
-        hpv.write_rule_surface(claude_home, WORKSTATION_VERDICT_RULE, "\n".join(lines) + "\n")
+        write_rule_surface(claude_home, WORKSTATION_VERDICT_RULE, "\n".join(lines) + "\n")
     except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
         print(f"WARN [hook-plane] could not write the verdict: {type(exc).__name__}: {exc}", file=sys.stderr)
         return
@@ -4807,6 +4929,48 @@ _PREFLIGHT_PROBE_NAMES = (
 )
 
 
+#: Template names under `templates/bin/` whose installed copy may lack the exec
+#: bit: both are imported or sourced, never executed. Every other template that
+#: carries the bit must keep it once installed.
+EXEC_BIT_MAY_DROP = frozenset({"_machine_local.py", "claude-machine-local.sh"})
+
+
+def exec_bit_parity_problems(templates_bin: Path, installed_bin: Path) -> list[str]:
+    """Names whose template has an exec bit and whose installed copy lost it.
+
+    A template with no installed copy is not drift (Windows-only templates are
+    never installed on POSIX; presence is the forwarders item's concern).
+    """
+    problems = []
+    for template in sorted(templates_bin.iterdir()):
+        if not template.is_file() or not template.stat().st_mode & 0o111:
+            continue
+        if template.name in EXEC_BIT_MAY_DROP:
+            continue
+        installed = installed_bin / template.name
+        if installed.is_file() and not installed.stat().st_mode & 0o111:
+            problems.append(template.name)
+    return problems
+
+
+def check_installed_exec_bit_parity(repo_root: Path, settings_home_path: Path):
+    """`--check` item: installed `<settings-home>/bin/` copies keep their templates' exec bit."""
+    from coordinator_core.install.setup_check import CheckItem
+
+    name = "exec-bit-parity"
+    if os.name == "nt":
+        return CheckItem(name, True, "not applicable on Windows")
+    coord_path, source = _resolve_coordinator_claude_root(repo_root, Args())
+    plugin_root = None if source.is_publish_mirror_rejected else _resolve_plugin_root_for_machine_local(coord_path)
+    templates_bin = None if plugin_root is None else plugin_root / "templates" / "bin"
+    if templates_bin is None or not templates_bin.is_dir():
+        return CheckItem(name, False, f"no templates/bin to compare against (coordinator-claude root: {source.display})")
+    problems = exec_bit_parity_problems(templates_bin, settings_home_path / "bin")
+    if problems:
+        return CheckItem(name, False, f"installed copy lost the exec bit its template carries: {', '.join(problems)} -- re-run scripts/setup.py")
+    return CheckItem(name, True, f"installed bin/ matches {templates_bin} (exempt: {', '.join(sorted(EXEC_BIT_MAY_DROP))})")
+
+
 def run_check(claude_klabauter_root: Path) -> int:
     """`--check`: verify the install and print one PASS/FAIL line per item; exit 1 on any FAIL."""
     if str(claude_klabauter_root) not in sys.path:
@@ -4822,6 +4986,7 @@ def run_check(claude_klabauter_root: Path) -> int:
         keys = ["repos.claude_klabauter"]
     print("=== setup.py --check ===")
     items = setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
+    items.append(check_installed_exec_bit_parity(Path(__file__).resolve().parent.parent, settings_home()))
     for item in items:
         print(item.line())
     code = setup_check.exit_code(items)
@@ -4877,17 +5042,49 @@ def write_environment_import(root: Path, variant: str) -> None:
     """Write `.claude/environment.md` from `docs/claude-md/environment.<variant>.md`.
 
     The project CLAUDE.md imports this file; a missing source is reported, never fatal.
+    A published mirror ships neither the source nor a CLAUDE.md that imports it, so
+    a root with both absent has nothing to write and says nothing.
     """
     src = root / "docs" / "claude-md" / f"environment.{variant}.md"
     dest = root / ".claude" / "environment.md"
+    if not src.exists() and not (root / "CLAUDE.md").exists():
+        return
     try:
         text = src.read_text(encoding="utf-8")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
+        dest.write_text(text, encoding="utf-8", newline="\n")
     except OSError as exc:
         print(f"WARN [environment] could not write {dest} from {src}: {exc}")
         return
     print(f"PASS [environment] wrote {dest} ({variant} variant)")
+
+
+def install_record_receipt(claude_klabauter_root_resolved: Path) -> None:
+    """Rebuild `<settings-home>/install-receipt.json` from this run's resolution journal.
+
+    Recording leg: a failure here is reported and never fails the install.
+    A writer that did not report this run lands in `unreported_writer_ids`.
+    """
+    print()
+    print("--- Install: receipt (install-receipt.json) ---")
+    try:
+        from coordinator_core.install.maximalist import _build_and_persist_receipt
+
+        _build_and_persist_receipt(claude_klabauter_root_resolved)
+    except Exception as exc:  # noqa: BLE001 -- recording leg must never break the install
+        print(f"[ADVISORY] install-receipt not rewritten: {exc}", file=sys.stderr)
+        return
+    print("PASS [receipt] install-receipt.json rewritten from this run's resolution journal.")
+
+
+def _reset_resolution_journal() -> None:
+    """Start the run's resolution journal empty, so the receipt reflects this run only."""
+    try:
+        from coordinator_core.install.resolution_journal import clear_journal
+
+        clear_journal()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ADVISORY] resolution journal not reset: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -5000,6 +5197,7 @@ def main(argv: list[str]) -> int:
         # the ~2.34ms native door to a cold interpreter start with NO error and
         # no signal -- just a slower path nobody is looking at. Pinned by
         # coordinator_core/install/tests/test_door_bare_name_ordering.py.
+        _reset_resolution_journal()
         forwarders_failed = install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         install_claude_author_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
@@ -5011,6 +5209,7 @@ def main(argv: list[str]) -> int:
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
+        install_record_receipt(claude_klabauter_root_resolved)
         install_write_hook_plane_verdict(repo_root, claude_klabauter_root_resolved, args)
 
     print()

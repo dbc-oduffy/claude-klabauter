@@ -383,3 +383,19 @@ def test_no_desc_flag_emits_judgment_step_title(tmp_path, capsys):
     stdout = capsys.readouterr().out
     assert "[JUDGMENT STEP — suggest title from: My Plan]" in stdout
     assert "[Caller-supplied description]" not in stdout
+
+
+def test_read_divergence_surfaces_diverged_prose_and_names_unreadable(tmp_path, capsys) -> None:
+    clean = tmp_path / "clean.md"
+    diverged = tmp_path / "div.md"
+    _write(clean, '---\nchunk: C1\ndivergence: {"diverged": false}\n---\n\n## Observations\nfine\n')
+    _write(diverged, '---\nchunk: C2\ndivergence: {"diverged": true}\n---\n\n## Observations\nIT WENT SIDEWAYS\n')
+
+    rc = fer.main(["--read-divergence", str(clean), str(diverged), str(tmp_path / "gone.md")])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert out.count("DIVERGED: full record follows") == 1
+    assert "IT WENT SIDEWAYS" in out
+    assert "fine" not in out
+    assert "UNREADABLE" in out

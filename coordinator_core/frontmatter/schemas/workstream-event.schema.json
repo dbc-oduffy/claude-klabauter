@@ -30,7 +30,7 @@
     },
     "coordinator_root_path": {
       "type": "string",
-      "description": "Dual-tenant discriminator — the git root path of the repo this event's workstream belongs to. Mirrors workstream.schema.json's coordinator_root_path (same composite-natural-key component claude-klabauter's trackers.py already uses); required so the generator can filter a dual-tenant state/workstreams/events/ directory (the claude-klabauter-hosted meta-repo case) to only the current repo's entries."
+      "description": "Dual-tenant discriminator — the git root path of the repo this event's workstream belongs to. Mirrors workstream.schema.json's coordinator_root_path (same composite-natural-key component the engine's trackers.py already uses); required so the generator can filter a dual-tenant state/workstreams/events/ directory (the engine-hosted meta-repo case) to only the current repo's entries."
     },
     "supersedes": {
       "type": "string",

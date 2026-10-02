@@ -11,7 +11,6 @@ import pytest
 from coordinator_core.orient_assemble import readers_clean_ops as rco
 from coordinator_core.orient_assemble import readers_handoff_triage as rht
 from coordinator_core.orient_assemble import readers_health_reaper as rhr
-from coordinator_core.ops.reap_in_flight_claims import SurveyResult
 
 
 def _write(path: Path, text: str) -> None:
@@ -129,45 +128,6 @@ def test_collect_threads_repo_root_into_memo_surface(foreign_repo):
 
     questions = [jp["question"] for jp in result.judgment_points if jp["id"].startswith("j-memo-")]
     assert any("ZZZ Foreign Memo Title" in q for q in questions)
-
-
-def test_reaper_dry_run_scan_target_is_the_passed_repo_root(foreign_repo):
-    fake_result = SurveyResult(would_release=0, would_reclaim=0, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result) as survey_mock:
-        rhr._read_reaper_dry_run(str(foreign_repo))
-
-    survey_mock.assert_called_once_with(str(foreign_repo))
-
-
-def test_reaper_dry_run_falls_back_to_claude_klabauter_root_when_none_given():
-    fake_result = SurveyResult(would_release=0, would_reclaim=0, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result) as survey_mock:
-        rhr._read_reaper_dry_run()
-
-    survey_mock.assert_called_once_with(rhr._CLAUDE_KLABAUTER_ROOT)
-
-
-def test_reaper_dry_run_two_different_roots_scan_differently(foreign_repo, clean_repo):
-    fake_result = SurveyResult(would_release=0, would_reclaim=0, dispositions=[])
-    with mock.patch.object(rhr, "_reap_survey", return_value=fake_result) as survey_mock:
-        rhr._read_reaper_dry_run(str(foreign_repo))
-        rhr._read_reaper_dry_run(str(clean_repo))
-
-    called_roots = [call.args[0] for call in survey_mock.call_args_list]
-    assert called_roots == [str(foreign_repo), str(clean_repo)]
-    assert called_roots[0] != called_roots[1]
-
-
-def test_collect_day_cadence_threads_repo_root_into_reaper(foreign_repo):
-    fake_result = SurveyResult(would_release=1, would_reclaim=0, dispositions=[])
-    with mock.patch.object(
-        rhr, "_reap_survey", return_value=fake_result
-    ) as survey_mock, mock.patch.object(
-        rhr, "_cmd_working_repo_registration", return_value=0
-    ):
-        rhr.collect("day", repo_root=str(foreign_repo))
-
-    survey_mock.assert_called_once_with(str(foreign_repo))
 
 
 def test_read_ready_forwards_repo_root_onto_the_cmd_namespace(foreign_repo):
@@ -296,9 +256,6 @@ def test_collect_does_not_forward_repo_root_to_the_two_pinned_probes(foreign_rep
         rhr, "_cmd_working_repo_registration", return_value=0
     ) as registration_mock, mock.patch.object(
         rhr, "_cmd_ceremony_hook", return_value=None
-    ), mock.patch.object(
-        rhr, "_reap_survey",
-        return_value=SurveyResult(would_release=0, would_reclaim=0, dispositions=[]),
     ):
         rhr.collect("day", repo_root=str(foreign_repo))
 

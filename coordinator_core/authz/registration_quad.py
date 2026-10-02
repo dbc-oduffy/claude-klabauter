@@ -331,16 +331,10 @@ def check_registration_quad(
 # landing the real registration surface(s) it names (with, for
 # OP_CLASSIFICATION specifically, the five-question affirmation
 # `classification.py`'s own convention requires) and deleting the entry — never
-# by an executor's local judgment call. The remaining 70 ops (67 missing only
-# OP_CLASSIFICATION, tracked by `_KNOWN_UNCLASSIFIED_OPS_DEBT` above; the 6
-# below needing a fuller registration) still need that real work; this ledger
-# buys back the gate's legibility, it does not do the work.
+# by an executor's local judgment call. Drained to empty: every op carries its
+# real registration surfaces.
 # ---------------------------------------------------------------------------
-_KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {
-    "distill.curate_clusters": ("OP_MODULE_MAP",),
-    "memo.fate_backfill": ("OP_MODULE_MAP",),
-    "updatedocs.gates": ("OP_MODULE_MAP",),
-}
+_KNOWN_INCOMPLETE_REGISTRATIONS: Mapping[str, tuple[str, ...]] = {}
 
 
 def prune_known_incomplete(

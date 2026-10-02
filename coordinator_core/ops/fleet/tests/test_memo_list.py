@@ -103,16 +103,14 @@ def _make_claude_home(
 def _write_doe_manifest(
     claude_home: Path, tmp_path: Path, manifest: dict, content_root: Path | None = None
 ) -> None:
-    """Write a .coordinator-content-root sentinel + coordinator-registry.manifest.json fixture.
+    """Write a content-root sentinel + coordinator-registry.manifest.json fixture.
 
     Mirrors test_memo_check_addressee.py's `_write_doe_manifest` pattern —
     a hermetic tmp_path-scoped manifest, never the real machine's DoE tree.
 
-    The sentinel lands on the DR-071 ladder's durable rung
-    (`<settings-home>/machine-local/.coordinator-content-root`), not the pre-2026-07-28
-    `<CLAUDE_HOME>/.coordinator-content-root` — a location no writer has written since
-    `ops.gen_content_root_pointer` moved the pointer under the settings home.
-    A caller whose registry fixture registers `repos.content_root` must pass
+    The sentinel lands on the ladder's durable rung
+    (`<settings-home>/machine-local/.coordinator-content-root`).
+    A caller whose registry fixture registers the doctrine repo must pass
     that path as `content_root`; the registry rung outranks the pointer file.
     """
     content_root = content_root or (tmp_path / "content-root")
@@ -318,7 +316,7 @@ class TestEnumerationAliasesAndCentral:
 
         assert result["exit_code"] == 0
         receivers = _receivers(result["candidates"])
-        doe = [c for c in receivers if c["repo_key"] == "repos.content_root"]
+        doe = [c for c in receivers if c["repo_key"] == "repos." + "coordinator-content-repo".replace("-", "_")]
         assert len(doe) == 1
         assert doe[0]["is_central"] is True
 

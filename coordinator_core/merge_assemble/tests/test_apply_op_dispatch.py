@@ -96,44 +96,29 @@ class TestResolveOpReachesNothingForMergesVerbs:
 
 class TestC2InProcessConvergence:
 
-    _CONVERGED_HANDLERS = (
-        ma_apply._dispatch_merge_recovery_and_tag_cut,
-        ma_apply._dispatch_portability_sweep,
-        ma_apply._dispatch_check_no_illegal_paths,
-    )
-    _STILL_SPAWNING_HANDLERS = (
-        ma_apply._dispatch_merge_gate_and_pr,
-        ma_apply._dispatch_merge_release_notes_derive,
-        ma_apply._dispatch_orphan_branch_sweep,
-    )
+    _REPO_ROOT_ARG_HANDLERS = {
+        ma_apply._dispatch_merge_gate_and_pr: ("merge-gate-and-pr", ["pr-body"]),
+        ma_apply._dispatch_merge_release_notes_derive: (
+            "merge-release-notes-derive",
+            ["flip-tags", "v1.2.3", "abc", "2026-01-01", "entry.md"],
+        ),
+        ma_apply._dispatch_orphan_branch_sweep: ("orphan-branch-sweep", ["--format", "text"]),
+    }
 
-    def test_converged_handlers_never_call_run_py_script(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _boom(*args, **kwargs):  # pragma: no cover - only fires on regression
-            raise AssertionError("converged handler unexpectedly spawned a subprocess")
+    def test_formerly_spawning_handlers_dispatch_in_process_with_an_explicit_repo_root(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: list[tuple[str, str, list[str]]] = []
 
-        monkeypatch.setattr(ma_apply, "_run_py_script", _boom)
+        def _fake_dispatch_in_process(cli, script_name, args):
+            captured.append((cli, script_name, list(args)))
+            return {"cli": cli, "returncode": 0, "stdout": ""}
+
+        monkeypatch.setattr(ma_apply, "_dispatch_in_process", _fake_dispatch_in_process)
         repo_root = Path(".").resolve()
-        result = ma_apply._dispatch_check_no_illegal_paths([], repo_root)
-        assert result["cli"] == "check-no-illegal-paths"
-
-    def test_still_spawning_handlers_call_run_py_script(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[str] = []
-
-        class _FakeProc:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        def _fake_run_py_script(script_name, args, repo_root):
-            calls.append(script_name)
-            return _FakeProc()
-
-        monkeypatch.setattr(ma_apply, "_run_py_script", _fake_run_py_script)
-        repo_root = Path(".").resolve()
-        ma_apply._dispatch_merge_gate_and_pr(["pr-body"], repo_root)
-        ma_apply._dispatch_merge_release_notes_derive(["flip-tags"], repo_root)
-        ma_apply._dispatch_orphan_branch_sweep(["--format", "text"], repo_root)
-        assert calls == ["merge-gate-and-pr", "merge-release-notes-derive", "orphan-branch-sweep"]
+        for handler, (cli, args) in self._REPO_ROOT_ARG_HANDLERS.items():
+            handler(list(args), repo_root)
+            assert captured[-1] == (cli, cli, [*args, "--repo-root", str(repo_root)])
 
     def test_portability_sweep_absent_producer_raises_unrecognized_directive(self) -> None:
         repo_root = Path(".").resolve()

@@ -87,6 +87,7 @@ from typing import List, Optional, Tuple
 
 import yaml
 
+from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.win_portability import no_console_creationflags
@@ -392,7 +393,7 @@ def find_frontmatterless_duplicate(plans_dir: Path, title: str, exclude: Optiona
 # ---------------------------------------------------------------------------
 
 
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]
+_ENGINE_ROOT = ENGINE_CHECKOUT_ROOT
 _DOC_NEW_PATH = _ENGINE_ROOT / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
@@ -412,13 +413,8 @@ def invoke_coordinator_doc_new(
     through as ``cwd=`` below and used to relativize the returned path, both
     unrelated to where the scaffolder script itself lives). The scaffolder
     is resolved against the ENGINE checkout root instead
-    (``Path(__file__).resolve().parents[2]``, mirroring
-    ``plan_tasks_mutate.py``'s ``_HARVEST_CLI_PATH`` self-location
-    convention for the same "shell out to a sibling coordinator/bin/ engine
-    CLI" problem — chosen over ``coordinator_core.engine_root`` because this
-    module already lives inside the engine checkout, so self-location is a
-    free ``Path(__file__)`` derivation with no subprocess, versus
-    ``engine_root``'s Rung 2 fallback which can shell out to the
+    (``engine_root.ENGINE_CHECKOUT_ROOT`` — a pure ``__file__`` derivation, not
+    ``coordinator_engine_root()``, whose Rung 2 can shell out to the
     ``machine-local`` CLI). Resolving the scaffolder against ``repo_root``
     instead was the bug this fix addresses: for any caller repo that is NOT
     the engine checkout (i.e. every real consumer repo), no

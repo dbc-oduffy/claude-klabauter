@@ -42,7 +42,7 @@ def repos():
     (so the registered-successor path is reachable) and one unrelated repo (so
     a fuzzy fallthrough has somewhere to land)."""
     return {
-        "repos.content_root": "/x/coordinator-content-repo",
+        R.convention_repo_key("coordinator-content-repo-em"): "/x/coordinator-content-repo",
         "repos.claude_klabauter": "/x/claude-klabauter",
     }
 

@@ -26,8 +26,8 @@ artifact this generator reads that stays DoE-resident (it is the plugin's
 own hook-registration manifest) -- so this is now the one remaining
 cross-plane read, direction reversed from the source: DoE-resident code
 used to resolve INTO the engine; this engine-resident code now resolves
-OUT to DoE. Resolved via `coordinator_core.content_root_pointer.
-read_content_root_pointer()` + `coordinator_core.data_root.content_root_for()`
+OUT to DoE. Resolved via `coordinator_core.content_root.
+read_content_root()` + `coordinator_core.data_root.content_root_for()`
 -- the same registry-first/pointer-file/content-root seam
 `oss_operative_strings._resolve_mcp_topology_path` (W4-C6) already
 established for the identical displacement class, mirrored here rather
@@ -83,13 +83,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks import fanin_registries as _fanin_registries
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -116,7 +116,6 @@ PROVENANCE_KEYS = (
     "generated_from_dirty_tree",
 )
 
-_GIT_TIMEOUT_SECONDS = 10
 
 #: Bootstrap trampoline tails -- present at the tail of every hooks.json
 #: `args` array, never a registration in their own right. See module
@@ -283,22 +282,22 @@ def _resolve_doe_content_root() -> Path:
     unresolved root as fatal rather than fail-open -- a manifest generator
     has no excuse for a partial or missing result."""
     try:
-        from coordinator_core.content_root_pointer import read_content_root_pointer
+        from coordinator_core.content_root import read_content_root
         from coordinator_core.data_root import content_root_for
     except Exception as exc:  # noqa: BLE001
         raise EmitterError(f"cannot import content-root resolution seam: {exc}") from exc
 
-    content_root = read_content_root_pointer()
-    if not content_root:
+    base = read_content_root()
+    if not base:
         raise EmitterError(
-            "DoE root did not resolve (registry/pointer-file rungs all missed) -- "
+            "content root did not resolve (registry/pointer-file rungs all missed) -- "
             "cannot locate hooks.json or the effective-delivery.json sidecar; "
             "aborting closed"
         )
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(base)
     if content_root is None:
         raise EmitterError(
-            f"resolved DoE root {content_root!r} carries neither content layout "
+            f"resolved content root {base!r} carries neither content layout "
             "(coordinator/ nor a flat published mirror) -- aborting closed"
         )
     return content_root
@@ -757,21 +756,11 @@ def build_retired_entries() -> List[Dict[str, Any]]:
 
 
 def _run_git(*args: str, cwd: Any = None) -> str:
-    """Runs `git <args>` with an explicit timeout and never `shell=True`,
-    in `REPO_ROOT` unless `cwd` names another tree (the resolved DoE
+    """Runs `git <args>` through the shared runner, in `REPO_ROOT` unless `cwd` names another tree (the resolved DoE
     content root's repo, for the `hooks.json` half of the provenance)."""
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=REPO_ROOT if cwd is None else cwd,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
-            shell=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise EmitterError(f"cannot run 'git {' '.join(args)}': {exc}") from exc
+    result = run_git(list(args), cwd=str(REPO_ROOT if cwd is None else cwd))
+    if result.timed_out or result.returncode == 127:
+        raise EmitterError(f"cannot run 'git {' '.join(args)}': rc={result.returncode}")
     if result.returncode != 0:
         raise EmitterError(
             f"'git {' '.join(args)}' exited {result.returncode}: {result.stderr.strip()}"
@@ -786,7 +775,7 @@ def _emission_provenance(hooks_json_path: Path) -> Dict[str, Any]:
     `hooks.json` has uncommitted edits. Plus a UTC second-precision
     `Z`-suffixed timestamp."""
     # DoE repo root is two levels above the resolved content root under the
-    # private-authoring layout (<content_root>/coordinator/) and the content
+    # private-authoring layout (<repo-root>/coordinator/) and the content
     # root itself under the flat published-mirror layout (its own .git).
     doe_content_root = hooks_json_path.parents[1]
     doe_repo_root = doe_content_root if (doe_content_root / ".git").exists() else doe_content_root.parent

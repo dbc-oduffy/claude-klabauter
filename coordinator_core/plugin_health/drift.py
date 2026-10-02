@@ -38,7 +38,7 @@ regressions):
 Self-registration: importing this module calls register_op("plugin_health.drift", ...)
 as a side-effect (same pattern as ops/engine_drift.py / ops/session_hierarchy_derive.py).
 
-Spec backlink: docs/plans/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 1 [DEAD-CITATION: plan file never committed to this repo]
+Spec backlink: example-retrieval-repo archive/specs/2026-05/2026-05-21-plugin-source-live-mirror-doctrine.md § Chunk 1
 Extended by:    docs/plans/2026-05-23-copy-install-drift-coverage.md § Chunk 2
                 docs/plans/2026-05-28-reverse-drift-gate-meta-repo-coverage.md § Chunk 3a
                 docs/plans/2026-05-28-forward-drift-probe-content-equivalence.md § Chunk 1

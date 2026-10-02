@@ -44,8 +44,8 @@ Three fidelity guards that a naive port silently drops — all three implemented
         equivalent call site.
     (3) all-stale-blockers → coverable. If every blocker handoff's consuming session is
         non-live, the commit is not blocked by any active workstream → treat that
-        ancestor as coverable. Implemented via _handoff_session_live() + live_sids
-        frozenset (hoisted once for the fixpoint).
+        ancestor as coverable. Its implementation lived in the same removed DAG-mode
+        fixpoint; the flat-mode path below has no equivalent call site.
 
 Verdict line (frozen CLI contract, AC11; extended by C10 with coverage_ratio):
     range=<range> chain_commits=N covered=M uncovered=K coverage_ratio=R.RR VERDICT={COVERED|WARN|INDETERMINATE}
@@ -513,8 +513,18 @@ _PATH_INTRODUCING_STATUSES = ("A", "C", "R")
 _COMMIT_HEADER_SENTINEL = "\x02"
 
 
+#: Authored corpora that live under a bookkeeping prefix in every fleet repo.
+#: The universal bookkeeping set stands; these subtrees are carved out of it and
+#: classify PLANNING (reviewable, never exempt), so a repo authoring its roadmap
+#: there does not have that work read as ledger exhaust.
+_AUTHORED_STATE_PREFIXES: Tuple[str, ...] = ("state/roadmap/",)
+
+
 def _is_bookkeeping_path(path: str) -> bool:
-    """True if `path` falls under a bookkeeping prefix (see _BOOKKEEPING_PATH_PREFIXES)."""
+    """True if `path` falls under a bookkeeping prefix (see _BOOKKEEPING_PATH_PREFIXES)
+    and not under an authored carve-out (_AUTHORED_STATE_PREFIXES)."""
+    if any(path.startswith(prefix) for prefix in _AUTHORED_STATE_PREFIXES):
+        return False
     return any(path.startswith(prefix) for prefix in _BOOKKEEPING_PATH_PREFIXES)
 
 
@@ -537,6 +547,7 @@ _PLANNING_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "docs/research/",
     "docs/problems/",
     "state/plan-sidecars/",
+    *_AUTHORED_STATE_PREFIXES,
 )
 
 
@@ -799,69 +810,7 @@ def _classify_bookkeeping_shas(
     return exhaust_set, planning_set, note
 
 
-_UNRESTRICTED_CREDIT_KINDS: Tuple[str, ...] = ("diff",)
-
 _RECOGNIZED_SCOPE_KINDS: Tuple[str, ...] = ("diff", "plan", "integration")
-
-
-def _credit_from_kind_partition(
-    reviewed_by_kind: Dict[str, Set[str]],
-    cwd: str,
-) -> Set[str]:
-    """Collapse a per-kind reviewed partition into ONE credited set — the
-    kind-aware crediting rule (C5, docs/plans/2026-08-05-coverage-gate-
-    planning-artifact-class.md § C5).
-
-    No production call site reaches this function today: its former callers
-    (`build_reviewed_set` / `_reviewed_via_graph_walk`) were deleted, and the
-    surviving reviewed-set writer, `review_trail.backfill._resolve_special`,
-    reimplements this same rule inline (its own `_classify_bookkeeping_shas`
-    pass over the plan-kind bucket) rather than calling this function. Kept
-    live for its direct test coverage in
-    `tests/test_coverage_reviewed_set.py` and as the reference statement of
-    the rule other call sites' comments point back to.
-
-    "diff" (and any future unrestricted kind, see _UNRESTRICTED_CREDIT_KINDS)
-    credits its resolved SHAs unconditionally, exactly as before this chunk.
-
-    "plan" credits ONLY the subset of its resolved SHAs that
-    `_classify_bookkeeping_shas` independently classifies PLANNING (i.e. a
-    commit whose touched paths are entirely planning-artifact/bookkeeping
-    paths with >=1 planning-artifact path, and that does not author a
-    state/handoffs/ file) — reusing the already-landed C2 classifier rather
-    than inventing a second notion of "planning commit". This is the fix for
-    the naive "just delete the skip" shortcut (Anti-scope): that shortcut
-    would credit a plan review's ENTIRE resolved range unconditionally,
-    including any code commits it happens to span — worse than the false
-    tail it replaces, and exploit-shaped (AC6). Filtering the plan bucket
-    down to genuinely-planning commits means a plan review can never credit
-    code, however its sha_range is drawn.
-
-    Any other kind (there are none yet reachable here — "integration" is
-    skipped in Phase 1 and never reaches Phase 2) credits nothing, fail-closed.
-
-    2026-08-10: this used to `assert set(reviewed_by_kind) <= {"diff", "plan"}`
-    — self-verifying, but fatal to the WHOLE gate the moment one review-trail
-    record anywhere in the corpus carried an unrecognized scope_kind (the
-    schema had no enum, so nothing stopped one being hand-authored). A single
-    stray record could then block every PARTITION-MANDATORY close on a repo
-    from ever reaching a VERDICT line. Per-record degrade replaces it: the
-    WARN for an unrecognized kind is emitted upstream, at Phase 1
-    classification (where the record's artifact/path are still in scope) —
-    this function's fail-closed-by-omission (an unrecognized kind is simply
-    never read from `reviewed_by_kind`) is left to do the crediting work
-    silently, same as before the assertion existed.
-    """
-    credited: Set[str] = set()
-    for kind in _UNRESTRICTED_CREDIT_KINDS:
-        credited |= reviewed_by_kind.get(kind, set())
-
-    plan_raw = reviewed_by_kind.get("plan", set())
-    if plan_raw:
-        _, planning_set, _note = _classify_bookkeeping_shas(list(plan_raw), cwd, {})
-        credited |= (plan_raw & planning_set)
-
-    return credited
 
 
 _TRAILER_LOOKUP_CHUNK = 300
@@ -945,11 +894,9 @@ def _parse_handoff_claimed_by(
     own parent directory, matching this function's original behavior when
     called bare.
 
-    No try/except here by design: the two callers below
-    (``_get_handoff_claimed_by``, ``_handoff_session_live``) need DIFFERENT
-    failure treatment — the former's contract is depended on verbatim by
-    external call sites, the latter feeds the DAG-fixpoint Guard-2
-    notes/indeterminate machinery — so each catches independently.
+    No try/except here by design: callers need different failure treatment —
+    ``_get_handoff_claimed_by``'s conservative-None contract is depended on
+    verbatim by external call sites — so each catches independently.
 
     Unreadable-file raise, restored (C2-fix): ``resolve_claim_state`` itself
     degrades an unreadable/missing handoff file to "no claim" (``holder is
@@ -1037,46 +984,6 @@ def _get_handoff_claimed_by(
             file=sys.stderr,
         )
         return None
-
-
-def _handoff_session_live(
-    handoff_path: str,
-    live_sids: FrozenSet[str],
-    *,
-    common_dir: Optional[Path] = None,
-    repo_root: Optional[str] = None,
-) -> Tuple[bool, Optional[str]]:
-    """True if the session that claimed handoff_path is currently live.
-
-    Ledger-first (C2, this plan) via ``_parse_handoff_claimed_by`` —
-    calls it DIRECTLY, bypassing ``_get_handoff_claimed_by``, so this is
-    the DAG-fixpoint's own call path onto the same C1 accessor.
-
-    Conservative default: if session cannot be resolved (unclaimed or unreadable)
-    → return True (do not wrongly treat as stale → do not wrongly cover).
-    Second element of the returned tuple carries a Guard-2-shaped note when
-    resolution failed due to a read/parse exception (as opposed to a
-    legitimately-unclaimed handoff) — None when there is nothing to surface.
-    ``common_dir``/``repo_root`` are optional hot-path pre-resolution hooks
-    (this function runs per-handoff inside the fixpoint) — see
-    ``_parse_handoff_claimed_by``.
-    """
-    try:
-        if common_dir is not None or repo_root is not None:
-            sid = _parse_handoff_claimed_by(
-                handoff_path, common_dir=common_dir, repo_root=repo_root
-            )
-        else:
-            sid = _parse_handoff_claimed_by(handoff_path)
-    except Exception as exc:
-        note = (
-            f"{handoff_path}: _get_handoff_claimed_by raised "
-            f"{type(exc).__name__}: {exc} — INDETERMINATE"
-        )
-        return True, note
-    if sid is None:
-        return True, None
-    return sid in live_sids, None
 
 
 _SCOPE_FILTER_CHUNK_SIZE = 200

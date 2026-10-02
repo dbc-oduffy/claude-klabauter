@@ -969,6 +969,17 @@ def _scoped_commit(
     shape and `_run_git` in-process read-model.
     """
     message = _compute_commit_message(class_, basename, landed)
+    # This commit bypasses run_commit_pipeline, and `git add <path>` stages
+    # the working-tree file — so uncommitted `carried_items` on a handoff
+    # would ride in ungated. Same gate the pipeline runs, same refusal shape
+    # as a git failure here.
+    from coordinator_core.ops.ceremony.commit_gates import carry_gate
+
+    outcome = carry_gate(repo_root, [artifact_rel_path])
+    if not outcome.passed:
+        raise RuntimeError(
+            f"carry_gate refused {artifact_rel_path}: " + "; ".join(outcome.diagnostics)
+        )
     return apply_base.scoped_commit(repo_root, artifact_rel_path, message, _run_git)
 
 

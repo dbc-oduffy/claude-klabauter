@@ -130,7 +130,11 @@ def _stage_wins_violations(files) -> list:
     violations = []
     for path in files:
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            # A violation calls one of the stage-wins routes by name.
+            if not any(route in text for route in _STAGE_WINS_ROUTES):
+                continue
+            tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
         if not _names_the_ledger(tree):
@@ -165,7 +169,11 @@ def test_the_ledger_is_never_named_in_a_staged_bytes_preference():
     offenders = []
     for path in _python_files():
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            # An offender is a call carrying one of these keyword arguments.
+            if "prefer_staged" not in text and "prefer_deliberate_stage" not in text:
+                continue
+            tree = ast.parse(text)
         except (OSError, SyntaxError):
             continue
         ledger_aware = _names_the_ledger(tree)

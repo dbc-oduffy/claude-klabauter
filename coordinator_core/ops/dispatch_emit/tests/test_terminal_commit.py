@@ -92,7 +92,7 @@ def test_op_registers_scope_and_classification():
 def test_a_script_with_no_marker_commits_nothing(repo):
     (repo / "run.mjs").write_text("// nothing here\n", encoding="utf-8")
     out = _call(repo, {"script_path": "run.mjs", "incomplete_chunks": []})
-    assert out == {"committed": False, "nothing_to_commit": True}
+    assert out == {"committed": False, "nothing_to_commit": True, "stranded": {}}
 
 
 def test_lands_one_commit_over_done_chunks_only(repo):
@@ -126,6 +126,45 @@ def test_lands_one_commit_over_done_chunks_only(repo):
     assert "a.py" in log
     assert "b.py" in log
     assert "missing-incomplete.py" not in log
+
+
+def test_landed_chunks_leave_the_reported_incomplete_list_and_are_committed(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "b.py").write_text("b\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="C5", title="t5", paths=("b.py",)),
+        ),
+    )
+    script = _write_script(repo, request)
+
+    out = _call(
+        repo,
+        {"script_path": script, "incomplete_chunks": ["C5"], "landed_chunks": ["C5"]},
+    )
+    assert out["committed"] is True, out
+    assert set(out["chunks_committed"]) == {"C3", "C5"}
+    assert out["incomplete_chunks"] == []
+    assert out["stranded"] == {}
+
+
+def test_a_chunk_not_named_landed_stays_incomplete(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="C5", title="t5", paths=("b.py",)),
+        ),
+    )
+    script = _write_script(repo, request)
+
+    out = _call(
+        repo,
+        {"script_path": script, "incomplete_chunks": ["C5"], "landed_chunks": ["C9"]},
+    )
+    assert out["incomplete_chunks"] == ["C5"]
+    assert "C5" in out["stranded"]
 
 
 def test_inline_review_trailer(repo):

@@ -177,7 +177,7 @@ def test_dedup_multiple_citations_same_file_same_plan(tmp_path, capsys):
     assert "FAIL: 1 dangling" in captured.err
 
 
-def test_fix_heals_and_rerun_is_clean(tmp_path, capsys):
+def test_fix_heals_and_rerun_reports_the_healed_citation_on_the_id_form_axis(tmp_path, capsys):
     root = str(tmp_path)
     _make_moved_plan_tree(root)
     target = "coordinator/wiki/citer1.md"
@@ -188,16 +188,19 @@ def test_fix_heals_and_rerun_is_clean(tmp_path, capsys):
     )
     rc = main(["--root", root, "--fix"])
     captured = capsys.readouterr()
-    assert rc == 0
+    assert rc == 1
     assert "healed 1 dangling" in captured.out
+    assert "UNGRANDFATHERED-PATH" in captured.err
 
     with open(os.path.join(root, target), encoding="utf-8") as fh:
         healed = fh.read()
     assert "spec_backlink: archive/specs/2026-01/2026-01-01-foo-plan.md" in healed
     assert "docs/plans/2026-01-01-foo-plan.md" not in healed
 
+    capsys.readouterr()
     rc2 = main(["--root", root])
-    assert rc2 == 0
+    assert rc2 == 1
+    assert "UNGRANDFATHERED-PATH" in capsys.readouterr().err
 
 
 def test_fix_leaves_prose_mention_untouched(tmp_path):
@@ -376,6 +379,36 @@ def test_ungrandfathered_path_form_fails(tmp_path, capsys):
     assert rc == 1
     assert "UNGRANDFATHERED-PATH" in captured.err
     assert "docs/plans/2026-03-01-qux-plan.md" in captured.err
+
+
+def test_healed_archive_specs_path_citation_is_reported_on_the_id_form_axis(tmp_path, capsys):
+    root = str(tmp_path)
+    _write(
+        root,
+        "archive/specs/2026-03/2026-03-01-qux-plan.md",
+        _fm("Qux plan", plan_id="pln-qux-plan-222222"),
+    )
+    _write(
+        root,
+        "coordinator/wiki/citer.md",
+        "spec_backlink: archive/specs/2026-03/2026-03-01-qux-plan.md\n",
+    )
+    rc = main(["--root", root])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "UNGRANDFATHERED-PATH" in captured.err
+    assert "archive/specs/2026-03/2026-03-01-qux-plan.md" in captured.err
+
+
+def test_unresolvable_archive_specs_path_citation_stays_grandfathered(tmp_path, capsys):
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "archive", "specs"))
+    _write(
+        root,
+        "coordinator/wiki/citer.md",
+        "spec_backlink: archive/specs/2026-03/2026-03-02-never-existed-locally.md\n",
+    )
+    assert main(["--root", root]) == 0
 
 
 def test_scan_missing_ids_flags_plan_with_no_id(tmp_path):

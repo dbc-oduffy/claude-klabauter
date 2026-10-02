@@ -186,6 +186,10 @@ def _reaches_the_leg_directly(source: str) -> bool:
     Asserted on the CALL GRAPH rather than on the op key, because the key is
     dead and a module reaching the leg does so without ever naming it.
     """
+    # Every True return needs the `_handler` identifier and the leg module's
+    # last segment (an identifier, so never split by a line break) in the source.
+    if _LEG_ATTR not in source or _LEG_MODULE.rpartition(".")[2] not in source:
+        return False
     try:
         tree = ast.parse(source)
     except SyntaxError:

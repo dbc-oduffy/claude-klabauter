@@ -147,19 +147,19 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional
 
+from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.plan_capture_persist import persist_captured_plan
 
-#: This op's own repo root, computed structurally from `__file__` — mirrors
-#: `coordinator_core.ops.invoke_from_argv._ENGINE_ROOT` and its siblings.
-#: Used only for the meta-repo-routing branch below: unlike the source
+#: This op's own repo root, the shared `engine_root.ENGINE_CHECKOUT_ROOT`
+#: anchor. Used only for the meta-repo-routing branch below: unlike the source
 #: script (which had to resolve ITS OWN host engine via `_resolve_claude_klabauter_root()`
 #: from a DIFFERENT repo), this op already runs inside that engine, so its
 #: own root is a fixed fact of this file's location, never something to
 #: resolve at call time.
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]
+_ENGINE_ROOT = ENGINE_CHECKOUT_ROOT
 
 #: Degraded (unresolved) verbatim from the source script's `_WIKI_ANCHOR` —
 #: see module docstring point 3 for why this op does not attempt to

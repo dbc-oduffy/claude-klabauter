@@ -85,6 +85,7 @@ except Exception:  # pragma: no cover -- defensive: an isolated test harness
     # or partial deploy must still fail open rather than crash on import.
     yaml = None
 
+from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
@@ -110,7 +111,6 @@ _VALID_CASES = frozenset({"shared", "predecessor", "dirty-tree", "carried-items"
 _VALID_CLASSES = frozenset({"protected", "droppable"})
 _REQUIRED_SEGMENT_KEYS = frozenset({"segment_id", "case", "class", "order"})
 
-_GIT_STATUS_TIMEOUT_SECONDS = 5
 _BRIEF_TIMEOUT_SECONDS = 12
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -169,19 +169,7 @@ def _resolve_repo_root(payload_cwd: Optional[str]) -> Optional[Path]:
 
 
 def _git_status_porcelain(repo_root: Path) -> Optional[str]:
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_GIT_STATUS_TIMEOUT_SECONDS,
-            creationflags=_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    result = run_git(["status", "--porcelain"], cwd=str(repo_root))
     if result.returncode != 0:
         return None
     return result.stdout

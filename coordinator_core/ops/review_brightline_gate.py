@@ -47,7 +47,7 @@ none given. See `_worktree_scoped`.
 
 --session-id <id> filters the range to commits whose trailer matches
 `^Session-Id: <id>` (prepare-commit-msg hook injects this trailer per
-docs/wiki/workstream-complete-review.md — UNANCHORED at the end, 2026-09-21,
+Coordinator-content-repo coordinator/docs/wiki/ceremony-calibration/workstream-complete-review.md — UNANCHORED at the end, 2026-09-21,
 since a trailing `$` silently drops a commit whose `Session-Id` line is not
 the message's last line), recomputing all four metrics over
 the filtered commit set only. A zero-match against the resolved `range_`
@@ -899,6 +899,9 @@ def _session_scoped(range_: str, session_id: str) -> int:
     surfaces = len(surfaces_set)
 
     verdict = _verdict(loc, commits, surfaces)
+    # `range=` is the scan window as supplied and may span peer commits;
+    # `shas=` is the session's own set — the only span safe to freeze.
+    shas_token = ",".join(sha[:12] for sha in filtered_shas)
 
     # ATTRIBUTION COVERAGE (2026-08-30). A session-scoped verdict is only as
     # sound as the trailer it filters on, and this gate had no way to tell an
@@ -920,7 +923,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
         if untrailered:
             print(
                 f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
-                f"files={files} filtered_to={filtered_count} basis=code-only VERDICT=indeterminate"
+                f"files={files} filtered_to={filtered_count} shas={shas_token} basis=code-only VERDICT=indeterminate"
             )
             print(
                 f"note: {untrailered} commit(s) in range carry no Session-Id "
@@ -933,7 +936,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
 
     print(
         f"range={range_} loc={loc} commits={commits} surfaces={surfaces} "
-        f"files={files} filtered_to={filtered_count} basis=code-only VERDICT={verdict}"
+        f"files={files} filtered_to={filtered_count} shas={shas_token} basis=code-only VERDICT={verdict}"
     )
     return 0
 

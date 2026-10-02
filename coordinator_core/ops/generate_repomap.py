@@ -5,7 +5,7 @@ repomap generator. Port of: generate-repomap.sh (DoE b5a4192c, 2026-07-20).
 Purpose: run generate-repomap.py with default arguments. Contains NO
 RAG-gating logic — callers gate via coordinator/bin/check-rag-state.py
 (DoE-resident) before invoking this. Full gating doctrine:
-docs/wiki/repomap-rag-gating.md (DoE-resident).
+Coordinator-content-repo coordinator/docs/wiki/mcp-topology/repomap-rag-gating.md (DoE-resident).
 
 Spec backlink: docs/plans/2026-05-09-skill-consolidation-pass.md § T2
 

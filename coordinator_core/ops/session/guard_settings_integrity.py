@@ -55,7 +55,7 @@ transparently fixes both the "write a hookless snapshot as last-known-good"
 and "restore from a hookless snapshot" failure modes — no separate gating
 code was needed at either call site.
   - ``is_inline_install``: reads ``{config_dir}/.coordinator-content-root`` directly (NOT the
-    shared ``read-content-root-pointer.sh``-equivalent helper, because this guard's
+    shared pointer-reading helper, because this guard's
     ``CONFIG_DIR`` is caller-supplied and differs from that helper's fixed
     ``${CLAUDE_HOME:-$HOME}/.claude``). Strips only a trailing CR/LF
     (embedded spaces preserved — Windows "OneDrive - Company Name" paths).
@@ -143,7 +143,7 @@ _CLOBBER_BAK_NAME = ".settings-clobbered.bak"
 # newer one.
 _KNOWN_GOOD_BACKUP_GLOB = "settings.json.known-good-*"
 _KNOWN_GOOD_BACKUP_RE = re.compile(r"^settings\.json\.known-good-(\d{8}T\d{6})$")
-_DOEROOT_NAME = ".coordinator-content-root"
+_POINTER_NAME = ".coordinator-content-root"
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 _HOOKS_JSON_REL = ("hooks", "hooks.json")
 _EFFECTIVE_DELIVERY_REL = ("hooks", "effective-delivery.json")
@@ -344,9 +344,8 @@ def is_inline_install(config_dir: Path) -> bool:
 
       1. `<settings-home>/machine-local/.coordinator-content-root`
          (`coordinator_core._settings_home.machine_local_dir()`) — the
-         canonical home since the 2026-08-01 migration off `{config_dir}/
-         .coordinator-content-root`, which was machine-local state living in a git-tracked
-         cross-machine repo (a Mac writing `/Users/...` and a Windows box
+         canonical home, because a pointer under `{config_dir}` is machine-local
+         state living in a git-tracked cross-machine repo (a Mac writing `/Users/...` and a Windows box
          writing `C:\\...` committing over each other for weeks). Consulted
          ONLY when `_settings_home_scoped_to(config_dir, settings_home())`
          is True — i.e. `config_dir` is a direct sibling of the resolved
@@ -361,7 +360,7 @@ def is_inline_install(config_dir: Path) -> bool:
          2026-08-01 (see `_settings_home_scoped_to` and the "Restore
          rungs" section's 2026-08-01 scope-escape note). When not scoped,
          the migrated rung is treated as absent, not consulted at all.
-      2. `{config_dir}/.coordinator-content-root` (legacy) — consulted whenever the
+      2. `{config_dir}/.coordinator-content-root` (legacy location) — consulted whenever the
          migrated rung does not answer live (absent, blank, unreadable, or
          naming a missing tree).
 
@@ -404,27 +403,27 @@ def is_inline_install(config_dir: Path) -> bool:
         # which internally re-resolves settings_home() a second time for the
         # same path; on this SessionStart boot path resolution cost is a
         # first-order concern (see module docstring).
-        if _content_root_pointer_is_live(home / "machine-local" / _DOEROOT_NAME):
+        if _content_root_pointer_is_live(home / "machine-local" / _POINTER_NAME):
             return True
-    return _content_root_pointer_is_live(config_dir / _DOEROOT_NAME)
+    return _content_root_pointer_is_live(config_dir / _POINTER_NAME)
 
 
-def _content_root_pointer_is_live(doeroot_file: Path) -> bool:
-    if not doeroot_file.is_file():
+def _content_root_pointer_is_live(pointer_file: Path) -> bool:
+    if not pointer_file.is_file():
         return False
     try:
-        with doeroot_file.open("r", encoding="utf-8", newline="") as fh:
+        with pointer_file.open("r", encoding="utf-8", newline="") as fh:
             first_line = fh.readline()
     except OSError:
-        print(f"skip: is_inline_install: with doeroot_file.open(\"r\", encoding=\"utf-8\", newline=\"\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
+        print(f"skip: is_inline_install: with pointer_file.open(\"r\", encoding=\"utf-8\", newline=\"\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
-    doe = first_line.rstrip("\r\n")
-    if not doe:
+    root = first_line.rstrip("\r\n")
+    if not root:
         return False
     # Either content layout counts: on a published flat mirror the content root
-    # IS the pointed-at directory, and probing only `<doe>/coordinator` classified
+    # IS the pointed-at directory, and probing only `<root>/coordinator` classified
     # a live inline install as plugin-only.
-    return content_root_for(Path(doe)) is not None
+    return content_root_for(Path(root)) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1550,7 +1549,7 @@ def _atomic_copy(src: Path, dst: Path) -> bool:
 _BANNER_INLINE_INSTALL = """
 ╔══════════════════════════════════════════════════════════════════╗
 ║  ℹ  settings.json has no `enabledPlugins` — but this is an INLINE
-║     (--plugin-dir) install (`.coordinator-content-root` present, coordinator loads live
+║     (--plugin-dir) install (content-root pointer present, coordinator loads live
 ║     from the clone). This is EXPECTED, not a clobber. No action needed.
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -2130,8 +2129,11 @@ def _ks_banner_body(info: KillSwitchMarkerInfo, marker: Path, config_dir: Path) 
     lines.append(
         "║  today would very likely cause hooks to fire TWICE, not restore them."
     )
+    # Trap: the evaluator has no IPC op, so `coordinator-invoke` cannot run
+    # it; the remedy names the in-process call, which does.
     lines.append(
-        "║  Consult `evaluate_hook_delivery_duplication` before deleting."
+        "║  Before deleting, run: python3 -c \"from coordinator_core.ops.session."
+        "guard_settings_integrity import evaluate_hook_delivery_duplication as f; print(f())\""
     )
     return lines
 

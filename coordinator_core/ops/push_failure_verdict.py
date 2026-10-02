@@ -282,9 +282,7 @@ def _inprocess_staged_unstaged(
 
       staged   -- `git_state.read_index` (full v2/v3/v4 index identity)
                   compared against `git_state.head_blobs` for the same
-                  paths, mirroring `git_index.diff_index_name_status`'s own
-                  `(mode, sha)` comparison but over EVERY index path rather
-                  than a caller-supplied pathspec.
+                  paths, comparing `(mode, sha)` over EVERY index path.
       unstaged -- `git_index.scoped_status`'s stat fast path (git's own
                   `ce_match_stat`), same paths, any non-`"clean"` verdict
                   counted as unstaged. A stat MISMATCH is counted as

@@ -66,7 +66,7 @@ this guard's own message as prompt injection and ignored it").
 BUDGET -- every rendered template must fit
 `_message_size.MESSAGE_PROSE_CAP_BYTES` (220 BYTES of prose, measured by
 `_message_size.measure_envelope`), not 280 characters (this repo has no
-`docs/wiki/guard-message-concision.md` -- that page is DoE-resident and
+`coordinator-content-repo coordinator/docs/wiki/guards/guard-message-concision.md` -- that page is DoE-resident and
 documents a DIFFERENT surface's cap in a different unit; do not cite it
 here). Every template below leans on `_alternative_liveness`'s own
 `_CUE_WINDOW_RE`/`_BACKTICK_RE`/`_cue_windows` exemption semantics, used as

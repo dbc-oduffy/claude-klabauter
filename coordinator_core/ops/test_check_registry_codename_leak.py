@@ -212,6 +212,10 @@ def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path, capsys):
     assert "blocked.md" in captured.err
 
 
+#: Registry key whose slug (`content_root`) is in the guard's KEEPSET.
+_KEEPSET_SLUG_KEY = "repos." + "content_root"
+
+
 def _content_root_fixture(tmp_path):
     d = tmp_path / "doe-em"
     d.mkdir()
@@ -223,7 +227,7 @@ def _content_root_fixture(tmp_path):
 
 def test_no_exempt_absent_content_root_still_exempt_today(tmp_path, capsys):
     d = _content_root_fixture(tmp_path)
-    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"))
+    rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY))
     assert rc == 0
     captured = capsys.readouterr()
     assert "no private codenames to check" in captured.err
@@ -233,7 +237,7 @@ def test_no_exempt_flag_reveals_content_root_leak(tmp_path, capsys):
     d = _content_root_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "content_root", str(d)],
-        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"),
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY),
     )
     assert rc == 1
     captured = capsys.readouterr()
@@ -282,7 +286,7 @@ def test_no_exempt_env_var_reveals_content_root_leak(tmp_path, capsys):
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
+            COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY,
             COORDINATOR_CODENAME_NO_EXEMPT="content_root",
         ),
     )
@@ -298,7 +302,7 @@ def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
     rc = main(
         ["--no-exempt", "content_root", str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
+            COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY,
             COORDINATOR_CODENAME_NO_EXEMPT="content_root",
         ),
     )
@@ -309,7 +313,7 @@ def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys
     d = _content_root_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "coordinator-content-repo", str(d)],
-        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root"),
+        env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY),
     )
     assert rc == 2
     captured = capsys.readouterr()
@@ -325,7 +329,7 @@ def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
     rc = main(
         [str(d)],
         env=_env(
-            COORDINATOR_CODENAME_REGISTRY_KEYS="repos.content_root",
+            COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY,
             COORDINATOR_CODENAME_NO_EXEMPT="not_a_real_keepset_slug",
         ),
     )

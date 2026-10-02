@@ -79,8 +79,8 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._sentinel_creation_guard import indirection_deny_reason
 from coordinator_core.bash_guards._sentinel_removal_guard import (
-    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     VERDICT_ADVISORY,
     VERDICT_ALLOW,
@@ -136,14 +136,9 @@ def _deny_reason(
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     if reason_class == REASON_INDIRECTION:
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        return (
-            "[dev-repo guard] BLOCKED: this command was denied because its "
-            "payload is delivered through an interpreter, stdin, or "
-            "command-assembly indirection this guard cannot examine.\n\n"
-            "Instead: %s\n\n"
-            "Detected shape: %s"
-            % (INDIRECTION_REMEDY, safe_shape)
-        ) + ("\n\n%s" % _note if _note else "")
+        return indirection_deny_reason("dev-repo guard", safe_shape) + (
+            "\n\n%s" % _note if _note else ""
+        )
     return (
         "[dev-repo guard] BLOCKED: instead, confirm this removal/relocation "
         "is intentional and ask the EM/PM to run it -- this command would "

@@ -4342,3 +4342,23 @@ class TestReviewStampGate:
         assert _head_sha(root) != pre_head
 
 
+
+
+def test_foreign_session_disposition_ref_is_reported_not_refused(tmp_path: Path) -> None:
+    """A coded row citing a commit whose Session-Id names another session is
+    reported; one citing the closing session's own commit is not."""
+    _init_repo(tmp_path)
+    shas = {}
+    for name, sid in (("own", "sess-closing"), ("peer", "sess-peer")):
+        (tmp_path / f"{name}.txt").write_text(name, encoding="utf-8")
+        _run_git(["add", f"{name}.txt"], tmp_path)
+        _run_git(["commit", "-q", "-m", f"{name}\n\nSession-Id: {sid}"], tmp_path)
+        shas[name] = _head_sha(tmp_path)
+    rows = [
+        {"id": "C1", "disposition": "coded", "disposition_ref": shas["own"][:10]},
+        {"id": "C2", "disposition": "coded", "disposition_ref": shas["peer"]},
+        {"id": "C3", "disposition": "coded", "disposition_ref": "deadbeef00"},
+    ]
+    foreign = coas._foreign_session_disposition_refs(rows, tmp_path, "sess-closing")
+    assert foreign == {"C2": "sess-peer"}
+    assert coas._foreign_session_disposition_refs(rows, tmp_path, None) == {}

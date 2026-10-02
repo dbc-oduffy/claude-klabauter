@@ -136,7 +136,11 @@ def _bare_at_field(node: ast.AST) -> Optional[str]:
 
 def _scan_module(path: str) -> list[tuple[int, str]]:
     with open(path, encoding="utf-8") as handle:
-        tree = ast.parse(handle.read(), filename=path)
+        text = handle.read()
+    # Every hit names a Name/Attribute/string key ending in `_at`.
+    if "_at" not in text:
+        return []
+    tree = ast.parse(text, filename=path)
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr):

@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -351,3 +353,16 @@ def test_a_fleet_env_FILE_at_top_level_is_still_copied(tmp_path):
     staging = publish._create_publish_staging_dir(dest)
 
     assert (staging / ".fleet-env.prior").is_file()
+
+
+def test_live_staging_dir_survives_a_sibling_rows_stale_sweep(tmp_path):
+    """copytree back-dates the staging root to dest's mtime; a second root row
+    on the same dest must not sweep the first row's live staging dir."""
+    dest = _seed_dest(tmp_path, with_git=True)
+    old = time.time() - 7 * 86400
+    os.utime(dest, (old, old))
+
+    staging = publish._create_publish_staging_dir(dest)
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals(), out=io.StringIO())
+
+    assert staging.is_dir()

@@ -5,7 +5,7 @@ documented below) and the
 --full-mode `doctor-last-run.json` sentinel writer that scan-addon-health.sh
 (coordinator_core.plugin_health.scan) consumes.
 
-Purpose: docs/wiki/coordinator-doctor.md defines runnable probes for the substrate
+Purpose: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/coordinator-doctor.md defines runnable probes for the substrate
 downstream plugins depend on (machine-local registry, coordinator_whoami, mcpServers
 config, bin/ resolvers). This module is the non-skill primitive that fires the
 probes on cadence (from /workday-start Step 1.10 --full) and writes
@@ -30,7 +30,7 @@ relocated/renamed sibling (as happened in b644d5a9) silently degraded the
 probe to a false GREEN instead of surfacing as amber-inconclusive. Each of
 these 4 probes now calls its native module directly, unconditionally, with
 `_NativeCallFailed -> _inconclusive(...)` as the sole degradation path — see
-`docs/wiki/doctor-probe-design.md` § `inconclusive` Is a First-Class Probe
+`coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/doctor-probe-design.md` § `inconclusive` Is a First-Class Probe
 Status. P-15/P-17 formerly shelled
 out to their own DoE-owned bash sibling (scripts/lib/prereq_probe.sh, sourced via
 `bash -c 'source ...; <fn>'`) — DR-079's prereq-probe-debash-complete-migration
@@ -80,7 +80,7 @@ state to settle into.
 Contract to preserve — LOAD-BEARING, cross-plugin (not one of the 8 T0-frozen
 contracts, but equally so): the sentinel JSON schema (ran_at, verdict, red_probes,
 amber_probes, advisory_notes, hint, machine, plugin) is consumed by
-coordinator_core.plugin_health.scan AND, per docs/wiki/addon-health-sentinel.md, by
+coordinator_core.plugin_health.scan AND, per coordinator-content-repo coordinator/docs/wiki/addon-protocol/addon-health-sentinel.md, by
 every other plugin's own doctor writing to the same schema at their own
 <plugin>/data/doctor-last-run.json path. Field names, JSON indent=2 + trailing
 newline formatting are preserved byte-for-byte.
@@ -268,7 +268,7 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
 # Manifest ids with no probe body in this module. Until 2026-08-15 these were
 # simply absent from the dispatch list below, so `--full` reported GREEN having
 # never evaluated them -- a fabricated pass, which is the one thing
-# docs/wiki/doctor-probe-design.md § `inconclusive` Is a First-Class Probe Status
+# coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/doctor-probe-design.md § `inconclusive` Is a First-Class Probe Status
 # forbids. They now report `inconclusive` instead, and the honest amber stands
 # until somebody writes the bodies.
 #
@@ -345,7 +345,7 @@ def _registry_keys(ml_dir: Path) -> Optional[List[str]]:
 def _inconclusive(probe_id: str, detail: str) -> List[ProbeNote]:
     """"I could not run this check" — NOT "the thing I check is broken".
 
-    Doctrine: docs/wiki/doctor-probe-design.md § `inconclusive` Is a
+    Doctrine: coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/doctor-probe-design.md § `inconclusive` Is a
     First-Class Probe Status — "when a probe cannot reach the state it checks,
     it emits `inconclusive` with the reason — never a fabricated pass or fail."
 
@@ -541,7 +541,7 @@ def _run_prereq_probe_function(scripts_lib_dir: Path, func_name: str) -> Tuple[s
 
 # ---------------------------------------------------------------------------
 # Probe bodies — each returns 0 or more ProbeNote. Logic preserved verbatim
-# from the bash oracle (docs/wiki/coordinator-doctor.md severity rules).
+# from the bash oracle (coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/coordinator-doctor.md severity rules).
 # ---------------------------------------------------------------------------
 
 
@@ -1451,7 +1451,7 @@ def probe_p20() -> List[ProbeNote]:
     order any shell script or `bash -c` caller gets — never `sys.executable`
     or the interpreter running this probe suite; the whole point is what a
     caller invoking bare `bash` would get, not what this Python process
-    happens to run under (see docs/wiki/doctor-probe-design.md § A Probe
+    happens to run under (see coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/doctor-probe-design.md § A Probe
     Must Walk the Same Resolution Path as the Runtime Tool It Vouches For).
 
     No bash on PATH is not the same finding as an OLD bash on PATH: on

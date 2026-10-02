@@ -57,8 +57,12 @@ POPULATION: Mapping[str, tuple] = {
     "query-completions": ("not_a_gate", "read-only query"),
     "query-records": ("not_a_gate", "read-only query"),
     "reap-claims-for-repos": ("not_a_gate", "reaps claims"),
-    "reap-orphaned-in-flight-handoffs": ("not_a_gate", "reaps handoffs"),
     "reassess-goal-krs": ("not_a_gate", "reassesses and writes KRs"),
+    "record-superseding-review": ("not_a_gate", "writes a superseding review record, prints its path"),
+    "review-stamp": (
+        "covered_by",
+        "coordinator_core/ops/tests/test_review_stamp.py::test_check_refuses_no_stamp",
+    ),
     "regenerate-orientation-cache": ("not_a_gate", "regenerates a cache"),
     "stamp-run-complete": ("not_a_gate", "stamps a run record"),
     "standup": ("not_a_gate", "emits a standup report"),

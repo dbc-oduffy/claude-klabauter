@@ -18,7 +18,8 @@ keys and no others —
     gates.{claim,claim_grant,liveness_signal,coast,execution_stamp_match,
            shipped_state,sender_reachability}
     gates.addressee (memo only)
-    directives, judgment_points, narration, next_move, sizing_disposition
+    decisions, directives, judgment_points, narration, next_move,
+    sizing_disposition
     preflight.{completeness_items,completeness_batches,tree_quiescence}
 
 Every field DR-415 deleted (`preflight.closure_signals`,
@@ -85,9 +86,6 @@ constraint). Modules this file imports, and why:
         display-path rendering).
     coordinator_core.artifact_basename             -- md_fallback_candidates
         (the not-found error's tried-basenames list).
-    coordinator_core.win_portability               -- no_console_creationflags
-        (the one git spawn on this path, § tree_quiescence, must not pop a
-        console window on Windows).
 
 `cli_dispatch`, `cli_rejection`, `apply_halt`, `json_payload_flag`
 (`coordinator_core.ceremony_common`): this module CONSUMES
@@ -114,17 +112,10 @@ REWRITE from the requirement, not a byte-identical port — see the row body,
     - `resolve_artifact` implements the literal-path, prose-sanitize and
       live/archive basename-fallback tiers. The elision-marker form
       (`…/<basename>`) resolves through the basename fallback rather than a
-      dedicated tier, matching the monolith's output. NOT reproduced: the
-      suffix-match tier (a prefix-omitted slug resolved by unique
-      basename-suffix match, 2026-07-28) and the git-revision-SHA tier
-      (2026-08-14). A caller passing either gets a not-found business
-      failure (exit 1) where the monolith would have resolved it — a real
-      behavioural gap, named here rather than silently absorbed.
-
-      The revision-SHA tier is the one deliberately left out on cost
-      grounds rather than scope: it walks git history to map a SHA to the
-      artifact it touched, which is exactly the "corpus walk for an answer"
-      DR-344 targets. Restoring it needs a measurement, not a reflex.
+      dedicated tier, matching the monolith's output. The suffix-match and
+      git-revision-SHA tiers run last, only once every exact tier has missed;
+      the revision tier costs one `git diff-tree` spawn, and is
+      rebuilt from the requirement, not ported.
     - `gates.execution_stamp_match` computes `computed_sha` via
       `frontmatter.primitives.canonical_body_sha` (a pure-Python git-blob-hash,
       zero spawns) and reports `verdict in {"match", "mismatch"}` (or `None`
@@ -141,7 +132,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 from datetime import date, datetime as _dt, timezone as _tz
 from pathlib import Path
@@ -174,7 +164,9 @@ from coordinator_core.frontmatter.body_blocks import (
     locate_fenced_block as _locate_fenced_block,
 )
 from coordinator_core.frontmatter.primitives import (
+    APPROVED_BODY_CHANGED,
     canonical_body_sha,
+    check_approved_body,
     read_fm_field_unquoted,
     split_frontmatter,
 )
@@ -183,6 +175,7 @@ from coordinator_core.git import git_index as _git_index
 from coordinator_core.git import git_state as _git_state
 from coordinator_core.git import repo_root as _repo_root_mod
 from coordinator_core.git.content_hash import content_matches_index_sha
+from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core import env_locality as _env_locality
@@ -194,7 +187,6 @@ from coordinator_core.shipped_in_tokens import (
     _SHA_HEX_RE as _SHIPPED_SHA_RE,
 )
 from coordinator_core.sizing_disposition import compute_sizing_disposition
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
 # ---------------------------------------------------------------------------
@@ -550,6 +542,36 @@ def _is_relative(p: Path, base: Path) -> bool:
         return False
 
 
+_PLAN_ID_KEYS = ("stub_id", "plan_id", "deliverable_id")
+_PLAN_ID_HEAD_BYTES = 4096
+
+
+def _plans_with_frontmatter_id(repo_root: Path, bare_id: str) -> list[Path]:
+    """`docs/plans/*.md` whose frontmatter `stub_id`/`plan_id`/`deliverable_id`
+    equals `bare_id` exactly. Reads only each file's head; spawn-free."""
+    plans_dir = repo_root / "docs" / "plans"
+    if not bare_id or not plans_dir.is_dir():
+        return []
+    pattern = re.compile(
+        r"^(?:%s):\s*[\"']?%s[\"']?\s*$" % ("|".join(_PLAN_ID_KEYS), re.escape(bare_id)),
+        re.MULTILINE,
+    )
+    hits: list[Path] = []
+    for candidate in sorted(plans_dir.glob("*.md")):
+        try:
+            with open(candidate, "rb") as fh:
+                head = fh.read(_PLAN_ID_HEAD_BYTES).decode("utf-8", "replace")
+        except OSError:
+            continue
+        if not head.startswith("---"):
+            continue
+        end = head.find("\n---", 3)
+        front = head if end == -1 else head[:end]
+        if pattern.search(front):
+            hits.append(candidate)
+    return hits
+
+
 def _fallback_search(repo_root: Path, dirs: tuple[str, ...], basename: str) -> list[Path]:
     hits: list[Path] = []
     for d in dirs:
@@ -560,6 +582,32 @@ def _fallback_search(repo_root: Path, dirs: tuple[str, ...], basename: str) -> l
             if candidate.is_file():
                 hits.append(candidate)
     return hits
+
+
+_REVISION_SHA_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def _changed_md_basenames_for_revision(repo_root: Path, revision: str) -> list[str]:
+    """Basenames of the `.md` files commit `revision` touched under
+    LIVE_DIRS + ARCHIVE_DIRS, via one `git diff-tree` spawn. A commit-time path
+    is stale once a memo moves to an archive dir, so callers re-search by
+    basename. An unknown revision, a merge commit or a spawn failure yields []."""
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", revision],
+        cwd=str(repo_root), binary=True,
+    )
+    if proc.returncode != 0:
+        return []
+    prefixes = tuple(d + "/" for d in LIVE_DIRS + ARCHIVE_DIRS)
+    names: list[str] = []
+    for rel in proc.stdout_bytes.decode("utf-8", errors="replace").split("\0"):
+        if rel.endswith(".md") and rel.startswith(prefixes):
+            name = rel.rsplit("/", 1)[-1]
+            if name not in names:
+                names.append(name)
+    return names
 
 
 def _read_fm_dict(text: str) -> dict[str, Any]:
@@ -694,9 +742,9 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     resolver `pickup_brief` owns (§ Design, "one rule, one home"); C11
     re-points `apply`'s own recompute at this function.
 
-    See the module docstring's documented reductions: literal-path,
-    prose-sanitize and live/archive basename-fallback tiers only. The
-    suffix-match and git-revision-SHA tiers are NOT reproduced.
+    See the module docstring's documented reductions. Tiers, in order:
+    literal path, prose-sanitize, live/archive basename fallback,
+    suffix match, plan id, git revision SHA.
 
     Containment: an absolute `artifact_path` resolving outside `repo_root`,
     or a relative one carrying a literal `..` traversal component, raises
@@ -802,6 +850,7 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     #: same way as `sanitize_resolution` so a caller can see the engine
     #: guessed and what it landed on, never silently.
     suffix_resolution: Optional[dict[str, str]] = None
+    plan_id_resolution: Optional[dict[str, str]] = None
 
     # Suffix tier: a caller citing a slug with the `<date>-<sender>-` prefix
     # omitted. Spawn-free, and only reached once every exact tier above has
@@ -830,9 +879,53 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
                         ),
                     }
 
+    # Plan-id tier: a bare id that names a plan's frontmatter `stub_id`/
+    # `plan_id`/`deliverable_id` rather than any filename.
+    if total == 0 and basename == _raw_artifact_path and "/" not in basename and "\\" not in basename:
+        bare_id = basename[: -len(".md")] if basename.endswith(".md") else basename
+        tried = list(tried) + [f"frontmatter {'/'.join(_PLAN_ID_KEYS)} == {bare_id!r} in docs/plans"]
+        plan_hits = _plans_with_frontmatter_id(repo_root, bare_id)
+        if plan_hits:
+            live_hits = plan_hits
+            total = len(live_hits)
+            if total == 1:
+                plan_id_resolution = {
+                    "passed": artifact_path,
+                    "resolved": rel_id(plan_hits[0], repo_root),
+                }
+
+    # Revision tier: a commit SHA citing the artifact's delivery commit. Last
+    # tier, so a real path/basename/slug never spawns git.
+    revision_resolution: Optional[dict[str, Any]] = None
+    if total == 0 and _REVISION_SHA_RE.fullmatch(_raw_artifact_path):
+        tried = list(tried) + [f"revision {_raw_artifact_path} (changed .md basenames)"]
+        revision_names = _changed_md_basenames_for_revision(repo_root, _raw_artifact_path)
+        for rev_basename in revision_names:
+            for hit in _fallback_search(repo_root, LIVE_DIRS, rev_basename):
+                if hit not in seen:
+                    seen.add(hit)
+                    live_hits.append(hit)
+            for hit in _fallback_search(repo_root, ARCHIVE_DIRS, rev_basename):
+                if hit not in seen:
+                    seen.add(hit)
+                    archive_hits.append(hit)
+        total = len(live_hits) + len(archive_hits)
+        if total == 1:
+            only_hit = (live_hits or archive_hits)[0]
+            revision_resolution = {
+                "passed": _raw_artifact_path,
+                "resolved": (
+                    rel_id(only_hit, repo_root) if _is_relative(only_hit, repo_root) else str(only_hit)
+                ),
+            }
+
     def _tag(result: dict[str, Any]) -> dict[str, Any]:
         if suffix_resolution is not None:
             result = {**result, "suffix_resolution": suffix_resolution}
+        if plan_id_resolution is not None:
+            result = {**result, "plan_id_resolution": plan_id_resolution}
+        if revision_resolution is not None:
+            result = {**result, "revision_resolution": revision_resolution}
         return _tag_elision(result, elision_resolution)
 
     if total == 0:
@@ -1318,7 +1411,6 @@ def acquire_brief_claim(
 # preflight.tree_quiescence / gates.coast
 # ---------------------------------------------------------------------------
 
-_NO_CONSOLE = no_console_creationflags()
 
 
 #: Cap on the candidate-path count `_expand_scope_entries` will settle
@@ -2200,6 +2292,23 @@ def compute_execution_stamp_match(
     if computed_sha is None:
         return None
 
+    approved_state, approved_msg = check_approved_body(target_text)
+    if (
+        approved_state == APPROVED_BODY_CHANGED
+        and (_parsed_frontmatter_dict(target_text) or {}).get("status") not in PLAN_TERMINAL_STATUS
+    ):
+        return (
+            {
+                "verdict": "stale-substantive",
+                "stamped_sha": stamped_sha,
+                "computed_sha": computed_sha,
+                "stamp_commit": None,
+                "delta_class": "substantive",
+                "next_move": f"{approved_msg}. Not executable until then.",
+            },
+            target_rel_path,
+        )
+
     stamp_commit = _find_stamp_commit(repo_root, target_rel_path, stamped_sha)
 
     if computed_sha == stamped_sha:
@@ -2259,8 +2368,22 @@ def compute_execution_stamp_match(
             target_rel_path,
         )
 
-    delta_class = _classify_stamp_delta(repo_root, stamp_commit, target_rel_path, target_text)
-    if delta_class == "bookkeeping":
+    # A terminal plan has already shipped: re-authorization has no meaning,
+    # and its own close-out edits (AC status cells, frontmatter `status:`)
+    # would otherwise read as a re-scope on every healthy completed plan.
+    target_fm = _parsed_frontmatter_dict(target_text) or {}
+    if target_fm.get("status") in PLAN_TERMINAL_STATUS:
+        delta_class = "terminal"
+    else:
+        delta_class = _classify_stamp_delta(repo_root, stamp_commit, target_rel_path, target_text)
+    if delta_class == "terminal":
+        verdict = "stale-bookkeeping"
+        next_move = (
+            f"No action — {target_rel_path} is terminal "
+            f"(`status: {target_fm.get('status')}`); re-authorization does not apply "
+            "to shipped work."
+        )
+    elif delta_class == "bookkeeping":
         verdict = "stale-bookkeeping"
         next_move = (
             f"Authorization stands on {target_rel_path} — proceed WITHOUT re-stamping. "
@@ -4036,9 +4159,22 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
             ) + (decision_object.get("narration") or ""),
         }
 
+    plan_id_resolution = (decision_object.get("artifact") or {}).get("plan_id_resolution")
+    if plan_id_resolution:
+        decision_object = {
+            **decision_object,
+            "narration": (
+                f"Passed id '{plan_id_resolution['passed']}' named no file — resolved via a "
+                f"plan frontmatter id -> '{plan_id_resolution['resolved']}'. "
+            ) + (decision_object.get("narration") or ""),
+        }
+
     narration = decision_object.get("narration")
     if not narration:
         raise ValueError("_emit: decision object missing non-empty 'narration'")
+
+    # The decision-object envelope contract requires `decisions` on every brief.
+    decision_object = {**decision_object, "decisions": decision_object.get("decisions") or {}}
 
     coast_verdict = (((decision_object.get("gates") or {}).get("coast")) or {}).get("verdict")
     if coast_verdict != "clear":

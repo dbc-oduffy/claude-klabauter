@@ -30,6 +30,7 @@ recipe-t4a-coordinator-session-hub.md § claims.py
 
 from __future__ import annotations
 
+from coordinator_core.tests.git_seed import seeded_repo
 import json
 import os
 import shutil
@@ -73,21 +74,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(tmp_path):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
-    subprocess.run(
-        ["git", "config", "user.email", "t@example.com"],
-        cwd=tmp_path,
-        **no_console_passthrough_kwargs(),
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "t"], cwd=tmp_path, **no_console_passthrough_kwargs()
-    )
-    (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, **no_console_passthrough_kwargs())
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, **no_console_passthrough_kwargs()
-    )
-    return tmp_path
+    return seeded_repo(tmp_path, readme="x")
 
 
 def _write_session(repo, sid, meta: dict):
@@ -1926,8 +1913,7 @@ class TestListClaimsBySession:
 
     def test_list_claims_by_session_survives_real_ship_call_site(self, tmp_path):
         """Drives the REAL `handoff_transition._ship` mutator (the function
-        the archive path (`handoff_ship_archive`) calls to flip
-        `deployment_state` to `shipped`) against a claimed handoff, then
+        that flips `deployment_state` to `shipped`) against a claimed handoff, then
         asserts the handoff-claims record — read via the real
         `list_claims_by_session` — survives. This is the actual regression
         guard the fixture-only sibling test above overclaimed: if a future

@@ -35,6 +35,7 @@ from coordinator_core.ops.dispatch_emit.queue_emit import (
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
 
 from .conftest import REVIEW_KW
+from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 
@@ -594,10 +595,10 @@ def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path):
 def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
     repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
     (repo_root / ".git").rmdir()
-    subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+    subprocess.run(["git", "init", "-q", str(repo_root)], check=True, **no_console_passthrough_kwargs())
     subprocess.run(
         ["git", "-C", str(repo_root), "config", "--add", "coordinator.commitTrailer", _TRAILER],
-        check=True,
+        check=True, **no_console_passthrough_kwargs(),
     )
     output_path = tmp_path / "queue-grind" / "emitted.mjs"
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -78,6 +78,8 @@ def test_raw_ask_emits_without_spawning_or_naming_fire(repo, capsys):
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
 def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys, tshirt):
     _put(repo, tshirt)
+    if tshirt == "M":  # C5: emit runs the gate, which mints the M baton and reads the branch
+        subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     rc, out = _emit(repo, capsys, "--ask", "--sizing", REL)
     assert rc == 0
     assert "--fire" not in out

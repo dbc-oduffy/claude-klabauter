@@ -36,7 +36,7 @@ avoids the trap structurally by (a) reading line 1 in isolation for the
 shebang assertion — never a whole-file substring search — and (b) scoping
 the trampoline-literal assertion to a small header window (first
 `TRAMPOLINE_WINDOW` lines, matching the window `check-bin-sh-polyglot.py`
-and `docs/wiki/coordinator-tripwires.md` already use to define "live
+and `coordinator-content-repo coordinator/docs/wiki/coordinator-tripwires.md` already use to define "live
 trampoline" vs. incidental mention) rather than a whole-file search.
 
 TIMING (2026-07-21): 85 files are mid-migration to the DR-076 shape as this
@@ -64,7 +64,7 @@ NEGATIVE SPEC
       second, less-precise label.
 
 Spec backlink: PM ruling 2026-07-21 (`#!/bin/sh` sh/python polyglot wrapper
-retired as legacy debt), docs/wiki/cross-platform-invocation-parity.md,
+retired as legacy debt), coordinator-content-repo coordinator/docs/wiki/portability/cross-platform-invocation-parity.md,
 DR-076.
 """
 from __future__ import annotations

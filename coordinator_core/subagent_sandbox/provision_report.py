@@ -1380,6 +1380,11 @@ def assemble_contract_block_parts_for_payload(
     if not isinstance(plugin_root, str) or not plugin_root:
         plugin_root = resolve_plugin_root()
     if not plugin_root:
+        print(
+            "provision-sidecar: plugin content root unresolved (no snippets/ found); "
+            "contract blocks skipped. Register repos.content_root.",
+            file=sys.stderr,
+        )
         return None
 
     _agent_id, _agent_type, subagent_type = resolve_effective_types(payload, git_root)

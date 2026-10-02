@@ -843,3 +843,94 @@ class TestBulkForeignIndexRefusal:
 
     def test_the_threshold_sits_above_a_session_and_below_a_bulk_change(self):
         assert 10 < dispatch_checks._BULK_FOREIGN_INDEX_PATHS < 500
+
+
+class TestBulkRefusalIsReachedThroughCheckValidateCommit:
+    """The bulk refusal wins whatever the first offending path would otherwise have been.
+
+    Drives the real dispatch over a tmp repo with 51 staged paths so the arm order, not the
+    message builder, is what is pinned.
+    """
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, first_arm):
+        import json
+        import subprocess
+        from datetime import datetime, timezone
+
+        from coordinator_core.bash_guards import dispatch as bash_dispatch
+        from coordinator_core.session import core, touch_record
+        from coordinator_core.win_portability import no_console_creationflags
+
+        def _git(*args):
+            subprocess.run(
+                ["git", *args],
+                cwd=str(tmp_path),
+                check=True,
+                capture_output=True,
+                **no_console_creationflags(),
+            )
+
+        def _claim(sid, path):
+            sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+            touch_record.append_event(
+                touch_record.sink_path(sdir),
+                session_id=sid,
+                agent_id=None,
+                verb=touch_record.VERB_TOUCH,
+                path=path,
+                name=REAL_NAME,
+            )
+
+        root = str(tmp_path)
+        _git("init", "-q")
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "Test")
+        (tmp_path / "README.md").write_text("init\n", encoding="utf-8")
+        _git("add", "README.md")
+        _git("commit", "-q", "-m", "init")
+
+        sid, peer = "my-sess", "other-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(peer, cwd=root)
+        future = datetime.fromtimestamp(
+            datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
+        )
+        (tmp_path / ".git" / "coordinator-sessions" / sid / "started_at").write_text(
+            future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
+        )
+
+        names = ["f%02d.txt" % i for i in range(51)]
+        for name in names:
+            (tmp_path / name).write_text("x\n", encoding="utf-8")
+        _git("add", "--", *names)
+        for name in names[1:]:
+            _claim(peer, name)
+        if first_arm == "contested":
+            _claim(peer, names[0])
+            _claim(sid, names[0])
+        elif first_arm == "vanished":
+            (tmp_path / names[0]).unlink()
+
+        monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": 'git commit -m "x"'},
+            "session_id": sid,
+            "cwd": root,
+        })
+        return bash_dispatch.evaluate_payload_json(payload)
+
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    @pytest.mark.parametrize("first_arm", ["contested", "unclaimed", "vanished"])
+    def test_bulk_refusal_wins_for_every_first_path_arm(
+        self, tmp_path, monkeypatch, first_arm
+    ):
+        result = self._run(tmp_path, monkeypatch, first_arm)
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        reason = out["permissionDecisionReason"]
+        assert "the index holds 51 staged paths" in reason
+        assert "restore --staged" not in reason

@@ -71,6 +71,9 @@ def _write_ac_handoff(tmp_path: Path, rel_path: str, body: str) -> None:
     handoff_path.write_text(f"---\nstatus: open\n---\n\n{body}\n", encoding="utf-8")
 
 
+_AC_BODY = "## Acceptance criteria" + chr(10) * 2 + "- [x] one"
+
+
 def _ship_directives(directives: list[dict]) -> list[dict]:
     return [d for d in directives if d["id"].startswith("d-ship-consumed-handoff:")]
 
@@ -94,6 +97,19 @@ def test_resolvable_predecessor_consumed_handoff_emits_the_ship_directive(tmp_pa
     assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]
 
 
+def test_already_archived_predecessor_emits_no_ship_directive(tmp_path):
+    # The resolver follows a boot sweep's move to archive/handoffs/YYYY-MM/;
+    # ship-handoff refuses a non-live path, so the directive must not fire.
+    _write_ac_handoff(
+        tmp_path, "archive/handoffs/foo.md", "## Acceptance criteria\n\n- [x] one\n"
+    )
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+
+    directives = wsc.build_directives(gate, {}, tmp_path)
+
+    assert _ship_directives(directives) == []
+
+
 # ---------------------------------------------------------------------------
 # 2. NEGATIVE, DISPOSITION
 # ---------------------------------------------------------------------------
@@ -114,6 +130,16 @@ def test_every_other_disposition_emits_no_ship_directive(tmp_path, disposition):
 
 def test_predecessor_consumed_with_unresolvable_path_emits_no_ship_directive(tmp_path):
     gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/does-not-exist.md",))
+
+    directives = wsc.build_directives(gate, {}, tmp_path)
+
+    assert _ship_directives(directives) == []
+
+
+def test_predecessor_already_archived_emits_no_ship_directive(tmp_path):
+    name = "2026-09-01-foo.md"
+    _write_ac_handoff(tmp_path, f"archive/handoffs/2026-09/{name}", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=(f"state/handoffs/{name}",))
 
     directives = wsc.build_directives(gate, {}, tmp_path)
 

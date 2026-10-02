@@ -185,6 +185,31 @@ def _cygpath_w(posix_path: str) -> str:
 
 _MACHINE_MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 
+#: Every `coordinator_core.install` module that writes into the settings home
+#: (`settings_home()`) or the harness config dir (`<claude_home>`, `~/.claude`)
+#: without consulting the kill switch. Each is an install-plane entry in
+#: `MACHINE_MUTATION_SWITCH_CARVE_OUTS`: the switch refuses machine state
+#: outside the install's own territory, and a `COORDINATOR_DISABLE_MACHINE_MUTATION=1`
+#: install still builds its settings home. Pinned exactly by
+#: `test_machine_mutation_carve_out_declared` -- a settings-home writer absent
+#: here and ungated fails, as does an entry that now gates. Bare entries are
+#: install-module stems; `scripts/setup.py::<function>` entries name the
+#: installer's own settings-home write sites, checked per function.
+SETTINGS_HOME_WRITER_CARVE_OUT = (
+    "dep_check",
+    "door_install",
+    "door_uninstall",
+    "ensure_venv",
+    "first_run",
+    "forwarder_self_heal",
+    "gen_settings_hooks",
+    "live_plugin_registration",
+    "uninstall_legs",
+    "scripts/setup.py::_record_homebrew_removal",
+    "scripts/setup.py::ensure_percolate_identity",
+    "scripts/setup.py::write_rule_surface",
+)
+
 CARVE_OUT_INSTALL_PLANE = "install-plane"
 CARVE_OUT_CALLER_GATED = "caller-gated-mechanic"
 CARVE_OUT_NOT_A_WRITE = "not-a-machine-write"
@@ -198,7 +223,7 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     # from this dict and absent from the switch is a test failure; an entry
     # whose module now gates, vanished, or stopped reaching a write is a
     # test failure too. `gap` entries are non-install-plane writers still
-    # ungated -- the class may only shrink (pinned in the test).
+    # ungated -- the class stays empty (pinned in the test).
     "dep_check.py": (
         CARVE_OUT_INSTALL_PLANE,
         "writes only the chain-walk visited-set under <settings_home>/coordinator-claude/",
@@ -230,10 +255,6 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "forwarder_self_heal.py": (
         CARVE_OUT_INSTALL_PLANE,
         "appends its failure ledger beside the settings-home forwarders",
-    ),
-    "hook_plane_verdict.py": (
-        CARVE_OUT_INSTALL_PLANE,
-        "writes <claude_home>/rules/<basename>, the install's own rule surface",
     ),
     "live_plugin_registration.py": (
         CARVE_OUT_INSTALL_PLANE,
@@ -282,20 +303,7 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
         CARVE_OUT_NOT_A_WRITE,
         "writes are confined to a throwaway sandbox dir; live files are only read and backed up into it",
     ),
-    "host_sampler_scheduler.py": (
-        CARVE_OUT_GAP,
-        "registers an OS Task Scheduler entry via schtasks: machine state outside the install plane, ungated",
-    ),
-    "wrapper_onto_path.py": (
-        CARVE_OUT_GAP,
-        "copies a wrapper into the per-user PATH bin dir (~/.local/bin): outside settings-home, ungated",
-    ),
-    "maximalist.py": (
-        CARVE_OUT_GAP,
-        "the orchestrator's own direct writes -- the Defender process-exclusion offer and the claude-author wrapper in the per-user bin dir -- are ungated",
-    ),
 }
-
 
 
 def _refuse_machine_mutation(
@@ -1679,6 +1687,7 @@ def _write_native_door_forwarder(
                 "fix the toolchain/build and re-run to cut it over.",
                 file=sys.stderr,
             )
+            door_install.record_install_door_degrade(name, exc)
         return None
     if not check_only:
         door_install.remove_shadowing_ps1_sibling(bin_dst, name)
@@ -1945,6 +1954,25 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     )
 
 
+def _agent_forwarder_content(name: str, target: str, resolver_module: str = _AGENT_RESOLVER_MODULE) -> str:
+    """The exact bytes `_write_agent_forwarder` installs for `name`."""
+    return f"""#!/usr/bin/env python3
+# coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
+# `coordinator/bin/` directory via the co-located `{resolver_module}.py`
+# shim (the ratified resolve-claude-klabauter-bin contract, coordinator-content-repo
+# coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
+# Regenerated verbatim on every install run — do not hand-edit.
+# Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from {resolver_module} import exec_cli  # noqa: E402
+
+exec_cli("{target}")
+"""
+
+
 def _write_agent_forwarder(
     name: str,
     dst: Path,
@@ -2033,21 +2061,7 @@ def _write_agent_forwarder(
     current count, not this prose), so that tax is not one file's
     cost -- it is one cold-`bash.exe`-avoidance win per forwarder per
     install, on Windows, which CLAUDE.md treats as the primary platform."""
-    content = f"""#!/usr/bin/env python3
-# coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
-# `coordinator/bin/` directory via the co-located `{resolver_module}.py`
-# shim (the ratified resolve-claude-klabauter-bin contract, coordinator-content-repo
-# coordinator/snippets/resolve-claude-klabauter-bin.md) and execs `{target}` there.
-# Regenerated verbatim on every install run — do not hand-edit.
-# Spec backlink: cross-repo/inbox/2026-07-22-claude-central-em-forwarder-template-still-execs-dead-doe-bin.md
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from {resolver_module} import exec_cli  # noqa: E402
-
-exec_cli("{target}")
-"""
+    content = _agent_forwarder_content(name, target, resolver_module)
     if check_only:
         if dst.exists() and dst.read_text(encoding="utf-8") == content:
             print(f"[install-substrate] check: {dst.name} up to date -> {dst} (no-op)")
@@ -2373,17 +2387,17 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
                 # the CLEAN path, unprompted by any failure. Two consumers
                 # already depend on knowing that: `forwarder_self_heal`
                 # captures stdout+stderr so session boot does not print this
-                # every time, and `settings_home_report` redirects stdout so
-                # the JSON doctor probe's contract survives it. The `print`
-                # below therefore reaches any caller that has not arranged
-                # otherwise -- check the tree before assuming it is quiet.
+                # every time, and `settings_home_report` redirects both streams
+                # so the JSON doctor probe stays quiet. The warning goes to
+                # stderr, so a stdout-contract caller is safe either way.
                 dropped = existing if py_twin == n else n
                 if installed_name not in _DELIBERATE_EXTENSIONLESS_TWINS:
                     print(
                         f"[install-substrate] WARNING: duplicate CLI pair for "
                         f"installed name {installed_name!r} in {agent_bin} -- "
                         f"{py_twin!r} and {dropped!r} both exist; installing "
-                        f"{py_twin!r} (the .py twin) and ignoring {dropped!r}"
+                        f"{py_twin!r} (the .py twin) and ignoring {dropped!r}",
+                        file=sys.stderr,
                     )
                 mapping[installed_name] = py_twin
                 continue
@@ -3812,34 +3826,14 @@ def _write_agent_helper_forwarders(
     # `SubstrateFatalError`, which `run()`/`main()` already turn into exit 1
     # (see their own `except SubstrateFatalError` clauses) — no new exit path.
     #
-    # THE CATCH IS THREE TYPES WIDE, NOT `Exception` (DR-402's shape, one
-    # plane over; C2, dispatch brief F-013). `OSError` alone caught the
-    # WinError-32 case above but let a POSIX door-BUILD failure kill the
-    # whole loop: `door_build_posix.build()` (a real compile error, toolchain
-    # present) raises `SystemExit`, and a missing-toolchain degrade
-    # (`door_install_posix_build.build_or_advise`) is surfaced by
-    # `door_install.install_door` as `door_install.DoorInstallError`. Both
-    # must degrade THIS NAME onto its existing Python path and continue, the
-    # same as the OSError case -- but the catch stays this named triple,
-    # never a bare `except Exception`, so a per-name failure keeps landing in
-    # `failed` (and therefore the non-zero exit / summary line below) instead
-    # of silently vanishing the way the backlog row above describes.
-    #
-    # REVIEW (overengineering-reviewer, applied-then-reverted): the reviewer
-    # read `_write_native_door_forwarder`'s own inner catch of
-    # `(DoorInstallError, SystemExit)` as closing this path, so the outer
-    # catch here would never fire for either type and could safely narrow to
-    # `OSError`. Narrowing was applied and re-verified against this plan's
-    # own falsifier (`docs/plans/2026-09-01-the-dogfooded-install-stops-
-    # lying-about.falsifier.py`), which flipped from PASS back to FALSIFIED:
-    # its static check does not know about the inner catch and reads a
-    # bare `except OSError` around this call chain as the abort bug the
-    # prime exit criterion's door-build leg exists to close. Escalated
-    # rather than silently trusting either instrument over the other --
-    # see the review-integrator's ESCALATION note.
+    # The per-name catch is `OSError` only: a door-build failure
+    # (`DoorInstallError`, or a compile failure's `SystemExit`) is absorbed one
+    # level down in `_write_native_door_forwarder`, which degrades the name onto
+    # its Python path and records the degrade durably. The door-source hoist
+    # below catches all three itself because it has no per-name inner catch.
     failed: "list[tuple[str, BaseException]]" = []
     from coordinator_core.install import door_install
-    _PER_NAME_DEGRADE_EXCEPTIONS = (OSError, door_install.DoorInstallError, SystemExit)
+    _PER_NAME_DEGRADE_EXCEPTIONS = (OSError,)
 
     agent_helper_resolved: "list[WriteSurfaceEntry]" = []
     # One loop body for both modes: `check_only` never writes, so it runs
@@ -3865,7 +3859,7 @@ def _write_agent_helper_forwarders(
         if engine_root is not None and not check_only:
             try:
                 door_source = door_install.install_door(bin_dst, engine_root, check_only=False)
-            except _PER_NAME_DEGRADE_EXCEPTIONS:
+            except (OSError, door_install.DoorInstallError, SystemExit):
                 door_source = None
         for f, target in sorted(agent_helper_target_map.items()):
             try:
@@ -4560,6 +4554,31 @@ def _percolation_and_path_steps(
         print(f"[setup] added {claude_dir} (claude CLI) to PATH — open a new shell to use `claude`")
 
 
+def _retire_whoami_residue(dst_whoami: Path, check_only: bool) -> None:
+    """Remove the retired `<settings-home>/coordinator-whoami/` copy a
+    pre-retirement install left; nothing writes it any more."""
+    if not os.path.lexists(dst_whoami):
+        return
+    if check_only:
+        print(f"[install-substrate] would: remove retired {dst_whoami}")
+        return
+    blocked = _refuse_machine_mutation(
+        str(dst_whoami), what="remove the retired coordinator-whoami directory", check_temp_path=False,
+    )
+    if blocked:
+        print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
+        return
+    try:
+        if dst_whoami.is_symlink() or not dst_whoami.is_dir():
+            dst_whoami.unlink()
+        else:
+            shutil.rmtree(dst_whoami)
+    except OSError as exc:
+        print(f"[install-substrate] WARNING: could not remove retired {dst_whoami}: {exc}", file=sys.stderr)
+        return
+    print(f"[install-substrate] removed retired {dst_whoami}")
+
+
 def _c10a_steps(
     install_base: str, settings_home_path: Path, plugin_root: Path, bin_dst: Path, check_only: bool,
     *, allow_venv_fallback: bool = False,
@@ -4577,6 +4596,7 @@ def _c10a_steps(
     # regression. `bin_dst` is unused now that C10a-2's registry write is
     # gone; kept as a parameter for call-site compatibility.
     dst_whoami = settings_home_path / _WHOAMI_DIRNAME
+    _retire_whoami_residue(dst_whoami, check_only)
 
     # Step C10a-3: venv rebuild + legacy venv removal (native —
     # coordinator_core.install.ensure_venv). Reachable ONLY behind
@@ -5627,11 +5647,13 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # 28/29 below, so a stale settings-home copy left by a
         # pre-retirement install remains a recognized prune candidate.
         StaticClause(
+            effect="delete",
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
                     path=f"<settings-home>/{_WHOAMI_DIRNAME}/",
-                    reason="RETIRED: no longer written — Step C10a-1's relocation copy is deleted (item 1). Entry stays declared, unwritten, for stale-residue recognition on a pre-retirement box",
+                    effect="delete",
+                    reason="RETIRED: never written; `_retire_whoami_residue` removes the stale copy a pre-retirement install left",
                 ),
             ),
         ),

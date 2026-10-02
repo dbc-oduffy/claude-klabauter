@@ -10,6 +10,10 @@ commit (D3, ``dispatch.terminal_commit``, built in C10): which chunks
 landed which paths, under which own-report-claimed prefixes, and which
 report file each chunk's own-prefix claim list lives in.
 
+``CommitRequest.repo_root``: always null in emitted markers (no consumer reads
+it, and a host path must not land in a committed script); the key stays for
+pre-existing markers.
+
 ``CommitRequest.expected_branch``: branch the run promised to commit onto;
 null = no promise. Trap: optional forever — pre-field v1 markers exist on
 disk, so ``parse_marker`` reads it with ``payload.get``.

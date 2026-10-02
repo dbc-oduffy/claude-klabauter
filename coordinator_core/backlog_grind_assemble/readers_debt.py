@@ -76,6 +76,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -144,6 +145,31 @@ def _cross_reference_overlap(debt_records: list[dict], bug_records: list[dict]) 
     return overlaps
 
 
+_PATH_TOKEN = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
+
+
+def _group_key(record: dict) -> str:
+    """Debt-triage Step 4's "system": the first path cited in `surface`,
+    falling back to `title` then `body`, cut to its two leading directories.
+    `system` is free text and absent on many rows, so it is not the key."""
+    fm = record.get("frontmatter") or {}
+    for field_name in ("surface", "title", "body"):
+        m = _PATH_TOKEN.search(str(fm.get(field_name) or ""))
+        if m:
+            parts = m.group(0).split("/")
+            dirs = parts[:-1] if "." in parts[-1] else parts
+            return "/".join(dirs[:2]) or parts[0]
+    return "ungrouped"
+
+
+def _system_groups(records: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for rec in records:
+        key = _group_key(rec)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _load_debt_backlog(repo_root: Path) -> list[dict]:
     return load_family_records("debt-backlog", repo_root)
 
@@ -186,8 +212,11 @@ def _build_batched_pm_gate(
         "; ".join(f"{o['surface']!r}: {o['debt_path']} <-> {o['bug_path']}" for o in bug_overlaps)
         or "no exact-surface overlaps"
     )
+    groups = sorted(_system_groups(debt_open).items(), key=lambda kv: (-kv[1], kv[0]))
+    groups_str = ", ".join(f"{k}={n}" for k, n in groups) or "none"
     evidence = (
         f"debt-backlog open={len(debt_open)} (by severity: {severity_str}) | "
+        f"debt-backlog groups (surface path, else title/body path): {groups_str} | "
         f"improvement-queue open={len(improvement_open)} | "
         f"bug/debt exact-surface overlaps: {overlap_summary}"
     )

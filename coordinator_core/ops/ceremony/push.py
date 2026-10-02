@@ -165,7 +165,7 @@ _PUSH_MAX_RETRIES = 3
 #: A deadline the ladder owns is checked BETWEEN attempts, where the state is
 #: known: the last push was OBSERVED as rejected and nothing is in flight. So an
 #: exhausted budget reports a genuine `failed`, never `unconfirmed`, and the
-#: caller is not left with "unknown" (`docs/wiki/close-ceremony-residue.md`).
+#: caller is not left with "unknown" (`coordinator-content-repo coordinator/docs/wiki/ceremony-calibration/close-ceremony-residue.md`).
 #:
 #: SIZING: the full ladder is 3 pushes + 2 fetches (~3.8s quiet) plus a local rebase, but a no-op
 #: `git push` under the load norm measures 2.07s-15.31s (DR-401). 18.0s clears that worst case with

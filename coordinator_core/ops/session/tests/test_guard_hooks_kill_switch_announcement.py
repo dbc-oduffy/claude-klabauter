@@ -339,3 +339,17 @@ def test_router_line_command_actually_resolves(tmp_path):
     assert "Coordinator hook generation is DISABLED" in text
     assert "double-fire status" in text
     assert "MET as of 2026-07-28" in text
+
+
+def test_full_detail_remedy_names_a_resolvable_callable(tmp_path):
+    import importlib
+    import re
+
+    config_dir = tmp_path / "config"
+    future = (_dt.date.today() + _dt.timedelta(days=14)).isoformat()
+    _write_marker(config_dir, f"Since: 2026-07-14\nExpires: {future}\n")
+    detail = gsi.evaluate_hooks_kill_switch_full_detail(config_dir)
+    m = re.search(r"from (coordinator_core\.[\w.]+) import (\w+) as f; print\(f\(\)\)", detail)
+    assert m, "full detail must name a runnable remedy, not an unregistered op name"
+    fn = getattr(importlib.import_module(m.group(1)), m.group(2))
+    assert isinstance(fn(config_dir), str)

@@ -293,6 +293,49 @@ def test_base_param_overrides_default_branch_resolution(tmp_path):
     assert explicit_base_result["findings"][0]["file"] == "src/newer.py"
 
 
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def _commit_feature_files(repo: Path, names: tuple[str, ...]) -> None:
+    _git(repo, "checkout", "-q", "-b", "feature")
+    for name in names:
+        _track_file(repo, f"src/{name}.py", "# fixed the retry loop as of 2026-09-25\n")
+        _git(repo, "commit", "-q", "-m", name)
+
+
+def test_default_scope_caps_at_the_last_n_commits_on_a_long_branch(tmp_path, monkeypatch):
+    """A branch further than the cap from its merge-base scans only the last
+    N commits' files, not everything since the fork; an explicit `base`
+    reaches past the cap.
+    """
+    monkeypatch.setattr("coordinator_core.ops.run_commenting_sweep.DEFAULT_DIFF_COMMIT_CAP", 2)
+    repo = _init_repo(tmp_path)
+    fork_sha = _git(repo, "rev-parse", "HEAD")
+    _commit_feature_files(repo, ("one", "two", "three"))
+
+    capped = run_commenting_sweep(repo)
+    assert sorted({f["file"] for f in capped["findings"]}) == ["src/three.py", "src/two.py"]
+    assert capped["files_checked"] == 2
+
+    assert run_commenting_sweep(repo, base=fork_sha)["files_checked"] == 3
+
+
+def test_default_scope_within_the_cap_reaches_the_merge_base(tmp_path, monkeypatch):
+    monkeypatch.setattr("coordinator_core.ops.run_commenting_sweep.DEFAULT_DIFF_COMMIT_CAP", 2)
+    repo = _init_repo(tmp_path)
+    _commit_feature_files(repo, ("one", "two"))
+
+    assert run_commenting_sweep(repo)["files_checked"] == 2
+
+
 def test_params_repo_root_takes_priority_over_injected(tmp_path):
     repo_a = _init_repo(tmp_path / "a")
     _track_file(repo_a, "one.py", "# clean\n")

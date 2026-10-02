@@ -142,6 +142,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
@@ -174,6 +175,20 @@ UNDECLARED = _Undeclared()
 
 NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
 
+#: Authored aliases for a canonical disposition. Spines written before `coded`
+#: was enforced say `done`; every reader folds them where rows are read.
+DISPOSITION_ALIASES = {"done": "coded"}
+
+
+def with_canonical_disposition(row):
+    """`row` with an aliased `disposition` rewritten to its canonical value;
+    any other row (or a non-mapping) is returned as is."""
+    if not isinstance(row, dict):
+        return row
+    alias = DISPOSITION_ALIASES.get(str(row.get("disposition") or "").strip())
+    return {**row, "disposition": alias} if alias else row
+
+
 # The schema's COMPLETE enum -- the closed values plus `open`. Named
 # separately because the two sets answer different questions, and conflating
 # them is what let an unrecognized value dispatch: membership in
@@ -186,6 +201,86 @@ _GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
 _GATE_CLEARED_KEY = "cleared"
 
 _UNDECLARED_GATE_KEY = "awaiting_gate"
+
+
+_TERMINAL_NON_CODED = NON_DISPATCHABLE_DISPOSITIONS - {"coded"}
+
+
+def _repo_root_of(plan_path) -> Optional[Path]:
+    here = Path(plan_path).resolve().parent
+    for candidate in (here, *here.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _unlanded_plan_edge(
+    raw: dict, plan_path, repo_root: Optional[Path], plan_cache: dict
+) -> Optional[str]:
+    """The first ``depends_on_plan`` edge of ``raw`` whose named row is not yet
+    ``coded``, as a detail string; ``None`` when every edge is satisfied or the
+    row declares none. Raises ``DanglingPlanDependencyError`` for an edge that
+    can never be satisfied. With no repo root to resolve against, an edge cannot
+    be shown satisfied and withholds the row."""
+    edges = raw.get("depends_on_plan")
+    if not edges:
+        return None
+    if not isinstance(edges, list):
+        raise MalformedDependencyEdgeError(
+            f"row {raw.get('id')!r} depends_on_plan is {edges!r}, not a list"
+        )
+    held: Optional[str] = None
+    for edge in edges:
+        if not isinstance(edge, dict) or not edge.get("plan") or not edge.get("chunk"):
+            raise MalformedDependencyEdgeError(
+                f"row {raw.get('id')!r} depends_on_plan entry {edge!r} must be "
+                "{plan: <repo-relative .md path>, chunk: <row id>, gate_kind: <kind>}"
+            )
+        rel = str(edge["plan"]).replace("\\", "/")
+        chunk = edge["chunk"]
+        label = f"{rel} {chunk}"
+        if ".." in rel.split("/") or rel.startswith("/"):
+            raise DanglingPlanDependencyError(
+                f"row {raw.get('id')!r} depends_on_plan {label}: path escapes the repo"
+            )
+        if repo_root is None:
+            held = held or f"depends_on_plan {label}: no repo root to resolve it against"
+            continue
+        target = repo_root / rel
+        if target not in plan_cache:
+            try:
+                loaded = load_rows(target.read_text(encoding="utf-8"))
+            except OSError:
+                plan_cache[target] = None
+            else:
+                plan_cache[target] = (
+                    {
+                        r["id"]: with_canonical_disposition(r)
+                        for r in loaded.rows
+                        if isinstance(r, dict) and r.get("id")
+                    }
+                    if loaded.status is LocateStatus.LOCATED
+                    else None
+                )
+        rows_by_id = plan_cache[target]
+        if rows_by_id is None:
+            raise DanglingPlanDependencyError(
+                f"row {raw.get('id')!r} depends_on_plan {label}: plan is absent or has no spine"
+            )
+        named = rows_by_id.get(chunk)
+        if named is None:
+            raise DanglingPlanDependencyError(
+                f"row {raw.get('id')!r} depends_on_plan {label}: no such row in that plan"
+            )
+        disposition = named.get("disposition")
+        if disposition in _TERMINAL_NON_CODED:
+            raise DanglingPlanDependencyError(
+                f"row {raw.get('id')!r} depends_on_plan {label}: predecessor is {disposition}, "
+                "never coded"
+            )
+        if disposition != "coded":
+            held = held or f"depends_on_plan {label}: predecessor not yet coded"
+    return held
 
 
 def _is_operator_row(raw: dict) -> bool:
@@ -343,6 +438,13 @@ class DanglingDependencyError(SpineReadError):
 
 class MalformedDependencyEdgeError(SpineReadError):
     pass
+
+
+class DanglingPlanDependencyError(SpineReadError):
+    """A ``depends_on_plan`` edge whose predecessor can never land: the plan
+    file is absent (moved terminal), escapes the repo, the named row is not in
+    its spine, or the row reached a terminal non-``coded`` disposition. Waiting
+    on it would withhold the dependent row forever."""
 
 
 class InvalidFieldTypeError(SpineReadError):
@@ -526,8 +628,10 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, which
     carry an uncleared ``external_gate`` entry blocking ``execution`` (see
     ``_has_uncleared_execution_gate``), or which declare
-    ``execution_mode: operator`` (see ``_is_operator_row``) are excluded from
-    the returned list — they are not dispatchable.
+    ``execution_mode: operator`` (see ``_is_operator_row``), or which name a
+    ``depends_on_plan`` row not yet ``coded`` (``_unlanded_plan_edge``; a
+    predecessor that can never land raises ``DanglingPlanDependencyError``) are
+    excluded from the returned list — they are not dispatchable.
 
     ``exclusions``, when a list is passed, is APPENDED with one
     ``{"id", "reason", "detail"}`` dict per row this function drops. It is an
@@ -575,7 +679,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             f"plan {plan_path!r} task-spine block is {result.status.name}, not LOCATED"
         )
 
-    raw_rows = result.rows
+    raw_rows = [with_canonical_disposition(raw) for raw in result.rows]
 
     if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
         schema_error = check_plan_tasks_source(source)
@@ -731,10 +835,19 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
     satisfied_ids: set[str] = set()
     blocked_ids: set[str] = set()
+    plan_edge_root: Optional[Path] = None
+    plan_edge_cache: dict = {}
+    if any(isinstance(raw, dict) and raw.get("depends_on_plan") for raw in raw_rows):
+        plan_edge_root = _repo_root_of(plan_path)
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
         em_performed = raw.get("performer") == "em"
+        plan_hold = None
+        if not (
+            disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed
+        ):
+            plan_hold = _unlanded_plan_edge(raw, plan_path, plan_edge_root, plan_edge_cache)
         if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
             raise UnknownDispositionError(
                 f"row {raw.get('id')!r} has disposition {disposition!r}, which is "
@@ -759,6 +872,8 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 )
             elif _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
                 _reason = ("external_gate", "uncleared external_gate blocking execution")
+            elif plan_hold is not None:
+                _reason = ("depends_on_plan", plan_hold)
             if _reason is not None:
                 exclusions.append(
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
@@ -769,6 +884,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         elif (
             _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
             or _is_operator_row(raw)
+            or plan_hold is not None
         ):
             blocked_ids.add(raw.get("id"))
 

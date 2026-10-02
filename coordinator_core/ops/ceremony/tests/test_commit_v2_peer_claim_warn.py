@@ -80,6 +80,11 @@ def test_live_peer_holder_warns_and_still_commits(repo, monkeypatch):
     assert any(
         rel in w and peer_sid in w for w in result["warnings"]
     ), result["warnings"]
+    body = subprocess.run(
+        ["git", "log", "-1", "--format=%B"], cwd=str(repo), capture_output=True,
+        text=True, check=True, **no_console_creationflags(),
+    ).stdout
+    assert f"{commit_v2.ABSORBED_PEER_CLAIM_PREFIX} {peer_sid} {rel}" in body, body
 
 
 def test_dead_holder_no_warning(repo, monkeypatch):

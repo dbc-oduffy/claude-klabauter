@@ -46,7 +46,7 @@ regardless of invocation mode — per-key scope overrides the CLI's `--global`/n
 choice for that key.
 
 Spec backlink: cross-repo/inbox/2026-05-30-index-lock-leak-concurrent-em.md (example-game-repo
-consult); docs/wiki/concurrent-em-hazards.md § H21.
+consult); coordinator-content-repo coordinator/docs/wiki/concurrent-em-git-operations/concurrent-em-hazards.md § H21.
 Prior bash implementation: coordinator/bin/coordinator-configure-git.
 
 Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-port):

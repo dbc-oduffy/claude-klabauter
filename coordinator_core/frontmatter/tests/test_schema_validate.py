@@ -3934,11 +3934,24 @@ _QUEUE_SCHEMA_PINS = {
     #   gains the case_against deferred-branch sentence). No shape change;
     #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
     #   ours, verified).
-    'bug-backlog': "4bf3ddd88d262ce473be21108462aba32a692ada",
+    # Pin moved 2026-10-02 to ad6d2f178ac499f573cd11f00bc33c10bfc9cb7a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
+    #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
+    #   blocking-releases)
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'bug-backlog': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
-    'cross-repo-commitment': "cd70f651f95503ac2d8979b6900ba905c910a75a",
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'cross-repo-commitment': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
     #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
@@ -3989,7 +4002,16 @@ _QUEUE_SCHEMA_PINS = {
     #   gains the case_against deferred-branch sentence). No shape change;
     #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
     #   ours, verified).
-    'debt-backlog': "37de8d415a7fb11c9189a330320c8f74a3260a44",
+    # Pin moved 2026-10-02 to ad6d2f178ac499f573cd11f00bc33c10bfc9cb7a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
+    #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
+    #   blocking-releases)
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'debt-backlog': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -4077,7 +4099,16 @@ _QUEUE_SCHEMA_PINS = {
     #   gains the case_against deferred-branch sentence). No shape change;
     #   claude-klabauter's copy carried no unique prose (DoE note strictly supersedes
     #   ours, verified).
-    'improvement-queue': "37de8d415a7fb11c9189a330320c8f74a3260a44",
+    # Pin moved 2026-10-02 to ad6d2f178ac499f573cd11f00bc33c10bfc9cb7a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
+    #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
+    #   blocking-releases)
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'improvement-queue': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -4092,12 +4123,20 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
     #   release suite)
-    'lesson-entry': "78e0fb1a511bdf2b453412656cded0fafbda2128",
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'lesson-entry': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-10-01 to 78e0fb1a511bdf2b453412656cded0fafbda2128 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lessons-outbox.
     #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
     #   release suite)
-    'lessons-outbox': "78e0fb1a511bdf2b453412656cded0fafbda2128",
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py lessons-outbox.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'lessons-outbox': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   re-vendor: DoE bumped x-schema-version and changed shape
@@ -4155,7 +4194,11 @@ _QUEUE_SCHEMA_PINS = {
     #   DoE wiki reorg moved cited wiki paths into subdirectories; review-
     #   findings 3.5.1 note reworded upstream (x-bump-class dropped locally,
     #   upward ask filed in report)
-    'review-findings': "9a2573ca4a089e789f712a555fcd486f6cbb7e63",
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'review-findings': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4186,7 +4229,14 @@ _QUEUE_SCHEMA_PINS = {
     #   published mirror's transformed copies (31 phantom drifts); fixed at
     #   72e3baac33, so these ten are the first honest reading. handoff is held
     #   back -- major advance, separate act.
-    'review-trail': "469897344d1927702184d9cb1b7eff26c9e16ea8",
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    # Pin moved 2026-10-02 to 3a54ea89a5cc7653732b7b7cd23e17efa3dddd49 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   DoE DR-097 shape bumps (1.1.1/1.1.1/2.1.1/2.3.1)
+    'review-trail': "3a54ea89a5cc7653732b7b7cd23e17efa3dddd49",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the
@@ -4197,7 +4247,16 @@ _QUEUE_SCHEMA_PINS = {
     # Pinned to 577a710c7 (x-schema-version 1.1.0), the ref confirmed clean
     # and present in coordinator-content-repo at vendor-time.
     # docs/plans/2026-08-06-vendor-priority-ledger-and-priority-inte.md § C1
-    'priority-ledger': "577a710c7c07cbeb0b061ebcc131dc09d2975654",
+    # Pin moved 2026-10-02 to ad6d2f178ac499f573cd11f00bc33c10bfc9cb7a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py priority-ledger.
+    #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
+    #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
+    #   blocking-releases)
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py priority-ledger.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'priority-ledger': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
     # Vendored 2026-08-06, same wave as priority-ledger above — see that
     # entry's comment. priority-intent.schema.json is the record shape
     # example-cockpit-repo drops into priority-intent-inbox/ for priority.drain
@@ -4205,7 +4264,16 @@ _QUEUE_SCHEMA_PINS = {
     # non-skippable trust boundary. Pinned to 577a710c7 (x-schema-version
     # 1.1.0), same ref as priority-ledger.
     # docs/plans/2026-08-06-vendor-priority-ledger-and-priority-inte.md § C1
-    'priority-intent': "577a710c7c07cbeb0b061ebcc131dc09d2975654",
+    # Pin moved 2026-10-02 to ad6d2f178ac499f573cd11f00bc33c10bfc9cb7a (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py priority-intent.
+    #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
+    #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
+    #   blocking-releases)
+    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py priority-intent.
+    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
+    #   enables publish transform carve-out
+    'priority-intent': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
 }
 
 # Ahead-pin registry: entries here declare "claude-klabauter's vendored copy is
@@ -7881,6 +7949,20 @@ class TestMultiLineQuotedScalars:
 
         assert fm['statement'] == '"never closed'
         assert fm['n'] == 1
+
+
+def test_prose_carve_out_is_scoped_by_position():
+    from coordinator_core.frontmatter.schema_validate import _is_prose_annotation_path
+
+    assert _is_prose_annotation_path(("description",))
+    assert _is_prose_annotation_path(("properties", "description", "description"))
+    assert _is_prose_annotation_path(("items", "x-bump-note"))
+    # A domain property named `description`, or instance data, is validation-bearing.
+    assert not _is_prose_annotation_path(("properties", "description"))
+    assert not _is_prose_annotation_path(("$defs", "description"))
+    assert not _is_prose_annotation_path(("properties", "x", "const", "description"))
+    assert not _is_prose_annotation_path(("properties", "x", "enum", 0, "description"))
+    assert not _is_prose_annotation_path(("properties", "description", "pattern"))
 
 
 class TestCheckSchemaDriftBatch:

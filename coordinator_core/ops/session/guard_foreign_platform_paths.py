@@ -19,7 +19,7 @@ Root cause it defends against (established by investigation, not guessed):
 topology carries MACHINE-ABSOLUTE hook paths baked in at install time
 (`coordinator_core.install.gen_settings_hooks` rewrites every
 `${CLAUDE_PLUGIN_ROOT}` in `coordinator/hooks/hooks.json` to a registry-resolved
-absolute path — see `docs/wiki/external-plugin-live-resolution.md § Hook-delivery`,
+absolute path — see `coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/external-plugin-live-resolution.md § Hook-delivery`,
 required because upstream `--plugin-dir` hook-delivery is dead, bug #38699).
 `~/.claude` is ALSO a git repo synced across machines (manual push/pull +
 periodic "safety-commit" snapshots of the live working tree). Machine-absolute
@@ -163,8 +163,8 @@ _POWERSHELL_AUTOMATIC_VARS = frozenset(
     )
 )
 
-_DOEROOT_NAME = ".coordinator-content-root"
-_LEGACY_DOEROOT_NAME = ".coordinator-content-root"  # private-name-ok: compat-fallback
+_POINTER_NAME = ".coordinator-content-root"
+_LEGACY_POINTER_NAME = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
 # --- Prose-scan shapes (CLAUDE.md / CLAUDE.local.md) -------------------------
 #
@@ -383,19 +383,19 @@ class Finding:
     suggested: Optional[str]
 
 
-def _read_content_root(config_dir: Path) -> Optional[str]:
-    doeroot_file = config_dir / _DOEROOT_NAME
-    if not doeroot_file.is_file():
-        doeroot_file = config_dir / _LEGACY_DOEROOT_NAME
-    if not doeroot_file.is_file():
+def _read_content_root_pointer(config_dir: Path) -> Optional[str]:
+    pointer_file = config_dir / _POINTER_NAME
+    if not pointer_file.is_file():
+        pointer_file = config_dir / _LEGACY_POINTER_NAME
+    if not pointer_file.is_file():
         return None
     try:
-        with doeroot_file.open("r", encoding="utf-8", newline="") as fh:
+        with pointer_file.open("r", encoding="utf-8", newline="") as fh:
             first_line = fh.readline()
     except OSError:
         return None
-    doe = first_line.rstrip("\r\n")
-    return doe or None
+    root = first_line.rstrip("\r\n")
+    return root or None
 
 
 def _suggest_corrected(value: str, local_coordinator_root: Optional[str]) -> Optional[str]:
@@ -604,7 +604,7 @@ def evaluate_foreign_platform_paths(
         return ""
 
     resolved_config_dir = config_dir if config_dir is not None else settings_path.parent
-    local_root = _read_content_root(resolved_config_dir)
+    local_root = _read_content_root_pointer(resolved_config_dir)
 
     findings = detect_foreign_platform_paths(
         data, host_is_windows=host_is_windows, local_coordinator_root=local_root

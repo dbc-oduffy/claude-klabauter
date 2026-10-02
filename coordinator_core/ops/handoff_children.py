@@ -330,77 +330,6 @@ async def _build_index(
     return index, None
 
 
-async def has_live_children_many(
-    candidates: List[str],
-    repo_root: Optional[Path] = None,
-    *,
-    edge_kinds: Optional[Set[str]] = None,
-) -> Dict[str, int]:
-    """``{candidate: exit_code}`` for many candidates over ONE corpus pass.
-
-    Same question, same guards, same verdicts as ``handoff.has_live_children``
-    below — this exists because that op is target-independent right up to its
-    final comparison, so asking it N times pays N x M frontmatter reads to
-    answer something that needs M. It enumerates the handoff corpus and reads
-    every node's edges once PER CALL, and `_FRONTMATTER_CACHE` does not save
-    it: that cache memoises PARSING while every `_read_meta` still re-reads
-    and re-hashes the bytes, deliberately, to close the stamp-read/content-read
-    TOCTOU window. The cost is the asking, so the fix is to ask once.
-
-    Measured caller: `reap-orphaned-in-flight-handoffs.py` spent 3.1s of a
-    3.1s run here — 36,638 `_read_meta` calls for 19 orphans against ~950
-    handoffs — with DR-344's bar at 500ms for the whole script.
-
-    Not a new mechanism: `dag.build_reverse_edge_index` /
-    `_referenced_by_indexed` already exist for exactly this shape and are
-    already in production behind `fleet.archive_terminal_handoffs` (which hit
-    the same wall at 96,534 opens / 21.5s). This routes the per-orphan caller
-    onto them via `reverse_membership`'s own `index=` parameter, so the
-    terminal-and-archived child exclusion still runs afterwards, unchanged and
-    shared by both branches — the indexed and unindexed paths cannot answer
-    differently.
-
-    Fail-closed exactly as the singular op: a corpus that cannot be fully
-    enumerated, an empty live set, a candidate escaping
-    state/handoffs//archive/handoffs/, a candidate absent from disk, or a
-    `reverse_membership` failure all yield 2 (indeterminate) for the affected
-    candidate — never 1 (safe to release). Whole-corpus failures mark EVERY
-    candidate indeterminate; a single candidate's failure never contaminates
-    its siblings.
-    """
-    if not candidates:
-        return {}
-    if repo_root is None:
-        return {c: 2 for c in candidates}
-
-    worktree_root = main_worktree_root(repo_root)
-    allowed_roots = _allowed_candidate_roots(worktree_root)
-
-    live_paths, corpus_error = await _enumerate_live_set(worktree_root)
-    if corpus_error is not None:
-        return {c: 2 for c in candidates}
-
-    index, index_error = await _build_index(worktree_root, live_paths)
-    if index_error is not None:
-        return {c: 2 for c in candidates}
-
-    codes: Dict[str, int] = {}
-    for candidate in candidates:
-        candidate_abs, candidate_error = _resolve_candidate(candidate, allowed_roots)
-        if candidate_error is not None:
-            codes[candidate] = 2
-            continue
-        try:
-            children = reverse_membership(
-                candidate_abs, live_paths, edge_kinds=edge_kinds, index=index
-            )
-        except Exception:  # noqa: BLE001
-            codes[candidate] = 2
-            continue
-        codes[candidate] = 0 if len(children) > 0 else 1
-    return codes
-
-
 async def has_live_children_from_metas(
     candidate: str,
     repo_root: Path,
@@ -416,10 +345,9 @@ async def has_live_children_from_metas(
     C1 (leg (b) reads the corpus once): `_predicate_refusal`'s leg (b) is the
     one caller-shape that re-derives the whole-corpus answer per candidate
     inside a cascade that has ALREADY read every record once via
-    `_collect_live_candidates_for_kind`. This function is that same question
-    — `has_live_children_many`'s single-candidate shape — but taking the
-    pre-read frontmatter as a `metas` lookup instead of re-reading it via
-    `_read_meta` inside `build_reverse_edge_index`.
+    `_collect_live_candidates_for_kind`. This function is that same question,
+    taking the pre-read frontmatter as a `metas` lookup instead of re-reading
+    it via `_read_meta` inside `build_reverse_edge_index`.
 
     `metas` is a LOOKUP with `_read_meta` fallback per missing path — that
     fallback already lives inside `build_reverse_edge_index` itself. This
@@ -432,15 +360,13 @@ async def has_live_children_from_metas(
     `CONCLUSION_EDGE_KINDS` here, the same value it passes to
     `_handoff_has_live_children`'s params dict on the other branch.
 
-    Composes `has_live_children_many`'s already-decided shape rather than
-    reinventing it: same containment guard, same fail-closed empty/scan-error
+    Same guards as the singular op: same containment guard, same fail-closed empty/scan-error
     live-set guard, same `_is_archive_resident_path` index-set split (index built over
     non-archive paths only; `reverse_membership` still judges against the
     FULL live set, so archive-resident referencers are still excluded via
     `_is_terminal_or_archived_child`, never by omission from the index).
 
-    Returns the same reply shape as `has_live_children_many`'s per-candidate
-    question, per the plan's own citation (docs/plans/2026-08-30-the-terminal-
+    Reply shape, per the plan's own citation (docs/plans/2026-08-30-the-terminal-
     cascade-reads-the-corpus-once.md, C1 Part A): `referenced`, `children`,
     `exit_code` on the success branch, plus `error` on the exit_code=2
     (indeterminate) branch. `children` is present on every branch (fail-closed

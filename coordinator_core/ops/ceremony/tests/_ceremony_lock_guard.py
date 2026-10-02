@@ -122,6 +122,11 @@ def assert_no_ceremony_lock_reintroduction(
                 continue
             scanned += 1
             source = path.read_text(encoding="utf-8", errors="replace")
+            # Every shape _identifier_hits matches spells _TARGET verbatim in
+            # source, so a file without the substring cannot hit: skipping
+            # its parse is exact, and keeps the walk off ~thousands of ASTs.
+            if _TARGET not in source:
+                continue
             try:
                 tree = ast.parse(source, filename=str(path))
             except SyntaxError:

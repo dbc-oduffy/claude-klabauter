@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Optional, Sequence
 
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -21,6 +22,11 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     ManifestRow,
     StageManifest,
+)
+from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
+    CrossRepoWriteError,
+    check_cross_repo_writes,
+    check_external_gate_exclusions,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -42,6 +48,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec_or_none
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
@@ -69,6 +76,19 @@ def _write(path: Path, text: str) -> None:
 
 def _rel(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
+
+
+def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[str, str]:
+    """Self-DR discharge clauses keyed by row id; {} without a readable `sizing_object`."""
+    split = split_frontmatter(plan_text)
+    cited = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    if not cited:
+        return {}
+    try:
+        sizing = load_sizing(root, cited)
+    except SizingFireRefused:
+        return {}
+    return discharge_clauses(raw_rows, sizing)
 
 
 def stage(
@@ -112,6 +132,11 @@ def stage(
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
     check_unschedulable_rows(rows, raw_by_id)
+    try:
+        check_external_gate_exclusions(exclusions, raw_by_id)
+        check_cross_repo_writes(rows, root)
+    except CrossRepoWriteError as exc:
+        raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
     if not waves:
         raise AskStageError("the spine derives zero dispatchable rows")
@@ -119,6 +144,8 @@ def stage(
     context = derive_plan_context(
         plan_text, fallback_title=plan_path.stem, repo_root=root.as_posix()
     )
+
+    clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
 
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
@@ -129,7 +156,10 @@ def stage(
             _model_opt(agent_type, row.agent_model)  # raises on an unknown agent type or bad model grammar
             model = row.agent_model or _AGENT_MODELS[agent_type]
             brief = run_dir / "briefs" / f"{row.id}.md"
-            _write(brief, _row_prompt(row, plan_posix, context))
+            text = _row_prompt(row, plan_posix, context)
+            if row.id in clauses:
+                text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+            _write(brief, text)
             paths = _widen_with_test_candidates(commit_pathspec_or_none([row]) or [])
             declared.extend(paths)
             manifest_rows.append(

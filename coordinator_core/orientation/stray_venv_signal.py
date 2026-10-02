@@ -58,7 +58,7 @@ def _scan(repo_root: Path) -> List[str]:
                 rel = cfg_path.relative_to(repo_root)
             except ValueError:
                 rel = cfg_path
-            hits.append(str(rel))
+            hits.append(rel.as_posix())
     hits.sort()
     return hits
 

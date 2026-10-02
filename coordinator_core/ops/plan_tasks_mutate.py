@@ -583,6 +583,37 @@ def _parse_rows_or_abort(body: str, verb: str) -> list:
     return rows
 
 
+def _carry_prep_certificate(old_text: str, new_text: str) -> str:
+    """A disposition write-back records execution state; it does not change
+    what mise-prep certified or what plan review approved. When the plan was
+    CERTIFIED / verified-approved before this write, move ``mise_prepped_sha`` /
+    ``approved_body_sha`` onto the new body so executing a plan never
+    de-certifies it. A plan that was not stays as it was."""
+    if new_text == old_text:
+        return new_text
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_OK,
+        canonical_body_sha,
+        check_approved_body,
+        rebuild,
+        replace_fm_field,
+        split_frontmatter,
+        stamp_approved_body_sha,
+    )
+    from coordinator_core.roadmap.prep_gate import CERTIFIED, read_stamp
+
+    if check_approved_body(old_text)[0] == APPROVED_BODY_OK:
+        new_text = stamp_approved_body_sha(new_text)
+    if read_stamp(old_text)["state"] != CERTIFIED:
+        return new_text
+    new_sha = canonical_body_sha(new_text)
+    split = split_frontmatter(new_text)
+    if not new_sha or split is None:
+        return new_text
+    fm_text = replace_fm_field(split.fm_text, "mise_prepped_sha", new_sha, numeric_quoting=True)
+    return rebuild(split, fm_text)
+
+
 def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> dict:
     try:
         path = _resolve_path(plan_path, worktree)
@@ -1407,7 +1438,7 @@ def _resolve(
         return new_text
 
     try:
-        locked_rmw(path, mutate, repo_root=repo_root)
+        locked_rmw(path, lambda old: _carry_prep_certificate(old, mutate(old)), repo_root=repo_root)
     except FileNotFoundError:
         return _err(f"resolve: plan not found: {plan_path}")
     except LockTimeout as exc:

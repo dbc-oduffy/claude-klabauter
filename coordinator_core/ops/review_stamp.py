@@ -72,7 +72,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -84,12 +83,10 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
-from coordinator_core.completion_receipts.verdict import mint_refusal
+from coordinator_core.git.run import run_git
+from coordinator_core.completion_receipts.verdict import mint_refusal, superseding_delivery
 from coordinator_core.session.claimed_write import replace_text
-from coordinator_core.win_portability import no_console_creationflags
 
-_CREATIONFLAGS = no_console_creationflags()
-_GIT_TIMEOUT_SECS = 30
 
 #: The product-file rule's one home. A diff line touching only these prefixes
 #: is bookkeeping, never product code — prep's `product_files` and the
@@ -167,18 +164,9 @@ class _GitUnavailable(Exception):
 
 
 def _run_git(args: List[str], cwd: str) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise _GitUnavailable(str(exc)) from exc
+    result = run_git(args, cwd=cwd)
+    if result.timed_out:
+        raise _GitUnavailable("git timed out")
     if result.returncode != 0:
         raise _GitUnavailable(result.stderr.strip() or "git command failed")
     return result.stdout
@@ -492,7 +480,10 @@ def mint(
                     raise MintRefusal(
                         f"review-stamp: refusing to mint: no terminal commit resolved for plan_id {plan_id!r}"
                     )
-                raise MintRefusal(f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar")
+                raise MintRefusal(
+                    f"review-stamp: integration sidecar {integration_path} carries no prep_sidecar; "
+                    "rerun with mint --repair to rebuild the record from the run's wave sidecars"
+                )
             integration_path, integration_data = _repair_build_bookkeeping_record(
                 repo_root, plan_id, integration_path, integration_data, plan_path
             )
@@ -512,6 +503,8 @@ def mint(
     if not isinstance(delivery_data, dict):
         delivery_rel = (prep_data.get("whole_diff_sidecars") or {}).get("delivery")
         delivery_data = (_load_sidecar(repo_root / delivery_rel) or {}) if delivery_rel else {}
+    if superseding_record is not None:
+        delivery_data = superseding_delivery(integration_data, delivery_data)
     delivery_verdict = delivery_data.get("verdict")
 
     fixes_applied = integration_data.get("fixes_applied")
@@ -623,18 +616,9 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
     if tree_out.strip() != expected_tree:
         return f"review-stamp: terminal commit {terminal}'s tree no longer matches the stamped tree"
 
-    try:
-        result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", terminal, "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=str(repo_root),
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            **_CREATIONFLAGS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"review-stamp: could not check ancestry for {terminal}: {exc}"
+    result = run_git(["merge-base", "--is-ancestor", terminal, "HEAD"], cwd=str(repo_root))
+    if result.timed_out or result.returncode == 127:
+        return f"review-stamp: could not check ancestry for {terminal}: git did not run"
     if result.returncode == 1:
         # `merge-base --is-ancestor` exits 1 specifically for "genuinely not an
         # ancestor" -- both refs resolved, the relationship just doesn't hold.

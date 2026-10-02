@@ -1048,18 +1048,18 @@ def resolve_roots(
 
     if not any(label == "coordinator-content-repo" for label, _ in roots):
         try:
-            from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+            from coordinator_core.content_root import read_content_root
 
-            doe = coordinator_content_root()
+            doe = read_content_root()
         except Exception as exc:
             doe, exc_text = None, str(exc)
             skips.append(f"coordinator-content-repo: resolver unavailable ({exc_text})")
         else:
             if not doe:
                 skips.append(
-                    "coordinator-content-repo: coordinator_content_root() resolved nothing "
-                    "(no CONTENT_ROOT/REPO_CONTENT_ROOT, no machine-local repos.content_root, "
-                    "no .coordinator-content-root pointer, no marketplace cache)"
+                    "coordinator-content-repo: read_content_root() resolved nothing "
+                    "(no machine-local repos.content_root, "
+                    "no .coordinator-content-root pointer, no installed plugin root)"
                 )
             elif not os.path.isdir(doe):
                 skips.append(f"coordinator-content-repo: resolved to {doe}, which is not a directory")

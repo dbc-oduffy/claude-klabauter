@@ -143,9 +143,8 @@ from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispa
 # Import side-effects: register "handoff.stamp" / "handoff.transition" in the
 # ipc op-registry so the entry-seam lookup in _stamp/_ship resolves via a direct
 # registry hit rather than a lazy-import fallback (belt-and-braces, not strictly
-# required for correctness). Mirrors
-# coordinator_core.ops.handoff_ship_archive's own reuse pattern
-# (public op-registry contract, not a private cross-module reach).
+# required for correctness). Uses the public op-registry contract, not a
+# private cross-module reach.
 import coordinator_core.ops.handoff_stamp  # noqa: F401
 from coordinator_core.session.declared_writes import declare_write
 import coordinator_core.ops.handoff_transition  # noqa: F401

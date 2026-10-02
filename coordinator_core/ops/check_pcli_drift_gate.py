@@ -108,11 +108,10 @@ field in the capture JSON may only SHORTEN the effective window:
 config would let the watched party set its own deadline, the same hole the
 capture's own `$comment` already warns against for hand-editing.
 
-Repo-root / DoE-clone resolution: this module imports and reuses
-`coordinator_core.ops.ensure_doe_clone.resolve_doe_clone()` (env override
-`REPO_CONTENT_ROOT`, then `machine-local get repos.content_root`) rather than
+Repo-root / clone resolution: this module imports and reuses
+`coordinator_core.content_root.read_content_root()` rather than
 hardcoding a path or re-implementing the tiering — same division of labor as
-every other DoE-clone-resolving op in this repo.
+every other content-root-resolving op in this repo.
 
 Negative-spec (deliberately NOT covered here):
     - Does NOT read the live `Workflow` tool API. Only an EM session holds
@@ -163,7 +162,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.data_root import content_root_for
-from coordinator_core.ops.ensure_doe_clone import resolve_doe_clone
+from coordinator_core.content_root import read_content_root
 
 _MAX_AGE_DAYS = 14
 _MAX_AGE_DAYS_WITH_EM_LEG = 90
@@ -395,12 +394,12 @@ def _extract_capture_opts_fields(capture: Any, capture_path: Path) -> "set[str]"
     return set(opts.keys())
 
 
-def run_gate(content_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
-    content_root = Path(content_root)
-    content_root = content_root_for(content_root)
+def run_gate(clone_root: "str | Path", *, today: Optional[date] = None) -> list[str]:
+    clone_root = Path(clone_root)
+    content_root = content_root_for(clone_root)
     if content_root is None:
         raise GateError(
-            f"no coordinator content root under {content_root} (neither a coordinator/ "
+            f"no coordinator content root under {clone_root} (neither a coordinator/ "
             "directory nor a flat .claude-plugin/plugin.json) — schemas/ unreachable"
         )
     schemas_dir = content_root / "schemas"
@@ -461,7 +460,7 @@ def run_gate(content_root: "str | Path", *, today: Optional[date] = None) -> lis
         )
 
     hash_reasons = compute_hash_drift(
-        content_root,
+        clone_root,
         resolution.get("hash_algorithm"),
         source_hashes,
     )
@@ -473,16 +472,16 @@ def run_gate(content_root: "str | Path", *, today: Optional[date] = None) -> lis
 
 
 def main(argv: list[str]) -> int:  # noqa: ARG001 — no flags today; argv reserved for CLI parity
-    content_root = resolve_doe_clone()
-    if not content_root:
-        print("ERROR: DoE clone unresolvable (REPO_CONTENT_ROOT / repos.content_root not set)", file=sys.stderr)
+    clone_root = read_content_root()
+    if not clone_root:
+        print("ERROR: coordinator content root unresolvable (repos.content_root not set)", file=sys.stderr)
         return EXIT_ERROR
-    if not Path(content_root).is_dir():
-        print(f"ERROR: DoE clone path does not exist: {content_root}", file=sys.stderr)
+    if not Path(clone_root).is_dir():
+        print(f"ERROR: coordinator content root path does not exist: {clone_root}", file=sys.stderr)
         return EXIT_ERROR
 
     try:
-        lines = run_gate(content_root)
+        lines = run_gate(clone_root)
     except GateError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_ERROR

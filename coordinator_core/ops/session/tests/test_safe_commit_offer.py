@@ -51,6 +51,7 @@ import pytest
 from coordinator_core.git.commit import CommitOutcome, CommitRefused
 from coordinator_core.ipc import dispatch_message
 from coordinator_core.session import claim_index, core, scope, touch_record
+from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
@@ -65,16 +66,7 @@ def _make_repo(tmp_path):
     # check=True on every fixture-setup git call
     # (mirrors test_scope.py's _make_repo): a silent fixture-setup failure
     # must not masquerade as a passing test.
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(
-        ["git", "config", "user.email", "t@example.com"], cwd=tmp_path, check=True,
-        **no_console_passthrough_kwargs(),
-    )
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    (tmp_path / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
-    return tmp_path
+    return seeded_repo(tmp_path, readme="x")
 
 
 def _agent_claim(agent_dir, *paths, owner_sid=None, ts=None):

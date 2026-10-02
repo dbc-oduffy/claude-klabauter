@@ -199,3 +199,19 @@ def test_unreadable_segment_file_is_fail_loud(tmp_path: Path, monkeypatch: pytes
     with pytest.raises(SegmentLoadError) as excinfo:
         load_segments(content_root, SEGMENT_DIR, filter_key="case", legal_values=LEGAL_CASES)
     assert "could not read" in str(excinfo.value)
+
+
+def test_lane_is_optional_and_passed_through_verbatim(tmp_path: Path) -> None:
+    content_root = _make_segment_dir(tmp_path)
+    seg_dir = content_root / SEGMENT_DIR
+    (seg_dir / "999-laned.md").write_text(
+        "---\nsegment_id: laned\ncase: shared\nclass: droppable\norder: 9\n"
+        "lane: XL\n---\nBody.\n",
+        encoding="utf-8",
+    )
+    segments = load_segments(
+        content_root, SEGMENT_DIR, filter_key="case", legal_values=LEGAL_CASES
+    )
+    by_id = {s["segment_id"]: s for s in segments}
+    assert by_id["laned"]["lane"] == "XL"
+    assert all(s["lane"] is None for sid, s in by_id.items() if sid != "laned")

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.benchmarks.interleave import PrimitiveStats
 from coordinator_core.benchmarks.shim_decision_rule import (
     CHEAPER_THAN_MARGIN,
@@ -10,6 +12,14 @@ from coordinator_core.benchmarks.shim_decision_rule import (
     calibrate_aa_noise_floor,
     evaluate,
 )
+from coordinator_core.telemetry import op_latency
+
+
+@pytest.fixture(autouse=True)
+def _restore_benchmark_origin_env(monkeypatch):
+    # calibrate_aa_noise_floor (via run_interleaved) declares benchmark origin into the
+    # process-global env; monkeypatch restores the pre-test value on teardown.
+    monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
 
 
 def _stats(median_ms: float, p90_ms: float, sample_count: int) -> PrimitiveStats:

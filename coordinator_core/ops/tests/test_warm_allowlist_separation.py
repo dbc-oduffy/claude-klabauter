@@ -31,7 +31,10 @@ that surface already has coverage in
 (`test_door_eligible_forwarder_names_reads_the_committed_allowlist` and its
 missing-allowlist sibling). This suite is scoped to the SEPARATION itself:
 that the two gates now read distinct keys and that neither key's removal
-silently satisfies an assertion meant for the other.
+silently satisfies an assertion meant for the other -- plus the committed
+copy's parity, since `forwarder_door_census --write-allowlist` regenerates
+`entrypoints` and only preserves `door_eligible_entrypoints`, so a regen
+leaves the door copy stale with nothing else failing.
 
 Spec backlink: state/dispatch-briefs/2026-09-01-the-dogfooded-install-
     stops-lying-about/C13.md
@@ -114,4 +117,18 @@ def test_warm_load_gate_reads_entrypoints_key_not_door_eligible_key(monkeypatch,
         "the warm-load loader must read 'entrypoints' only -- a name "
         "present solely under 'door_eligible_entrypoints' must not "
         "warm-load"
+    )
+
+
+def test_committed_door_list_is_not_a_stale_copy_of_the_warm_load_list():
+    """The census regen writes `entrypoints` and carries `door_eligible_entrypoints` over verbatim, so the two
+    drift on every regen that changes the door-eligible bucket. A door name absent from `entrypoints` routes a
+    forwarder to a warm load that refuses; a warm name absent from the door list is a cutover that silently lags."""
+    data = json.loads(_ALLOWLIST_PATH.read_text(encoding="utf-8"))
+    warm = set(data["entrypoints"])
+    door = set(data["door_eligible_entrypoints"])
+    assert not door - warm, f"door-eligible but not warm-loadable: {sorted(door - warm)}"
+    assert not warm - door, (
+        f"warm-loadable but missing from door_eligible_entrypoints: {sorted(warm - door)} -- a census regen "
+        "updated 'entrypoints' and preserved the old door list; copy the regenerated names across"
     )

@@ -2267,6 +2267,78 @@ def test_register_claude_klabauter_root_unresolved_identity_not_overridable(setu
     assert exc_info.value.code == setup_mod.EXIT_REPO_IDENTITY_UNRESOLVED
 
 
+# The driver ends the process with `os._exit` so interpreter teardown flushes
+# nothing: only an explicit flush before the hard exit lets the output land.
+_HARD_EXIT_DRIVER = """
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("_hard_exit_driver", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
+spec.loader.exec_module(mod)
+scenario, repo_root, claude_klabauter_root = sys.argv[2], sys.argv[3], sys.argv[4]
+if scenario == "machine-local-absent":
+    from coordinator_core.install import _shared
+    _shared.resolve_machine_local_cli = lambda plugin_root: None
+print("STDOUT-BEFORE-EXIT")
+try:
+    from pathlib import Path
+    mod.register_claude_klabauter_root(Path(claude_klabauter_root), "driver", Path(repo_root), mod.Args())
+except SystemExit as exc:
+    os._exit(exc.code)
+os._exit(0)
+"""
+
+
+@pytest.mark.parametrize(
+    ("scenario", "agents_md", "expected_code_name", "error_head", "error_tail"),
+    [
+        (
+            "repo-identity-unresolved",
+            False,
+            "EXIT_REPO_IDENTITY_UNRESOLVED",
+            "ERROR [hard] cannot determine repo identity",
+            "  Checked: ",
+        ),
+        (
+            "machine-local-absent",
+            True,
+            "EXIT_HARD_DEP_MISSING",
+            "ERROR [hard] machine-local not found",
+            "    --skip-dep-check --accept-missing-deps-risk",
+        ),
+    ],
+)
+def test_hard_exit_error_block_survives_redirected_output(
+    setup_mod, tmp_path, scenario, agents_md, expected_code_name, error_head, error_tail
+):
+    import subprocess
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    if agents_md:
+        (repo_root / "AGENTS.md").write_text("# claude-klabauter — Agent Entry Point\n", encoding="utf-8")
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+    log = tmp_path / "install.log"
+
+    with log.open("wb") as fh:
+        proc = subprocess.run(
+            [sys.executable, "-c", _HARD_EXIT_DRIVER, str(_SETUP_PY_PATH), scenario, str(repo_root), str(claude_klabauter_root)],
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            cwd=str(_SETUP_PY_PATH.parents[1]),
+            env={k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"},
+            timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    text = log.read_text(encoding="utf-8")
+    assert proc.returncode == getattr(setup_mod, expected_code_name), text
+    assert "STDOUT-BEFORE-EXIT" in text
+    assert error_head in text
+    assert error_tail in text
+
+
 # ---------------------------------------------------------------------------
 # register_claude_klabauter_root / _discover_klabauter_root — dual-boot auto-arm.
 # docs/plans/2026-08-12-auto-arm-the-dual-boot-for-claude-klabauter-instal.md C1,
@@ -2873,8 +2945,17 @@ def test_install_claude_author_launcher_chain_unresolved_content_root_is_not_app
     assert len(calls) == 1
 
 
+@pytest.fixture
+def probe_ok(setup_mod, tmp_path, monkeypatch):
+    shim = tmp_path / "claude-author-shim.sh"
+    shim.write_text("x\n")
+    monkeypatch.setattr(setup_mod, "_rendered_claude_author_shims", lambda: [shim])
+    monkeypatch.setattr(setup_mod, "_doe_dev_clone_root", lambda: tmp_path)
+    monkeypatch.setattr(setup_mod, "_probe_launcher_with_shim_flags", lambda *a: None)
+
+
 def test_install_claude_author_launcher_chain_all_pass_prints_no_incomplete_summary(
-    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, probe_ok, tmp_path, monkeypatch, capsys
 ):
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
@@ -2898,7 +2979,7 @@ def test_install_claude_author_launcher_chain_all_pass_prints_no_incomplete_summ
 
 
 def test_install_claude_author_launcher_chain_never_spawns_subprocess(
-    setup_mod, launcher_opted_in, tmp_path, monkeypatch, capsys
+    setup_mod, launcher_opted_in, probe_ok, tmp_path, monkeypatch, capsys
 ):
     """P175-C6: the chain runs its four generators in-process via
     `run_op_main` (spike verdict call shape (b)) -- no `subprocess.run` on
@@ -3158,9 +3239,10 @@ def test_verification_child_program_names_the_artifact(setup_mod):
 
 
 class _FakeDoorRouteResult:
-    def __init__(self, route, entry=None):
+    def __init__(self, route, entry=None, detail=None):
         self.route = route
         self.entry = entry
+        self.detail = detail
 
 
 def _patch_door_seams(
@@ -3343,6 +3425,29 @@ def test_install_warm_door_advisory_on_discriminator_unavailable(setup_mod, tmp_
     assert "PASS" not in out
     assert "[ADVISORY]" in err
     assert "discriminator_unavailable" in err
+    assert "no git common dir resolves" in err
+    assert "export COORDINATOR_OP_LATENCY_DISABLE=0" not in err
+
+
+def test_install_warm_door_names_the_kill_switch_only_when_set(setup_mod, tmp_path, monkeypatch, capsys):
+    import coordinator_core.install.door_route_signal as door_route_signal_mod
+
+    published = tmp_path / "published"
+    published.mkdir()
+    _patch_door_seams(
+        monkeypatch, resolved=_FakeInstallEngineRoot("published", root=published),
+        settings_home_dir=tmp_path / "settings-home",
+        door_route=_FakeDoorRouteResult(door_route_signal_mod.UNRESOLVED),
+        control_route=_FakeDoorRouteResult(door_route_signal_mod.UNRESOLVED),
+    )
+    monkeypatch.setattr(setup_mod.sys, "platform", "darwin")
+    monkeypatch.setenv("COORDINATOR_OP_LATENCY_DISABLE", "1")
+
+    setup_mod.install_warm_door(tmp_path, tmp_path, setup_mod.Args())
+
+    err = capsys.readouterr().err
+    assert "COORDINATOR_OP_LATENCY_DISABLE=1 is set" in err
+    assert "Remediation: unset COORDINATOR_OP_LATENCY_DISABLE" in err
 
 
 def test_install_warm_door_control_invocation_anchored_to_repo_root(setup_mod, tmp_path, monkeypatch, capsys):
@@ -3668,6 +3773,13 @@ def test_check_governed_authoring_surfaces_manifest_unresolvable_plugin_root_war
     assert "valid JSON but not a" not in out
 
 
+def test_write_rule_surface(setup_mod, tmp_path):
+    assert setup_mod.write_rule_surface(tmp_path, "a.md", "x\n") is True
+    assert (tmp_path / "rules" / "a.md").read_bytes() == b"x\n"
+    assert setup_mod.write_rule_surface(tmp_path, "a.md", None) is False
+    assert not (tmp_path / "rules" / "a.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # convert_editable_finder_to_plain_path — the dist-info interlock
 # ---------------------------------------------------------------------------
@@ -3714,6 +3826,7 @@ def test_convert_editable_finder_converts_when_direct_url_names_the_root(
 ):
     """The sanctioned case: the dist-info records this very checkout, so the
     finder-import line is rewritten to the plain absolute path."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     site_packages = tmp_path / "site-packages"
     package_root = tmp_path / "claude-klabauter"
     package_root.mkdir()
@@ -3733,6 +3846,7 @@ def test_convert_editable_finder_writes_literal_engine_link_when_it_matches(
     `package_root`, the `.pth` gets the LITERAL, unresolved link line -- never
     `package_root.resolve()` -- so a later re-point of that link is followed
     by every fresh interpreter without a second `.pth` rewrite."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     site_packages = tmp_path / "site-packages"
     package_root = tmp_path / "klabauter"
     package_root.mkdir()
@@ -3755,6 +3869,7 @@ def test_convert_editable_finder_ignores_engine_link_that_does_not_match(
 ):
     """`engine_link` naming a DIFFERENT tree than `package_root` is not this
     checkout's link -- falls back to the plain resolved path, unchanged."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     site_packages = tmp_path / "site-packages"
     package_root = tmp_path / "klabauter"
     package_root.mkdir()
@@ -3769,6 +3884,26 @@ def test_convert_editable_finder_ignores_engine_link_that_does_not_match(
 
     assert "converted" in result
     assert pth.read_text(encoding="utf-8").strip() == str(package_root.resolve())
+
+
+def test_convert_editable_finder_is_refused_by_the_machine_mutation_switch(
+    setup_mod, monkeypatch, tmp_path
+):
+    """The `.pth` lives in site-packages, outside the settings home: with the
+    kill switch set it stays byte-identical and the result names the skip."""
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "claude-klabauter"
+    package_root.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    before = pth.read_bytes()
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    result = setup_mod.convert_editable_finder_to_plain_path("py", package_root)
+
+    assert f"skip ({pth})" in result
+    assert "converted" not in result
+    assert pth.read_bytes() == before
 
 
 def test_convert_editable_finder_refuses_a_root_the_dist_info_does_not_name(
@@ -4071,3 +4206,102 @@ def test_verify_settings_home_fails_when_the_forwarder_writer_failed(
     assert ("PASS [settings-home] complete" in captured.out) is not forwarders_failed
     assert ("FAIL bin/ forwarders" in captured.out) is forwarders_failed
     assert ("is incomplete" in captured.err) is forwarders_failed
+
+
+_LEGACY_STEM = "claude-" + "doe"
+
+
+def test_launcher_chain_counts_the_legacy_named_shim_as_the_earlier_opt_in(
+    setup_mod, launcher_box, tmp_path, monkeypatch, capsys
+):
+    _dev_clone(tmp_path, monkeypatch)
+    legacy = launcher_box["shim"].parent / f"{_LEGACY_STEM}-shim.sh"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("claude() { command " + _LEGACY_STEM + ' "$@"; }\n')
+
+    _run_chain(setup_mod, tmp_path, setup_mod.Args())
+
+    assert len(launcher_box["calls"]) == len(setup_mod._CLAUDE_AUTHOR_CHAIN_STEPS)
+    assert "not opted in" not in capsys.readouterr().out
+
+
+def test_launcher_chain_retires_legacy_callers_on_a_box_that_is_not_opted_in(
+    setup_mod, launcher_box, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv("HOME", str(launcher_box["home"]))
+    rc = launcher_box["home"] / ".bashrc"
+    rc.write_text(
+        f"# --- coordinator {_LEGACY_STEM} shim [generated] ---\nsource x\n"
+        f"# --- end coordinator {_LEGACY_STEM} shim ---\nexport KEEP=1\n"
+    )
+
+    _run_chain(setup_mod, tmp_path, setup_mod.Args())
+
+    assert rc.read_text() == "export KEEP=1\n"
+
+
+def _fake_launcher(tmp_path, forwards):
+    cli = tmp_path / "fake-launcher.py"
+    flag = "--" + "doe" + "-root"
+    cli.write_text(
+        "def main(argv):\n"
+        "    print('exec claude --plugin-dir x')\n"
+        f"    print('forwarded-flags: {flag}' if {forwards!r} else 'forwarded-flags: ')\n"
+        "    return 0\n"
+    )
+    return cli
+
+
+def _shim_calling_launcher(tmp_path):
+    shim = tmp_path / "claude-author-shim.sh"
+    shim.write_text('coordinator() {\n  command claude-author --content-root "$_r" --dangerously-skip-permissions "$@"\n}\n')
+    return shim
+
+
+def test_launcher_probe_fails_naming_a_launcher_flag_the_launcher_forwards(setup_mod, tmp_path):
+    shim = tmp_path / "claude-author-shim.sh"
+    shim.write_text('f() { command claude-author ' + "--" + 'content-root "$_r" "$@"; }\n')
+    cli = _fake_launcher(tmp_path, forwards=True)
+
+    failure = setup_mod._probe_launcher_with_shim_flags(cli, shim, tmp_path)
+
+    assert failure and "--" + "content-root" in failure and "forwarded" in failure
+
+
+def test_launcher_probe_passes_when_the_launcher_consumes_the_flags(setup_mod, tmp_path):
+    cli = _fake_launcher(tmp_path, forwards=False)
+
+    assert setup_mod._probe_launcher_with_shim_flags(cli, _shim_calling_launcher(tmp_path), tmp_path) is None
+
+
+def test_launcher_probe_fails_on_a_nonzero_dry_run(setup_mod, tmp_path):
+    cli = tmp_path / "rejecting.py"
+    cli.write_text("import sys\ndef main(argv):\n    sys.stderr.write('error: unknown option --content-root\\n')\n    return 1\n")
+
+    failure = setup_mod._probe_launcher_with_shim_flags(cli, _shim_calling_launcher(tmp_path), tmp_path)
+
+    assert failure and "--content-root" in failure
+
+
+def test_launcher_probe_accepts_the_real_launcher_for_the_real_shim_flags(setup_mod, tmp_path):
+    root = tmp_path / "clone"
+    (root / "coordinator").mkdir(parents=True)
+    real = _SETUP_PY_PATH.parent.parent / "coordinator" / "bin" / "claude-author.py"
+
+    assert setup_mod._probe_launcher_with_shim_flags(real, _shim_calling_launcher(tmp_path), root) is None
+
+
+def test_launcher_chain_does_not_pass_on_a_rendered_file_alone(
+    setup_mod, launcher_box, tmp_path, monkeypatch, capsys
+):
+    _dev_clone(tmp_path, monkeypatch)
+    args = setup_mod.Args()
+    args.with_claude_author_launcher = True
+
+    _run_chain(setup_mod, tmp_path, args)
+
+    out = capsys.readouterr().out
+    assert "PASS [claude-author-chain] claude-author shim" not in out or "dry-run" in out
+    assert "FAIL [claude-author-chain]" in out

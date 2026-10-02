@@ -10,8 +10,9 @@ terminal-test-phase derivation resolves per-STEM, not by scanning for files
 that merely happen to cover a surface, no dispatch wave that touched
 publish.py ever selected a test to run over the change. Two real defects
 shipped through that hole on 2026-08-26 (see debt-backlog row
-`state/debt-backlog/2026-08-26-four-token-index-acs-are-code-only-no-te-
-c7a03bd3079e.yaml`): `dispatch_preswap_payload_parity_gate` was re-wired to
+`archive/debt-backlog/2026-08/2026-08-26-four-token-index-acs-are-code-only-no-te-
+c7a03bd3079e.yaml`; the open emitter-gap follow-up is the DECLARED_UNTESTED
+entry's cited row): `dispatch_preswap_payload_parity_gate` was re-wired to
 take a `token_index_path` kwarg its signature never accepted (`TypeError` on
 every call), and the token index's writer/reader root mismatch silently
 forced a 1250ms full-scan fallback for any subdirectory dest.
@@ -80,8 +81,8 @@ DECLARED_UNTESTED: dict[str, str] = {
         "cover this module, but the stem convention only recognizes a single "
         "tests/test_publish.py -- none of the existing files match it, so no "
         "dispatch wave ever selects a test for a change here. Tracked: "
-        "state/debt-backlog/2026-08-26-four-token-index-acs-are-code-only-no-te-"
-        "c7a03bd3079e.yaml (proposed_action: make a chunk whose surface has no "
+        "state/debt-backlog/2026-10-02-the-dispatch-emitter-stem-convention-cannot-see-publish-py-tests.yaml "
+        "(proposed_action: make a chunk whose surface has no "
         "runnable test target an emitter refusal or an explicit "
         "declared-untested disposition -- this allowlist is that disposition "
         "on OUR side until the emitter, owned by coordinator-content-repo and not ours to "

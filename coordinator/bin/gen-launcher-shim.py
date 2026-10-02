@@ -142,7 +142,7 @@ SESSION-CLAIM RECORDING (2026-08-06, DR-276)
 
 WHOAMI-BOOTSTRAP EXCEPTION (2026-07-21 macos-first-class-invocation C9)
     `coordinator-whoami`'s deps (jsonschema, rfc3339-validator, PyYAML) are
-    venv-resident per PEP-668 (docs/wiki/install-surface-completeness.md) —
+    venv-resident per PEP-668 (coordinator-content-repo coordinator/docs/wiki/install-playbook-rationale/install-surface-completeness.md) —
     a bare-python3-shebanged launcher CANNOT `import coordinator_whoami`
     directly. This is the ONE explicitly-named exception to this module's
     otherwise-uniform single-class contract (every other bin/ entrypoint is
@@ -569,7 +569,7 @@ def _cmd_localappdata_rung() -> str:
 # --- Dispatch-root launcher cache (C15, docs/plans/2026-08-21-the-cli-
 # bootstrap-tax-dies-at-the-interpreter-floor.md) -----------------------
 #
-# THE SHAPE: stamp + `_registry_mtime_pair`'s triple as the composite key,
+# THE SHAPE: stamp + `_registry_mtime_pair`'s pair as the composite key,
 # carried in the `%LOCALAPPDATA%` self-healing cache, NEVER in any tracked
 # `.cmd`/`.ps1` body -- the byte-parity guard over all 393 launchers requires
 # that, and a launcher cannot re-bake itself past the next publish (see this
@@ -628,7 +628,7 @@ def write_dispatch_root_cache(
 ) -> None:
     """Persist a gate-resolved `(root, resolution_class)` answer under
     `%LOCALAPPDATA%`, keyed on the engine build stamp PLUS
-    `_registry_mtime_pair`'s float triple (AC17) -- the stamp alone misses a
+    `_registry_mtime_pair`'s float pair (AC17) -- the stamp alone misses a
     `machine-local set repos.*` redirect, which changes which engine
     executes WITHOUT touching any stamp (HARD CONSTRAINT 2: that would trade
     a visible latency bug for an invisible staleness one).
@@ -674,7 +674,7 @@ def read_dispatch_root_cache(ml_dir: Path, engine_root: Path) -> tuple[str, str]
     starting Python -- only this function does.
 
     Composite key: engine build stamp bytes (DR-328's invalidation key)
-    PLUS `_registry_mtime_pair`'s triple (HARD CONSTRAINT 2 -- a stamp alone
+    PLUS `_registry_mtime_pair`'s pair (HARD CONSTRAINT 2 -- a stamp alone
     misses a `machine-local set repos.*` redirect). Both must match the
     cached values for a hit; any mismatch, missing file, or corrupt content
     is a miss -- never an error, since a miss just falls back to the full
@@ -788,6 +788,10 @@ REM itself, is unconditionally true, and discards the bake precisely when it
 REM succeeded. The existence test below is the property that actually matters and
 REM already covers the unbaked case -- the literal token is not a path, so it
 REM falls through to the probe tiers on its own.
+REM The WindowsApps screen (builtin substring strip, no findstr spawn) runs first:
+REM an App Execution Alias is a 0-byte stub that passes `if exist`.
+set "_pytest=%_py:WindowsApps=%"
+if not "%_pytest%"=="%_py%" set "_py="
 if not "%_py%"=="" if exist "%_py%" goto :run_baked
 set "_py="
 

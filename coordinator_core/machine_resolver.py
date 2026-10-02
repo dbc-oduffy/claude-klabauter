@@ -335,6 +335,48 @@ def _parse_toml_text(text: str) -> dict:
         return {}
 
 
+def _same_path(a: str, b: str) -> bool:
+    def norm(p: str) -> str:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(p)))
+
+    return norm(a) == norm(b)
+
+
+def retire_paired_content_root_key(key: str) -> bool:
+    """Drop the other spelling of the content-root key from ``registry.local.toml``
+    when it names the same path as ``key``; ``key`` itself survives.
+
+    One registry key per repo: a published install writes one spelling and an
+    authoring install the other, and a box that ran both carries two keys for
+    one clone. Readers resolve either spelling through `registry_get`, so the
+    survivor needs no companion. Returns True when a line was removed; a
+    differing path, an absent pair, or a pair held only in ``registry.toml``
+    changes nothing.
+    """
+    other = _CONTENT_ROOT_KEY_PAIR.get(key)
+    if other is None:
+        return False
+    mine, theirs = _registry_get_exact(key), _registry_get_exact(other)
+    if not mine or not theirs or not _same_path(mine, theirs):
+        return False
+    target_path = registry_dir() / _REGISTRY_TARGET_FILE
+    try:
+        content = target_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    header = _TOML_TABLE_HEADER_RE.search(content)
+    root_end = header.start() if header else len(content)
+    root, tables = content[:root_end], content[root_end:]
+    pattern = re.compile(r'^"' + re.escape(other) + r'"\s*=.*\n?', re.MULTILINE)
+    new_root, removed = pattern.subn("", root)
+    if not removed:
+        return False
+    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
+    tmp_path.write_text(new_root + tables, encoding="utf-8", newline="\n")
+    os.replace(tmp_path, target_path)
+    return True
+
+
 def registry_set(key: str, value: str) -> None:
     """Write one flat, root-namespace registry key into
     ``registry.local.toml`` — in-process, no ``machine-local`` CLI
@@ -365,7 +407,7 @@ def registry_set(key: str, value: str) -> None:
     those must go through the real ``machine-local`` CLI.
 
     Shape sanctioned for exactly this single-writer-namespaced-table case by
-    coordinator-content-repo's ``docs/wiki/machine-local-registry.md``: "Append-only
+    coordinator-content-repo's ``coordinator-content-repo coordinator/docs/wiki/hook-best-practices/machine-local-registry.md``: "Append-only
     writers that structurally preserve sibling tables (read ->
     tomllib-parse-absent-check -> append -> atomic os.replace) satisfy the
     preserve-unrelated-tables property by construction and need no
@@ -420,6 +462,7 @@ def registry_set(key: str, value: str) -> None:
     if match and not trapped:
         existing_value = _flatten(_parse_toml_text(content)).get(key)
         if existing_value == value:
+            retire_paired_content_root_key(key)
             return  # already correct -- no-op, no write, no journal-worthy mutation
     for m in reversed(trapped):
         end = m.end() + 1 if tables[m.end():m.end() + 1] == "\n" else m.end()
@@ -446,6 +489,7 @@ def registry_set(key: str, value: str) -> None:
     tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
     tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
     os.replace(tmp_path, target_path)
+    retire_paired_content_root_key(key)
 
 
 def merged_flat_registry() -> dict:

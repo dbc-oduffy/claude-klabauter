@@ -40,7 +40,7 @@ _OP_NAME = "handoff.has_live_children"
 # INVERTED 2026-08-27 (kill ledger K-113). The op was deleted under the 200ms
 # sweep; `_handoff_has_live_children` survives UNDECORATED because
 # handoff_close_origin_stub._try_close resolves it in-process and needs the
-# `children` payload `has_live_children_many` does not return. The tests below
+# `children` payload. The tests below
 # exercise that compute and stay valuable — what must no longer be true is the
 # registration. Asserting the negative keeps this file a guard against the
 # decorator being restored rather than a stale import check.

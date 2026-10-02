@@ -22,11 +22,8 @@ Spec backlink: pln-plan-sizing-citation-gate-scaf-45eaed § C1 / AC1
 from __future__ import annotations
 
 import json
-import subprocess
-import tempfile
 from pathlib import Path
 
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.schema_validate import (
     parse_frontmatter,
     validate_frontmatter,
@@ -108,36 +105,26 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
         plan_paths = sorted(plans_dir.glob('*.md'))
         assert len(plan_paths) > 0, f'No plans found under {plans_dir}'
 
-        baseline_schema = json.loads(
-            subprocess.run(
-                ['git', 'show', 'feeb5d2c6135~1:coordinator_core/frontmatter/schemas/plan.schema.json'],
-                cwd=repo_root, check=True, capture_output=True, text=True, timeout=30,
-                stdin=subprocess.DEVNULL,
-                **no_console_creationflags(),
-            ).stdout
-        )
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            baseline_schema_path = Path(tmp_dir) / 'plan.schema.pre-bump.json'
-            baseline_schema_path.write_text(json.dumps(baseline_schema), encoding='utf-8')
-            regressions: list[str] = []
-            validated_bumped = 0
-            for path in plan_paths:
-                content = path.read_text(encoding='utf-8')
-                fm = parse_frontmatter(content)['frontmatter']
-                if fm is None:
-                    continue
-                errors_before = validate_frontmatter(fm, baseline_schema_path)
-                errors_after = validate_frontmatter(fm, _PLAN_SCHEMA)
-                if errors_after and not errors_before:
-                    regressions.append(f'{path.name}: newly fails: {errors_after}')
-                elif not errors_after:
-                    validated_bumped += 1
+        baseline_schema_path = Path(__file__).resolve().parent / 'fixtures' / 'plan.schema.pre-sizing-object.json'
+        regressions: list[str] = []
+        validated_bumped = 0
+        for path in plan_paths:
+            content = path.read_text(encoding='utf-8')
+            fm = parse_frontmatter(content)['frontmatter']
+            if fm is None:
+                continue
+            errors_before = validate_frontmatter(fm, baseline_schema_path)
+            errors_after = validate_frontmatter(fm, _PLAN_SCHEMA)
+            if errors_after and not errors_before:
+                regressions.append(f'{path.name}: newly fails: {errors_after}')
+            elif not errors_after:
+                validated_bumped += 1
 
-            assert not regressions, (
-                f'{len(regressions)} file(s) validated before the sizing_object bump '
-                f'and now fail:\n' + '\n'.join(regressions)
-            )
-            assert validated_bumped > 0
+        assert not regressions, (
+            f'{len(regressions)} file(s) validated before the sizing_object bump '
+            f'and now fail:\n' + '\n'.join(regressions)
+        )
+        assert validated_bumped > 0
 
     def test_sizing_object_bearing_plans_validate(self):
         """The plans already carrying `sizing_object:` as an unvalidated

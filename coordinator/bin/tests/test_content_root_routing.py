@@ -161,7 +161,7 @@ def test_central_improvement_queue_under_doe():
     its own C3 HELD with recorded disk proof the flip never took effect). The CLI's
     OWN current source (`coordinator-queue-append`'s `_output_path`, negative-spec
     docstring) confirms central-scope improvement-queue writes route to
-    `_claude_klabauter_root()` unconditionally, per docs/wiki/state-placement-law.md § Taxonomy
+    `_claude_klabauter_data_home()` unconditionally, per coordinator-content-repo coordinator/docs/wiki/hook-best-practices/state-placement-law.md § Taxonomy
     "Central/global state" and `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`
     (state/ is claude-klabauter's own disk-truth custody). Only coordinator-lesson-promote's
     lessons-outbox central write genuinely routes to coordinator-content-repo (see
@@ -169,7 +169,7 @@ def test_central_improvement_queue_under_doe():
     different owners, and this test previously conflated them.
     """
     fake_claude_klabauter = "/fake/claude-klabauter"
-    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=fake_claude_klabauter):
+    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_data_home", return_value=fake_claude_klabauter):
         result = _queue_cli._output_path(
             "improvement-queue", "My improvement", queue_scope="central"
         )
@@ -182,13 +182,12 @@ def test_central_scope_raises_doe_unresolvable():
     """_output_path() central branch raises _ClaudeKlabauterUnresolvable when claude_klabauter_root() cannot resolve.
 
     Rewired (DR-236, 2026-07-25): see test_central_improvement_queue_under_doe's
-    docstring — central-scope improvement-queue routes to CLAUDE_KLABAUTER_ROOT (via
-    `_claude_klabauter_root()`, which returns None rather than raising — see
-    coordinator/bin/lib/cli_shared.py::claude_klabauter_root()'s own negative-spec, "never
-    raises"), not CONTENT_ROOT; the CLI raises its own `_ClaudeKlabauterUnresolvable` when
-    `_claude_klabauter_root()` returns None, not `_reg._DoeUnresolvable`.
+    docstring — central-scope improvement-queue routes to the claude-klabauter data home (via
+    `_claude_klabauter_data_home()`, which returns None rather than raising), not CONTENT_ROOT;
+    the CLI raises its own `_ClaudeKlabauterUnresolvable` when `_claude_klabauter_data_home()` returns
+    None, not `_reg._DoeUnresolvable`.
     """
-    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_root", return_value=None):
+    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_data_home", return_value=None):
         try:
             _queue_cli._output_path("improvement-queue", "title", queue_scope="central")
         except _queue_cli._ClaudeKlabauterUnresolvable:
@@ -420,8 +419,13 @@ _CENTRAL_IQ_ARGV = [
 ]
 
 
-def _run_cold_queue(tmpdir: str) -> str:
+def _run_cold_queue(tmpdir: str, *, meta_repo_cwd: bool = False) -> str:
     cold_env = _make_cold_env(tmpdir)
+    argv = list(_CENTRAL_IQ_ARGV)
+    repo_root = "/fake/repo"
+    if meta_repo_cwd:
+        argv[argv.index("central")] = "project"
+        repo_root = cold_env["CLAUDE_HOME"]
     _assert_cold_env_content_root_unresolvable(cold_env)
     captured_err = io.StringIO()
 
@@ -430,9 +434,17 @@ def _run_cold_queue(tmpdir: str) -> str:
 
     with (
         unittest.mock.patch.dict(os.environ, cold_env, clear=True),
-        unittest.mock.patch("sys.argv", _CENTRAL_IQ_ARGV),
+        unittest.mock.patch("sys.argv", argv),
         unittest.mock.patch.object(
             _queue_cli, "_cc_route", side_effect=fake_route
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_claude_klabauter_data_home",
+            side_effect=(lambda: None) if meta_repo_cwd else _queue_cli._claude_klabauter_data_home,
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_claude_home",
+            side_effect=(lambda: repo_root) if meta_repo_cwd else _queue_cli._claude_home,
         ),
         unittest.mock.patch.object(
             _queue_cli, "_schema_cli_describe",
@@ -453,7 +465,7 @@ def _run_cold_queue(tmpdir: str) -> str:
             _queue_cli, "_resolve_from_repo", return_value="test-em"
         ),
         unittest.mock.patch.object(
-            _queue_cli, "_current_repo_root", return_value="/fake/repo"
+            _queue_cli, "_current_repo_root", return_value=repo_root
         ),
         unittest.mock.patch("sys.stderr", captured_err),
     ):
@@ -472,7 +484,7 @@ def test_queue_append_cold_warn_to_stderr(tmp_path):
     until the engine-root rename (C16/DR-344) retired that variable name from
     operator-facing prose (54e4b87c0, 2fd1b988f).
     """
-    err = _run_cold_queue(str(tmp_path))
+    err = _run_cold_queue(str(tmp_path), meta_repo_cwd=True)
     assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
     assert "engine root unresolvable" in err, "cold-path WARN must mention the engine root"
     assert "COORDINATOR_ENGINE_ROOT" in err, "cold-path WARN must name the engine-root env var"
@@ -780,8 +792,12 @@ def test_content_root_module_bootstrap_zero_spawn(monkeypatch):
                 spec = importlib.util.spec_from_loader(loader.name, loader)
                 mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
                 loader.exec_module(mod)
+                # The manifest loads lazily on first attribute read (PEP 562
+                # __getattr__), so the read must happen inside the isolated env
+                # and the no-spawn patch.
+                resolved_manifest_path = mod._MANIFEST_PATH
 
-        assert mod._MANIFEST_PATH == os.path.join(
+        assert resolved_manifest_path == os.path.join(
             fake_content_root, "coordinator", "schemas", "coordinator-registry.manifest.json"
         )
     finally:

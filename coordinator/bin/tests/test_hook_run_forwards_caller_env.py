@@ -62,3 +62,26 @@ def test_an_event_that_carries_env_is_not_overwritten(hook_run, monkeypatch):
     _run(mod, monkeypatch, {**_EVENT, "env": {"COORDINATOR_ALLOW_X": "1"}})
 
     assert seen["params"]["payload"]["env"] == {"COORDINATOR_ALLOW_X": "1"}
+
+
+def test_the_sessions_home_and_project_dir_reach_the_payload(hook_run, monkeypatch):
+    mod, seen = hook_run
+    for name, value in (
+        ("CLAUDE_HOME", "/s/home"),
+        ("CLAUDE_PROJECT_DIR", "/s/proj"),
+        ("HOME", "/s/h"),
+        ("USERPROFILE", "/s/u"),
+    ):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("UNRELATED_SECRET", "never")
+
+    _run(mod, monkeypatch, dict(_EVENT))
+
+    env = seen["params"]["payload"]["env"]
+    assert {k: env.get(k) for k in ("CLAUDE_HOME", "CLAUDE_PROJECT_DIR", "HOME", "USERPROFILE")} == {
+        "CLAUDE_HOME": "/s/home",
+        "CLAUDE_PROJECT_DIR": "/s/proj",
+        "HOME": "/s/h",
+        "USERPROFILE": "/s/u",
+    }
+    assert "UNRELATED_SECRET" not in env
