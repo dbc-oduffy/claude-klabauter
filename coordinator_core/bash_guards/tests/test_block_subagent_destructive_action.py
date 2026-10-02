@@ -4153,3 +4153,24 @@ class TestV2DockerKillDbClientMatchers:
     def test_db_client_with_no_statement_flag_allows(self):
         payload = _payload("psql mydb", agent_type="coordinator:executor")
         assert guard.check(payload) is None
+
+
+@pytest.mark.parametrize(
+    "cmd,allowed",
+    [
+        ("git archive abc123 | tar -x -C /tmp/scratch/base", True),
+        ("git archive --format=tar HEAD -- src", True),
+        ("git archive -o /tmp/x.tar HEAD", False),
+        ("git archive --output=/tmp/x.tar HEAD", False),
+        ("git archive --remote=origin HEAD", False),
+        ("git update-index --chmod=+x scripts/run.py", True),
+        ("git update-index --chmod=-x a.py b.py", True),
+        ("git update-index --chmod=+x", False),
+        ("git update-index --assume-unchanged a.py", False),
+        ("git update-index --chmod=+x --add a.py", False),
+    ],
+)
+def test_git_archive_to_stdout_and_update_index_chmod(cmd, allowed):
+    result = guard.check(_payload(cmd, agent_type="coordinator:executor"))
+    denied = result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert denied is not allowed, (cmd, result)

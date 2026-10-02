@@ -2293,6 +2293,25 @@ def _evaluate_git_segment_anchored(
         if _MERGE_FILE_STDOUT_FLAGS.intersection(options):
             return None
         return _MERGE_FILE_DENY_KIND
+    if subcmd == "archive":
+        # Read-only against the repo when the tarball goes to stdout (the
+        # `git archive <sha> | tar -x -C <scratch>` baseline plans prescribe).
+        # `-o`/`--output` writes a caller-chosen file; `--remote`/`--exec`
+        # run against another repo or a caller-chosen upload-archive.
+        for tok in remaining:
+            if tok in ("-o", "--output") or tok.startswith(("--output=", "--remote", "--exec")) or (
+                tok.startswith("-o") and not tok.startswith("--")
+            ):
+                return f"git archive option {tok!r} writes a file or runs a remote; pipe to stdout"
+        return None
+    if subcmd == "update-index":
+        # Only the mode-bit form the POSIX-exec ratchet asks for: index mode
+        # of named paths, no content staged, no other flag.
+        paths = [t for t in remaining if t != "--"]
+        flags = [t for t in paths if t.startswith("-")]
+        if flags and all(f in ("--chmod=+x", "--chmod=-x") for f in flags) and len(flags) < len(paths):
+            return None
+        return "git update-index (only --chmod=+x/-x <path>... is allowed)"
     if subcmd == "mv":
         # Classified explicitly rather than falling through to the
         # default-deny below, SOLELY to earn a named forward path in

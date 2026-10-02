@@ -1310,6 +1310,9 @@ def _scaffold_missing(
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8") as fh:
         fh.write(text)
+    from coordinator_core.session.declared_writes import declare_write
+
+    declare_write(target)
 
 
 def write_back(
