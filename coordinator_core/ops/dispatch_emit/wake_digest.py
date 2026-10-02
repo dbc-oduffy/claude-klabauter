@@ -307,13 +307,9 @@ def next_action_parts(
             # the commit -- so the record lands in the same commit as the
             # code it reviews.
             stem_lit = review_vars["bookkeeping_stem"]
-            prep_stem_lit = review_vars.get("prep_label_stem_literal")
-            prep_sidecar_expr = (
-                f"({prep_var} && {prep_var}.share_dir ? "
-                f"{prep_var}.share_dir + '/' + {prep_stem_lit} + '.md' : null)"
-                if prep_stem_lit
-                else "null"
-            )
+            # review-stage 1.3.0: the prep agent returns its own sidecar path. Absent on an
+            # older prep agent, it is null and bookkeeping resolves the real file itself.
+            prep_sidecar_expr = f"(({prep_var} && {prep_var}.sidecar_path) ?? null)"
             inline_review_expr = (
                 "(" + wave_var + " ? { integration_stem: " + stem_lit + ", "
                 "slices: " + wave_var + ".length, "

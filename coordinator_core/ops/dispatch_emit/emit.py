@@ -1708,10 +1708,8 @@ def _prime_exit_criterion_falsifier(plan_text: str) -> Optional[dict]:
 
 def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal: str) -> dict:
     """The review-result bindings `wake_digest.next_action_parts` reads, for the plan route and
-    the ask script alike. With no integration stage the reviewers apply in place and
-    `prep_label_stem_literal` stands in for the prep sidecar path: `review-prep-result` carries
-    no `sidecar_path`, so it is derived from the prep agent's `review:` label (a disclosed
-    assumption; prefer a real field if DoE adds one)."""
+    the ask script alike. With no integration stage the reviewers apply in place and the prep
+    sidecar is the prep agent's own `review-prep-result.sidecar_path` (review-stage 1.3.0)."""
     out = {
         "prep": "_reviewPrep",
         "wave": "_reviewWave",
@@ -1721,10 +1719,6 @@ def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal:
     }
     if review.integration is not None:
         out["integration"] = "_reviewIntegration"
-    else:
-        out["prep_label_stem_literal"] = _js_string_literal(
-            re.sub(r"[^A-Za-z0-9_.-]", "-", f"review:{review.prep.agent_type}")
-        )
     return out
 
 
