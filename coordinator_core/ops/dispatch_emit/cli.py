@@ -206,6 +206,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "<base>-<lane>.workflow.mjs",
     )
     parser.add_argument(
+        "--only-incomplete",
+        default=None,
+        metavar="RUN_TEXT",
+        help="with --plan: re-emit only the rows no `checkpoint(wave N): ... \u2014 ids` "
+        "commit subject in RUN_TEXT (a git log dump or run output) names as landed; "
+        "edges onto landed rows count as satisfied",
+    )
+    parser.add_argument(
         "--mark-landed",
         dest="mark_landed_phase",
         default=None,
@@ -727,6 +735,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:
         params["plan_path"] = args.plan
+        if args.only_incomplete:
+            from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
+
+            params["landed_rows"] = sorted(
+                landed_rows_from_text(Path(args.only_incomplete).read_text(encoding="utf-8"))
+            )
     if args.inventory:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:

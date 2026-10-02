@@ -739,6 +739,29 @@ def targets_add(
     return merged
 
 
+def plan_targets(plan_path: Path) -> List[str]:
+    """Union of the plan spine's declared `writes`, in row order, de-duplicated.
+    A row whose `writes` is UNDECLARED raises LedgerError naming the row."""
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, SpineReadError, read_spine
+
+    try:
+        rows = read_spine(plan_path)
+    except (SpineReadError, ValueError, OSError) as exc:
+        raise LedgerError(f"--from-plan {plan_path}: {exc}") from exc
+    undeclared = [row.id for row in rows if row.writes is UNDECLARED]
+    if undeclared:
+        raise LedgerError(
+            f"--from-plan {plan_path}: row(s) {', '.join(undeclared)} declare no `writes:` — "
+            "declare it (`writes: []` for none) or pass explicit --add paths"
+        )
+    merged: List[str] = []
+    for row in rows:
+        for path in row.writes:
+            if path not in merged:
+                merged.append(path)
+    return merged
+
+
 def _resolve_git_root(cwd: Optional[str] = None) -> Path:
     root = show_toplevel(cwd)
     if root is None:
@@ -771,6 +794,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     # previously accepted exactly one path per flag occurrence, forcing a
     # shell loop for a multi-path writes: list (memo friction item 2).
     targets_p.add_argument("--add", nargs="+", action="extend", default=[], dest="add")
+    targets_p.add_argument(
+        "--from-plan",
+        default=None,
+        help="Plan path: register the union of its spine rows' declared writes (adds to any --add paths).",
+    )
     targets_p.add_argument(
         "--agent-key",
         default=None,
@@ -825,8 +853,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.command == "targets":
-        if not args.add:
-            print("review-findings-ledger: targets --add requires at least one path", file=sys.stderr)
+        paths = list(args.add)
+        if args.from_plan:
+            try:
+                paths += plan_targets(Path(args.from_plan))
+            except LedgerError as exc:
+                print(f"review-findings-ledger: {exc}", file=sys.stderr)
+                return 1
+        if not paths:
+            print(
+                "review-findings-ledger: targets requires --add <path> or --from-plan <plan> "
+                "(with at least one declared write)",
+                file=sys.stderr,
+            )
             return 2
         session_id = args.session_id
         if not session_id:
@@ -842,7 +881,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 2
         try:
-            merged = targets_add(git_root, session_id, args.add, args.agent_key)
+            merged = targets_add(git_root, session_id, paths, args.agent_key)
         except LedgerError as exc:
             print(f"review-findings-ledger: {exc}", file=sys.stderr)
             return 1

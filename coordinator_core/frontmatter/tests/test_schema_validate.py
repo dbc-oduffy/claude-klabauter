@@ -3939,19 +3939,17 @@ _QUEUE_SCHEMA_PINS = {
     #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
     #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
     #   blocking-releases)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'bug-backlog': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'bug-backlog': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'cross-repo-commitment': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'cross-repo-commitment': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Pin moved 2026-08-14 to 13f3307000d4685243d60220145fc494383a0839 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
     #   C7 (4b8e485c6) rewrote cross-repo citations to repo-qualified ids
@@ -4007,11 +4005,20 @@ _QUEUE_SCHEMA_PINS = {
     #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
     #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
     #   blocking-releases)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to 631cf1e34f48c81384e7aa035ebc8b2d8435fa5d (DoE
+    # 631cf1e34f48c81384e7aa035ebc8b2d8435fa5d) by bin/claude-klabauter-revendor-
+    # schema.py debt-backlog.
+    #   DoE 1.3.0: optional apm_recommendation for autonomous debt-triage;
+    #   requested and reviewed bilaterally 2026-10-02
+    # Pin moved 2026-10-02 to 7524b888db715e7ea5ce40df3d12c48be51ab74f (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'debt-backlog': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   DoE 7524b888db: plan-tasks 3.6.0 status alternative, plan 2.28.0 plan-
+    #   level depends_on_plan
+    # Pin moved 2026-10-02 to 03e24d12e57e871b5040394774c4a684a7920dc6 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py debt-backlog.
+    #   merge origin/main: restore debt-backlog 1.3.0 (acked bilaterally
+    #   2026-10-02) and handoff at DoE HEAD
+    'debt-backlog': "03e24d12e57e871b5040394774c4a684a7920dc6",
     # Pin moved 2026-07-29 to 9f6ee8540e7b09da9ce6b81509402a4f118aefd8 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
     #   DoE 1239761c1 added the 'verification' member; b142e8dc re-vendored
@@ -4104,11 +4111,10 @@ _QUEUE_SCHEMA_PINS = {
     #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
     #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
     #   blocking-releases)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py improvement-queue.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'improvement-queue': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'improvement-queue': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -4123,20 +4129,18 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
     #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
     #   release suite)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lesson-entry.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'lesson-entry': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'lesson-entry': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Pin moved 2026-10-01 to 78e0fb1a511bdf2b453412656cded0fafbda2128 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lessons-outbox.
     #   DoE 10.9.0: cloud-channel and cloud-spawn producers (coordinator-content-repo-81
     #   release suite)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py lessons-outbox.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'lessons-outbox': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'lessons-outbox': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Pin moved 2026-08-13 to a88486a268af18ebc2b751339ec6f56d1ce1cb88 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   re-vendor: DoE bumped x-schema-version and changed shape
@@ -4194,11 +4198,14 @@ _QUEUE_SCHEMA_PINS = {
     #   DoE wiki reorg moved cited wiki paths into subdirectories; review-
     #   findings 3.5.1 note reworded upstream (x-bump-class dropped locally,
     #   upward ask filed in report)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'review-findings': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    # Pin moved 2026-10-02 to 7524b888db715e7ea5ce40df3d12c48be51ab74f (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE 7524b888db: plan-tasks 3.6.0 status alternative, plan 2.28.0 plan-
+    #   level depends_on_plan
+    'review-findings': "7524b888db715e7ea5ce40df3d12c48be51ab74f",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4229,14 +4236,10 @@ _QUEUE_SCHEMA_PINS = {
     #   published mirror's transformed copies (31 phantom drifts); fixed at
     #   72e3baac33, so these ten are the first honest reading. handoff is held
     #   back -- major advance, separate act.
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    # Pin moved 2026-10-02 to 3a54ea89a5cc7653732b7b7cd23e17efa3dddd49 (DoE
-    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
-    #   DoE DR-097 shape bumps (1.1.1/1.1.1/2.1.1/2.3.1)
-    'review-trail': "3a54ea89a5cc7653732b7b7cd23e17efa3dddd49",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'review-trail': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the
@@ -4252,11 +4255,10 @@ _QUEUE_SCHEMA_PINS = {
     #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
     #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
     #   blocking-releases)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py priority-ledger.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'priority-ledger': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign pinned schemas to DoE HEAD
+    'priority-ledger': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
     # Vendored 2026-08-06, same wave as priority-ledger above — see that
     # entry's comment. priority-intent.schema.json is the record shape
     # example-cockpit-repo drops into priority-intent-inbox/ for priority.drain
@@ -4269,11 +4271,10 @@ _QUEUE_SCHEMA_PINS = {
     #   re-vendor all drifted schemas to DoE HEAD ad6d2f178 (closes DoE
     #   improvement-queue 2026-09-06-vendored-schemas-drift-from-doe-head-
     #   blocking-releases)
-    # Pin moved 2026-10-02 to e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17 (DoE
+    # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py priority-intent.
-    #   re-vendor DoE prose-scrubbed schemas (DoE 72eba4aa3, main b1b3812b5);
-    #   enables publish transform carve-out
-    'priority-intent': "e7efe57f8dafb7c10d654d23a1ff353f9d9b8f17",
+    #   after merging keen-mayer: realign to DoE HEAD
+    'priority-intent': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
 }
 
 # Ahead-pin registry: entries here declare "claude-klabauter's vendored copy is

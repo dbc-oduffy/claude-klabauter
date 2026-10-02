@@ -112,9 +112,7 @@ def test_disposition_writeback_carries_a_verified_stamp_only():
 
 
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True,
-        **no_console_creationflags())
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
 
 
 def test_exec_auth_authorize_invocation_refuses_changed_body(tmp_path):

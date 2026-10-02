@@ -213,6 +213,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
+    "plan.cross_plan_gate":                   "coordinator_core.ops.plan_cross_plan_gate",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",

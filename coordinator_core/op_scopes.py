@@ -285,6 +285,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry dispatch resolves repo_root=None and the handler refuses outright.
     "plan.prep_gate":                        "common_dir",
     "plan.stamp_prepped":                    "common_dir",
+    "plan.cross_plan_gate":                  "common_dir",
     "goal.match_candidates":                 "common_dir",
     "goal.close_day":                        "common_dir",
     "goal.close_day_apply":                  "common_dir",

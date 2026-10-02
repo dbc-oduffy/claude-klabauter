@@ -223,7 +223,18 @@
                           "properties": {
                             "verdict": { "type": ["string", "null"] },
                             "product_files": { "type": ["integer", "null"] },
-                            "claims_unbacked": { "type": ["integer", "null"] }
+                            "claims_unbacked": { "type": ["integer", "null"] },
+                            "unbacked": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "claim": { "type": ["string", "null"] },
+                                  "anchor": { "type": ["string", "null"] }
+                                }
+                              }
+                            }
                           }
                         },
                         "tests": {

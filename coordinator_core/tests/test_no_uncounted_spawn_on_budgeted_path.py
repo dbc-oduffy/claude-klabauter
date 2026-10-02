@@ -344,6 +344,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/sizing_resize.py",
         ("_handler",),
     ),
+    "plan.cross_plan_gate": (
+        "coordinator_core/ops/plan_cross_plan_gate.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-01, EM-adjudication step 2: each measured an EMPTY
     # function-granular reachable spawn set, so none needs legitimization.
     "engine.registration_completeness": (

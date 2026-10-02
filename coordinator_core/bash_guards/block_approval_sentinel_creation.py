@@ -214,10 +214,8 @@ _RISK_DIRECT = (
     "approves its own edit."
 )
 _RISK_INDIRECTION = (
-    "this command's payload runs through an interpreter, stdin or command "
-    "assembly the guard could not read, so it might create the "
-    "doctrine-approval sentinel (the PM's sign-off on always-loaded doctrine "
-    "edits) unseen."
+    "payload behind an interpreter or stdin the guard could not read, so the "
+    "PM-approval sentinel may be created unseen. Use instead: the plain command, unwrapped."
 )
 
 CLASS = "hard-deny"

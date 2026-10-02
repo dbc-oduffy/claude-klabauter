@@ -2998,13 +2998,18 @@ def _checkpoint_commit_js(
     branch (``push_branch``; never main/master, never forced). The terminal
     commit still lands the receipts, stamps and any prefix-claimed files."""
     root_clause = (
-        f"Your repo is `{repo_root}`: `cd` there before any command and resolve every "
+        "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
         if repo_root
         else ""
     )
-    repo_flag = f" --repo {repo_root}" if repo_root else ""
+    repo_flag = " --repo \0" if repo_root else ""
     head = _BRIEF_PRECEDENCE_CLAUSE + "\n\n" + root_clause
+
+    def _js(text: str) -> str:
+        # \0 marks the repo root, spliced as the run-time `_repoRoot` binding, never as text.
+        return (" + " + _REPO_ROOT_VAR + " + ").join(_js_string_literal(part) for part in text.split("\0"))
+
     commit_tail = (
         " You are the only stage that stages or commits anything. Stage exactly this "
         "declared path list and nothing else, dropping any entry that neither exists "
@@ -3047,10 +3052,10 @@ def _checkpoint_commit_js(
         "    let r = null;",
         "    try {",
         "      r = await agent(",
-        f"        {_js_string_literal(head)} + 'You are the committer for wave ' + n + ' (' + done.join(', ') + "
+        f"        {_js(head)} + 'You are the committer for wave ' + n + ' (' + done.join(', ') + "
         "'). Commit subject: `' + subject + '`.' + "
         f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
-        f"{_js_string_literal(route)},",
+        f"{_js(route)},",
         f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
         f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_COMMIT_SCHEMA }}",
         "      );",
@@ -3064,19 +3069,20 @@ def _checkpoint_commit_js(
     ]
     if push_branch is not None:
         branch = push_branch
+        git_c = " -C \0" if repo_root else ""
         push_prompt = (
             head
             + f"Push a checkpoint of this run's work branch `{branch}`. Run "
-            f"`git{' -C ' + repo_root if repo_root else ''} rev-parse --abbrev-ref HEAD`; if it is "
+            f"`git{git_c} rev-parse --abbrev-ref HEAD`; if it is "
             f"not `{branch}`, report pushed false with reason `branch moved` and stop. Otherwise run "
-            f"exactly `git{' -C ' + repo_root if repo_root else ''} push origin HEAD:refs/heads/{branch}`. "
+            f"exactly `git{git_c} push origin HEAD:refs/heads/{branch}`. "
             "Never pass --force or --force-with-lease, never push any other ref, never push main or "
             "master. If the push is rejected or the remote is unreachable, report the verbatim output "
             "in `reason` and stop: do not retry, merge or rebase."
         )
         lines += [
             "    _checkpointPushes.push(agent(",
-            f"      {_js_string_literal(push_prompt)},",
+            f"      {_js(push_prompt)},",
             f"      {{ label: 'checkpoint-push:' + id, phase: {phase}, agentType: {push_type}, "
             f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_PUSH_SCHEMA }}",
             "    ).then((p) => {",
@@ -4118,6 +4124,34 @@ def find_new_module_with_importer(rows, repo_root: Optional[Path]) -> list:
     return findings
 
 
+def _drop_landed_rows(rows: list, landed: frozenset) -> list:
+    unknown = set(landed) - {r.id for r in rows}
+    if unknown:
+        raise ValueError(f"landed row id(s) not dispatchable in this spine: {sorted(unknown)}")
+    kept = []
+    for row in rows:
+        if row.id in landed:
+            continue
+        edges = [
+            e for e in row.depends_on
+            if not (isinstance(e, dict) and e.get("chunk") in landed)
+        ]
+        kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
+    return kept
+
+
+_CHECKPOINT_SUBJECT_RE = re.compile(r"checkpoint\(wave \d+\): \d+ rows \u2014 ([^\n]*)")
+
+
+def landed_rows_from_text(text: str) -> frozenset:
+    """Row ids named by the checkpoint commit subjects found in ``text`` (a
+    ``git log`` dump or a run's task output)."""
+    ids: set = set()
+    for m in _CHECKPOINT_SUBJECT_RE.finditer(text):
+        ids.update(i.strip() for i in re.split(r"[,\s]+", m.group(1)) if i.strip())
+    return frozenset(ids)
+
+
 def emit_script(
     plan_path,
     *,
@@ -4131,8 +4165,14 @@ def emit_script(
     preamble: Optional[str] = None,
     script_path: Optional[str] = None,
     findings_out: Optional[list] = None,
+    landed_rows: Optional[frozenset] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``landed_rows`` drops those rows from the emission and treats every edge
+    onto them as satisfied, so the remaining rows are re-waved by file overlap
+    and run at full parallelism (recovery of a run that ended incomplete).
+    A named id absent from the spine raises ``ValueError``.
 
     ``findings_out``, when given, receives the emit-time WARN findings that
     are about the plan rather than the composed script (see
@@ -4208,6 +4248,10 @@ def emit_script(
     # nobody performed.
     exclusions: list = []
     rows = read_spine(plan_path, exclusions=exclusions)
+    if landed_rows:
+        rows = _drop_landed_rows(rows, landed_rows)
+        if not rows:
+            raise ValueError("every dispatchable row is already landed; nothing to re-emit")
 
     resolved_name = name or plan_path.stem
     resolved_description = description or (

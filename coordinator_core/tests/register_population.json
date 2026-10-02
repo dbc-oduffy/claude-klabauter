@@ -281,6 +281,10 @@
       "_NO_CONSOLE"
     ],
     [
+      "coordinator/tests/test_claude_author.py",
+      "_ROOT_SPELLINGS"
+    ],
+    [
       "coordinator/tests/test_claude_home_contract.py",
       "_RECONCILED"
     ],
@@ -2469,6 +2473,10 @@
       "_BASE_PROVENANCE"
     ],
     [
+      "coordinator_core/contract/tests/test_mise_lane_map_schema.py",
+      "_VALID"
+    ],
+    [
       "coordinator_core/contract/tests/test_residue_segments.py",
       "LEGAL_CASES"
     ],
@@ -2567,6 +2575,10 @@
     [
       "coordinator_core/execute_plan_assemble/tests/test_stamp_refuses_contradiction.py",
       "_SPUN_OFF_ROW"
+    ],
+    [
+      "coordinator_core/frontmatter/tests/test_approved_body_sha.py",
+      "_TASKS"
     ],
     [
       "coordinator_core/frontmatter/tests/test_author_dependence.py",
@@ -2771,6 +2783,10 @@
     [
       "coordinator_core/frontmatter/tests/test_routed_sizing_carries_a_deliverable_id.py",
       "_EXEMPT_STATUSES"
+    ],
+    [
+      "coordinator_core/frontmatter/tests/test_schema_drift.py",
+      "_NAMES"
     ],
     [
       "coordinator_core/frontmatter/tests/test_schema_keyword_coverage.py",
@@ -3321,6 +3337,10 @@
       "_REPORTER_METHODS"
     ],
     [
+      "coordinator_core/install/tests/test_shaped_writers_report.py",
+      "_NOT_AN_INSTALL_RUN_WRITER"
+    ],
+    [
       "coordinator_core/install/tests/test_substrate_engine_root_flag.py",
       "_SHIM_PATH"
     ],
@@ -3737,6 +3757,10 @@
       "_RECEIPT_KEYS"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_resume_from_continuance.py",
+      "_HEADER"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_sizing_fire_wiring.py",
       "_FIREABLE_S"
     ],
@@ -4023,6 +4047,10 @@
     [
       "coordinator_core/ops/fleet/tests/test_pathspec_less_commit_seams_are_guarded.py",
       "GUARD_NAMES"
+    ],
+    [
+      "coordinator_core/ops/fleet/tests/test_unique_nearest_no_sibling_redirect.py",
+      "_CLOUD_REPOS"
     ],
     [
       "coordinator_core/ops/gate_liveness/tests/test_emit_discharge.py",
@@ -4543,6 +4571,10 @@
     [
       "coordinator_core/ops/tests/test_plan_capture_persist.py",
       "_FIXTURE_SIZING"
+    ],
+    [
+      "coordinator_core/ops/tests/test_plan_cross_plan_gate.py",
+      "ROW"
     ],
     [
       "coordinator_core/ops/tests/test_plan_status_transition.py",
@@ -7637,7 +7669,7 @@
       "_VALID_FM"
     ]
   ],
-  "candidate_ids_sha256": "360b2f1c9ca1ee50d5a7bc55e4efa004a3d117851f783d237737ce99c78543da",
+  "candidate_ids_sha256": "bbe18c8797748dce59d3e5cd074a0b0aae188be0d458ad863bb643a401e3e23d",
   "candidate_roots": [
     "coordinator/tests",
     "coordinator_core"

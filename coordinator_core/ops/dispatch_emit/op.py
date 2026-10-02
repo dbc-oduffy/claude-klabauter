@@ -1098,6 +1098,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             preamble=preamble,
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
+            landed_rows=frozenset(params.get("landed_rows") or ()),
         )
 
     check_agent_types_resolve(

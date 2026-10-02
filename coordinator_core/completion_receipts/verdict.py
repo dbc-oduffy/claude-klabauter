@@ -35,6 +35,17 @@ def superseding_delivery(record: dict, delivery: dict) -> dict:
     return {**delivery, "verdict": "PASS"}
 
 
+def _unbacked_suffix(delivery: object) -> str:
+    """The verifier's unbacked claims (claim and the evidence it lacked) as a refusal suffix; empty when none."""
+    items = delivery.get("unbacked") if isinstance(delivery, dict) else None
+    if not isinstance(items, list) or not items:
+        return ""
+    lines = [
+        f"- {c.get('claim')} [lacked: {c.get('anchor')}]" for c in items if isinstance(c, dict)
+    ]
+    return "; unbacked claims:\n" + "\n".join(lines)
+
+
 def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
     """The first mint refusal message that applies to this record, else `None`."""
     footprint = prep.get("slice_files")
@@ -53,7 +64,10 @@ def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
     if delivery_verdict != "PASS":
-        return f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS"
+        return (
+            f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS"
+            + _unbacked_suffix(delivery)
+        )
     if criterion_status in ("not_met", "indeterminate"):
         return f"review-stamp: refusing to mint: exit criterion is {criterion_status}"
     if tests_status != "pass" and not (tests_status == "not_run" and criterion_status == "met"):

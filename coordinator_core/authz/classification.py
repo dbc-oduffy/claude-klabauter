@@ -1238,6 +1238,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
     "plan.prep_gate": OpClass.COMPUTE_ONLY,
+    # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans
+    # its depends_on_plan edges name and RETURNS whether they are satisfied.
+    #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
+    #   3. Opens any file for write? No.  4. Shared mutable state? No.
+    #   5. Persistent state changes observable across processes? No.
+    "plan.cross_plan_gate": OpClass.COMPUTE_ONLY,
     # plan.stamp_prepped — MUTATING: the ONLY writer of the four-field mise-prep attest
     # (mise_prepped_by/_at/_sha/_findings) on a caller-named docs/plans/*.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) with the gate

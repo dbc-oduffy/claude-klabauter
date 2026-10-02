@@ -3447,7 +3447,7 @@ def test_install_warm_door_names_the_kill_switch_only_when_set(setup_mod, tmp_pa
 
     err = capsys.readouterr().err
     assert "COORDINATOR_OP_LATENCY_DISABLE=1 is set" in err
-    assert "Remediation: unset COORDINATOR_OP_LATENCY_DISABLE" in err
+    assert "): unset COORDINATOR_OP_LATENCY_DISABLE" in err
 
 
 def test_install_warm_door_control_invocation_anchored_to_repo_root(setup_mod, tmp_path, monkeypatch, capsys):

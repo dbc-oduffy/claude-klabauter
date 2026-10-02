@@ -100,13 +100,12 @@ _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 
 _RISK_DIRECT = (
-    "this command creates or modifies the worktree-ban override file, which "
-    "only the PM may create; an agent creating it grants itself worktree isolation."
+    "creates the worktree-ban override file, which only the PM may create. "
+    "Use instead: scoped-parallel edits."
 )
 _RISK_INDIRECTION = (
-    "this command's payload runs through an interpreter, stdin or xargs "
-    "wrapper the guard could not read, so it might create the worktree-ban "
-    "override file (PM-created only) unseen."
+    "payload behind an interpreter or stdin the guard could not read, so the "
+    "worktree override file may be created unseen. Use instead: the plain command, unwrapped."
 )
 
 #: Heads that cannot write a file (no redirects except to /dev/null are

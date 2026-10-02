@@ -3824,7 +3824,7 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
         cause, remedy = diagnose_inert_sink(repo_root, control)
         print(f"[ADVISORY] door route {DISCRIMINATOR_UNAVAILABLE} — telemetry sink is inert: {cause}.", file=sys.stderr)
         if remedy:
-            print(f"  Remediation: {remedy}, then re-run: python3 scripts/setup.py", file=sys.stderr)
+            print(f"  Remediation (then re-run python3 scripts/setup.py): {remedy}", file=sys.stderr)
         return
 
     if door_result.route == IN_PROCESS:

@@ -910,7 +910,9 @@ def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
-        "delivery": {"verdict": "FAIL", "product_files": 1, "claims_unbacked": 2},
+        "delivery": {"verdict": "FAIL", "product_files": 1, "claims_unbacked": 2,
+                     "unbacked": [{"claim": "adds retry", "anchor": "no diff hunk in x.py"},
+                                  {"claim": "pins it", "anchor": "no test names it"}]},
         "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"},
         "criterion": {"status": "met", "observation": "o", "sidecar": None},
     }
@@ -919,6 +921,8 @@ def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
     assert out["committed"] is True and out["sha"]
     assert out["review_stamp"] == "refused"
     assert "delivery verdict is 'FAIL'" in out["review_stamp_refusal"]
+    assert "adds retry [lacked: no diff hunk in x.py]" in out["review_stamp_refusal"]
+    assert "pins it [lacked: no test names it]" in out["review_stamp_refusal"]
     assert "review_stamp:" not in _show(repo, "HEAD:docs/plan.md")
 
 

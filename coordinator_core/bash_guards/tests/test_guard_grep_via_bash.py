@@ -188,9 +188,17 @@ class TestPartialRewriteMessageSizeFloorC3:
     or that lowers it back under cap, should touch this number
     deliberately rather than let it drift unnoticed either way."""
 
-    def test_partial_rewrite_cell_stays_over_cap_at_a_bounded_floor(self):
+    def test_partial_rewrite_cell_stays_over_cap_at_a_bounded_floor(self, monkeypatch):
+        """The rendered interpreter token is host-resolved (an absolute
+        `$HOME/AppData/.../python.exe` path on Windows, ~66 bytes, versus
+        `python3` elsewhere) and lands in the non-exempt first line, so the
+        floor is measured with the interpreter pinned to its host-independent
+        form. C9 (docs/plans/2026-10-02-tf-c2-guard-message-register-
+        ratchets.md): the 461b reading was this host path, not copy growth.
+        The 450 pin is unchanged."""
         from coordinator_core.bash_guards._message_size import measure_envelope
 
+        monkeypatch.setattr(dispatch_checks, "_bt_python3_invocation", lambda: "python3")
         out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
         measurement = measure_envelope({"hookSpecificOutput": out}, band="advisory-rewrite")
         assert measurement.is_speaker

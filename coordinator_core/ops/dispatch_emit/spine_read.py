@@ -214,39 +214,92 @@ def _repo_root_of(plan_path) -> Optional[Path]:
     return None
 
 
+def _plan_status(target: Path) -> Optional[str]:
+    """`target`'s frontmatter ``status``; ``None`` when the file is absent."""
+    try:
+        split = split_frontmatter(target.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if split is None:
+        return ""
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return ""
+    return str(doc.get("status") or "") if isinstance(doc, dict) else ""
+
+
+def _status_edge_hold(owner: str, label: str, wanted: str, actual: Optional[str]) -> Optional[str]:
+    """Hold detail for a ``{plan, status}`` edge; ``None`` once ``actual`` has
+    reached ``wanted`` along the plan lifecycle. A plan that ended
+    ``abandoned``/``superseded`` can never reach it."""
+    from coordinator_core.roadmap.plan_gate import _STATUS_LIFECYCLE_ORDER as order
+
+    if actual is None:
+        raise DanglingPlanDependencyError(f"{owner} depends_on_plan {label}: plan is absent")
+    if wanted not in order:
+        raise MalformedDependencyEdgeError(
+            f"{owner} depends_on_plan {label}: status {wanted!r} is not a plan status"
+        )
+    if actual in ("abandoned", "superseded"):
+        raise DanglingPlanDependencyError(
+            f"{owner} depends_on_plan {label}: plan is {actual}, never {wanted}"
+        )
+    if actual in order and actual != "deferred" and order.index(actual) >= order.index(wanted):
+        return None
+    return f"depends_on_plan {label}: plan status is {actual or 'unset'}, not yet {wanted}"
+
+
 def _unlanded_plan_edge(
     raw: dict, plan_path, repo_root: Optional[Path], plan_cache: dict
 ) -> Optional[str]:
-    """The first ``depends_on_plan`` edge of ``raw`` whose named row is not yet
-    ``coded``, as a detail string; ``None`` when every edge is satisfied or the
-    row declares none. Raises ``DanglingPlanDependencyError`` for an edge that
-    can never be satisfied. With no repo root to resolve against, an edge cannot
-    be shown satisfied and withholds the row."""
-    edges = raw.get("depends_on_plan")
+    """The first ``depends_on_plan`` edge of ``raw`` not yet satisfied, as a
+    detail string; ``None`` when every edge is satisfied or the row declares
+    none. An edge is ``{plan, chunk}`` (named row ``coded``) or ``{plan, status}``
+    (plan reached that lifecycle status). Raises ``DanglingPlanDependencyError``
+    for an edge that can never be satisfied. With no repo root to resolve
+    against, an edge cannot be shown satisfied and withholds the row."""
+    return unlanded_plan_edges(
+        f"row {raw.get('id')!r}", raw.get("depends_on_plan"), repo_root, plan_cache
+    )
+
+
+def unlanded_plan_edges(
+    owner: str, edges, repo_root: Optional[Path], plan_cache: dict
+) -> Optional[str]:
+    """``_unlanded_plan_edge``'s body over any edge list, ``owner`` naming whose
+    it is (a row, or the plan itself for frontmatter edges)."""
     if not edges:
         return None
     if not isinstance(edges, list):
-        raise MalformedDependencyEdgeError(
-            f"row {raw.get('id')!r} depends_on_plan is {edges!r}, not a list"
-        )
+        raise MalformedDependencyEdgeError(f"{owner} depends_on_plan is {edges!r}, not a list")
     held: Optional[str] = None
     for edge in edges:
-        if not isinstance(edge, dict) or not edge.get("plan") or not edge.get("chunk"):
+        if (
+            not isinstance(edge, dict)
+            or not edge.get("plan")
+            or bool(edge.get("chunk")) == bool(edge.get("status"))
+        ):
             raise MalformedDependencyEdgeError(
-                f"row {raw.get('id')!r} depends_on_plan entry {edge!r} must be "
-                "{plan: <repo-relative .md path>, chunk: <row id>, gate_kind: <kind>}"
+                f"{owner} depends_on_plan entry {edge!r} must be "
+                "{plan: <repo-relative .md path>, chunk: <row id> | status: <plan status>, "
+                "gate_kind: <kind>}"
             )
         rel = str(edge["plan"]).replace("\\", "/")
-        chunk = edge["chunk"]
-        label = f"{rel} {chunk}"
+        chunk = edge.get("chunk")
+        label = f"{rel} {chunk or edge['status']}"
         if ".." in rel.split("/") or rel.startswith("/"):
             raise DanglingPlanDependencyError(
-                f"row {raw.get('id')!r} depends_on_plan {label}: path escapes the repo"
+                f"{owner} depends_on_plan {label}: path escapes the repo"
             )
         if repo_root is None:
             held = held or f"depends_on_plan {label}: no repo root to resolve it against"
             continue
         target = repo_root / rel
+        if not chunk:
+            hold = _status_edge_hold(owner, label, str(edge["status"]), _plan_status(target))
+            held = held or hold
+            continue
         if target not in plan_cache:
             try:
                 loaded = load_rows(target.read_text(encoding="utf-8"))
@@ -265,17 +318,17 @@ def _unlanded_plan_edge(
         rows_by_id = plan_cache[target]
         if rows_by_id is None:
             raise DanglingPlanDependencyError(
-                f"row {raw.get('id')!r} depends_on_plan {label}: plan is absent or has no spine"
+                f"{owner} depends_on_plan {label}: plan is absent or has no spine"
             )
         named = rows_by_id.get(chunk)
         if named is None:
             raise DanglingPlanDependencyError(
-                f"row {raw.get('id')!r} depends_on_plan {label}: no such row in that plan"
+                f"{owner} depends_on_plan {label}: no such row in that plan"
             )
         disposition = named.get("disposition")
         if disposition in _TERMINAL_NON_CODED:
             raise DanglingPlanDependencyError(
-                f"row {raw.get('id')!r} depends_on_plan {label}: predecessor is {disposition}, "
+                f"{owner} depends_on_plan {label}: predecessor is {disposition}, "
                 "never coded"
             )
         if disposition != "coded":
@@ -598,6 +651,19 @@ def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
     return by_row
 
 
+def frontmatter_plan_edges(source: str):
+    """The plan's own frontmatter ``depends_on_plan`` list (an execution
+    precondition on the whole plan), or ``None`` when it declares none."""
+    split = split_frontmatter(source)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    return doc.get("depends_on_plan") if isinstance(doc, dict) else None
+
+
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
 
@@ -837,8 +903,14 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     blocked_ids: set[str] = set()
     plan_edge_root: Optional[Path] = None
     plan_edge_cache: dict = {}
-    if any(isinstance(raw, dict) and raw.get("depends_on_plan") for raw in raw_rows):
+    plan_level_edges = frontmatter_plan_edges(source)
+    if plan_level_edges or any(
+        isinstance(raw, dict) and raw.get("depends_on_plan") for raw in raw_rows
+    ):
         plan_edge_root = _repo_root_of(plan_path)
+    plan_level_hold = unlanded_plan_edges(
+        "plan frontmatter", plan_level_edges, plan_edge_root, plan_edge_cache
+    )
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred", False)
@@ -847,7 +919,9 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         if not (
             disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed
         ):
-            plan_hold = _unlanded_plan_edge(raw, plan_path, plan_edge_root, plan_edge_cache)
+            plan_hold = plan_level_hold or _unlanded_plan_edge(
+                raw, plan_path, plan_edge_root, plan_edge_cache
+            )
         if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
             raise UnknownDispositionError(
                 f"row {raw.get('id')!r} has disposition {disposition!r}, which is "

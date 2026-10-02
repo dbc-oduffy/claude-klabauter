@@ -21,13 +21,13 @@
     "verdict": "WRITE_TARGET_UNRESOLVED"
   },
   {
-    "detail": "bin/claude-klabauter-revendor-schema.py writes tracked path 'coordinator_core/frontmatter/tests/test_schema_validate.py' but declares no GENERATES",
+    "detail": "bin/claude-klabauter-revendor-schema.py declares MUTATES_APPEND = ['coordinator_core/frontmatter/tests/test_schema_validate.py'] (append-only ledger or surgical edit) (no staleness contract)",
     "generator": "bin/claude-klabauter-revendor-schema.py",
     "mutates": [
       "coordinator_core/frontmatter/tests/test_schema_validate.py"
     ],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator/bin/append-goal-event.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1943,6 +1943,13 @@
   {
     "detail": "coordinator_core/ops/roadmap_blitz_land.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/roadmap_blitz_land.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/plan_cross_plan_gate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_cross_plan_gate.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

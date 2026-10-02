@@ -852,9 +852,8 @@ def render_bump_message(
 
 
 CROSS_REPO_WARN_RISK = (
-    "This write lands outside the current repo. A session started in the "
-    "target repo acts with that repo's full context, so a substantial "
-    "cross-repo change is usually better made from there."
+    "Outside the current repo: for a substantial change, a session in the "
+    "target repo has its full context — start one there instead."
 )
 
 

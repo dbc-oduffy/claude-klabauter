@@ -108,3 +108,9 @@ def test_judge_refused_record_is_null():
     rec = _record()
     rec["unresolved"] = ["x"]
     assert judge_verdict(rec, all_rows_landed=True, now=NOW) == (None, None)
+
+
+def test_delivery_fail_names_the_unbacked_claims():
+    rec = _record()
+    rec["delivery"] = {"verdict": "FAIL", "unbacked": [{"claim": "adds retry", "anchor": "no hunk in x.py"}]}
+    assert _refusal(rec).endswith("unbacked claims:\n- adds retry [lacked: no hunk in x.py]")

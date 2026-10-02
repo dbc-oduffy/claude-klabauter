@@ -116,7 +116,31 @@ _PARAM_FIELDS = (
     Field("incomplete_chunks", "str_list", required=True),
     Field("landed_chunks", "str_list"),
     Field("inline_review", "dict"),
+    Field("task_output_path", "nonempty_str"),
 )
+
+
+def _params_from_task_output(path_raw: str) -> dict:
+    """`next_action.params` out of a Workflow task-output file, bare or `{summary, logs, result}`-wrapped.
+
+    Same envelope unwrap as `land-wave.py :: _wave_result`: a dict `result` is the digest.
+    Raises ValueError naming the file when no `next_action.params` dict is found.
+    """
+    path = Path(path_raw)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read params.task_output_path {path_raw!r}: {exc}") from exc
+    if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("result"), dict):
+        data = data["result"]
+    action = data.get("next_action") if isinstance(data, dict) else None
+    found = action.get("params") if isinstance(action, dict) else None
+    if not isinstance(found, dict):
+        raise ValueError(
+            f"{path_raw!r} carries no next_action.params: neither a digest nor a "
+            "task-output envelope wrapping one"
+        )
+    return found
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -586,6 +610,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              refuses (``refused="unreviewed"``);
                                              its trailer is appended to the
                                              commit message.
+        task_output_path (str, optional) -- a Workflow task-output file; its
+                                             ``next_action.params`` supplies
+                                             script_path / incomplete_chunks /
+                                             inline_review, explicit params win.
         session_id (str, optional)       -- forwarded to ``ceremony.commit_v2``
                                              when canonical-UUID shaped.
 
@@ -635,6 +663,13 @@ def _terminal_commit(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
             "repo_root (git common dir) was not supplied"
         )
+
+    if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
+        try:
+            params = {**_params_from_task_output(params["task_output_path"]), **{
+                k: v for k, v in params.items() if k != "task_output_path"}}
+        except ValueError as exc:
+            return _error(str(exc))
 
     refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
     if refusal is not None:

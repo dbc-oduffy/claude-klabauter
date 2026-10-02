@@ -212,7 +212,7 @@ pinned by `.fleet-env.lock`, which is a different question from whichever `pytho
 Check it the way its owner does — resolve `fleet_env.root`, then run the interpreter under it:
 
 ```
-python3 coordinator/bin/fleet-env.py get
+machine-local get fleet_env.root
 ```
 
 Contract and provisioning detail live in claude-klabauter's

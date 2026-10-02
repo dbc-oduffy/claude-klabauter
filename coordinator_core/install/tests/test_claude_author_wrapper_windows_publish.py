@@ -21,6 +21,7 @@ def _make_wrapper_src(tmp_path):
 
 
 def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(maximalist.os, "name", "nt")
 
     claude_klabauter_root = str(tmp_path / "claude-klabauter")
@@ -89,6 +90,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
 
 
 def test_windows_install_cleans_up_temp_on_copy_failure(tmp_path, orch, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(maximalist.os, "name", "nt")
 
     claude_klabauter_root = str(tmp_path / "claude-klabauter")

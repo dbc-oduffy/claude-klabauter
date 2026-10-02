@@ -378,3 +378,45 @@ def test_cli_targets_add_without_session_id_or_env_refuses(tmp_path, monkeypatch
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
     assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py"]) == 2
+
+
+_PLAN_TMPL = """# P
+
+## Tasks
+
+```yaml plan-tasks
+- id: A
+  title: a
+  surface: s
+  writes: [x/a.py, x/b.py]
+- id: B
+  title: b
+  surface: s
+  writes: [x/b.py, y/c.py]
+%s```
+"""
+
+
+def _plan(tmp_path, extra=""):
+    p = tmp_path / "plan.md"
+    p.write_text(_PLAN_TMPL % extra, encoding="utf-8")
+    return p
+
+
+def test_plan_targets_is_the_deduped_union_of_row_writes(tmp_path):
+    assert m.plan_targets(_plan(tmp_path)) == ["x/a.py", "x/b.py", "y/c.py"]
+
+
+def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path):
+    plan = _plan(tmp_path, "- id: C\n  title: c\n  surface: s\n")
+    with pytest.raises(m.LedgerError, match="C"):
+        m.plan_targets(plan)
+
+
+def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
+    (tmp_path / ".git").mkdir()
+    rc = m.main(["--root", str(tmp_path), "targets", "--from-plan", str(_plan(tmp_path)),
+                 "--add", "z.py", "--session-id", "s1"])
+    assert rc == 0
+    f = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
+    assert f.read_text(encoding="utf-8").split() == ["z.py", "x/a.py", "x/b.py", "y/c.py"]

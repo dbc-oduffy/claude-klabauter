@@ -840,8 +840,11 @@ def link_engine_cli_shims_onto_image_path(report: Report) -> None:
     skipped_existing: list[str] = []
     entries = sorted(source.iterdir()) if source.is_dir() else []
     for entry in entries:
-        if entry.suffix in (".cmd", ".ps1") or not entry.is_file() or not os.access(entry, os.X_OK):
+        if entry.suffix in (".cmd", ".ps1") or not entry.is_file():
             continue
+        if os.name != "nt":
+            if not os.access(entry, os.X_OK):
+                continue
         link = link_dir / entry.name
         if os.path.lexists(link):
             skipped_existing.append(entry.name)

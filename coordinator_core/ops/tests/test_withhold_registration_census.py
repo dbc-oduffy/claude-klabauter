@@ -118,7 +118,10 @@ _AGENT_FACING_SUFFIXES = ("_note", "_msg", "_err", "_ctx")
 #: asserts a knob name is absent from `_registry`'s SOURCE LINES (`inspect.getsource(...)`,
 #: split on `#`) — a DRY/no-hardcoded-literal check, not a claim about what text reaches an
 #: agent. It shares no semantics with the withheld-knob doctrine at all.
-_NOT_WITHHOLD_EXACT = frozenset({"os.environ", "env", "base_env", "hooks_text", "code"})
+#:
+#: `"remedy"` is operator-facing diagnostic text (`door_route_signal.diagnose_inert_sink`): the
+#: kill switch is named in its `cause` by design, so absence from `remedy` is not a withhold.
+_NOT_WITHHOLD_EXACT = frozenset({"os.environ", "env", "base_env", "hooks_text", "code", "remedy"})
 _NOT_WITHHOLD_PREFIXES = ("captured[",)
 _NOT_WITHHOLD_SUFFIXES = ("_env",)
 
