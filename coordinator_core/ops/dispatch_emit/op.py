@@ -1236,6 +1236,17 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
             engine_root=Path(__file__).resolve().parents[3],
             sizing_abs=(Path(root) / sizing_rel).as_posix(),
         )
+        if not out["plan_blitz_args"].get("provisionSidecarCli"):
+            # plan-blitz refuses every baton without it, so a script emitted here would halt
+            # every run with "no ready plan". Fail at emit, never later.
+            raise SizingFireRefused(
+                [
+                    "provisionSidecarCli unresolved: no provision-sidecar launcher under the "
+                    "settings home, on PATH, or at <engine>/coordinator/bin/provision-sidecar.py; "
+                    "plan-blitz would refuse every baton. Install the coordinator settings home "
+                    "or set COORDINATOR_SETTINGS_HOME, then re-emit."
+                ]
+            )
         if verdict.baton:
             baton_path = verdict.baton["path"]
             out["batons"] = [baton_path]

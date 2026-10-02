@@ -156,6 +156,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "capture-fan-out-threshold.py",
     "central-run-due.py",
     "check-arch-audit-staleness.py",
+    "check-mcp-namespace-registration.py",
     "check-atlas-watch-drift.py",
     "check-auto-memory-drained.py",
     "check-bin-sh-polyglot.py",
@@ -266,6 +267,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "list-week-changelog.py",
     "mint-deliverable-id.py",
     "misc-session-and-guards.py",
+    "needs-restart.py",  # no --help: prints one verdict, always exits 0
     "new-project-scaffold.py",
     "normalize-consumed-frontmatter.py",
     "normalize-snippet.py",
@@ -293,6 +295,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "reap-sessions.py",
     "reaper-resting-batons.py",
     "reassess-goal-krs.py",
+    "record-superseding-review.py",
     "refresh-queries.py",
     "refresh-roadmap-callout.py",
     # render-handoff-tracker.py: Review: code-reviewer (690dd6f9) -- deleted by
@@ -302,6 +305,7 @@ _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
     "render-template-tree.py",
     "render-template.py",
     "resolve-repo-path.py",
+    "roadmap-blitz-stage.py",
     "review-brightline-gate.py",
     "review-coverage-gate.py",
     "rollup-derive.py",

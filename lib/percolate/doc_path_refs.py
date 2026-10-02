@@ -43,7 +43,11 @@ _REF = re.compile(
     r"((?:lib|bin)/[A-Za-z0-9_.\-/]*[A-Za-z0-9_\-]\.[A-Za-z0-9]+)(?![\w/<*{$])"
 )
 # A ref whose line or sentence says it is optional is not a promise the payload carries it.
-_OPTIONAL = re.compile(r"if present|if it exists|absent[\w\s]{0,20}:\s*skip", re.IGNORECASE)
+# A ref the doc itself locates "under the resolved engine root" lives in the separately published
+# engine checkout, not in this payload.
+_OPTIONAL = re.compile(
+    r"if present|if it exists|absent[\w\s]{0,20}:\s*skip|under the resolved engine root", re.IGNORECASE
+)
 
 
 def _graded_refs(text: str) -> list[str]:
@@ -282,6 +286,20 @@ def default_pyproject() -> Path:
 _INSTALL_SCRIPT = Path("lib") / "install" / "coordinator_install.py"
 
 
+def _payload_python_argv(root: Path, script: str, *args: str) -> list[str]:
+    """argv via the payload's own bin/lib/python_interp, so the gate runs the installer the way users do."""
+    sys.path.insert(0, str(root / "bin" / "lib"))
+    try:
+        from python_interp import python_argv
+        argv = python_argv(script, *args)
+    except ImportError:
+        argv = None
+    finally:
+        sys.path.pop(0)
+    interpreter = sys.executable
+    return argv or [interpreter, script, *args]
+
+
 def run_install_plan(payload_root: Path, timeout: float = 120) -> str | None:
     """Run `lib/install/coordinator_install.py --plan` in the payload under an empty HOME.
 
@@ -296,7 +314,7 @@ def run_install_plan(payload_root: Path, timeout: float = 120) -> str | None:
         env.update(HOME=home, USERPROFILE=home, CLAUDE_HOME=home)
         try:
             proc = subprocess.run(
-                [sys.executable, str(_INSTALL_SCRIPT), "--plan"],
+                _payload_python_argv(root, str(_INSTALL_SCRIPT), "--plan"),
                 cwd=str(root), env=env, capture_output=True, text=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:

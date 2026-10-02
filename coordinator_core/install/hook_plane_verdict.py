@@ -3,8 +3,9 @@
 `scripts/cloud_setup.py` loads this file by path on an interpreter that has no
 `coordinator_core` installed, and `scripts/setup.py` imports it as a package
 module. It therefore imports the standard library only and does no I/O at import
-time. `tomllib` is imported inside `registry_value_or_none` so a 3.10
-interpreter loses that one rung instead of the module.
+time. `tomllib` is imported inside `read_registry` so a pre-3.11 interpreter still
+imports the module, and the missing `tomllib` is reported as an unreadable
+registry rather than as an absent value.
 
 Every function is a read of disk with zero spawns and no writes; each
 installer lands the verdict through its own rule-surface writer.
@@ -16,6 +17,7 @@ import json
 import os
 import shlex
 import socket
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -99,23 +101,38 @@ def plugin_record_key(plugin_root: Path) -> str:
     return f"{plugin_name}@{marketplace_name}"
 
 
-def registry_value_or_none(machine_local_dir: Path, key: str) -> str | None:
-    """One flat `"<key>" = '<value>'` registry value via tomllib, no subprocess.
+def read_registry(machine_local_dir: Path, key: str) -> tuple[str | None, list[str]]:
+    """One flat `"<key>" = '<value>'` registry value via tomllib, no subprocess,
+    plus every reason a registry file could not be read.
 
-    `registry.local.toml` wins over `registry.toml`. Absent, unparseable, or no
-    tomllib (<3.11) means this rung says nothing.
+    `registry.local.toml` wins over `registry.toml`. A file that does not exist is
+    simply absent (no error). A file that exists but cannot be read, an
+    unparseable one, or a missing `tomllib` (<3.11) is an error entry: an
+    unreadable registry must never degrade to "this rung says nothing".
     """
+    errors: list[str] = []
+    value: str | None = None
     for fname in ("registry.local.toml", "registry.toml"):
+        path = machine_local_dir / fname
         try:
             import tomllib
 
-            data = tomllib.loads((machine_local_dir / fname).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - absent, unreadable, unparseable, or no tomllib
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             continue
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+        except ImportError as e:
+            errors.append(
+                f"{fname}: tomllib unavailable on Python {sys.version_info[0]}.{sys.version_info[1]} "
+                f"({sys.executable}); {type(e).__name__}: {e}"
+            )
+            break  # no later file is readable either
+        except Exception as e:  # noqa: BLE001 - unreadable or unparseable is a recorded error
+            errors.append(f"{fname}: {type(e).__name__}: {e}")
+            continue
+        found = data.get(key)
+        if value is None and isinstance(found, str) and found:
+            value = found
+    return value, errors
 
 
 def first_line_or_none(path: Path) -> str | None:
@@ -239,7 +256,7 @@ def derive_hook_plane(
     Two facts: at least one delivery surface registers hooks (`settings.json`'s
     `hooks` block or the plugin's `hooks/hooks.json`), and `.coordinator-content-root` resolves
     through at least one rung (registry, `<settings-home>/machine-local/.coordinator-content-root`,
-    legacy `<claude_home>/.coordinator-content-root`). Never raises; returns the ten-key dict.
+    legacy `<claude_home>/.coordinator-content-root`). Never raises; returns the eleven-key dict.
     """
     claude_home = Path(claude_home)
     settings_path = claude_home / "settings.json"
@@ -267,10 +284,13 @@ def derive_hook_plane(
 
     settings_home_str = str(settings_home) if settings_home else ""
     rungs: dict[str, str | None] = {}
+    registry_errors: list[str] = []
     if settings_home_str:
         machine_local = Path(settings_home_str) / "machine-local"
         for key in _REGISTRY_KEYS:
-            rungs[f"registry {key}"] = registry_value_or_none(machine_local, key)
+            value, errors = read_registry(machine_local, key)
+            rungs[f"registry {key}"] = value
+            registry_errors.extend(e for e in errors if e not in registry_errors)
         rungs[f"{settings_home_str}/machine-local/.coordinator-content-root"] = first_line_or_none(
             machine_local / ".coordinator-content-root"
         )
@@ -299,6 +319,7 @@ def derive_hook_plane(
         "plugin_hooks": plugin,
         "content_root_resolves": content_root_resolves,
         "content_root_rungs": rungs,
+        "registry_read_errors": registry_errors,
         "content_root_bin_dir": content_root_bin_dir,
         "content_root_bin_resolves": content_root_bin_resolves,
     }
@@ -315,7 +336,12 @@ def hook_plane_problems(hook_plane: dict) -> list[str]:
             + (f" ({read_error})" if read_error else "")
             + f" and the coordinator plugin delivers none ({reason})"
         )
-    if not hook_plane.get("content_root_resolves"):
+    registry_errors = hook_plane.get("registry_read_errors") or []
+    if registry_errors:
+        problems.append("registry unreadable: " + "; ".join(registry_errors))
+    elif not hook_plane.get("content_root_resolves"):
+        # An unreadable registry is its own problem above: the registry rungs were
+        # never consulted, so "no rung resolves" would misreport the cause.
         problems.append("`.coordinator-content-root` resolves through no rung the no-launcher fences read")
     return problems
 

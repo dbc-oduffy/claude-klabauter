@@ -25,7 +25,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "lib"))
 from frontmatter_scan import read_text, scan_frontmatter  # noqa: E402
 sys.path.insert(0, str(_ROOT / "hooks" / "scripts"))
-from _git_root_walk import git_root_walk  # noqa: E402
+try:  # hooks/scripts is overlaid at publish; absent in a bare claude-klabauter checkout
+    from _git_root_walk import git_root_walk  # noqa: E402
+except ImportError:
+    def git_root_walk():
+        return None
 
 
 def _load_json(path: Path) -> dict:

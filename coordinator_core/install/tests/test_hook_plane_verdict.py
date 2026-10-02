@@ -20,6 +20,7 @@ TEN_KEYS = {
     "plugin_hooks",
     "content_root_resolves",
     "content_root_rungs",
+    "registry_read_errors",
     "content_root_bin_dir",
     "content_root_bin_resolves",
 }
@@ -304,3 +305,45 @@ def test_registry_scrub_twin_key_resolves(tmp_path):
     plane = hpv.derive_hook_plane(claude_home=tmp_path / "home", plugin_root=None, settings_home=sh)
     assert plane["content_root_resolves"] is True
     assert plane["content_root_rungs"][f"registry {twin}"] == "/twin"
+
+
+def _block_tomllib(monkeypatch):
+    """Simulate a pre-3.11 interpreter: `import tomllib` raises ModuleNotFoundError."""
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+
+
+def test_missing_tomllib_is_a_registry_error_not_an_absent_rung(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    sh = tmp_path / "sh"
+    ml = sh / "machine-local"
+    ml.mkdir(parents=True)
+    (ml / "registry.toml").write_text("\"repos.content_root\" = '/registry'\n", encoding="utf-8")
+    _block_tomllib(monkeypatch)
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=sh)
+    assert plane["content_root_resolves"] is False
+    assert len(plane["registry_read_errors"]) == 1
+    assert "tomllib unavailable" in plane["registry_read_errors"][0]
+    problems = hpv.hook_plane_problems(plane)
+    assert any(p.startswith("registry unreadable: ") for p in problems)
+    assert not any("resolves through no rung" in p for p in problems)
+
+
+def test_unparseable_registry_is_reported_and_other_file_still_read(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    sh = tmp_path / "sh"
+    ml = sh / "machine-local"
+    ml.mkdir(parents=True)
+    (ml / "registry.local.toml").write_text("not = = toml", encoding="utf-8")
+    (ml / "registry.toml").write_text("\"repos.content_root\" = '/registry'\n", encoding="utf-8")
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=sh)
+    assert plane["content_root_rungs"]["registry repos.content_root"] == "/registry"
+    assert any("registry.local.toml" in e for e in plane["registry_read_errors"])
+    assert hpv.hook_plane_problems(plane)[-1].startswith("registry unreadable: ")
+
+
+def test_absent_registry_files_are_not_errors(tmp_path):
+    ml = tmp_path / "machine-local"
+    ml.mkdir()
+    assert hpv.read_registry(ml, "repos.content_root") == (None, [])

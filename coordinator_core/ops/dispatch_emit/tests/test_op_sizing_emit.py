@@ -120,3 +120,28 @@ def test_gate_halt_raises_refusal_naming_kind(repo):
     with pytest.raises(SizingFireRefused) as exc:
         _gate_sizing_at_emit(repo, REL, [])
     assert "touchpoint" in str(exc.value) and "sizing-accept-exit-criterion" in str(exc.value)
+
+
+def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+
+    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, "M")
+    assert _emit(repo) == 0
+    out = capsys.readouterr().out
+    reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
+    text = open(reply["path"], encoding="utf-8").read()
+    call = text.split("await planBlitz(", 1)[1].split("\n", 1)[0]
+    assert '"provisionSidecarCli": "/x/provision-sidecar"' in call
+
+
+def test_unresolvable_sidecar_cli_refuses_at_emit_and_writes_nothing(repo, capsys, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+
+    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: None)
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, "M")
+    assert _emit(repo) != 0
+    assert "provisionSidecarCli" in capsys.readouterr().err
+    assert _mjs(repo) == []

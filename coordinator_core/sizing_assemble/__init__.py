@@ -1331,7 +1331,8 @@ def write_back(
 
     Sets estimate.tshirt, route, detents, fork/xl_exit (only when the decision
     resolved one), scout_evidence and premise (only when given), and status
-    `draft` -> `sized`. exit_criterion.statement is written only while
+    `draft`/`sized` -> `routed` (terminal statuses are never regressed); a
+    scaffold-placeholder `intent` is replaced by the computed one. exit_criterion.statement is written only while
     `accepted` is null; interaction_mode only while absent. Raises
     `SizingAssembleError` on any refusal, with nothing written.
     """
@@ -1406,8 +1407,17 @@ def write_back(
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
-        if doc.get("status") == "draft":
-            text = _set_scalar(text, "status", "sized")
+        intent_now = doc.get("intent")
+        computed_intent = (decision.get("intent") or "").strip()
+        if (
+            computed_intent
+            and isinstance(intent_now, str)
+            and intent_now.startswith("PLACEHOLDER")
+        ):
+            text = _set_scalar(text, "intent", json.dumps(computed_intent))
+        # A computed route is a routed sizing; only the pre-route statuses advance.
+        if doc.get("status") in ("draft", "sized"):
+            text = _set_scalar(text, "status", "routed")
 
         try:
             new_doc = yaml.safe_load(text) or {}

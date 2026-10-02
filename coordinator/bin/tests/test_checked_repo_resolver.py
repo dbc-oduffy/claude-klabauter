@@ -464,6 +464,9 @@ class TestNoSubprocessSpawnedByRevParse(unittest.TestCase):
         # Resolves `git -C <its own bin dir>`, never the process cwd --
         # same class-C shape, different neighbourhood.
         "check-bin-sh-polyglot.py",
+        # Same class-C shape: `git rev-parse --show-toplevel` run with
+        # `cwd=<its own bin dir>`, never the process cwd.
+        "check-decision-citations.py",
         # Class-C per the class-B re-verification: `git -C <plugin_root>`
         # (script location / COORDINATOR_PLUGIN_ROOT), never the process cwd.
         "check-schema-version-bump.py",

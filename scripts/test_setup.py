@@ -1082,34 +1082,29 @@ def test_resolve_python_returns_sys_executable_when_already_311_plus(setup_mod, 
     assert setup_mod.resolve_python() == setup_mod.sys.executable
 
 
-def test_resolve_python_reexecs_when_candidate_found_below_311(setup_mod, monkeypatch):
-    monkeypatch.setattr(setup_mod.sys, "version_info", (3, 9, 0))
-    monkeypatch.setattr(setup_mod, "_python_version_ok", lambda candidate: candidate == "python3")
+def test_resolve_python_fails_fast_below_311_naming_interpreter(setup_mod, monkeypatch, capsys):
+    monkeypatch.setattr(setup_mod.sys, "version_info", (3, 9, 6))
+    monkeypatch.setattr(setup_mod.sys, "executable", "/usr/bin/python3")
 
-    calls = {}
+    def no_exec(*a, **k):  # a re-exec fallback must not exist
+        raise AssertionError("must not re-exec into another interpreter")
 
-    def fake_execvp(file, args):
-        calls["file"] = file
-        calls["args"] = args
-        raise _StopExecvp()
-
-    class _StopExecvp(Exception):
-        pass
-
-    monkeypatch.setattr(setup_mod.os, "execvp", fake_execvp)
-    with pytest.raises(_StopExecvp):
-        setup_mod.resolve_python()
-    assert calls["file"] == "python3"
-    assert calls["args"][0] == "python3"
-    assert calls["args"][1] == str(_SETUP_PY_PATH)
-
-
-def test_resolve_python_exits_1_when_no_candidate_found(setup_mod, monkeypatch):
-    monkeypatch.setattr(setup_mod.sys, "version_info", (3, 9, 0))
-    monkeypatch.setattr(setup_mod, "_python_version_ok", lambda candidate: False)
+    monkeypatch.setattr(setup_mod.os, "execvp", no_exec)
     with pytest.raises(SystemExit) as exc_info:
         setup_mod.resolve_python()
     assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "/usr/bin/python3" in err and "3.9.6" in err and "3.11" in err
+    assert "Nothing was written" in err
+
+
+def test_entry_guard_precedes_coordinator_core_imports_and_any_write():
+    """Module-level guard runs before the first `coordinator_core` import, and the
+    guard function is the single version check (resolve_python delegates to it)."""
+    src = _SETUP_PY_PATH.read_text(encoding="utf-8")
+    guard_call = src.index("\n_require_python_311()")
+    assert guard_call < src.index("from coordinator_core.")
+    assert src.count("def _require_python_311") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1588,6 +1583,75 @@ def test_check_coordinator_claude_dep_exits_hard_on_publish_mirror(setup_mod, mo
     with pytest.raises(SystemExit) as exc_info:
         setup_mod.check_coordinator_claude_dep(tmp_path / "repo", args)
     assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
+
+
+def _publisher_box(setup_mod, monkeypatch, tmp_path, registry):
+    """Sibling default `<X>/coordinator-claude` is a registered mirror; `registry`
+    is the fake flat registry served to `registry_get`."""
+    x = tmp_path / "X"
+    repo = x / "claude-klabauter"
+    mirror = x / "coordinator-claude"
+    repo.mkdir(parents=True, exist_ok=True)
+    mirror.mkdir(exist_ok=True)
+    _add_source_evidence(mirror)
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
+        lambda target_root, env=None: str(Path(target_root).resolve()) == str(mirror.resolve()),
+    )
+    monkeypatch.setattr("coordinator_core.machine_resolver.registry_get", lambda key: registry.get(key))
+    for name in ("_coordinator_root_from_content_root_pointer", "_coordinator_root_from_registry",
+                 "_coordinator_root_from_settings_home"):
+        monkeypatch.setattr(setup_mod, name, lambda: None)
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    return repo, mirror
+
+
+def test_sibling_mirror_resolves_content_source_from_registry(setup_mod, monkeypatch, tmp_path, capsys):
+    source = tmp_path / "src" / "coordinator-claude"
+    source.mkdir(parents=True)
+    _add_source_evidence(source)
+    repo, mirror = _publisher_box(
+        setup_mod, monkeypatch, tmp_path,
+        {"plugin.mirrors.coordinator-claude.source_path": str(source)},
+    )
+    root, res = setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())
+    assert root == source and root != mirror
+    assert res.rung is setup_mod.CoordSourceRung.REGISTRY_CONTENT_SOURCE
+    assert res.is_publish_mirror_rejected is False
+    setup_mod.check_coordinator_claude_dep(repo, setup_mod.Args())  # no SystemExit(90)
+    assert "PASS [hard] coordinator-claude" in capsys.readouterr().out
+
+
+def test_content_root_key_wins_over_source_path_and_mirror_is_never_chosen(setup_mod, monkeypatch, tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        _add_source_evidence(d)
+    repo, mirror = _publisher_box(
+        setup_mod, monkeypatch, tmp_path,
+        {"engine.working_repos.content_root": str(a),
+         "plugin.mirrors.coordinator-claude.source_path": str(b)},
+    )
+    assert setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())[0] == a
+    # content_root naming the mirror itself is skipped; source_path is used instead
+    repo, mirror = _publisher_box(
+        setup_mod, monkeypatch, tmp_path,
+        {"engine.working_repos.content_root": str(tmp_path / "X" / "coordinator-claude"),
+         "plugin.mirrors.coordinator-claude.source_path": str(b)},
+    )
+    assert setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())[0] == b
+
+
+def test_sibling_mirror_without_registry_source_still_exits_90_naming_the_keys(setup_mod, monkeypatch, tmp_path, capsys):
+    repo, _ = _publisher_box(setup_mod, monkeypatch, tmp_path, {})
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.check_coordinator_claude_dep(repo, setup_mod.Args())
+    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
+    err = capsys.readouterr().err
+    assert "plugin.mirrors.coordinator-claude.source_path" in err
+    assert "engine.working_repos.content_root" in err
+    assert "--skip-dep-check" not in err
 
 
 def test_check_coordinator_claude_dep_rejects_bare_directory_no_evidence(setup_mod, monkeypatch, tmp_path):
@@ -4305,3 +4369,39 @@ def test_launcher_chain_does_not_pass_on_a_rendered_file_alone(
     out = capsys.readouterr().out
     assert "PASS [claude-author-chain] claude-author shim" not in out or "dry-run" in out
     assert "FAIL [claude-author-chain]" in out
+
+
+def _klabauter_setup_run(setup_mod, tmp_path, monkeypatch, capsys, with_claude_klabauter):
+    from coordinator_core.install import _shared
+
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
+    monkeypatch.setattr(setup_mod.subprocess, "run", lambda *a, **k: None)
+    repo_root = tmp_path / "claude-klabauter"
+    repo_root.mkdir()
+    (repo_root / "AGENTS.md").write_text("# claude-klabauter — Agent Entry Point\n")
+    if with_claude_klabauter:
+        mk = tmp_path / "claude-klabauter" / "docs" / "install"
+        mk.mkdir(parents=True)
+        (mk / "agent-install-manifest.json").write_text(
+            json.dumps({"repo_id": setup_mod._CLAUDE_KLABAUTER_MANIFEST_REPO_ID})
+        )
+    setup_mod.register_claude_klabauter_root(repo_root, "test-source", repo_root, _override_args(setup_mod))
+    return capsys.readouterr().out
+
+
+def test_klabauter_install_registers_claude_klabauter_when_sibling_checkout(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    out = _klabauter_setup_run(setup_mod, tmp_path, monkeypatch, capsys, with_claude_klabauter=True)
+    assert "repos.claude_klabauter" in out
+    assert "engine.working_repos.claude_klabauter" not in out
+
+
+def test_klabauter_install_without_claude_klabauter_checkout_skips_claude_klabauter(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    import coordinator_core.engine_root as er
+
+    monkeypatch.setattr(er, "engine_source_root", lambda *a, **k: None)
+    out = _klabauter_setup_run(setup_mod, tmp_path, monkeypatch, capsys, with_claude_klabauter=False)
+    assert "repos.claude_klabauter" not in out

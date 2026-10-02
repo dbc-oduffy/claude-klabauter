@@ -228,6 +228,39 @@ def _exit_flushed(code: int) -> None:
     sys.exit(code)
 
 
+def _require_python_311() -> None:
+    """Refuse to run under an interpreter older than 3.11, before any write.
+
+    One guard, two call sites: module level (ahead of the `coordinator_core`
+    imports, which need 3.11) and `resolve_python`. It fails fast and names the
+    interpreter rather than re-exec'ing into a PATH `python3`: a pre-3.11 host
+    lacks `tomllib`, and a run that limps on writes verdicts and registrations
+    from a blind position (a 3.9 run once wrote `HOOK PLANE: UNARMED` falsely
+    because the registry rungs were unreadable). The operator picks the
+    interpreter; this script does not guess a second one.
+    """
+    if sys.version_info >= (3, 11):
+        return
+    got = f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}"
+    print(
+        f"FAIL [hard] python — Python 3.11+ required; this run is {got} at "
+        f"{sys.executable or '<unknown interpreter>'}. Nothing was written.",
+        file=sys.stderr,
+    )
+    print(
+        "  Remediation: re-run under a Python 3.11+ interpreter, e.g. "
+        "`python3.12 scripts/setup.py` (or the full path to one); install one from "
+        "https://www.python.org/downloads/ if none exists.",
+        file=sys.stderr,
+    )
+    print(
+        "  On Windows: disable App Execution Alias stubs (Settings > Apps > App execution "
+        "aliases) before installing.",
+        file=sys.stderr,
+    )
+    _exit_flushed(1)
+
+
 _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 def _print_child_detail(proc) -> None:
     """Print a failed child's own last line of output, if it left one.
@@ -257,6 +290,7 @@ def _print_child_detail(proc) -> None:
 # before any dependency has been provisioned. The sub-minute probe bounds
 # scattered below stay literals: those are wedged-child guards on our own
 # fast checks, and admitting them here would blur what the family is for.
+_require_python_311()  # before the coordinator_core imports below, which need 3.11
 if str(Path(__file__).resolve().parent.parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from coordinator_core.install.timeouts import (  # noqa: E402
@@ -468,72 +502,10 @@ def _stdin_can_answer() -> bool:
         return False
 
 
-def _python_version_ok(executable: str, timeout: float = 10.0) -> bool:
-    """Behavior-verify (not name-order) that `executable` resolves, runs, and
-    reports Python >= 3.11. Timeout-guarded: on Windows a `python3` name is
-    frequently a non-executable shim (Git-Bash wrapper, App-execution-alias
-    stub) that neither honors the shebang nor exits cleanly — a bare
-    subprocess call would hang rather than fail, stalling the whole installer
-    (observed on a real install 2026-07-14, install-friction F1)."""
-    try:
-        proc = subprocess.run(
-            [executable, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"],
-            timeout=timeout,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **_NO_CONSOLE,
-        )
-        return proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        return False
-
-
 def resolve_python() -> str:
-    """Resolve a working Python 3.11+ interpreter.
-
-    This script is itself Python, so the common case (a healthy interpreter
-    already ran it) needs no probing: `sys.executable` already satisfies the
-    floor once this module's own top-level `from __future__ import` line ran
-    without a SyntaxError, since tomllib (used below) requires 3.11 to import
-    at all. We still behavior-verify explicitly for a clear, actionable
-    error message rather than a bare ImportError traceback, and — for parity
-    with the retired twins — fall back to probing `python3`/`python` on PATH
-    for the rare case this file was invoked via an older interpreter that
-    somehow reached this line (e.g. `python2 scripts/setup.py`, which would
-    already have failed on `from __future__ import annotations` syntax before
-    reaching here on truly ancient interpreters, but not on 3.x < 3.11).
-
-    A found candidate is
-    re-exec'd into via `os.execvp` BEFORE returning, not merely returned by
-    name: the host process is still the original sub-3.11 interpreter at this
-    point, and `derive_deps` below does `import tomllib` (3.11+ stdlib-only)
-    in whichever process actually keeps running — returning the name without
-    re-exec left that import to crash in the still-old host, defeating this
-    function's own "clear error, not a bare traceback" purpose."""
-    if sys.version_info >= (3, 11):
-        return sys.executable
-
-    script_path = Path(__file__).resolve()
-    for candidate in ("python3", "python"):
-        if _python_version_ok(candidate):
-            os.execvp(candidate, [candidate, str(script_path), *sys.argv[1:]])
-            return candidate  # pragma: no cover — os.execvp never returns on success
-
-    print(
-        f"FAIL [hard] python — Python 3.11+ required (got {sys.version.split()[0]}).",
-        file=sys.stderr,
-    )
-    print(
-        "  Remediation: install Python 3.11+ from https://www.python.org/downloads/, "
-        "then re-run: python3 scripts/setup.py",
-        file=sys.stderr,
-    )
-    print(
-        "  On Windows: disable App Execution Alias stubs (Settings > Apps > App execution "
-        "aliases) before installing.",
-        file=sys.stderr,
-    )
-    _exit_flushed(1)
+    """The running interpreter, after `_require_python_311` has refused <3.11."""
+    _require_python_311()
+    return sys.executable
 
 
 def _git_version_tuple(timeout: float = 10.0) -> tuple[int, ...] | None:
@@ -645,7 +617,7 @@ def deps_importable(interpreter: str, import_names: list[str]) -> bool:
     `timeout=` added to the
     cross-interpreter probe. `interpreter` can be a bare `python3`/`python`
     name resolved via the Finding-1 fallback path (a Windows App-Execution-
-    Alias stub / non-executable shim), the same category `_python_version_ok`
+    Alias stub / non-executable shim), the same category as a shim that fails a version probe
     was given `timeout=10.0` to survive after a real hang was observed
     (2026-07-14, install-friction F1) — this call site had no timeout and
     could reintroduce that exact hang."""
@@ -2070,6 +2042,41 @@ def _coordinator_root_from_registry() -> "Path | None":
         return None
 
 
+#: Registry keys naming the content SOURCE checkout, tried in order, when the
+#: sibling-dir default turns out to be a registered publish mirror.
+_CONTENT_SOURCE_REGISTRY_KEYS = (
+    "engine.working_repos.content_root",
+    "plugin.mirrors.coordinator-claude.source_path",
+)
+
+
+def _content_source_from_registry() -> "tuple[Path, str] | None":
+    """The content source checkout a publisher box registers, as `(path, key)`.
+
+    Tries `_CONTENT_SOURCE_REGISTRY_KEYS` in order and returns the first value
+    that is set and is NOT itself a registered publish mirror (a mirror is never
+    a content root). None when no key yields one; a registry read failure prints
+    an advisory and reads as None, never aborting the installer."""
+    try:
+        from coordinator_core.machine_resolver import registry_get
+    except ImportError:
+        return None
+    for key in _CONTENT_SOURCE_REGISTRY_KEYS:
+        try:
+            value = registry_get(key)
+        except Exception as exc:  # noqa: BLE001 - best-effort rung
+            print(f"[ADVISORY] registry resolution failed ({exc}); skipping {key}.", file=sys.stderr)
+            continue
+        if not value:
+            continue
+        raw = Path(value)
+        derived = _resolve_plugin_root_for_machine_local(raw) or raw
+        if _is_publish_mirror(derived) or _is_publish_mirror(raw):
+            continue
+        return derived, key
+    return None
+
+
 class CoordSourceRung(Enum):
     """Identity of the rung `_resolve_coordinator_claude_root` resolved a
     candidate from — the undecorated discriminant callers MUST branch on.
@@ -2096,6 +2103,7 @@ class CoordSourceRung(Enum):
     REGISTRY = auto()
     SETTINGS_HOME = auto()
     SIBLING_DIR_DEFAULT = auto()
+    REGISTRY_CONTENT_SOURCE = auto()
 
 
 @dataclass(frozen=True)
@@ -2209,6 +2217,15 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
                 is_unresolved = True
                 display = f"{display} [UNRESOLVED -- PATH DOES NOT EXIST]"
     is_publish_mirror_rejected = _is_publish_mirror(candidate)
+    if is_publish_mirror_rejected and rung is CoordSourceRung.SIBLING_DIR_DEFAULT:
+        # A publisher box: the sibling default IS the mirror. The registry names
+        # the real source checkout; never settle on the mirror itself.
+        source = _content_source_from_registry()
+        if source is not None:
+            candidate, key = source
+            rung, display = CoordSourceRung.REGISTRY_CONTENT_SOURCE, f"{key} registry key"
+            is_publish_mirror_rejected = False
+            is_unresolved = False
     if is_publish_mirror_rejected:
         display = f"{display} [PUBLISH MIRROR -- REJECTED]"
     return candidate, CoordSourceResolution(
@@ -2392,12 +2409,13 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  A publish mirror is a generated downstream copy — the hard-dep gate must walk", file=sys.stderr)
         print("  the real coordinator-claude SOURCE checkout, never a mirror.", file=sys.stderr)
         print(file=sys.stderr)
-        print("  Point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at the actual working checkout", file=sys.stderr)
+        print("  Remedy: register the source checkout in the machine-local registry --", file=sys.stderr)
+        print("    engine.working_repos.content_root (checked first), or", file=sys.stderr)
+        print("    plugin.mirrors.coordinator-claude.source_path (the mirror entry's source checkout).", file=sys.stderr)
+        print("  Or point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at the actual working checkout", file=sys.stderr)
         print("  (an OSS source clone not registered under publish.mirrors.*.path, or a DoE-style", file=sys.stderr)
         print("  dev clone with the coordinator/ dev-clone markers -- see _looks_like_coordinator_claude_source).", file=sys.stderr)
         print(file=sys.stderr)
-        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
-        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
         print(file=sys.stderr)
         # Item 11 (2026-09-01 dogfood ledger): under `> log 2>&1` this
         # stderr block did not appear at all, only truncated stdout — the
@@ -2544,6 +2562,28 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
         candidate_path = Path(candidate)
         if candidate_path.is_dir() and (candidate_path / "coordinator_core").is_dir():
             return str(candidate_path)
+    return None
+
+
+def _discover_claude_klabauter_checkout(repo_root: Path) -> str | None:
+    """Find a real claude-klabauter checkout beside a klabauter install, or
+    None. Candidates (first verified hit wins): the conventional sibling
+    `../claude-klabauter`, then `engine_source_root()`. Each must pass
+    `resolve_repo_identity == IDENTITY_AUTHORING` -- never a guess, and a
+    klabauter mirror never qualifies."""
+    candidates = [str(repo_root.parent / "claude-klabauter")]
+    try:
+        from coordinator_core.engine_root import engine_source_root
+
+        candidates.append(engine_source_root())
+    except Exception:
+        pass
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_dir() and resolve_repo_identity(path) == IDENTITY_AUTHORING:
+            return str(path)
     return None
 
 
@@ -2780,6 +2820,13 @@ def register_claude_klabauter_root(
             "engine.target": channel,
             "repos.claude_klabauter": str(claude_klabauter_root_resolved),
         }
+        # A makers' box that installs from the klabauter clone still has a
+        # real claude-klabauter checkout; register THAT path (never the klabauter
+        # clone's) so repos.claude_klabauter is not left to a hand-set.
+        # Absent a verified checkout nothing is written (pure consumer).
+        claude_klabauter_checkout = _discover_claude_klabauter_checkout(repo_root)
+        if claude_klabauter_checkout:
+            key_values["repos.claude_klabauter"] = claude_klabauter_checkout
 
         def _klabauter_identity_advisory() -> None:
             actual_branch = _git_current_branch(claude_klabauter_root_resolved)
