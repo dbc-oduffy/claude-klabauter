@@ -872,3 +872,20 @@ def test_md_inline_code_span_still_fires() -> None:
     text = "see `/Users/realperson/X/claude-klabauter` for the shape\n"
     hits = detect_in_text(text, filename="doc.md")
     assert any(f.rule == "posix-home" for f in hits)
+
+
+def test_terminal_plan_is_a_historical_record() -> None:
+    body = "the repo lives at /Users/realperson/X/claude-klabauter\n"
+    for status in ("implemented", "closed_partial", "abandoned", "superseded"):
+        text = f"---\nstatus: {status}\n---\n{body}"
+        assert not detect_in_text(text, filename="docs/plans/2026-01-01-x.md")
+
+
+def test_live_plan_stays_gated() -> None:
+    text = "---\nstatus: executing\n---\nthe repo lives at /Users/realperson/X/claude-klabauter\n"
+    assert any(f.rule == "posix-home" for f in detect_in_text(text, filename="docs/plans/2026-01-01-x.md"))
+
+
+def test_terminal_status_outside_plans_stays_gated() -> None:
+    text = "---\nstatus: implemented\n---\nthe repo lives at /Users/realperson/X/claude-klabauter\n"
+    assert any(f.rule == "posix-home" for f in detect_in_text(text, filename="docs/research/x.md"))

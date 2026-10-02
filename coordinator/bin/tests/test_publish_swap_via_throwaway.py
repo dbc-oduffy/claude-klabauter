@@ -175,6 +175,35 @@ def test_commit_throwaway_and_merge_into_dest_commits_exactly_the_delta(tmp_path
     assert (dest / ".git").is_dir()
 
 
+def test_commit_throwaway_reaps_tracked_egg_info(tmp_path):
+    """Install output an old round committed is removed by the next round's
+    commit, and a non-install-output top-level dir is left alone."""
+    dest = tmp_path / "dest-repo"
+    _init_git_repo(dest)
+    (dest / "x.egg-info").mkdir()
+    (dest / "x.egg-info" / "PKG-INFO").write_text("Name: x\n", encoding="utf-8")
+    (dest / "docs").mkdir()
+    (dest / "docs" / "keep.md").write_text("keep\n", encoding="utf-8")
+    (dest / "a.txt").write_text("before\n", encoding="utf-8")
+    _git(dest, "add", ".")
+    _git(dest, "commit", "-m", "chore: seed dest")
+    throwaway = tmp_path / "throwaway"
+    _git(tmp_path, "clone", "--local", "--no-checkout", str(dest), str(throwaway))
+    _git(throwaway, "checkout", "-q", "HEAD")
+    (throwaway / "a.txt").write_text("after\n", encoding="utf-8")
+
+    present, deleted = publish._throwaway_delta_paths(throwaway)
+    publish._commit_throwaway_and_merge_into_dest(
+        dest, throwaway, present_paths=present, deleted_paths=deleted,
+        succeeded_row_names=["row-a"], round_pinned_shas={},
+    )
+
+    assert "x.egg-info/PKG-INFO" not in _git(dest, "ls-files").stdout
+    assert not (dest / "x.egg-info").exists()
+    assert (dest / "docs" / "keep.md").exists()
+    assert _git(dest, "status", "--porcelain").stdout == ""
+
+
 def test_swap_all_rows_into_dest_commits_the_shared_root_once(tmp_path):
     """`_swap_all_rows_into_dest` orchestrates the whole thing per repo
     root, keyed by `staged_by_repo_root`/`throwaway_by_repo_root` — this

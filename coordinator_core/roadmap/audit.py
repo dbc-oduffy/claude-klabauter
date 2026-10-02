@@ -15,8 +15,9 @@ Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md §
 
 Audit 1 — stub-coverage: count of MERGE+KEEP verdicts in reconciliation.md must
   equal count of stubs on disk (live + archived) with this roadmap_id.
-Audit 2 — at most one ``ready_to_fire`` stub per (roadmap_id, sprint, wave) —
-  wave is sprint-LOCAL, so the uniqueness key is (sprint, wave), not wave alone.
+Audit 2 — ``ready_to_fire`` stubs sharing a (roadmap_id, sprint, wave) slot run in
+  parallel, so none may be ``blocked_by`` another in the same slot. Wave is
+  sprint-LOCAL, so the slot key is (sprint, wave), not wave alone.
 Audit 3 — every stub with ``gate_dependency`` starting ``"PM "`` must have a
   matching ``stub_id`` row in pm-gates.md.
 Audit 4 — every ``pending`` row in pm-gates.md must be referenced by at least
@@ -181,7 +182,9 @@ from coordinator_core.ops.dispatch_emit.spine_read import read_spine as read_tas
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.roadmap.plan_gate import (
     PlanIndex,
+    _as_list,
     _best_plan,
+    _sizing_key,
     build_plan_index,
     link_plans,
 )
@@ -990,35 +993,43 @@ def _audit1_stub_coverage(
 
 
 def _audit2_ready_to_fire_uniqueness(r: _Reporter, run_id: str, data_root: Path) -> None:
+    """Ready stubs sharing a (sprint, wave) slot run in parallel, so none of
+    them may depend on another: a `blocked_by` edge between two ready stubs in
+    one slot fails. Several independent ready stubs per slot are the point of
+    a dependency-tier wave."""
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id} AND deployment_state=ready_to_fire"
     results = query_records("handoff", data_root, where=where)
     if not results:
         return
 
-    slots: List[str] = []
+    slot_of: Dict[str, str] = {}
+    deps_of: Dict[str, List[str]] = {}
     for rec in results:
         fm = rec["frontmatter"]
+        stub_id = str(fm.get("stub_id") or "")
         sprint = fm.get("sprint")
         wave = fm.get("wave")
         s = "NO_SPRINT" if sprint is None else str(sprint)
         w = "NO_WAVE" if wave is None else str(wave)
-        slots.append(f"s{s}:w{w}")
+        slot_of[stub_id] = f"s{s}:w{w}"
+        raw = fm.get("blocked_by")
+        deps_of[stub_id] = [str(b) for b in raw] if isinstance(raw, list) else ([str(raw)] if raw else [])
 
-    seen: Dict[str, int] = {}
-    for s in slots:
-        seen[s] = seen.get(s, 0) + 1
-    dupes = sorted(k for k, c in seen.items() if c > 1)
-
-    if dupes:
+    clashes = sorted(
+        f"{a} blocked_by {b} in {slot_of[a]}"
+        for a, deps in deps_of.items()
+        for b in deps
+        if b in slot_of and slot_of[b] == slot_of[a]
+    )
+    if clashes:
         r.fail(
-            f"Multiple ready_to_fire stubs in the same (roadmap_id, sprint, wave): "
-            f"slots [{chr(10).join(dupes)}]. At most one ready_to_fire per (sprint, "
-            f"wave) allowed."
+            "Ready_to_fire stubs in one (sprint, wave) slot depend on each other, "
+            f"so the slot cannot run in parallel: [{'; '.join(clashes)}]."
         )
     else:
         r.passed(
-            f"ready_to_fire uniqueness: {len(results)} ready stubs across distinct "
-            f"(sprint, wave) slots."
+            f"ready_to_fire slots: {len(results)} ready stubs, none depending on a "
+            "same-slot sibling."
         )
 
 
@@ -1438,6 +1449,12 @@ def derive_write_set(run_id: str, data_root: Path, worktree_root: Path) -> Dict[
     live_records = query_records("handoff", data_root, where=where)
     arch_records = query_records("handoff-archived", data_root, where=where)
     all_records = [*live_records, *arch_records]
+    # Same rule as `plan_gate`: a sizing object several batons cite links none of them.
+    _sizing_cited_by: Dict[str, int] = {}
+    for rec in all_records:
+        for key in {_sizing_key(v) for v in _as_list(rec.get("frontmatter", {}).get("sizing_object"))}:
+            _sizing_cited_by[key] = _sizing_cited_by.get(key, 0) + 1
+    plans.shared_sizing = {k for k, n in _sizing_cited_by.items() if n > 1}
 
     baton_stub_ids: Set[str] = set()
     resolved_plan_paths: Set[str] = set()

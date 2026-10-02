@@ -315,6 +315,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/hook_dispositions.py': ('git-internal', 'hook backup and in-place hook rewrite under <git-common-dir>/hooks: _write_backup, _replace_file'),
     'coordinator_core/hooks/postuse_subagent_compaction_warning.py': ('outside-repo', 'per-agent band marker under settings_home()/state/compaction-warned, outside every repo'),
     'coordinator_core/ops/discover_working_repos.py': ('outside-repo', 'tmp-then-replace of <home>/.claude/working-repos.yaml: write_working_repos_yaml'),
+    'coordinator_core/ops/dispatch_emit/reverify_delivery.py': ('claims-explicitly', 'exclusive-create delivery-verdict record declared through declare_write: record_delivery_verdict; emit_reverify writes only the operator-named --out script'),
     'coordinator_core/ops/dispatch_emit/ask_stage.py': ('ignored-target', 'spine, briefs, commit-request marker and manifest under the run dir (state/scratch/warp/..., gitignored scratch/): _write'),
     'coordinator_core/ops/review_mint/supersede.py': ('claims-explicitly', 'exclusive-create superseding record under state/superseding-reviews/, declared through declare_write: record_superseding_review'),
     'coordinator_core/percolate/_entrypoint_depth_probe/sitecustomize.py': ('outside-repo', 'per-pid depth record in the env-named dir the percolate gate makes with tempfile.TemporaryDirectory'),

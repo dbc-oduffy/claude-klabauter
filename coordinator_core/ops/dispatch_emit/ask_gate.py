@@ -22,8 +22,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
+    ARM_ROADMAP,
     SizingFireRefused,
     collect_fire_refusals,
+    effective_route,
     load_sizing,
     resolve_arm,
 )
@@ -58,8 +60,8 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
 
-    route = sizing.get("route")
-    if route in sa._ROOM_ENTRY:
+    route = effective_route(sizing)
+    if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         return _halt(
             HALT_ROOM,
             f"route {route!r} is room-owned: {sa._ROOM_ENTRY[route]}",
@@ -91,7 +93,7 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
         return _halt(HALT_REFUSAL, "; ".join(refusals))
 
     if arm != ARM_M_PLUS:
-        return GateVerdict(arm=arm, halt=None)
+        return GateVerdict(arm=arm, halt=None)  # roadmap mints no baton: roadmap-blitz stubs are the batons
 
     doc_new = _load_doc_new()
     try:

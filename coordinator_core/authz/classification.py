@@ -4589,6 +4589,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # wave, never writing).
     "roadmap.blitz_land": OpClass.MUTATING,
 
+    # roadmap.blitz_stage — MUTATING: ops/roadmap_blitz_stage.py scaffolds
+    # roadmap-baton stubs under state/handoffs/ and freezes a gate report under
+    # state/plan-blitz/. It commits nothing.
+    "roadmap.blitz_stage": OpClass.MUTATING,
+
     # memo.check_deliveries — COMPUTE_ONLY: ops/fleet/memo_send.py
     # `_memo_check_deliveries`'s own docstring states plainly "'memo.
     # check_deliveries' COMPUTE_ONLY op handler" and "Reads only: the

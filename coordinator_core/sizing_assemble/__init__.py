@@ -1280,6 +1280,38 @@ def _set_scalar(text: str, key: str, raw: str) -> str:
     return replace_fm_field_raw(text, key, raw)
 
 
+def _scaffold_missing(
+    root: Path,
+    target: Path,
+    decision: dict[str, Any],
+    premise_provenance: Optional[str],
+    premise_evidence: Optional[str],
+) -> None:
+    """Create the sizing-object `--write` points at, via doc-new's own scaffold."""
+    import importlib.util
+
+    intent = (decision.get("intent") or "").strip()
+    if not intent:
+        raise SizingAssembleError(
+            f"sizing-object not found on disk: {target.name}; pass --intent to scaffold it"
+        )
+    doc_new = root / "coordinator" / "bin" / "coordinator-doc-new.py"
+    if not doc_new.is_file():
+        doc_new = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-doc-new.py"
+    spec = importlib.util.spec_from_file_location("coordinator_doc_new_for_sizing_write", doc_new)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    recorded = premise_provenance not in (None, "unrecorded")
+    text = mod._scaffold_sizing(
+        title=intent,
+        premise=premise_provenance if recorded else None,
+        premise_evidence=premise_evidence if recorded else None,
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "x", encoding="utf-8") as fh:
+        fh.write(text)
+
+
 def write_back(
     root: Path,
     sizing: str,
@@ -1325,7 +1357,7 @@ def write_back(
     if target is None:
         raise SizingAssembleError(f"{sizing!r} escapes state/sizings/")
     if not target.is_file():
-        raise SizingAssembleError(f"sizing-object not found on disk: {sizing}")
+        _scaffold_missing(root, target, decision, premise_provenance, premise_evidence)
     record_premise = premise_provenance not in (None, "unrecorded")
     if record_premise and not (premise_evidence or "").strip():
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")

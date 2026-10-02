@@ -1119,6 +1119,22 @@ _EVIDENCE_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "state/review-findings/",
     "state/subagent-share/",
     ".coordinator-local/subagent-share/",
+    # Run records and correspondence the engine or a session writes as a
+    # transcript of what happened -- stand-down and blitz/mise run state,
+    # sent and received memos, outbox lessons, audits --
+    # plus the archive and the `tasks/` scratch tree. They quote the paths a
+    # run touched; rewriting them would falsify the record. Authored surfaces
+    # (docs/, wiki, code, live handoffs and plans) stay scanned.
+    "archive/",
+    "tasks/",
+    "state/stand-downs/",
+    "state/plan-blitz/",
+    "state/mise-inventory/",
+    "state/memo-outbox/",
+    ".coordinator-local/memo-outbox/",
+    "state/cross-repo/",
+    "state/lessons-outbox/",
+    "state/audits/",
 )
 
 # A THIRD, narrower evidence-artifact class: byte-exact serialization/
@@ -1184,6 +1200,21 @@ def _is_evidence_artifact(filename: str) -> bool:
     return False
 
 
+#: A plan in one of these statuses is a historical record: its paths describe
+#: the tree it ran against, and rewriting them would falsify it. Live plans
+#: (draft through executing) stay gated.
+_TERMINAL_PLAN_STATUSES = frozenset({"implemented", "closed_partial", "abandoned", "superseded"})
+_FRONTMATTER_STATUS = re.compile(r"^status:\s*['\"]?([A-Za-z_-]+)", re.MULTILINE)
+
+
+def _is_terminal_plan(text: str, filename: str) -> bool:
+    if not (filename.startswith("docs/plans/") and filename.endswith(".md") and text.startswith("---")):
+        return False
+    end = text.find("\n---", 3)
+    match = _FRONTMATTER_STATUS.search(text, 0, end if end != -1 else 0)
+    return bool(match) and match.group(1) in _TERMINAL_PLAN_STATUSES
+
+
 def detect_in_text(text: str, filename: str = "") -> List[Finding]:
     """Pure, filesystem-free -- returns every `Finding` in `text`.
 
@@ -1212,7 +1243,7 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
     exemptions" section. An empty `filename` matches neither extension, so
     this is likewise a no-op without one.
     """
-    if _is_evidence_artifact(filename):
+    if _is_evidence_artifact(filename) or _is_terminal_plan(text, filename):
         return []
 
     findings: List[Finding] = []
@@ -1476,7 +1507,9 @@ def scan_repo(root: Path) -> List[Finding]:
             text = full.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if not _maybe_relevant(text):
+        # A NUL marks a binary blob (images, archives); bytes that happen to
+        # decode as a path are not a citation.
+        if "\0" in text or not _maybe_relevant(text):
             continue
         findings.extend(detect_in_text(text, rel))
     return findings

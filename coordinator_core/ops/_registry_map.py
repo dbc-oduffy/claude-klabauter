@@ -208,6 +208,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
+    "roadmap.blitz_stage":                    "coordinator_core.ops.roadmap_blitz_stage",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
     # of plan.stamp_prepped; the DoE-side runnable half is
     # coordinator/bin/mise-prep-gate.py and the two must agree.

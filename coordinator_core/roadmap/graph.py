@@ -68,16 +68,9 @@ def topo_number(
     ``wave=depth+1`` -- see § wave assignment below and the module docstring's
     Negative-spec for why.
 
-    Wave assignment: single-sprint (sprint=1 for every node). Wave is NOT the
-    raw longest-path depth bucket -- same-depth siblings are spread across
-    distinct, sequential waves (sorted by (depth, tie_break), reusing the same
-    ``cmp`` comparator used to order ``order``) rather than collapsed into one
-    shared wave. Depth strictly increases along every blocked_by edge by
-    construction, so this spreading preserves strict (sprint, wave) monotonicity
-    along every edge while also giving every node a unique wave -- the flat
-    depth+1 assignment gave every same-depth sibling an IDENTICAL wave, which
-    collides with ``coordinator_core.roadmap.audit``'s Audit 2 (at most one
-    ready_to_fire stub per (sprint, wave)).
+    Wave assignment: single-sprint (sprint=1 for every node). Wave is the dependency tier,
+    ``depth + 1``: stubs with no edge between them share a wave, and a dependent lands
+    strictly later than every blocker, so a wave is a parallel set.
 
     Tie-breaking within a ready-set (same Kahn's layer): the optional ``tie_break``
     comparator is applied; default is stable original nodes-array index order.
@@ -154,16 +147,9 @@ def topo_number(
     for i, label in enumerate(order):
         number[label] = i + 1
 
-    def wave_cmp(a: str, b: str) -> int:
-        da, db = depth.get(a, 0), depth.get(b, 0)
-        if da != db:
-            return da - db
-        return cmp(a, b)
-
-    wave_order = sorted(nodes, key=cmp_to_key(wave_cmp))
-    sprint_wave: Dict[str, Dict[str, int]] = {}
-    for i, label in enumerate(wave_order):
-        sprint_wave[label] = {"sprint": 1, "wave": i + 1}
+    sprint_wave: Dict[str, Dict[str, int]] = {
+        label: {"sprint": 1, "wave": depth.get(label, 0) + 1} for label in nodes
+    }
 
     return {"order": order, "number": number, "sprintWave": sprint_wave}
 

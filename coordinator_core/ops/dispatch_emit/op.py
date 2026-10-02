@@ -1210,7 +1210,7 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
-    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_M_PLUS, SizingFireRefused, load_sizing
+    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_M_PLUS, ARM_ROADMAP, SizingFireRefused, load_sizing
     from coordinator_core.warm.caller_context import resolve_caller_context
 
     outside = paths_outside_repo_root(writes, root)
@@ -1229,16 +1229,17 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
             line += f" — run: {halt['touchpoint']}"
         raise SizingFireRefused([line])
     out: dict = {"writes": writes, "batons": [], "uncommitted": []}
-    if verdict.arm == ARM_M_PLUS:
+    if verdict.arm in (ARM_M_PLUS, ARM_ROADMAP):
         plugin_root = resolve_caller_context().plugin_root
         out["plan_blitz_args"] = plan_blitz_args.resolve(
             plugin_root=Path(plugin_root) if plugin_root else None,
             engine_root=Path(__file__).resolve().parents[3],
             sizing_abs=(Path(root) / sizing_rel).as_posix(),
         )
-        baton_path = verdict.baton["path"]
-        out["batons"] = [baton_path]
-        out["uncommitted"] = [] if had_baton else [baton_path, sizing_rel]
+        if verdict.baton:
+            baton_path = verdict.baton["path"]
+            out["batons"] = [baton_path]
+            out["uncommitted"] = [] if had_baton else [baton_path, sizing_rel]
     return out
 
 

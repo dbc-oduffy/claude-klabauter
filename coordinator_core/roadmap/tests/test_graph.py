@@ -44,17 +44,12 @@ def test_topo_number_respects_dependency_order_every_edge():
 
     assert result["order"] == ["B", "A", "C", "D"]
     assert result["number"] == {"B": 1, "A": 2, "C": 3, "D": 4}
-    # sprintWave: this port DELIBERATELY diverges from the oracle here (see
-    # topo_number's docstring + graph.py's module Negative-spec) — the oracle's
-    # flat wave=depth+1 would give A and C (same depth) the identical wave 2,
-    # which fails audit.py's Audit 2 uniqueness gate. Same-depth siblings are
-    # spread across distinct waves instead, tie-broken by the same `cmp` used
-    # to order `order` (here: default nodes-array index, A before C).
+    # sprintWave is the dependency tier: A and C (same depth) share wave 2.
     assert result["sprintWave"] == {
         "B": {"sprint": 1, "wave": 1},
         "A": {"sprint": 1, "wave": 2},
-        "C": {"sprint": 1, "wave": 3},
-        "D": {"sprint": 1, "wave": 4},
+        "C": {"sprint": 1, "wave": 2},
+        "D": {"sprint": 1, "wave": 3},
     }
 
 
@@ -123,20 +118,13 @@ def test_wave_depth_increases_along_dependency_chain():
     assert result["sprintWave"]["C"]["wave"] == 3
 
 
-def test_same_depth_siblings_get_distinct_waves_no_audit2_collision():
-    nodes = ["A", "B", "C", "D"]
-    edges = [
-        {"from": "A", "to": "B"},
-        {"from": "C", "to": "B"},
-        {"from": "D", "to": "A"},
-        {"from": "D", "to": "C"},
-    ]
-    result = topo_number(nodes, edges)
-    waves = [result["sprintWave"][label]["wave"] for label in nodes]
-    assert len(waves) == len(set(waves)), (
-        f"Audit-2-forbidden wave collision among nodes with no direct blocked_by "
-        f"edge between them: {result['sprintWave']}"
-    )
+def test_edge_free_stubs_share_a_wave_and_a_dependent_is_later():
+    nodes = ["A", "B", "C"]
+    result = topo_number(nodes, [{"from": "C", "to": "A"}])
+    waves = {n: result["sprintWave"][n]["wave"] for n in nodes}
+    assert waves["A"] == waves["B"] == 1
+    assert waves["C"] == 2
+    assert len({result["number"][n] for n in nodes}) == 3
 
 
 def test_wave_monotone_non_decreasing_with_depth_audit5():
@@ -154,8 +142,7 @@ def test_wave_monotone_non_decreasing_with_depth_audit5():
         dep, dpnd = edge["to"], edge["from"]
         assert depth_by_label[dpnd] >= depth_by_label[dep]
         assert result["sprintWave"][dpnd]["wave"] > result["sprintWave"][dep]["wave"]
-    waves = [result["sprintWave"][label]["wave"] for label in nodes]
-    assert len(waves) == len(set(waves))
+    assert result["sprintWave"]["A"]["wave"] == result["sprintWave"]["C"]["wave"] == result["sprintWave"]["E"]["wave"]
 
 
 def test_same_slot_dependency_is_a_slot_violation():

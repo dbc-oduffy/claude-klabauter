@@ -14,8 +14,10 @@ import yaml
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session import record_homes
 
-ARM_XS, ARM_S, ARM_M_PLUS = "xs", "s", "m_plus"
-ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan"}
+ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
+ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
+_PM_DECISION = "pm-decision"
+_ROADMAP_EXIT = "roadmap"
 XS_PHASES = ("execute", "review", "terminal-commit")
 
 _TSHIRT_ARM = {
@@ -59,8 +61,23 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     return doc
 
 
+def effective_route(sizing: Mapping) -> object:
+    """`route`, except a `pm-decision` whose recorded `xl_exit` resolves it: the plan-resolving
+    exit (plan_gate's constant) to `plan`, `roadmap` to `roadmap`. An unresolved one stays."""
+    route = sizing.get("route")
+    if route != _PM_DECISION:
+        return route
+    from coordinator_core.roadmap.plan_gate import _XL_EXIT_RESOLVING_TO_PLAN
+
+    xl_exit = sizing.get("xl_exit")
+    if xl_exit == _XL_EXIT_RESOLVING_TO_PLAN:
+        return "plan"
+    return _ROADMAP_EXIT if xl_exit == _ROADMAP_EXIT else route
+
+
 def resolve_arm(sizing: Mapping) -> str:
-    """The arm keyed by `estimate.tshirt`; an absent or unknown size is a refusal."""
+    """The arm keyed by `estimate.tshirt`, ARM_ROADMAP for an XL+ roadmap route; an absent or
+    unknown size is a refusal."""
     est = sizing.get("estimate")
     tshirt = est.get("tshirt") if isinstance(est, Mapping) else None
     arm = _TSHIRT_ARM.get(tshirt)
@@ -68,6 +85,8 @@ def resolve_arm(sizing: Mapping) -> str:
         raise SizingFireRefused(
             [f"`estimate.tshirt` is {tshirt!r} — expected one of {sorted(_TSHIRT_ARM)}"]
         )
+    if arm == ARM_M_PLUS and tshirt in ("XL", "XXL") and effective_route(sizing) == _ROADMAP_EXIT:
+        return ARM_ROADMAP
     return arm
 
 
@@ -114,7 +133,7 @@ def collect_fire_refusals(
     if status not in _FIREABLE_STATUS:
         out.append(f"`status` is {status!r}, not one of {list(_FIREABLE_STATUS)}")
     expected = ARM_ROUTE[arm]
-    route = sizing.get("route")
+    route = effective_route(sizing)
     if route != expected:
         out.append(f"`route` is {route!r}, but arm {arm!r} fires only route {expected!r}")
     if arm == ARM_XS and not list(writes):

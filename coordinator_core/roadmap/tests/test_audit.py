@@ -446,14 +446,14 @@ def test_run_audit_ready_to_fire_uniqueness_violation(tmp_path: Path) -> None:
     )
     _write_stub(
         handoffs / f"{run_id}-2.md", run_id, f"{run_id}-2", 1, 1,
-        deployment_state="ready_to_fire",
+        deployment_state="ready_to_fire", blocked_by=[f"{run_id}-1"],
     )
     _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 2)
 
     exit_code, _stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
 
     assert exit_code == 1
-    assert any("Multiple ready_to_fire stubs" in line for line in stderr_lines)
+    assert any("depend on each other" in line for line in stderr_lines)
 
 
 def test_run_audit_pm_gates_cross_reference_missing(tmp_path: Path) -> None:
@@ -561,14 +561,14 @@ def test_run_audit_canonical_kind_ready_to_fire_uniqueness_violation(
     )
     _write_stub(
         handoffs / f"{run_id}-2.md", run_id, f"{run_id}-2", 1, 1,
-        deployment_state="ready_to_fire", kind="roadmap-baton",
+        deployment_state="ready_to_fire", kind="roadmap-baton", blocked_by=[f"{run_id}-1"],
     )
     _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 2)
 
     exit_code, _stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
 
     assert exit_code == 1
-    assert any("Multiple ready_to_fire stubs" in line for line in stderr_lines)
+    assert any("depend on each other" in line for line in stderr_lines)
 
 
 def test_run_audit_dual_spelling_both_legacy_and_canonical_kind_found(
@@ -1084,3 +1084,19 @@ def test_roadmap_declaring_no_covers_keeps_the_legacy_count_bar(tmp_path: Path) 
 
     assert exit_code == 0, stderr_lines
     assert any("Counted, not covered" in ln for ln in stdout_lines)
+
+
+def test_run_audit_independent_ready_stubs_share_a_wave(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-e2e-parallel"
+    handoffs = root / "state" / "handoffs"
+    for n in (1, 2):
+        _write_stub(
+            handoffs / f"{run_id}-{n}.md", run_id, f"{run_id}-{n}", 1, 1,
+            deployment_state="ready_to_fire",
+        )
+    _write_reconciliation(root / "state" / "roadmap" / run_id / "reconciliation.md", 2)
+
+    _exit_code, _stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert not any("depend on each other" in line for line in stderr_lines)

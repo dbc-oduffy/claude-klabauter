@@ -22,6 +22,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
+from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.review_mint.execute_review import (
     _DELIVERY_VERIFIER_AGENT_TYPE,
@@ -202,6 +203,7 @@ def record_delivery_verdict(
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8", newline="\n") as fh:
         fh.write("---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n")
+    declare_write(str(target))
     return rel.as_posix()
 
 

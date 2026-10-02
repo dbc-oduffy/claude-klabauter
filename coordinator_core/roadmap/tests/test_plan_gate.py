@@ -1334,3 +1334,29 @@ def test_deliverable_id_outranks_governing_plan(tmp_path):
 
     assert row["plan"]["path"] == own
     assert row["plan"]["link_basis"] == "deliverable_id"
+
+
+def test_a_sizing_object_shared_by_several_batons_links_none_and_is_named(tmp_path):
+    _plan(tmp_path, "stage-one", "approved", sizing_object="szo-road")
+    for n in ("a-1", "b-2", "c-3"):
+        _baton(tmp_path, n, sizing_object="szo-road")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    for n in ("a-1", "b-2", "c-3"):
+        baton = _by_id(report, n)
+        assert baton["plan"] is None
+        assert baton["needs_plan"] is True
+        assert baton["execution_gate"]["open"] is False or baton["plan"] is None
+    assert [r["sizing_object"] for r in report["shared_sizing_objects"]] == ["szo-road"]
+    assert len(report["shared_sizing_objects"][0]["batons"]) == 3
+
+
+def test_a_unique_sizing_object_still_links_beside_a_shared_one(tmp_path):
+    _plan(tmp_path, "mine", "approved", sizing_object="szo-own")
+    _baton(tmp_path, "own-1", sizing_object="szo-own")
+    _baton(tmp_path, "x-1", sizing_object="szo-road")
+    _baton(tmp_path, "x-2", sizing_object="szo-road")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert _by_id(report, "own-1")["plan"]["link_basis"] == "sizing_object"
+    assert [r["sizing_object"] for r in report["shared_sizing_objects"]] == ["szo-road"]

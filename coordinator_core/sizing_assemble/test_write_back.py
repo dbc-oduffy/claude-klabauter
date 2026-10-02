@@ -134,3 +134,26 @@ def test_schema_invalid_result_leaves_file_untouched(repo: Path) -> None:
     with pytest.raises(sizing_assemble.SizingAssembleError):
         sizing_assemble.write_back(repo, str(path), decision)
     assert path.read_text(encoding="utf-8") == _DRAFT
+
+
+def test_write_on_a_missing_file_scaffolds_then_writes(repo: Path) -> None:
+    target = repo / "state" / "sizings" / "2026-10-02-new.yaml"
+    decision = _decision("S", premise_provenance="read")
+    sizing_assemble.write_back(
+        repo,
+        "state/sizings/2026-10-02-new.yaml",
+        decision,
+        premise_provenance="read",
+        premise_evidence="tests/x.py:3",
+    )
+    doc = _load(target)
+    assert doc["intent"] == "Ship the thing"
+    assert doc["status"] == "sized"
+    assert doc["premise"] == {"provenance": "read", "evidence": "tests/x.py:3"}
+
+
+def test_write_on_a_missing_file_without_intent_still_refuses(repo: Path) -> None:
+    decision = sizing_assemble.route(estimate={"tshirt": "S"})
+    with pytest.raises(sizing_assemble.SizingAssembleError):
+        sizing_assemble.write_back(repo, "state/sizings/nope.yaml", decision)
+    assert not (repo / "state" / "sizings" / "nope.yaml").exists()

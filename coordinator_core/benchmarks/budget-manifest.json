@@ -310,6 +310,17 @@
       },
       "_rationale": "One `git rev-list <shas> --not HEAD` for the whole set of cited shipped_in SHAs (blitz_land.shipped_in_refusals via git/run.py::run_git), batched so the count does not grow with the number of batons; it is what refuses a stamp citing a commit HEAD cannot reach. Counted by coordinator_core/ops/tests/test_roadmap_blitz_land_spawn_count.py with exact equality."
     },
+    "roadmap.blitz_stage": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "commit_stubs_and_report": 0
+      },
+      "_rationale": "Two scoped commits through ceremony.commit_v2's handler, one over the scaffolded stubs and one over the frozen gate report, each with explicit paths. Measured 0 git spawns for the pair (commit_v2 stages in process); git/run.py::run_git is reachable only on its refusal branches. Counted by coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py with exact equality."
+    },
     "dispatch.emit": {
       "target_ms": 300,
       "tolerance": {

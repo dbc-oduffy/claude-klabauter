@@ -49,7 +49,7 @@ def test_an_untitled_sizing_object_is_refused_and_writes_nothing(repo: Path):
     result = _run(repo, "--type", "sizing-object", "--premise", "read", "--premise-evidence", "tests: premise read")
 
     assert result.returncode != 0
-    assert "--title is required" in result.stderr
+    assert "missing required flag(s): --title" in result.stderr
     assert "Nothing was written" in result.stderr
     assert list(repo.rglob("*.yaml")) == []
 

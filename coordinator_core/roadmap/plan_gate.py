@@ -718,6 +718,9 @@ class PlanIndex:
         self.by_plan_id: Dict[str, List[str]] = {}
         self.by_deliverable_id: Dict[str, List[str]] = {}
         self.by_sizing_object: Dict[str, List[str]] = {}
+        # Sizing keys cited by more than one baton; set by `assemble_plan_gate`.
+        # A shared sizing object names the roadmap, not any one baton's plan.
+        self.shared_sizing: Set[str] = set()
 
     def add(self, rel_path: str, fm: Dict[str, Any]) -> None:
         status = str(fm.get("status") or "").strip().lower()
@@ -843,6 +846,8 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
             elif field in ("deliverable_id", "deliverable_ids"):
                 candidates = plans.by_deliverable_id.get(value, [])
             else:
+                if _sizing_key(value) in plans.shared_sizing:
+                    continue
                 candidates = plans.by_sizing_object.get(_sizing_key(value), [])
             for rel in candidates:
                 record = plans.get(rel)
@@ -1741,6 +1746,20 @@ def assemble_plan_gate(
     # rule in `_WITHDRAWALS` below. Left here because every rule reads a record
     # that is already fully annotated, which is what lets them be order-free.
     tracked, index_unreadable = _tracked_paths(worktree_root)
+    _sizing_cited_by: Dict[str, int] = {}
+    for record in records:
+        for key in {_sizing_key(v) for v in record["sizing_objects"]}:
+            _sizing_cited_by[key] = _sizing_cited_by.get(key, 0) + 1
+    plans.shared_sizing = {k for k, n in _sizing_cited_by.items() if n > 1}
+    shared_sizing_rows = [
+        {
+            "sizing_object": k,
+            "batons": sorted(
+                r["path"] for r in records if k in {_sizing_key(v) for v in r["sizing_objects"]}
+            ),
+        }
+        for k in sorted(plans.shared_sizing)
+    ]
     for record in records:
         record["tracked"] = (
             record["path"] in tracked if tracked is not None and record["live"] else None
@@ -2317,6 +2336,7 @@ def assemble_plan_gate(
         "unresolved_blockers": unresolved,
         "unschedulable": unschedulable_rows,
         "shared_wave_slot": shared_wave_slot_rows,
+        "shared_sizing_objects": shared_sizing_rows,
         "untracked": untracked_rows,
         "index_unreadable": index_unreadable,
         "resurrected": resurrected_rows,

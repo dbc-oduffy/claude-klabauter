@@ -26,6 +26,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
+    ARM_ROADMAP,
     ARM_S,
     ARM_XS,
     SizingFireRefused,
@@ -198,6 +199,7 @@ def compose_ask_script(
     script_path: Optional[str] = None,
     plan_blitz_args: Optional[dict] = None,
     writes: Sequence[str] = (),
+    roadmap_blitz_text: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -220,7 +222,7 @@ def compose_ask_script(
     known_arm = _known_arm(repo_root, sizing_rel)
     blitz_fn: str = ""
     blitz_phases: list[str] = []
-    if known_arm in (None, ARM_M_PLUS):
+    if known_arm in (None, ARM_M_PLUS, ARM_ROADMAP):
         if wrap_stage is None:
             from coordinator_core.ops.dispatch_emit import ask_plan_blitz
 
@@ -228,6 +230,20 @@ def compose_ask_script(
         blitz_fn, blitz_phases = wrap_stage(plan_blitz_text if plan_blitz_text is not None else _read_plan_blitz())
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
+
+    if known_arm == ARM_ROADMAP:
+        from coordinator_core.ops.dispatch_emit.ask_roadmap import compose_roadmap_script
+
+        return compose_roadmap_script(
+            repo_root=repo_root,
+            sizing_rel=sizing_rel,
+            run_id=run_id,
+            interaction_mode=load_sizing(Path(repo_root), sizing_rel).get("interaction_mode"),
+            roadmap_text=roadmap_blitz_text,
+            plan_blitz_fn=blitz_fn,
+            plan_blitz_phases=blitz_phases,
+            plan_blitz_args=plan_blitz_args,
+        )
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
     manifest_rel = f"{run_dir}/manifest.json"

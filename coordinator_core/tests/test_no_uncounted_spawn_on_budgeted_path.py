@@ -1446,6 +1446,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/roadmap_plan_gate.py",
         ("_handler",),
     ),
+    "roadmap.blitz_stage": (
+        "coordinator_core/ops/roadmap_blitz_stage.py",
+        ("_handler",),
+    ),
     "session.whoami_live": (
         "coordinator_core/ops/session_whoami_live.py",
         ("_session_whoami_live",),
@@ -1796,6 +1800,20 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_a_four_baton_wave_spawns_one_rev_list_in_total` (`assert len(spawns) == "
         "budget`, read from the manifest's roadmap.blitz_land `shipped_in_reachability`); "
         "the attribution is itself asserted on every run.",
+    ),
+    (
+        "roadmap.blitz_stage",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_roadmap_blitz_stage_spawn_count.py",
+        executed="Measured 2026-10-02: reachable through ceremony.commit_v2's handler, which spawned no "
+        "git process for the stub commit plus the gate-report commit under "
+        "`test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns` (`assert "
+        "len(counted) == budget`, read from the manifest's roadmap.blitz_stage override).",
     ),
     (
         "session.reap",
