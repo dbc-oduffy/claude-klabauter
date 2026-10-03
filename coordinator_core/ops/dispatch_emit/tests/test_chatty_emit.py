@@ -50,7 +50,7 @@ def test_chatty_emit_has_valid_roster_overseer_and_distinct_nonces():
     for n in nonces:
         assert script.count(n) >= 1
     for m in roster["members"][1:]:
-        assert f"Nonce: {m['nonce']}" in script
+        assert f"MY-NONCE={m['nonce']}" in script
     assert script.count("register") >= 3
 
 
@@ -71,22 +71,34 @@ def test_briefs_carry_mailbox_rule_and_no_peer_sendmessage_instruction():
     brief = chatty.member_brief("C1", "abc")
     assert "mail/<role>.jsonl" in brief
     assert "state=returned" in brief
-    assert "Never SendMessage a peer" in brief
-    assert "Message the overseer or a peer" not in brief
-    assert "addressable by their roster agent_id" not in brief
-    assert "SendMessage" not in chatty.overseer_prompt(chatty.build_roster("r", ["A"]))
+    roster = chatty.build_roster("r", ["A"])
+    for text in (brief, chatty.overseer_prompt(roster), chatty.survey_prompt("n"),
+                 chatty.summary_prompt("n"), chatty.continuation_brief("A")):
+        assert "SendMessage" not in text
 
 
-def test_wake_stage_only_when_chatty_and_after_rows():
-    assert "chatty-wake" not in _script()
+def test_continuation_stage_after_rows_and_no_sendmessage():
+    assert "chatty-survey" not in _script()
     script = _script(chatty=True)
-    wake = script.index("label: 'chatty-wake'")
+    assert "SendMessage" not in script
     rows = script.index("await Promise.all(Object.values(_rows));")
     prov = script.index("label: 'chatty-overseer'")
-    assert prov < script.index("_rows['C1'] =") < rows < wake
-    assert "const _overseer" not in script and "  await agent('You are the overseer of a chatty run. " in script
-    assert script.count("SendMessage its roster agent_id") == 1
-    assert "`returned`" in script
+    survey = script.index("label: 'chatty-survey'")
+    cont = script.index("_continue['C1'] =")
+    summary = script.index("label: 'chatty-summary'")
+    assert prov < script.index("_rows['C1'] =") < rows < survey < cont < summary
+
+
+def test_continuation_briefs_carry_continued_by_predecessor_and_own_nonce():
+    script = _script(chatty=True)
+    assert script.count("_continue['C") == 3
+    assert "continued_by" in script and "Read its transcript" in script
+    assert "'CHATTY CONTINUATION" in script.replace("\\n", "") or "CHATTY CONTINUATION" in script
+    assert "MY-NONCE=' + _n + '" in script
+    brief = chatty.continuation_brief("C1")
+    assert brief.count("MY-NONCE=" + chatty.NONCE_SLOT) == 1
+    assert "continued_by" in brief and "transcript" in brief
+    assert "first user record" in brief
 
 
 def test_chatty_flag_reaches_the_emitter(monkeypatch, tmp_path):
@@ -98,3 +110,45 @@ def test_chatty_flag_reaches_the_emitter(monkeypatch, tmp_path):
         cli.main(["--plan", "p.md", "--out", str(tmp_path / "o.workflow.mjs"), *extra])
     assert "chatty" not in seen[0]
     assert seen[1]["chatty"] is True
+
+
+def _all_briefs(roster):
+    out = {chatty.OVERSEER_ROLE: chatty.overseer_prompt(roster)}
+    for m in roster["members"]:
+        if m["role"] != chatty.OVERSEER_ROLE:
+            out[m["role"]] = chatty.member_brief(m["role"], m["nonce"])
+    out["survey"] = chatty.survey_prompt("0123456789abcdef")
+    out["summary"] = chatty.summary_prompt("fedcba9876543210")
+    return out
+
+
+def test_each_brief_carries_exactly_its_own_my_nonce():
+    roster = chatty.build_roster("r", ["a", "b"])
+    briefs = _all_briefs(roster)
+    for role, text in briefs.items():
+        if role in ("survey", "summary"):
+            assert len(set(re.findall(r"MY-NONCE=([0-9a-f]{16})", text))) == 1
+            continue
+        own = chatty.member_nonce(roster, role)
+        assert text.count("MY-NONCE=" + own) == 1
+        assert set(re.findall(r"MY-NONCE=([0-9a-f]{16})", text)) == {own}
+    assert len({m["nonce"] for m in roster["members"]}) == 3
+
+
+def test_roster_text_never_contains_my_nonce_form():
+    roster = chatty.build_roster("r", ["a", "b"])
+    text = chatty.overseer_prompt(roster)
+    embedded = text[text.index("ROSTER:"):]
+    assert "MY-NONCE=" not in embedded
+    assert "MY-NONCE=" not in json.dumps(roster)
+    for m in roster["members"]:
+        assert m["nonce"] in embedded
+
+
+def test_self_id_checks_line_2_and_fails_closed():
+    roster = chatty.build_roster("r", ["a"])
+    for text in _all_briefs(roster).values():
+        assert "sed -n" not in text
+        assert '"type\\"==\\"user' in text.replace(" ", "") or "first user record" in text
+        assert "grep -rl" not in text
+        assert "Zero or more than one: stop and report" in text

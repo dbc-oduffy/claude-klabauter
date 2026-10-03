@@ -2,19 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/chatty-roster.schema.json",
   "x-schema-name": "chatty-roster",
-  "x-schema-version": "1.0.0",
-  "x-bump-note": "1.0.0 initial. RE-VENDOR: claude-klabauter must vendor this schema (coordinator_core/frontmatter/schemas/chatty-roster.schema.json) before the roster emitter or the SendMessage guard reads <run-dir>/roster.json.",
+  "x-schema-version": "2.0.0",
+  "x-bump-note": "2.0.0 removes caps and counters (the send hook is advisory-only) and names the overseer as the roster writer. 1.0.0 initial. RE-VENDOR: claude-klabauter must vendor this schema (coordinator_core/frontmatter/schemas/chatty-roster.schema.json) before the roster emitter or the SendMessage guard reads <run-dir>/roster.json.",
   "applies_to": "<run-dir>/roster.json",
-  "description": "Roster of an opt-in chatty workflow run, written to <run-dir>/roster.json. Absence of the file means the run is not chatty and the guard is a no-op. Read-side rule not expressible in JSON Schema: members[].nonce values must be unique within the roster (a reader must reject duplicates). The counters object has exactly one writer, the SendMessage guard; no other agent may write it, since concurrent writers would race the file.",
+  "description": "Roster of an opt-in chatty workflow run, written to <run-dir>/roster.json. Absence of the file means the run is not chatty and the guard is a no-op. Read-side rule not expressible in JSON Schema: members[].nonce values must be unique within the roster (a reader must reject duplicates). There are no caps or counters and no counters writer. The overseer agent writes this file as its first act after nonce self-ID; the emitter cannot, since there is no runId at emit time.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "run_id",
     "overseer_role",
-    "members",
-    "caps",
-    "counters"
+    "members"
   ],
   "properties": {
     "schema_version": {
@@ -30,7 +28,7 @@
     "overseer_role": {
       "type": "string",
       "minLength": 1,
-      "description": "Role of the only member allowed to send to main. Must name a member role (read-side rule)."
+      "description": "Role of the only member briefed to send to main (a convention, not enforced). Must name a member role (read-side rule)."
     },
     "members": {
       "type": "array",
@@ -54,33 +52,6 @@
           "state": {
             "enum": ["registering", "running", "returned", "woken"]
           }
-        }
-      }
-    },
-    "caps": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["run_messages_max", "agent_messages_max"],
-      "properties": {
-        "run_messages_max": { "type": "integer", "minimum": 1 },
-        "agent_messages_max": { "type": "integer", "minimum": 1 }
-      }
-    },
-    "counters": {
-      "type": "object",
-      "description": "Written only by the SendMessage guard.",
-      "additionalProperties": false,
-      "required": ["run_messages", "per_role"],
-      "properties": {
-        "run_messages": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Run-wide total, checked against caps.run_messages_max."
-        },
-        "per_role": {
-          "type": "object",
-          "description": "Per-role sent count, checked against caps.agent_messages_max.",
-          "additionalProperties": { "type": "integer", "minimum": 0 }
         }
       }
     }

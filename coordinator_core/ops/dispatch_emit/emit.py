@@ -2249,6 +2249,7 @@ def _row_agent_call_expr(
     new_module_paths: tuple = (),
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     chatty_brief: Optional[str] = None,
+    chatty_nonce_var: Optional[str] = None,
 ) -> str:
     """Compose one row's ``agent(...)`` call expression -- the per-node body
     of the DAG's own ``_rows[id] = _runRow(...)`` registration (§ Design D4).
@@ -2283,7 +2284,13 @@ def _row_agent_call_expr(
             prompt_literal = (
                 f"{shared.expr(head)} + {_resolve_markers_plus(prompt[len(head):])}"
             )
-    if chatty_brief:
+    if chatty_brief and chatty_nonce_var:
+        pre, post = chatty_brief.split(_chatty.NONCE_SLOT)
+        prompt_literal = (
+            f"{prompt_literal} + {_js_string_literal(pre)} + {chatty_nonce_var} + "
+            f"{_js_string_literal(post)}"
+        )
+    elif chatty_brief:
         prompt_literal = f"{prompt_literal} + {_js_string_literal(chatty_brief)}"
     row_agent_type = _row_agent_type(row)
     return (
@@ -2964,6 +2971,20 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
     )
 
 
+_CHATTY_SURVEY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "continuations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"role": {"type": "string"}, "agent_id": {"type": "string"}},
+                "required": ["role", "agent_id"],
+            },
+        }
+    },
+    "required": ["continuations"],
+}
 _CHECKPOINT_COMMIT_SCHEMA = {
     "type": "object",
     "required": ["outcome"],
@@ -3288,7 +3309,7 @@ def compose_script(
     unchanged) composes a schema-valid roster template (``chatty.build_roster``),
     embeds it in an overseer agent's brief (the overseer writes ``<run-dir>/roster.json``; the emitter writes no file), and
     appends a nonce plus register-on-start mailbox brief to every row's prompt,
-    then runs a wake stage (overseer agent) after the rows return.
+    then, after the rows return, a survey step lists `returned` members with unread mail and the script dispatches a fresh continuation agent per entry, then an overseer summary.
 
     ``preamble`` (optional) is a run-wide posture block forwarded to every
     row's prompt -- EXECUTOR prompts only, never the review/test phases,
@@ -3517,15 +3538,44 @@ def compose_script(
         )
     body_blocks.append("  await Promise.all(Object.values(_rows));")
     if roster is not None:
-        body_blocks.append(
-            "  await agent("
-            f"{_js_string_literal(_chatty.overseer_wake_prompt(roster))}, "
+        overseer_opts = (
             "{ "
-            f"label: {_js_string_literal('chatty-wake')}, "
             f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
             f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
             f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, "
-            f"stallMs: {_EXECUTOR_STALL_MS} "
+            f"stallMs: {_EXECUTOR_STALL_MS}"
+        )
+        body_blocks.append(
+            "  const _survey = await agent("
+            f"{_js_string_literal(_chatty.survey_prompt(_chatty.new_nonce()))}, "
+            f"{overseer_opts}, label: 'chatty-survey', schema: {json.dumps(_CHATTY_SURVEY_SCHEMA)} "
+            "});"
+        )
+        body_blocks.append("  const _continue = {};")
+        for row in flat_rows:
+            cont_call = _row_agent_call_expr(
+                row,
+                plan_path,
+                plan_context,
+                shared,
+                agent_type_host=agent_type_host,
+                preamble=preamble,
+                new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                memo_deliveries=memo_deliveries,
+                chatty_brief=_chatty.continuation_brief(row.id),
+                chatty_nonce_var="_n",
+            ).replace("label: ", "label: 'continue:' + ", 1)
+            body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
+        body_blocks.append(
+            "  await Promise.all(((_survey && _survey.continuations) || [])"
+            ".filter((c) => _continue[c.role])"
+            ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
+            "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
+        )
+        body_blocks.append(
+            "  await agent("
+            f"{_js_string_literal(_chatty.summary_prompt(_chatty.new_nonce()))}, "
+            f"{overseer_opts}, label: 'chatty-summary' "
             "});"
         )
     body_blocks.append("  await Promise.all(_verifications);")
