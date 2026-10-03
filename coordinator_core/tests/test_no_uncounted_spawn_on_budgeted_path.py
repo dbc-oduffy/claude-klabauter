@@ -2117,7 +2117,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     ),
     "deliverable.cascade_terminal": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "distill.apply_disposal": (
         ("coordinator_core/dag.py", "_git_path_ever_tracked", "git", 0),
@@ -2260,7 +2259,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
         "coordinator_core/ops/commit_join_divergence_report.py",
         "_handler",
     ),
-    "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
+    "deliverable.cascade_terminal": ("coordinator_core/ops/cascade_terminal_op.py", "_handler"),
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "engine.drift": ("coordinator_core/ops/engine_drift.py", "_engine_drift"),
     "fleet.archive_completed_handoffs": ("coordinator_core/ops/fleet/archive_terminal_handoffs.py", "_handler"),
@@ -2384,9 +2383,11 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # `tracker.push_suggestion` gained
     # `git/run.py::run_git` via `git_native.commit_authored_new_file` -> `_head_entry_for` ->
     # `git_state.head_blobs` (the ls-tree fallback memo.send's legitimation names): 56 + 1 = 57.
-    assert total_pairs == 57, (
+    # 57 -> 56 (2026-10-03): `deliverable.cascade_terminal` re-registered from
+    # `cascade_terminal_op.py` and no longer reaches `git_native.py::_git._invoke`: -1.
+    assert total_pairs == 56, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "57 measured 2026-10-02 (see the comment above). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "56 measured 2026-10-03 (see the comment above). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -2683,7 +2684,7 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "completion.flip_to_released": ("coordinator_core/ops/completion_ops.py", "_flip_to_released_handler"),
     "crossrepo.closure_status": ("coordinator_core/ops/crossrepo_closure_status.py", "_handler"),
     "cruft_sweep.run": ("coordinator_core/ops/cruft_sweep.py", "_run_handler"),
-    "deliverable.cascade_terminal": ("coordinator_core/ops/deliverable_cascade.py", "_handler"),
+    "deliverable.cascade_terminal": ("coordinator_core/ops/cascade_terminal_op.py", "_handler"),
     "distill.apply_disposal": ("coordinator_core/ops/distill_apply_disposal.py", "_handler"),
     "distill.assemble_disposal_manifest": ("coordinator_core/ops/distill_disposal_manifest.py", "_handler"),
     "distill.curation_status": ("coordinator_core/ops/distill_curation_status.py", "_distill_curation_status"),
@@ -2762,9 +2763,7 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "cruft_sweep.run": (
         ("coordinator_core/ops/discover_working_repos.py", "_sort_unique", "sort", 0),
     ),
-    "deliverable.cascade_terminal": (
-        ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-    ),
+    "deliverable.cascade_terminal": (),
     "distill.apply_disposal": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
         ("coordinator_core/distill/delete_guard.py", "_candidate_actioned_date", "git", 0),
@@ -2890,9 +2889,11 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # `_resolve_git_root_uncached` off `hooks.cater_subagent_start`'s reachable set.
     # 34 -> 33 on 2026-10-02: 7835b34367 routed `handoff_columns.py::_resolve_shipped_in_dates`
     # onto `git/run.py::run_git` (a D3 file), so `handoff.columns` reaches no D5 site.
-    assert total_pairs == 33, (
+    # 33 -> 32 on 2026-10-03: `deliverable.cascade_terminal` re-registered from
+    # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
+    assert total_pairs == 32, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
+        "32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and completion.flip_to_released stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -6787,6 +6788,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "workflow.fire_status": 1,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,
+    "deliverable.cascade_terminal": 1,
     "dispatch.terminal_commit": 5,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,

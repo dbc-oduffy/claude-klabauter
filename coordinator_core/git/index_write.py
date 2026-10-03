@@ -107,9 +107,12 @@ class IndexStaleAfterCommit(IndexWriteError):
     thing.
     """
 
-    def __init__(self, *args: object, outcome: object = None) -> None:
+    def __init__(
+        self, *args: object, outcome: object = None, paths: Tuple[str, ...] = ()
+    ) -> None:
         super().__init__(*args)
         self.outcome = outcome
+        self.paths = paths
 
 
 def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:

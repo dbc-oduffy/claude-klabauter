@@ -157,6 +157,75 @@ def test_remint_backfills_null_id_from_existing_baton_and_leaves_baton(repo):
     assert edge["deliverable_id"] == _baton_id(baton)
 
 
+_ALL_SECTIONS = ["Specification", "Acceptance criteria", "Reference materials"]
+
+
+def _skeleton_baton(repo: Path, sizing_text: str) -> tuple[Path, str]:
+    """Mint a baton from a sizing with no derivable content, then link the sizing to it."""
+    _put(repo, _sizing(evidence="TBD", criterion=None))
+    first = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    _put(repo, sizing_text.replace("status: sized\n", f'status: sized\nbaton: "{first["path"]}"\n'))
+    return repo / first["path"], first["path"]
+
+
+def test_fresh_mint_is_a_session_handoff(repo):
+    _put(repo, _sizing())
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    text = (repo / result["path"]).read_text(encoding="utf-8")
+    assert yaml.safe_load(text.split("---")[1])["kind"] == "session-handoff"
+
+
+def test_existing_skeleton_baton_is_filled_and_reports_all_sections(repo):
+    baton, _ = _skeleton_baton(repo, _sizing())
+    assert "<!-- The actual work spec." in baton.read_text(encoding="utf-8")
+
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    body = baton.read_text(encoding="utf-8")
+    assert result["created"] is False
+    assert result["prefilled"] == ["Specification", "Acceptance criteria"]
+    assert f"## Specification\n\n{_EVIDENCE}\n" in body
+    assert f"## Acceptance criteria\n\n- [ ] {_CRITERION}\n" in body
+    assert "<!-- The actual work spec." not in body
+
+
+def test_existing_baton_fills_all_three_sections_with_scout_evidence(repo):
+    baton, _ = _skeleton_baton(repo, _sizing() + "scout_evidence:\n  - first finding\n")
+
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    assert result["prefilled"] == _ALL_SECTIONS
+    assert "- first finding\n" in baton.read_text(encoding="utf-8")
+
+
+def test_authored_specification_is_kept_byte_for_byte(repo):
+    baton, _ = _skeleton_baton(repo, _sizing())
+    authored = "## Specification\n\nHand-written spec the EM authored.\n\n"
+    text = baton.read_text(encoding="utf-8")
+    start = text.index("## Specification")
+    end = text.index("## Acceptance criteria")
+    baton.write_text(text[:start] + authored + text[end:], encoding="utf-8", newline="\n")
+
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    body = baton.read_text(encoding="utf-8")
+    assert authored in body
+    assert _EVIDENCE not in body
+    assert "Specification" not in result["prefilled"]
+    assert "Acceptance criteria" in result["prefilled"]
+
+
+def test_second_call_is_a_no_op(repo):
+    baton, _ = _skeleton_baton(repo, _sizing())
+    _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    after_first = baton.read_bytes()
+
+    again = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+
+    assert again["prefilled"] == []
+    assert baton.read_bytes() == after_first
+
+
 def test_remint_never_overwrites_a_non_null_id(repo):
     sizing = _put(repo, _sizing())
     first = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))

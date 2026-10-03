@@ -272,3 +272,23 @@ def test_ok_verdict_still_runs_recovery_dance(tmp_path: Path, monkeypatch, capsy
     assert "refs/heads/work/testhost/2026-08-07" in _git(
         ["ls-remote", "--heads", "origin"], cwd=work
     ).stdout
+
+
+def test_cut_tag_tags_fetched_tip_when_tracking_ref_is_stale(tmp_path: Path) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    peer = tmp_path / "peer"
+    _git(["clone", "-b", "main", str(tmp_path / "origin.git"), str(peer)], cwd=tmp_path)
+    _git(["config", "user.email", "t@example.com"], cwd=peer)
+    _git(["config", "user.name", "T"], cwd=peer)
+    (peer / "g.txt").write_text("merged\n", encoding="utf-8")
+    _git(["add", "g.txt"], cwd=peer)
+    _git(["commit", "-m", "post-merge"], cwd=peer)
+    _git(["push", "origin", "HEAD:main"], cwd=peer)
+    new_tip = _git(["rev-parse", "HEAD"], cwd=peer).stdout.strip()
+    _git(["config", "--unset-all", "remote.origin.fetch"], cwd=work)
+
+    cut, merge_sha = cut_tag(work, "v2.0.0")
+
+    assert cut is True
+    assert merge_sha == new_tip
+    assert _git(["rev-parse", "v2.0.0^{}"], cwd=work).stdout.strip() == new_tip

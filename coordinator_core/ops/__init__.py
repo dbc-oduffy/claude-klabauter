@@ -136,6 +136,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "module contains no reference to prune before this row; C1's "
         "SUSPENDED_OPS row removal is what makes dispatch reachable)",
     ),
+    (
+        "coordinator_core.ops.cascade_terminal_op",
+        'registers "deliverable.cascade_terminal" (v2 rebuild, 0 spawns, one commit per run — '
+        "docs/plans/2026-10-03-warp-dogfood-follow-ons.md C5, the fleet.prune_closed_bugs "
+        "precedent; the library ops/deliverable_cascade.py stays undecorated for in-process callers)",
+    ),
     ("coordinator_core.ops.fleet.archive_plans", 'eager-imported for library compute; its op is killed'),
     ("coordinator_core.housekeeping.cycle", 'registers "housekeeping.cycle"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),

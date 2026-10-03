@@ -1417,13 +1417,20 @@ def commit_paths(
         sign_warning=sign_warning,
     )
     try:
-        index_write.splice_index(repo, index_updates)
+        try:
+            index_write.splice_index(repo, index_updates)
+        except index_write.IndexWriteLockBusy:
+            # One in-process re-splice: a peer's lock is held for the width of a splice.
+            index_write.splice_index(repo, index_updates)
     except index_write.IndexWriteError as exc:
+        stale = tuple(sorted(index_updates))
         raise index_write.IndexStaleAfterCommit(
             f"commit {commit_sha} LANDED; the index splice did not: {exc}. "
-            "Do not retry -- the work is in history. Any subsequent "
-            "`git add`/`git status` refreshes the index.",
+            "Do not retry -- the work is in history. Re-stage the index_stale "
+            "paths (`git add -- <paths>`), or unstage them to HEAD "
+            "(`git reset -q HEAD -- <paths>`).",
             outcome=outcome,
+            paths=stale,
         ) from exc
 
     return CommitOutcome(

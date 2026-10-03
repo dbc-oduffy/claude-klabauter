@@ -517,38 +517,13 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         ),
         "spinoff": None,
     },
-    "deliverable.cascade_terminal": {
-        "c2_citation": {
-            "route": "warm_server",
-            "confidence": "EXACT",
-            "n": 5,
-            "p95_ms": 1218.75,
-            "window": "all_time",
-            "t_start_min": "2026-08-26T22:19:04Z",
-            "t_start_max": "2026-08-27T16:22:47Z",
-            "verdict": "unadjudicated",
-            "outcome": "re-affirmed",
-        },
-        "measured": {"max_ms": 1218.8, "p50_ms": 523.4, "n": 4, "unit": "process_ms"},
-        "note": (
-            "Compute retained as a library in ops/deliverable_cascade.py for the "
-            "in-process callers (plan_status_transition._run_cascade); only the "
-            "dispatchable op is dead."
-        ),
-        "disposition": (
-            "JOB STILL DONE, RELOCATION MEASURED AND SOUND. The compute runs in "
-            "post_commit_tail._run_deliverable_cascade and plan_status_transition."
-            "_run_cascade. FIX LANDED 2026-08-30: the corpus-wide re-read on "
-            "`_predicate_refusal`'s leg (b) is collapsed to the one read "
-            "`_collect_live_candidates_for_kind` already does, threaded via "
-            "`corpus_metas`. Post-fix, 5/5 falsifier runs GREEN at "
-            "62.50-93.75ms (corpus_size=305), under the 200ms bar. Figures and "
-            "full provenance (baseline, re-measurement, falsifier methodology): "
-            "state/kill-ledger.md K-117 LANDED; "
-            "docs/plans/2026-08-30-the-terminal-cascade-reads-the-corpus-once.md."
-        ),
-        "spinoff": None,
-    },
+    # deliverable.cascade_terminal — REMOVED, and pruned from both
+    # test_op_suspension_ratchet lists in this same commit. Not the old op earning its
+    # way back: ops/cascade_terminal_op.py is the v2 rebuild
+    # (docs/plans/2026-10-03-warp-dogfood-follow-ons.md C5; spike verdict
+    # docs/research/spike-verdicts/2026-10-03-cascade-terminal-v2.md). Measured
+    # before lifting: handler at one handoff plus one sizing advanced over a
+    # 305-handoff corpus, 0 spawns (test_cascade_terminal_op.py).
     # fleet.prune_closed_bugs — REMOVED by delegated PM assent (autonomous-mode
     # APM ruling), and pruned from both test_op_suspension_ratchet
     # _RATIFIED_SUSPENSIONS lists in this same commit. Not the old op earning its

@@ -387,6 +387,17 @@
         "green_path": 0
       },
       "_rationale": "Measured 2026-09-30 with coordinator_core/benchmarks/spawn_counter.py::_count_spawns_attributed (docs/plans/2026-07-19-engine-migration-high-traffic-strangle.md, B1) over coordinator_core/ops/tests/test_handoff_transition_claim_terminal.py's repo fixture shape (tmp git repo, one seeded unclaimed ready_to_fire baton via _seed), one `claim` through handoff_transition._handler with repo_root=<repo>/.git; exit_code 0. green_path=0: with the common dir supplied by the caller the locked write resolves no git process, and handoff.transition's own docstring states it does not commit. Only the `claim` verb was measured; other verbs (ship, close, gate-recheck, ...) are not covered by this number. Wall time 11-34ms. Enforced by coordinator_core/ops/tests/test_handoff_transition_whole_op_spawn_count.py. target_ms/tolerance copy the MUTATING class default and satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
+    },
+    "deliverable.cascade_terminal": {
+      "target_ms": 160,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "one_handoff_one_sizing_advanced": 0
+      },
+      "_rationale": "v2 rebuild (docs/plans/2026-10-03-warp-dogfood-follow-ons.md C5; spike docs/research/spike-verdicts/2026-10-03-cascade-terminal-v2.md). Measured with coordinator_core/benchmarks/spawn_counter.py::_count_spawns_attributed over coordinator_core/ops/tests/test_cascade_terminal_op.py::test_handler_one_handoff_one_sizing_under_200ms_zero_spawns: one handoff plus one sizing advanced over a 305-handoff corpus, one commit. target_ms is set so target x (1 + tolerance) stays under the 200ms PROCESS_BAR_MS; spawn_count_budget is the enforced invariant."
     }
   },
   "_catering_relay_baseline": {

@@ -178,3 +178,27 @@ class TestEmptyBodyIsNotACollision:
             "an empty-body draft must never be refused as a body-collision "
             f"with its empty-body sibling: {err}"
         )
+
+
+class TestDuplicateBodyKeysOnReceiverAndBody:
+    def test_identical_body_to_different_receiver_sends(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "earlier-topic", to="other-em", body="Same.\n")
+        _write_draft(sender_repo, "later-topic", to="example-retrieval-repo-em", body="Same.\n")
+
+        result = _memo_send({"dry_run": False, "topic": "later-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+
+    def test_identical_body_same_receiver_still_refused(self, tmp_path, monkeypatch, capsys):
+        sender_repo, _ = _stage_two_drafts(
+            tmp_path, monkeypatch, first_body="Same.\n", second_body="Same.\n",
+        )
+
+        result = _memo_send({"dry_run": False, "topic": "later-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 1
+        assert "earlier-topic" in capsys.readouterr().err

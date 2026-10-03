@@ -569,13 +569,15 @@ assert not poisoned, (
     "modules poisoned during _eager_import_all() after "
     "pickup_assemble-then-ops import order: " + repr(poisoned)
 )
-# deliverable.cascade_terminal was DELETED 2026-08-27 (kill ledger K-104,
-# 200ms sweep). The import-order hazard this probe guards is unchanged and
-# still worth pinning -- cascade_backstop_sweep exercises the same
-# pickup_assemble-then-ops path through the same package.
-assert "deliverable.cascade_terminal" not in _REGISTRY, (
-    "deliverable.cascade_terminal is killed and must not re-register"
+# deliverable.cascade_terminal was killed 2026-08-27 (kill ledger K-104) and is
+# rebuilt as a v2 op in cascade_terminal_op; the library handler stays undecorated.
+assert "deliverable.cascade_terminal" in _REGISTRY, (
+    "deliverable.cascade_terminal missing from _REGISTRY after "
+    "pickup_assemble-then-ops import order"
 )
+assert _REGISTRY["deliverable.cascade_terminal"].__module__ == (
+    "coordinator_core.ops.cascade_terminal_op"
+), "deliverable.cascade_terminal must register from cascade_terminal_op, not the library"
 assert "deliverable.cascade_backstop_sweep" in _REGISTRY, (
     "deliverable.cascade_backstop_sweep missing from _REGISTRY after "
     "pickup_assemble-then-ops import order"

@@ -277,3 +277,21 @@ def test_over_subject_stage_gets_one_filled_prompt_per_element():
     assert "alpha for S" in script and "beta for S" in script
     assert [g["fanned"] for g in agent_graph(script)] == [True]
     assert subjects(script) == ["S"]
+
+
+def test_every_agent_call_is_wrapped_in_the_empty_return_guard():
+    script = _compose()
+    assert "const produced = async (label, call)" in script
+    assert "produced nothing" in script
+    assert script.count("produced(") == 4
+    for line in script.splitlines():
+        if "agent(" in line and "const produced" not in line:
+            assert "produced(" in line
+
+
+def test_synthesis_follows_awaited_fan_outs_and_subjects_run_sequentially():
+    script = _compose()
+    assert "for (const s of subjects) {" in script
+    assert "ret['rebuttal'] = await (async () => {" in script
+    assert script.index("ret['rebuttal'] = await") < script.index("ret['synth'] = await")
+    assert "parallel(" not in script.split("for (const s of subjects)", 1)[1].replace("fanOut(", "")

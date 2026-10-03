@@ -152,6 +152,13 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str]) -> dict[st
 
 def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, Any]:
     test_path = Path(*NODE_CEREMONY_TEST_RELPATH)
+    resolved = repo_root / test_path
+    if not resolved.is_file():
+        print(
+            f"[merge-assemble] d0 SKIPPED: runner_absent — looked for {resolved}",
+            file=sys.stderr,
+        )
+        return {"cli": "node-ceremony-gate", "skipped": "runner_absent", "path": str(resolved)}
     proc = subprocess.run(
         ["node", "--test", str(test_path)],
         cwd=str(repo_root),
@@ -488,7 +495,7 @@ def _apply_force_bypass(directives: list[dict[str, Any]], force: bool) -> list[d
     out = []
     for directive in directives:
         if directive["id"] == "d0":
-            out.append({**directive, "already_satisfied": True})
+            out.append({**directive, "advisory": True})
         else:
             out.append(directive)
     return out

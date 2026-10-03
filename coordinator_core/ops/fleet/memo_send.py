@@ -109,7 +109,7 @@ Negative-spec:
   - Does NOT allow a send whose staged body is byte-identical (frontmatter
     stripped, trailing whitespace normalised) to another `*.md` draft
     already sitting in the same sender's `state/memo-outbox/` under a
-    DIFFERENT topic — refused via `build_setup_error_result` before any
+    DIFFERENT topic and the SAME receiver (`to:`) — refused via `build_setup_error_result` before any
     write, naming the colliding topic and the outbox path. Skipped only
     when the body is empty (the `--empty-body` opt-in path: two
     deliberately body-less memos are not a collision). No override flag —
@@ -454,11 +454,13 @@ def _normalize_body(text: str) -> str:
 
 
 def _find_duplicate_draft_topic(
-    outbox_dir: Path, topic: str, normalized_body: str,
+    outbox_dir: Path, topic: str, normalized_body: str, receiver: object = None,
 ) -> Optional[str]:
     """Scan sibling `*.md` drafts directly in `outbox_dir` (non-recursive —
     `sent/` is a subdirectory and is never visited) for one whose body
-    normalises byte-identical to `normalized_body` under a DIFFERENT topic.
+    normalises byte-identical to `normalized_body` under a DIFFERENT topic
+    AND the same receiver (`to:`) -- one body to two receivers is not a
+    duplicate.
 
     Returns the colliding topic, or None. A candidate this cannot read or
     parse is skipped rather than treated as a match or a failure — a
@@ -491,7 +493,11 @@ def _find_duplicate_draft_topic(
         # always a str (falls back to the whole file text when frontmatter is
         # absent/unparseable), so that branch never fired; the real
         # unreadable-sibling skip is the except clause above.
-        other_body = parse_frontmatter(other_text).get("body")
+        other_parsed = parse_frontmatter(other_text)
+        other_fm = other_parsed.get("frontmatter") or {}
+        if str(other_fm.get("to")) != str(receiver):
+            continue
+        other_body = other_parsed.get("body")
         if _normalize_body(other_body) == normalized_body:
             return other_topic
     return None
@@ -1816,13 +1822,13 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # sibling staged before the repoint is still a real duplicate.
         for sibling_dir in (outbox_dir(sender_worktree), legacy_outbox_dir(sender_worktree)):
             colliding_topic = _find_duplicate_draft_topic(
-                sibling_dir, topic, normalized_body,
+                sibling_dir, topic, normalized_body, fm.get("to"),
             )
             if colliding_topic is not None:
                 return build_setup_error_result(
                     _MODE, dry_run,
                     f"memo.send: staged body is byte-identical to draft "
-                    f"{colliding_topic!r} in {sibling_dir} — rewrite this body, "
+                    f"{colliding_topic!r} (same receiver) in {sibling_dir} — rewrite this body, "
                     f"or discard the stale draft, before sending.",
                 )
 

@@ -261,6 +261,20 @@ def test_item_missing_a_used_field(tmp_path):
     assert any("'a'" in r and "'topic'" in r for r in reasons)
 
 
+def test_duplicate_verifier_topic_in_one_subject_is_refused(tmp_path):
+    inputs = _inputs(subjects=({"subject": "a", "verifiers": [{"topic": "C"}, {"topic": "B"}, {"topic": "c"}]},))
+    reasons = _refusal(tmp_path, [_stage("s", fan_out=_OVER_SUBJECT)], inputs, template="{{item.topic}}")
+    assert any("verifiers[3] repeats verifiers[1]" in r and "collide" in r for r in reasons)
+
+
+def test_same_topic_in_different_subjects_is_allowed(tmp_path):
+    inputs = _inputs(subjects=tuple({"subject": k, "verifiers": [{"topic": "t"}]} for k in "ab"))
+    manifest = load_manifest(
+        _build(tmp_path, [_stage("s", fan_out=_OVER_SUBJECT)], template="{{item.topic}}"), "p"
+    )
+    assert validate(manifest, inputs).scope == {"s": SCOPE_SUBJECT}
+
+
 def test_over_subject_does_not_require_a_schema_and_runs_per_subject(tmp_path):
     inputs = _inputs(subjects=({"subject": "a", "verifiers": [{"topic": "t"}]},))
     manifest = load_manifest(

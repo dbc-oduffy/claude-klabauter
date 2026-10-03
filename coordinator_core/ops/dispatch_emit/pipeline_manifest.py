@@ -560,6 +560,17 @@ def _check_subject_lists(
         if not isinstance(items, list) or not items:
             reasons.append(f"stage {stage.id!r}: subject {name!r} has no non-empty list field {field!r}")
             continue
+        if used:
+            seen: dict[tuple, int] = {}
+            for number, item in enumerate(items, 1):
+                if isinstance(item, dict):
+                    key = tuple(str(item.get(f)).lower() for f in sorted(used))
+                    if key in seen:
+                        reasons.append(
+                            f"stage {stage.id!r}: subject {name!r} {field}[{number}] repeats {field}[{seen[key]}]; "
+                            "their output and mailbox files would collide"
+                        )
+                    seen.setdefault(key, number)
         for number, item in enumerate(items, 1):
             if not used:
                 continue

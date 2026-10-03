@@ -352,15 +352,35 @@ def _gh_pr_view_json(pr: str, jq_field: str) -> tuple[int, str]:
     return proc.returncode, proc.stdout.strip()
 
 
+def _git_log_last_commit_iso(pr: str) -> str:
+    """Newest commit time of the PR head ref via git; empty string when no
+    PR head ref resolves."""
+    for ref in (f"refs/pull/{pr}/head", f"refs/remotes/origin/pull/{pr}/head"):
+        proc = subprocess.run(
+            ["git", "log", "-1", "--format=%cI", ref, "--"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=_REPO_ROOT.get(),
+            **_no_console_flags(),
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    return ""
+
+
 def cmd_active_branch_guard(args: argparse.Namespace) -> int:
     if args.force:
         return 0
 
     returncode, last_iso = _gh_pr_view_json(args.pr, "commits[-1].committedDate")
     if returncode != 0 or not last_iso:
+        last_iso = _git_log_last_commit_iso(args.pr)
+    if not last_iso:
         print(
-            f"merge-gate-and-pr active-branch-guard: could not read commit "
-            f"timestamps for PR {args.pr!r} via gh pr view",
+            f"merge-gate-and-pr active-branch-guard: verdict=indeterminate — "
+            f"could not read commit timestamps for PR {args.pr!r} via gh pr "
+            "view or git log",
             file=sys.stderr,
         )
         return 1
@@ -373,8 +393,8 @@ def cmd_active_branch_guard(args: argparse.Namespace) -> int:
         )
     except ValueError:
         print(
-            f"merge-gate-and-pr active-branch-guard: unparseable commit "
-            f"timestamp {last_iso!r}",
+            f"merge-gate-and-pr active-branch-guard: verdict=indeterminate — "
+            f"unparseable commit timestamp {last_iso!r}",
             file=sys.stderr,
         )
         return 1

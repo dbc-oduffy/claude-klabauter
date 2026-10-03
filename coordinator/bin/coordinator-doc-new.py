@@ -3025,8 +3025,13 @@ def _scaffold_spinoff(
     reference_materials: Sequence[str] = (),
     specification: str | None = None,
     acceptance: Sequence[str] = (),
+    kind: str = "spinoff",
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
+
+    kind="session-handoff" emits the same work-spec sections under a
+    session-handoff header: no origin_* fields, no "What travels with this
+    spinoff" section, no spinoff marker.
 
     specification / acceptance, when supplied, replace the comments under
     `## Specification` / `## Acceptance criteria`; each acceptance entry
@@ -3104,6 +3109,7 @@ def _scaffold_spinoff(
     """
     _bootstrap_engine()
     today = _today()
+    _is_session = kind == "session-handoff"
     placeholder_summary = f"PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)"
     _dlv = _yaml_quote(deliverable_id) if deliverable_id else "null"
     _ini = _yaml_quote(initiative) if initiative else "null"
@@ -3204,7 +3210,8 @@ def _scaffold_spinoff(
         f"branch: {_yaml_quote(branch)}",
         "status: open",
         "predecessor: none",
-        "kind: spinoff",
+        f"kind: {kind}",
+        *(["handoff_phase: continuation"] if _is_session else []),
         "baton_role: work",
         f"deployment_state: {_deployment_state}",
         f"category: {_category}",
@@ -3212,21 +3219,22 @@ def _scaffold_spinoff(
         f"pickup_ready: {_pickup_ready}",
         _authoring_session_line,
     ]
-    _origin = _resolve_spinoff_origin()
-    _origin_handoff_id = origin_handoff_id or _origin.origin_handoff_id
-    lines.append(f"origin_session: {_yaml_quote(_authoring_session_value)}")
-    lines.append(
-        f"origin_handoff: {_yaml_quote(_origin.origin_handoff)}"
-        if _origin.origin_handoff
-        else "origin_handoff: null"
-    )
-    lines.append(
-        f"origin_handoff_id: {_yaml_quote(_origin_handoff_id)}"
-        if _origin_handoff_id
-        else "origin_handoff_id: null"
-    )
-    if _origin.workstream:
-        lines.append(f"workstream: {_yaml_quote(_origin.workstream)}")
+    if not _is_session:
+        _origin = _resolve_spinoff_origin()
+        _origin_handoff_id = origin_handoff_id or _origin.origin_handoff_id
+        lines.append(f"origin_session: {_yaml_quote(_authoring_session_value)}")
+        lines.append(
+            f"origin_handoff: {_yaml_quote(_origin.origin_handoff)}"
+            if _origin.origin_handoff
+            else "origin_handoff: null"
+        )
+        lines.append(
+            f"origin_handoff_id: {_yaml_quote(_origin_handoff_id)}"
+            if _origin_handoff_id
+            else "origin_handoff_id: null"
+        )
+        if _origin.workstream:
+            lines.append(f"workstream: {_yaml_quote(_origin.workstream)}")
     lines.extend([
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
@@ -3286,15 +3294,24 @@ def _scaffold_spinoff(
         "",
         "<!-- Failure modes a context-less EM might hit. Negative scope. -->",
         "",
-        "## What travels with this spinoff",
-        "",
-        "<!-- Sizings, plans, or components leaving this EM's hands with the -->",
-        "<!-- spinoff. Ask, don't search or guess -- nothing to log? Leave this -->",
-        "<!-- section empty; that absence stays truthful. -->",
-        "",
+        *(
+            []
+            if _is_session
+            else [
+                "## What travels with this spinoff",
+                "",
+                "<!-- Sizings, plans, or components leaving this EM's hands with the -->",
+                "<!-- spinoff. Ask, don't search or guess -- nothing to log? Leave this -->",
+                "<!-- section empty; that absence stays truthful. -->",
+                "",
+            ]
+        ),
         *_require_session_ledger_block(),
-        "",
-        _spinoff_marker(today, _authoring_session_value, _display_name),
+        *(
+            []
+            if _is_session
+            else ["", _spinoff_marker(today, _authoring_session_value, _display_name)]
+        ),
     ])
     return "\n".join(lines)
 
@@ -4837,10 +4854,69 @@ def _evidence_bullets(scout_evidence: object) -> list[str]:
     return bullets
 
 
+_BATON_SECTION_HEADS = {
+    "Specification": "## Specification",
+    "Acceptance criteria": "## Acceptance criteria",
+    "Reference materials": "## Reference materials",
+}
+_SKELETON_ONLY_RE = re.compile(r"(?:\s|<!--.*?-->|-\s\[\s\]\s*$)*", re.DOTALL | re.MULTILINE)
+
+
+def _sizing_baton_sections(meta: dict) -> tuple[str | None, list[str], list[str]]:
+    """Return the sizing-derived (specification, acceptance items, reference bullets)."""
+    _premise = meta.get("premise")
+    _evidence = _premise.get("evidence") if isinstance(_premise, dict) else None
+    specification = None if _is_placeholder_text(_evidence) else " ".join(_evidence.split())
+    _criterion = meta.get("exit_criterion")
+    _statement = _criterion.get("statement") if isinstance(_criterion, dict) else None
+    acceptance = [] if _is_placeholder_text(_statement) else [" ".join(_statement.split())]
+    return specification, acceptance, _evidence_bullets(meta.get("scout_evidence"))
+
+
+def _fill_skeleton_sections(text: str, fills: dict[str, list[str]]) -> tuple[str, list[str]]:
+    """Fill each named section whose body is only whitespace, comments and empty boxes.
+
+    A section with any authored text, or an empty fill, is left byte-for-byte.
+    Returns (new text, names filled in ``fills`` order).
+    """
+    filled: list[str] = []
+    for name, lines in fills.items():
+        if not lines:
+            continue
+        head = re.search(rf"^{re.escape(_BATON_SECTION_HEADS[name])}[^\n]*\n", text, re.MULTILINE)
+        if head is None:
+            continue
+        nxt = re.search(r"^## ", text[head.end():], re.MULTILINE)
+        end = head.end() + nxt.start() if nxt else len(text)
+        if _SKELETON_ONLY_RE.fullmatch(text[head.end():end]) is None:
+            continue
+        tail = "\n" if nxt else ""
+        text = text[:head.end()] + "\n" + "\n".join(lines) + "\n" + tail + text[end:]
+        filled.append(name)
+    return text, filled
+
+
+def _prefill_baton_sections(baton_abs: str, fills: dict[str, list[str]], repo_root: str) -> list[str]:
+    """Pre-fill skeleton-only baton sections under ``locked_rmw``; return the names filled."""
+    _bootstrap_engine()
+    from pathlib import Path as _Path  # noqa: PLC0415
+    from coordinator_core.locked_write import locked_rmw as _locked_rmw  # noqa: PLC0415
+
+    _names: list[str] = []
+
+    def _mutate(old_text: str) -> str:
+        new_text, _filled = _fill_skeleton_sections(old_text, fills)
+        _names[:] = _filled
+        return new_text
+
+    _locked_rmw(_Path(baton_abs), _mutate, repo_root=_Path(repo_root))
+    return _names
+
+
 def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
     """Mint the baton for an M+ sizing, or return the one its `baton:` edge already names.
 
-    Returns ``{"id", "path", "title", "created"}``; ``path`` is repo-relative POSIX.
+    Returns ``{"id", "path", "title", "created"}`` (an existing baton adds ``prefilled``); ``path`` is repo-relative POSIX.
     Raises ``SizingMintRefused`` naming every failing field (`estimate.tshirt`,
     `intent`, `baton`). Write order: sizing edge first, then the baton, with the
     edge reverted when the baton write fails. ``repo_root`` is the caller's.
@@ -4885,7 +4961,17 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
             fields, f"--from-sizing refused for {sizing_rel}: " + "; ".join(reasons)
         )
 
+    specification, acceptance, reference_materials = _sizing_baton_sections(meta)
     if existing_abs is not None:
+        prefilled = _prefill_baton_sections(
+            existing_abs,
+            {
+                "Specification": [specification] if specification else [],
+                "Acceptance criteria": [f"- [ ] {_item}" for _item in acceptance],
+                "Reference materials": reference_materials,
+            },
+            repo_root,
+        )
         text = open(existing_abs, encoding="utf-8").read()
         _baton_dlv = read_fm_field_unquoted(text, "deliverable_id")
         if not meta.get("deliverable_id") and not _is_null_scalar(_baton_dlv):
@@ -4895,6 +4981,7 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
             "path": existing,
             "title": read_fm_field_unquoted(text, "title"),
             "created": False,
+            "prefilled": prefilled,
         }
 
     title = " ".join(str(meta.get("name") or intent).split())
@@ -4906,20 +4993,14 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
             deliverable_id=dlv_source, carry_source="cited sizing-object (--from-sizing)"
         )
     else:
-        deliverable_id = _mint_deliverable_id_from_title(title, "spinoff", repo_root)
-    handoff_id = _mint_artifact_id_from_title("hnd", title, "spinoff", "handoff_id")
+        deliverable_id = _mint_deliverable_id_from_title(title, "session-handoff", repo_root)
+    handoff_id = _mint_artifact_id_from_title("hnd", title, "session-handoff", "handoff_id")
     out_rel = f"state/handoffs/{_today()}-{_slug_from_title(title)}.md"
     out_abs = os.path.join(repo_root, out_rel)
     if os.path.exists(out_abs):
         raise SizingMintRefused(
             ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
         )
-    _premise = meta.get("premise")
-    _evidence = _premise.get("evidence") if isinstance(_premise, dict) else None
-    specification = None if _is_placeholder_text(_evidence) else " ".join(_evidence.split())
-    _criterion = meta.get("exit_criterion")
-    _statement = _criterion.get("statement") if isinstance(_criterion, dict) else None
-    acceptance = [] if _is_placeholder_text(_statement) else [" ".join(_statement.split())]
     content = _scaffold_spinoff(
         title=title,
         branch=_current_branch(),
@@ -4928,9 +5009,10 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
         sizing_object=sizing_rel,
         summary=summary,
         what_this_covers=intent,
-        reference_materials=_evidence_bullets(meta.get("scout_evidence")),
+        reference_materials=reference_materials,
         specification=specification,
         acceptance=acceptance,
+        kind="session-handoff",
     )
     _assert_no_archived_handoff_twin(out_abs, handoff_id, repo_root)
     try:

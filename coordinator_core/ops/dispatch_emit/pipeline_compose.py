@@ -59,6 +59,13 @@ _IN_CHUNKS = """async function inChunks(items, run, size) {
 
 const withItem = (text, item) => text.split(ITEM_MARK).join(String(item));"""
 
+_PRODUCED = """const produced = async (label, call) => {
+  const value = await call;
+  const text = typeof value === 'string' ? value.trim() : value == null ? '' : JSON.stringify(value);
+  if (text === '' || text === '{}' || text === '[]') throw new Error(`stage ${label} produced nothing`);
+  return value;
+};"""
+
 _RETURN_NAME = {SCOPE_PRE: "pre", SCOPE_SUBJECT: "ret", SCOPE_POST: "post"}
 
 
@@ -186,9 +193,10 @@ def _agent_call(
     stage: Stage, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None,
     prompt: str, label: str, slug: str,
 ) -> str:
-    """One `agent(` expression; a roster-typed stage gets one literal call site per roster agent type."""
+    """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type."""
     if stage.agent_type_from is None:
-        return f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
+        call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
+        return f"produced({label}, {call})"
     name = stage.agent_type_from.split(".", 1)[1]
     types = list(dict.fromkeys(entry["agent_type"] for entry in inputs.lists[name]))
     chain = "".join(
@@ -196,7 +204,7 @@ def _agent_call(
         for t in types
     )
     chain += "Promise.reject(new Error(`no roster agent type for ${l}`))"
-    return f"((p, l, t) => {chain})({prompt}, {label}, rosterTypes[{_js_string_literal(name)}][{slug}])"
+    return f"produced({label}, ((p, l, t) => {chain})({prompt}, {label}, rosterTypes[{_js_string_literal(name)}][{slug}]))"
 
 
 def _has_item(text: str) -> bool:
@@ -404,7 +412,7 @@ def compose_pipeline_script(
         out += ["", _FAN_OUT]
     if any(s.max_concurrent is not None for s in fanned):
         out += ["", _IN_CHUNKS]
-    out += ["", _FAN_TRAILER, ""]
+    out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
     out += ["const pre = {};", "const post = {};", "const subjRets = [];", "const results = [];", ""]
     out += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "")
     out += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]

@@ -389,7 +389,10 @@ def _stamp_coded_commit(
         restore()
         detail = reply.get("error") if isinstance(reply, dict) else reply
         return {"coded_stamp_error": f"coded-stamp commit did not land: {detail!r}"}
-    return {"rows_coded": rows_coded, "coded_sha": reply.get("sha")}
+    out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha")}
+    if reply.get("index_stale"):
+        out["coded_index_stale"] = list(reply["index_stale"])
+    return out
 
 
 def _parse_prefix_claims(report_text: str) -> Optional[list]:
@@ -647,6 +650,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
     when that second step failed -- the product commit stands regardless.
+    ``index_stale`` lists committed paths whose index entry could not be
+    spliced to the landed blob (``[]`` when every entry equals it); a
+    non-empty list means the run is not clean.
     ``review_stamp`` (``minted``/``refused``) reports the stamp, and on a
     minted stamp with no incomplete chunk ``plan_status`` reports the
     ``implemented`` flip (``implemented``/``refused``/``not-stamped``), which
@@ -1057,6 +1063,9 @@ def _terminal_commit(
                 also_commit=(request.plan_path,) if reply.get("review_stamp") == "minted" else (),
             )
         )
+        coded_stale = reply.pop("coded_index_stale", [])
+        if coded_stale:
+            reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))
         if (
             request.plan_path
             and reply.get("review_stamp") == "minted"

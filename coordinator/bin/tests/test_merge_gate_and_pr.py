@@ -163,14 +163,41 @@ def test_active_branch_guard_settled_commit_passes(monkeypatch):
     assert rc == 0
 
 
-def test_active_branch_guard_gh_failure_halts(monkeypatch, capsys):
-    def _fake_gh(pr, jq_field):
-        return 1, ""
+def test_active_branch_guard_gh_failure_falls_back_to_git_log(monkeypatch):
+    old_iso = (
+        datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=900)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(_mod, "_gh_pr_view_json", lambda pr, f: (1, ""))
+    monkeypatch.setattr(_mod, "_git_log_last_commit_iso", lambda pr: old_iso)
+    assert _mod.main(["active-branch-guard", "--pr", "123"]) == 0
 
-    monkeypatch.setattr(_mod, "_gh_pr_view_json", _fake_gh)
+
+def test_active_branch_guard_git_log_fallback_reads_real_repo(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z",
+           "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z"}
+    for args in (["init", "-q"], ["config", "user.email", "t@x.invalid"],
+                 ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"],
+                 ["commit", "-q", "--allow-empty", "-m", "c"],
+                 ["update-ref", "refs/pull/123/head", "HEAD"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, env=env, capture_output=True)
+    monkeypatch.setattr(_mod, "_gh_pr_view_json", lambda pr, f: (1, ""))
+    token = _mod._REPO_ROOT.set(str(repo))
+    assert _mod._git_log_last_commit_iso("999") == ""
+    try:
+        assert _mod._git_log_last_commit_iso("123").startswith("2020-01-01")
+        assert _mod.main(["active-branch-guard", "--pr", "123", "--repo-root", str(repo)]) == 0
+    finally:
+        _mod._REPO_ROOT.reset(token)
+
+
+def test_active_branch_guard_indeterminate_when_gh_and_git_fail(monkeypatch, capsys):
+    monkeypatch.setattr(_mod, "_gh_pr_view_json", lambda pr, f: (1, ""))
+    monkeypatch.setattr(_mod, "_git_log_last_commit_iso", lambda pr: "")
     rc = _mod.main(["active-branch-guard", "--pr", "123"])
     assert rc == 1
-    assert "could not read commit timestamps" in capsys.readouterr().err
+    assert "verdict=indeterminate" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -2475,6 +2475,42 @@ def _supersedes_invoke_value(supersedes: "list[str] | None") -> "str | list[str]
     return supersedes[0] if len(supersedes) == 1 else supersedes
 
 
+def _split_receivers(raw: str) -> list:
+    """Comma list -> ordered, de-duplicated receiver ids ([] pieces dropped)."""
+    return list(dict.fromkeys(r.strip() for r in str(raw).split(",") if r.strip()))
+
+
+def _fanout_topic(topic: str, receiver: str) -> str:
+    """Per-receiver draft topic: `<topic>--<receiver-slug>`."""
+    return f"{topic}--{re.sub(r'[^a-z0-9-]+', '-', receiver.lower()).strip('-')}"
+
+
+def _draft_fanout(args: argparse.Namespace, receivers: list) -> int:
+    """`draft --to a,b`: stage one `<topic>--<receiver>` draft per receiver."""
+    rc = 0
+    for receiver in receivers:
+        sub = argparse.Namespace(**vars(args))
+        sub.to = receiver
+        sub.topic = _fanout_topic(args.topic, receiver)
+        rc = max(rc, _cmd_draft(sub))
+    return rc
+
+
+def _fanout_topics(sender_root: str, topic: str) -> list:
+    """Staged `<topic>--*` fan-out drafts, only when no plain `<topic>` draft exists."""
+    try:
+        plain = Path(_resolve_outbox_draft_path(sender_root, topic))
+    except (ImportError, AttributeError):
+        # Engine not bindable (stubbed `lib`): the send op reports that itself.
+        return []
+    if plain.exists():
+        return []
+    try:
+        return sorted(p.stem for p in plain.parent.glob(f"{topic}--*.md"))
+    except OSError:
+        return []
+
+
 def _cmd_draft(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo draft <topic> --to <em> --title <line> --kind <k> [--summary] [--in-reply-to]
 
@@ -2496,6 +2532,9 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     reaches classification). See the inline comment at the `rejection_class`
     read below for the full mapping and rationale.
     """
+    receivers = _split_receivers(args.to)
+    if len(receivers) > 1:
+        return _draft_fanout(args, receivers)
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     import cc_invoke
     topic = args.topic
@@ -3246,6 +3285,17 @@ def _cmd_send(args: argparse.Namespace) -> int:
         return 2
     _warn_if_unregistered_sender()
 
+    if not getattr(args, "_fanout_member", False):
+        members = _fanout_topics(sender_root, topic)
+        if members:
+            rc = 0
+            for member in members:
+                sub = argparse.Namespace(**vars(args))
+                sub.topic = member
+                sub._fanout_member = True
+                rc = max(rc, _cmd_send(sub))
+            return rc
+
     def legacy_send() -> None:
         """Fail-loud legacy stub — DR-210: NOT a direct-write fallback.
 
@@ -3270,6 +3320,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
         print(f"cross-repo-memo send: {exc}", file=sys.stderr)
         _print_route_mutation_failure_reasons(exc)
         print(f"cross-repo-memo send: {_PR_COMMENT_FALLBACK}", file=sys.stderr)
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else "send failed"
+        print(f"REFUSED: {topic}: {first}")
         return 1
 
     acted = result.get("acted") if isinstance(result, dict) else None
@@ -3279,6 +3331,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
             "delivered memo (empty 'acted') — aborting.",
             file=sys.stderr,
         )
+        print(f"REFUSED: {topic}: no delivered memo")
         return 1
 
     acted_item = acted[0] if isinstance(acted[0], dict) else {}

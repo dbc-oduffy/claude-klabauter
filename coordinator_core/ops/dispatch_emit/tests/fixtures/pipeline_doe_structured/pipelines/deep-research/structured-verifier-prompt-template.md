@@ -73,9 +73,15 @@ Read `{{scratch_dir}}/{{subject}}-scout-{{item.topic}}.md` and identify:
 - Which contradictions the scout flagged
 - The scout's recommended sources for deep read
 
-If the scout file doesn't exist (scout failed), fall back to self-directed discovery:
-3-5 web searches using the search domains from your topic row in the brief, with varied
-phrasings targeting different source types.
+If the scout file doesn't exist or lists no accessible sources (scout failed), fall back to
+self-directed discovery: 3-5 web searches using the search domains from your topic row in the
+brief, with varied phrasings targeting different source types.
+
+**Search budget: the scout's pool is your source list.** WebSearch draws on one pool shared by
+every agent in the session (about 200 calls), and a verifier that spends it starves the next
+subject's verifiers. Work the scout's sources by WebFetch first. WebSearch only to fill a gap the
+pool cannot: the fallback above, the adversarial source, or an unmet gate rule — at most 5 searches
+in all. Record each one under Supplementary searches.
 
 ### 2. Deep-Read and Verify (top 3-5 sources)
 

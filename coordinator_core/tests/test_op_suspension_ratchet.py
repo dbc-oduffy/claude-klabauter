@@ -120,6 +120,8 @@ _RATIFIED_SUSPENSIONS = frozenset({
     "session.reap_claims_for_repos",
     "records.history",
     "session.boot_sweep",
+    # deliverable.cascade_terminal — row REMOVED and pruned here in the SAME commit; the
+    # v2 rebuild is ops/cascade_terminal_op.py, not the killed op earning its way back.
     # hooks.cater_subagent_start — REINSTATED 65bbe1323, pruned here 2026-08-22.
     # fleet.archive_completed_handoffs — row REMOVED by PM ruling 2026-08-26 and
     # pruned here in the SAME commit. Not an op earning its way back: the row was
@@ -145,7 +147,6 @@ _RATIFIED_SUSPENSIONS = frozenset({
     "handoff.housekeeping",
     "ceremony.post_commit_tail",
     "write_surface.emit_manifest",
-    "deliverable.cascade_terminal",
     "ceremony.commit",
     "eol.census",
     "eol.repair",
@@ -171,7 +172,6 @@ _C3_CITED_OPS = frozenset({
     "session.boot_sweep",
     "ceremony.post_commit_tail",
     "write_surface.emit_manifest",
-    "deliverable.cascade_terminal",
     "ceremony.commit",
     "eol.census",
     "eol.repair",

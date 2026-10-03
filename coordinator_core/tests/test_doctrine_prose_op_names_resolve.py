@@ -82,7 +82,6 @@ _KNOWN_STALE_BARE: dict[tuple[str, str], int] = {
     ("docs/wiki/doctrine-authoring/named-contracts-vs-incidental-flags.md", "handoff.has_live_children"): 1,
     ("docs/wiki/em-operating-model/verification-before-completion.md", "review_trail.write"): 1,
     ("docs/wiki/hook-best-practices/state-placement-law.md", "session.boot_sweep"): 1,
-    ("docs/wiki/reviewer-pipeline/terminal-judge.md", "deliverable.cascade_terminal"): 1,
     ("docs/wiki/skills-corpus/architecture-survey-residue.md", "cartography.churn"): 1,
     ("skills/roadmap-planning/residue/contact-points-checklist.md", "session.boot_sweep"): 1,
 }
@@ -243,20 +242,20 @@ def test_planted_dead_op_is_flagged_in_every_reference_shape(tmp_path):
     skills = tmp_path / "skills" / "x"
     skills.mkdir(parents=True)
     (skills / "SKILL.md").write_text(
-        "Stamp via `coordinator-invoke deliverable.cascade_terminal '{}'`.\n"
+        "Stamp via `coordinator-invoke session.boot_sweep '{}'`.\n"
         '`& "$env:H\\bin\\coordinator-invoke.exe" fleet.no_such_op_zzz \'{}\'`\n'
-        "The sizing-object stamp owner is `deliverable.cascade_terminal`, which runs it.\n"
+        "The sizing-object stamp owner is `session.boot_sweep`, which runs it.\n"
         "A page.md names fleet.no_such_op_zzz.md only as a file.\n",
         encoding="utf-8",
     )
     live = _live_op_names()
-    dead = frozenset({"deliverable.cascade_terminal"})
-    assert "deliverable.cascade_terminal" not in live
+    dead = frozenset({"session.boot_sweep"})
+    assert "session.boot_sweep" not in live
     found = set(_stale_op_references(tmp_path, live, dead))
     assert found == {
-        ("skills/x/SKILL.md", 1, "deliverable.cascade_terminal", "invoke"),
+        ("skills/x/SKILL.md", 1, "session.boot_sweep", "invoke"),
         ("skills/x/SKILL.md", 2, "fleet.no_such_op_zzz", "invoke"),
-        ("skills/x/SKILL.md", 3, "deliverable.cascade_terminal", "bare"),
+        ("skills/x/SKILL.md", 3, "session.boot_sweep", "bare"),
     }
 
 

@@ -161,3 +161,38 @@ def test_fill_gate_verdicts_reports_unavailable_for_missing_producer() -> None:
     assert gates["portability_sweep"] == "unavailable"
     assert gates["check_no_illegal_paths"] == "passed"
     assert gates["portability_sweep"] not in ("passed", "failed", "pending")
+
+
+def test_failed_halt_on_fail_gate_is_never_already_satisfied(tmp_path: Path) -> None:
+    from coordinator_core.contract import apply_base
+    from coordinator_core.merge_assemble.apply import _apply_force_bypass
+
+    def _failing_gate(args, repo_root):
+        raise RuntimeError("node-ceremony-gate: exited 1: Could not find run.js")
+
+    directives = [{"id": "d0", "cli": "node-ceremony-gate", "args": [], "depends_on": None,
+                   "already_satisfied": False}]
+    table = {"node-ceremony-gate": _failing_gate}
+    code, report = apply_base.execute_directives(
+        _apply_force_bypass(directives, False), [], tmp_path, table, decisions={}
+    )
+    assert code == apply_base.APPLY_EXIT_PARTIAL_MUTATION
+    assert report["failed_directive"] == "d0"
+    assert not any(r.get("already_satisfied") for r in report["results"])
+
+    code, report = apply_base.execute_directives(
+        _apply_force_bypass(directives, True), [], tmp_path, table, decisions={}
+    )
+    assert not any(r.get("already_satisfied") for r in report["results"])
+    assert report["advisory_failures"][0]["directive_id"] == "d0"
+
+
+def test_absent_runner_is_skipped_not_already_satisfied(tmp_path: Path, capsys) -> None:
+    from coordinator_core.merge_assemble.apply import _dispatch_node_ceremony_gate
+
+    d0 = next(d for d in build_directives(tmp_path, tag_prefix="v", proposed_tag="v1.0.0") if d["id"] == "d0")
+    assert d0["already_satisfied"] is False
+    detail = _dispatch_node_ceremony_gate([], tmp_path)
+    assert detail["skipped"] == "runner_absent"
+    assert detail["path"] == str(tmp_path / "coordinator" / "tests" / "plugin-ecosystem" / "run.js")
+    assert "runner_absent" in capsys.readouterr().err

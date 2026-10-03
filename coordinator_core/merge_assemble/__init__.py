@@ -484,20 +484,13 @@ def build_directives(
     cut_tag = proposed_tag or f"{tag_prefix}0.0.0"
     if release_notes_text is None:
         release_notes_text = f"Release {cut_tag}."
-    gate_entrypoint = node_ceremony_gate_entrypoint(repo_root)
-    gate_absent = not gate_entrypoint.is_file()
     node_gate: dict[str, Any] = {
         "id": "d0",
         "cli": "node-ceremony-gate",
         "args": [],
         "depends_on": None,
-        "already_satisfied": gate_absent,
+        "already_satisfied": False,
     }
-    if gate_absent:
-        node_gate["skipped_reason"] = (
-            f"no node ceremony suite in this repo ({'/'.join(NODE_CEREMONY_TEST_RELPATH)} "
-            "absent) — nothing to gate"
-        )
     portability_script = portability_sweep_entrypoint()
     portability_absent = not portability_script.is_file()
     portability_gate: dict[str, Any] = {

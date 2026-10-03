@@ -30,10 +30,10 @@ Subcommands (argv[1] selects):
       verbatim from SKILL.md Step 1.5 Part 2 Mode A. Absent key -> prints
       nothing, exits 0 (bare-`v*` default per DR-149).
 
-  cut-tag TAG [--repo-root PATH] [--fetch-ref main] [--merge-ref origin/main]
+  cut-tag TAG [--repo-root PATH] [--fetch-ref main] [--merge-ref REF]
            [--must-contain SHA]
       Idempotent annotated-tag cut + push: fetches `--fetch-ref` from origin,
-      resolves `--merge-ref` to a commit SHA, and only (re)creates + pushes
+      resolves `--merge-ref` (default: the just-fetched `--fetch-ref` tip, FETCH_HEAD) to a commit SHA, and only (re)creates + pushes
       the annotated tag when it does not already point at that commit.
       Peels an existing annotated tag (`TAG^{}`) before comparing, so the
       "already at target" skip is a genuine idempotency check against the
@@ -347,7 +347,7 @@ def cut_tag(
     repo_root: Path,
     tag: str,
     fetch_ref: str = "main",
-    merge_ref: str = "origin/main",
+    merge_ref: Optional[str] = None,
     must_contain: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Idempotent annotated-tag cut + push. Returns (cut, merge_sha).
@@ -362,9 +362,12 @@ def cut_tag(
     if fetch.returncode != 0:
         _die(f"git fetch origin {fetch_ref} failed: {fetch.stderr.strip()}")
 
-    rev = _run(["git", "rev-parse", merge_ref], cwd=repo_root, check=False)
+    # No explicit merge_ref: the tip just fetched, not a tracking ref that a
+    # refspec-less or single-branch remote leaves stale.
+    resolved_ref = merge_ref or "FETCH_HEAD"
+    rev = _run(["git", "rev-parse", f"{resolved_ref}^{{commit}}"], cwd=repo_root, check=False)
     if rev.returncode != 0:
-        _die(f"git rev-parse {merge_ref} failed: {rev.stderr.strip()}")
+        _die(f"git rev-parse {resolved_ref} failed: {rev.stderr.strip()}")
     merge_sha = rev.stdout.strip()
 
     if must_contain is not None:
@@ -487,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cut.add_argument("tag")
     p_cut.add_argument("--repo-root", default=None)
     p_cut.add_argument("--fetch-ref", default="main")
-    p_cut.add_argument("--merge-ref", default="origin/main")
+    p_cut.add_argument("--merge-ref", default=None)
     p_cut.add_argument("--must-contain", default=None)
     p_cut.set_defaults(func=cmd_cut_tag)
 

@@ -72,6 +72,7 @@ from coordinator_core.git.commit_trailers import (
     apply_missing_trailers,
     message_missing_subject,
 )
+from coordinator_core.git.git_index import IndexParseError
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
     find_declared_eol_drift,
@@ -782,10 +783,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "no sha can be reported -- resolve it with `git log -1`)"
             )
         index_stale_warning = str(exc)
+        index_stale_paths = list(exc.paths)
+    except IndexParseError as exc:
+        # Raised reading the index before the ref moves: nothing landed.
+        return _error(
+            f"{exc}. Nothing committed; resolve any unmerged path, or convert a v4 "
+            "index with `git update-index --index-version 2`."
+        )
     except (CommitRefused, FilterUnsupported) as exc:
         return _error(str(exc))
     else:
         index_stale_warning = None
+        index_stale_paths = []
 
     # A FIELD IS NOT A SIGNAL. A commit which sets one side aside is a
     # legitimate success and the operator still needs to see why, not a
@@ -903,4 +912,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "no_delta": list(outcome.no_delta),
         "warnings": warnings,
         "guard_class_relay": guard_class_relay,
+        "index_stale": index_stale_paths,
     }
