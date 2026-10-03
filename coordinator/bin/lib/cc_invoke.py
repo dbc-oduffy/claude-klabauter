@@ -2518,6 +2518,12 @@ def _apply_warm_envelope(
     return envelope["result"]
 
 
+last_rung: str | None = None
+"""Rung the most recent `cc_invoke()`/`cc_invoke_bare()` call was served on: "warm"
+(in-engine or warm pipe hit) or "spawn" (interpreter spawn after a warm miss); None
+before any call."""
+
+
 def cc_invoke(
     op: str,
     params: dict[str, Any],
@@ -2578,14 +2584,19 @@ def cc_invoke(
     """
     claude_klabauter_root = _claude_klabauter_root if _claude_klabauter_root is not None else _resolve_claude_klabauter_root()
 
+    global last_rung
+    last_rung = None
     _in_engine = _try_in_engine_dispatch(op, params, repo_root, claude_klabauter_root)
     if _in_engine is not None:
+        last_rung = "warm"
         return _apply_warm_envelope(op, _in_engine, "", _stderr_sink)
 
     _warm_response, _warm_stderr = _capture_warm_reach(op, params, repo_root)
     if _warm_response is not None:
+        last_rung = "warm"
         return _apply_warm_envelope(op, _warm_response, _warm_stderr, _stderr_sink)
 
+    last_rung = "spawn"
     try:
         params_json = json.dumps(params, separators=(",", ":"))
     except TypeError as exc:
@@ -2736,14 +2747,19 @@ def cc_invoke_bare(
     """
     claude_klabauter_root = _claude_klabauter_root if _claude_klabauter_root is not None else _resolve_claude_klabauter_root()
 
+    global last_rung
+    last_rung = None
     _in_engine = _try_in_engine_dispatch(op, params, repo_root, claude_klabauter_root)
     if _in_engine is not None:
+        last_rung = "warm"
         return _apply_warm_envelope(op, _in_engine, "", _stderr_sink)
 
     _warm_response, _warm_stderr = _capture_warm_reach(op, params, repo_root)
     if _warm_response is not None:
+        last_rung = "warm"
         return _apply_warm_envelope(op, _warm_response, _warm_stderr, _stderr_sink)
 
+    last_rung = "spawn"
     try:
         params_json = json.dumps(params, separators=(",", ":"))
     except TypeError as exc:

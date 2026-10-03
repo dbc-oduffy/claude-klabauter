@@ -281,7 +281,13 @@ def apply_guard_level(
         return None
     if risk is None:
         reason = str(hso.get("permissionDecisionReason") or "").strip()
-        risk = " ".join(reason.split("\n\n", 1)[0].split())
+        paras = reason.split("\n\n")
+        risk = " ".join(paras[0].split())
+        if risk.endswith(":") and len(paras) > 1:
+            # A paragraph ending in ":" is a header; its list is the content.
+            risk = "\n".join(
+                [risk] + [" ".join(p.split()) for p in paras[1:] if p.strip()]
+            ) + "\n"
         # A warn-level advisory never blocked anything; do not let the
         # embedded deny text claim it did.
         if risk.startswith("BLOCKED:"):

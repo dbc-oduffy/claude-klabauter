@@ -650,6 +650,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
     when that second step failed -- the product commit stands regardless.
+    ``incomplete_reasons`` maps each incomplete id the ask manifest withheld to
+    ``external_gate`` (such a row carries no paths, so nothing is stranded);
     ``index_stale`` lists committed paths whose index entry could not be
     spliced to the landed blob (``[]`` when every entry equals it); a
     non-empty list means the run is not clean.
@@ -672,7 +674,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     stranded: dict = {}
     scope: dict = {}
-    reply = _terminal_commit(params, repo_root, stranded, scope)
+    gated_ids: set = set()
+    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids)
     reply["stranded"] = stranded
     if scope:
         reply.update(_undeclared_dirty(scope["root"], scope["request"]))
@@ -680,11 +683,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     if landed and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed))
+    if gated_ids and isinstance(incomplete, list):
+        reply["incomplete_reasons"] = {
+            i: "external_gate" for i in sorted(gated_ids & (set(incomplete) - set(landed)))
+        }
     return reply
 
 
 def _terminal_commit(
-    params: dict, repo_root: Optional[Path], stranded: dict, scope: dict
+    params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
+    gated_ids: Optional[set] = None,
 ) -> dict:
     if repo_root is None:
         return _error(
@@ -752,6 +760,8 @@ def _terminal_commit(
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return _error(f"cannot read ask-run manifest {manifest_rel!r}: {exc!r}")
+            if gated_ids is not None:
+                gated_ids.update(g.id for g in manifest.gated)
             request_abs = contained_path(worktree_root / manifest.marker_path, [run_root])
             if request_abs is None:
                 return _error(

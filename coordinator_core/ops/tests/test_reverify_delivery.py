@@ -78,7 +78,7 @@ def test_script_has_one_delivery_verifier_call_naming_prior_claims(tmp_path):
 
 def test_prior_claims_refuses_a_non_fail_record(tmp_path):
     repo = _repo(tmp_path)
-    record = _record(repo, _git(repo, "rev-parse", "HEAD"))
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), tests={"status": "pass", "run": 1, "failed": 0, "sidecar": None})
     with pytest.raises(rd.ReverifyRefused):
         rd.prior_unbacked_claims(record)
 

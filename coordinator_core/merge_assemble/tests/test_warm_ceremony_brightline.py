@@ -673,11 +673,24 @@ _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
         print(f"unrecognized mode {sys.argv[2]!r}", file=sys.stderr)
         sys.exit(2)
 
+    _reach = {"hit": False}
+    _real_reach = cc_invoke._try_in_process_warm_reach
+
+
+    def _recording_reach(*args, **kwargs):
+        response = _real_reach(*args, **kwargs)
+        _reach["hit"] = response is not None
+        return response
+
+
+    cc_invoke._try_in_process_warm_reach = _recording_reach
+
     import entry_point_shim as _eps
 
 
     def main() -> int:
         rc = _eps._merge_assemble_entry(["apply", "--force"])
+        print(f"warm-reach: {'hit' if _reach['hit'] else 'miss'}", file=sys.stderr)
         if rc not in (0, 1, 2, 3, 4):
             print(f"apply transport-failed: exit_code={rc}", file=sys.stderr)
             return 11
@@ -689,7 +702,7 @@ _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(
     '''
 )
 
-_PATH_SERVED_RE = re.compile(r"(merge_assemble\.\w+): path=(cold|warm)")
+_PATH_SERVED_RE = re.compile(r"(merge_assemble\.\w+): path=(cold|warm|engine-spawn)")
 
 
 def _paths_served(stderr_text: str) -> dict:
@@ -829,7 +842,12 @@ class TestLikeForLikeWarmVsColdComparison:
         assert precheck.returncode == 0, precheck
         current_paths = _paths_served(precheck.stderr)
         current_served = current_paths.get("merge_assemble.apply")
-        assert current_served in ("warm", "cold"), (
+        if current_served == "warm" and "warm-reach: hit" not in precheck.stderr:
+            # `path=warm` only means route() took the engine rung; a warm-reach
+            # miss (e.g. this tree carries no engine build stamp, so no server
+            # is hosted for it) is two cold engine interpreter spawns.
+            current_served = "engine-spawn"
+        assert current_served in ("warm", "cold", "engine-spawn"), (
             f"current leg reported neither warm nor cold: {precheck.stderr}"
         )
 
@@ -871,4 +889,4 @@ class TestLikeForLikeWarmVsColdComparison:
             # op warm on this box -- report the residual (above), do not
             # synthesize or assert a warm-vs-cold comparison that never
             # happened.
-            assert current_served == "cold"
+            assert current_served in ("cold", "engine-spawn")

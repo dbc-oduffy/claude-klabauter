@@ -20,7 +20,10 @@ def _criterion(status):
 
 def _run(tmp_path, criterion_status):
     repo = _repo(tmp_path)
-    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_PASS, criterion=_criterion(criterion_status))
+    record = _record(
+        repo, _git(repo, "rev-parse", "HEAD"), delivery=_PASS, criterion=_criterion(criterion_status),
+        tests={"status": "pass", "run": 1, "failed": 0, "sidecar": None},
+    )
     return repo, record
 
 

@@ -769,6 +769,11 @@ def test_audit_is_not_stale_against_the_live_sink():
         )
 
     live_paths = [str(p) for p in live_generations]
+    live_dir = str(live_generations[0].parent)
+    if not any(str(Path(s).parent) == live_dir for s in stamped_paths):
+        # The sink is box-local: an audit stamped on another box (its paths name
+        # another root) says nothing about this box's sink, same as an absent one.
+        pytest.skip(f"audit stamped on another box ({stamped_paths[:1]!r}), not {live_dir!r}")
     live_sizes = []
     for p in live_generations:
         try:

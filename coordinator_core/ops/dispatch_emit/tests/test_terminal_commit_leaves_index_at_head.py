@@ -70,7 +70,9 @@ def repo(tmp_path):
 
 
 def _script(repo: Path, request: CommitRequest) -> str:
-    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    marker = render_marker(request)
+    assert marker is not None, "fixture request has no committable chunk"
+    (repo / "run.mjs").write_text("// emitted\n" + marker + "\n", encoding="utf-8")
     return "run.mjs"
 
 

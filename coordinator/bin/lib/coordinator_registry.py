@@ -338,6 +338,14 @@ def _mp_marketplace_cache_rung() -> str:
     return _best
 
 
+def _mp_live_path_rung() -> str:
+    """The plugin mirror's live path, read in-process; the CLI spawn runs only under an explicit MACHINE_LOCAL_IMPL."""
+    _key = "plugin.mirrors.coordinator-claude.live_path"
+    if (os.environ.get(_REGISTRY_MACHINE_LOCAL_IMPL_ENV) or "").strip():
+        return _registry_machine_local_get(_key) or ""
+    return _mlir_registry_get(_key) or ""
+
+
 @functools.lru_cache(maxsize=None)
 def _load_manifest() -> dict:
     """Resolve, read and validate the registry manifest once per process.
@@ -379,7 +387,7 @@ def _load_manifest() -> dict:
             _mp_marketplace_cache_rung(),
             _mp_flat_layout_probe_rung(),
             os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip(),
-            _registry_machine_local_get("plugin.mirrors.coordinator-claude.live_path") or "",
+            _mp_live_path_rung(),
         ):
             if not _mp_root or not os.path.isdir(_mp_root):
                 continue

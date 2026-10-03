@@ -65,3 +65,20 @@ def test_minted_spine_derives_lightweight_review_tier(tmp_path):
     (tmp_path / SIZING_REL).write_text("estimate:\n  tshirt: XS\n", encoding="utf-8")
     text, path = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path)
     assert derive_review_tier(path, repo_root=tmp_path, plan_text=text) == "lightweight"
+
+
+def test_declared_gated_row_is_minted_withheld_never_dropped(tmp_path):
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows
+
+    gated = [{"title": "DoE dead-op prose", "owner_repo": "coordinator-content-repo", "requires": "landed-work"}]
+    text, path = mint_xs_spine(
+        SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=gated
+    )
+    path.write_text(text, encoding="utf-8", newline="\n")
+    exclusions: list = []
+    rows = read_spine(path, exclusions=exclusions)
+    assert [r.id for r in rows] == ["X1"]
+    raw = {r["id"]: r for r in load_rows(text).rows}
+    withheld = gated_rows(exclusions, raw)
+    assert [(g.id, g.reason, g.owner_repo) for g in withheld] == [("X2", "external_gate", "coordinator-content-repo")]

@@ -74,13 +74,21 @@ class GatedRow:
     id: str
     reason: str
     gate: str
+    owner_repo: str = ""
+    closure_key: Any = None
 
     def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "reason": self.reason, "gate": self.gate}
+        return {
+            "id": self.id, "reason": self.reason, "gate": self.gate,
+            "owner_repo": self.owner_repo, "closure_key": self.closure_key,
+        }
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "GatedRow":
-        return cls(id=data["id"], reason=data["reason"], gate=data["gate"])
+        return cls(
+            id=data["id"], reason=data["reason"], gate=data["gate"],
+            owner_repo=data.get("owner_repo") or "", closure_key=data.get("closure_key"),
+        )
 
 
 @dataclass(frozen=True)

@@ -26,8 +26,10 @@ def test_gated_round_trips():
     m = _manifest(gated=gated)
     data = m.to_json()
     assert data["gated"] == [
-        {"id": "G1", "reason": "external_gate", "gate": "owner_repo=x requires=y"},
-        {"id": "G2", "reason": "transitive_gate_closure", "gate": "via G1"},
+        {"id": "G1", "reason": "external_gate", "gate": "owner_repo=x requires=y",
+         "owner_repo": "", "closure_key": None},
+        {"id": "G2", "reason": "transitive_gate_closure", "gate": "via G1",
+         "owner_repo": "", "closure_key": None},
     ]
     assert StageManifest.from_json(data) == m
 

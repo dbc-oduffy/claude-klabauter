@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.git_state import head_branch
@@ -60,6 +60,7 @@ _PARAMS = (
     Field("plan_path", "str"),
     Field("sizing_path", "str"),
     Field("writes", "str_list"),
+    Field("gated", "list"),
 )
 
 __all__ = ["AskStageError", "stage"]
@@ -98,6 +99,7 @@ def stage(
     plan_rel: Optional[str] = None,
     sizing_rel: Optional[str] = None,
     writes: Sequence[str] = (),
+    gated: Sequence[Mapping] = (),
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`)."""
     root = Path(repo_root)
@@ -113,7 +115,7 @@ def stage(
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
         spine_text, spine_path = mint_xs_spine(
-            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=run_dir
+            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=run_dir, gated=gated
         )
         _write(spine_path, spine_text)
         plan_path = spine_path
@@ -228,6 +230,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             plan_rel=params.get("plan_path") or None,
             sizing_rel=params.get("sizing_path") or None,
             writes=writes,
+            gated=[g for g in (params.get("gated") or []) if isinstance(g, dict)],
         )
     except (AskStageError, SizingFireRefused) as exc:
         return {"error": str(exc)}

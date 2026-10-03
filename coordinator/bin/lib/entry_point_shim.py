@@ -372,6 +372,7 @@ def _merge_assemble_dispatch(op: str, params: dict, print_fn, result_key: str, *
         served_cold = True
         return _merge_assemble_cold_call(op, params)
 
+    cc_invoke.last_rung = None
     try:
         result = cc_invoke.route(op, params, repo_root, _legacy_fn)
     except RuntimeError as exc:
@@ -412,7 +413,13 @@ def _merge_assemble_dispatch(op: str, params: dict, print_fn, result_key: str, *
             print(f"{op}: transport failure: {exc}", file=sys.stderr)
             return _TRANSPORT_FAIL
 
-    print(f"{op}: path={'cold' if served_cold else 'warm'}", file=sys.stderr)
+    if served_cold:
+        path_label = "cold"
+    elif getattr(cc_invoke, "last_rung", None) == "spawn":
+        path_label = "engine-spawn"
+    else:
+        path_label = "warm"
+    print(f"{op}: path={path_label}", file=sys.stderr)
 
     if not isinstance(result, dict):
         print(f"{op}: unexpected result shape {type(result).__name__}", file=sys.stderr)

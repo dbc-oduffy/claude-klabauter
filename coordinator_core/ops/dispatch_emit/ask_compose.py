@@ -76,7 +76,15 @@ def _obj(required: list[str], properties: dict) -> dict:
 
 _STR = {"type": "string"}
 _SIZE_SCHEMA = _obj(
-    ["sizing_rel", "writes"], {"sizing_rel": _STR, "writes": {"type": "array", "items": _STR}}
+    ["sizing_rel", "writes"],
+    {
+        "sizing_rel": _STR,
+        "writes": {"type": "array", "items": _STR},
+        "gated": {
+            "type": "array",
+            "items": _obj(["title", "owner_repo"], {"title": _STR, "owner_repo": _STR, "requires": _STR}),
+        },
+    },
 )
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
@@ -111,7 +119,7 @@ _MANIFEST_SCHEMA = _obj(
         },
         "review_declared_paths": {"type": "array", "items": _STR},
         "marker_path": _STR,
-        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR})},
+        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "closure_key": {}})},
     },
 )
 
@@ -275,6 +283,7 @@ def compose_ask_script(
     writes_literal = json.dumps(list(writes))
     b.append(f"  let _writes = {writes_literal};")
     b.append("  let _planRel = null;")
+    b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
     if blitz_fn:
         b.append(blitz_fn)
@@ -295,7 +304,9 @@ def compose_ask_script(
             "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "
             "sizing_rel, and as `writes` the repo-relative files the ask will create, edit or "
             "delete -- every file the ask names, plus any you find it must touch. An XS with "
-            "empty `writes` is refused at the gate.\n\nAsk:\n"
+            "empty `writes` is refused at the gate. Return as `gated` every deliverable the ask declares "
+            "as owned by another repo or blocked on an external gate (title, owner_repo, requires): "
+            "never fold one into `writes` and never omit one.\n\nAsk:\n"
             + (prompt or "")
         )
         b.append(
@@ -303,6 +314,7 @@ def compose_ask_script(
         )
         b.append("  _sizingRel = _sized.sizing_rel;")
         b.append("  _writes = _sized.writes ?? [];")
+        b.append("  _gated = _sized.gated ?? [];")
 
     b.append("  phase('gate');")
     gate_prompt = _cat(
@@ -327,7 +339,7 @@ def compose_ask_script(
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
         "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes } "
-        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes })",
+        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
         "empty -- never an empty manifest without the error.",
@@ -438,7 +450,9 @@ def compose_ask_script(
     b.append(
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
-        "incomplete: _incompleteChunks, blocked: _blockedChunks, unanswered: _unansweredBriefs, "
+        "incomplete: _incompleteChunks, "
+        "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
+        "blocked: _blockedChunks, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "

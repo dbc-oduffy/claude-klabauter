@@ -1370,6 +1370,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/preuse_search_dispatch.py",
         ("_handler",),
     ),
+    "hooks.preuse_sendmessage_dispatch": (
+        "coordinator_core/hooks/preuse_sendmessage_dispatch.py",
+        ("_handler",),
+    ),
     "hooks.preuse_skill_dispatch": (
         "coordinator_core/hooks/preuse_skill_dispatch.py",
         ("_handler",),

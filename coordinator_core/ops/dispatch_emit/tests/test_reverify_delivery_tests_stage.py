@@ -32,7 +32,7 @@ def test_tests_only_staleness_allows_reverify_and_emits_tests_stage(tmp_path, mo
 def test_old_shape_record_emits_no_tests_stage(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
-    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail, tests={"status": "pass", "run": 1, "failed": 0, "sidecar": None})
     plan = repo / "docs" / "plans" / "p.md"
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text("---\nplan_id: pln-x\nstatus: executing\n---\nbody\n", encoding="utf-8")
@@ -60,3 +60,22 @@ def test_tests_error_then_reverified_pass_mints(tmp_path):
     )
     stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
     assert stamp["terminal_commit_sha"] == head
+
+
+def test_not_run_tests_and_criterion_are_legs_to_run_and_all_pass_still_refuses(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    not_run = {"status": "not_run", "run": 0, "failed": 0, "sidecar": None}
+    record = _record(repo, head, delivery=_PASS, tests=not_run)
+    assert rd.prior_unbacked_claims(record)[1] == []
+    assert rd._tests_stale(rd._frontmatter(record))
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-x\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "p.mjs"
+    rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
+    assert "Tests re-run" in out.read_text(encoding="utf-8")
+    assert rd._criterion_unsettled({"criterion": {"status": "not_run"}})
+    ok = {"tests": {"status": "pass"}, "criterion": {"status": "met"}}
+    assert not rd._unsettled(ok)

@@ -159,6 +159,14 @@ def _gate_description(raw: Optional[Mapping]) -> str:
     return " ".join(parts)
 
 
+def _first_gate_field(raw: Optional[Mapping], key: str):
+    gates = raw.get("external_gate") if isinstance(raw, Mapping) else None
+    for gate in gates if isinstance(gates, list) else ():
+        if isinstance(gate, Mapping) and gate.get("cleared") is not True and gate.get(key):
+            return gate[key]
+    return None
+
+
 def gated_rows(
     exclusions: Sequence[Mapping], raw_by_id: Mapping[str, Mapping]
 ) -> list[GatedRow]:
@@ -177,5 +185,12 @@ def gated_rows(
             gate = str(entry.get("detail", ""))
         else:
             continue
-        out.append(GatedRow(id=row_id, reason=reason, gate=gate))
+        raw = raw_by_id.get(row_id)
+        out.append(
+            GatedRow(
+                id=row_id, reason=reason, gate=gate,
+                owner_repo=str(_first_gate_field(raw, "owner_repo") or ""),
+                closure_key=_first_gate_field(raw, "closure_key"),
+            )
+        )
     return out

@@ -37,9 +37,14 @@ def mint_xs_spine(
     sizing_rel: str,
     writes: Sequence[str],
     out_dir: Path,
+    gated: Sequence[Mapping] = (),
 ) -> tuple[str, Path]:
     """Return `(spine_text, out_dir / "<sizing-stem>.spine.md")`; raises the inventory_mint
-    footprint errors for a glob or directory-shaped `writes` entry, `ValueError` for empty writes."""
+    footprint errors for a glob or directory-shaped `writes` entry, `ValueError` for empty writes.
+
+    Each `gated` entry (`title`, `owner_repo`, optional `requires`/`id`) is minted as a pathless
+    row carrying an uncleared `external_gate`, so a declared external deliverable surfaces as
+    withheld instead of vanishing."""
     sizing_rel = str(sizing_rel).replace("\\", "/")
     stem = PurePosixPath(sizing_rel).stem
     paths = [str(w).replace("\\", "/") for w in writes]
@@ -77,6 +82,24 @@ def mint_xs_spine(
         "writes": paths,
     }
 
+    rows = [row]
+    for n, g in enumerate(gated, start=2):
+        gid = str(g.get("id") or "").strip() or f"X{n}"
+        if gid == XS_ROW_ID or any(r["id"] == gid for r in rows):
+            gid = f"G{n}"
+        gate = {"owner_repo": str(g.get("owner_repo") or "external"), "requires": str(g.get("requires") or "landed-work")}
+        rows.append(
+            {
+                "id": gid,
+                "title": str(g.get("title") or gid),
+                "change_kind": "code-edit",
+                "surface": sizing_rel,
+                "body": f"Spec: {sizing_rel} ({gid})\nDeclared by the ask as owned by {gate['owner_repo']}; withheld.\n",
+                "writes": [],
+                "external_gate": [gate],
+            }
+        )
+
     text = (
         "---\n"
         + yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True, default_flow_style=False)
@@ -86,7 +109,7 @@ def mint_xs_spine(
         + "**Do not hand-edit** — the next mint overwrites this file in place.\n\n"
         + "## Tasks\n\n"
         + "```yaml plan-tasks\n"
-        + _dump_rows([row])
+        + _dump_rows(rows)
         + "```\n"
     )
     return text, Path(out_dir) / f"{stem}.spine.md"

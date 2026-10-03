@@ -62,6 +62,7 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -210,6 +211,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"refusing to accept on {p}: no statement is on record and none was "
                 "given — this op never composes a criterion on the PM's behalf"
             )
+
+        refusal = post_stamp_refusal(new_statement)
+        if refusal is not None:
+            raise MutateAbort(f"refusing to accept on {p}: {refusal}")
 
         new_accepted = {
             "pm_quote": pm_quote,

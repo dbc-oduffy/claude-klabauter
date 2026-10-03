@@ -73,19 +73,19 @@ def _delivery_block(record: dict) -> Optional[dict]:
 
 
 def _criterion_unsettled(record: dict) -> bool:
-    """True when the run record's frozen criterion status is `not_met` or `indeterminate`."""
+    """True when the run record's frozen criterion status is `not_met`, `indeterminate` or `not_run`."""
     for holder in (record, record.get("inline_review"), record.get("review")):
         block = holder.get("criterion") if isinstance(holder, dict) else None
-        if isinstance(block, dict) and block.get("status") in ("not_met", "indeterminate"):
+        if isinstance(block, dict) and block.get("status") in ("not_met", "indeterminate", "not_run"):
             return True
     return False
 
 
 def _tests_stale(record: dict) -> bool:
-    """True when the run record's frozen build/test status is `fail` or `error`."""
+    """True when the run record's frozen build/test status is `fail`, `error` or `not_run`."""
     for holder in (record, record.get("inline_review"), record.get("review")):
         block = holder.get("tests") if isinstance(holder, dict) else None
-        if isinstance(block, dict) and block.get("status") in ("fail", "error"):
+        if isinstance(block, dict) and block.get("status") in ("fail", "error", "not_run"):
             return True
     return False
 
@@ -109,7 +109,7 @@ def prior_unbacked_claims(record_path: Path) -> tuple[Dict[str, Any], List[dict]
         return record, []
     if delivery is None or delivery.get("verdict") != "FAIL":
         raise ReverifyRefused(
-            f"reverify-delivery: {record_path} carries no delivery FAIL, unmet criterion or failed tests "
+            f"reverify-delivery: {record_path} carries no delivery FAIL, unmet/not-run criterion or failed/not-run tests "
             "to re-verify"
         )
     items = delivery.get("unbacked")

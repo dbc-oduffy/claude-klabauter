@@ -934,6 +934,10 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             _reason = None
             if disposition in NON_DISPATCHABLE_DISPOSITIONS:
                 _reason = ("disposition", "disposition: %s" % disposition)
+            elif _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
+                # Ahead of deferred/em-performed/operator: a gated row of any
+                # mode must reach the gate ledger (StageManifest.gated).
+                _reason = ("external_gate", "uncleared external_gate blocking execution")
             elif deferred is True:
                 _reason = ("deferred", "deferred: true")
             elif em_performed:
@@ -944,8 +948,6 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     "execution_mode: operator — a human must run this row; it "
                     "was NOT dispatched and has NOT been done",
                 )
-            elif _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
-                _reason = ("external_gate", "uncleared external_gate blocking execution")
             elif plan_hold is not None:
                 _reason = ("depends_on_plan", plan_hold)
             if _reason is not None:

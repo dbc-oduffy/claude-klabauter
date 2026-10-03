@@ -107,6 +107,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
+from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal
+
 # ---------------------------------------------------------------------------
 # Vocabulary
 # ---------------------------------------------------------------------------
@@ -1505,6 +1507,9 @@ def _prime_exit(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[st
             "prime_exit_criterion.statement is still a scaffold placeholder "
             "(replace the <REPLACE: ...> marker with the falsifiable sentence)",
         )
+    post_stamp = post_stamp_refusal(statement)
+    if post_stamp is not None:
+        return _defect("prime-exit-post-stamp", post_stamp)
     derived_from = criterion.get("derived_from")
     if not str(derived_from or "").strip():
         return _defect(

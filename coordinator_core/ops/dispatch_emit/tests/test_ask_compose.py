@@ -163,3 +163,11 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
     assert "plan_id: (_manifest.plan_id ?? null)" in ret
     for field in ("wave_sidecar_paths:", "prep:", "delivery:", "incomplete_chunks:"):
         assert field in ret, field
+
+
+def test_size_phase_schema_and_prompt_require_gated_rows():
+    script = _compose()
+    size_stage = script.split("const _sized = await", 1)[1].split("_sizingRel = _sized", 1)[0]
+    assert '"gated"' in size_stage and '"owner_repo"' in size_stage
+    assert "`gated`" in size_stage
+    assert "gated: _gated" in script

@@ -29,6 +29,7 @@ def test_external_and_transitive_rows_in_order():
             "P1",
             "external_gate",
             "owner_repo=C:/example-cockpit-repo requires=commit-in-owner-repo",  # abs-path-ok: fixture
+            owner_repo="C:/example-cockpit-repo",  # abs-path-ok: fixture
         ),
         GatedRow("C9", "transitive_gate_closure", "via P1"),
     ]
