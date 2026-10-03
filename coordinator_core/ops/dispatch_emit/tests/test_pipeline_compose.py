@@ -95,11 +95,11 @@ def test_each_stage_yields_exactly_one_agent_site_with_literal_type_and_model():
     assert subjects(_compose()) == ["A", "B"]
 
 
-def test_over_stage_is_guarded_by_empty_list_skip_before_inchunks():
+def test_over_stage_is_guarded_by_empty_list_skip_before_fan_out():
     script = _compose()
     for stage_id in ("verify", "rebuttal"):
         block = script.split(f"phase('{stage_id}');")[1].split("phase(")[0]
-        assert block.index("items.length === 0") < block.index("inChunks(")
+        assert block.index("items.length === 0") < block.index("fanOut(")
         assert "fanTrailer(item, i + 1, items.length," in block
 
 

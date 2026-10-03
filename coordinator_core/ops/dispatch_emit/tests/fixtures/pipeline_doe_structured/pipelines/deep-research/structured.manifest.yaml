@@ -22,7 +22,6 @@ stages:
     template: structured-verifier-prompt-template.md
     fan_out:
       over: subject.verifiers
-    max_concurrent: 5
     web_caller: true
     depends_on: [scout]
     output: "{{scratch_dir}}/{{item.topic}}-findings.md"
@@ -39,7 +38,6 @@ stages:
     template: structured-rebuttal-prompt-template.md
     fan_out:
       over: stage.verify.return.challenged
-    max_concurrent: 5
     web_caller: true
     depends_on: [verify]
     output: "{{scratch_dir}}/{{item}}-findings.md"

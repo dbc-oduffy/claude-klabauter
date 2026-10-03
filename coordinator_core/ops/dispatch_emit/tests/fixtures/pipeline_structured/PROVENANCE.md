@@ -20,3 +20,6 @@ rebuttal (sonnet, schema), synthesizer (opus), the middle two inside `inChunks(`
 
 `pipelines/deep-research/structured.manifest.yaml` is the v1 manifest that models the same graph. It is an in-repo copy,
 never DoE's file.
+
+The oracle is frozen and still chunks at `MAX_CONCURRENT = 5`. Parity compares agent graph shape only (agent type,
+model, schema, fanned), never chunk size; the pipeline route no longer has a default chunk size or a web-caller ceiling.

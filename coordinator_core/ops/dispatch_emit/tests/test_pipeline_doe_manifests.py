@@ -66,7 +66,7 @@ def test_phase_labels_schema_literal_and_chunk_cap(monkeypatch, tmp_path):
     assert "phases: ['Scout', 'Verify', 'Rebuttal', 'Synthesize']" in script
     assert [m for m in re.findall(r"phase\('([^']+)'\)", script)] == ["Scout", "Verify", "Rebuttal", "Synthesize"]
     assert script.count('"required": ["topic", "challenged"]') == 2
-    assert script.count("), 5);") == 2
+    assert "inChunks" not in script and script.count("fanOut(items,") == 2
     assert "description: 'Structured research, one subject at a time" in script
 
 
@@ -89,21 +89,39 @@ def _copy_with(tmp_path: Path, old: str, new: str) -> Path:
     return content
 
 
-def test_max_concurrent_above_the_ceiling_is_refused(monkeypatch, tmp_path):
-    content = _copy_with(tmp_path, "max_concurrent: 5", "max_concurrent: 6")
+_CAP = "    web_caller: true\n    depends_on: [scout]\n"
+
+
+def _with_cap(tmp_path: Path, value: str) -> Path:
+    return _copy_with(tmp_path, _CAP, f"    max_concurrent: {value}\n" + _CAP)
+
+
+def _emit_one(monkeypatch, tmp_path: Path, content: Path) -> str:
     work = tmp_path / "work"
     work.mkdir()
+    return _emit(monkeypatch, work, content, "structured", subjects=[{"subject": "s", "verifiers": _VERIFIERS}])
+
+
+def test_max_concurrent_above_five_is_accepted(monkeypatch, tmp_path):
+    script = _emit_one(monkeypatch, tmp_path, _with_cap(tmp_path, "6"))
+    assert "inChunks(items," in script and "), 6);" in script
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "2.5", "'x'"])
+def test_max_concurrent_non_positive_or_non_integer_is_refused(monkeypatch, tmp_path, bad):
     with pytest.raises(PipelineEmitRefused) as info:
-        _emit(monkeypatch, work, content, "structured", subjects=[{"subject": "s", "verifiers": _VERIFIERS}])
-    assert any("max_concurrent 6" in r and "ceiling of 5" in r for r in info.value.reasons)
+        _emit_one(monkeypatch, tmp_path, _with_cap(tmp_path, bad))
+    assert any("max_concurrent must be an integer of at least 1" in r for r in info.value.reasons)
 
 
-def test_max_concurrent_lowers_the_chunk_size(monkeypatch, tmp_path):
-    content = _copy_with(tmp_path, "max_concurrent: 5", "max_concurrent: 2")
-    work = tmp_path / "work"
-    work.mkdir()
-    script = _emit(monkeypatch, work, content, "structured", subjects=[{"subject": "s", "verifiers": _VERIFIERS}])
-    assert "), 2);" in script and "), 5);" in script
+def test_max_concurrent_absent_fans_out_unchunked(monkeypatch, tmp_path):
+    script = _emit_one(monkeypatch, tmp_path, _DOE_FIXTURE)
+    assert "fanOut(items," in script and "inChunks" not in script and "CHUNK_SIZE" not in script
+
+
+def test_max_concurrent_present_chunks_at_that_size(monkeypatch, tmp_path):
+    script = _emit_one(monkeypatch, tmp_path, _with_cap(tmp_path, "3"))
+    assert "inChunks(items," in script and "), 3);" in script and "fanOut(items," in script
 
 
 def test_unknown_stage_key_is_still_refused(monkeypatch, tmp_path):

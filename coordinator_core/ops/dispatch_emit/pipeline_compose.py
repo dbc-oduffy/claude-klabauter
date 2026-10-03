@@ -19,7 +19,6 @@ from typing import Mapping
 
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
-    CHUNK_SIZE,
     FAN_OUT_OVER,
     ITEM_MARK,
     PLACEHOLDER_RE,
@@ -48,7 +47,9 @@ _FAN_TRAILER = (
     "\\nWrite this item's output under ${out}/item-${i}/`;"
 )
 
-_IN_CHUNKS = """async function inChunks(items, run, size = CHUNK_SIZE) {
+_FAN_OUT = """const fanOut = (items, run) => parallel(items.map((item, i) => () => run(item, i)));"""
+
+_IN_CHUNKS = """async function inChunks(items, run, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) {
     out.push(...await parallel(items.slice(i, i + size).map((item, j) => () => run(item, i + j))));
@@ -223,6 +224,7 @@ def _stage_expression(
         label = f"s.subject + {label}"
     fanned = stage.fan_out.kind == FAN_OUT_OVER
     size = f", {stage.max_concurrent}" if stage.max_concurrent is not None else ""
+    fan = "inChunks" if stage.max_concurrent is not None else "fanOut"
     item_label = (
         f"s.subject + {_js_string_literal(f':{stage.id}:')} + (i + 1)"
         if scope == SCOPE_SUBJECT
@@ -235,7 +237,7 @@ def _stage_expression(
         expr = (
             "(async () => {\n"
             f"      const items = {holder}.items[{_js_string_literal(stage.id)}];\n"
-            "      return inChunks(items, (item, i) =>\n"
+            f"      return {fan}(items, (item, i) =>\n"
             f"        {call}{size});\n"
             "    })()"
         )
@@ -249,7 +251,7 @@ def _stage_expression(
             "(async () => {\n"
             f"      const items = {items};\n"
             "      if (items.length === 0) return [];\n"
-            "      return inChunks(items, (item, i) =>\n"
+            f"      return {fan}(items, (item, i) =>\n"
             f"        {call}{size});\n"
             "    })()"
         )
@@ -382,7 +384,6 @@ def compose_pipeline_script(
         f"  phases: [{phases}],",
         "};",
         "",
-        f"const CHUNK_SIZE = {CHUNK_SIZE};",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
         f"const subjects = {json.dumps(subject_data, ensure_ascii=True, indent=1)};",
     ]
@@ -398,7 +399,12 @@ def compose_pipeline_script(
     if roster_names:
         roster = {n: {e["slug"]: e["agent_type"] for e in inputs.lists[n]} for n in roster_names}
         out.append(f"const rosterTypes = {json.dumps(roster, ensure_ascii=True, indent=1)};")
-    out += ["", _IN_CHUNKS, "", _FAN_TRAILER, ""]
+    fanned = [s for s in active if s.fan_out.kind == FAN_OUT_OVER]
+    if any(s.max_concurrent is None for s in fanned):
+        out += ["", _FAN_OUT]
+    if any(s.max_concurrent is not None for s in fanned):
+        out += ["", _IN_CHUNKS]
+    out += ["", _FAN_TRAILER, ""]
     out += ["const pre = {};", "const post = {};", "const subjRets = [];", "const results = [];", ""]
     out += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "")
     out += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]

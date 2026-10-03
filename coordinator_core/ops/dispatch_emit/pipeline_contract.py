@@ -20,7 +20,7 @@ from typing import Mapping
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
 __all__ = [
-    "SCHEMA_VERSION", "MANIFEST_SUFFIX", "PIPELINES_DIR", "subject_key", "MAX_CONCURRENT_WEB_CALLERS", "CHUNK_SIZE",
+    "SCHEMA_VERSION", "MANIFEST_SUFFIX", "PIPELINES_DIR", "subject_key",
     "PLACEHOLDER_RE", "FAN_OUT_NONE", "FAN_OUT_PER_SUBJECT", "FAN_OUT_OVER",
     "SCOPE_PRE", "SCOPE_SUBJECT", "SCOPE_POST", "RUN_ID_PREFIX", "RUN_DIR_ROOT",
     "FlagSpec", "FanOut", "When", "Stage", "Manifest", "PipelineInputs", "Schedule",
@@ -31,8 +31,6 @@ __all__ = [
 SCHEMA_VERSION = 1
 MANIFEST_SUFFIX = ".manifest.yaml"
 PIPELINES_DIR = "pipelines"
-MAX_CONCURRENT_WEB_CALLERS = 5
-CHUNK_SIZE = 5
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
 FAN_OUT_NONE, FAN_OUT_PER_SUBJECT, FAN_OUT_OVER = "none", "per_subject", "over"
 SCOPE_PRE, SCOPE_SUBJECT, SCOPE_POST = "pre", "subject", "post"
@@ -103,7 +101,7 @@ class Stage:
     """One agent() call site; template and schema are names keyed into Manifest (an inline schema
     is keyed `<inline:<stage id>>`). model None keeps the agent definition's pinned model;
     agent_type_from `inputs.<roster>` replaces agent_type with a per-item lookup; phase None is
-    the stage id; max_concurrent None is CHUNK_SIZE."""
+    the stage id; max_concurrent None fans out unchunked."""
 
     id: str
     agent_type: str | None

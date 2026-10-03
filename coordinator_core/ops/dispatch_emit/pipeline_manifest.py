@@ -17,8 +17,8 @@ import yaml
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
-    CHUNK_SIZE, FAN_OUT_NONE, FAN_OUT_OVER, FAN_OUT_PER_SUBJECT, MANIFEST_SUFFIX, PIPELINES_DIR,
-    MAX_CONCURRENT_WEB_CALLERS, PLACEHOLDER_RE, SCHEMA_VERSION, SCOPE_POST, SCOPE_PRE,
+    FAN_OUT_NONE, FAN_OUT_OVER, FAN_OUT_PER_SUBJECT, MANIFEST_SUFFIX, PIPELINES_DIR,
+    PLACEHOLDER_RE, SCHEMA_VERSION, SCOPE_POST, SCOPE_PRE,
     SCOPE_SUBJECT, SUBJECTS_MODE_SEQUENTIAL, WHEN_FLAG, WHEN_NONEMPTY, WHEN_RETURN, FanOut,
     FlagSpec, Manifest, PipelineEmitRefused, PipelineInputs, Schedule, Stage, When, subject_key,
     subject_slug,
@@ -234,10 +234,6 @@ def _load_stage(
     if max_concurrent is not None:
         if not isinstance(max_concurrent, int) or isinstance(max_concurrent, bool) or max_concurrent < 1:
             reasons.append(f"{label}: max_concurrent must be an integer of at least 1")
-        elif max_concurrent > MAX_CONCURRENT_WEB_CALLERS:
-            reasons.append(
-                f"{label}: max_concurrent {max_concurrent} exceeds the ceiling of {MAX_CONCURRENT_WEB_CALLERS}"
-            )
     optional = raw.get("optional", False)
     if not isinstance(optional, bool):
         reasons.append(f"{label}: optional must be true or false")
@@ -430,18 +426,6 @@ def validate(manifest: Manifest, inputs: PipelineInputs) -> Schedule:
         _check_stage_tokens(stage, manifest, inputs, scope.get(stage.id), closure.get(stage.id), by_id, reasons)
 
     levels = _levels([sid for sid in order if sid not in skipped], effective, scope, by_id)
-    for scope_name, scope_levels in levels.items():
-        for level in scope_levels:
-            width = sum(
-                (by_id[sid].max_concurrent or CHUNK_SIZE) if by_id[sid].fan_out.kind == FAN_OUT_OVER else 1
-                for sid in level if by_id[sid].web_caller
-            )
-            if width > MAX_CONCURRENT_WEB_CALLERS:
-                callers = [sid for sid in level if by_id[sid].web_caller]
-                reasons.append(
-                    f"{scope_name} level runs {width} concurrent web callers "
-                    f"(max {MAX_CONCURRENT_WEB_CALLERS}): {', '.join(callers)}"
-                )
     if reasons:
         raise PipelineEmitRefused(reasons)
     return Schedule(scope=scope, levels=levels, skipped=frozenset(skipped))

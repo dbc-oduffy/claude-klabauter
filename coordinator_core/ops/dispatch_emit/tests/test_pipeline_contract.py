@@ -44,7 +44,7 @@ def test_dataclasses_are_frozen():
 
 
 def test_pinned_constants():
-    assert (pc.SCHEMA_VERSION, pc.CHUNK_SIZE, pc.MAX_CONCURRENT_WEB_CALLERS) == (1, 5, 5)
+    assert pc.SCHEMA_VERSION == 1
     assert pc.MANIFEST_SUFFIX == ".manifest.yaml"
     assert pc.RUN_ID_PREFIX == "pipeline-"
     assert len({pc.SCOPE_PRE, pc.SCOPE_SUBJECT, pc.SCOPE_POST}) == 3

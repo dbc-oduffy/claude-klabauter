@@ -117,10 +117,10 @@ def _web_pair(chained):
     return [src, over, per]
 
 
-def test_web_width_six_on_one_level_names_both(tmp_path):
-    reasons = _refusal(tmp_path, _web_pair(chained=False), template="x {{subject}}")
-    web = [r for r in reasons if "web callers" in r]
-    assert web and "ov" in web[0] and "ps" in web[0] and "6" in web[0]
+def test_web_width_on_one_level_is_not_capped(tmp_path):
+    manifest = load_manifest(_build(tmp_path, _web_pair(chained=False), template="x {{subject}}"), "p")
+    schedule = validate(manifest, _inputs())
+    assert set(schedule.levels[SCOPE_SUBJECT][1]) == {"ov", "ps"}
 
 
 def test_chained_web_stages_pass(tmp_path):

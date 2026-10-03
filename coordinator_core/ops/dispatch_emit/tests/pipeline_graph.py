@@ -2,7 +2,7 @@
 
 `agent_graph(script_text)` returns one entry per real `agent(` call site in source order:
 `{agentType, model, has_schema, fanned}`, where `fanned` means the call sits inside an
-`inChunks(` callback. `subjects(script_text)` returns the subject keys the script carries.
+`inChunks(` or `fanOut(` callback. `subjects(script_text)` returns the subject keys the script carries.
 Masking (comments, string interiors) is the hook's own, so a call named inside a prompt or a
 comment is never counted.
 """
@@ -94,7 +94,7 @@ def _options_object(buf: str, mask: bytearray, open_idx: int, close_idx: int) ->
 def agent_graph(script_text: str) -> list[dict]:
     buf = _strip_comments(script_text)
     mask = _string_mask(buf)
-    chunk_spans = _call_sites(buf, mask, "inChunks")
+    chunk_spans = _call_sites(buf, mask, "inChunks") + _call_sites(buf, mask, "fanOut")
     graph = []
     for open_idx, close_idx in _call_sites(buf, mask, "agent"):
         options = _options_object(buf, mask, open_idx, close_idx)
