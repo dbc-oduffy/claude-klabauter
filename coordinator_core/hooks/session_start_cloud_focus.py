@@ -1,18 +1,14 @@
 """coordinator_core.hooks.session_start_cloud_focus -- SessionStart(startup)
-op: arm a cloud session's focus repo; report missing agent teams.
+op: arm a cloud session's focus repo.
 
 Port of: coordinator-content-repo `coordinator/hooks/scripts/session-start-cloud-focus.py`
-(PM order: warm-hook migration, claude-klabauter slice). Same two facts, same
-cloud-only gating, same silent-everywhere-else contract.
+(PM order: warm-hook migration, claude-klabauter slice). Same cloud-only gating,
+same silent-everywhere-else contract.
 
 Cloud-only, by the engine's own detector (`coordinator_core.env_locality
 .harness_rung`, harness rung only -- a headless VM is not a cloud session);
-a silent no-op everywhere else. Two legs:
+a silent no-op everywhere else. One leg:
 
-- Agent teams are on in every cloud session (the settings manifest's
-  all-machines `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, applied at
-  pre-boot). The harness reads that flag once, at process start, so this
-  hook can only report it missing, never turn it on. Silent when it is `1`.
 - `COORDINATOR_CLOUD_FOCUS_REPO`, `owner/repo` or bare `repo`. This hook
   locates that checkout, and gives its session branch an empty anchor
   commit when the branch carries nothing ahead of base (GitHub refuses a
@@ -53,7 +49,6 @@ from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
 
 FOCUS_ENV = "COORDINATOR_CLOUD_FOCUS_REPO"
-TEAMS_FLAG_ENV = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 SESSION_ID_ENV = "CLAUDE_CODE_REMOTE_SESSION_ID"
 
 # abs-path-ok: cloud-sandbox mount points, not a machine-local repo path -- ported
@@ -263,15 +258,6 @@ def ensure_anchor(checkout: Path, branch: str, base: str, session_id: str) -> bo
         return False
 
 
-def render_teams_line(flag: str) -> Optional[str]:
-    if flag == "1":
-        return None
-    return (
-        f"CLOUD: agent teams OFF. Add {TEAMS_FLAG_ENV}=1 to the env-var box, then start a "
-        "new session."
-    )
-
-
 def render_focus_line(focus: str, name: Optional[str], branch: Optional[str],
                       base: Optional[str], ready: bool) -> str:
     if name is None:
@@ -308,7 +294,6 @@ def compute_context(payload: dict) -> Optional[str]:
 
     lines: List[Optional[str]] = []
     try:
-        lines.append(render_teams_line(str(env.get(TEAMS_FLAG_ENV, "") or "").strip()))
         if focus:
             owner, repo = parse_focus(focus)
             roots: List[Path] = [*CHECKOUT_ROOTS]

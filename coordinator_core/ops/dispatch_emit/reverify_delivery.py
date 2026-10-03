@@ -28,8 +28,10 @@ from coordinator_core.ops.review_mint.execute_review import (
     _DELIVERY_VERIFIER_AGENT_TYPE,
     _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
     _DELIVERY_VERIFIER_ROLE_PREAMBLE,
+    CRITERION_JUDGE_PHASE_TITLE,
     _agent_opts_for,
     _schema_literal,
+    compose_criterion_judge,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -37,6 +39,7 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 VERDICT_DIR = Path("state") / "delivery-verdicts"
 RECORD_KIND = "delivery-verdict"
 _PHASE = "Delivery re-verify"
+_CRITERION_STATUSES = ("met", "not_met", "indeterminate")
 
 
 class ReverifyRefused(ValueError):
@@ -118,8 +121,9 @@ def compose_reverify_script(
     head_sha: str,
     claims: List[dict],
 ) -> str:
-    """A Workflow script holding exactly one delivery-verifier agent call, briefed with the
-    prior FAIL's unbacked claims and told to verify them at `head_sha`."""
+    """A Workflow script holding one delivery-verifier agent call, briefed with the prior FAIL's
+    unbacked claims and told to verify them at `head_sha`, then the roster's criterion judge
+    (when declared) against the same HEAD."""
     review = parse_execute_review(fragment)
     agent = next((a for a in review.review_wave if a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE), None)
     if agent is None:
@@ -151,11 +155,32 @@ def compose_reverify_script(
         agent_opts=_agent_opts_for(agent, emitted_agent_type=_DELIVERY_VERIFIER_HOST_NATIVE_TYPE),
         schema_literal=_schema_literal(agent.schema, stage_schemas),
     )
+    judge_call = compose_criterion_judge(
+        review,
+        stage_schemas=stage_schemas,
+        plan_path=plan_path,
+        run_base_sha=base,
+        falsifier=None,
+        prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
+    )
+    phases = [_js_string_literal(_PHASE)]
+    judge_lines = ""
+    criterion_field = ""
+    if judge_call is not None:
+        phases.append(_js_string_literal(CRITERION_JUDGE_PHASE_TITLE))
+        judge_lines = (
+            f"  phase({_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)});\n"
+            f"  const _judge = await {judge_call};\n"
+        )
+        criterion_field = (
+            ", criterion: _judge ? { status: _judge.status ?? null, "
+            "observation: _judge.observation ?? null } : null"
+        )
     meta = (
         "export const meta = {\n"
         "  name: 'reverify-delivery',\n"
-        "  description: 'Re-run the delivery verifier at HEAD over a prior delivery FAIL.',\n"
-        f"  phases: [{_js_string_literal(_PHASE)}],\n"
+        "  description: 'Re-run the delivery verifier and criterion judge at HEAD over a prior delivery FAIL.',\n"
+        f"  phases: [{', '.join(phases)}],\n"
         "};\n"
     )
     ident = {
@@ -168,9 +193,11 @@ def compose_reverify_script(
         f"{meta}\n"
         f"  phase({_js_string_literal(_PHASE)});\n"
         f"  const _delivery = await {call};\n"
+        f"{judge_lines}"
         f"  return {{ reverify_delivery: {json.dumps(ident, sort_keys=True)}, "
         "verdict: _delivery?.verdict ?? null, "
-        "claims_unbacked: (_delivery?.claims_unbacked ?? []).map(c => ({ claim: c && c.claim, anchor: c && c.anchor })) };\n"
+        "claims_unbacked: (_delivery?.claims_unbacked ?? []).map(c => ({ claim: c && c.claim, anchor: c && c.anchor }))"
+        f"{criterion_field} }};\n"
     )
 
 
@@ -183,6 +210,7 @@ def record_delivery_verdict(
     verdict: Optional[str],
     unbacked: List[dict],
     session_id: str = "",
+    criterion: Optional[dict] = None,
 ) -> str:
     """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path."""
     if verdict not in ("PASS", "FAIL"):
@@ -199,6 +227,11 @@ def record_delivery_verdict(
         "session_id": session_id,
         "delivery": {"verdict": verdict, "unbacked": unbacked if verdict == "FAIL" else []},
     }
+    if criterion is not None:
+        status = criterion.get("status")
+        if status not in _CRITERION_STATUSES:
+            raise ReverifyRefused(f"reverify-delivery: criterion status {status!r} is not one of {_CRITERION_STATUSES}")
+        fm["criterion"] = {"status": status, "observation": criterion.get("observation"), "sidecar": None}
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8", newline="\n") as fh:
@@ -207,9 +240,7 @@ def record_delivery_verdict(
     return rel.as_posix()
 
 
-def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
-    """The `delivery` block of the newest delivery-verdict record superseding `run_record_rel`,
-    else `None`. Newest is by `recorded_at`."""
+def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
     base = repo_root / VERDICT_DIR
     if not base.is_dir():
         return None
@@ -218,13 +249,27 @@ def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Option
         fm = _frontmatter(path)
         if not fm or fm.get("kind") != RECORD_KIND or fm.get("supersedes") != run_record_rel:
             continue
-        delivery = fm.get("delivery")
-        if not isinstance(delivery, dict):
+        if not isinstance(fm.get("delivery"), dict):
             continue
         key = (str(fm.get("recorded_at") or ""), path.name)
         if best is None or key > best[0]:
-            best = (key, delivery)
+            best = (key, fm)
     return best[1] if best else None
+
+
+def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
+    """The `delivery` block of the newest delivery-verdict record superseding `run_record_rel`,
+    else `None`. Newest is by `recorded_at`."""
+    fm = _newest_supersession(repo_root, run_record_rel)
+    return fm["delivery"] if fm else None
+
+
+def latest_criterion_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
+    """The `criterion` block of that same newest record; `None` when there is no record or it
+    predates criterion re-judging."""
+    fm = _newest_supersession(repo_root, run_record_rel)
+    criterion = fm.get("criterion") if fm else None
+    return criterion if isinstance(criterion, dict) and criterion.get("status") else None
 
 
 _BOOKKEEPING_GLOB = ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md"
@@ -298,6 +343,22 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
     return {"path": out_path, "supersedes": rel, "claims": len(claims), "receipt": receipt}
 
 
+def _unwrap_task_output(result: Any) -> dict:
+    """The result inside a Workflow task-output wrapper (`result`/`output`/`return_value`,
+    possibly JSON text); anything else raises."""
+    if isinstance(result, dict):
+        for key in ("result", "output", "return_value", "returnValue"):
+            inner = result.get(key)
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except ValueError:
+                    continue
+            if isinstance(inner, dict) and "reverify_delivery" in inner:
+                return inner
+    raise ValueError("result carries no reverify_delivery payload, bare or in a task-output wrapper")
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = argparse.ArgumentParser(prog="reverify-delivery")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -313,6 +374,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if not raw.lstrip().startswith("{"):
             raw = Path(raw).read_text(encoding="utf-8")
         result = json.loads(raw)
+        if "reverify_delivery" not in result:
+            result = _unwrap_task_output(result)
         ident = result["reverify_delivery"]
         rel = record_delivery_verdict(
             repo_root=repo_root,
@@ -322,6 +385,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             verdict=result.get("verdict"),
             unbacked=result.get("claims_unbacked") or [],
             session_id=args.session_id,
+            criterion=result.get("criterion") or None,
         )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)

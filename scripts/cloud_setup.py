@@ -1774,6 +1774,18 @@ def register_plugin_settings() -> None:
 #: `_SPEC` is the executable form of the settings manifest's env table (DoE pins
 #: the two together), so running it keeps the cloud on that single source: a new
 #: all-machines row reaches cloud with no change here.
+def _settings_env_module():
+    """`coordinator_core.install.settings_env`, imported lazily: this module is
+    stdlib-only and the klabauter clone is not otherwise on `sys.path`."""
+    try:
+        from coordinator_core.install import settings_env
+    except ImportError:
+        sys.path.insert(0, str(Path(CLONES["klabauter"]["dest"])))
+        from coordinator_core.install import settings_env
+
+    return settings_env
+
+
 SETTINGS_ENV_CHECKER_REL = ("bin", "check-settings-env.py")
 
 
@@ -1781,44 +1793,18 @@ def apply_settings_manifest_env(report: Report) -> None:
     """Apply the settings manifest's all-machines env values to the
     `settings.json` this run wrote, and record the checker's verdict.
 
-    The values are not written here by name, deliberately — see
-    `SETTINGS_ENV_CHECKER_REL`. `--apply` writes only `all_machines` rows, so a
-    machine-specific row is reported, never forced. Unapplied values each gate a
-    tool out of the session silently (agent teams, the task tools), so any
-    finding left after the apply pass raises, and `run_step` carries it to the
-    session verdict rule.
+    `--apply` writes only `all_machines` rows, so a machine-specific row is
+    reported, never forced. Any finding left after the apply pass raises, and
+    `run_step` carries it to the session verdict rule.
     """
-    checker = Path(CLONES["coordinator-claude"]["dest"]).joinpath(*SETTINGS_ENV_CHECKER_REL)
-    if not checker.is_file():
-        raise FileNotFoundError(f"settings-env checker not found at {checker}")
-    settings_path = _claude_home() / "settings.json"
-    result = subprocess.run(
-        [sys.executable, str(checker), "--settings", str(settings_path), "--apply", "--json"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        stdin=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    mod = _settings_env_module()
     try:
-        verdict = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        verdict = None
-    if not isinstance(verdict, dict):
-        report.settings_env = {"exit_code": result.returncode, "applied": None, "findings": None}
-        raise RuntimeError(
-            f"check-settings-env exited {result.returncode} with no JSON verdict: "
-            + ((result.stderr or result.stdout or "").strip()[-400:] or "<no output>")
+        report.settings_env = mod.apply_settings_env(
+            Path(CLONES["coordinator-claude"]["dest"]), _claude_home() / "settings.json"
         )
-    findings = verdict.get("findings") or []
-    report.settings_env = {
-        "exit_code": result.returncode,
-        "applied": verdict.get("applied") or [],
-        "findings": findings,
-    }
-    if result.returncode != 0:
-        named = ", ".join(f"{f.get('var')} ({f.get('kind')})" for f in findings) or "<none named>"
-        raise RuntimeError(f"check-settings-env exited {result.returncode}; unapplied: {named}")
+    except mod.SettingsEnvError as exc:
+        report.settings_env = exc.record
+        raise
 
 
 def verify_plugin_settings(report: Report) -> None:

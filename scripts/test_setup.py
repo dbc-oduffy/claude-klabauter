@@ -1062,6 +1062,55 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
         "install_verify_settings_home",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "apply_settings_manifest_env", lambda *a, **k: True)
+
+
+_SETTINGS_ENV_CHECKER = """
+import json, sys
+path = sys.argv[sys.argv.index("--settings") + 1]
+assert "--apply" in sys.argv
+try:
+    doc = json.load(open(path))
+except FileNotFoundError:
+    doc = {}
+doc.setdefault("env", {})["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
+json.dump(doc, open(path, "w"))
+print(json.dumps({"applied": ["CLAUDE_CODE_ENABLE_TODO_TOOLS"], "findings": []}))
+"""
+
+
+def _plant_settings_env_plugin(setup_mod, monkeypatch, tmp_path, body):
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "check-settings-env.py").write_text(body)
+    monkeypatch.setattr(
+        setup_mod, "_resolve_coordinator_claude_root", lambda *a, **k: (plugin, None)
+    )
+    monkeypatch.setattr(setup_mod, "_resolve_plugin_root_for_machine_local", lambda p: p)
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    return cfg
+
+
+def test_apply_settings_manifest_env_writes_defaults_and_repairs_drift(setup_mod, monkeypatch, tmp_path):
+    cfg = _plant_settings_env_plugin(setup_mod, monkeypatch, tmp_path, _SETTINGS_ENV_CHECKER)
+    (cfg / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_ENABLE_TODO_TOOLS": "0"}}))
+    repo_root = Path(setup_mod.__file__).resolve().parent.parent
+    assert setup_mod.apply_settings_manifest_env(repo_root, repo_root, None) is True
+    env = json.loads((cfg / "settings.json").read_text())["env"]
+    assert env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "1"
+
+
+def test_apply_settings_manifest_env_fails_loudly_on_nonzero_exit(setup_mod, monkeypatch, tmp_path, capsys):
+    _plant_settings_env_plugin(
+        setup_mod, monkeypatch, tmp_path,
+        "import json, sys\nprint(json.dumps({'applied': [], 'findings': "
+        "[{'var': 'X', 'kind': 'wrong-value'}]}))\nsys.exit(1)\n",
+    )
+    repo_root = Path(setup_mod.__file__).resolve().parent.parent
+    assert setup_mod.apply_settings_manifest_env(repo_root, repo_root, None) is False
+    assert "X (wrong-value)" in capsys.readouterr().err
 
 
 def test_main_preflight_flag_short_circuits_before_flag_pair_gate(setup_mod, monkeypatch):

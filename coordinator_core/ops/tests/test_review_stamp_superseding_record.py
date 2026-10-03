@@ -120,7 +120,8 @@ def test_mint_refuses_a_fail_delivery_with_mints_exact_message(tmp_path):
     )
     with pytest.raises(m.MintRefusal) as exc:
         m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
-    assert str(exc.value) == "review-stamp: refusing to mint: delivery verdict is 'FAIL', not PASS"
+    assert str(exc.value).startswith("review-stamp: refusing to mint: delivery verdict is 'FAIL', not PASS;")
+    assert "--reverify-delivery" in str(exc.value)
 
 
 def _count_spawns(monkeypatch) -> list:
@@ -131,7 +132,7 @@ def _count_spawns(monkeypatch) -> list:
         calls.append(a)
         return real(*a, **kw)
 
-    monkeypatch.setattr(m.subprocess, "run", counting)
+    monkeypatch.setattr(subprocess, "run", counting)
     return calls
 
 

@@ -461,7 +461,10 @@ def mint(
         if record is None:
             raise MintRefusal(f"review-stamp: could not read superseding record {record_path}")
         if record.get("kind") != "superseding-review":
-            raise MintRefusal(f"review-stamp: {record_path} is not a superseding-review record")
+            raise MintRefusal(
+                f"review-stamp: {record_path} is not a superseding-review record; "
+                "write one with op review_mint.record_superseding_review"
+            )
         if str(record.get("plan_id") or "") != plan_id:
             raise MintRefusal(
                 f"review-stamp: superseding record plan_id {record.get('plan_id')!r} does not match {plan_id!r}"
@@ -514,13 +517,18 @@ def mint(
     if superseding_record is not None:
         delivery_data = superseding_delivery(integration_data, delivery_data)
     if integration_path is not None:
-        from coordinator_core.ops.dispatch_emit.reverify_delivery import latest_delivery_supersession
-
-        reverified = latest_delivery_supersession(
-            repo_root, integration_path.relative_to(repo_root).as_posix()
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import (
+            latest_criterion_supersession,
+            latest_delivery_supersession,
         )
+
+        run_rel = integration_path.relative_to(repo_root).as_posix()
+        reverified = latest_delivery_supersession(repo_root, run_rel)
         if reverified is not None:
             delivery_data = reverified
+            reverified_criterion = latest_criterion_supersession(repo_root, run_rel)
+            if reverified_criterion is not None:
+                integration_data = {**integration_data, "criterion": reverified_criterion}
     delivery_verdict = delivery_data.get("verdict")
 
     fixes_applied = integration_data.get("fixes_applied")
@@ -546,6 +554,12 @@ def mint(
 
     refusal = mint_refusal({**integration_data, "delivery": delivery_data}, prep_data, build_test_data)
     if refusal is not None:
+        if delivery_verdict == "FAIL":
+            refusal += (
+                "; a fix-forward clears this by re-verifying delivery at HEAD: "
+                "emit-dispatch-workflow --plan <plan> --reverify-delivery <run-record>, "
+                "then reverify-delivery record"
+            )
         raise MintRefusal(refusal)
 
     try:

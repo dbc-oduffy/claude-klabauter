@@ -3567,6 +3567,34 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
         print(line)
 
 
+def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> bool:
+    """Write the settings manifest's all-machines env values into
+    `settings.json` via `<plugin-root>/bin/check-settings-env.py --apply`.
+    Idempotent, so a re-run repairs drift. Returns False (fatal to the caller)
+    when the plugin root or checker is missing or the checker exits non-zero."""
+    print()
+    print("--- Settings-manifest env defaults ---")
+    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
+    if plugin_root is None:
+        print(f"FAIL [settings-env] no plugin root resolved under {coord_path}", file=sys.stderr)
+        return False
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    from coordinator_core._settings_home import claude_config_dir
+    from coordinator_core.install.settings_env import SettingsEnvError, apply_settings_env
+
+    settings_path = claude_config_dir() / "settings.json"
+    try:
+        record = apply_settings_env(plugin_root, settings_path)
+    except (SettingsEnvError, FileNotFoundError, OSError, subprocess.SubprocessError) as exc:
+        print(f"FAIL [settings-env] {exc}", file=sys.stderr)
+        return False
+    applied = ", ".join(record["applied"]) or "nothing to change"
+    print(f"PASS [settings-env] {settings_path} ({applied})")
+    return True
+
+
 def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
     """Best-effort install-chain step: lands the coordinator LFS pre-push gate
     at `.git/hooks/pre-push`, so the ~267ms / ~20-spawn stock git-lfs shim
@@ -5249,6 +5277,8 @@ def main(argv: list[str]) -> int:
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
         install_claude_author_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
+        if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
+            return 1
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)

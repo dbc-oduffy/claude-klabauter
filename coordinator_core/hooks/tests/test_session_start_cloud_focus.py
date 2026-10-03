@@ -20,7 +20,7 @@ def _git(repo, *args, check=True):
 
 
 def _cloud_env(**extra) -> dict:
-    env = {"CLAUDE_CODE_REMOTE": "true", mod.TEAMS_FLAG_ENV: "1"}
+    env = {"CLAUDE_CODE_REMOTE": "true"}
     env.update(extra)
     return env
 
@@ -55,7 +55,7 @@ def test_op_registered():
 
 
 def test_no_op_off_cloud():
-    result = mod._handler({"env": {mod.TEAMS_FLAG_ENV: "1"}})
+    result = mod._handler({"env": {}})
     assert result.get("hookSpecificOutput", {}).get("additionalContext") is None
 
 
@@ -68,12 +68,6 @@ def test_malformed_payload_safe():
     assert mod._handler({}) == {}
     assert mod._handler({"env": "not-a-mapping"}) == {}
     assert mod._handler(None) == {}
-
-
-def test_teams_flag_missing_reports():
-    context = mod.compute_context({"env": {"CLAUDE_CODE_REMOTE": "true"}})
-    assert context is not None
-    assert "agent teams OFF" in context
 
 
 def test_cloud_gating_anchors_level_branch_and_hands_off(tmp_path, monkeypatch):
@@ -119,11 +113,6 @@ def test_cloud_focus_no_checkout_match(tmp_path, monkeypatch):
     context = mod.compute_context(payload)
     assert context is not None
     assert "no checkout matches nobody/nowhere" in context
-
-
-def test_render_teams_line():
-    assert mod.render_teams_line("1") is None
-    assert mod.render_teams_line("") is not None
 
 
 def test_parse_focus():

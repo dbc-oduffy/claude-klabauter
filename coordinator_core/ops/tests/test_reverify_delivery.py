@@ -103,3 +103,78 @@ def test_a_task_output_resolves_to_the_plans_bookkeeping_record_and_emits_a_rece
     )
     assert result["supersedes"].endswith("pln-example-abc123.review-wave-bookkeeping.md")
     assert result["receipt"] and (out.parent / (out.name + ".emitted.json")).is_file()
+
+
+_NOT_MET = {"status": "not_met", "observation": "old", "sidecar": None}
+
+
+def _fail_not_met(tmp_path):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    record = _record(repo, head, delivery=_FAIL, criterion=_NOT_MET)
+    return repo, record, record.relative_to(repo).as_posix()
+
+
+def _supersede_with(repo, rel, verdict, criterion):
+    return rd.record_delivery_verdict(
+        repo_root=repo, supersedes=rel, plan_id="pln-example-abc123",
+        head_sha="h" * 40, verdict=verdict, unbacked=[], criterion=criterion,
+    )
+
+
+def test_reverify_pass_and_met_clears_a_frozen_not_met_criterion(tmp_path):
+    repo, record, rel = _fail_not_met(tmp_path)
+    with pytest.raises(m.MintRefusal):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    _supersede_with(repo, rel, "PASS", {"status": "met", "observation": "ran it"})
+    stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    assert stamp["criterion"]["status"] == "met"
+
+
+def test_reverify_not_met_criterion_still_refuses(tmp_path):
+    repo, record, rel = _fail_not_met(tmp_path)
+    _supersede_with(repo, rel, "PASS", {"status": "not_met", "observation": "still"})
+    with pytest.raises(m.MintRefusal, match="not_met"):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+
+
+def test_old_shape_record_keeps_the_frozen_criterion(tmp_path):
+    repo, record, rel = _fail_not_met(tmp_path)
+    _supersede(repo, rel, "PASS")
+    assert rd.latest_criterion_supersession(repo, rel) is None
+    with pytest.raises(m.MintRefusal, match="not_met"):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+
+
+def test_script_runs_the_criterion_judge_and_returns_it():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].append(
+        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
+                                      "effort": "low", "schema": "judge-result"}]}
+    )
+    schemas = {**_STAGE_SCHEMAS, "judge-result": {"type": "object", "properties": {"status": {"type": "string"}},
+                                                  "required": ["status"]}}
+    script = rd.compose_reverify_script(
+        fragment=fragment, stage_schemas=schemas, plan_path="p.md",
+        run_record_rel="r.md", plan_id="pln-1", run_base_sha="a" * 40,
+        head_sha="b" * 40, claims=_CLAIMS,
+    )
+    assert script.count("agent(") == 2
+    assert "criterion: _judge" in script
+
+
+def test_record_cli_accepts_bare_and_wrapped_results_and_rejects_others(tmp_path, capsys):
+    import json
+
+    repo, _, rel = _fail_not_met(tmp_path)
+    bare = {
+        "reverify_delivery": {"plan_id": "pln-example-abc123", "head_sha": "h" * 40},
+        "verdict": "PASS", "claims_unbacked": [],
+        "criterion": {"status": "met", "observation": "ok"},
+    }
+    argv = ["record", "--run-record", rel, "--repo-root", str(repo), "--result-json"]
+    assert rd.main(argv + [json.dumps(bare)]) == 0
+    assert rd.main(argv + [json.dumps({"result": bare, "status": "completed"})]) == 0
+    assert rd.main(argv + [json.dumps({"output": json.dumps(bare)})]) == 0
+    assert rd.main(argv + [json.dumps({"nothing": 1})]) == 1
+    assert rd.latest_criterion_supersession(repo, rel)["status"] == "met"
