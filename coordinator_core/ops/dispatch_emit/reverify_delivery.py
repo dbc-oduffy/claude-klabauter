@@ -259,9 +259,13 @@ def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]
 
 def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
     """The `delivery` block of the newest delivery-verdict record superseding `run_record_rel`,
-    else `None`. Newest is by `recorded_at`."""
+    else `None`, with the record's `head_sha` (the HEAD it verified) added when it has one.
+    Newest is by `recorded_at`."""
     fm = _newest_supersession(repo_root, run_record_rel)
-    return fm["delivery"] if fm else None
+    if not fm:
+        return None
+    head = fm.get("head_sha")
+    return {**fm["delivery"], "head_sha": str(head)} if head else fm["delivery"]
 
 
 def latest_criterion_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:

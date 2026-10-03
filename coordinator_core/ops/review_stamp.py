@@ -427,6 +427,21 @@ def _count(value: Any) -> int:
     return len(value) if isinstance(value, (list, tuple)) else 0
 
 
+def _drop_review_stamp_block(fm_text: str) -> str:
+    """`fm_text` without any top-level `review_stamp:` block (the key line and its indented body)."""
+    kept: list[str] = []
+    skipping = False
+    for line in fm_text.split("\n"):
+        if line.startswith("review_stamp:"):
+            skipping = True
+            continue
+        if skipping and (not line.strip() or line[0] in " \t"):
+            continue
+        skipping = False
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def mint(
     plan_path: Path,
     repo_root: Path,
@@ -526,6 +541,7 @@ def mint(
         reverified = latest_delivery_supersession(repo_root, run_rel)
         if reverified is not None:
             delivery_data = reverified
+            terminal_sha = str(reverified.get("head_sha") or terminal_sha)
             reverified_criterion = latest_criterion_supersession(repo_root, run_rel)
             if reverified_criterion is not None:
                 integration_data = {**integration_data, "criterion": reverified_criterion}
@@ -542,6 +558,11 @@ def mint(
         build_test_data = _load_sidecar(Path(build_test_path))
         if build_test_data is None:
             raise MintRefusal(f"review-stamp: no build/test record at {build_test_path}")
+        if "status" not in build_test_data:
+            raise MintRefusal(
+                f"review-stamp: --build-test expects a build/test record (frontmatter with `status: pass` "
+                f"plus run/failed counts), not a delivery-verdict or run record; {build_test_path} has no `status`"
+            )
         build_test_sidecar = str(build_test_path).replace("\\", "/")
     else:
         build_test_data = integration_data.get("tests")
@@ -612,7 +633,7 @@ def mint(
     # rather than routed through insert_fm_field_raw's single-line contract.
     body_lines = raw_yaml.splitlines()[1:]
     indented = "\n".join(f"  {ln}" for ln in body_lines)
-    new_fm = split.fm_text.rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
+    new_fm = _drop_review_stamp_block(split.fm_text).rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
     new_text = rebuild(split, new_fm)
     replace_text(plan_path, new_text)
     return stamp

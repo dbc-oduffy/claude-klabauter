@@ -27,10 +27,10 @@ def _fail_record(tmp_path):
     return repo, record, record.relative_to(repo).as_posix()
 
 
-def _supersede(repo, rel, verdict, unbacked=()):
+def _supersede(repo, rel, verdict, unbacked=(), head_sha=None):
     return rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id="pln-example-abc123",
-        head_sha="h" * 40, verdict=verdict, unbacked=list(unbacked),
+        head_sha=head_sha or _git(repo, "rev-parse", "HEAD"), verdict=verdict, unbacked=list(unbacked),
     )
 
 
@@ -118,7 +118,7 @@ def _fail_not_met(tmp_path):
 def _supersede_with(repo, rel, verdict, criterion):
     return rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id="pln-example-abc123",
-        head_sha="h" * 40, verdict=verdict, unbacked=[], criterion=criterion,
+        head_sha=_git(repo, "rev-parse", "HEAD"), verdict=verdict, unbacked=[], criterion=criterion,
     )
 
 
@@ -178,3 +178,46 @@ def test_record_cli_accepts_bare_and_wrapped_results_and_rejects_others(tmp_path
     assert rd.main(argv + [json.dumps({"output": json.dumps(bare)})]) == 0
     assert rd.main(argv + [json.dumps({"nothing": 1})]) == 1
     assert rd.latest_criterion_supersession(repo, rel)["status"] == "met"
+
+
+def _fix_forward(repo):
+    (repo / "docs" / "plans" / "example.md").write_text(
+        (repo / "docs" / "plans" / "example.md").read_text(encoding="utf-8") + "\nfix\n", encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "fix-forward")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_supersession_head_becomes_the_stamp_terminal_and_closeout_check_passes(tmp_path):
+    repo, record, rel = _fail_record(tmp_path)
+    original = _git(repo, "rev-parse", "HEAD")
+    new_head = _fix_forward(repo)
+    _supersede(repo, rel, "PASS", head_sha=new_head)
+    stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    assert stamp["terminal_commit_sha"] == new_head != original
+    assert stamp["terminal_tree_sha"] == _git(repo, "rev-parse", new_head + "^{tree}")
+    assert m.check(_plan(repo), repo, supersession=True) is None
+
+
+def test_record_without_head_sha_keeps_the_original_terminal(tmp_path):
+    repo, record, rel = _fail_record(tmp_path)
+    original = _git(repo, "rev-parse", "HEAD")
+    _fix_forward(repo)
+    path = _supersede(repo, rel, "PASS")
+    f = repo / path
+    f.write_text("".join(ln for ln in f.read_text().splitlines(True) if not ln.startswith("head_sha:")))
+    stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    assert stamp["terminal_commit_sha"] == original
+
+
+def test_remint_leaves_one_review_stamp_block_with_the_second_values(tmp_path):
+    repo, record, rel = _fail_record(tmp_path)
+    _supersede(repo, rel, "PASS")
+    m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    new_head = _fix_forward(repo)
+    _supersede(repo, rel, "PASS", head_sha=new_head)
+    m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    text = _plan(repo).read_text(encoding="utf-8")
+    assert text.count("review_stamp:\n") == 1
+    assert f"terminal_commit_sha: {new_head}" in text
