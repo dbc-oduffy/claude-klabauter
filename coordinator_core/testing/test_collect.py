@@ -14,7 +14,7 @@ Negative-spec: the committed `test_*.py` modules under `coordinator_core/testing
 are the allow-listed set in `_REAL_TEST_MODULES` below (this module plus the runner
 tests, `test_golden.py` — the parity-goldens helper's unit test — and
 `test_suite_mutex.py`, the machine-wide test-suite mutex's own unit test, and
-`test_tier_t_slots.py`, the Tier-T slot semaphore's, `test_orphan_reaper.py` and `test_state_write_audit.py`) — every
+`test_tier_t_slots.py`, the Tier-T slot semaphore's, `test_orphan_reaper.py`, `test_state_write_audit.py` and `test_fs_containment.py`) — every
 fixture repo tree this module exercises is built via the shared `fixture_tree`
 factory (conftest.py) under pytest's `tmp_path`, never committed to disk (Finding 9).
 """
@@ -36,6 +36,7 @@ from coordinator_core.testing.content_root import content_root_and_present
 _TESTING_PKG_DIR = Path(__file__).resolve().parent
 _REAL_TEST_MODULES = {
     "test_collect.py",
+    "test_fs_containment.py",
     "test_run.py",
     "test_tier_t_slots.py",
     "test_full_runner.py",

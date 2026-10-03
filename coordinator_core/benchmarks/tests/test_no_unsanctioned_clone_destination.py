@@ -122,10 +122,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "source volume instead would put this benchmark's churn -- 200 commits per "
         "sample -- on the working tree's disk to buy a constraint it does not have"
     ),
-    ("coordinator_core/bash_guards/tests/guard_message_corpus.py", "mkdtemp"): (
-        "doctrine-surface fixture under `Path.home()` -- a scratch dir the guard "
-        "text must see as home-rooted; not an engine clone"
-    ),
     ("coordinator_core/bash_guards/tests/test_write_claim_record.py", "mkdtemp"): (
         "AC-7 timing scratch under the repo-rooted `.pytest_ac7_scratch`; a "
         "work dir for a synthetic repo, not an engine clone"

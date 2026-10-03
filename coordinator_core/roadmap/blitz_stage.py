@@ -9,7 +9,7 @@ process, and freeze the gate report plan-blitz consumes.
 Reuses, never re-implements: ``coordinator-doc-new``'s ``_scaffold_roadmap_baton``
 (loaded in process), ``ops.mint_deliverable_id.mint``, ``roadmap.graph.topo_number``
 and ``roadmap.number_stubs`` edge parsing, ``roadmap.audit.run_audit``, and
-``roadmap.plan_gate.assemble_plan_gate``.
+the ``roadmap.plan_gate`` op handler.
 
 Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
   - ``clusters.md``: one ``## <id> — <title>`` section per cluster; a section's
@@ -18,11 +18,11 @@ Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
     An optional ``Stub slug prefix: `<x>``` line names the stub-id prefix.
   - ``reconciliation.md``: the KEEP verdict table; absent -> every cluster is KEEP.
 
-Gate report contract: the BARE ``roadmap.plan_gate`` result, frozen at
-``state/plan-blitz/<roadmap_id>/wave-1.gate-report.json``, with ``waves`` replaced by
-``[{index, batons: [{id, path, title, sized, planPath, executionOpen, route}]}]`` (index = dependency
-tier, the shape warp's roadmap arm reads) and plan_gate's own id-list ``waves`` kept as
-``plan_gate_waves``.
+Gate report contract: the BARE ``roadmap.plan_gate`` result for the roadmap, serialized by
+``ops.roadmap_plan_gate.bare_text`` (byte-identical to ``coordinator-invoke --bare
+roadmap.plan_gate '{"roadmap_id": ...}'``), frozen at
+``state/plan-blitz/<roadmap_id>/wave-1.gate-report.json``. ``waves`` are plan_gate's own: lists of
+baton ids, numbered from 0.
 
 Fold rule (roadmap-planning Step 2.1.6, sized by ``sizing_assemble.TSHIRT_WEIGHT``): see
 ``FOLD_RULE``.
@@ -53,7 +53,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core.roadmap.plan_gate import effective_sizing_route
 from coordinator_core.roadmap.audit import parse_keep_cluster_ids, run_audit, validate_run_id
 from coordinator_core.roadmap.graph import RoadmapCycleError, topo_number
 from coordinator_core.roadmap.number_stubs import (
@@ -62,7 +61,6 @@ from coordinator_core.roadmap.number_stubs import (
     derive_nodes,
     parse_edges_file,
 )
-from coordinator_core.roadmap.plan_gate import assemble_plan_gate
 from coordinator_core.session.claimed_write import create_exclusive
 from coordinator_core.sizing_assemble import TSHIRT_ORDER, TSHIRT_WEIGHT
 
@@ -320,32 +318,6 @@ def _fold_report(stubs: List[Dict[str, Any]], fold: Dict[str, Any]) -> Dict[str,
     }
 
 
-def _baton_ref(record: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
-    gate = record.get("execution_gate") or {}
-    plan = record.get("plan") or {}
-    return {
-        "id": record["id"],
-        "path": record["path"],
-        "title": record.get("title") or "",
-        "sized": bool(record.get("sized")),
-        "planPath": plan.get("path"),
-        "executionOpen": bool(gate.get("open")),
-        "route": effective_sizing_route(repo_root, record.get("sizing_objects")) if repo_root else None,
-    }
-
-
-def waves_from_tiers(
-    report: Dict[str, Any], stub_tier: Dict[str, int], repo_root: Optional[Path] = None
-) -> List[Dict[str, Any]]:
-    """``[{index, batons: [...]}]`` ordered by tier; ``stub_tier`` maps baton path to its tier."""
-    by_path = {b["path"]: b for b in report.get("batons") or []}
-    grouped: Dict[int, List[Dict[str, Any]]] = {}
-    for path, tier in sorted(stub_tier.items(), key=lambda kv: (kv[1], kv[0])):
-        if path in by_path:
-            grouped.setdefault(tier, []).append(_baton_ref(by_path[path], repo_root))
-    return [{"index": t, "batons": grouped[t]} for t in sorted(grouped)]
-
-
 def _write_sizing(
     repo_root: Path, doc_new: Any, title: str, stub_id: str, deliverable_id: str, unit: Dict[str, Any], source: str
 ) -> str:
@@ -391,14 +363,14 @@ def _commit(repo_root: Path, paths: List[str], message: str) -> Tuple[Optional[s
     return None, str(reply.get("error") or reply)
 
 
-def _freeze_gate_report(
-    repo_root: Path, roadmap_id: str, stub_paths: List[str], stub_tier: Dict[str, int]
-) -> Dict[str, Any]:
+def _freeze_gate_report(repo_root: Path, roadmap_id: str, stub_paths: List[str]) -> Dict[str, Any]:
     rel = f"state/plan-blitz/{roadmap_id}/{GATE_REPORT_NAME}"
     target = repo_root / rel
     if target.is_file():
         return {"gate_report_path": rel, "gate_report_state": "already-frozen"}
-    report = assemble_plan_gate(repo_root, roadmap_id=roadmap_id)
+    from coordinator_core.ops.roadmap_plan_gate import _handler as plan_gate_op, bare_text
+
+    report = plan_gate_op({"roadmap_id": roadmap_id}, repo_root=repo_root)
     staged = set(stub_paths)
     untracked = [row["path"] for row in report.get("untracked") or [] if row.get("path") in staged]
     if untracked:
@@ -407,11 +379,8 @@ def _freeze_gate_report(
             "gate_report_state": "deferred-untracked",
             "untracked_stubs": untracked,
         }
-    report.pop("matched_targets", None)
-    report["plan_gate_waves"] = report.get("waves")
-    report["waves"] = waves_from_tiers(report, stub_tier, repo_root)
     target.parent.mkdir(parents=True, exist_ok=True)
-    create_exclusive(target, json.dumps(report, indent=2, default=str) + "\n")
+    create_exclusive(target, bare_text(report))
     os.chmod(target, 0o444)
     return {"gate_report_path": rel, "gate_report_state": "frozen-now"}
 
@@ -564,11 +533,7 @@ def stage_roadmap(
         if sha:
             commits.append({"sha": sha, "paths": new_paths})
 
-    # Waves are transcribed from the numbering's `wave` (the dependency tier), never recomputed
-    # here, and same-wave stubs are never collapsed into one baton: that fold needs file-disjoint
-    # `scope:`, which is unknown at staging, so collapse is a no-op.
-    stub_tier = {s["path"]: s["wave"] for s in stubs}
-    frozen = _freeze_gate_report(repo_root, roadmap_id, [s["path"] for s in stubs], stub_tier)
+    frozen = _freeze_gate_report(repo_root, roadmap_id, [s["path"] for s in stubs])
     if commit and frozen["gate_report_state"] == "frozen-now":
         sha, err = _commit(
             repo_root,

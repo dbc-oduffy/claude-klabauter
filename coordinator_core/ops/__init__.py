@@ -223,6 +223,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'of the primary success / exit criterion at the sizing touchpoint)',
     ),
     (
+        "coordinator_core.ops.sizing_record_xl_exit",
+        'registers "sizing.record_xl_exit" (2026-10-03, records the PM\'s XL exit pick '
+        'and verbatim quote on a sizing)',
+    ),
+    (
         "coordinator_core.ops.sizing_resize",
         'registers "sizing.resize" (2026-10-01, writes `estimate.tshirt` and the '
         'engine-resolved `route` back to a sizing)',

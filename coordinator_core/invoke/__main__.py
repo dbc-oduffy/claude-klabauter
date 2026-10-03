@@ -237,6 +237,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--list",
+        action="store_true",
+        default=False,
+        help="Print every registered op name, sorted, one per line, and exit 0.",
+    )
+    p.add_argument(
         "--bare",
         action="store_true",
         default=False,
@@ -753,6 +759,13 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     # positionals after the flags instead, which every argument here supports --
     # none uses nargs=REMAINDER or a subparser, the two shapes it refuses.
     args = parser.parse_intermixed_args(argv)
+
+    if args.list:
+        from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+        sys.stdout.write("".join(f"{name}\n" for name in sorted(OP_MODULE_MAP)))
+        sys.stdout.flush()
+        raise SystemExit(0)
 
     # --allow-unstamped-dispatch: process-local, per-invocation opt-out of
     # ipc.dispatch_message's stamp gate (state/handoffs/2026-08-21_103635_

@@ -748,28 +748,28 @@ def test_write_surface_is_independent_of_this_machines_actual_registry() -> None
     name = "write_surface_is_independent_of_this_machines_actual_registry"
     before = _writer.WRITE_SURFACE
 
-    tmp = tempfile.mkdtemp()
-    registry_dir = os.path.join(tmp, "registry")
+    with tempfile.TemporaryDirectory() as tmp:
+        registry_dir = os.path.join(tmp, "registry")
 
-    _write_registry(registry_dir, {})
-    settings_path = os.path.join(tmp, "a", "settings.local.json")
-    committed_path = os.path.join(tmp, "a", "settings.json")
-    result_a = _run_cli(_base_args(settings_path, committed_path, registry_dir, extra=["--check-only"]))
-    if result_a.returncode != 0:
-        raise AssertionError(f"{name}: state A run failed: {result_a.stderr!r}")
+        _write_registry(registry_dir, {})
+        settings_path = os.path.join(tmp, "a", "settings.local.json")
+        committed_path = os.path.join(tmp, "a", "settings.json")
+        result_a = _run_cli(_base_args(settings_path, committed_path, registry_dir, extra=["--check-only"]))
+        if result_a.returncode != 0:
+            raise AssertionError(f"{name}: state A run failed: {result_a.stderr!r}")
 
-    repo_a = os.path.join(tmp, "repo-a")
-    os.makedirs(repo_a)
-    _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")
-    _write_registry(registry_dir, {"repo_a": repo_a})
-    result_b = _run_cli(_base_args(settings_path, committed_path, registry_dir, extra=["--check-only"]))
-    if result_b.returncode != 0:
-        raise AssertionError(f"{name}: state B run failed: {result_b.stderr!r}")
+        repo_a = os.path.join(tmp, "repo-a")
+        os.makedirs(repo_a)
+        _write_manifest(repo_a, [{"name": "pluginA"}], "marketA")
+        _write_registry(registry_dir, {"repo_a": repo_a})
+        result_b = _run_cli(_base_args(settings_path, committed_path, registry_dir, extra=["--check-only"]))
+        if result_b.returncode != 0:
+            raise AssertionError(f"{name}: state B run failed: {result_b.stderr!r}")
 
-    if _writer.WRITE_SURFACE is not before:
-        raise AssertionError(f"{name}: WRITE_SURFACE object identity changed across machine states")
-    if len(_writer.WRITE_SURFACE.clauses) != 3:
-        raise AssertionError(f"{name}: WRITE_SURFACE clause count changed across machine states")
+        if _writer.WRITE_SURFACE is not before:
+            raise AssertionError(f"{name}: WRITE_SURFACE object identity changed across machine states")
+        if len(_writer.WRITE_SURFACE.clauses) != 3:
+            raise AssertionError(f"{name}: WRITE_SURFACE clause count changed across machine states")
 
 
 

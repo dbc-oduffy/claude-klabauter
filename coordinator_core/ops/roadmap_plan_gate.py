@@ -57,6 +57,7 @@ Spec backlink: coordinator-content-repo coordinator/skills/plan-blitz/SKILL.md Â
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -97,6 +98,11 @@ def _select_verdict(report: Dict[str, Any], subject: Optional[str], gate: str) -
         "open": baton[key]["open"],
         "blocking": baton[key]["blocking"],
     }
+
+
+def bare_text(report: Dict[str, Any]) -> str:
+    """The exact bytes ``coordinator-invoke --bare roadmap.plan_gate`` prints for ``report``."""
+    return json.dumps(report, ensure_ascii=False) + "\n"
 
 
 @register_op("roadmap.plan_gate")

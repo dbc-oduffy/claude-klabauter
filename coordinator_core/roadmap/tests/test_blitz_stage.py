@@ -250,7 +250,8 @@ def test_edge_free_stubs_share_a_wave_and_the_dependent_is_later(tmp_path, roadm
     wave = {s["cluster"]: s["wave"] for s in reply["stubs"]}
     assert wave["C1"] == wave["C2"] == 1 and wave["C3"] == 2
     report = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
-    assert [(w["index"], len(w["batons"])) for w in report["waves"]] == [(1, 2), (2, 1)]
+    assert all(isinstance(w, list) and all(isinstance(i, str) for i in w) for w in report["waves"])
+    assert sum(len(w) for w in report["waves"]) == 3
     assert len(reply["stubs"]) == 3
 
 
@@ -276,7 +277,7 @@ def test_gate_report_frozen_in_plan_gate_shape(tmp_path, roadmap):
     path = tmp_path / reply["gate_report_path"]
     assert reply["gate_report_path"] == "state/plan-blitz/rm-test/wave-1.gate-report.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    for key in ("batons", "waves", "cycles", "unresolved_blockers", "untracked", "counts", "plan_gate_waves"):
+    for key in ("batons", "waves", "cycles", "unresolved_blockers", "untracked", "counts"):
         assert key in payload
     assert "result" not in payload
     assert {b["stub_id"] for b in payload["batons"]} >= {s["stub_id"] for s in reply["stubs"]}
@@ -324,37 +325,22 @@ def test_op_wraps_the_library(tmp_path, roadmap):
         _handler({}, repo_root=tmp_path / ".git")
 
 
-def test_report_waves_validate_against_the_warp_roadmap_arm_schema(tmp_path, roadmap):
-    import jsonschema
-
-    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+def test_frozen_report_is_byte_identical_to_the_bare_plan_gate_op(tmp_path, roadmap):
+    from coordinator_core.invoke.__main__ import _dispatch_argv
 
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
-    payload = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
-    waves_schema = ac._obj(
-        ["waves"],
-        {
-            "waves": {
-                "type": "array",
-                "items": ac._obj(
-                    ["index", "batons"],
-                    {"index": {"type": "integer"}, "batons": {"type": "array", "items": {"type": "object"}}},
-                ),
-            }
-        },
+    frozen = (tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8")
+    out, _, code = _dispatch_argv(
+        ["roadmap.plan_gate", json.dumps({"roadmap_id": "rm-test"}), "--bare", "--repo", str(tmp_path)],
+        str(tmp_path),
+        allow_warm=False,
     )
-    jsonschema.validate({"waves": payload["waves"]}, waves_schema)
-    ids = {s["cluster"]: s["stub_id"] for s in reply["stubs"]}
-    by_index = {w["index"]: [b["id"] for b in w["batons"]] for w in payload["waves"]}
-    assert sorted(by_index) == [1, 2, 3, 4][: len(by_index)]
-    tier1 = {b["path"] for b in payload["waves"][0]["batons"]}
-    assert {s["path"] for s in reply["stubs"] if s["cluster"] in ("C1", "C4")} == tier1
-    for wave in payload["waves"]:
-        for baton in wave["batons"]:
-            assert set(baton) == {"id", "path", "title", "sized", "planPath", "executionOpen", "route"}
+    assert code == 0 and frozen == out
+    waves = json.loads(frozen)["waves"]
+    assert waves and all(isinstance(w, list) and all(isinstance(i, str) for i in w) for w in waves)
 
 
-def test_recycle_check_reads_the_object_waves(tmp_path, roadmap):
+def test_recycle_check_reads_the_frozen_waves(tmp_path, roadmap):
     import importlib.util
 
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
@@ -416,16 +402,3 @@ def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
         assert record["deliverable_id"] == stub["deliverable_id"]
         assert f'sizing_object: "{stub["sizing_object"]}"' in _fm(tmp_path / stub["path"])
     assert len({yaml.safe_load((tmp_path / p).read_text(encoding="utf-8"))["deliverable_id"] for p in paths}) == len(paths)
-
-
-def test_wave_baton_route_applies_a_recorded_xl_exit(tmp_path):
-    """An XL sizing whose PM picked accept_multi_session is a plan route in
-    the wave, so plan-blitz plans it instead of re-adjudicating."""
-    sizing = tmp_path / "state" / "sizings" / "x.yaml"
-    sizing.parent.mkdir(parents=True)
-    sizing.write_text("route: pm-decision\nxl_exit: accept_multi_session\n", encoding="utf-8")
-    record = {"id": "b", "path": "state/handoffs/b.md", "sizing_objects": ["state/sizings/x.yaml"]}
-    assert bs._baton_ref(record, tmp_path)["route"] == "plan"
-    sizing.write_text("route: pm-decision\n", encoding="utf-8")
-    assert bs._baton_ref(record, tmp_path)["route"] == "pm-decision"
-    assert bs._baton_ref({**record, "sizing_objects": []}, tmp_path)["route"] is None

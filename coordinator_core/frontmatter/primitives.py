@@ -808,12 +808,84 @@ APPROVED_BODY_UNVERIFIABLE = "unverifiable"
 APPROVED_BODY_NOT_APPLICABLE = "n/a"
 
 
+_SPINE_KEY_INDENT_RE = re.compile(r'^([ \t]*-[ \t]+)id:')
+_ENGINE_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:[ \t]*(open|coded)[ \t]*$')
+_ENGINE_DISPOSITION_REF_RE = re.compile(r'^[ \t]*disposition_ref:')
+_ANY_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:')
+
+
+def approval_body_sha(file_text: str) -> Optional[str]:
+    """The hash `approved_body_sha` binds: `canonical_body_sha` with the
+    ENGINE-OWNED spine bookkeeping neutralised.
+
+    `dispatch.terminal_commit` flips rows open -> coded, writes `disposition_ref`,
+    and re-sorts rows to honour the D5 open-before-coded order. None of that is a
+    plan edit, so per `yaml plan-tasks` row this drops `disposition_ref:` and a
+    `disposition:` of `open`/`coded`, and orders the `do` rows (open/coded/unset
+    disposition) by id. Rows in any other grouping keep their place and bytes.
+    Everything else -- prose, row set, row fields, a closed disposition -- still
+    moves the hash. Residual blindness: relative order among `do` rows alone.
+    Stamps minted before this function hashed `canonical_body_sha`; the check
+    accepts both."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    body = frontmatter_body_text(file_text)
+    located = locate_fenced_block(body)
+    if located.status != LocateStatus.LOCATED or located.span is None:
+        return git_blob_sha1(body)
+    start, end = located.span
+    lines = body[start:end].splitlines(keepends=True)
+    spans: list[tuple[int, int, str]] = []
+    key_indent = None
+    for idx, line in enumerate(lines):
+        m = _SPINE_KEY_INDENT_RE.match(line)
+        if m is None:
+            continue
+        if key_indent is None:
+            key_indent = len(m.group(1)) - len(m.group(1).lstrip(' \t'))
+        if len(m.group(1)) - len(m.group(1).lstrip(' \t')) != key_indent:
+            continue
+        spans.append([idx, len(lines), line[m.end():].strip().strip('\'"')])
+    for i in range(len(spans) - 1):
+        spans[i][1] = spans[i + 1][0]
+    if not spans:
+        return git_blob_sha1(body)
+
+    rows: list[tuple[str, bool, list[str]]] = []
+    for s_idx, e_idx, row_id in spans:
+        row_lines = lines[s_idx:e_idx]
+        content_indent = _SPINE_KEY_INDENT_RE.match(row_lines[0]).end() - len('id:')
+        is_do = True
+        kept: list[str] = []
+        for n, line in enumerate(row_lines):
+            text = line.rstrip('\r\n')
+            at_key = n == 0 or (len(text) - len(text.lstrip(' \t'))) == content_indent
+            if at_key and n > 0:
+                if _ENGINE_DISPOSITION_REF_RE.match(text) or _ENGINE_DISPOSITION_RE.match(text):
+                    continue
+                if _ANY_DISPOSITION_RE.match(text):
+                    is_do = False
+            kept.append(line)
+        while len(kept) > 1 and not kept[-1].strip():
+            kept.pop()
+        if kept and not kept[-1].endswith(('\n', '\r')):
+            kept[-1] += '\n'
+        rows.append((row_id, is_do, kept))
+
+    do_sorted = iter(sorted((r for r in rows if r[1]), key=lambda r: r[0]))
+    out = lines[: spans[0][0]]
+    for row in rows:
+        out.extend((next(do_sorted) if row[1] else row)[2])
+    normalized = body[:start] + ''.join(out).rstrip('\n') + body[end:]
+    return git_blob_sha1(normalized)
+
+
 def stamp_approved_body_sha(file_text: str) -> str:
-    """`file_text` with `approved_body_sha` set to its current body sha.
+    """`file_text` with `approved_body_sha` set to its current `approval_body_sha`.
 
     Frontmatter is excluded from the hash, so the stamp does not move it.
     Returns the text unchanged when it has no parseable frontmatter."""
-    sha = canonical_body_sha(file_text)
+    sha = approval_body_sha(file_text)
     split = split_frontmatter(file_text)
     if sha is None or split is None:
         return file_text
@@ -844,8 +916,8 @@ def check_approved_body(file_text: str) -> tuple[str, str]:
                 'approved_body_sha absent: body unchanged-since-review is unverifiable',
             )
         return APPROVED_BODY_NOT_APPLICABLE, ''
-    current = canonical_body_sha(file_text)
-    if current == stamped.lower():
+    current = approval_body_sha(file_text)
+    if stamped.lower() in (current, canonical_body_sha(file_text)):
         return APPROVED_BODY_OK, ''
     return (
         APPROVED_BODY_CHANGED,

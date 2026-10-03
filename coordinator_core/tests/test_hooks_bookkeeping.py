@@ -1090,10 +1090,11 @@ class TestTrackDispatchedAgents:
             text = ""
             for model, stype in seq:
                 text = _make_dispatch_mutate(aid, model, stype)(text)
-            path = Path(tempfile.mkdtemp()) / "dispatched-agents.txt"
-            for model, stype in seq:
-                _process_dispatched_sync(str(path), aid, model, stype)
-            mirrored = path.read_text(encoding="utf-8")
+            with tempfile.TemporaryDirectory() as sync_dir:
+                path = Path(sync_dir) / "dispatched-agents.txt"
+                for model, stype in seq:
+                    _process_dispatched_sync(str(path), aid, model, stype)
+                mirrored = path.read_text(encoding="utf-8")
             # Column 4 is a write-time epoch; compare the identity columns only.
             assert [l.split("\t")[:3] for l in text.splitlines()] == \
                    [l.split("\t")[:3] for l in mirrored.splitlines()], (

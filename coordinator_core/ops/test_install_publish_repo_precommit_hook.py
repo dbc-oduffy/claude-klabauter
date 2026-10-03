@@ -422,18 +422,19 @@ def _tool_survives_a_narrowed_path(candidate: str, name: str) -> bool:
     """
     if not symlink_capability.CAN_CREATE_SYMLINK:
         return False
-    probe_dir = Path(tempfile.mkdtemp()) / "probe-bindir"
-    probe_dir.mkdir(parents=True)
-    (probe_dir / name).symlink_to(candidate)
-    env = dict(os.environ)
-    env["PATH"] = str(probe_dir)
-    result = subprocess.run(
-        [require_sh_interpreter(), "-c", f"{name} --version"],
-        env=env,
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+    with tempfile.TemporaryDirectory() as probe_root:
+        probe_dir = Path(probe_root) / "probe-bindir"
+        probe_dir.mkdir(parents=True)
+        (probe_dir / name).symlink_to(candidate)
+        env = dict(os.environ)
+        env["PATH"] = str(probe_dir)
+        result = subprocess.run(
+            [require_sh_interpreter(), "-c", f"{name} --version"],
+            env=env,
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
+        )
     return result.returncode == 0
 
 

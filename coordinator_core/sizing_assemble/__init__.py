@@ -1463,7 +1463,9 @@ def _usage(prog: str, stream=None) -> int:
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
         "[--exit-criterion <str>] "
         "[--interaction-mode hands-on|pm|ceo] "
-        "[--write <state/sizings/x.yaml>]",
+        "[--write <state/sizings/x.yaml>] "
+        "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
+        "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>",
         file=stream,
     )
     return EXIT_USAGE
@@ -1518,6 +1520,9 @@ def main(argv: list[str]) -> int:
     interaction_mode_flag = None
     premise_evidence = None
     write_path = None
+    xl_exit_pick = None
+    pm_quote = None
+    decided_on = None
 
     i = 0
     while i < len(argv):
@@ -1582,11 +1587,38 @@ def main(argv: list[str]) -> int:
         elif tok == "--interaction-mode" and i + 1 < len(argv):
             interaction_mode_flag = argv[i + 1]
             i += 2
+        elif tok == "--xl-exit" and i + 1 < len(argv):
+            xl_exit_pick = argv[i + 1]
+            i += 2
+        elif tok == "--pm-quote" and i + 1 < len(argv):
+            pm_quote = argv[i + 1]
+            i += 2
+        elif tok == "--decided-on" and i + 1 < len(argv):
+            decided_on = argv[i + 1]
+            i += 2
         elif tok == "--json":
             i += 1
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
+
+    if xl_exit_pick is not None:
+        if write_path is None:
+            print(f"{prog}: --xl-exit requires --write <state/sizings/x.yaml>", file=sys.stderr)
+            return EXIT_USAGE
+        from coordinator_core.ops.sizing_record_xl_exit import _handler as record_xl_exit
+
+        result = record_xl_exit(
+            {
+                "sizing": write_path,
+                "xl_exit": xl_exit_pick,
+                "pm_quote": pm_quote,
+                "decided_on": decided_on,
+            },
+            repo_root=Path.cwd(),
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
 
     if tshirt is None:
         return _usage(prog)

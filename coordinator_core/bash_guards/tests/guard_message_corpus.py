@@ -670,11 +670,16 @@ def _rehomed_doctrine_surface_setup(
 
     mp.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
     _machine_profile.reset_cache()
-    plugin_root = Path(
-        tempfile.mkdtemp(
-            prefix="guard-message-corpus-doctrine-surface-", dir=str(Path.home())
-        )
-    )
+    # The wiki citation home-collapses to `~/...` only when `plugin_root` sits
+    # under `Path.home()` -- the installed-layout branch B8 must exercise
+    # (`test_b8_doctrine_surface_fixture_exercises_the_home_collapse_branch`).
+    # Home is sandboxed inside scratch: minting under the real home leaked one
+    # dir per run.
+    from coordinator_core.testing.home_sandbox import sandbox_home
+
+    home = sandbox_home(mp, scratch_dir / "home")
+    plugin_root = home / "doctrine-surface-plugin-root"
+    plugin_root.mkdir(exist_ok=True)
     (plugin_root / "governed-authoring-surfaces.json").write_text(
         '["docs/wiki/governed-thing.md"]', encoding="utf-8"
     )

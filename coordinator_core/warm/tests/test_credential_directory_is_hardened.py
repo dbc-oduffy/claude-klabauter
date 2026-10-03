@@ -33,6 +33,7 @@ for "the door never holds a credential" becomes "the door holds one anywhere".
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -53,7 +54,10 @@ posix_only = pytest.mark.skipif(
 def runtime_base(monkeypatch):
     base = Path(tempfile.mkdtemp(prefix="cred-", dir=None if os.name == "nt" else "/tmp"))
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
-    yield base
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _mode(path: Path) -> int:
