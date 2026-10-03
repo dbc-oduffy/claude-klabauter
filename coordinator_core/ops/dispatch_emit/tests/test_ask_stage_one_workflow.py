@@ -90,9 +90,10 @@ def _brief(tmp_path, row, run_id="r1"):
     return (tmp_path / RUN_DIR_ROOT / run_id / "briefs" / f"{row}.md").read_text(encoding="utf-8")
 
 
-def test_external_gate_row_refused_before_anything_is_staged(tmp_path):
+def test_all_gated_plan_refuses_naming_every_gated_row(tmp_path):
     _repo(tmp_path, GATED)
     reply = _stage(tmp_path)
+    assert "zero dispatchable rows" in reply["error"]
     assert "G1" in reply["error"] and "G2" in reply["error"]
     run_dir = tmp_path / RUN_DIR_ROOT / "r1"
     assert not (run_dir / "briefs").exists()

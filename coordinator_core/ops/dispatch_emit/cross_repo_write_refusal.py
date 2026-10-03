@@ -33,8 +33,9 @@ It is pure path arithmetic plus one targeted ``.git``-presence probe on the
 sibling candidate a row itself named -- never a directory scan for what
 "might" be a sibling repo.
 
-``check_external_gate_exclusions`` is the second refusal here: it reads the
-``exclusions`` ledger ``read_spine`` fills and never re-derives gating.
+``gated_rows`` is the gate ledger: it reads the ``exclusions`` ledger
+``read_spine`` fills and never re-derives gating. It withholds, never refuses;
+the rows land in ``StageManifest.gated``.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit.ask_contract import GatedRow
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 
 _DRIVE_ABS = re.compile(r"^[A-Za-z]:/")
@@ -145,16 +147,6 @@ def check_cross_repo_writes(rows, repo_root: Optional[Path]) -> None:
     )
 
 
-class ExternalGateRowsRefused(CrossRepoWriteError):
-    """Raised when ``read_spine`` dropped a row for an uncleared
-    ``external_gate``. ``rows`` holds every named id (gated rows and
-    transitively gated dependents) in exclusion order."""
-
-    def __init__(self, message: str, rows: list[str]):
-        super().__init__(message)
-        self.rows = rows
-
-
 def _gate_description(raw: Optional[Mapping]) -> str:
     gates = raw.get("external_gate") if isinstance(raw, Mapping) else None
     parts: list[str] = []
@@ -167,30 +159,23 @@ def _gate_description(raw: Optional[Mapping]) -> str:
     return " ".join(parts)
 
 
-def check_external_gate_exclusions(
+def gated_rows(
     exclusions: Sequence[Mapping], raw_by_id: Mapping[str, Mapping]
-) -> None:
-    """Refuse when any ``read_spine`` exclusion has reason ``external_gate``,
-    naming every such row and every ``transitive_gate_closure`` row.
+) -> list[GatedRow]:
+    """Every ``external_gate`` and ``transitive_gate_closure`` exclusion as a
+    ``GatedRow``, in exclusion order. Never raises.
 
-    Negative-spec: reasons other than those two never raise on their own,
-    and exclusion ``detail`` strings are not parsed."""
-    if not any(e.get("reason") == "external_gate" for e in exclusions):
-        return
-    lines: list[str] = []
-    rows: list[str] = []
+    Negative-spec: other reasons are skipped, and exclusion ``detail``
+    strings are copied through, not parsed."""
+    out: list[GatedRow] = []
     for entry in exclusions:
         reason = entry.get("reason")
         row_id = entry.get("id")
         if reason == "external_gate":
-            gate = _gate_description(raw_by_id.get(row_id))
-            lines.append(f"{row_id}: {gate}" if gate else f"{row_id}: external_gate")
+            gate = _gate_description(raw_by_id.get(row_id)) or "external_gate"
         elif reason == "transitive_gate_closure":
-            lines.append(f"{row_id}: transitively gated ({entry.get('detail', '')})")
+            gate = str(entry.get("detail", ""))
         else:
             continue
-        rows.append(row_id)
-    raise ExternalGateRowsRefused(
-        "external_gate rows cannot run in this workflow:\n" + "\n".join(lines),
-        rows,
-    )
+        out.append(GatedRow(id=row_id, reason=reason, gate=gate))
+    return out

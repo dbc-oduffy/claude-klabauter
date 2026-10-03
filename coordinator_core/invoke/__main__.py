@@ -641,9 +641,10 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
     A JSON-RPC success whose result carries a nonzero integer `exit_code` exits
     the process 0 (`_exit_code_for_response`), and the wire envelope has no
     reason field, so a caller that parses stdout alone sees the failure as an
-    empty result. The op's own reason, when it wrote one, is the last non-empty
-    line already on stderr; it is folded into this line so the failure and its
-    cause arrive together. The envelope and the exit code are not changed.
+    empty result. The reason is the first non-empty string of `result.error`
+    then `result.message`, else the last non-empty line already on stderr; it
+    is folded into this line so the failure and its cause arrive together.
+    The envelope and the exit code are not changed.
     """
     result = response.get("result")
     if not isinstance(result, dict):
@@ -651,6 +652,13 @@ def _in_band_failure_line(response: dict, method: object, prior_stderr: str) -> 
     code = result.get("exit_code")
     if isinstance(code, bool) or not isinstance(code, int) or code == 0:
         return None
+    for field in ("error", "message"):
+        value = result.get(field)
+        if isinstance(value, str) and value.strip():
+            return (
+                f"[invoke] {method} FAILED in-band: result exit_code={code} with "
+                f"process exit 0. Reason (result.{field}): {value.strip()}"
+            )
     lines = [ln.strip() for ln in prior_stderr.splitlines() if ln.strip()]
     reason = lines[-1] if lines else "no reason was written to stderr"
     return (

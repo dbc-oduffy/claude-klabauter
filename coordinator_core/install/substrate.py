@@ -3697,13 +3697,33 @@ def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> N
     atomic_write_bytes(sidecar, payload, preserve_mode=True)
 
 
+def _installed_resolver_module(bin_dst: Path) -> str:
+    """The stem of the ``_resolve_*.py`` module installed in ``bin_dst``.
+
+    Several installed (a dual-tree box) is resolved to the running image's own
+    spelling when present; otherwise it is ambiguous and raises ``FileNotFoundError``.
+    An empty ``bin_dst`` returns the running image's spelling: only a caller
+    that installs no resolver of its own reaches here, and
+    ``_install_bin_resolvers`` always passes the stem it installed.
+    """
+    stems = sorted(p.stem for p in bin_dst.glob("_resolve_*.py"))
+    if not stems or _AGENT_RESOLVER_MODULE in stems:
+        return _AGENT_RESOLVER_MODULE
+    if len(stems) == 1:
+        return stems[0]
+    raise FileNotFoundError(
+        f"no unambiguous _resolve_*.py resolver installed in {bin_dst} "
+        f"(found: {stems})"
+    )
+
+
 def _write_agent_helper_forwarders(
     agent_helper_target_map: "dict[str, str]",
     bin_dst: Path,
     check_only: bool,
     *,
     engine_root: "Optional[Path]" = None,
-    resolver_module: str = _AGENT_RESOLVER_MODULE,
+    resolver_module: "Optional[str]" = None,
     static_family_names: "frozenset[str]" = frozenset(),
 ) -> "list[WriteSurfaceEntry]":
     """Step 3b's forwarder-write loop proper, extracted out of
@@ -3879,6 +3899,8 @@ def _write_agent_helper_forwarders(
                     native_written.add(f)
                     continue
                 py_dst = bin_dst / f
+                if resolver_module is None:
+                    resolver_module = _installed_resolver_module(bin_dst)
                 _write_agent_forwarder(
                     f, py_dst, check_only, target=target,
                     resolver_module=resolver_module,
@@ -4156,12 +4178,18 @@ def _install_bin_resolvers(
                 python_bin_substitution=static_python_bin_substitution,
             )
 
-    def rm_family(dst_dir: Path, prefix: str) -> None:
-        # _resolve_claude_klabauter.py is installed ONCE per bin dir, alongside every
-        # emitted forwarder — see its own module docstring for why the
-        # resolve-claude-klabauter-bin ladder now lives here instead of duplicated
-        # inline in each forwarder body.
-        _install_one(resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py", dst_dir / "_resolve_claude_klabauter.py", False, prefix, check_only)
+    def rm_family(dst_dir: Path, prefix: str) -> str:
+        # The resolver is installed ONCE per bin dir, alongside every emitted
+        # forwarder; its stem is what those forwarders import.
+        resolver_src = _live_source_tree_resolver(claude_klabauter_root_resolved)
+        if resolver_src is None:
+            raise SubstrateFatalError(
+                f"install-substrate: no single _resolve_*.py under "
+                f"{claude_klabauter_root_resolved / 'coordinator' / 'lib'}; forwarders "
+                f"would import a resolver that is not installed"
+            )
+        _install_one(resolver_src, dst_dir / resolver_src.name, False, prefix, check_only)
+        return resolver_src.stem
 
     # --- Step 3: bin/ resolvers (<settings-home>/bin/) ---
     # C0: this family (ml_family + ch_family + ml_explicit) force-overwrites
@@ -4210,15 +4238,15 @@ def _install_bin_resolvers(
     # _write_agent_forwarder's docstring). `plugin_root / "bin"` (coordinator-content-repo's
     # tree) is the now-empty, dead source this repoint replaces.
     agent_bin = claude_klabauter_root_resolved / "coordinator" / "bin"
-    resolve_claude_klabauter_lib = claude_klabauter_root_resolved / "coordinator" / "lib" / "resolve-claude-klabauter"
 
     agent_helper_target_map = _derive_agent_helper_target_map(agent_bin)
     agent_cmd_dest_map = _resolve_agent_cmd_dest_collisions(agent_helper_target_map)
 
-    rm_family(bin_dst, "resolve-claude-klabauter")
+    resolver_module = rm_family(bin_dst, "resolve-claude-klabauter")
     agent_helper_resolved = _write_agent_helper_forwarders(
         agent_helper_target_map, bin_dst, check_only,
         engine_root=_door_engine_root(),
+        resolver_module=resolver_module,
         static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
     )
     if not check_only:

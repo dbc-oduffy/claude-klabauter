@@ -67,14 +67,33 @@ class ManifestRow:
 
 
 @dataclass(frozen=True)
+class GatedRow:
+    """A row withheld from the run; ``reason`` is ``external_gate`` or
+    ``transitive_gate_closure`` and ``gate`` describes the blocking gate."""
+
+    id: str
+    reason: str
+    gate: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {"id": self.id, "reason": self.reason, "gate": self.gate}
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "GatedRow":
+        return cls(id=data["id"], reason=data["reason"], gate=data["gate"])
+
+
+@dataclass(frozen=True)
 class StageManifest:
-    """dispatch.ask_stage reply, also written as manifest.json in the run dir."""
+    """dispatch.ask_stage reply, also written as manifest.json in the run dir.
+    ``gated`` lists rows withheld, never staged; an absent key reads as ``()``."""
 
     run_dir: str
     rows: tuple[ManifestRow, ...]
     review_declared_paths: tuple[str, ...]
     marker_path: str
     plan_id: str | None = None
+    gated: tuple[GatedRow, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -83,6 +102,7 @@ class StageManifest:
             "rows": [r.to_json() for r in self.rows],
             "review_declared_paths": list(self.review_declared_paths),
             "marker_path": self.marker_path,
+            "gated": [g.to_json() for g in self.gated],
         }
 
     @classmethod
@@ -93,4 +113,5 @@ class StageManifest:
             review_declared_paths=tuple(data["review_declared_paths"]),
             marker_path=data["marker_path"],
             plan_id=data.get("plan_id"),
+            gated=tuple(GatedRow.from_json(g) for g in data.get("gated") or ()),
         )

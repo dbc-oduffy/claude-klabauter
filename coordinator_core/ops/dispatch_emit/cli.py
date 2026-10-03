@@ -230,7 +230,9 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="RUN_RECORD",
         help="with --plan: emit a one-stage script re-running only the delivery verifier at HEAD "
         "over RUN_RECORD's frozen delivery FAIL; record its result with "
-        "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record`",
+        "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record`; "
+        "an empty value resolves the record a warp run leaves at "
+        ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md",
     )
     parser.add_argument(
         "--mark-landed",
@@ -647,7 +649,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_USAGE
         return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
 
-    if args.reverify_delivery:
+    if args.reverify_delivery is not None:
         if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):
             print(
                 f"emit-dispatch-workflow: ERROR — --reverify-delivery needs --plan and --out "

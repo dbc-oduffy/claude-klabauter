@@ -383,3 +383,45 @@ class TestZeroSpawns:
         import coordinator_core.ops.gate_liveness.reconcile as mod
 
         assert not any(name in ("subprocess", "git") for name in vars(mod))
+
+
+class TestApprovalBodyShaSurvivesReconcile:
+    def test_apply_true_and_a_second_evidence_append_keep_approved_body_sha_valid(self, tmp_path):
+        from coordinator_core.frontmatter.primitives import (
+            APPROVED_BODY_CHANGED,
+            APPROVED_BODY_OK,
+            check_approved_body,
+            stamp_approved_body_sha,
+        )
+
+        repo = _make_git_repo(tmp_path)
+        import yaml as _yaml
+
+        dumped = _yaml.safe_dump(
+            _yaml.safe_load(_ROWS_ONE_GATE), sort_keys=False, allow_unicode=True, width=10_000
+        )
+        plan = _write_plan(repo, dumped)
+        plan.write_text(
+            stamp_approved_body_sha("---\ntitle: p\nstatus: approved\n---\n\n" + plan.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
+        _write_discharge_memo(repo, "deliverable", "dlv-foo-abc123")
+        assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
+
+        first = reconcile_gate_liveness("docs/plans/plan.md", True, repo, repo, "2026-08-21")
+        assert len(first["flipped"]) == 1
+        text = plan.read_text(encoding="utf-8")
+        assert "cleared: true" in text
+        assert check_approved_body(text)[0] == APPROVED_BODY_OK
+
+        reopened = text.replace("cleared: true", "cleared: false")
+        plan.write_text(reopened, encoding="utf-8")
+        second = reconcile_gate_liveness("docs/plans/plan.md", True, repo, repo, "2026-08-22")
+        assert len(second["flipped"]) == 1
+        text2 = plan.read_text(encoding="utf-8")
+        assert text2.count("gate_liveness.reconcile") == 2
+        assert check_approved_body(text2)[0] == APPROVED_BODY_OK
+        assert (
+            check_approved_body(text2.replace("something must land", "something else"))[0]
+            == APPROVED_BODY_CHANGED
+        )

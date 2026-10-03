@@ -1182,6 +1182,7 @@ def _external_deps(
     missing_requires: List[str] = []
     bad_requires: List[str] = []
     commit_gated: List[str] = []
+    unkeyed_landed: List[str] = []
     withheld: List[str] = []
 
     for row in rows:
@@ -1266,6 +1267,17 @@ def _external_deps(
                 withheld.append(row_id)
             else:
                 withheld.append(row_id)
+                if requires == REQUIRES_LANDED and not entry.get("closure_key"):
+                    unkeyed_landed.append(
+                        f"{row_id}: external_gate[{index}] requires landed-work but "
+                        "carries no closure_key — it has no clearance path; add "
+                        "closure_key: {kind: deliverable|memo-thread, id}"
+                    )
+
+    def _warned(result: Dict[str, Any]) -> Dict[str, Any]:
+        # Non-verdict: never alters status, kind or withheld.
+        result["warnings"] = list(unkeyed_landed)
+        return result
 
     collapsed = [
         line if count == 1 else f"{line} (x{count})"
@@ -1277,8 +1289,8 @@ def _external_deps(
         # differs — one replaces a stand-in with the path it stands for, the
         # other adds a gate — and a tally that names only the second sends the
         # author to the wrong fix.
-        return _defect(
-            "path-placeholder", "; ".join(placeholders + defects), withheld=withheld
+        return _warned(
+            _defect("path-placeholder", "; ".join(placeholders + defects), withheld=withheld)
         )
     if defects:
         detail = "; ".join(defects)
@@ -1292,7 +1304,7 @@ def _external_deps(
                 "the row that creates it. Writing files deeper inside it does not "
                 "declare that the tree gains a root"
             )
-        return _defect("external-dep-undeclared", detail, withheld=withheld)
+        return _warned(_defect("external-dep-undeclared", detail, withheld=withheld))
     if withheld:
         # Both populations named, because the withheld set alone says a row is
         # held and not what would release it — one waits for a peer's landing,
@@ -1303,8 +1315,8 @@ def _external_deps(
                 f" — of which needing a cross-repo commit ({'; '.join(commit_gated)}), "
                 "to be dispatched under per-session assent rather than refused"
             )
-        return _pass(detail, withheld=withheld)
-    return _pass("no declared path leaves this repo")
+        return _warned(_pass(detail, withheld=withheld))
+    return _warned(_pass("no declared path leaves this repo"))
 
 
 # ---------------------------------------------------------------------------

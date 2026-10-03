@@ -147,3 +147,32 @@ def test_terminal_commit_then_only_incomplete_emit_is_not_refused(tmp_path):
     after = plan.read_text(encoding="utf-8")
     assert "disposition_ref" in after
     _refuse_unapproved_body(str(plan))  # raises ValueError on "plan body changed since approval"
+
+
+_GATED_ROWS = """- id: C3
+  title: t3
+  change_kind: code-edit
+  surface: a.py
+  deferred: false
+  external_gate:
+  - owner_repo: other-repo
+    condition: land the thing
+"""
+
+
+def test_clearing_an_external_gate_keeps_the_stamp_valid_and_real_edit_refuses(tmp_path):
+    from coordinator_core.ops.plan_tasks_mutate import _clear_gate
+
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    plan = tmp_path / "docs" / "plans" / "plan.md"
+    approved = _approved(rows=_GATED_ROWS)
+    plan.write_text(approved, encoding="utf-8")
+    res = _clear_gate("docs/plans/plan.md", "C3", "other-repo", "landed in abc123", tmp_path, tmp_path)
+    assert res.get("applied") is True, res
+    cleared = plan.read_text(encoding="utf-8")
+    assert "cleared: true" in cleared and cleared != approved
+    assert check_approved_body(cleared)[0] == APPROVED_BODY_OK
+    assert check_approved_body(cleared.replace("land the thing", "land another"))[0] == APPROVED_BODY_CHANGED

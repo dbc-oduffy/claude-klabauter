@@ -69,16 +69,31 @@ def _delivery_block(record: dict) -> Optional[dict]:
     return None
 
 
+def _criterion_unsettled(record: dict) -> bool:
+    """True when the run record's frozen criterion status is `not_met` or `indeterminate`."""
+    for holder in (record, record.get("inline_review"), record.get("review")):
+        block = holder.get("criterion") if isinstance(holder, dict) else None
+        if isinstance(block, dict) and block.get("status") in ("not_met", "indeterminate"):
+            return True
+    return False
+
+
 def prior_unbacked_claims(record_path: Path) -> tuple[Dict[str, Any], List[dict]]:
     """`(record, claims)` of a run record's frozen delivery FAIL, each claim `{claim, anchor}`.
-    Raises `ReverifyRefused` when the record is unreadable or its delivery verdict is not FAIL."""
+    A delivery PASS whose criterion is `not_met`/`indeterminate` returns `(record, [])`: there is
+    nothing to re-check claim by claim, but the verdict and criterion are stale. Raises
+    `ReverifyRefused` when the record is unreadable, or when delivery PASSed and the criterion
+    was met (nothing to supersede)."""
     record = _frontmatter(record_path)
     if record is None:
         raise ReverifyRefused(f"reverify-delivery: cannot read run record {record_path}")
     delivery = _delivery_block(record)
+    if delivery is not None and delivery.get("verdict") != "FAIL" and _criterion_unsettled(record):
+        return record, []
     if delivery is None or delivery.get("verdict") != "FAIL":
         raise ReverifyRefused(
-            f"reverify-delivery: {record_path} carries no delivery FAIL to re-verify"
+            f"reverify-delivery: {record_path} carries no delivery FAIL and no unmet criterion "
+            "to re-verify"
         )
     items = delivery.get("unbacked")
     if not isinstance(items, list):
@@ -132,19 +147,31 @@ def compose_reverify_script(
         f"- {c['claim']} [lacked: {c.get('anchor')}]" for c in claims
     )
     base = run_base_sha or "run_base_sha"
+    if claims:
+        lead = (
+            "Re-verify delivery at HEAD. A prior verdict FAILed this run with the unbacked claims "
+            "below; follow-up commits may have delivered them. Check EACH claim against the tree at "
+            f"HEAD {head_sha} (the diff to judge is `git diff {base}..{head_sha}` plus the files as "
+            "they stand at HEAD). Never judge from the original run's frozen diff: it predates the "
+            "fixes. Return FAIL with claims_unbacked listing every claim still unbacked at HEAD, "
+            "PASS only when all are backed.\n"
+        )
+    else:
+        lead = (
+            "Re-verify delivery at HEAD. The prior verdict PASSed but the run's exit criterion was "
+            "not met; follow-up commits may have changed what is delivered. Verify the plan's "
+            f"deliverables against the tree at HEAD {head_sha} (the diff to judge is "
+            f"`git diff {base}..{head_sha}` plus the files as they stand at HEAD). Return FAIL with "
+            "claims_unbacked listing every claim unbacked at HEAD, PASS only when all are backed.\n"
+        )
     prompt = (
         f"{_DELIVERY_VERIFIER_ROLE_PREAMBLE}\n\n"
-        f"Re-verify delivery at HEAD. A prior verdict FAILed this run with the unbacked claims "
-        f"below; follow-up commits may have delivered them. Check EACH claim against the tree at "
-        f"HEAD {head_sha} (the diff to judge is `git diff {base}..{head_sha}` plus the files as "
-        f"they stand at HEAD). Never judge from the original run's frozen diff: it predates the "
-        f"fixes. Return FAIL with claims_unbacked listing every claim still unbacked at HEAD, "
-        f"PASS only when all are backed.\n"
+        f"{lead}"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {base}\n"
         f"head_sha: {head_sha}\n"
         f"supersedes: {run_record_rel}\n"
-        f"prior_unbacked_claims:\n{claim_lines}"
+        f"prior_unbacked_claims:\n{claim_lines or '(none)'}"
     )
     call = _agent_call_literal(
         _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
@@ -297,7 +324,7 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
     for path in candidates:
         fm = _frontmatter(path)
         block = _delivery_block(fm) if fm else None
-        if block and block.get("verdict") == "FAIL":
+        if block and (block.get("verdict") == "FAIL" or _criterion_unsettled(fm)):
             return path
     return None
 
@@ -307,16 +334,19 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
     from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 
+    blank = not run_record.strip()
     record_file = Path(run_record)
-    if not record_file.is_absolute():
+    if not blank and not record_file.is_absolute():
         record_file = repo_root / record_file
-    if _frontmatter(record_file) is None:
-        # Not a run record (a task .output, say): resolve the plan's own bookkeeping.
-        found = _bookkeeping_record(repo_root, _plan_id_of(plan_path))
+    if blank or _frontmatter(record_file) is None:
+        # Blank, or not a run record (a task .output, say): resolve the plan's own bookkeeping.
+        plan_id = _plan_id_of(plan_path)
+        found = _bookkeeping_record(repo_root, plan_id)
         if found is None:
+            glob = _BOOKKEEPING_GLOB.replace("<plan_id>", plan_id or "<plan_id>")
+            what = "no run record given" if blank else f"cannot read run record {record_file}"
             raise ReverifyRefused(
-                f"reverify-delivery: cannot read run record {record_file}, and no "
-                f"{_BOOKKEEPING_GLOB} carries this plan's delivery FAIL"
+                f"reverify-delivery: {what}, and no {glob} carries this plan's delivery FAIL"
             )
         record_file = found
     record, claims = prior_unbacked_claims(record_file)

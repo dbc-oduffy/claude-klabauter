@@ -812,6 +812,38 @@ _SPINE_KEY_INDENT_RE = re.compile(r'^([ \t]*-[ \t]+)id:')
 _ENGINE_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:[ \t]*(open|coded)[ \t]*$')
 _ENGINE_DISPOSITION_REF_RE = re.compile(r'^[ \t]*disposition_ref:')
 _ANY_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:')
+_GATE_CLEARANCE_KEYS = ('cleared', 'cleared_evidence', 'closure_evidence')
+_GATE_CLEARANCE_RE = re.compile(
+    r'^[ \t]+(?:-[ \t]+)?(?:cleared|cleared_evidence|closure_evidence):(?![ \t]*false[ \t]*$)'
+)
+
+
+def _without_gate_clearance(row_lines: list[str]) -> list[str]:
+    """The row with engine-written clearance keys removed from its `external_gate`
+    entries, parsed rather than line-matched so multi-line evidence (block or
+    quoted scalar) goes too. A row naming no clearance key with an engine-written
+    value (`cleared: false` alone is the pre-clear default) keeps its bytes, so a
+    stamp minted before any clearance hashes as it always did."""
+    if not any(_GATE_CLEARANCE_RE.match(ln) for ln in row_lines[1:]):
+        return row_lines
+    import yaml
+
+    try:
+        loaded = yaml.safe_load(''.join(row_lines))
+    except yaml.YAMLError:
+        return row_lines
+    if not (isinstance(loaded, list) and len(loaded) == 1 and isinstance(loaded[0], dict)):
+        return row_lines
+    gates = loaded[0].get('external_gate')
+    if not isinstance(gates, list):
+        return row_lines
+    loaded[0]['external_gate'] = [
+        {k: v for k, v in g.items() if k not in _GATE_CLEARANCE_KEYS} if isinstance(g, dict) else g
+        for g in gates
+    ]
+    return yaml.safe_dump(
+        loaded, sort_keys=False, allow_unicode=True, width=10_000
+    ).splitlines(keepends=True)
 
 
 def approval_body_sha(file_text: str) -> Optional[str]:
@@ -821,7 +853,9 @@ def approval_body_sha(file_text: str) -> Optional[str]:
     `dispatch.terminal_commit` flips rows open -> coded, writes `disposition_ref`,
     and re-sorts rows to honour the D5 open-before-coded order. None of that is a
     plan edit, so per `yaml plan-tasks` row this drops `disposition_ref:` and a
-    `disposition:` of `open`/`coded`, and orders the `do` rows (open/coded/unset
+    `disposition:` of `open`/`coded`, drops the engine-written external_gate
+    clearance keys (`cleared`, `cleared_evidence`, `closure_evidence`, with any
+    deeper-indented continuation), and orders the `do` rows (open/coded/unset
     disposition) by id. Rows in any other grouping keep their place and bytes.
     Everything else -- prose, row set, row fields, a closed disposition -- still
     moves the hash. Residual blindness: relative order among `do` rows alone.
@@ -853,7 +887,7 @@ def approval_body_sha(file_text: str) -> Optional[str]:
 
     rows: list[tuple[str, bool, list[str]]] = []
     for s_idx, e_idx, row_id in spans:
-        row_lines = lines[s_idx:e_idx]
+        row_lines = _without_gate_clearance(lines[s_idx:e_idx])
         content_indent = _SPINE_KEY_INDENT_RE.match(row_lines[0]).end() - len('id:')
         is_do = True
         kept: list[str] = []

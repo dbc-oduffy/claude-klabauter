@@ -3023,8 +3023,14 @@ def _scaffold_spinoff(
     summary: str | None = None,
     what_this_covers: str | None = None,
     reference_materials: Sequence[str] = (),
+    specification: str | None = None,
+    acceptance: Sequence[str] = (),
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
+
+    specification / acceptance, when supplied, replace the comments under
+    `## Specification` / `## Acceptance criteria`; each acceptance entry
+    renders as an unchecked `- [ ] <text>` box. Absent, output is unchanged.
 
     summary / what_this_covers, when supplied, replace the placeholder
     `summary:` line and the `## What this covers` comment; absent, the
@@ -3254,15 +3260,23 @@ def _scaffold_spinoff(
         "",
         "## Specification",
         "",
-        "<!-- The actual work spec. Be concrete enough that a context-less EM can act. -->",
+        specification
+        if specification
+        else "<!-- The actual work spec. Be concrete enough that a context-less EM can act. -->",
         "",
         "## Acceptance criteria",
         "",
-        "<!-- Checklist the picking-up EM gates completion against. -->",
-        "<!-- `- [ ]`/`- [x]` checkboxes only — the consumed-handoff completeness -->",
-        "<!-- gate counts boxes and reads a prose list as indeterminate. -->",
-        "",
-        "- [ ] ",
+        *(
+            [f"- [ ] {_item}" for _item in acceptance]
+            if acceptance
+            else [
+                "<!-- Checklist the picking-up EM gates completion against. -->",
+                "<!-- `- [ ]`/`- [x]` checkboxes only — the consumed-handoff completeness -->",
+                "<!-- gate counts boxes and reads a prose list as indeterminate. -->",
+                "",
+                "- [ ] ",
+            ]
+        ),
         "",
         "## Recommended next steps for the picking-up EM",
         "",
@@ -4688,8 +4702,14 @@ class SizingMintRefused(Exception):
         self.fields = fields
 
 
-def _mutate_sizing_baton_edge(old_text: str, baton_repo_rel_path: str) -> str:
-    """Return sizing YAML text with `baton:` set; touches no other key."""
+def _mutate_sizing_baton_edge(
+    old_text: str, baton_repo_rel_path: str, deliverable_id: str | None = None,
+) -> str:
+    """Return sizing YAML text with `baton:` set; touches no other key.
+
+    A supplied ``deliverable_id`` is written only when the sizing's own is
+    null or absent; a non-null value is never overwritten.
+    """
     _bootstrap_engine()
     from coordinator_core.frontmatter.primitives import (  # noqa: PLC0415
         insert_fm_field_raw,
@@ -4703,12 +4723,33 @@ def _mutate_sizing_baton_edge(old_text: str, baton_repo_rel_path: str) -> str:
     else:
         _after = "plan" if read_fm_field_unquoted(old_text, "plan") is not None else "status"
         new_text = insert_fm_field_raw(old_text, "baton", _raw, _after)
+    if deliverable_id:
+        new_text = _fill_null_deliverable_id(new_text, deliverable_id)
     _validate_mutated_sizing(old_text, new_text)
     return new_text
 
 
+def _fill_null_deliverable_id(text: str, deliverable_id: str) -> str:
+    """Return sizing text with a null/absent `deliverable_id` set; a non-null value is left as is."""
+    from coordinator_core.frontmatter.primitives import (  # noqa: PLC0415
+        insert_fm_field_raw,
+        read_fm_field_unquoted,
+        replace_fm_field_raw,
+    )
+
+    _current = read_fm_field_unquoted(text, "deliverable_id")
+    if not _is_null_scalar(_current):
+        return text
+    _raw = _yaml_quote(deliverable_id)
+    if _current is not None:
+        return replace_fm_field_raw(text, "deliverable_id", _raw)
+    _after = "baton" if read_fm_field_unquoted(text, "baton") is not None else "status"
+    return insert_fm_field_raw(text, "deliverable_id", _raw, _after)
+
+
 def _write_sizing_baton_edge(
     sizing_abs_path: str, baton_repo_rel_path: str, repo_root: str,
+    deliverable_id: str | None = None,
 ) -> str:
     """Write the sizing->baton edge under ``locked_rmw``; return the pre-mutation text."""
     _ensure_engine_on_path()
@@ -4719,10 +4760,42 @@ def _write_sizing_baton_edge(
 
     def _mutate(old_text: str) -> str:
         _captured["old_text"] = old_text
-        return _mutate_sizing_baton_edge(old_text, baton_repo_rel_path)
+        return _mutate_sizing_baton_edge(old_text, baton_repo_rel_path, deliverable_id)
 
     _locked_rmw(_Path(sizing_abs_path), _mutate, repo_root=_Path(repo_root))
     return _captured.get("old_text", "")
+
+
+def _backfill_sizing_deliverable_id(
+    sizing_abs_path: str, deliverable_id: str, repo_root: str,
+) -> None:
+    """Set a null/absent sizing `deliverable_id` under ``locked_rmw``; a non-null value is left as is."""
+    _bootstrap_engine()
+    from pathlib import Path as _Path  # noqa: PLC0415
+    from coordinator_core.locked_write import locked_rmw as _locked_rmw  # noqa: PLC0415
+
+    def _mutate(old_text: str) -> str:
+        new_text = _fill_null_deliverable_id(old_text, deliverable_id)
+        if new_text != old_text:
+            _validate_mutated_sizing(old_text, new_text)
+        return new_text
+
+    _locked_rmw(_Path(sizing_abs_path), _mutate, repo_root=_Path(repo_root))
+
+
+def _is_null_scalar(raw: str | None) -> bool:
+    """True for an absent key or a YAML-null raw scalar (``""``, ``null``, ``~``)."""
+    return raw is None or raw.strip() in ("", "null", "~")
+
+
+_PLACEHOLDER_RE = re.compile(r"(?:PLACEHOLDER|TBD|TODO)\b", re.IGNORECASE)
+
+
+def _is_placeholder_text(value: object) -> bool:
+    """True for an absent, blank, or PLACEHOLDER/TBD/TODO-led scalar (whole word only)."""
+    if not isinstance(value, str) or not value.strip():
+        return True
+    return _PLACEHOLDER_RE.match(value.strip()) is not None
 
 
 def _write_baton_file(out_abs: str, content: str) -> None:
@@ -4814,6 +4887,9 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
 
     if existing_abs is not None:
         text = open(existing_abs, encoding="utf-8").read()
+        _baton_dlv = read_fm_field_unquoted(text, "deliverable_id")
+        if not meta.get("deliverable_id") and not _is_null_scalar(_baton_dlv):
+            _backfill_sizing_deliverable_id(sizing_abs, _baton_dlv, repo_root)
         return {
             "id": read_fm_field_unquoted(text, "handoff_id"),
             "path": existing,
@@ -4838,6 +4914,12 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
         raise SizingMintRefused(
             ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
         )
+    _premise = meta.get("premise")
+    _evidence = _premise.get("evidence") if isinstance(_premise, dict) else None
+    specification = None if _is_placeholder_text(_evidence) else " ".join(_evidence.split())
+    _criterion = meta.get("exit_criterion")
+    _statement = _criterion.get("statement") if isinstance(_criterion, dict) else None
+    acceptance = [] if _is_placeholder_text(_statement) else [" ".join(_statement.split())]
     content = _scaffold_spinoff(
         title=title,
         branch=_current_branch(),
@@ -4847,6 +4929,8 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
         summary=summary,
         what_this_covers=intent,
         reference_materials=_evidence_bullets(meta.get("scout_evidence")),
+        specification=specification,
+        acceptance=acceptance,
     )
     _assert_no_archived_handoff_twin(out_abs, handoff_id, repo_root)
     try:
@@ -4856,7 +4940,7 @@ def mint_baton_from_sizing(sizing_rel: str, repo_root: str) -> dict:
             ["intent"], f"--from-sizing refused for {sizing_rel}: baton scaffold failed validation ({exc})"
         ) from exc
 
-    old_text = _write_sizing_baton_edge(sizing_abs, out_rel, repo_root)
+    old_text = _write_sizing_baton_edge(sizing_abs, out_rel, repo_root, deliverable_id)
     try:
         _write_baton_file(out_abs, content)
     except Exception:

@@ -223,3 +223,38 @@ def test_non_mirror_rows_keep_their_own_lines(monkeypatch, tmp_path, capsys):
     assert len(next_step_lines) == 2, next_step_lines
     assert "percolate-push solo-a" in combined
     assert "percolate-push solo-b" in combined
+
+
+def test_clean_round_prints_the_exact_push_command_for_the_committed_repo(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    _wire_common_fakes(monkeypatch, tmp_path)
+
+    rc = publish.main([_ROW_NAMES[0]])
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if ln.startswith("To publish")]
+
+    assert rc == 0
+    assert lines == [
+        f"To publish (commit-only round, nothing pushed): "
+        f"git -C {tmp_path / 'dst-row-a'} push origin main"
+    ]
+
+
+@pytest.mark.parametrize("mode", ["failed", "dry-run"])
+def test_no_push_command_on_failure_or_dry_run(monkeypatch, tmp_path, capsys, mode):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    _wire_common_fakes(monkeypatch, tmp_path, fail_row=(mode == "failed"))
+
+    publish.main([_ROW_NAMES[0]] + (["--dry-run"] if mode == "dry-run" else []))
+    captured = capsys.readouterr()
+
+    assert "To publish" not in captured.out + captured.err
+
+
+def test_push_command_helper_skips_detached_and_headless_repos(tmp_path):
+    detached = tmp_path / "d"
+    (detached / ".git").mkdir(parents=True)
+    (detached / ".git" / "HEAD").write_text("a" * 40 + "\n", encoding="utf-8")
+    assert publish._committed_branch_push_commands([detached, tmp_path / "missing"]) == []

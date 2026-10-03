@@ -111,6 +111,7 @@ _MANIFEST_SCHEMA = _obj(
         },
         "review_declared_paths": {"type": "array", "items": _STR},
         "marker_path": _STR,
+        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR})},
     },
 )
 
@@ -379,6 +380,7 @@ def compose_ask_script(
     b.append(
         f"  _manifest = await {_agent(stage_prompt, label='stage', phase='stage', agent_type=agent_type, schema=_MANIFEST_SCHEMA)};"
     )
+    b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append(
         "  if (_manifest.error || !(_manifest.rows ?? []).length) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || "
@@ -440,7 +442,8 @@ def compose_ask_script(
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
-        f"next_action: {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} }};"
+        f"next_action: {{ kind: {na_kind}, op: {na_op}, params: {na_params} }}, "
+        "...((_manifest && !_manifest.error) ? {} : { next_action: { kind: 'none', op: null, params: null } }) };"
     )
 
     meta = _emit._meta_block(

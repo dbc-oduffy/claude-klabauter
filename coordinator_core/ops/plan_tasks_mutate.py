@@ -806,6 +806,178 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
+def _gate_matches(entry: object, owner_repo: str) -> bool:
+    return (
+        isinstance(entry, dict)
+        and str(entry.get("owner_repo") or "").strip().casefold() == owner_repo.casefold()
+    )
+
+
+def _frontmatter_gate_items(fm_lines: list) -> Optional[tuple]:
+    """Locate the top-level ``external_gate:`` block-list in frontmatter lines.
+
+    Returns ``(item_spans, indent)`` where each span is a ``(start, end)`` line
+    range of one ``- `` item, or None when the key is absent or not a
+    block-style list.
+    """
+    head = next(
+        (i for i, ln in enumerate(fm_lines) if ln.rstrip() == "external_gate:"), None
+    )
+    if head is None:
+        return None
+    end = len(fm_lines)
+    for i in range(head + 1, len(fm_lines)):
+        ln = fm_lines[i]
+        if ln.strip() and not ln.startswith((" ", "\t", "-", "#")):
+            end = i
+            break
+    starts = [
+        i for i in range(head + 1, end) if fm_lines[i].lstrip().startswith("- ")
+    ]
+    if not starts:
+        return None
+    indent = min(len(fm_lines[i]) - len(fm_lines[i].lstrip()) for i in starts)
+    starts = [i for i in starts if len(fm_lines[i]) - len(fm_lines[i].lstrip()) == indent]
+    spans = [(s, starts[k + 1] if k + 1 < len(starts) else end) for k, s in enumerate(starts)]
+    return spans, indent
+
+
+def _clear_gate(
+    plan_path: str,
+    task_id: str,
+    owner_repo: str,
+    evidence: str,
+    worktree: Path,
+    repo_root: Path,
+) -> dict:
+    """Apply the clear-gate verb: set ``cleared: true`` + ``closure_evidence``
+    on the one ``external_gate`` entry of row ``task_id`` whose ``owner_repo``
+    matches — a row-level entry, or a frontmatter entry carrying ``row: <id>``.
+
+    Refuses empty evidence, an unknown row, no matching gate, and more than
+    one matching gate. An already-cleared gate is a no-op (applied False).
+    """
+    try:
+        path = _resolve_path(plan_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"clear-gate: {exc}")
+
+    if not task_id:
+        return _err("clear-gate: 'id' is required")
+    if not owner_repo:
+        return _err("clear-gate: 'owner_repo' is required")
+    if not evidence:
+        return _err(
+            "clear-gate: 'evidence' is required and must be non-empty — "
+            "a gate clears against recorded evidence, never bare"
+        )
+
+    _state: dict = {"applied": False, "message": "", "warnings": []}
+    gate_label = f"{task_id!r} gate owner_repo={owner_repo!r}"
+
+    def mutate(old_text: str) -> str:
+        result = locate_fenced_block(old_text)
+        if result.status is LocateStatus.MALFORMED:
+            raise MutateAbort(
+                "clear-gate: task spine is malformed (multiple 'yaml plan-tasks' fences, "
+                "or a fence not directly under the '## Tasks' heading)"
+            )
+        if result.status is LocateStatus.ABSENT:
+            raise MutateAbort("clear-gate: task spine is absent — no gate to clear")
+
+        plan_fm = parse_frontmatter(old_text).get("frontmatter")
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
+
+        rows = _parse_rows_or_abort(result.body, "clear-gate")
+        row = next(
+            (r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None
+        )
+        if row is None:
+            raise MutateAbort(f"clear-gate: task id not found: {task_id!r}")
+
+        row_gates = row.get("external_gate")
+        row_hits = [
+            g for g in (row_gates if isinstance(row_gates, list) else [])
+            if _gate_matches(g, owner_repo)
+        ]
+
+        from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
+
+        split = split_frontmatter(old_text)
+        fm_lines: list = split.fm_text.splitlines(keepends=True) if split else []
+        fm_hits: list = []
+        located = _frontmatter_gate_items(fm_lines) if split else None
+        if located is not None:
+            spans, indent = located
+            for start, end in spans:
+                block = "".join(ln[indent:] for ln in fm_lines[start:end])
+                try:
+                    item = yaml.safe_load(block)
+                except yaml.YAMLError:
+                    continue
+                if (
+                    isinstance(item, list) and item
+                    and _gate_matches(item[0], owner_repo)
+                    and item[0].get("row") == task_id
+                ):
+                    fm_hits.append((start, end, indent, item[0]))
+
+        total = len(row_hits) + len(fm_hits)
+        if total == 0:
+            raise MutateAbort(f"clear-gate: no external_gate matches {gate_label}")
+        if total > 1:
+            named = [f"row-level #{i + 1}" for i in range(len(row_hits))] + [
+                f"frontmatter {g[3].get('id', 'entry')!r}" for g in fm_hits
+            ]
+            raise MutateAbort(
+                f"clear-gate: {total} external_gate entries match {gate_label}: "
+                f"{', '.join(named)} — make owner_repo distinct before clearing"
+            )
+
+        entry = row_hits[0] if row_hits else fm_hits[0][3]
+        if entry.get("cleared") is True:
+            _state["message"] = f"clear-gate: {gate_label} already cleared"
+            return old_text
+
+        if row_hits:
+            entry["cleared"] = True
+            entry["closure_evidence"] = evidence
+            try:
+                untouched_invalid = _validate_all(
+                    rows, governed=governed, touched_ids={task_id}, plan_created=plan_created,
+                )
+            except MutateAbort as exc:
+                raise MutateAbort(f"clear-gate: {exc.args[0] if exc.args else exc}") from exc
+            start, end = result.span
+            new_text = old_text[:start] + _dump_rows(rows) + old_text[end:]
+            _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
+        else:
+            start, end, indent, item = fm_hits[0]
+            item["cleared"] = True
+            item["closure_evidence"] = evidence
+            dumped = yaml.safe_dump(
+                [item], sort_keys=False, allow_unicode=True, width=10_000
+            ).splitlines(keepends=True)
+            new_lines = fm_lines[:start] + [" " * indent + ln for ln in dumped] + fm_lines[end:]
+            new_text = rebuild(split, "".join(new_lines))
+
+        _state["applied"] = True
+        _state["message"] = f"clear-gate: cleared {gate_label}"
+        return new_text
+
+    try:
+        locked_rmw(path, lambda old: _carry_prep_certificate(old, mutate(old)), repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"clear-gate: plan not found: {plan_path}")
+    except LockTimeout as exc:
+        return _err(f"clear-gate: timed out waiting for file lock on {plan_path}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "clear-gate: mutation aborted")
+
+    return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
+
+
 # RETIRED 2026-07-29 — `_PM_APPROVAL_OFFER` lived here and is deliberately
 # `_GROUPING_APPROVAL_HINT` from schema_validate, which is written as an
 
@@ -1479,12 +1651,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     in-place. Does NOT git-commit.
 
     Required params:
-        verb      (str) — one of: add-task | stamp | resolve.
+        verb      (str) — one of: add-task | stamp | resolve | clear-gate.
         plan_path (str) — absolute or repo-relative path to the plan file
                            (must resolve under <worktree>/docs/plans/).
 
     Verb-specific required params:
-        add-task : task    (dict) — the new row; must carry a non-empty 'id'.
+        clear-gate : id (str), owner_repo (str), evidence (str, non-empty) —
+                   sets cleared: true + closure_evidence on the one matching
+                   external_gate entry (row-level, or frontmatter with row: id).
+        add-task : task   (dict) — the new row; must carry a non-empty 'id'.
         stamp    : updates (list[dict]) — [{"id": <id>, ...field-updates}, ...].
                    Refuses the WHOLE batch if any entry carries
                    disposition/disposition_ref/disposition_detail — use
@@ -1546,7 +1721,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | clear-gate)")
     if not plan_path:
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
@@ -1603,6 +1778,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             ]
         return await asyncio.to_thread(_resolve, plan_path, resolutions, worktree, repo_root)
 
+    if verb == "clear-gate":
+        return await asyncio.to_thread(
+            _clear_gate,
+            plan_path,
+            (params.get("id") or "").strip(),
+            (params.get("owner_repo") or "").strip(),
+            (params.get("evidence") or "").strip(),
+            worktree,
+            repo_root,
+        )
+
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, clear-gate"
     )

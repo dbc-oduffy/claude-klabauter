@@ -426,6 +426,8 @@ _JUDGE_PREAMBLE = (
     "Do not read executor reports, review sidecars or their prose: the run does not "
     "certify itself. Every 'met' names the command you ran or the path you read. When "
     "the plan records a falsifier, run it as recorded; it is not yours to replace. "
+    "Run Python as `python3`, falling back to `python` when `python3` is absent, rather "
+    "than running a falsifier's bare `python` verbatim. "
     "Return 'indeterminate' when the evidence does not settle the criterion. Report "
     "the REQUIRED boolean `differs_from_baseline`: true only if what you observed "
     "differs from the baseline in the way the criterion describes, false otherwise "

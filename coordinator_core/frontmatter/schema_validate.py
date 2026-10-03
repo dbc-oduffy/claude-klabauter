@@ -2444,6 +2444,7 @@ def _cf_disposition_shape(
     requires_ref: frozenset = frozenset(),
     forbids_ref: frozenset = frozenset(),
     detail_exempt: frozenset = frozenset(),
+    ref_remedy: dict | None = None,
 ) -> ErrorDict | None:
     """Shared shape-only cross-field validator for a disposition-carrying
     entry list — extracted out of _cf_carried_items_shape's real content
@@ -2529,7 +2530,14 @@ def _cf_disposition_shape(
                         f'{field_name}[{idx}] has disposition {disposition!r} but no '
                         'non-empty disposition_ref'
                     ),
-                    'hint': f'disposition {disposition!r} requires disposition_ref.',
+                    'hint': (
+                        f'disposition {disposition!r} requires disposition_ref'
+                        + (
+                            f' — resolve it with {ref_remedy[disposition]}, not a hand edit.'
+                            if ref_remedy and disposition in ref_remedy
+                            else '.'
+                        )
+                    ),
                 }
         if disposition in forbids_ref:
             ref = item.get('disposition_ref')
@@ -2915,6 +2923,11 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
         requires_ref=frozenset({'coded', 'spun_off', 'backlogged'}),
         forbids_ref=frozenset({'wont_do'}),
         detail_exempt=frozenset({'coded'}),
+        ref_remedy={
+            'coded': '`plan-tasks-resolve --id <row> --coded <sha>`',
+            'spun_off': '`plan-tasks-resolve --id <row> --spun-off <ref>`',
+            'backlogged': '`plan-tasks-resolve --id <row> --backlogged`',
+        },
     )
     if error is not None:
         return error

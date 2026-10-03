@@ -1662,6 +1662,73 @@ def _body_discharges_without_block(fm: dict, body: str) -> bool:
     return "discharges" not in fm and bool(_BODY_DISCHARGES_LINE_RE.search(body or ""))
 
 
+_PLAN_TASKS_BLOCK_RE = re.compile(r"```yaml plan-tasks\n(.*?)```", re.DOTALL)
+
+
+def _parked_thread_gate(
+    receiver_repo_path: Path, in_reply_to: str, owners: set,
+) -> Optional[tuple]:
+    """`(plan filename, row id)` of a receiver plan row holding an uncleared
+    `external_gate` keyed `memo-thread` on `in_reply_to` and owned by one of
+    `owners` (lowercase repo names); `None` when there is none.
+
+    Read-only and in-process. A plan whose lowercased text lacks the thread
+    id is skipped before any YAML parse, so only the few matching plans pay
+    for one.
+    """
+    import yaml
+
+    from coordinator_core.ops.gate_liveness.resolve import _memo_thread_ids_match
+
+    needle = Path(in_reply_to.strip()).name.lower()
+    needle = needle[:-3] if needle.endswith(".md") else needle
+    if not needle:
+        return None
+    try:
+        plans = sorted((receiver_repo_path / "docs" / "plans").glob("*.md"))
+    except OSError:
+        return None
+    for plan in plans:
+        try:
+            text = plan.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle not in text.lower():
+            continue
+        for block in _PLAN_TASKS_BLOCK_RE.findall(text):
+            try:
+                rows = yaml.safe_load(block)
+            except yaml.YAMLError:
+                continue
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                gates = row.get("external_gate")
+                for gate in gates if isinstance(gates, list) else []:
+                    if not isinstance(gate, dict) or gate.get("cleared") is True:
+                        continue
+                    key = gate.get("closure_key")
+                    if not isinstance(key, dict) or key.get("kind") != "memo-thread":
+                        continue
+                    key_id, owner = key.get("id"), gate.get("owner_repo")
+                    if (
+                        isinstance(key_id, str) and isinstance(owner, str)
+                        and _memo_thread_ids_match(key_id, in_reply_to)
+                        and owner.strip().lower() in owners
+                    ):
+                        return plan.name, str(row.get("id"))
+    return None
+
+
+def _discharge_prompt(plan_name: str, row_id: str, in_reply_to: str) -> str:
+    return (
+        f"memo.send: this reply answers {in_reply_to!r}, which gates row "
+        f"{row_id} of the receiver's plan {plan_name}, and the draft has no "
+        "`discharges` block, so that gate stays awaiting-discharge. Compose "
+        "the block with `gate_liveness.emit_discharge`, or resend to send as is."
+    )
+
+
 @register_op("memo.send")
 def _memo_send(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.send' MUTATING op handler.
@@ -1815,6 +1882,27 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             )
             if duplicate_warning is not None:
                 held.append(duplicate_warning)
+
+    # Discharge prompt: the receiver holds a parked gate keyed on the thread
+    # this reply answers, and the draft carries no `discharges` block.
+    if (
+        not dry_run and not self_send and "discharges" not in fm
+        and isinstance(reply_to, str) and reply_to.strip()
+    ):
+        sender_owner = str(from_id or sender_worktree.name).strip().lower()
+        if sender_owner.endswith("-em"):
+            sender_owner = sender_owner[: -len("-em")]
+        parked = _parked_thread_gate(
+            receiver_repo_path, reply_to,
+            {sender_owner, sender_worktree.name.lower()},
+        )
+        if parked is not None:
+            discharge_prompt = _warn_once(
+                sender_worktree, f"discharge-prompt:{topic}:{reply_to.strip()}",
+                _discharge_prompt(parked[0], parked[1], reply_to.strip()),
+            )
+            if discharge_prompt is not None:
+                held.append(discharge_prompt)
 
     # Citation lint: the body cites a docs/state/coordinator/archive/
     # cross-repo path with no repo qualifier — the receiver resolves it

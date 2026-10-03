@@ -26,7 +26,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
-    check_external_gate_exclusions,
+    gated_rows,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -132,14 +132,15 @@ def stage(
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
     check_unschedulable_rows(rows, raw_by_id)
+    gated = gated_rows(exclusions, raw_by_id)
     try:
-        check_external_gate_exclusions(exclusions, raw_by_id)
         check_cross_repo_writes(rows, root)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
     if not waves:
-        raise AskStageError("the spine derives zero dispatchable rows")
+        named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
+        raise AskStageError(f"the spine derives zero dispatchable rows{named}")
 
     context = derive_plan_context(
         plan_text, fallback_title=plan_path.stem, repo_root=root.as_posix()
@@ -201,6 +202,7 @@ def stage(
         review_declared_paths=tuple(_dedupe_preserve_order(declared)),
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
+        gated=tuple(gated),
     )
     _write(run_dir / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
     return manifest
