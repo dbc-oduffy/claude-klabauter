@@ -288,6 +288,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="overwrite an --out path already holding a different session's emission",
     )
     parser.add_argument(
+        "--chatty",
+        action="store_true",
+        help="plan route: compose an opt-in chatty workflow (roster, mailbox briefs, overseer wake stage)",
+    )
+    parser.add_argument(
         "--fire",
         action="store_true",
         help="fire the emitted script via workflow.fire after a successful emit",
@@ -767,6 +772,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:
         params["plan_path"] = args.plan
+        if args.chatty:
+            params["chatty"] = True
         if args.only_incomplete:
             from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
 

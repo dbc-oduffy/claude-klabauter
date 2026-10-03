@@ -75,6 +75,9 @@ def member_nonce(roster: dict, role: str) -> str:
     return next(m["nonce"] for m in roster["members"] if m["role"] == role)
 
 
+_MAIL_LINE = '{"from":"<role>","text":"<summary>"}'
+
+
 def member_brief(role: str, nonce: str) -> str:
     """Agent-facing addendum appended to a worker's brief."""
     return (
@@ -83,16 +86,20 @@ def member_brief(role: str, nonce: str) -> str:
         "On start, self-ID: grep -rl for your nonce under your parent transcript's "
         "subagents/workflows/ tree; the matching agent-<agentId>.jsonl names your "
         "agentId and its directory is the run directory (never pick the newest "
-        "file). Wait for roster.json there before your first send, then set your "
-        "member's agent_id and state=running.\n"
-        f"Peers are addressable by their roster agent_id. Message the {OVERSEER_ROLE} "
-        "or a peer with a summary, never a relay of another message."
+        "file). Wait for roster.json there, then set your member's agent_id and "
+        "state=running.\n"
+        "Mail: <run-dir>/mail/<role>.jsonl is that role's mailbox. Send by "
+        f"appending one JSON line {_MAIL_LINE} to the recipient's mailbox; read "
+        f"yours at <run-dir>/mail/{role}.jsonl, then append {{\"read\":true}} to it. "
+        "Never SendMessage a peer. Report findings to the "
+        f"{OVERSEER_ROLE} by mailbox, as a summary, never a relay. Never message the EM.\n"
+        "Before finishing, set your roster state=returned. If woken, read your "
+        "mailbox, act, then set state=returned again."
     )
 
 
 def overseer_prompt(roster: dict) -> str:
-    """The overseer's whole brief: provision the roster, register, then
-    summarise to the EM."""
+    """The overseer's provisioning brief: write the roster, register, finish."""
     nonce = member_nonce(roster, OVERSEER_ROLE)
     return (
         "You are the overseer of a chatty run. "
@@ -103,8 +110,28 @@ def overseer_prompt(roster: dict) -> str:
         "(<parent transcript without .jsonl>/subagents/workflows/wf_<runId>/) is "
         "the run directory (never pick the newest file).\n"
         "2. First act: write the roster below to <run directory>/roster.json "
-        "with your own agent_id set and state=running. Workers wait for it.\n"
-        "3. Workers register themselves into it. Collect what they send you and "
-        "report to the EM once, as a summary, never a relay.\n"
+        "with your own agent_id set and state=running; create <run directory>/mail/. "
+        "Workers wait for it.\n"
+        "3. Then finish; a later stage reads the mail and wakes members.\n"
         "ROSTER:\n" + json.dumps(roster, indent=2)
+    )
+
+
+def overseer_wake_prompt(roster: dict) -> str:
+    """The post-return stage brief: wake `returned` members holding unread mail,
+    then report to the EM."""
+    nonce = member_nonce(roster, OVERSEER_ROLE)
+    return (
+        "You are the overseer of a chatty run, after every row returned. "
+        f"Nonce: {nonce}.\n"
+        "1. Self-ID: grep -rl for your nonce under your parent transcript's "
+        "subagents/workflows/ tree; the matching directory is the run directory.\n"
+        "2. Read <run-dir>/roster.json and every <run-dir>/mail/<role>.jsonl. "
+        "A mailbox is unread when it has a message line after its last "
+        '{"read":true} line.\n'
+        "3. For each member whose roster state is `returned` and whose mailbox "
+        "is unread: set state=woken, then SendMessage its roster agent_id: "
+        '"Read your mailbox." Wake nobody in any other state.\n'
+        f"4. Read your own mailbox ({OVERSEER_ROLE}.jsonl). Report to the EM once, "
+        "as a summary, never a relay."
     )

@@ -807,6 +807,8 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             route).
         cloud_spawn (dict, optional): the cloud-spawn route -- see module
             docstring. Replies ``{"ok": True, "create_session": {...}}``.
+        chatty (bool, optional, default False): plan route; compose an opt-in
+            chatty workflow (``emit.compose_script``'s ``chatty``).
         force (bool, optional, default False): overwrite an ``output_path``
             that already holds a different session's emission. Off by
             default -- see ``ForeignEmissionError``.
@@ -1099,6 +1101,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
             landed_rows=frozenset(params.get("landed_rows") or ()),
+            chatty=bool(params.get("chatty")),
         )
 
     check_agent_types_resolve(

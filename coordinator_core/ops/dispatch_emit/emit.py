@@ -3287,7 +3287,8 @@ def compose_script(
     ``chatty`` (opt-in, default off; absent leaves every emitted byte
     unchanged) composes a schema-valid roster template (``chatty.build_roster``),
     embeds it in an overseer agent's brief (the overseer writes ``<run-dir>/roster.json``; the emitter writes no file), and
-    appends a nonce plus register-on-start brief to every row's prompt.
+    appends a nonce plus register-on-start mailbox brief to every row's prompt,
+    then runs a wake stage (overseer agent) after the rows return.
 
     ``preamble`` (optional) is a run-wide posture block forwarded to every
     row's prompt -- EXECUTOR prompts only, never the review/test phases,
@@ -3438,7 +3439,7 @@ def compose_script(
         roster = _chatty.build_roster(name, [row.id for row in flat_rows])
         overseer_type = _EXECUTOR_AGENT_TYPE
         body_blocks.append(
-            "  const _overseer = agent("
+            "  await agent("
             f"{_js_string_literal(_chatty.overseer_prompt(roster))}, "
             "{ "
             f"label: {_js_string_literal('chatty-overseer')}, "
@@ -3516,7 +3517,17 @@ def compose_script(
         )
     body_blocks.append("  await Promise.all(Object.values(_rows));")
     if roster is not None:
-        body_blocks.append("  await _overseer;")
+        body_blocks.append(
+            "  await agent("
+            f"{_js_string_literal(_chatty.overseer_wake_prompt(roster))}, "
+            "{ "
+            f"label: {_js_string_literal('chatty-wake')}, "
+            f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
+            f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
+            f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, "
+            f"stallMs: {_EXECUTOR_STALL_MS} "
+            "});"
+        )
     body_blocks.append("  await Promise.all(_verifications);")
     body_blocks.append("  await Promise.all(_waveTriggers);")
     body_blocks.append("  await _commitChain;")

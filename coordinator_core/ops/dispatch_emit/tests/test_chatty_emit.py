@@ -65,3 +65,36 @@ def test_roster_validation_rejects_duplicate_nonce_and_unknown_overseer():
     assert "duplicate member nonce" in chatty.validate_roster(roster)
     roster["overseer_role"] = "nobody"
     assert "overseer_role names no member" in chatty.validate_roster(roster)
+
+
+def test_briefs_carry_mailbox_rule_and_no_peer_sendmessage_instruction():
+    brief = chatty.member_brief("C1", "abc")
+    assert "mail/<role>.jsonl" in brief
+    assert "state=returned" in brief
+    assert "Never SendMessage a peer" in brief
+    assert "Message the overseer or a peer" not in brief
+    assert "addressable by their roster agent_id" not in brief
+    assert "SendMessage" not in chatty.overseer_prompt(chatty.build_roster("r", ["A"]))
+
+
+def test_wake_stage_only_when_chatty_and_after_rows():
+    assert "chatty-wake" not in _script()
+    script = _script(chatty=True)
+    wake = script.index("label: 'chatty-wake'")
+    rows = script.index("await Promise.all(Object.values(_rows));")
+    prov = script.index("label: 'chatty-overseer'")
+    assert prov < script.index("_rows['C1'] =") < rows < wake
+    assert "const _overseer" not in script and "  await agent('You are the overseer of a chatty run. " in script
+    assert script.count("SendMessage its roster agent_id") == 1
+    assert "`returned`" in script
+
+
+def test_chatty_flag_reaches_the_emitter(monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import cli
+
+    seen = []
+    monkeypatch.setattr(cli, "_dispatch_emit", lambda params, repo_root=None: seen.append(params) or {"ok": False})
+    for extra in ([], ["--chatty"]):
+        cli.main(["--plan", "p.md", "--out", str(tmp_path / "o.workflow.mjs"), *extra])
+    assert "chatty" not in seen[0]
+    assert seen[1]["chatty"] is True
