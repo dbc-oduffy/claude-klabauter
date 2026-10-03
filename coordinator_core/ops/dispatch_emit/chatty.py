@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Sequence
 
 OVERSEER_ROLE = "overseer"
-ROSTER_SCHEMA_VERSION = "2.0.0"
+ROSTER_SCHEMA_VERSION = "2.1.0"
 
 _SCHEMA_PATH = (
     Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "chatty-roster.schema.json"

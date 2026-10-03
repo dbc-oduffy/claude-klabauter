@@ -3,7 +3,7 @@
   "$id": "https://coordinator.local/schemas/chatty-roster.schema.json",
   "x-schema-name": "chatty-roster",
   "x-schema-version": "2.0.0",
-  "x-bump-note": "2.0.0 removes caps and counters (the send hook is advisory-only) and names the overseer as the roster writer. 1.0.0 initial. RE-VENDOR: claude-klabauter must vendor this schema (coordinator_core/frontmatter/schemas/chatty-roster.schema.json) before the roster emitter or the SendMessage guard reads <run-dir>/roster.json.",
+  "x-bump-note": "2.0.0 removes caps and counters (the send hook is advisory-only) and names the overseer as the roster writer. 1.0.0 initial. RE-VENDOR: claude-klabauter must vendor this schema (coordinator_core/frontmatter/schemas/chatty-roster.schema.json) before the roster emitter or the SendMessage guard reads <run-dir>/roster.json. 2.1.0 adds optional members[].continued_by (continuation-dispatch wake).",
   "applies_to": "<run-dir>/roster.json",
   "description": "Roster of an opt-in chatty workflow run, written to <run-dir>/roster.json. Absence of the file means the run is not chatty and the guard is a no-op. Read-side rule not expressible in JSON Schema: members[].nonce values must be unique within the roster (a reader must reject duplicates). There are no caps or counters and no counters writer. The overseer agent writes this file as its first act after nonce self-ID; the emitter cannot, since there is no runId at emit time.",
   "type": "object",
@@ -36,21 +36,44 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "nonce", "agent_id", "state"],
+        "required": [
+          "role",
+          "nonce",
+          "agent_id",
+          "state"
+        ],
         "properties": {
-          "role": { "type": "string", "minLength": 1 },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
           "nonce": {
             "type": "string",
             "minLength": 1,
             "description": "Per-member token placed in the brief; uniqueness across members is a read-side rule."
           },
           "agent_id": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "minLength": 1,
             "description": "Null until the member registers by resolving its nonce."
           },
           "state": {
-            "enum": ["registering", "running", "returned", "woken"]
+            "enum": [
+              "registering",
+              "running",
+              "returned",
+              "woken"
+            ]
+          },
+          "continued_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "agentId of the fresh continuation agent that carried this member's role on after it returned; set by that continuation."
           }
         }
       }
