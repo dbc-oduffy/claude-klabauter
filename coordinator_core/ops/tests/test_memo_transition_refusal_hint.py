@@ -20,7 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.memo_transition import _action
+import asyncio
+
+from coordinator_core.ops.memo_transition import _action, _handler
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -85,7 +87,52 @@ def test_unexpected_status_refusal_names_the_recovery_verbs(tmp_path):
     assert "expected in_progress" in result["error"]
     # The recovery hint names both routes forward: the two-step ceremony
     # (claim, then action) and the one-step atomic collapse.
-    assert "claim-memo-stamp" in result["error"]
-    assert "resolve-memo" in result["error"]
+    assert "verb=claim" in result["error"]
+    assert "claim-action" in result["error"]
+    assert "archive-stamp-cli" not in result["error"]
     # Refusal is read-only — no partial write on the way to the abort.
     assert memo.read_text(encoding="utf-8") == before
+
+
+def test_missing_params_all_named_in_one_error():
+    r = asyncio.run(_handler({"verb": "claim"}))
+    assert r["exit_code"] == 1
+    for name in ("memo", "session_id", "at"):
+        assert name in r["error"]
+    r = asyncio.run(_handler({}))
+    assert "verb" in r["error"] and "memo" in r["error"]
+
+
+def test_relative_memo_resolves_against_repo_root_param(tmp_path):
+    memo = _init_repo_with_memo(tmp_path, _OPEN_MEMO)
+    repo = memo.parents[2]
+    r = asyncio.run(_handler({
+        "verb": "claim-action", "memo": "cross-repo/inbox/memo.md",
+        "session_id": "s1", "at": "2026-06-02T00:00:00Z",
+        "repo_root": str(repo), "decision": "accepted", "realized_by": "abc1234",
+    }))
+    assert r["exit_code"] == 0, r
+    assert "status: actioned" in memo.read_text(encoding="utf-8")
+
+
+def test_relative_memo_resolves_against_bound_repo_root(tmp_path):
+    memo = _init_repo_with_memo(tmp_path, _OPEN_MEMO)
+    repo = memo.parents[2]
+    r = asyncio.run(_handler({
+        "verb": "claim", "memo": "cross-repo/inbox/memo.md",
+        "session_id": "s1", "at": "2026-06-02T00:00:00Z",
+    }, repo_root=repo / ".git"))
+    assert r["exit_code"] == 0, r
+    assert "status: in_progress" in memo.read_text(encoding="utf-8")
+
+
+def test_claim_action_on_open_memo_is_one_call(tmp_path):
+    memo = _init_repo_with_memo(tmp_path, _OPEN_MEMO)
+    r = asyncio.run(_handler({
+        "verb": "claim-action", "memo": str(memo),
+        "session_id": "s1", "at": "2026-06-02T00:00:00Z",
+        "decision": "accepted", "realized_by": "abc1234",
+    }))
+    assert r["exit_code"] == 0, r
+    text = memo.read_text(encoding="utf-8")
+    assert "status: actioned" in text and "picked_up_by: s1" in text

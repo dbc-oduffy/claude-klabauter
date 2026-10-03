@@ -103,8 +103,8 @@ explicit-pathspec follow-up commit of ONLY the memo path, using the git root
 ``_containment_check`` already resolves. This is the terminal committer for the
 mutation — no downstream sweep (e.g. ``fleet.archive_actioned_memos``) should be
 the first thing to commit a memo.transition write. The consumer-agnostic
-contract is unchanged: the caller's ``repo_root`` param stays unused; the memo's
-own git root is what commits.
+contract is unchanged: the memo's own git root is what commits; ``repo_root``
+(param, else the bound repo) only anchors a RELATIVE ``memo`` when ``cwd`` is absent.
 
 surface_advisory wiring (AC4/AC5, P080-C2): ``action`` and ``resolve`` (including
 ``correct_realization`` and the stranded-write resume path) attach an additive
@@ -161,6 +161,7 @@ from typing import Any
 import yaml
 
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -1277,8 +1278,8 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
             if status != "in_progress":
                 raise MutateAbort(
                     f'unexpected current status "{status or "(missing)"}" for action — expected in_progress\n'
-                    "  (claim it first with archive-stamp-cli claim-memo-stamp, or use "
-                    "archive-stamp-cli resolve-memo to claim and action in one step, then retry)"
+                    "  (claim it first with memo.transition verb=claim, or use "
+                    "verb=claim-action to claim and action in one call, then retry)"
                 )
 
             # PRESERVE picked_up_by and picked_up_at — claim-of-record for the archived memo.
@@ -1885,20 +1886,31 @@ async def _handler(
     (DR-212 D3).
     """
     verb = (params.get("verb") or "").strip()
-    if not verb:
+    memo = (params.get("memo") or "").strip()
+    session_id = (params.get("session_id") or "").strip()
+    at = (params.get("at") or "").strip()
+
+    missing = [name for name, val in (("verb", verb), ("memo", memo)) if not val]
+    if verb in ("claim", "resolve", "claim-action"):
+        missing += [n for n, v in (("session_id", session_id), ("at", at)) if not v]
+    elif verb == "close" and not at:
+        missing.append("at")
+    if missing:
         return _err(
-            "memo.transition: 'verb' is required (claim | action | release | resolve | close | lift)"
+            "memo.transition: missing required param(s): " + ", ".join(missing)
+            + " (verbs: claim | action | release | resolve | claim-action | close | lift)"
         )
 
-    memo = (params.get("memo") or "").strip()
-    if not memo:
-        return _err("memo.transition: 'memo' is required")
-
     cwd = (params.get("cwd") or "").strip() or None
+    if cwd is None:
+        cwd = (params.get("repo_root") or "").strip() or None
+    if cwd is None and repo_root is not None:
+        try:
+            cwd = str(main_worktree_root(Path(repo_root)))
+        except ValueError:
+            cwd = None
 
     if verb == "claim":
-        session_id = (params.get("session_id") or "").strip()
-        at = (params.get("at") or "").strip()
         return await asyncio.to_thread(_claim, memo, session_id, at, cwd)
 
     if verb == "action":
@@ -1907,19 +1919,16 @@ async def _handler(
     if verb == "release":
         return await asyncio.to_thread(_release, memo, cwd)
 
-    if verb == "resolve":
-        session_id = (params.get("session_id") or "").strip()
-        at = (params.get("at") or "").strip()
+    if verb in ("resolve", "claim-action"):
         return await asyncio.to_thread(_resolve, memo, session_id, at, params, cwd)
 
     if verb == "lift":
         return await asyncio.to_thread(_lift, memo, cwd)
 
     if verb == "close":
-        at = (params.get("at") or "").strip()
         return await asyncio.to_thread(_close, memo, at, cwd)
 
     return _err(
         f"memo.transition: unknown verb {verb!r} — supported: "
-        "claim, action, release, resolve, close, lift"
+        "claim, action, release, resolve, claim-action, close, lift"
     )

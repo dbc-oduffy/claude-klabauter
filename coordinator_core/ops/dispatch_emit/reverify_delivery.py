@@ -34,12 +34,15 @@ from coordinator_core.ops.review_mint.execute_review import (
     compose_criterion_judge,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
+from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 VERDICT_DIR = Path("state") / "delivery-verdicts"
 RECORD_KIND = "delivery-verdict"
 _PHASE = "Delivery re-verify"
 _CRITERION_STATUSES = ("met", "not_met", "indeterminate")
+_TESTS_PHASE = "Tests re-run"
+_TESTS_STATUSES = ("pass", "fail", "error")
 
 
 class ReverifyRefused(ValueError):
@@ -78,21 +81,35 @@ def _criterion_unsettled(record: dict) -> bool:
     return False
 
 
+def _tests_stale(record: dict) -> bool:
+    """True when the run record's frozen build/test status is `fail` or `error`."""
+    for holder in (record, record.get("inline_review"), record.get("review")):
+        block = holder.get("tests") if isinstance(holder, dict) else None
+        if isinstance(block, dict) and block.get("status") in ("fail", "error"):
+            return True
+    return False
+
+
+def _unsettled(record: dict) -> bool:
+    return _criterion_unsettled(record) or _tests_stale(record)
+
+
 def prior_unbacked_claims(record_path: Path) -> tuple[Dict[str, Any], List[dict]]:
     """`(record, claims)` of a run record's frozen delivery FAIL, each claim `{claim, anchor}`.
-    A delivery PASS whose criterion is `not_met`/`indeterminate` returns `(record, [])`: there is
+    A delivery PASS whose criterion is `not_met`/`indeterminate`, or whose tests
+    are `fail`/`error`, returns `(record, [])`: there is
     nothing to re-check claim by claim, but the verdict and criterion are stale. Raises
-    `ReverifyRefused` when the record is unreadable, or when delivery PASSed and the criterion
-    was met (nothing to supersede)."""
+    `ReverifyRefused` when the record is unreadable, or when delivery PASSed and nothing else
+    is stale (nothing to supersede)."""
     record = _frontmatter(record_path)
     if record is None:
         raise ReverifyRefused(f"reverify-delivery: cannot read run record {record_path}")
     delivery = _delivery_block(record)
-    if delivery is not None and delivery.get("verdict") != "FAIL" and _criterion_unsettled(record):
+    if delivery is not None and delivery.get("verdict") != "FAIL" and _unsettled(record):
         return record, []
     if delivery is None or delivery.get("verdict") != "FAIL":
         raise ReverifyRefused(
-            f"reverify-delivery: {record_path} carries no delivery FAIL and no unmet criterion "
+            f"reverify-delivery: {record_path} carries no delivery FAIL, unmet criterion or failed tests "
             "to re-verify"
         )
     items = delivery.get("unbacked")
@@ -135,6 +152,7 @@ def compose_reverify_script(
     run_base_sha: Optional[str],
     head_sha: str,
     claims: List[dict],
+    rerun_tests: bool = False,
 ) -> str:
     """A Workflow script holding one delivery-verifier agent call, briefed with the prior FAIL's
     unbacked claims and told to verify them at `head_sha`, then the roster's criterion judge
@@ -191,6 +209,32 @@ def compose_reverify_script(
         prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
     )
     phases = [_js_string_literal(_PHASE)]
+    tests_lines = ""
+    tests_field = ""
+    if rerun_tests:
+        phases.append(_js_string_literal(_TESTS_PHASE))
+        tests_prompt = (
+            f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
+            "Run Python as `python3`, falling back to `python` when `python3` is absent. "
+            "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
+        )
+        tests_call = _agent_call_literal(
+            review.prep.agent_type,
+            tests_prompt,
+            _TESTS_PHASE,
+            schema=True,
+            as_arrow=False,
+            agent_opts=_agent_opts_for(review.prep),
+            schema_literal=stage_schema_literal("test_result"),
+        )
+        tests_lines = (
+            f"  phase({_js_string_literal(_TESTS_PHASE)});\n"
+            f"  const _tests = await {tests_call};\n"
+        )
+        tests_field = (
+            ", tests: _tests ? { status: _tests.status ?? null, run: _tests.tests_run ?? null, "
+            "failed: _tests.tests_failed ?? null, sidecar: _tests.sidecar_path ?? null } : null"
+        )
     judge_lines = ""
     criterion_field = ""
     if judge_call is not None:
@@ -220,11 +264,12 @@ def compose_reverify_script(
         f"{meta}\n"
         f"  phase({_js_string_literal(_PHASE)});\n"
         f"  const _delivery = await {call};\n"
+        f"{tests_lines}"
         f"{judge_lines}"
         f"  return {{ reverify_delivery: {json.dumps(ident, sort_keys=True)}, "
         "verdict: _delivery?.verdict ?? null, "
         "claims_unbacked: (_delivery?.claims_unbacked ?? []).map(c => ({ claim: c && c.claim, anchor: c && c.anchor }))"
-        f"{criterion_field} }};\n"
+        f"{criterion_field}{tests_field} }};\n"
     )
 
 
@@ -238,6 +283,7 @@ def record_delivery_verdict(
     unbacked: List[dict],
     session_id: str = "",
     criterion: Optional[dict] = None,
+    tests: Optional[dict] = None,
 ) -> str:
     """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path."""
     if verdict not in ("PASS", "FAIL"):
@@ -259,6 +305,16 @@ def record_delivery_verdict(
         if status not in _CRITERION_STATUSES:
             raise ReverifyRefused(f"reverify-delivery: criterion status {status!r} is not one of {_CRITERION_STATUSES}")
         fm["criterion"] = {"status": status, "observation": criterion.get("observation"), "sidecar": None}
+    if tests is not None:
+        status = tests.get("status")
+        if status not in _TESTS_STATUSES:
+            raise ReverifyRefused(f"reverify-delivery: tests status {status!r} is not one of {_TESTS_STATUSES}")
+        fm["tests"] = {
+            "status": status,
+            "run": tests.get("run"),
+            "failed": tests.get("failed"),
+            "sidecar": tests.get("sidecar"),
+        }
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8", newline="\n") as fh:
@@ -303,6 +359,14 @@ def latest_criterion_supersession(repo_root: Path, run_record_rel: str) -> Optio
     return criterion if isinstance(criterion, dict) and criterion.get("status") else None
 
 
+def latest_tests_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
+    """The `tests` block of that same newest record; `None` when there is no record or it
+    predates test re-running."""
+    fm = _newest_supersession(repo_root, run_record_rel)
+    tests = fm.get("tests") if fm else None
+    return tests if isinstance(tests, dict) and tests.get("status") else None
+
+
 _BOOKKEEPING_GLOB = ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md"
 
 
@@ -324,7 +388,7 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
     for path in candidates:
         fm = _frontmatter(path)
         block = _delivery_block(fm) if fm else None
-        if block and (block.get("verdict") == "FAIL" or _criterion_unsettled(fm)):
+        if block and (block.get("verdict") == "FAIL" or _unsettled(fm)):
             return path
     return None
 
@@ -367,6 +431,7 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
         run_base_sha=prep.get("run_base_sha") or commit_range.get("base"),
         head_sha=_head_sha(repo_root),
         claims=claims,
+        rerun_tests=_tests_stale(record),
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
     from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
@@ -420,6 +485,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             unbacked=result.get("claims_unbacked") or [],
             session_id=args.session_id,
             criterion=result.get("criterion") or None,
+            tests=result.get("tests") or None,
         )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)

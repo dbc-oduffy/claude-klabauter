@@ -2986,7 +2986,7 @@ _FOLD_INTO_PLAN_GUIDANCE = (
     "<path>`, drop the hunks that are not yours, `git apply --cached`, "
     "then commit the staged version. Never `git stash`. This disposition "
     "maps to `--decision accepted`, so it requires `realized_by` "
-    "(the SHA of the fold commit); `cs_action_memo` fails loud without it. "
+    "(the SHA of the fold commit); `memo.transition` (verb claim, then verb action) fails loud without it. "
     "`decision_note` is not enforced but is worth adding for the record."
 )
 
@@ -3043,7 +3043,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "source side for a residual after the move lands. This disposition maps "
                 "to `--decision accepted`, which requires `realized_by` (a pointer to "
                 "what realized the ask — typically the commit SHA that landed the fix) "
-                "alongside `decision_note`; `cs_action_memo` fails loud without it."
+                "alongside `decision_note`; `memo.transition` (verb claim, then verb action) fails loud without it."
             ),
         },
         {
@@ -3068,7 +3068,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "`state/sizings/<id>.yaml`; a sizing that terminates at `route: "
                 "pm-decision` with `xl_exit: null` is a legitimate open state, which is "
                 "exactly why `partial` remains right rather than becoming wrong) "
-                "alongside `decision_note`; `cs_action_memo` fails loud without it."
+                "alongside `decision_note`; `memo.transition` (verb claim, then verb action) fails loud without it."
             ),
         },
         {
@@ -3106,7 +3106,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "doesn't need its own section. Actioning this disposition requires "
                 "`actioned_note` (the reply itself): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since replying in place is not "
-                "an accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "an accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails loud if "
                 "neither `--decision` nor `--actioned-note` is supplied — so state the "
                 "reply, however brief, rather than leaving `actioned_note` empty."
             ),
@@ -3122,7 +3122,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "verdict. Actioning this disposition requires `actioned_note` (pointing "
                 "at the `## EM Response` heading): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since replying in place is not "
-                "an accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "an accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails loud if "
                 "neither `--decision` nor `--actioned-note` is supplied — so state the "
                 "pointer, however brief, rather than leaving `actioned_note` empty."
             ),
@@ -3138,7 +3138,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "adopting. This disposition maps to `--decision accepted`, which "
                 "requires `realized_by` (a pointer to what realized the proposal — "
                 "typically the commit SHA that landed it) alongside `decision_note`; "
-                "`cs_action_memo` fails loud without it."
+                "`memo.transition` (verb claim, then verb action) fails loud without it."
             ),
         },
         {
@@ -3166,7 +3166,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "the memo with its SHA. Same premise-verification and live-claim-holder "
                 "checks as an `ask` accept apply before landing. This disposition maps "
                 "to `--decision accepted`, which requires `realized_by` (the SHA of the "
-                "commit that lands the fix) alongside `decision_note`; `cs_action_memo` "
+                "commit that lands the fix) alongside `decision_note`; `memo.transition` (verb claim, then verb action) "
                 "fails loud without it."
             ),
         },
@@ -3180,7 +3180,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "assert that it exists. Actioning this disposition requires "
                 "`actioned_note` (the pointer itself): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since already-owned-elsewhere "
-                "is not an accepted/partial/declined outcome), and `cs_action_memo` "
+                "is not an accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) "
                 "fails loud if neither `--decision` nor `--actioned-note` is supplied — "
                 "so state the pointer, however brief, rather than leaving "
                 "`actioned_note` empty."
@@ -3196,7 +3196,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "Actioning this disposition requires `actioned_note` (the check "
                 "performed and its result): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since not-a-bug is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails loud if "
                 "neither `--decision` nor `--actioned-note` is supplied — so state what "
                 "was checked, however brief, rather than leaving `actioned_note` empty."
             ),
@@ -3234,7 +3234,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "live-claim-holder checks as an `ask` accept apply before landing. "
                 "This disposition maps to `--decision accepted`, which requires "
                 "`realized_by` (the SHA of the commit that lands the change) "
-                "alongside `decision_note`; `cs_action_memo` fails loud without it."
+                "alongside `decision_note`; `memo.transition` (verb claim, then verb action) fails loud without it."
             ),
         },
         {
@@ -3248,7 +3248,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "disposition requires `actioned_note` (the pointer itself): "
                 "`d-action-memo` resolves via the `--actioned-note` path (no "
                 "`--decision`, since already-tracked-elsewhere is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud "
+                "accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails loud "
                 "if neither `--decision` nor `--actioned-note` is supplied — so state "
                 "the pointer, however brief, rather than leaving `actioned_note` "
                 "empty."
@@ -3265,7 +3265,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "verdict. Actioning this disposition requires `actioned_note` (the "
                 "check performed and its result): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since not-actionable is not "
-                "an accepted/partial/declined outcome), and `cs_action_memo` fails "
+                "an accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails "
                 "loud if neither `--decision` nor `--actioned-note` is supplied — so "
                 "state what was checked, however brief, rather than leaving "
                 "`actioned_note` empty."
@@ -3297,7 +3297,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "action. Actioning this disposition requires `actioned_note` (recording "
                 "the nil-impact rationale): `d-action-memo` resolves via the "
                 "`--actioned-note` path (no `--decision`, since nil-impact is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "accepted/partial/declined outcome), and `memo.transition` (verb claim, then verb action) fails loud if "
                 "neither `--decision` nor `--actioned-note` is supplied — so state the "
                 "rationale, however brief, rather than leaving `actioned_note` empty."
             ),
@@ -3328,7 +3328,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "than a full re-plan. Same premise/live-claim verification as an `ask` "
                 "accept applies. This disposition maps to `--decision accepted`, so it "
                 "requires BOTH `realized_by` (the SHA of the commit that lands the fix — "
-                "`cs_action_memo` fails loud without it) and `decision_note` for the "
+                "`memo.transition` (verb claim, then verb action) fails loud without it) and `decision_note` for the "
                 "reasoning; `actioned_note` is rejected on this branch, it belongs to "
                 "nil-impact dispositions only. Land the fix first, then action the memo "
                 "with its SHA."
@@ -3353,7 +3353,7 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-#: (kind_resolved, disposition_value) -> `cs_action_memo`'s `--decision` mode
+#: (kind_resolved, disposition_value) -> `memo.transition` action's `--decision` mode
 #: (accepted/partial/declined). Ported verbatim from the monolith's own
 #: `_MEMO_ACTION_DECISION_MAP`.
 _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
@@ -3368,7 +3368,7 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     # is what makes `realized_by` (the fold commit's SHA) required, so the
     # edit is auditable from the memo record and not only from the plan's
     # history. Without these two rows the disposition resolves
-    # `d-action-memo` with no decision channel and `cs_action_memo` fails
+    # `d-action-memo` with no decision channel and `memo.transition` action fails
     # loud at dispatch.
     ("fyi", "fold-into-plan"): "accepted",
     ("proposal", "fold-into-plan"): "accepted",
@@ -3809,7 +3809,7 @@ def build_handoff_directives(
 
 
 def _build_action_memo_args(artifact_path: str, kind_resolved: str, decisions: dict[str, Any]) -> list[str]:
-    """Resolves `decisions["j-kind"]` into `cs_action_memo`'s CLI-flag
+    """Resolves `decisions["j-kind"]` into `memo.transition` action's CLI-flag
     surface. Ported verbatim."""
     jkind = decisions.get("j-kind") if isinstance(decisions, dict) else None
     jkind = jkind if isinstance(jkind, dict) else {}
@@ -4931,7 +4931,7 @@ def _usage(prog: str, stream=None) -> int:
     return EXIT_USAGE
 
 
-#: `--decisions[jp_id]` optional content keys `cs_action_memo` accepts
+#: `--decisions[jp_id]` optional content keys `memo.transition` action accepts
 #: alongside `disposition`/`value` — ported verbatim from
 #: `pickup_assemble.DISPOSITION_CONTENT_KEYS` (same closed set,
 #: `validate_decisions_shape` below is this module's own copy of that
@@ -5003,7 +5003,7 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
                 f"--decisions[{jp_id!r}] sets distill_fate=\"ratification\" but "
                 f"omits \"in_repo_capture\" — supply the in-repo capture path "
                 f'(e.g. "docs/decisions/..." or "docs/plans/...") the '
-                f"ratification was captured to; cs_action_memo hard-requires it "
+                f"ratification was captured to; memo.transition (verb action) hard-requires it "
                 f"for this distill_fate"
             )
     return None

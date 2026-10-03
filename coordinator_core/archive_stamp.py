@@ -23,8 +23,10 @@ Function-to-oracle map:
                                                                  cs_consume_handoff is a
                                                                  retained deprecated alias)
     cs_claim_memo_stamp      <- cs_claim_memo_stamp()          (memo.transition claim)
-    cs_action_memo           <- cs_action_memo()               (memo.transition action +
-                                                                 session.shape.session_shape_set)
+    cs_action_memo           <- cs_action_memo()               (memo.transition: verb claim,
+                                                                 then verb action; plus
+                                                                 session.shape.session_shape_set;
+                                                                 not an op name: -32601)
     cs_release_memo_revert   <- cs_release_memo_revert()       (memo.transition release)
     cs_stamp_plan_implemented<- cs_stamp_plan_implemented()    (native in-process call to
                                                                  coordinator_core.ops.plan_status_transition.main,
