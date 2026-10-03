@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-10-03-fixture",
+  "scratch_root": "<scratch_root>",
+  "output_path": "out/{SUBJECT}.json",
+  "output_schema": "{ \"name\": string, \"summary\": string }",
+  "topics": [
+    {
+      "id": "alpha",
+      "name": "Alpha topic",
+      "search_domains": ["example.org"],
+      "focus_questions": ["What is alpha?"],
+      "schema_fields": ["name"]
+    },
+    {
+      "id": "beta",
+      "name": "Beta topic",
+      "search_domains": ["example.net"],
+      "focus_questions": ["What is beta?"],
+      "schema_fields": ["summary"]
+    }
+  ],
+  "acceptance_criteria": ["Every claim is sourced"],
+  "gate_rules": ["Reject unsourced claims"],
+  "phase2_gate_rules": ["Reject contested claims"],
+  "min_minutes": 5,
+  "max_minutes": 15,
+  "min_sources": 5
+}

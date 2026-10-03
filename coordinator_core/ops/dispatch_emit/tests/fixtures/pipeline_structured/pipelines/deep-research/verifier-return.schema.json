@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["topic", "challenged"],
+  "properties": {
+    "topic": { "type": "string" },
+    "challenged": { "type": "array", "items": { "type": "string" } }
+  }
+}

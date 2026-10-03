@@ -154,7 +154,8 @@ def _no_receipt_deny_reason(script_name: str) -> str:
     launcher = _emitter_launcher_invocation()
     return (
         f"{script_name}: hand-rolled Workflow with an untyped or write-capable "
-        f"agent() call and no receipt. Emit it: {launcher} --plan <plan-path> "
+        f"agent() call and no receipt. Emit it: {launcher} --plan <plan-path>, "
+        f"or {launcher} --pipeline <name> --brief <text> "
         "(read-only fan-outs are exempt)."
     )
 

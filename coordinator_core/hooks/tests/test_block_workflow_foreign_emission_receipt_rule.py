@@ -200,3 +200,36 @@ def test_emit_wave_fire_receipt_shape_is_sanctioned(tmp_path):
         }
     )
     assert result == {}
+
+
+def _assert_names_both_doors(result) -> None:
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    reason = hso["permissionDecisionReason"]
+    assert "--pipeline <name> --brief" in reason
+    assert "--plan <plan-path>" in reason
+
+
+def test_no_receipt_deny_names_pipeline_route_for_script_path(tmp_path):
+    script = tmp_path / "hand.workflow.mjs"
+    script.write_text('agent({ prompt: "do it" });\n', encoding="utf-8")
+    _assert_names_both_doors(
+        bwfe._handler(
+            {
+                "tool_name": "Workflow",
+                "tool_input": {"scriptPath": str(script)},
+                "cwd": str(tmp_path),
+            }
+        )
+    )
+
+
+def test_no_receipt_deny_names_pipeline_route_for_inline_script():
+    _assert_names_both_doors(
+        bwfe._handler(
+            {
+                "tool_name": "Workflow",
+                "tool_input": {"script": 'agent({ prompt: "do it" });\n'},
+            }
+        )
+    )

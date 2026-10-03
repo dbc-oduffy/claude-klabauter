@@ -69,6 +69,22 @@ Wire params:
                                      READ-only guard.
     name (str, optional)          — forwarded to ``emit.emit_script``.
     description (str, optional)   — forwarded to ``emit.emit_script``.
+    pipeline (str, optional)      — the PIPELINE route: a DoE manifest name
+                                     (``<content-root>/pipelines/**/<name>.manifest.yaml``).
+                                     Needs ``brief`` (non-empty) and ``repo_root``
+                                     or ``target_root``; optional ``subjects``
+                                     (a list of strings or objects with a ``subject``
+                                     key, or a research spec object with ``subjects``
+                                     and ``topics``), ``lists`` (name -> list; a roster
+                                     entry is ``{slug, agent_type}`` or ``slug=agent_type``),
+                                     ``scratch_dir`` (repo-relative,
+                                     guarded) and ``flags`` (str->str|bool). Exclusive of
+                                     every other route selector
+                                     (``PipelineParamConflictError``). Output
+                                     defaults to
+                                     ``state/scratch/warp/<run-id>.workflow.mjs``;
+                                     receipt extras add pipeline/run_id/
+                                     manifest_sha256/subjects. Emit-only.
     cloud_spawn (dict, optional)  — the CLOUD-SPAWN route: ``{kind: probe|worker,
                                      source_repo, parent_session_id,
                                      channel_pr, question}``. Replies
@@ -107,7 +123,8 @@ Reply fields:
      "findings": [{"severity","code","message","line"?}, ...],
      "error_count": int, "warn_count": int,
      "receipt": "<written receipt path>" | None,
-     "fire_args": {"repoRoot": "<posix root>"} | absent}
+     "fire_args": {"repoRoot": "<posix root>"} | absent,
+     "run_id", "scratch_dir": ask/pipeline routes (scratch_dir: pipeline only)}
     ``receipt`` names the provenance sidecar written beside the script, or is
     ``None`` when it could not be written — receipt writing is best-effort and
     never fails the emit (§ The receipt is a property of emitting).
@@ -191,11 +208,14 @@ import json
 import os
 import sys
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.cartography._guard import PathEscapeError
+from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
@@ -208,6 +228,13 @@ from coordinator_core.ops.dispatch_emit.emit import (
     emit_script,
     resolve_agent_type_host,
 )
+from coordinator_core.ops.dispatch_emit.pipeline_contract import (
+    RUN_ID_PREFIX,
+    PipelineEmitRefused,
+    PipelineInputs,
+    subject_key,
+)
+from coordinator_core.ops.dispatch_emit.pipeline_inputs import normalize_lists, subjects_from_value
 from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
 from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_landed
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
@@ -291,6 +318,11 @@ class QueuePlanConflictError(ValueError):
 class SizingPathConflictError(ValueError):
     """Raised when ``sizing_path`` is passed with ``plan_path``/``inventory_path``/
     ``queue``/``profile``; the sizing route selects its own arm."""
+
+
+class PipelineParamConflictError(ValueError):
+    """Raised when ``pipeline`` is passed with another route's selector
+    (plan/inventory/queue/profile/ask/sizing_path/cloud_spawn)."""
 
 
 class ForeignEmissionError(ValueError):
@@ -745,14 +777,42 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
-            "inventory_repo_root",
+            "inventory_repo_root", "pipeline", "brief", "scratch_dir",
         )
     ),
     Field("inventory_part", "list"),
     Field("queue", "list"),
     Field("overrides", "dict"),
     Field("writes", "str_list"),
+    Field("flags", "dict"),
+    Field("lists", "dict"),
 )
+
+
+def _pipeline_content_root() -> Path:
+    """DoE content root the pipeline manifests live under; refuses, never defaults."""
+    content_root = read_content_root_pointer()
+    if not content_root:
+        raise PipelineEmitRefused(
+            ["coordinator-content-repo root unresolved: read_content_root_pointer() returned empty"]
+        )
+    content_root = content_root_for(content_root)
+    if content_root is None:
+        raise PipelineEmitRefused(
+            [f"{Path(content_root).as_posix()} is neither a private clone (no coordinator/) nor a flat mirror"]
+        )
+    return Path(content_root)
+
+
+def _pipeline_scratch_rel(root: Path, scratch_dir: Optional[str], run_id: str) -> str:
+    """Repo-relative POSIX scratch dir: the caller's, guarded under ``root``, or the per-run default."""
+    if not scratch_dir:
+        return f"{RUN_DIR_ROOT}/{run_id}"
+    given = Path(scratch_dir)
+    guarded = contained_path(given if given.is_absolute() else Path(root) / given, [Path(root)])
+    if guarded is None:
+        raise PathEscapeError(f"scratch_dir escapes repo root: {scratch_dir!r} not under {Path(root).as_posix()!r}")
+    return guarded.relative_to(Path(root).resolve()).as_posix()
 
 
 def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
@@ -872,6 +932,47 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     ask = params.get("ask")
     ask_ctx: Optional[dict] = None
     receipt_extras: Optional[dict] = None
+    pipeline_name = params.get("pipeline")
+    pipeline_ctx: Optional[dict] = None
+
+    if pipeline_name:
+        if plan_path or inventory_path or queue or profile_name or ask or sizing_path or params.get("cloud_spawn") is not None:
+            raise PipelineParamConflictError(
+                "dispatch.emit accepts pipeline alone, not with plan_path/inventory_path/"
+                f"queue/profile/ask/sizing_path/cloud_spawn (got pipeline={pipeline_name!r})"
+            )
+        brief = params.get("brief")
+        if not (isinstance(brief, str) and brief.strip()):
+            raise ValueError("dispatch.emit pipeline route requires a brief path")
+        given_root = repo_root or params.get("target_root")
+        if not given_root:
+            raise ValueError("dispatch.emit pipeline route requires repo_root or target_root")
+        pipeline_root = Path(given_root)
+        brief_path = Path(brief)
+        try:
+            os.stat(brief_path if brief_path.is_absolute() else pipeline_root / brief_path)
+        except OSError:
+            raise ValueError(f"dispatch.emit pipeline brief path does not exist: {brief}") from None
+        brief = brief_path.as_posix()
+        run_id = (
+            f"{RUN_ID_PREFIX}{pipeline_name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        )
+        raw_subjects = params.get("subjects")
+        subjects = () if raw_subjects is None else tuple(subjects_from_value(raw_subjects, base=pipeline_root))
+        pipeline_ctx = {
+            "root": pipeline_root,
+            "run_id": run_id,
+            "inputs": PipelineInputs(
+                brief=brief,
+                subjects=subjects,
+                scratch_dir=_pipeline_scratch_rel(pipeline_root, params.get("scratch_dir"), run_id),
+                flags=dict(params.get("flags") or {}),
+                lists=dict(params.get("lists") or {}),
+            ),
+        }
+        if not aliased_param(params, "output_path", "out_path"):
+            params = {**params, "output_path": str(pipeline_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
+        repo_root = repo_root or pipeline_root
 
     if ask or sizing_path:
         if plan_path or inventory_path or queue or profile_name:
@@ -938,7 +1039,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"(got plan_path={plan_path!r}, inventory_path={inventory_path!r})"
         )
 
-    if not is_queue_route and ask_ctx is None:
+    if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
             _refuse_inventory_outside_repo(
                 inventory_path, params.get("inventory_repo_root") or repo_root
@@ -1062,6 +1163,33 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
+        receipt_plan_path = None
+    elif pipeline_ctx is not None:
+        from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
+        from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
+
+        manifest = load_manifest(_pipeline_content_root(), pipeline_name)
+        pipeline_inputs = replace(
+            pipeline_ctx["inputs"],
+            lists=normalize_lists(manifest.lists, pipeline_ctx["inputs"].lists),
+        )
+        pipeline_ctx["inputs"] = pipeline_inputs
+        schedule = validate(manifest, pipeline_inputs)
+        script = compose_pipeline_script(
+            manifest,
+            pipeline_inputs,
+            schedule,
+            run_id=pipeline_ctx["run_id"],
+            agent_type_host=agent_type_host,
+        )
+        receipt_extras = {
+            **(receipt_extras or {}),
+            "pipeline": pipeline_name,
+            "run_id": pipeline_ctx["run_id"],
+            "brief": pipeline_ctx["inputs"].brief,
+            "manifest_sha256": manifest.sha256,
+            "subjects": [subject_key(s) for s in pipeline_ctx["inputs"].subjects],
+        }
         receipt_plan_path = None
     elif ask_ctx is not None:
         from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
@@ -1187,6 +1315,11 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         if "batons" in ask_ctx:
             reply["batons"] = ask_ctx["batons"]
             reply["uncommitted"] = ask_ctx["uncommitted"]
+
+    if pipeline_ctx is not None:
+        reply["run_id"] = pipeline_ctx["run_id"]
+        reply["brief"] = pipeline_ctx["inputs"].brief
+        reply["scratch_dir"] = pipeline_ctx["inputs"].scratch_dir
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

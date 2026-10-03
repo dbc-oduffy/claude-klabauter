@@ -88,6 +88,16 @@ from coordinator_core.ops.dispatch_emit.op import (
     restamp,
 )
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.pipeline_contract import (
+    PipelineEmitRefused,
+    subject_key,
+    subject_slug,
+)
+from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
+    STRUCTURED_SUFFIXES,
+    read_structured_file,
+    subjects_from_value,
+)
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
@@ -119,6 +129,7 @@ _DATA_ERRORS = (
     QueuePlanConflictError,
     SizingPathConflictError,
     SizingFireRefused,
+    PipelineEmitRefused,
     PathEscapeError,
     QueuePathEscapeError,
     ForeignEmissionError,
@@ -313,7 +324,91 @@ def _build_parser() -> argparse.ArgumentParser:
         "prompt this emission composes; its path and sha256 are recorded in the "
         "emission receipt",
     )
+    parser.add_argument(
+        "--pipeline",
+        default=None,
+        metavar="NAME",
+        help="pipeline route: emit the named manifest-driven pipeline over the --brief file path "
+        "and --subjects; emit-only, exclusive of every other route selector",
+    )
+    parser.add_argument(
+        "--brief", default=None, metavar="PATH",
+        help="pipeline route: path to the brief file (repo-relative or absolute; must exist)",
+    )
+    parser.add_argument(
+        "--subjects",
+        default=None,
+        metavar="VALUE",
+        help="pipeline route: a file of subject keys (one per line, # comments), a comma list, or a "
+        ".json/.yaml/.yml file holding a subjects list (strings or objects) or a research spec "
+        "(subjects plus topics, which become each subject's verifiers)",
+    )
+    parser.add_argument(
+        "--list",
+        action="append",
+        default=None,
+        metavar="NAME=a,b,c",
+        help="pipeline route: a manifest input list (repeatable); NAME=@FILE reads a JSON/YAML list; "
+        "a roster entry is slug=agent_type",
+    )
+    parser.add_argument(
+        "--scratch-dir", default=None, metavar="PATH", help="pipeline route: repo-relative scratch dir"
+    )
+    parser.add_argument(
+        "--flag",
+        action="append",
+        default=None,
+        metavar="NAME=VALUE",
+        help="pipeline route: a manifest flag (repeatable)",
+    )
     return parser
+
+
+def _load_subjects(value: str) -> "list":
+    """Subject keys or objects: a keys file (one per line), a comma list, or a JSON/YAML subjects list or spec."""
+    path = Path(value)
+    if path.is_file() and path.suffix.lower() in STRUCTURED_SUFFIXES:
+        subjects = subjects_from_value(read_structured_file(path), base=path.parent)
+    else:
+        raw = path.read_text(encoding="utf-8").splitlines() if path.is_file() else value.split(",")
+        subjects = [k.strip() for line in raw for k in [line.split("#", 1)[0]] if k.strip()]
+    if not subjects:
+        raise PipelineEmitRefused([f"--subjects yields no subjects: {value}"])
+    keys = [
+        subject_key(s) for s in subjects
+        if isinstance(s, str) or (isinstance(s, dict) and isinstance(s.get("subject"), str))
+    ]
+    if len({subject_slug(k) for k in keys}) != len(keys):
+        raise PipelineEmitRefused(
+            ["--subjects has duplicate (or slug-colliding) keys; scratch dirs would collide"]
+        )
+    return subjects
+
+
+def _parse_lists(items: "list[str]") -> "dict[str, list]":
+    lists: "dict[str, list]" = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep or not name or not value:
+            raise PipelineEmitRefused([f"--list {item!r} is not NAME=a,b,c or NAME=@FILE"])
+        if value.startswith("@"):
+            loaded = read_structured_file(Path(value[1:]))
+            if not isinstance(loaded, list):
+                raise PipelineEmitRefused([f"--list {name}: {value[1:]} must hold a list"])
+            lists[name] = loaded
+        else:
+            lists[name] = [v.strip() for v in value.split(",") if v.strip()]
+    return lists
+
+
+def _parse_flags(items: "list[str]") -> "dict[str, str]":
+    flags: "dict[str, str]" = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            raise PipelineEmitRefused([f"--flag {item!r} is not NAME=VALUE"])
+        flags[name] = value
+    return flags
 
 
 def _default_repo_root_from_cwd() -> "Optional[Path]":
@@ -602,6 +697,52 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_USAGE
         return _do_resume(args)
 
+    is_pipeline_route = args.pipeline is not None
+    pipeline_only = [
+        flag
+        for flag, value in (
+            ("--brief", args.brief),
+            ("--subjects", args.subjects),
+            ("--scratch-dir", args.scratch_dir),
+            ("--flag", args.flag),
+            ("--list", args.list),
+        )
+        if value
+    ]
+    if pipeline_only and not is_pipeline_route:
+        print(
+            f"emit-dispatch-workflow: ERROR — {', '.join(pipeline_only)} require --pipeline",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if is_pipeline_route:
+        others = [
+            flag
+            for flag, value in (
+                ("--plan", args.plan),
+                ("--inventory", args.inventory),
+                ("--queue", args.queue),
+                ("--profile", args.profile),
+                ("--ask", args.ask is not None),
+                ("--sizing", args.sizing),
+                ("--writes", args.writes),
+                ("--fire", args.fire),
+            )
+            if value
+        ]
+        if others:
+            print(
+                f"emit-dispatch-workflow: ERROR — --pipeline is exclusive of {', '.join(others)}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if not args.brief:
+            print(
+                "emit-dispatch-workflow: ERROR — --pipeline needs --brief PATH",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
     is_queue_route = bool(args.queue) or bool(args.profile)
 
     is_ask_route = args.ask is not None or bool(args.sizing)
@@ -651,10 +792,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if not is_queue_route and not args.plan and not args.inventory and not is_ask_route:
+    if not is_queue_route and not args.plan and not args.inventory and not is_ask_route and not is_pipeline_route:
         print(
-            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --ask, --sizing, or "
-            "--restamp is required",
+            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --ask, --sizing, "
+            "--pipeline, or --restamp is required",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -724,7 +865,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         # keep requiring --out explicitly.
         args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
-    if not args.out_path and not is_ask_route:
+    if not args.out_path and not is_ask_route and not is_pipeline_route:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
@@ -768,6 +909,24 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["sizing_path"] = args.sizing
         if args.writes:
             params["writes"] = list(args.writes)
+        if repo_root is None:
+            repo_root = _default_repo_root_from_cwd()
+    if is_pipeline_route:
+        params["pipeline"] = args.pipeline
+        params["brief"] = args.brief
+        try:
+            if args.subjects:
+                params["subjects"] = _load_subjects(args.subjects)
+            if args.flag:
+                params["flags"] = _parse_flags(args.flag)
+            if args.list:
+                params["lists"] = _parse_lists(args.list)
+        except PipelineEmitRefused as exc:
+            for reason in exc.reasons:
+                print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        if args.scratch_dir:
+            params["scratch_dir"] = args.scratch_dir
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:
@@ -846,6 +1005,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             if not args.inventory:
                 raise
             return _emit_inventory_parts(params, repo_root, over, args.fire, admission_record)
+    except PipelineEmitRefused as exc:
+        for reason in exc.reasons:
+            print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)
+        return EXIT_DATA_ERROR
     except _DATA_ERRORS as exc:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR

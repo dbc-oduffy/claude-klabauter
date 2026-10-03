@@ -1,0 +1,46 @@
+schema_version: 1
+pipeline: structured
+inputs:
+  brief: required
+  subjects: required
+  scratch_dir: optional
+  flags:
+    depth:
+      allowed: [quick, thorough]
+      default: quick
+stages:
+  - id: scout
+    agent_type: "coordinator:research-scout"
+    model: haiku
+    template: scout.md
+    web_caller: true
+    fan_out: per_subject
+    output: "{{scratch_dir}}/{{subject}}/scout-brief.md"
+  - id: verify
+    agent_type: "coordinator:research-specialist"
+    model: sonnet
+    template: verifier.md
+    schema: verifier-return.schema.json
+    web_caller: true
+    depends_on: [scout]
+    fan_out:
+      over: subject.verifiers
+    output: "{{scratch_dir}}/{{subject}}/verify"
+  - id: rebuttal
+    agent_type: "coordinator:research-specialist"
+    model: sonnet
+    template: rebuttal.md
+    schema: verifier-return.schema.json
+    web_caller: true
+    depends_on: [verify]
+    fan_out:
+      over: stage.verify.return.challenged
+    output: "{{scratch_dir}}/{{subject}}/rebuttal"
+  - id: synthesize
+    agent_type: "coordinator:structured-synthesizer"
+    model: opus
+    template: synthesizer.md
+    web_caller: false
+    depends_on: [verify, rebuttal]
+    fan_out: per_subject
+    output: "{{scratch_dir}}/{{subject}}/result.json"
