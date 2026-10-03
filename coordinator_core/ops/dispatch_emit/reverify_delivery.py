@@ -284,6 +284,7 @@ def record_delivery_verdict(
     session_id: str = "",
     criterion: Optional[dict] = None,
     tests: Optional[dict] = None,
+    foreign_claims: Optional[List[str]] = None,
 ) -> str:
     """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path."""
     if verdict not in ("PASS", "FAIL"):
@@ -315,6 +316,8 @@ def record_delivery_verdict(
             "failed": tests.get("failed"),
             "sidecar": tests.get("sidecar"),
         }
+    if foreign_claims is not None:
+        fm["foreign_claims"] = list(foreign_claims)
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "x", encoding="utf-8", newline="\n") as fh:
@@ -367,7 +370,59 @@ def latest_tests_supersession(repo_root: Path, run_record_rel: str) -> Optional[
     return tests if isinstance(tests, dict) and tests.get("status") else None
 
 
-_BOOKKEEPING_GLOB = ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md"
+def latest_foreign_claims_supersession(repo_root: Path, run_record_rel: str) -> Optional[List[str]]:
+    """The still-live `foreign_claims` of that same newest record; `None` for an old-shape record
+    (the frozen `prep.foreign_claims` then stands)."""
+    fm = _newest_supersession(repo_root, run_record_rel)
+    claims = fm.get("foreign_claims") if fm else None
+    return [str(c) for c in claims] if isinstance(claims, list) else None
+
+
+_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def _claim_held(path: str, cwd: str) -> bool:
+    """True when a live session claims `path`, or the ledger cannot answer."""
+    from coordinator_core.session import claim_index, liveness
+
+    try:
+        claimants = claim_index.lookup([path], cwd=cwd).get(path, [])
+        if claim_index.UNANSWERABLE in claimants:
+            return True
+        return any(liveness.session_live(sid, cwd) for sid in claimants)
+    except Exception:  # noqa: BLE001 - an unanswerable ledger must keep the claim blocking
+        return True
+
+
+def live_foreign_claims(repo_root: Path, frozen: List[Any], head_sha: str) -> List[str]:
+    """The subset of `frozen` (`"<path> ..."` strings) still blocking at `head_sha`: its path is
+    held by a live session, or a commit it names is not an ancestor of `head_sha`."""
+    cwd = str(repo_root)
+    live: List[str] = []
+    for claim in frozen:
+        text = str(claim)
+        path = text.split(" ", 1)[0]
+        if _claim_held(path, cwd):
+            live.append(text)
+            continue
+        for sha in _SHA_RE.findall(text):
+            proc = run_git(["merge-base", "--is-ancestor", sha, head_sha], cwd=cwd, timeout=30)
+            if proc.returncode != 0:
+                live.append(text)
+                break
+    return live
+
+
+def _frozen_foreign_claims(repo_root: Path, record: dict) -> Optional[List[Any]]:
+    prep = record.get("prep")
+    if not isinstance(prep, dict):
+        rel = record.get("prep_sidecar")
+        prep = _frontmatter(repo_root / rel) if rel else None
+    claims = prep.get("foreign_claims") if isinstance(prep, dict) else None
+    return claims if isinstance(claims, list) else None
+
+
+_BOOKKEEPING_GLOB = ".coordinator-local/subagent-share/*/*.review-wave-bookkeeping.md (plan_id: <plan_id>)"
 
 
 def _plan_id_of(plan_path: str) -> Optional[str]:
@@ -381,13 +436,15 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
         return None
     share = repo_root / ".coordinator-local" / "subagent-share"
     candidates = sorted(
-        share.glob(f"*/{plan_id}.review-wave-bookkeeping.md"),
+        share.glob("*/*.review-wave-bookkeeping.md"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
     for path in candidates:
         fm = _frontmatter(path)
-        block = _delivery_block(fm) if fm else None
+        if not fm or str(fm.get("plan_id")) != plan_id:
+            continue
+        block = _delivery_block(fm)
         if block and (block.get("verdict") == "FAIL" or _unsettled(fm)):
             return path
     return None
@@ -476,6 +533,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if "reverify_delivery" not in result:
             result = _unwrap_task_output(result)
         ident = result["reverify_delivery"]
+        run_record = _frontmatter(Path(args.run_record)) or {}
+        frozen = _frozen_foreign_claims(repo_root, run_record)
         rel = record_delivery_verdict(
             repo_root=repo_root,
             supersedes=_run_rel(repo_root, Path(args.run_record)),
@@ -486,6 +545,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             session_id=args.session_id,
             criterion=result.get("criterion") or None,
             tests=result.get("tests") or None,
+            foreign_claims=(
+                None if frozen is None else live_foreign_claims(repo_root, frozen, ident["head_sha"])
+            ),
         )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)

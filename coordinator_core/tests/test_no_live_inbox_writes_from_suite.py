@@ -34,6 +34,36 @@ def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path, monkeypat
             pass
 
 
+def test_an_external_write_during_a_test_is_not_flagged(tmp_path, monkeypatch):
+    root = tmp_path / "peer-inbox"
+    root.mkdir()
+    monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
+    gen = cc_conftest._no_live_inbox_writes_from_suite.__wrapped__()
+    next(gen)
+    # Simulates a peer process: the write bypasses this process's audit hook.
+    cc_conftest._inbox_watch_roots, saved = (), cc_conftest._inbox_watch_roots
+    (root / "peer-memo.md").write_text("x", encoding="utf-8")
+    cc_conftest._inbox_watch_roots = saved
+    with pytest.raises(StopIteration):
+        next(gen)
+
+
+def test_a_test_originated_rename_into_a_live_root_is_flagged(tmp_path, monkeypatch):
+    root = tmp_path / "peer-inbox"
+    root.mkdir()
+    monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
+    gen = cc_conftest._no_live_inbox_writes_from_suite.__wrapped__()
+    next(gen)
+    src = tmp_path / "draft.md"
+    src.write_text("x", encoding="utf-8")
+    src.rename(root / "moved-memo.md")
+    with pytest.raises(pytest.fail.Exception, match="moved-memo.md"):
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
 def test_a_clean_test_does_not_trip_the_guard(tmp_path, monkeypatch):
     root = tmp_path / "peer-inbox"
     root.mkdir()

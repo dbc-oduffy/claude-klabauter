@@ -1154,9 +1154,50 @@ def _live_inbox_roots() -> "tuple[str, ...]":
     return _LIVE_INBOX_ROOTS
 
 
+_inbox_watch_roots: "tuple[str, ...]" = ()
+_inbox_written: "set[str]" = set()
+
+
+def _record_inbox_write(target) -> None:
+    if not _inbox_watch_roots or not isinstance(target, (str, bytes, os.PathLike)):
+        return
+    try:
+        path = os.path.abspath(os.fsdecode(target))
+    except (TypeError, ValueError):
+        return
+    for root in _inbox_watch_roots:
+        if path.startswith(root + os.sep):
+            _inbox_written.add(path)
+            return
+
+
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT
+
+
+def _inbox_audit_hook(event: str, args: tuple) -> None:
+    # In-process writes only: a subprocess's writes are never attributed.
+    if event == "open":
+        if len(args) >= 3 and isinstance(args[2], int) and args[2] & _WRITE_FLAGS:
+            _record_inbox_write(args[0])
+    elif event in ("os.rename", "os.link", "os.symlink"):
+        _record_inbox_write(args[1])
+    elif event == "shutil.copyfile":
+        _record_inbox_write(args[1])
+
+
+sys.addaudithook(_inbox_audit_hook)
+
+
 @_pytest.fixture(autouse=True)
 def _no_live_inbox_writes_from_suite():
-    roots = _live_inbox_roots()
+    """Fail when THIS process wrote into a live inbox during the test.
+
+    A directory delta alone is not enough: peer sessions deliver memos to the
+    same inboxes at any moment. A new file counts only if the audit hook saw
+    this process open/rename/link it.
+    """
+    global _inbox_watch_roots
+    roots = tuple(os.path.abspath(r) for r in _live_inbox_roots())
     before = {}
     for root in roots:
         try:
@@ -1164,14 +1205,23 @@ def _no_live_inbox_writes_from_suite():
                 before[root] = {e.name for e in entries}
         except OSError:
             before[root] = set()
-    yield
+    _inbox_written.clear()
+    _inbox_watch_roots = roots
+    try:
+        yield
+    finally:
+        _inbox_watch_roots = ()
     for root in roots:
         try:
             with os.scandir(root) as entries:
                 after = {e.name for e in entries}
         except OSError:
             continue
-        leaked = sorted(after - before[root])
+        leaked = sorted(
+            n
+            for n in after - before[root]
+            if os.path.join(root, n) in _inbox_written
+        )
         if leaked:
             _pytest.fail(
                 f"_no_live_inbox_writes_from_suite: {root} gained {leaked!r} — a "

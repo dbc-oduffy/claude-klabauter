@@ -535,6 +535,7 @@ def mint(
         from coordinator_core.ops.dispatch_emit.reverify_delivery import (
             latest_criterion_supersession,
             latest_delivery_supersession,
+            latest_foreign_claims_supersession,
             latest_tests_supersession,
         )
 
@@ -546,6 +547,9 @@ def mint(
             reverified_criterion = latest_criterion_supersession(repo_root, run_rel)
             if reverified_criterion is not None:
                 integration_data = {**integration_data, "criterion": reverified_criterion}
+            reverified_claims = latest_foreign_claims_supersession(repo_root, run_rel)
+            if reverified_claims is not None:
+                prep_data = {**prep_data, "foreign_claims": reverified_claims}
             reverified_tests = latest_tests_supersession(repo_root, run_rel)
             if reverified_tests is not None:
                 integration_data = {**integration_data, "tests": reverified_tests}

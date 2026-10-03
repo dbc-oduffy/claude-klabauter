@@ -66,6 +66,14 @@ def _build(dest: Path, branch: str | None, email: str, name: str, readme: str) -
     git("commit", "-q", "-m", "init")
 
 
+def _replace_copy(src: str, dst: str) -> str:
+    """Git objects are mode 0444, so a re-seed over an existing repo cannot
+    overwrite them in place; unlink first (directory-writable is enough)."""
+    if os.path.lexists(dst):
+        os.unlink(dst)
+    return shutil.copy2(src, dst)
+
+
 def seeded_repo(
     dest: Path,
     *,
@@ -83,5 +91,5 @@ def seeded_repo(
         _build(seed, branch, email, name, readme)
         _SEEDS[key] = seed
     dest = Path(dest)
-    shutil.copytree(seed, dest, dirs_exist_ok=True, symlinks=True)
+    shutil.copytree(seed, dest, dirs_exist_ok=True, symlinks=True, copy_function=_replace_copy)
     return dest

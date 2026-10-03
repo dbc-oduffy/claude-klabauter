@@ -934,7 +934,9 @@ class TestDropRoundTrip:
 
         assert exit_code == pa_apply.APPLY_EXIT_OK
         assert report["released"] is True
-        assert report["unclaimed"] is True
+        # never-stamped record: ledger release only, frontmatter leg skipped
+        assert report["unclaimed"] is None
+        assert report["frontmatter_revert"] == "skipped-unstamped"
         assert report["commit_sha"] is None
 
 
@@ -967,7 +969,9 @@ class TestDropOnHalfAppliedArtifact:
         assert report["released"] is True
         # cs_unclaim_handoff's own idempotency: already at open+ready_to_fire
         # is a no-op success, not a failure, on the never-claimed half.
-        assert report["unclaimed"] is True
+        # never-stamped record: ledger release only, frontmatter leg skipped
+        assert report["unclaimed"] is None
+        assert report["frontmatter_revert"] == "skipped-unstamped"
         assert not claim_dir.is_dir()
         # Never touched — there was nothing for the unclaim no-op to change.
         assert handoff_path.read_text(encoding="utf-8") == original_text
@@ -1805,7 +1809,9 @@ class TestGateRecheckOrderingBeforeClaim:
         )
 
         assert drop_exit_code == pa_apply.APPLY_EXIT_OK
-        assert drop_report["unclaimed"] is True
+        # never-stamped record: ledger release only, frontmatter leg skipped
+        assert drop_report["unclaimed"] is None
+        assert drop_report["frontmatter_revert"] == "skipped-unstamped"
         text = hp.read_text(encoding="utf-8")
         assert "deployment_state: open" in text or "status: open" in text
 

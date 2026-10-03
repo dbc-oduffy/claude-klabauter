@@ -221,3 +221,73 @@ def test_remint_leaves_one_review_stamp_block_with_the_second_values(tmp_path):
     text = _plan(repo).read_text(encoding="utf-8")
     assert text.count("review_stamp:\n") == 1
     assert f"terminal_commit_sha: {new_head}" in text
+
+
+def _foreign_record(tmp_path, n):
+    repo = _repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+    claims = [f"a.txt {head[:12]} peer{i}" for i in range(n)]
+    prep = {"run_base_sha": head, "product_files": 1, "foreign_claims": claims, "slice_files": ["a.txt"]}
+    record = _record(repo, head, delivery={"verdict": "PASS", "product_files": 1}, prep=prep)
+    return repo, record, record.relative_to(repo).as_posix(), head, claims
+
+
+def _record_live(repo, rel, record, head):
+    frozen = rd._frozen_foreign_claims(repo, rd._frontmatter(record))
+    return rd.record_delivery_verdict(
+        repo_root=repo, supersedes=rel, plan_id="pln-example-abc123", head_sha=head, verdict="PASS",
+        unbacked=[], foreign_claims=rd.live_foreign_claims(repo, frozen, head),
+    )
+
+
+def test_released_foreign_claims_are_cleared_by_reverify(tmp_path, monkeypatch):
+    repo, record, rel, head, _ = _foreign_record(tmp_path, 7)
+    with pytest.raises(m.MintRefusal, match="7 foreign claim"):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
+    _record_live(repo, rel, record, head)
+    assert rd.latest_foreign_claims_supersession(repo, rel) == []
+    stamp = m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+    assert stamp["delivery"]["verdict"] == "PASS"
+
+
+def test_a_still_held_foreign_claim_keeps_refusing(tmp_path, monkeypatch):
+    repo, record, rel, head, claims = _foreign_record(tmp_path, 2)
+    monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
+    monkeypatch.setattr(rd, "live_foreign_claims", lambda r, f, h: [claims[1]])
+    _record_live(repo, rel, record, head)
+    with pytest.raises(m.MintRefusal, match="1 foreign claim"):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+
+
+def test_a_claim_whose_commit_is_not_an_ancestor_stays_live(tmp_path, monkeypatch):
+    repo, _, _, head, _ = _foreign_record(tmp_path, 0)
+    monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
+    off = "a.txt deadbeefdeadbeef peer"
+    assert rd.live_foreign_claims(repo, [off, f"a.txt {head[:12]}"], head) == [off]
+
+
+def test_old_record_keeps_the_frozen_foreign_claims(tmp_path):
+    repo, record, rel, head, _ = _foreign_record(tmp_path, 3)
+    _supersede(repo, rel, "PASS")
+    assert rd.latest_foreign_claims_supersession(repo, rel) is None
+    with pytest.raises(m.MintRefusal, match="3 foreign claim"):
+        m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
+
+
+def test_blank_record_resolves_a_run_id_named_bookkeeping_by_its_plan_id(tmp_path, monkeypatch):
+    repo, record, _ = _fail_record(tmp_path)
+    share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
+    share.mkdir(parents=True)
+    named = share / "ask-20261003T231507-1b2cb4.review-wave-bookkeeping.md"
+    named.write_bytes(record.read_bytes())
+    (share / "other-run.review-wave-bookkeeping.md").write_bytes(
+        record.read_bytes().replace(b"pln-example-abc123", b"pln-other")
+    )
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-example-abc123\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    result = rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record="", out_path=str(out))
+    assert result["supersedes"].endswith("ask-20261003T231507-1b2cb4.review-wave-bookkeeping.md")

@@ -2685,12 +2685,13 @@ class TestSupersedeArchiveHandoff:
         assert "claimed_by: mirror-session" in text
         assert "ledger-session" not in text
 
-    def test_silent_ledger_invents_no_holder_and_warns(self, tmp_path):
+    def test_silent_ledger_invents_no_holder_and_stays_silent(self, tmp_path):
         """A predecessor that was genuinely never claimed (shipped only) has no
-        honest holder to name. The calling session, and the `shipped_in`
+        honest holder to name, and succession to a terminal state warns nothing
+        (`_attribute_claim_holder` absence rule). The calling session, and the `shipped_in`
         commit's own `Session-Id:` trailer, are both available here and both
         answer a DIFFERENT question — neither may be stamped as `claimed_by`.
-        The residual holder-less record is surfaced as a warning instead."""
+        """
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -2709,7 +2710,8 @@ class TestSupersedeArchiveHandoff:
         text = archived[0].read_text(encoding="utf-8")
         assert "claimed_by:" not in text
         assert _DEFAULT_TEST_SESSION_ID not in text
-        assert "no claimed_by" in buf.getvalue()
+        assert "no claimed_by" not in buf.getvalue()
+        assert "DEFECT" not in buf.getvalue()
 
     def test_never_claimed_parent_with_successor_named_children_is_not_stamped(self, tmp_path):
         """AC10 (§ C5/C8, docs/plans/2026-07-28-handoff-close-path-fail-loud.md):
@@ -3309,16 +3311,14 @@ class TestSurfaceAdvisoryStderrLine:
         mp = _seed_memo(repo, "m.md", "in_progress", extra=extra)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _DEFAULT_TEST_SESSION_ID)
 
-        import coordinator_core.ops.memo.surface_advisory as surface_advisory_mod
-
-        real_run = surface_advisory_mod.subprocess.run
+        real_popen = subprocess.Popen
 
         def _boom(cmd, *args, **kwargs):
             if cmd[:2] == ["git", "log"]:
                 raise OSError("boom")
-            return real_run(cmd, *args, **kwargs)
+            return real_popen(cmd, *args, **kwargs)
 
-        monkeypatch.setattr(surface_advisory_mod.subprocess, "run", _boom)
+        monkeypatch.setattr(subprocess, "Popen", _boom)
         rc = arstamp.cs_action_memo(
             str(mp), "--decision", "accepted", "--realized-by", sha,
         )

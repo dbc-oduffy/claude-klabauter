@@ -232,7 +232,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "over RUN_RECORD's frozen delivery FAIL; record its result with "
         "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record`; "
         "an empty value resolves the record a warp run leaves at "
-        ".coordinator-local/subagent-share/*/<plan_id>.review-wave-bookkeeping.md",
+        ".coordinator-local/subagent-share/*/*.review-wave-bookkeeping.md whose plan_id matches",
     )
     parser.add_argument(
         "--mark-landed",
