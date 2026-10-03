@@ -194,6 +194,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.preuse_agent_dispatch",
     "coordinator_core.hooks.preuse_skill_dispatch",
     "coordinator_core.hooks.preuse_search_dispatch",
+    "coordinator_core.hooks.preuse_sendmessage_dispatch",
     "coordinator_core.hooks.enforce_agent_dispatch_mode",
     "coordinator_core.hooks.block_unenumerated_agent_type",
     "coordinator_core.hooks.guard_named_dispatch_tool_restriction",

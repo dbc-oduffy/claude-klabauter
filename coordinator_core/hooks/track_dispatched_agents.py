@@ -188,6 +188,29 @@ def _fold_agent_type(value: str) -> str:
     return folded
 
 
+# The harness re-fires SubagentStart on a SendMessage reply-resume of a workflow
+# agent under the SAME agentId but reports `general-purpose`, not the original
+# `workflow-subagent` (DoE spike verdict 2026-09-30-chatty-reply-resume-
+# identity-guard). Only this exact pair is a resume; it keeps the recorded type.
+_RESUME_REPORTED_TYPE = {"workflow-subagent": "general-purpose"}
+
+
+def _is_reply_resume(existing_type: str, incoming_type: str) -> bool:
+    """True when a second write for a recorded agent_id is the SAME agent resumed.
+
+    The one place the resume-identity rule lives: the same (comparison-folded)
+    type, or the harness's known resume re-report in `_RESUME_REPORTED_TYPE`.
+    Any other differing real type is a collision `_resolve_row_collision`
+    turns into AMBIGUOUS.
+    """
+    existing = _fold_agent_type(existing_type)
+    incoming = _fold_agent_type(incoming_type)
+    if existing == incoming:
+        return True
+    reported = _RESUME_REPORTED_TYPE.get(existing)
+    return reported is not None and _fold_agent_type(reported) == incoming
+
+
 def _resolve_row_collision(
     existing_cols: list[str],
     model: str,
@@ -232,7 +255,7 @@ def _resolve_row_collision(
     incoming_folded = _fold_agent_type(subagent_type)
     placeholder_folded = _fold_agent_type(PLACEHOLDER_TYPE)
 
-    if existing_folded == incoming_folded:
+    if _is_reply_resume(existing_type, subagent_type):
         if cols[1] == PLACEHOLDER_TYPE and model != PLACEHOLDER_TYPE:
             cols[1] = model
             return cols

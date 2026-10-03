@@ -290,6 +290,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _map_written_path_to_test_target,
     _declared_paths,
 )
+from coordinator_core.ops.dispatch_emit import chatty as _chatty
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -2247,6 +2248,7 @@ def _row_agent_call_expr(
     preamble: Optional[str] = None,
     new_module_paths: tuple = (),
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
+    chatty_brief: Optional[str] = None,
 ) -> str:
     """Compose one row's ``agent(...)`` call expression -- the per-node body
     of the DAG's own ``_rows[id] = _runRow(...)`` registration (§ Design D4).
@@ -2281,6 +2283,8 @@ def _row_agent_call_expr(
             prompt_literal = (
                 f"{shared.expr(head)} + {_resolve_markers_plus(prompt[len(head):])}"
             )
+    if chatty_brief:
+        prompt_literal = f"{prompt_literal} + {_js_string_literal(chatty_brief)}"
     row_agent_type = _row_agent_type(row)
     return (
         "agent("
@@ -2804,13 +2808,17 @@ _NODE_CHECK_DOES_NOT_APPLY_COMMENT = (
 )
 
 
-def _meta_block(name: str, description: str, phase_titles: list[str]) -> str:
+def _meta_block(
+    name: str, description: str, phase_titles: list[str], chatty: bool = False
+) -> str:
     phases_literal = ", ".join(_js_string_literal(t) for t in phase_titles)
+    chatty_line = "  chatty: true,\n" if chatty else ""
     return (
         "export const meta = {\n"
         f"  name: {_js_string_literal(name)},\n"
         f"  description: {_js_string_literal(description)},\n"
         f"  phases: [{phases_literal}],\n"
+        f"{chatty_line}"
         "};\n"
     )
 
@@ -3234,6 +3242,7 @@ def compose_script(
     script_path: Optional[str] = None,
     expected_branch: Optional[str] = None,
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
+    chatty: bool = False,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3274,6 +3283,11 @@ def compose_script(
     ``expected_branch`` (``emit_script``'s zero-spawn ``head_branch`` read,
     None when detached or unreadable) threads into the same marker; the
     terminal commit refuses when HEAD is on another branch.
+
+    ``chatty`` (opt-in, default off; absent leaves every emitted byte
+    unchanged) composes a schema-valid roster template (``chatty.build_roster``),
+    embeds it in an overseer agent's brief (the overseer writes ``<run-dir>/roster.json``; the emitter writes no file), and
+    appends a nonce plus register-on-start brief to every row's prompt.
 
     ``preamble`` (optional) is a run-wide posture block forwarded to every
     row's prompt -- EXECUTOR prompts only, never the review/test phases,
@@ -3419,6 +3433,21 @@ def compose_script(
     )
 
     body_blocks.append("  const _rows = {};")
+    roster = None
+    if chatty:
+        roster = _chatty.build_roster(name, [row.id for row in flat_rows])
+        overseer_type = _EXECUTOR_AGENT_TYPE
+        body_blocks.append(
+            "  const _overseer = agent("
+            f"{_js_string_literal(_chatty.overseer_prompt(roster))}, "
+            "{ "
+            f"label: {_js_string_literal('chatty-overseer')}, "
+            f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
+            f"agentType: {_js_string_literal(_degrade_agent_type(overseer_type, agent_type_host))}, "
+            f"{_model_opt(overseer_type)}, "
+            f"stallMs: {_EXECUTOR_STALL_MS} "
+            "});"
+        )
     unchecked_rows: list[str] = []
     committable_rows: set[str] = set()
     for node in dag.nodes:
@@ -3441,6 +3470,11 @@ def compose_script(
             preamble=preamble,
             new_module_paths=tuple(_new_module_paths(row, repo_root)),
             memo_deliveries=memo_deliveries,
+            chatty_brief=(
+                _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
+                if roster is not None
+                else None
+            ),
         )
         row_paths = row_pathspecs.get(row.id) or []
         if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
@@ -3481,6 +3515,8 @@ def compose_script(
             + ");"
         )
     body_blocks.append("  await Promise.all(Object.values(_rows));")
+    if roster is not None:
+        body_blocks.append("  await _overseer;")
     body_blocks.append("  await Promise.all(_verifications);")
     body_blocks.append("  await Promise.all(_waveTriggers);")
     body_blocks.append("  await _commitChain;")
@@ -3699,7 +3735,7 @@ def compose_script(
         )
     )
 
-    meta_block = _meta_block(name, description, phase_titles)
+    meta_block = _meta_block(name, description, phase_titles, chatty)
     path_list_declaration = shared.path_list_declaration() if shared is not None else None
     if path_list_declaration is not None:
         body_blocks.insert(0, path_list_declaration)
@@ -4161,6 +4197,7 @@ def emit_script(
     script_path: Optional[str] = None,
     findings_out: Optional[list] = None,
     landed_rows: Optional[frozenset] = None,
+    chatty: bool = False,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
@@ -4326,6 +4363,7 @@ def emit_script(
         script_path=script_path,
         expected_branch=expected_branch,
         memo_deliveries=memo_deliveries,
+        chatty=chatty,
     )
 
 
