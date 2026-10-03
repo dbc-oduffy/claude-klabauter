@@ -117,6 +117,7 @@ _PARAM_FIELDS = (
     Field("landed_chunks", "str_list"),
     Field("inline_review", "dict"),
     Field("task_output_path", "nonempty_str"),
+    Field("plan_path", "nonempty_str"),
 )
 
 
@@ -141,6 +142,27 @@ def _params_from_task_output(path_raw: str) -> dict:
             "task-output envelope wrapping one"
         )
     return found
+
+
+def _anchor_request(worktree_root: Path, params: dict, inline_review: Optional[dict]) -> Optional[CommitRequest]:
+    """The zero-chunk request for a marker-less run whose review delivered PASS
+    with no product file: it still owes the plan a fresh `Inline-Review`
+    commit for `review_stamp` to anchor on. ``None`` for any other shape."""
+    plan_rel = params.get("plan_path")
+    if not isinstance(plan_rel, str) or not isinstance(inline_review, dict):
+        return None
+    delivery = inline_review.get("delivery")
+    if not isinstance(delivery, dict) or delivery.get("verdict") != "PASS":
+        return None
+    files = delivery.get("product_files")
+    if isinstance(files, bool) or not isinstance(files, int) or files != 0:
+        return None
+    plan_text = _read_rel(worktree_root, plan_rel)
+    if plan_text is None:
+        return None
+    return CommitRequest(
+        chunks=(), plan_path=plan_rel, deliverable_id=plan_deliverable_id(plan_text)
+    )
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -740,7 +762,10 @@ def _terminal_commit(
     if manifest_rel is None:
         request = parse_marker(script_text)
     if request is None:
+        request = _anchor_request(worktree_root, params, inline_review)
+    if request is None:
         return {"committed": False, "nothing_to_commit": True}
+    anchor_only = not request.chunks
 
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
     # result carries no review-stage output cannot land code, however the
@@ -943,7 +968,7 @@ def _terminal_commit(
     receipt_paths: list = []
     receipts_built: list = []
     try:
-        receipts_built = build_run_receipts(
+        receipts_built = [] if anchor_only else build_run_receipts(
             worktree_root,
             request,
             done_ids=[c.id for c in done_chunks],
@@ -955,12 +980,16 @@ def _terminal_commit(
             branch=observed_branch,
             now=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
-        receipt_paths = write_run_receipts(worktree_root, receipts_built)
+        receipt_paths = write_run_receipts(worktree_root, receipts_built) if receipts_built else []
     except Exception as exc:  # noqa: BLE001 -- write_run_receipts already removed its partial writes
         return _error(f"completion receipt write failed: {exc}", refused="receipt-write-failed")
     all_paths.extend(receipt_paths)
 
-    message_lines = [_subject(contributing_chunks)]
+    message_lines = [
+        f"review anchor: {request.plan_path} -- delivery PASS, no product files"
+        if anchor_only
+        else _subject(contributing_chunks)
+    ]
     if deleted_paths:
         # The undeclared-staged-deletion guard reads the message for a removal verb.
         message_lines.append("Removes declared write(s): " + ", ".join(deleted_paths))
@@ -1006,8 +1035,12 @@ def _terminal_commit(
     if reply.get("committed") and reply.get("sha"):
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
-        source_rows = _source_rows_by_plan(
-            worktree_root, request.plan_path, [c.id for c in contributing_chunks]
+        source_rows = (
+            {request.plan_path: set()}
+            if anchor_only
+            else _source_rows_by_plan(
+                worktree_root, request.plan_path, [c.id for c in contributing_chunks]
+            )
         )
         # Before the coded stamp: that commit carries the plan, so a stamp
         # minted here lands in it and costs no commit of its own.

@@ -964,3 +964,71 @@ def test_malformed_request_is_refused_not_raised(repo, params, field):
     assert out["committed"] is False
     assert out["sha"] is None
     assert field in out["error"], out
+
+
+def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(repo):
+    """A FAIL run lands first; the marker-less verify-only PASS re-run (no product
+    file) must still land an `Inline-Review` commit so `review_stamp` resolves the
+    new review, not the stale FAIL one."""
+    from coordinator_core.ops.review_stamp import mint
+
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    first = _write_script(
+        repo,
+        CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md"),
+        name="first.mjs",
+    )
+
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+
+    def review(verdict: str, files: int, session: str) -> dict:
+        return {
+            "integration_stem": review_wave_bookkeeping_stem("pln-x-123456", session), "slices": 1, "fixes": 0,
+            "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+            "prep": {"run_base_sha": "a" * 40, "product_files": files, "foreign_claims": [],
+                     "slice_files": ["a.py"]},
+            "delivery": {"verdict": verdict, "product_files": files, "claims_unbacked": 0},
+            "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
+            "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+        }
+
+    s1, s2 = "11111111-2222-3333-4444-555555555555", "99999999-2222-3333-4444-555555555555"
+    failed = _call(repo, {"script_path": first, "incomplete_chunks": [], "session_id": s1,
+                          "inline_review": review("FAIL", 1, s1)})
+    assert failed["committed"] is True and failed["review_stamp"] == "refused"
+
+    rerun = _write_script(repo, CommitRequest(chunks=()), name="rerun.mjs")
+    before = _head(repo)
+    out = _call(repo, {"script_path": rerun, "incomplete_chunks": [], "plan_path": "docs/plan.md",
+                       "session_id": s2, "inline_review": review("PASS", 0, s2)})
+    assert out["committed"] is True, out
+    assert out["sha"] != before
+    assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
+    assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
+    anchor = _show(repo, f"{out['sha']}:docs/plan.md")
+    assert "review_stamp:" not in anchor
+    body = subprocess.run(
+        ["git", "show", "-s", "--format=%B", out["sha"]], cwd=str(repo), capture_output=True,
+        text=True, check=True, **no_console_creationflags(),
+    ).stdout
+    assert f"Inline-Review: applies {review_wave_bookkeeping_stem('pln-x-123456', s2)}" in body
+
+    # Resolution follows the anchor's Session-Id, not mtime: touch the stale FAIL record newest.
+    import os
+
+    old = next((repo / ".coordinator-local" / "subagent-share" / s1).glob("*.md"))
+    os.utime(old, (time.time() + 100, time.time() + 100))
+    # The standalone `review-stamp mint --plan` resolution walks to the new anchor.
+    mint(repo / "docs" / "plan.md", repo, build_test_path=None)
+
+
+def test_a_zero_file_run_that_is_not_a_pass_commits_nothing(repo):
+    script = _write_script(repo, CommitRequest(chunks=()), name="rerun.mjs")
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [], "plan_path": "docs/plan.md",
+                       "inline_review": {"delivery": {"verdict": "FAIL", "product_files": 0},
+                                         "integration_stem": "s", "slices": 0}})
+    assert out == {"committed": False, "nothing_to_commit": True, "stranded": {}}

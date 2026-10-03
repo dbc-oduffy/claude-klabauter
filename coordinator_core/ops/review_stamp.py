@@ -208,11 +208,17 @@ def _load_sidecar(path: Path) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-def _find_sidecar_by_stem(repo_root: Path, stem: str) -> Optional[Path]:
+def _find_sidecar_by_stem(repo_root: Path, stem: str, session_id: Optional[str] = None) -> Optional[Path]:
     share_root = repo_root / ".coordinator-local" / "subagent-share"
     if not share_root.exists():
         return None
+    # A bookkeeping stem is plan-scoped, so each re-run writes the same name under its own
+    # session dir; the anchor commit's Session-Id trailer names the run that wrote its record.
     matches = sorted(share_root.glob(f"**/{stem}.md"))
+    if session_id and len(matches) > 1:
+        own = share_root / session_id / f"{stem}.md"
+        if own in matches:
+            return own
     return matches[0] if matches else None
 
 
@@ -265,7 +271,7 @@ def _resolve_terminal_commit(
 
     Returns (commit_sha, integration_sidecar_path, integration_data) or
     raises MintRefusal."""
-    fmt = f"{_HEADER_SENTINEL}%H{_FIELD_SEP}%(trailers:key=Inline-Review,valueonly=true,unfold=true,separator={_MULTI_SEP})"
+    fmt = f"{_HEADER_SENTINEL}%H{_FIELD_SEP}%(trailers:key=Session-Id,valueonly=true,unfold=true,separator={_MULTI_SEP}){_FIELD_SEP}%(trailers:key=Inline-Review,valueonly=true,unfold=true,separator={_MULTI_SEP})"
     try:
         out = _run_git(
             ["log", "--no-merges", f"-{_COMMIT_WALK_BOUND}", f"--pretty=format:{fmt}"],
@@ -285,7 +291,9 @@ def _resolve_terminal_commit(
         if not line.startswith(_HEADER_SENTINEL):
             continue
         header = line[len(_HEADER_SENTINEL):]
-        sha, _, trailer_field = header.partition(_FIELD_SEP)
+        sha, _, rest = header.partition(_FIELD_SEP)
+        commit_session, _, trailer_field = rest.partition(_FIELD_SEP)
+        commit_session = commit_session.strip()
         for trailer in [t for t in trailer_field.split(_MULTI_SEP) if t]:
             m = _APPLIES_RE.match(trailer.strip())
             if not m:
@@ -299,7 +307,7 @@ def _resolve_terminal_commit(
                 # plan's own emit-receipt session has a real subagent-share
                 # dir, i.e. some evidence a run actually happened for it.
                 repair_candidate_sha = sha
-            sidecar_path = _find_sidecar_by_stem(repo_root, stem)
+            sidecar_path = _find_sidecar_by_stem(repo_root, stem, commit_session)
             if sidecar_path is None:
                 continue
             data = _load_sidecar(sidecar_path)

@@ -204,6 +204,7 @@ def next_action_parts(
     test_absent_status: str,
     script_path: Optional[str] = None,
     session_id: Optional[str] = None,
+    anchor_plan_path: Optional[str] = None,
 ) -> tuple:
     """`(kind, op, params)` JS source for a script's `next_action`; the one composer both the
     plan route's wake-digest and the ask script's return render, so the params are
@@ -222,9 +223,22 @@ def next_action_parts(
     tests_status_expr = _tests_status_expr(test_var, verification_var, test_absent_status)
     criterion_status_expr = _criterion_status_expr(falsifier_var)
 
-    next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
-    next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
-    if has_commit_request:
+    # A run with no marker (verify-only rows write no product file) still owes its
+    # PASS review a fresh `Inline-Review` anchor commit: `terminal_commit` lands one
+    # from `plan_path` + `inline_review`. Any other no-marker verdict stays `none`.
+    anchor_only = not has_commit_request and bool(anchor_plan_path) and bool(review_vars)
+    anchor_cond = (
+        f"({delivery_var} && {delivery_var}.verdict === 'PASS' && !({delivery_var}.product_files > 0))"
+        if anchor_only
+        else "false"
+    )
+    if anchor_only:
+        next_action_kind = f"({anchor_cond} ? 'terminal_commit' : 'none')"
+        next_action_op = f"({anchor_cond} ? 'dispatch.terminal_commit' : null)"
+    else:
+        next_action_kind = "'terminal_commit'" if has_commit_request else "'none'"
+        next_action_op = "'dispatch.terminal_commit'" if has_commit_request else "null"
+    if has_commit_request or anchor_only:
         # C11's integration stage result (`_reviewIntegration`) carries no
         # `integration_stem`/`slices` of its own post-review-integrator-
         # retirement -- only `fixes_applied`. `integration_stem` is derived
@@ -329,9 +343,12 @@ def next_action_parts(
             + ", ..." + RUNTIME_VARS[3] + "])], "
             + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
+            + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
             + "inline_review: " + inline_review_expr
             + " }"
         )
+        if anchor_only:
+            params_expr = f"({anchor_cond} ? {params_expr} : null)"
     else:
         params_expr = "null"
     return next_action_kind, next_action_op, params_expr
@@ -354,6 +371,7 @@ def completion_return_js(
     has_commit_request: bool,
     script_path: Optional[str] = None,
     session_id: Optional[str] = None,
+    anchor_plan_path: Optional[str] = None,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -397,6 +415,7 @@ def completion_return_js(
         test_absent_status=test_absent_status,
         script_path=script_path,
         session_id=session_id,
+        anchor_plan_path=anchor_plan_path,
     )
 
     outcome_expr = (

@@ -3693,6 +3693,7 @@ def compose_script(
             falsifier_var=falsifier_var,
             review_vars=review_vars,
             has_commit_request=marker is not None,
+            anchor_plan_path=plan_path,
             script_path=script_path,
             session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
         )
