@@ -7,7 +7,7 @@ import pytest
 from coordinator_core import machine_profile as mp
 from coordinator_core.ops import check_rag_state as crs
 from coordinator_core.ops import setup_rag_decision as srd
-from coordinator_core.orient_assemble import readers_clean_ops as rco
+from coordinator_core.orient_brief import _work
 
 _ENV = "MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE"
 
@@ -22,10 +22,10 @@ def profile(request, monkeypatch):
 
 def test_memo_and_rag_readers_gated_by_profile(profile, monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: calls.append("inbox") or str(tmp_path / "none"))
-    monkeypatch.setattr(rco, "check_rag_state", lambda: calls.append("rag") or ("fresh", 0))
-    rco._read_memo_surface("normal", repo_root=str(tmp_path))
-    rco._read_rag_staleness()
+    monkeypatch.setattr("coordinator_core.memo_corpus.memo_corpus_root", lambda root: calls.append("inbox") or str(tmp_path / "none"))
+    monkeypatch.setattr(crs, "_read_content_root", lambda h: calls.append("rag") or "")
+    _work._memo_points(tmp_path)
+    _work._rag_directive()
     assert (calls == []) == (profile == "consumer")
 
 
@@ -43,8 +43,8 @@ def test_memo_reader_follows_feature_toggle(profile_name, override, expect_read,
         monkeypatch.delenv("MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS", raising=False)
     mp.reset_cache()
     calls = []
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", lambda cwd=None: calls.append("inbox") or str(tmp_path / "none"))
-    rco._read_memo_surface("normal", repo_root=str(tmp_path))
+    monkeypatch.setattr("coordinator_core.memo_corpus.memo_corpus_root", lambda root: calls.append("inbox") or str(tmp_path / "none"))
+    _work._memo_points(tmp_path)
     mp.reset_cache()
     assert bool(calls) == expect_read
 

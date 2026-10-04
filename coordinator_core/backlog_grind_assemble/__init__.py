@@ -7,13 +7,12 @@ duplicated backlog-grind spines (`bug-blitz.md`, `mise-en-place.md`,
 `bug-sweep/SKILL.md`, `debt-triage/SKILL.md`, `dogfood/SKILL.md`). Cadence
 here names WHICH of the five mirror surfaces is asking
 (`"bug-blitz" | "mise-en-place" | "bug-sweep" | "debt-triage" | "dogfood"`)
-— it is `orient_assemble.CADENCES`'s severity/depth-knob naming convention
+— it is the `orient-assemble brief --cadence {session,day,week}` severity/depth-knob naming convention
 reused over a disjoint surface-selection set, never a severity tier (D-2).
 
-`orient_assemble`, NOT `pickup_assemble`/`baton_assemble`, is the model for
-THIS layer (`coordinator_core/orient_assemble/__init__.py`, esp. its
-negative-spec at lines 38-50 against re-deriving `_emit`/`build_envelope`
-locally). `pickup_assemble`/`baton_assemble` are the model only for the
+`orient-assemble brief`, NOT `pickup_assemble`/`baton_assemble`, is the model for
+THIS layer (a cadence-parameterized `brief` seam that never re-derives
+`_emit`/`build_envelope` locally). `pickup_assemble`/`baton_assemble` are the model only for the
 CLI trampoline (C5) and package layout, never for this envelope/seam.
 
 Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
@@ -31,7 +30,7 @@ envelope. Cadence self-gating (each reader is a no-op `ReaderResult()` for
 every cadence but its own) is decided INSIDE each reader's own `collect()`,
 never re-decided here — this seam calls all five unconditionally for every
 cadence and trusts each reader to self-gate, exactly mirroring
-`orient_assemble`'s health-reaper precedent.
+the day-cadence-only health gating of `orient-assemble brief --cadence day`.
 
 `run_id` (the CLI's `--run-id`) is threaded through that same seam the same
 way, and for the same reason: it is passed to ALL five readers on every
@@ -74,7 +73,7 @@ Negative-spec:
       same duck-typed `ReaderResult` shape (`.directives`/`.judgment_points`
       attributes), so no per-reader translation is needed.
     - Do NOT add a per-surface branch here. Cadence self-gating lives
-      inside each reader; this seam stays `orient_assemble`-sized
+      inside each reader; this seam stays `orient-assemble brief`-sized
       (~250 lines), not a grinding executor concentrating all five
       surfaces' compute.
     - Do NOT branch on `run_id` here either, do NOT validate it against any
@@ -117,7 +116,7 @@ from coordinator_core.resolution.facade import resolve_operator_config
 
 #: The five mirror-surface cadences `backlog-grind-assemble brief` accepts.
 #: Cadence names WHICH surface is asking, not a severity/depth knob (D-2) —
-#: see the module docstring for the `orient_assemble.CADENCES` naming
+#: see the module docstring for the `orient-assemble brief --cadence` naming
 #: reuse. Order matches `_READER_MODULES` below 1:1.
 CADENCES: tuple[str, ...] = (
     "bug-blitz",
@@ -196,7 +195,7 @@ def brief(
     Calls all five reader families' `collect(cadence, run_id=run_id)`
     unconditionally and concatenates their `directives`/`judgment_points`
     into the emitted envelope — never reshapes a reader's own dict (per
-    `orient_assemble`'s own negative-spec). Each reader self-gates to its
+    `orient-assemble brief`'s own negative-spec). Each reader self-gates to its
     own cadence; every other reader contributes an empty `ReaderResult` for
     a given cadence.
 

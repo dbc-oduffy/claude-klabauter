@@ -140,6 +140,17 @@ def _cg():
     return cg
 
 
+def _scan_frontmatter(text: "str | None") -> dict:
+    """`frontmatter_scan.scan_frontmatter`, imported on first call so a bare import of this
+    module leaves `sys.path` untouched."""
+    lib_dir = str(Path(__file__).resolve().parents[1] / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    from frontmatter_scan import scan_frontmatter
+
+    return scan_frontmatter(text)
+
+
 def _run_git(args: "list[str]", cwd: Path):
     if str(_REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPO_ROOT))
@@ -179,12 +190,6 @@ ALL_CLASSES: "tuple[str, ...]" = VIOLATION_CLASSES + STRUCTURAL_CLASSES + GUIDE_
 #: `| [some-page](some-page.md) | system | one-line |`.
 _GUIDE_ROW_LINK = re.compile(r"^\|\s*\[[^\]\n]*\]\(([^)\n]+\.md)\)\s*\|")
 
-#: The frontmatter `status:` key, bound to the fenced block by the caller
-#: (`read_frontmatter_status`) -- never applied to a whole file, which
-#: over-reports on this corpus by ~75% because body prose reuses the same
-#: key (dispatch brief C4).
-_FRONTMATTER_STATUS = re.compile(r"^status:\s*(.+?)\s*$", re.MULTILINE)
-
 
 def citation_identity(verdict: "cg.Verdict") -> str:
     """The baseline's atomic unit: enough to tell a NEW violation from a
@@ -219,17 +224,11 @@ def partition_current(report: "cg.CorpusReport") -> "dict[str, set[str]]":
 
 def read_frontmatter_status(text: str) -> "str | None":
     """The frontmatter `status:` value, bound strictly to the leading `---`
-    fence -- never a whole-file regex, which over-reports on this corpus by
+    fence -- never a whole-file read, which over-reports on this corpus by
     ~75% because body prose reuses the same key (dispatch brief C4). `None`
-    if there's no leading fence, or no `status:` key inside it."""
-    if not text.startswith("---"):
-        return None
-    end = text.find("\n---", 3)
-    if end == -1:
-        return None
-    fence = text[3:end]
-    match = _FRONTMATTER_STATUS.search(fence)
-    return match.group(1).strip() if match else None
+    if there's no closed leading fence, or no scalar `status:` key inside it."""
+    status = _scan_frontmatter(text).get("status")
+    return status if isinstance(status, str) and status else None
 
 
 def _relpath(path: Path, root: Path) -> str:

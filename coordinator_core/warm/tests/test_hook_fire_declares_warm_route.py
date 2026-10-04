@@ -57,7 +57,7 @@ def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path
                 {
                     "hook_event_name": "PreToolUse",
                     "session_id": "s-ac2-warm-route",
-                    "cwd": str(tmp_path),
+                    "cwd": str(Path.cwd()),
                     "tool_name": "Bash",
                     "tool_input": {"command": "echo hi"},
                 },

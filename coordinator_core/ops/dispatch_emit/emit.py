@@ -291,6 +291,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -3692,6 +3693,11 @@ def compose_script(
         declared_paths=declared_paths,
         prompt_head=review_prompt_head,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
+        precredited_rows=(
+            rows_backed_before_base(Path(repo_root), plan_path, run_base_sha)
+            if repo_root is not None and plan_path and run_base_sha
+            else None
+        ),
     ):
         phase_titles.append(title)
         guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))

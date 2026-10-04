@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
 """check-decision-citations -- a cited DR-nnn / SC-DR-nnn id must resolve somewhere in the fleet.
 
 Default mode exits 1 on a live dangling id the committed baseline does not list, 0 when clean (or
 when no baseline exists), 2 when the check could not run. `--emit-baseline` rewrites
 `state/baselines/decision-citations.md`; it is a reviewed act, never the reply to a fire.
 Contract: coordinator/docs/wiki/doctrine-authoring/decisions-corpus.md.
+
+Never imports coordinator_core: a stdlib-only fleet check with no engine-root bootstrap,
+so its git reads stay on its own bounded `subprocess.run`.
 """
 
 from __future__ import annotations

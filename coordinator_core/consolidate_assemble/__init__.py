@@ -32,7 +32,7 @@ Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d4
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /
 `.judgment.build_judgment_point`/`build_disposition` constructors — matching
-`baton_assemble`'s and `orient_assemble`'s shape (Review: code-reviewer —
+`baton_assemble`'s and `orient-assemble brief`'s shape (Review: code-reviewer —
 Finding 1; this module used to hand-assemble the 8-key envelope and each
 `judgment_points[]` entry as a raw dict literal, bypassing `build_envelope`'s
 own validation/defaults). Every emitted value (including each judgment

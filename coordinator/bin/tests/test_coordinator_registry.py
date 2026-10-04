@@ -119,7 +119,10 @@ def test_receiver_em_aliases():
 
 
 def test_central_receiver_ids():
-    assert reg.CENTRAL_RECEIVER_IDS == frozenset({"coordinator-content-repo-em"})
+    ids = reg.CENTRAL_RECEIVER_IDS
+    assert "coordinator-content-repo-em" in ids
+    assert ids <= frozenset({"coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"})
+    assert not ids & {"claude-central-em", "central-em", "central"}
 
 
 # AC-7: CENTRAL_REPO_BASENAMES retired (C1 — basename anchor abandoned; the

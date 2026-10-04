@@ -15,7 +15,7 @@ adapter per covered package instead, each calling that package's OWN
 `workweek_complete`, `baton_assemble`, `merge_assemble`), heavier where a
 `run_git`-injectable seam exists (`consolidate_assemble`), or a real (but
 read-only, empty-safe) disk/git read (`backlog_grind_assemble`,
-`orient_assemble`).
+`orient_brief`).
 
 Coverage note (2026-07-27, deferral closed): `pickup_assemble` was
 DELIBERATELY NOT covered here through the 2026-07-27 generalization pass
@@ -23,7 +23,7 @@ DELIBERATELY NOT covered here through the 2026-07-27 generalization pass
 a same-day follow-up dispatch closed that deferral with
 `sweep_pickup_assemble` below, the last entry in this file. `_DEFERRED_
 ALLOWLIST` is now empty. `learn_lessons_assemble` and
-`orient_assemble` are covered by the "verified resolves-free" static/
+`orient_brief` are covered by the "verified resolves-free" static/
 dynamic checks in `test_phantom_resolves_id_sweep.py` rather than a
 provider here, since none of their `build_disposition` call sites ever
 pass a non-empty `resolves` — there is no phantom-id risk to sweep, only a
@@ -213,10 +213,9 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
 
 
 def sweep_backlog_grind_assemble(monkeypatch: Any) -> PhantomSweepResult:
-    # `backlog_grind_assemble` transitively imports `orient_assemble` (for
-    # `ReaderResult`), whose own `readers_branch_reconcile.py` dynamically
-    # loads `coordinator/bin/workday-start-day-branch-resolve.py`, which
-    # imports `cc_invoke.py`. Until the `import-path-costs-nothing` sprint
+    # `backlog_grind_assemble` once transitively imported the retired
+    # `orient_assemble` (for `ReaderResult`), whose reader dynamically
+    # loaded a `coordinator/bin` script that imports `cc_invoke.py`. Until the `import-path-costs-nothing` sprint
     # (C8), that import armed lazy op registration process-globally as a
     # side effect, and this function used to snapshot/restore both the
     # `COORDINATOR_CORE_LAZY_OPS` env var and the `sys._coordinator_core_lazy_
@@ -512,7 +511,7 @@ def sweep_sprint_planning_assemble() -> PhantomSweepResult:
 # empty-safe when no completed central run is reachable) and needs no
 # fixture beyond a plain `Path`; `roots=[]` skips the peer-repo registry
 # read entirely, matching this bucket's "real but read-only, empty-safe"
-# siblings (`backlog_grind_assemble`, `orient_assemble`) rather than the
+# siblings (`backlog_grind_assemble`, `orient_brief`) rather than the
 # fully-pure `workday_complete`/`merge_assemble` bucket.
 # ---------------------------------------------------------------------------
 

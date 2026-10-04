@@ -88,7 +88,7 @@ _PACKAGE_DIR = _REPO_ROOT / "coordinator_core" / "backlog_grind_assemble"
 
 #: The five surface cadences (D-2's "one assembler ... call one
 #: cadence-parameterized assembler" -- cadence here is which of the five
-#: mirror surfaces is asking, mirroring orient_assemble's `CADENCES`
+#: mirror surfaces is asking, mirroring `orient-assemble brief --cadence`'s
 #: naming convention but over a disjoint surface set rather than a
 #: session/day/week severity knob). One per C3a-C3e reader module.
 _CADENCES = ("bug-blitz", "mise-en-place", "bug-sweep", "debt-triage", "dogfood")

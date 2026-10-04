@@ -192,15 +192,19 @@ def _remount_command(publish_ref: str, band: str, repo_slug: str) -> str:
     `CORPUS_MANIFEST_SCHEMA_VERSION` is 1, so the default refuses every artifact the current
     exporter writes. Memo'd to example-retrieval-repo as their defect; until they rule, omitting the flag
     makes the pasted command fail.
+
+    Both scripts are addressed under a `<example-retrieval-repo-root>` PLACEHOLDER: they live in the
+    example-retrieval-repo checkout, and a bare relative path resolves only when the operator's cwd happens
+    to be that checkout.
     """
     staging_dir = f"<staging>/{band}"
     return (
-        f"python project_rag_scripts/lib/download_corpus.py "
+        f"python <example-retrieval-repo-root>/project_rag_scripts/lib/download_corpus.py "
         f"--release-url {publish_ref} "
         f"--target-dir {staging_dir} "
         f"--expected-sha256 <sha256-from-publish> "
         f"--min-schema 1 "
-        f"&& python example_retrieval_repo_cli.py import-lance-parquet-consumer "
+        f"&& python <example-retrieval-repo-root>/example_retrieval_repo_cli.py import-lance-parquet-consumer "
         f"--parquet-dir {staging_dir} "
         f"--repo-slug {repo_slug}"
     )

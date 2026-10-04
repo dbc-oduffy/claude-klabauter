@@ -99,7 +99,7 @@ def test_stale_index_entry_is_dropped_not_trusted(tmp_path):
     assert state.resolved is False, "a stale index candidate must never be trusted as a match"
 
 
-def test_blocker_id_matching_handoff_id_but_not_stub_id_does_not_resolve(tmp_path):
+def test_blocker_named_by_archived_handoff_id_resolves(tmp_path):
     archive_dir = tmp_path / "archive" / "handoffs"
     p = archive_dir / "rec.md"
     _write_record(p, {"handoff_id": "hnd-twin", "stub_id": "sat-twin", "deployment_state": "shipped"})
@@ -107,9 +107,27 @@ def test_blocker_id_matching_handoff_id_but_not_stub_id_does_not_resolve(tmp_pat
 
     state = resolve_blocker_id("hnd-twin", {}, index)
 
-    assert state.resolved is False, (
-        "a blocker id matching a record's handoff_id (not its stub_id) must not resolve"
-    )
+    assert state.resolved is True
+    assert state.deployment_state == "shipped"
+
+
+def test_blocker_named_by_live_handoff_id_resolves_with_one_index_build(tmp_path):
+    live_path = tmp_path / "state" / "handoffs" / "live.md"
+    live_records = {
+        live_path: {
+            "handoff_id": "hnd-live",
+            "stub_id": "sat-live",
+            "deployment_state": "shipped",
+        }
+    }
+    archive_dir = tmp_path / "archive" / "handoffs"
+    archive_dir.mkdir(parents=True)
+    resolve = make_resolver(live_records, build_index(archive_dir))
+
+    assert resolve("hnd-live").resolved is True
+    assert resolve("sat-live").deployment_state == "shipped"
+    live_records[live_path] = {**live_records[live_path], "deployment_state": "closed"}
+    assert resolve("hnd-live").deployment_state == "closed"
 
 
 def test_chain_whose_archived_predecessor_sorts_after_the_live_head(tmp_path):

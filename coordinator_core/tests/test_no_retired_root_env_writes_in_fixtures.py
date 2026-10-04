@@ -89,7 +89,9 @@ EXCLUDED_PATHS: dict[str, str] = {
 
 #: Directory names never walked: caches, and the scratch tree sessions write
 #: throwaway copies of real modules into.
-_SKIP_DIR_PARTS = frozenset({".git", "__pycache__", "subagent-share", "node_modules"})
+_SKIP_DIR_PARTS = frozenset(
+    {".git", "__pycache__", "subagent-share", "node_modules", "scratch"}
+)
 
 
 def _test_modules() -> list[Path]:

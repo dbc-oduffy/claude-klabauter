@@ -59,6 +59,7 @@ pytestmark = [
 # Every hand-rolled trampoline fixed by the 2026-08-14 publish-round chunk,
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
+    "reverify-delivery.py",
     "backlog-grind-assemble.py",
     "consolidate-assemble.py",
     "coordinator-assemble.py",
@@ -129,6 +130,7 @@ _SEPARATELY_TESTED_ENTRYPOINTS = frozenset({
 # this already-large legacy population. Verifying/fixing any one of these is
 # a separate, scoped follow-up, not this guard's job.
 _LEGACY_UNVERIFIED_ENTRYPOINTS = frozenset({
+    "statusline.py",  # harness status-line renderer: reads stdin JSON, has no --help surface
     "advance-tracker-status.py",
     "agent-worktree-sweep.py",
     "aggregate-chain-loe.py",
@@ -514,7 +516,7 @@ class TestHandRolledCliHelpSweep(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr[-500:])
         # On stdout, not stderr: the warm door keeps only "usage"-bearing
         # stderr lines, which reduced this help to a bare `Usage:`.
-        self.assertIn('coordinator-safe-commit --blanket "<subject>"', result.stdout)
+        self.assertIn('coordinator-safe-commit --blanket --invoking-command <ceremony> "<subject>"', result.stdout)
 
     def test_a_genuinely_unknown_flag_still_refuses_nonzero(self):
         # Negative case: adding --help/-h recognition must not have made

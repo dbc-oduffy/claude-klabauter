@@ -35,6 +35,9 @@ class _FakeVersionState:
     def is_skewed(self, client_token: str) -> bool:
         return self._skewed
 
+    def is_source_stale(self) -> bool:
+        return False
+
 
 def _make_context():
     return server._ServerContext(name="test", sid="sid", version_state=_FakeVersionState())

@@ -28,7 +28,7 @@ Fold rule (roadmap-planning Step 2.1.6, sized by ``sizing_assemble.TSHIRT_WEIGHT
 ``FOLD_RULE``.
 
 Each newly scaffolded stub with a fold-sized t-shirt gets its OWN sizing object under
-``state/sizings/`` (``estimate.tshirt`` and ``route`` from ``sizing_assemble.route``, premise
+the sizings home (``estimate.tshirt`` and ``route`` from ``sizing_assemble.route``, premise
 ``read`` with the clusters.md evidence, deliverable_id shared with the stub), linked from the
 stub's ``sizing_object:``. 
 
@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.roadmap.audit import parse_keep_cluster_ids, run_audit, validate_run_id
 from coordinator_core.roadmap.graph import RoadmapCycleError, topo_number
+from coordinator_core.session import record_homes
 from coordinator_core.roadmap.number_stubs import (
     _stamp_author_sprints,
     _validate_sprint_axis_order,
@@ -173,7 +174,7 @@ def number_clusters(
 
 def _find_staged(repo_root: Path, stub_id: str) -> Optional[Path]:
     tail = f"roadmap-{stub_id}.md"
-    for base in (repo_root / "state" / "handoffs", repo_root / "archive" / "handoffs"):
+    for base in (Path(record_homes.home_dir(str(repo_root), "handoffs")), repo_root / "archive" / "handoffs"):
         if base.is_dir():
             for hit in sorted(base.rglob(f"*{tail}")):
                 if hit.name == tail or hit.name.endswith("_" + tail):
@@ -328,7 +329,7 @@ def _write_sizing(
 
     decision = route(estimate={"tshirt": unit["loe"]}, premise_provenance="read")
     evidence = f"{source} § {', '.join(unit['sources'])}"
-    rel = f"state/sizings/{doc_new._today()}-{stub_id}.yaml"
+    rel = Path(record_homes.record_path("", "sizings", f"{doc_new._today()}-{stub_id}.yaml")).as_posix()
     text = doc_new._scaffold_sizing(
         title=title,
         deliverable_id=deliverable_id,
@@ -364,7 +365,7 @@ def _commit(repo_root: Path, paths: List[str], message: str) -> Tuple[Optional[s
 
 
 def _freeze_gate_report(repo_root: Path, roadmap_id: str, stub_paths: List[str]) -> Dict[str, Any]:
-    rel = f"state/plan-blitz/{roadmap_id}/{GATE_REPORT_NAME}"
+    rel = Path(record_homes.record_path("", "plan-blitz", f"{roadmap_id}/{GATE_REPORT_NAME}")).as_posix()
     target = repo_root / rel
     if target.is_file():
         return {"gate_report_path": rel, "gate_report_state": "already-frozen"}
@@ -469,7 +470,7 @@ def stage_roadmap(
     doc_new = _load_doc_new()
     from coordinator_core.ops.mint_deliverable_id import mint
 
-    handoffs = repo_root / "state" / "handoffs"
+    handoffs = Path(record_homes.home_dir(str(repo_root), "handoffs"))
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     stubs: List[Dict[str, Any]] = []
     for label in sorted(unit_labels, key=lambda c: numbering[c]["number"]):

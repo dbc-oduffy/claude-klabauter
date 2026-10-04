@@ -11,7 +11,7 @@ surface is in play (`plan` / `diff` / genuinely unresolved) per the
 the residue directory, filters by resolved surface, sorts by declared
 `order`, and (3) emits the result through the shared
 `coordinator_core.contract.decision_object.envelope` chokepoint — mirroring
-`coordinator_core.orient_assemble`'s `brief(cadence)` idiom exactly:
+`orient-assemble brief --cadence <c>`'s idiom exactly:
 `brief(...) -> build_envelope(...) -> return dict(_envelope_emit(envelope))`.
 
 Residue directory (fixed resolution, no parallel ladder):

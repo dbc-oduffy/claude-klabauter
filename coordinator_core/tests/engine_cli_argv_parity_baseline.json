@@ -411,121 +411,17 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/orient_assemble/readers_clean_ops.py",
+      "module": "coordinator_core/orient_brief/_health.py",
       "directive_id": "",
-      "cli": "agent-worktree-sweep",
+      "cli": "",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/orient_assemble/readers_clean_ops.py",
+      "module": "coordinator_core/orient_brief/_work.py",
       "directive_id": "",
-      "cli": "scan-addon-health",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_clean_ops.py",
-      "directive_id": "d-rag-staleness-regen",
-      "cli": "generate-repomap",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_handoff_triage.py",
-      "directive_id": "d-plan-orphan-tiers",
-      "cli": "list-orphaned-plans",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "",
-      "cli": "coordinator-git-maintenance",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-ceremony-hook-output",
-      "cli": "workday-start-health-probes",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-git-perf-currency",
-      "cli": "workday-start-health-probes",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-goal-coverage",
-      "cli": "goal-coverage-scan",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-hook-currency",
-      "cli": "workday-start-health-probes",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-claude-klabauter-bin-sentinel",
-      "cli": "workday-start-health-probes",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-plugin-drift",
-      "cli": "check-plugin-drift",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-workday-marker-write",
-      "cli": "write-workday-start-marker",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-working-repo-registration",
-      "cli": "workday-start-health-probes",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-workweek-trail-scope",
-      "cli": "workweek-trail-scope",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_assemble/readers_health_reaper.py",
-      "directive_id": "d-workweek-trail-scope",
-      "cli": "workweek-trail-scope",
+      "cli": "",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

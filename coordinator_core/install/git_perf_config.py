@@ -178,7 +178,7 @@ def apply(repo: Path, *, dry_run: bool = False) -> List[str]:
 # fleet sweep. In that window `git maintenance run --auto`, including the
 # network-touching `prefetch` task, keeps firing unconstrained. WHAT CLOSES
 # IT: the daily workday-start ceremony's `git-perf-currency` health probe
-# (`orient_assemble.readers_health_reaper :: _read_git_perf_currency`) --
+# (surfaced by `orient-assemble brief --cadence day`) --
 # its `--fix` path calls `apply_fleet` in-process, which reaches these three
 # keys via `apply()` on every registered worktree. The window is bounded to
 # "until the next workday-start ceremony run," not indefinite; it is not

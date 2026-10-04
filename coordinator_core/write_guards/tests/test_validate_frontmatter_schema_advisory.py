@@ -7,8 +7,8 @@ Requires the sibling coordinator-content-repo checkout (for coordinator/schemas/
 registry manifest) — skipped entirely when absent, per the
 coordinator_core.testing.content_root convention (parity-oracle tests that need
 real schema content, not a synthetic stand-in, follow this same pattern
-elsewhere in this tree; see orient_assemble/tests/test_envelope_schema_
-conformance.py).
+elsewhere in this tree; see the `orient-assemble brief` envelope-schema
+conformance test).
 
 `read_content_root` is monkeypatched to the resolved sibling root for
 every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test

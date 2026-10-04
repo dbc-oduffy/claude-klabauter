@@ -13,7 +13,7 @@ Fold-in ask: cross-repo/archive/2026-08-14-coordinator-content-repo-em-quick-wra
 Governing ruling: docs/decisions/DR-306-a-computed-fact-left-in-prose-is-break.md
 
 Registration seam: consumed by the `coordinator/bin/quick-wrap-assemble` trampoline via
-`entry_point_shim.ASSEMBLE_TARGETS`, mirroring `coordinator_core.orient_assemble`'s
+`entry_point_shim.ASSEMBLE_TARGETS`, mirroring `orient-assemble brief`'s
 template shape (build_envelope/_emit chokepoint, `main(argv) -> int`).
 
 **All five close-gate facts are read off the session-fact facade**

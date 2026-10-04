@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -92,6 +93,8 @@ def _message_for(error) -> str:
     """
     if error.validator == "not":
         return f"row must NOT satisfy {error.validator_value} here (a conditional branch forbids it)"
+    if error.validator == "enum" and error.instance == "done" and list(error.path)[-1:] == ["disposition"]:
+        return "disposition `done` is not a spine value; write `coded` (with a ship-commit disposition_ref)"
     if error.validator == "pattern" and list(error.path)[:1] == ["writes"]:
         return (
             f"writes: {error.instance!r} is a directory; entries are files, one per path "
@@ -114,6 +117,63 @@ def _norm_path(path) -> str:
     if not isinstance(path, str):
         return path
     return path.replace("\\", "/")
+
+
+_WIDTH_RATIONALE_HEADING_RE = re.compile(r"^##\s+Width rationale\s*$", re.M)
+_ANY_HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.M)
+
+
+def _width_rationale(text: str) -> "str | None":
+    """The non-empty body of a `## Width rationale` section, or None if absent/empty."""
+    match = _WIDTH_RATIONALE_HEADING_RE.search(text)
+    if not match:
+        return None
+    rest = text[match.end():]
+    next_heading = _ANY_HEADING_RE.search(rest)
+    body = rest[: next_heading.start()] if next_heading else rest
+    body = body.strip()
+    return body or None
+
+
+#: Test seam: set to `(read_spine, build_dag)` to inject a stub in place of the engine's own.
+_ENGINE_WIDTH_FNS_OVERRIDE = None
+
+
+def _resolve_engine_width_fns():
+    if _ENGINE_WIDTH_FNS_OVERRIDE is not None:
+        return _ENGINE_WIDTH_FNS_OVERRIDE
+    _ensure_engine_on_path()
+    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+    from coordinator_core.ops.dispatch_emit.wave_map import build_dag
+
+    return read_spine, build_dag
+
+
+def _compute_width(path: Path):
+    """`(width_dict, unavailable_reason)` -- never raises, so a width failure cannot fail the check.
+
+    The graph is `wave_map.build_dag`'s: `max_width` = `max_concurrent_rows`, `critical_path_rows`
+    as published, `dispatchable_rows` = `len(nodes)`; only `critical_path_share` is computed here.
+    """
+    try:
+        read_spine, build_dag = _resolve_engine_width_fns()
+    except ImportError as exc:
+        return None, f"engine predates the width function ({exc})"
+    except Exception as exc:  # noqa: BLE001 - width is advisory; report, never crash
+        return None, f"engine unreachable: {exc}"
+    try:
+        dag = build_dag(read_spine(path))
+    except Exception as exc:  # noqa: BLE001 - report, never crash the checker
+        return None, f"width computation failed: {exc}"
+    dispatchable_rows = len(dag.nodes)
+    critical_path_rows = dag.critical_path_rows
+    share = (critical_path_rows / dispatchable_rows) if dispatchable_rows else 0
+    return {
+        "max_width": dag.max_concurrent_rows,
+        "critical_path_rows": critical_path_rows,
+        "dispatchable_rows": dispatchable_rows,
+        "critical_path_share": share,
+    }, None
 
 
 def _ensure_engine_on_path() -> None:
@@ -307,6 +367,24 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
             else:
                 advisories.append(finding)
 
+    width, width_unavailable = _compute_width(path)
+    if width is not None:
+        dispatchable_rows = width["dispatchable_rows"]
+        max_width = width["max_width"]
+        if dispatchable_rows >= 3 and max_width < 3 and _width_rationale(text) is None:
+            advisories.append(
+                {
+                    "row": "(plan)",
+                    "error": (
+                        f"WIDTH<3: max width {max_width} over {dispatchable_rows} dispatchable "
+                        "row(s) — add a `## Width rationale` section or restructure "
+                        "interface-first"
+                    ),
+                    "at": "width",
+                    "class": "advisory",
+                }
+            )
+
     if any(f["class"] == "structural" for f in findings):
         verdict = "INVALID"
     elif findings:
@@ -319,6 +397,8 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
         "detail": None,
         "rows": findings,
         "advisories": advisories,
+        "width": width,
+        "width_unavailable": width_unavailable,
     }
 
 
@@ -328,6 +408,16 @@ def _render(report: dict) -> str:
         f"  {a['row']} at `{a['at']}`: {a['error']}  [advisory, not fatal]"
         for a in report.get("advisories", [])
     ]
+    width = report.get("width")
+    if width is not None:
+        width_line = (
+            f"  WIDTH max={width['max_width']} "
+            f"critical-path={width['critical_path_rows']}/{width['dispatchable_rows']} "
+            f"share={width['critical_path_share']:.2f}"
+        )
+        advisory_lines = [width_line] + advisory_lines
+    elif report.get("width_unavailable"):
+        advisory_lines = [f"  WIDTH unavailable: {report['width_unavailable']}"] + advisory_lines
     advisory_block = ("\n" + "\n".join(advisory_lines)) if advisory_lines else ""
     if report["verdict"] in ("VALID", "NO-SPINE"):
         return f"plan-spine-check: {report['verdict']} — {name}{advisory_block}"

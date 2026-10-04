@@ -90,18 +90,18 @@ _PROVIDERS: dict[str, object] = {
 #: Packages verified (dynamically, below) to emit `judgment_points` whose
 #: dispositions NEVER carry a non-empty `resolves` -- there is no phantom-
 #: id risk to sweep, but the claim is checked every run, not just asserted
-#: in a comment. `orient_assemble` and `learn_lessons_assemble` are cheap
+#: in a comment. `orient_brief` and `learn_lessons_assemble` are cheap
 #: to call directly (read-only, no complex fixture); each entry maps to
 #: the callable that performs the live verification.
-def _verify_orient_assemble_never_resolves() -> None:
-    from coordinator_core import orient_assemble as oa
+def _verify_orient_brief_never_resolves() -> None:
+    from coordinator_core import orient_brief as ob
 
-    for cadence in oa.CADENCES:
-        do = oa.brief(cadence)
+    for cadence in ob.CADENCES:
+        do = ob.brief(cadence)
         for jp in do["judgment_points"]:
             for disposition in jp["dispositions"]:
                 assert not disposition.get("resolves"), (
-                    f"orient_assemble: judgment point {jp['id']!r} disposition "
+                    f"orient_brief: judgment point {jp['id']!r} disposition "
                     f"{disposition['value']!r} now resolves {disposition['resolves']!r} -- "
                     "this package was verified resolves-free; register a real sweep "
                     "provider in _phantom_sweep_providers.py instead of relying on this "
@@ -159,7 +159,7 @@ def _assert_package_source_never_resolves(package_name: str) -> None:
 
 _VERIFIED_RESOLVES_FREE = frozenset(
     {
-        "orient_assemble",
+        "orient_brief",
         "learn_lessons_assemble",
         # Both landed after the 2026-07-27 fleet-wide generalization and were
         # never registered, so `test_every_discovered_package_is_registered_
@@ -175,7 +175,7 @@ _VERIFIED_RESOLVES_FREE = frozenset(
         # disposition with a `resolves` entry. Verified via the static
         # source scan (`_assert_package_source_never_resolves`), not a
         # dynamic call: none of the three has a cheap, fixture-free `brief()`
-        # invocation the way `orient_assemble`/`learn_lessons_assemble` do.
+        # invocation the way `orient_brief`/`learn_lessons_assemble` do.
         "execute_plan_assemble",
         "goals",
         "plugin_health",
@@ -228,8 +228,8 @@ def test_no_phantom_resolves_id(package_name: str, monkeypatch, tmp_path) -> Non
     )
 
 
-def test_orient_assemble_verified_resolves_free() -> None:
-    _verify_orient_assemble_never_resolves()
+def test_orient_brief_verified_resolves_free() -> None:
+    _verify_orient_brief_never_resolves()
 
 
 def test_learn_lessons_assemble_verified_resolves_free(tmp_path) -> None:

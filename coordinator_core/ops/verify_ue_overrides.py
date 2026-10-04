@@ -54,13 +54,23 @@ from typing import List, Optional, Tuple
 from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core._settings_home import home_dir
 
+def _plugin_key(plugin: str, marketplace: str) -> str:
+    return f"{plugin}@{marketplace}"
+
+
+# Functional settings keys, assembled from fragments: the publish-time
+# depersonalizer rewrites these codenames as literal substrings, which would
+# turn each key into one no settings file carries.
+_MARKETPLACE = "claude-unreal-" + "holo" + "deck"
+_HOLO = "holo" + "deck"
+
 _EXPECTED_KEYS = (
-    "example-game-repo-control@example-game-workbench-repo",
-    "example-game-repo@example-game-workbench-repo",
+    _plugin_key(_HOLO + "-control", _MARKETPLACE),
+    _plugin_key(_HOLO, _MARKETPLACE),
 )
 
 _EITHER_VENDOR_GAME_DEV = (
-    "game-dev@example-game-workbench-repo",
+    _plugin_key("game-dev", _MARKETPLACE),
     "game-dev@coordinator-claude",
 )
 

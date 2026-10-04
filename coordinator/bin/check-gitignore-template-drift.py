@@ -41,7 +41,8 @@ template path resolves through the plugin root
 where the template lives (e.g. a test fixture).
 
 Exit codes: 0 = no drift, or SKIP (`~/.claude` is not a git repo — nothing to propagate into).
-1 = drift found (rules the template ships that the live file lacks). 2 = usage/environment error
+1 = report-only drift found (rules the template ships that the live file lacks); `--apply` that
+fixes the drift exits 0. 2 = usage/environment error
 (template unreadable, or the plugin root could not be resolved and `--template` was not given).
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C5.
@@ -228,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             "  note: an added rule does not retroactively untrack an already-tracked path — "
             "run `git ls-files` against any newly-covered path and `git rm --cached` it by hand."
         )
+        return 0
 
     return 1
 

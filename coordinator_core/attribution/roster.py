@@ -38,12 +38,14 @@ def _persona_clause(agent_text: str) -> str | None:
 def _name_from_clause(clause: str) -> str | None:
     """Extract the persona's proper name from the leading persona clause.
 
-    Handles the four shapes seen in DoE's roster:
+    Handles the shapes seen in DoE's roster:
       "the VP-Product Reviewer (they/them), VP Product — …"     -> name before " ("
       "Angelique, APM — …"                 -> name before ","
+      "Kira: is this code too much? …"     -> name before ":"
       "Waste — Kira: is this code too …"    -> name between "—" and ":"
       "the Data Science Reviewer — data science, …"           -> name before " —"
-      "the Front-End Reviewer reviews front-end code …"       -> name before a lowercase word
+    No bare "<Name> <lowercase word>" shape: it misreads a role sentence
+    ("EM judgment in a plan-blitz wave: …") as the persona "EM".
     Returns None for a role sentence carrying no persona name.
     """
     name: str | None = None
@@ -63,7 +65,7 @@ def _name_from_clause(clause: str) -> str | None:
         if m:
             name = m.group(1)
     if name is None:
-        m = re.match(r"^(\S+)\s+[a-z]", clause)
+        m = re.match(r"^(\S+):\s", clause)
         if m:
             name = m.group(1)
     if name is not None and name in _CLAUSE_STOPWORDS:

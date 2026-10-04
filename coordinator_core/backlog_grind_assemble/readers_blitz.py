@@ -19,7 +19,7 @@ autonomous bug-blitz fixes and says why.
 
 The seam (C3) calls `collect()` unconditionally for every cadence and
 trusts this module to self-gate internally (mirrors
-`orient_assemble.readers_health_reaper`'s day-cadence-only gating, applied
+the orient brief's day-cadence-only health gating, applied
 here to a surface-identity cadence instead of a session/day/week severity
 knob — see `coordinator_core.test_backlog_grind_assemble`'s `_CADENCES`
 for the five surface-identity cadence strings this cluster uses).
@@ -138,7 +138,7 @@ from coordinator_core.backlog_grind_assemble.directives import (
 from coordinator_core import executor_return_contract
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
-from coordinator_core.orient_assemble.reader_result import ReaderResult
+from coordinator_core.contract.decision_object.reader_result import ReaderResult
 
 #: This reader's own cadence identity — one of the five surface-identity
 #: cadences `coordinator_core.test_backlog_grind_assemble._CADENCES`

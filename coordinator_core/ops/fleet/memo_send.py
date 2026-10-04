@@ -1153,6 +1153,43 @@ _CITATION_ROOT_RE = re.compile(
 _CITATION_QUALIFIER_PRE_RE = re.compile(r"([A-Za-z][A-Za-z0-9_-]*)[:\s]\s*`?\Z")
 
 
+_FENCE_LINE_RE = re.compile(r"[ \t]*(`{3,}|~{3,})")
+
+
+def _fenced_spans(body: str) -> list:
+    """`(start, end)` offsets of each fenced code block (``` or ~~~, any
+    indentation), fence lines included. An unclosed fence runs to the end of
+    `body`. Contract: text inside a span is verbatim and never rewritten.
+    """
+    spans: list = []
+    open_start = None
+    marker = ""
+    pos = 0
+    for line in body.splitlines(keepends=True):
+        end = pos + len(line)
+        m = _FENCE_LINE_RE.match(line)
+        if open_start is None:
+            if m:
+                open_start, marker = pos, m.group(1)
+        elif m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker) \
+                and not line[m.end():].strip():
+            spans.append((open_start, end))
+            open_start = None
+        pos = end
+    if open_start is not None:
+        spans.append((open_start, len(body)))
+    return spans
+
+
+def _citation_matches(body: str):
+    """`_CITATION_ROOT_RE` matches outside fenced code blocks."""
+    spans = _fenced_spans(body)
+    for match in _CITATION_ROOT_RE.finditer(body):
+        if any(s <= match.start() < e for s, e in spans):
+            continue
+        yield match
+
+
 def _repo_qualifier_names(all_repos: dict) -> frozenset:
     """The set of names that qualify a body path citation as repo-scoped:
     each registry key (lowercased, `_` -> `-`) plus the lowercased basename
@@ -1180,7 +1217,7 @@ def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
     """
     seen: list = []
     seen_set: set = set()
-    for match in _CITATION_ROOT_RE.finditer(body):
+    for match in _citation_matches(body):
         candidate = match.group(0)
         prefix = body[: match.start()]
         qualifier_match = _CITATION_QUALIFIER_PRE_RE.search(prefix)
@@ -1257,7 +1294,7 @@ def _qualify_unqualified_citations(
     """
     out: list = []
     cursor = 0
-    for match in _CITATION_ROOT_RE.finditer(body):
+    for match in _citation_matches(body):
         candidate = match.group(0)
         prefix = body[cursor: match.start()]
         qualifier_match = _CITATION_QUALIFIER_PRE_RE.search(body[: match.start()])

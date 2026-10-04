@@ -159,11 +159,14 @@ COHORT: dict[str, tuple[bool, str]] = {
         "so gets WRITTEN as the agent dir's owner back-pointer, the exact outcome "
         "that arm's fail-closed conditions exist to prevent.",
     ),
-    "coordinator_core/orient_assemble/readers_clean_ops.py": (
-        True,
-        "Cold-only: no registered op imports `orient_assemble` at module scope or "
-        "call time. Entered from the orient/workday-start assemble CLI, in the "
-        "operator's own process, where the env read is the correct source.",
+    "coordinator_core/orient_brief/_work.py": (
+        False,
+        "Warm-reachable: `orient-assemble` is a `_native_route_entry` target, so the "
+        "door serves `orient_brief.main` in a warm pool worker. Successor of the "
+        "retired `orient_assemble/readers_clean_ops.py`. Its EM-environment reader takes "
+        "the session id from an env mapping it is handed (`dict(os.environ)`), which "
+        "the warm seam's `_environ_identity_borrow` has already bound to the caller; "
+        "it must never grow a direct `os.environ` session-identity read.",
     ),
     "coordinator_core/session/claims.py": (
         True,
@@ -291,7 +294,7 @@ _COHORT_FLOOR: frozenset = frozenset(
         "coordinator_core/baton_assemble/__init__.py",
         "coordinator_core/ops/handoff_correct_body.py",
         "coordinator_core/hooks/track_touched_files.py",
-        "coordinator_core/orient_assemble/readers_clean_ops.py",
+        "coordinator_core/orient_brief/_work.py",
         "coordinator_core/session/claims.py",
         "coordinator_core/ops/check_em_environment.py",
         "coordinator_core/ops/dispatch_shape_classify.py",

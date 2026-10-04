@@ -311,7 +311,6 @@ def test_end_to_end_pickup_assemble_keeps_its_subcommand(monkeypatch):
     path deliberately not present.
     """
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_ENGINE_ROOT))
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", str(_ENGINE_ROOT))
     argv = ["brief", "docs/plans/__parity_probe__.md"]
 
     monkeypatch.setattr(

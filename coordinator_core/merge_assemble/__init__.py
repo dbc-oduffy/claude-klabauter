@@ -20,7 +20,7 @@ Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d4
 `brief()` routes every construction through the shipped
 `coordinator_core.contract.decision_object.envelope.build_envelope` /
 `.judgment.build_judgment_point`/`build_disposition` constructors — matching
-`baton_assemble`'s and `orient_assemble`'s shape (Review: code-reviewer —
+`baton_assemble`'s and `orient-assemble brief`'s shape (Review: code-reviewer —
 Finding 1; this module used to hand-roll a divergent 6-key decision object
 missing `artifact`/`preflight`/`decisions`/`narration`/`next_move`
 outright). The four ad-hoc top-level keys the old shape carried now live in

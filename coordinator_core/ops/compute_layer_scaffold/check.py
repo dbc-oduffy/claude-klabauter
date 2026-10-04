@@ -55,7 +55,7 @@ SUB_SHAPE_A: tuple[str, ...] = (
 #: Sub-shape C — no apply half and no dispatch table at all. Reported N/A per
 #: clause (AC9), never a failing grade.
 SUB_SHAPE_C: tuple[str, ...] = (
-    "orient_assemble",
+    "orient_brief",
     "review_assemble",
     "learn_lessons_assemble",
 )

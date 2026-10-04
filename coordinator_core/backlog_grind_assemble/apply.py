@@ -11,7 +11,7 @@ in `apply_base`; this module supplies only its own closed `_CLI_DISPATCH`
 table and the git/session-grant plumbing its handlers invoke), and halts at
 the first unresolved judgment point rather than overriding a denial.
 
-`orient_assemble`/`pickup_assemble`/`baton_assemble`/`consolidate_assemble`
+`orient-assemble`/`pickup_assemble`/`baton_assemble`/`consolidate_assemble`
 are all precedent here; THIS module's shape follows `consolidate_assemble`'s
 apply.py most closely (a cadence/mode-selected brief, no single claimed
 artifact path, `Path.cwd()`-resolved repo root, its own `_run_git`) rather

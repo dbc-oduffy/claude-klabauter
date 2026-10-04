@@ -46,6 +46,13 @@ def _unbacked_suffix(delivery: object) -> str:
     return "; unbacked claims:\n" + "\n".join(lines)
 
 
+def test_verdict_of(build_test: dict) -> Any:
+    """The build/test verdict of a record: `test_verdict` when present, else `status` (old
+    sidecars, where `status` was the verdict; on a run-report it is the lifecycle)."""
+    verdict = build_test.get("test_verdict")
+    return verdict if verdict is not None else build_test.get("status")
+
+
 def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
     """The first mint refusal message that applies to this record, else `None`."""
     footprint = prep.get("slice_files")
@@ -59,7 +66,7 @@ def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
     delivery_verdict = delivery.get("verdict") if isinstance(delivery, dict) else None
     unresolved = integration.get("unresolved") or []
     confinement_violations = _count(integration.get("confinement_violations"))
-    tests_status = build_test.get("status")
+    tests_status = test_verdict_of(build_test)
     criterion = integration.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 

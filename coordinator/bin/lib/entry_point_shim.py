@@ -678,7 +678,7 @@ _ENGINE_ENTRIES: dict[str, Callable[[List[str]], int]] = {
     "baton-assemble": _native_route_entry("baton-assemble", "coordinator_core.baton_assemble"),
     "consolidate-assemble": _simple_entry("consolidate-assemble", "coordinator_core.consolidate_assemble"),
     "merge-assemble": _merge_assemble_entry,
-    "orient-assemble": _simple_entry("orient-assemble", "coordinator_core.orient_assemble"),
+    "orient-assemble": _native_route_entry("orient-assemble", "coordinator_core.orient_brief"),
     "pickup-assemble": _native_route_entry("pickup-assemble", "coordinator_core.pickup_brief"),
     "plan-assemble": _simple_entry("plan-assemble", "coordinator_core.plan_assemble"),
     "quick-wrap-assemble": _simple_entry("quick-wrap-assemble", "coordinator_core.quick_wrap_assemble"),
@@ -1150,7 +1150,7 @@ def run_target(name: str, argv: List[str]) -> int:
     # branch, unlike BY_PATH_TARGETS above, never sets sys.argv before
     # calling the target. Grepped all 12 engine-mapped ASSEMBLE_TARGETS
     # modules (coordinator_core.{backlog_grind_assemble,baton_assemble,
-    # consolidate_assemble,merge_assemble,orient_assemble,pickup_assemble,
+    # consolidate_assemble,merge_assemble,orient_brief,pickup_assemble,
     # plan_assemble,review_assemble,sizing_assemble,staff_session_assemble,
     # workday_complete.{brief,apply},workstream_complete}) for `sys.argv`:
     # every module-level `main(argv)` takes argv as a parameter and does not

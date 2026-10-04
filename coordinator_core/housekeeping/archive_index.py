@@ -60,7 +60,15 @@ _DEPLOYMENT_STATE_KEY = "deployment_state"
 
 _ABSENT_STATE = "<absent>"
 
-_SCAN_KEYS = {_BLOCKER_ID_KEY, _DEPLOYMENT_STATE_KEY}
+_SCAN_KEYS = {_BLOCKER_ID_KEY, _HANDOFF_ID_KEY, _DEPLOYMENT_STATE_KEY}
+
+
+def _index_ids(index: "ArchiveIndex", path: str, fields: Dict) -> None:
+    """File `path` under every id it carries, so a blocker named by either
+    `stub_id` or `handoff_id` finds it."""
+    for hid in {fields.get(_BLOCKER_ID_KEY), fields.get(_HANDOFF_ID_KEY)}:
+        if hid:
+            index.by_id.setdefault(hid, []).append(path)
 
 
 def _default_onerror(err: OSError) -> None:
@@ -149,9 +157,7 @@ def build_index(
         index.stat_by_path[path] = _signature_from_entry(entry)
         fields = scan_keys(path, _SCAN_KEYS)
         _record_nonterminal(index, path, fields)
-        hid = fields.get(_BLOCKER_ID_KEY)
-        if hid:
-            index.by_id.setdefault(hid, []).append(path)
+        _index_ids(index, path, fields)
 
     return index
 
@@ -183,9 +189,7 @@ def revalidate(
         _remove_path_from_by_id(index, path)
         fields = scan_keys(path, _SCAN_KEYS)
         _record_nonterminal(index, path, fields)
-        hid = fields.get(_BLOCKER_ID_KEY)
-        if hid:
-            index.by_id.setdefault(hid, []).append(path)
+        _index_ids(index, path, fields)
 
     return {Path(p) for p in changed}
 
@@ -228,7 +232,7 @@ def revalidate(
 import json
 import tempfile
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 _CACHE_DIRNAME = "coordinator-housekeeping"
 _CACHE_FILENAME = "archive-index.json"

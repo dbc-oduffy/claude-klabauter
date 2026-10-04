@@ -332,6 +332,37 @@ def record_delivery_verdict(
     return rel.as_posix()
 
 
+def settle_tests_sidecar(repo_root: Path, tests: Optional[dict]) -> bool:
+    """Write the re-run verdict into the test-runner sidecar as `test_verdict` (and `run`/`failed`
+    when absent), leaving `status` -- the run-report lifecycle -- alone. A sidecar that already
+    carries `test_verdict`, is absent, or has no frontmatter is left alone; returns whether it
+    was rewritten."""
+    if not tests or tests.get("status") not in _TESTS_STATUSES or not tests.get("sidecar"):
+        return False
+    path = Path(str(tests["sidecar"]))
+    if not path.is_absolute():
+        path = repo_root / path
+    try:
+        raw = path.read_bytes().decode("utf-8")
+    except OSError:
+        return False
+    crlf = "\r\n" in raw
+    norm = raw.replace("\r\n", "\n")
+    split = split_frontmatter(norm)
+    fm = _frontmatter(path)
+    if split is None or fm is None or "test_verdict" in fm:
+        return False
+    verdict = "errored" if tests["status"] == "error" else tests["status"]
+    add = f"test_verdict: {verdict}\n"
+    for key in ("run", "failed"):
+        if key not in fm and tests.get(key) is not None:
+            add += f"{key}: {tests[key]}\n"
+    base = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
+    out = norm.replace(split.fm_text, base + add, 1)
+    path.write_bytes((out.replace("\n", "\r\n") if crlf else out).encode("utf-8"))
+    return True
+
+
 def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
     base = repo_root / VERDICT_DIR
     if not base.is_dir():
@@ -556,6 +587,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 None if frozen is None else live_foreign_claims(repo_root, frozen, ident["head_sha"])
             ),
         )
+        settle_tests_sidecar(repo_root, result.get("tests") or None)
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)
         return 1

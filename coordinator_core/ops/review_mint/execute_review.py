@@ -27,12 +27,14 @@ from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.session import record_homes
 
 _DELIVERY_VERIFIER_AGENT_TYPE = "coordinator:delivery-verifier"
 
@@ -156,6 +158,14 @@ _NO_SLICES_REFUSAL = (
 )
 
 
+def prep_slice_id_for(plan_path: str, run_base_sha: Optional[str]) -> str:
+    """The frozen-diff slice id of one run's prep: plan stem plus run base, so concurrent runs of
+    different plans (or the same plan from different bases) never share
+    `state/review-trail/diffs/<id>.diff`."""
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(plan_path.replace("\\", "/")).stem)
+    return f"{stem}-{(run_base_sha or 'nobase')[:12]}-prep"
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -167,6 +177,7 @@ def compose_execute_review(
     prompt_head: str = "",
     prep_suffix_js: Optional[str] = None,
     criterion: Optional["OperativeCriterion"] = None,
+    precredited_rows: Optional[List[str]] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -218,13 +229,22 @@ def compose_execute_review(
 
     # -- 1. prep ----------------------------------------------------------
     prep_phase = "Review prep"
+    prep_slice_id = prep_slice_id_for(plan_path, run_base_sha)
+    credit_note = (
+        "\nDelivered before this run's base (resume): rows "
+        + ", ".join(precredited_rows)
+        + " are `coded` at a commit that is an ancestor of run_base_sha; the diff holds no hunk "
+        "for them by construction. Count them backed; never list them in claims_unbacked."
+        if precredited_rows
+        else ""
+    )
     prep_prompt = (
         f"{prompt_head}\n\n"
         f"Freeze and characterise this run's diff for review. Freeze it with the "
         f"`freeze-review-diff` launcher on PATH (the settings-home bin; the "
         f"`review.freeze_diff` op's entrypoint -- this repo need not carry "
         f"coordinator/bin, so never look for it here): `freeze-review-diff --worktree --range "
-        f"{run_base_sha or 'run_base_sha'} --slice-id <a name unique to this run> "
+        f"{run_base_sha or 'run_base_sha'} --slice-id {prep_slice_id} "
         f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
         f"`git diff base..HEAD` is never the run's diff. Return its single stdout "
@@ -337,8 +357,15 @@ def compose_execute_review(
         wave_prompt = (
             f"{prompt_head}\n\n"
             f"Review this run's whole diff.\n"
-            f"plan_path: {plan_path}\n"
+            + (
+                f"Read only the frozen diff named by whole_diff_path below (this run's is "
+                f"`{prep_slice_id}.diff`); never another plan's `-prep.diff`.\n"
+                if is_delivery_verifier
+                else ""
+            )
+            + f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
+            f"{credit_note if is_delivery_verifier else ''}"
             f"{role_note}"
         ).strip()
         emitted_agent_type = (
@@ -507,7 +534,7 @@ def resolve_operative_criterion(
         return None
     original = _one_line(block.get("statement"))
     derived = block.get("derived_from")
-    if repo_root is not None and isinstance(derived, str) and derived.startswith("state/sizings/"):
+    if repo_root is not None and isinstance(derived, str) and record_homes.home_pattern("sizings").match(derived):
         try:
             root = Path(repo_root).resolve()
             target = (root / derived.strip()).resolve()

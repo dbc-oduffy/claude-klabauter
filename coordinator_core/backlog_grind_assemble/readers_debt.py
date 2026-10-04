@@ -92,7 +92,7 @@ __all__ = ["ReaderResult", "collect"]
 
 #: the one cadence this reader self-gates on — the seam calls every reader
 #: unconditionally for every cadence and trusts each to self-gate (mirrors
-#: `orient_assemble.readers_health_reaper`'s day-cadence-only gating, one
+#: `orient-assemble brief --cadence day`'s day-cadence-only health gating, one
 #: layer up: there the gate is a cadence VALUE test, here it is a cadence
 #: IDENTITY test, since this reader owns exactly one of backlog-grind's five
 #: mirror surfaces rather than a severity-tuned subset of a shared one).
@@ -199,7 +199,7 @@ def _build_batched_pm_gate(
     SUBSTRATE CHECK in the module docstring, the debt-backlog terminus op
     is absent, so there is no execution-ready write for either disposition
     to gate; this judgment point is evidence-and-ask only, exactly like
-    `orient_assemble.readers_health_reaper`'s week-cadence marker-freshness
+    `orient-assemble brief --cadence week`'s marker-freshness
     gate (also un-gated to any directive).
 
     Item (5) (disposition of surviving project-specific improvement-queue

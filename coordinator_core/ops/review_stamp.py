@@ -84,7 +84,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.git.run import run_git
-from coordinator_core.completion_receipts.verdict import mint_refusal, superseding_delivery
+from coordinator_core.completion_receipts.verdict import mint_refusal, superseding_delivery, test_verdict_of
 from coordinator_core.session.claimed_write import replace_text
 
 
@@ -566,7 +566,7 @@ def mint(
         build_test_data = _load_sidecar(Path(build_test_path))
         if build_test_data is None:
             raise MintRefusal(f"review-stamp: no build/test record at {build_test_path}")
-        if "status" not in build_test_data:
+        if "status" not in build_test_data and "test_verdict" not in build_test_data:
             raise MintRefusal(
                 f"review-stamp: --build-test expects a build/test record (frontmatter with `status: pass` "
                 f"plus run/failed counts), not a delivery-verdict or run record; {build_test_path} has no `status`"
@@ -577,7 +577,7 @@ def mint(
         if not isinstance(build_test_data, dict):
             raise MintRefusal("review-stamp: refusing to mint: no build/test record (--build-test required)")
         build_test_sidecar = build_test_data.get("sidecar")
-    tests_status = build_test_data.get("status")
+    tests_status = test_verdict_of(build_test_data)
     criterion = integration_data.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
@@ -591,9 +591,22 @@ def mint(
         narrowing_receipt = criterion_waiver(
             text, criterion, (newest or {}).get("recorded_at") or integration_data.get("recorded_at")
         )
+    attestation_receipt = None
+    if criterion_status == "indeterminate":
+        from coordinator_core.ops.operator_attestation import attested
+
+        attestation_receipt, attestation_problem = attested(
+            split.fm_text, run_git=lambda args: _run_git(args, cwd=str(repo_root))
+        )
+        if attestation_problem:
+            raise MintRefusal(
+                f"review-stamp: refusing to mint: exit criterion is indeterminate; {attestation_problem}"
+            )
     gate_integration = {**integration_data, "delivery": delivery_data}
     if narrowing_receipt:
         gate_integration["criterion"] = {**criterion, "status": "not_run"}
+    if attestation_receipt:
+        gate_integration["criterion"] = {**criterion, "status": "met"}
     refusal = mint_refusal(gate_integration, prep_data, build_test_data)
     if refusal is not None:
         if delivery_verdict == "FAIL":
@@ -640,8 +653,8 @@ def mint(
         stamp["superseding_record"] = stamp["integration_sidecar"]
     if isinstance(criterion, dict) and criterion_status:
         stamp["criterion"] = {
-            "status": "not_run" if narrowing_receipt else criterion_status,
-            "observation": narrowing_receipt or criterion.get("observation"),
+            "status": "not_run" if narrowing_receipt else "met" if attestation_receipt else criterion_status,
+            "observation": narrowing_receipt or attestation_receipt or criterion.get("observation"),
             "sidecar": criterion.get("sidecar"),
         }
     from datetime import datetime, timezone

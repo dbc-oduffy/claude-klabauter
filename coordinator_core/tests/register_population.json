@@ -705,6 +705,10 @@
       "_EXCLUDED_SUFFIXES"
     ],
     [
+      "coordinator/tests/test_publish_doc_path_refs_gate.py",
+      "_HOOK_HEAD"
+    ],
+    [
       "coordinator/tests/test_publish_fleet_only_strip.py",
       "_FENCED_MD"
     ],
@@ -727,6 +731,18 @@
     [
       "coordinator/tests/test_publish_mirror_bare_name_expansion.py",
       "_MIRROR_ROWS"
+    ],
+    [
+      "coordinator/tests/test_publish_plugin_payload_gate_wired.py",
+      "_HOOK"
+    ],
+    [
+      "coordinator/tests/test_publish_plugin_payload_gate_wired.py",
+      "_MANIFEST"
+    ],
+    [
+      "coordinator/tests/test_publish_plugin_payload_gate_wired.py",
+      "_PLAN_NEEDS_MANIFEST"
     ],
     [
       "coordinator/tests/test_queue_append_node_validation.py",
@@ -3005,6 +3021,10 @@
       "_NO_CRED_ERR"
     ],
     [
+      "coordinator_core/hooks/tests/test_block_workflow_foreign_emission_pipeline.py",
+      "_CONTENT_ROOT"
+    ],
+    [
       "coordinator_core/hooks/tests/test_c4_ownership_inherited_at_dispatch_tripwires.py",
       "_DR_258_PATH"
     ],
@@ -3129,6 +3149,10 @@
       "_OP_NAMES"
     ],
     [
+      "coordinator_core/hooks/tests/test_track_dispatched_agents_reply_resume.py",
+      "ROSTER"
+    ],
+    [
       "coordinator_core/hooks/tests/test_ue_knowledge_distrust_message_text.py",
       "_FORBIDDEN_SUBSTRINGS"
     ],
@@ -3143,6 +3167,14 @@
     [
       "coordinator_core/install/test_ensure_venv.py",
       "_NON_THIRD_PARTY_HOOK_IMPORTS"
+    ],
+    [
+      "coordinator_core/install/test_forwarder_resolver_pair.py",
+      "_RESOLVER_SRC"
+    ],
+    [
+      "coordinator_core/install/test_forwarder_resolver_pair.py",
+      "_TARGETS"
     ],
     [
       "coordinator_core/install/test_forwarder_trust_guard.py",
@@ -3633,6 +3665,10 @@
       "ACCEPTED"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_ask_roadmap.py",
+      "ACCEPTED"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_ask_zero_headless.py",
       "_ACCEPTED"
     ],
@@ -3643,6 +3679,10 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_cli_mark_landed.py",
       "_LEGACY_SCRIPT"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_cli_reverify_delivery_empty.py",
+      "_FAIL"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_cloud_spawn_brief.py",
@@ -3749,6 +3789,34 @@
       "_ROUTE"
     ],
     [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_compose.py",
+      "_RETURN_SCHEMA"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_compose.py",
+      "_VERIFY_SCHEMA"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_doe_manifests.py",
+      "_DOE_CASES"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_doe_manifests.py",
+      "_FAILED"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_doe_manifests.py",
+      "_VERIFIERS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_manifest_refusals.py",
+      "ARRAY_SCHEMA"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_pipeline_manifest_refusals.py",
+      "_OVER_SUBJECT"
+    ],
+    [
       "coordinator_core/ops/dispatch_emit/tests/test_request_validation.py",
       "SPEC"
     ],
@@ -3759,6 +3827,18 @@
     [
       "coordinator_core/ops/dispatch_emit/tests/test_resume_from_continuance.py",
       "_HEADER"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_reverify_delivery_tests_stage.py",
+      "_ERR"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_reverify_delivery_tests_stage.py",
+      "_PASS"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_reverify_delivery_unmet_criterion.py",
+      "_PASS"
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_sizing_fire_wiring.py",
@@ -3782,6 +3862,10 @@
     ],
     [
       "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_completion_receipts.py",
+      "_REVIEWED"
+    ],
+    [
+      "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_leaves_index_at_head.py",
       "_REVIEWED"
     ],
     [
@@ -4253,6 +4337,10 @@
       "_GLOBAL_UE_OFF"
     ],
     [
+      "coordinator_core/ops/test_verify_ue_overrides_publish_keys.py",
+      "_REAL_KEYS"
+    ],
+    [
       "coordinator_core/ops/test_workday_complete_step2_5_dirty_tree.py",
       "_GOLDEN"
     ],
@@ -4577,6 +4665,14 @@
       "ROW"
     ],
     [
+      "coordinator_core/ops/tests/test_plan_narrow_criterion.py",
+      "NM"
+    ],
+    [
+      "coordinator_core/ops/tests/test_plan_narrow_criterion.py",
+      "ROWS"
+    ],
+    [
       "coordinator_core/ops/tests/test_plan_status_transition.py",
       "_AC_OPEN_TABLE"
     ],
@@ -4671,6 +4767,18 @@
     [
       "coordinator_core/ops/tests/test_queue_scaffold_baton.py",
       "_UNRELATED_PLAN_FIXTURES"
+    ],
+    [
+      "coordinator_core/ops/tests/test_reverify_delivery.py",
+      "_CLAIMS"
+    ],
+    [
+      "coordinator_core/ops/tests/test_reverify_delivery.py",
+      "_FAIL"
+    ],
+    [
+      "coordinator_core/ops/tests/test_reverify_delivery.py",
+      "_NOT_MET"
     ],
     [
       "coordinator_core/ops/tests/test_review_stamp.py",
@@ -4771,22 +4879,6 @@
     [
       "coordinator_core/ops/workflow_fire/tests/test_fire.py",
       "_TRUNCATION_LOG"
-    ],
-    [
-      "coordinator_core/orient_assemble/tests/test_directive_cli_resolvability.py",
-      "_CEREMONY_OR_SKILL_NAMES"
-    ],
-    [
-      "coordinator_core/orient_assemble/tests/test_narration_and_constructor_discipline.py",
-      "_JUDGMENT_POINT_CONSTRUCTOR_KEYS"
-    ],
-    [
-      "coordinator_core/orient_assemble/tests/test_narration_and_constructor_discipline.py",
-      "_OPTIONAL_JUDGMENT_POINT_KEYS"
-    ],
-    [
-      "coordinator_core/orient_assemble/tests/test_narration_and_constructor_discipline.py",
-      "_REQUIRED_DIRECTIVE_KEYS"
     ],
     [
       "coordinator_core/p4/tests/test_git_only_isolation.py",
@@ -5291,6 +5383,10 @@
     [
       "coordinator_core/roadmap/tests/test_pm_gate_signal.py",
       "_VENDORED_FRAGMENT_PATH"
+    ],
+    [
+      "coordinator_core/roadmap/tests/test_post_stamp_clause.py",
+      "FOLLOW_ONS"
     ],
     [
       "coordinator_core/roadmap/tests/test_prep_gate_placeholder.py",
@@ -6789,6 +6885,18 @@
       "_SEAM_NAMES"
     ],
     [
+      "coordinator_core/tests/test_orient_brief_branch.py",
+      "FORBIDDEN_GIT_VERBS"
+    ],
+    [
+      "coordinator_core/tests/test_orient_brief_import_closure.py",
+      "_FORBIDDEN"
+    ],
+    [
+      "coordinator_core/tests/test_orient_brief_work.py",
+      "_TITLES"
+    ],
+    [
       "coordinator_core/tests/test_os_open_create_declares_mode.py",
       "_SCAN_ROOTS"
     ],
@@ -7669,7 +7777,7 @@
       "_VALID_FM"
     ]
   ],
-  "candidate_ids_sha256": "bbe18c8797748dce59d3e5cd074a0b0aae188be0d458ad863bb643a401e3e23d",
+  "candidate_ids_sha256": "d22d91d8f6221b15fb49c1678869a78a784af914533a2f777df32c3ba41fcf12",
   "candidate_roots": [
     "coordinator/tests",
     "coordinator_core"

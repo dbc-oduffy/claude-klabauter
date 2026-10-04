@@ -52,7 +52,6 @@ Port of: check-plugin-drift.sh (DoE b5a4192c, 2026-07-20; dd820339^ recovered
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import os
 import re
@@ -64,6 +63,12 @@ from typing import Dict, List, Optional, Sequence
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
+from coordinator_core.plugin_health.refresh_log import (
+    pyproject_hash as _pyproject_hash,
+    refresh_log_baseline_hash as _refresh_log_baseline_hash,
+    resolve_claude_home as _resolve_claude_home,
+    resolve_refresh_log as _resolve_refresh_log,
+)
 
 _PROG = "check-plugin-drift"
 
@@ -198,11 +203,6 @@ def _venv_pin_check(
         return f"ERROR:{exc}"
 
 
-def _pyproject_hash(path: Path) -> str:
-    """Leg 2b helper — SHA256 of a pyproject.toml (or any path)."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def _venv_mapping_check(site_packages: Path, expected_root: Path) -> str:
     """Leg 2c. ``eval()`` -> ``ast.literal_eval`` (plan-directed hardening, both
     call sites): behaviorally identical for the only content that ever appears
@@ -292,26 +292,6 @@ def _venv_shim_check(pyproject_source_path: Path, live_path: Path, is_windows: b
         if not shim.exists() and not shim_ne.exists():
             missing.append(ep_name)
     return missing
-
-
-def _refresh_log_baseline_hash(refresh_log: Path, plugin_name: str) -> str:
-    """Mirrors the bash `grep ... | grep pyproject_hash= | tail -1 | sed ...`
-    baseline-hash lookup against the refresh audit log."""
-    if not refresh_log.exists():
-        return ""
-    try:
-        text = refresh_log.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        print(f"[warn] {_PROG}: could not read {refresh_log}: {exc}", file=sys.stderr)
-        return ""
-    baseline = ""
-    for line in text.splitlines():
-        if f" {plugin_name} " not in line or "pyproject_hash=" not in line:
-            continue
-        m = re.search(r"pyproject_hash=([a-f0-9]*)", line)
-        if m:
-            baseline = m.group(1)
-    return baseline.replace("\r", "")
 
 
 def _site_packages_dir(venv_dir: Path, is_windows: bool) -> Optional[Path]:
@@ -943,14 +923,6 @@ def _resolve_registry_dir() -> Path:
     if override:
         return Path(override)
     return settings_home() / "machine-local"
-
-
-def _resolve_claude_home() -> Path:
-    return Path(os.environ.get("HOME") or str(Path.home())) / ".claude"
-
-
-def _resolve_refresh_log() -> Path:
-    return _resolve_claude_home() / "plugins" / ".refresh-log"
 
 
 # ---------------------------------------------------------------------------

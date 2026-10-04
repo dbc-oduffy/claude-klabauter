@@ -53,7 +53,7 @@ discover_consumes_manifest_modules` proves those three are, in fact, the
 ENTIRE set of `coordinator_core` packages that define a module-level
 `CONSUMES_MANIFEST` today — every other `brief(`-defining package
 (`backlog_grind_assemble`, `baton_assemble`, `consolidate_assemble`,
-`merge_assemble`, `orient_assemble`, `pickup_assemble`, `review_assemble`)
+`merge_assemble`, the `orient-assemble` package, `pickup_assemble`, `review_assemble`)
 dispatches through its OWN closed `_CLI_DISPATCH` table of in-process
 Python handlers (`apply_base.execute_directives`), never a dynamically-
 resolved-and-imported `coordinator/bin/` CLI script with an argv-taking

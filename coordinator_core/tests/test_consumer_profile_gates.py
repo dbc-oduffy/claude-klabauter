@@ -102,16 +102,17 @@ def test_setup_rag_decision_skips_on_consumer(consumer, capsys):
     assert "consumer profile" in capsys.readouterr().out
 
 
-def test_memo_surface_readers_skip_on_consumer(consumer, monkeypatch):
-    from coordinator_core.orient_assemble import readers_clean_ops as rco
+def test_memo_surface_readers_skip_on_consumer(consumer, monkeypatch, tmp_path):
+    from coordinator_core.ops import check_rag_state as crs
+    from coordinator_core.orient_brief import _work
 
     def boom(*a, **k):
         raise AssertionError("fleet state read on consumer")
 
-    monkeypatch.setattr(rco, "_resolve_inbox_dir", boom)
-    monkeypatch.setattr(rco, "check_rag_state", boom)
-    assert not rco._read_memo_surface("surface").judgment_points
-    assert not rco._read_rag_staleness().directives
+    monkeypatch.setattr("coordinator_core.memo_corpus.memo_corpus_root", boom)
+    monkeypatch.setattr(crs, "_read_content_root", boom)
+    assert not _work._memo_points(tmp_path)
+    assert not _work._rag_directive()
 
 
 def test_check_rag_state_honours_injected_state_on_consumer(consumer, monkeypatch):

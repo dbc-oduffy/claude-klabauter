@@ -181,6 +181,7 @@ _PRIMITIVE_MODULE = "coordinator_core/git/run.py"
 _CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
     {
         "coordinator/bin/check-anchor-freshness.py",
+        "coordinator/bin/check-decision-citations.py",
         "coordinator/bin/check-watch-state-gitignore-fleet.py",
         "coordinator/bin/classify-legacy-engine-noun-references.py",
         "coordinator/bin/frontmatter-parse-check.py",
@@ -190,6 +191,8 @@ _CONTRACT_EXEMPT_MODULES: frozenset[str] = frozenset(
         "coordinator/bin/pre_commit_corpus_artifact_guard.py",
         "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
         "coordinator/bin/tier-last-run.py",
+        "coordinator/lib/generate-doctrine-surface-split.py",
+        "coordinator/lib/install/coordinator_install.py",
     }
 )
 
@@ -958,7 +961,8 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/workday_start_step0_reconcile.py",
         "coordinator_core/ops/workday_surface_stale_stash_entries.py",
         "coordinator_core/ops/workweek_trail_scope.py",
-        "coordinator_core/orient_assemble/readers_branch_reconcile.py",
+        "coordinator_core/orient_brief/_health.py",
+        "coordinator_core/orient_brief/_work.py",
         "coordinator_core/orientation/regenerate_cache.py",
         "coordinator_core/person_resolver.py",
         "coordinator_core/percolate/store.py",
@@ -1050,7 +1054,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator_core/ops/workday_complete_backfill_scan.py", "_GIT_TIMEOUT"),
         ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_GIT_TIMEOUT_SECS"),
         ("coordinator_core/ops/workweek_trail_scope.py", "_GIT_LOG_TIMEOUT_SECS"),
-        ("coordinator_core/orient_assemble/readers_branch_reconcile.py", "_GIT_TIMEOUT"),
         ("coordinator_core/person_resolver.py", "_GIT_TIMEOUT"),
         ("coordinator_core/plan_assemble/predicates/composition_graph.py", "_GIT_TIMEOUT_SEC"),
         ("coordinator_core/plugin_health/drift.py", "_run_git(timeout)"),
@@ -1069,8 +1072,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 186
-_PINNED_DIAL_CEILING = 68
+_PINNED_RUNNER_CEILING = 187
+_PINNED_DIAL_CEILING = 67
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1124,7 +1127,6 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_act_gitignore", "commit"),
         ("coordinator_core/ops/workday_complete_step2_5_dirty_tree.py", "_act_gitignore", "rm"),
         ("coordinator_core/ops/workday_surface_stale_stash_entries.py", "_run_stash_list", "stash"),
-        ("coordinator_core/orient_assemble/readers_branch_reconcile.py", "_current_branch", "branch"),
         ("coordinator_core/percolate/round.py", "step_commit", "add"),
         ("coordinator_core/percolate/round.py", "step_commit", "commit"),
     }
@@ -1134,7 +1136,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 39
+_PINNED_VERB_CEILING = 38
 
 
 def _runner_message(sites: list) -> str:

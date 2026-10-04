@@ -119,17 +119,24 @@ def _path_str(path: Any) -> str:
     return str(path)
 
 
-def _live_matches(
-    live_records: Dict[Any, Dict[str, Any]], blocker_id: str
-) -> List[Dict[str, Any]]:
-    matches: List[Dict[str, Any]] = []
+LiveIndex = Dict[str, List[Any]]
+
+
+def _carries_id(fields: Dict[str, Any], blocker_id: str) -> bool:
+    return blocker_id in (fields.get("stub_id"), fields.get("handoff_id"))
+
+
+def build_live_index(live_records: Dict[Any, Dict[str, Any]]) -> LiveIndex:
+    """One pass over the live corpus: every `stub_id` and `handoff_id` a
+    record carries -> the PATHS that carry it. Paths, not records: a caller
+    that swaps `live_records[path]` mid-sweep (a cleared gate) is still read
+    fresh at resolve time; ids are never rewritten by such a swap."""
+    index: LiveIndex = {}
     for path, fields in live_records.items():
-        if fields.get("stub_id") != blocker_id:
-            continue
-        rec = dict(fields)
-        rec["_path"] = _path_str(path)
-        matches.append(rec)
-    return matches
+        for rid in {fields.get("stub_id"), fields.get("handoff_id")}:
+            if rid:
+                index.setdefault(rid, []).append(path)
+    return index
 
 
 def _archive_matches(
@@ -140,7 +147,7 @@ def _archive_matches(
     matches: List[Dict[str, Any]] = []
     for path in archive_index.lookup(blocker_id):
         fields = reader(path, _RESOLVE_READ_KEYS)
-        if fields.get("stub_id") != blocker_id:
+        if not _carries_id(fields, blocker_id):
             continue
         rec = dict(fields)
         rec["_path"] = _path_str(path)
@@ -154,10 +161,16 @@ def resolve_blocker_id(
     archive_index: ArchiveIndex,
     *,
     reader: Reader = scan_keys,
+    live_index: Optional[LiveIndex] = None,
 ) -> BlockerState:
-    candidates = _live_matches(live_records, blocker_id) + _archive_matches(
-        archive_index, blocker_id, reader
-    )
+    if live_index is None:
+        live_index = build_live_index(live_records)
+    live: List[Dict[str, Any]] = []
+    for path in live_index.get(blocker_id, ()):
+        rec = dict(live_records[path])
+        rec["_path"] = _path_str(path)
+        live.append(rec)
+    candidates = live + _archive_matches(archive_index, blocker_id, reader)
     if not candidates:
         return UNRESOLVED_BLOCKER_STATE
 
@@ -180,8 +193,11 @@ def make_resolver(
     *,
     reader: Reader = scan_keys,
 ) -> Callable[[str], BlockerState]:
+    live_index = build_live_index(live_records)
 
     def resolve(blocker_id: str) -> BlockerState:
-        return resolve_blocker_id(blocker_id, live_records, archive_index, reader=reader)
+        return resolve_blocker_id(
+            blocker_id, live_records, archive_index, reader=reader, live_index=live_index
+        )
 
     return resolve

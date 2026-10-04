@@ -6,7 +6,7 @@ Resolution sources (config home = `CLAUDE_CONFIG_DIR` if set, else `Path.home()`
     `projects[<repo root>].mcpServers`
   - `mcpServers` keys in `<repo root>/.mcp.json`
   - `plugin_<plugin>_<server>` namespaces: a truthy `enabledPlugins` key `<plugin>@*` in
-    `<config-home>/settings.json`
+    `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`
 
 `claude_ai_*` namespaces are account-side connectors no local file records; they are listed as
 unverifiable, never as missing. Always exits 0.
@@ -62,8 +62,14 @@ def registered_servers(repo_root: Path, config_home: Path) -> set[str]:
     return names
 
 
+def _settings_path(config_home: Path) -> Path:
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        return config_home / "settings.json"
+    return config_home / ".claude" / "settings.json"
+
+
 def enabled_plugins(config_home: Path) -> set[str]:
-    block = _load_json(config_home / "settings.json").get("enabledPlugins")
+    block = _load_json(_settings_path(config_home)).get("enabledPlugins")
     if not isinstance(block, dict):
         return set()
     return {k.split("@", 1)[0] for k, v in block.items() if v}
@@ -72,7 +78,7 @@ def enabled_plugins(config_home: Path) -> set[str]:
 def agent_namespaces(agent_file: Path) -> set[str]:
     tools = scan_frontmatter(read_text(agent_file)).get("tools", "")
     entries = tools if isinstance(tools, list) else [tools]
-    return {m.group(1) for entry in entries for m in _NS_RE.finditer(entry)}
+    return {m.group(1) for entry in entries if isinstance(entry, str) for m in _NS_RE.finditer(entry)}
 
 
 def check(agents_dir: Path, repo_root: Path, config_home: Path) -> tuple[list[str], list[str]]:

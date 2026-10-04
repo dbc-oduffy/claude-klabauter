@@ -114,3 +114,23 @@ def test_delivery_fail_names_the_unbacked_claims():
     rec = _record()
     rec["delivery"] = {"verdict": "FAIL", "unbacked": [{"claim": "adds retry", "anchor": "no hunk in x.py"}]}
     assert _refusal(rec).endswith("unbacked claims:\n- adds retry [lacked: no hunk in x.py]")
+
+
+def test_test_verdict_pass_beats_open_lifecycle_status():
+    rec = _record()
+    rec["tests"] = {"status": "open", "test_verdict": "pass"}
+    assert _refusal(rec) is None
+
+
+def test_test_verdict_fail_refuses_despite_complete_status():
+    rec = _record()
+    rec["tests"] = {"status": "complete", "test_verdict": "fail"}
+    assert _refusal(rec) == "review-stamp: refusing to mint: build/test verdict is 'fail', not pass"
+
+
+def test_absent_test_verdict_falls_back_to_status():
+    rec = _record()
+    rec["tests"] = {"status": "pass"}
+    assert _refusal(rec) is None
+    rec["tests"] = {"status": "open"}
+    assert "build/test verdict is 'open'" in _refusal(rec)

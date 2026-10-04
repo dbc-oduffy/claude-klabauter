@@ -272,7 +272,7 @@ def main(argv: list[str]) -> int:
     first token is not a recognized subcommand name (e.g. it opens with a
     flag like `--artifact`), the entire `argv` is passed to `_dispatch_brief`
     unchanged — a bare `review-assemble` invocation briefs. This mirrors
-    `orient_assemble`'s cadence-implicit-default shape: the common case
+    `orient-assemble`'s cadence-implicit-default shape: the common case
     needs no subcommand word at all.
     """
     if argv and argv[0] in ("--help", "-h"):

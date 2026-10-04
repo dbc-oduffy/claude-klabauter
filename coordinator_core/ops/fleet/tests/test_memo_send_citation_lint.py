@@ -132,6 +132,24 @@ class TestQualifyUnqualifiedCitations:
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
         assert out == "example-retrieval-repo:docs/x.md and example-retrieval-repo:state/y.md both matter."
 
+    @pytest.mark.parametrize("fence", ["```", "~~~", "  ```", "    ~~~~"])
+    def test_fenced_block_byte_identical_prose_still_qualified(self, fence):
+        block = (
+            f"{fence}\npython scripts/x.py --out state/xl_exit/w.json\n{fence.lstrip()}\n"
+        )
+        body = "Run docs/a.md first:\n" + block + "Then read state/b.md.\n"
+        out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
+        assert block in out
+        assert out == (
+            "Run example-retrieval-repo:docs/a.md first:\n" + block
+            + "Then read example-retrieval-repo:state/b.md.\n"
+        )
+        assert _unqualified_path_citations(body, _QUALIFIERS) == ["docs/a.md", "state/b.md"]
+
+    def test_unclosed_fence_protects_to_end(self):
+        body = "```\ncat docs/x.md\n"
+        assert _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag") == body
+
     def test_no_candidates_returns_body_unchanged(self):
         body = "Nothing path-shaped here."
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")

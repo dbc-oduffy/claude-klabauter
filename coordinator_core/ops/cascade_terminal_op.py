@@ -41,6 +41,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from coordinator_core.session import record_homes
 from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
@@ -307,14 +308,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     worktree = main_worktree_root(common_dir)
     advanced_at = _iso_now()
 
-    handoff_texts, handoff_incomplete = _read_corpus_texts(worktree / "state" / "handoffs", ".md")
-    sizing_texts, sizing_incomplete = _read_corpus_texts(worktree / "state" / "sizings", ".yaml")
+    handoff_texts, handoff_incomplete = _read_corpus_texts(Path(record_homes.home_dir(str(worktree), "handoffs")), ".md")
+    sizing_texts, sizing_incomplete = _read_corpus_texts(Path(record_homes.home_dir(str(worktree), "sizings")), ".yaml")
 
     handoffs = _collect_handoffs(handoff_texts, deliverable_id)
     if source_kind == "handoff":
         source = Path(source_path)
         absolute = source if source.is_absolute() else worktree / source
-        resolved_source = contained_path(absolute, [worktree / "state" / "handoffs"])
+        resolved_source = contained_path(absolute, [Path(record_homes.home_dir(str(worktree), "handoffs"))])
         if resolved_source is not None:
             handoffs = [c for c in handoffs if c["path"].resolve() != resolved_source]
     sizings, sizing_unreadable = _collect_sizings(sizing_texts, deliverable_id)

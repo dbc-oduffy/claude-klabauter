@@ -880,3 +880,74 @@ def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path):
     plan_path = repo / "docs" / "plans" / "example.md"
     with pytest.raises(m.MintRefusal, match="1 foreign claim"):
         m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+_OPERATOR_FM = """\
+prime_exit_criterion:
+  statement: a billable smoke run passes at a real terminal
+  falsifier:
+    mode: operator
+  operator_attestation:
+    artifact: {artifact}
+    attested_by: sess-operator
+    verdict: {verdict}
+    ran_against: {ran_against}
+"""
+
+
+def _operator_plan(repo: Path, *, declared: bool = True, verdict: str = "pass",
+                   artifact: str = "state/audits/smoke.md", commit_artifact: bool = True,
+                   ran_against: str = "HEAD_SHA"):
+    plan = repo / "docs" / "plans" / "example.md"
+    text = plan.read_text(encoding="utf-8")
+    if declared:
+        if ran_against == "HEAD_SHA":
+            ran_against = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        block = _OPERATOR_FM.format(artifact=artifact, verdict=verdict, ran_against=ran_against)
+        text = text.replace("scope:\n", block + "scope:\n", 1)
+        plan.write_text(text, encoding="utf-8")
+    if commit_artifact:
+        (repo / artifact).parent.mkdir(parents=True, exist_ok=True)
+        (repo / artifact).write_text("smoke: pass\n", encoding="utf-8")
+    _commit(repo, "plan declares operator falsifier")
+    return _stage_record_fixture(
+        repo,
+        tests={"status": "pass", "run": 3, "failed": 0, "sidecar": "x.md"},
+        criterion={"status": "indeterminate", "observation": "operator-only", "sidecar": None},
+    )
+
+
+def test_mint_takes_an_operator_attested_indeterminate_criterion_as_met(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _operator_plan(repo)
+    stamp = m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+    assert stamp["criterion"]["status"] == "met"
+    assert "operator-attested by sess-operator" in stamp["criterion"]["observation"]
+
+
+def test_mint_refuses_indeterminate_when_operator_mode_is_undeclared(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _operator_plan(repo, declared=False)
+    with pytest.raises(m.MintRefusal, match="exit criterion is indeterminate$"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+def test_mint_refuses_operator_attestation_whose_artifact_is_not_committed(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _operator_plan(repo, commit_artifact=False)
+    with pytest.raises(m.MintRefusal, match="artifact state/audits/smoke.md is not committed"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+def test_mint_refuses_operator_attestation_with_a_fail_verdict(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _operator_plan(repo, verdict="fail")
+    with pytest.raises(m.MintRefusal, match="verdict is 'fail', not pass"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+def test_mint_refuses_operator_attestation_whose_ran_against_is_not_a_commit(tmp_path):
+    repo = _setup_repo(tmp_path)
+    _operator_plan(repo, ran_against="0123456789abcdef0123456789abcdef01234567")
+    with pytest.raises(m.MintRefusal, match="ran_against 0123456789abcdef0123456789abcdef01234567 does not resolve"):
+        m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)

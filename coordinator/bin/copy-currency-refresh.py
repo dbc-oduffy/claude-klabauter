@@ -20,7 +20,36 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "hooks" / "scripts"
+#: Pointer files naming the doctrine checkout. Trap: the engine mirror ships
+#: coordinator/bin without coordinator/hooks, so self-location alone fails there.
+_ROOT_POINTERS = (
+    Path.home() / ".claude" / ".coordinator-content-root",
+    Path.home() / ".claude" / ".coordinator-content-root",
+    Path.home() / ".coordinator-claude-settings" / ".coordinator-content-root",
+)
+
+
+def resolve_scripts_dir() -> Path:
+    """hooks/scripts holding project-orientation.py: plugin-root env, self-location, then pointers."""
+    candidates = []
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env_root:
+        candidates.append(Path(env_root) / "hooks" / "scripts")
+    candidates.append(Path(__file__).resolve().parents[1] / "hooks" / "scripts")
+    for pointer in _ROOT_POINTERS:
+        try:
+            root = pointer.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if root:
+            candidates.append(Path(root) / "coordinator" / "hooks" / "scripts")
+    for candidate in candidates:
+        if (candidate / "project-orientation.py").is_file():
+            return candidate
+    return candidates[1]
+
+
+_SCRIPTS_DIR = resolve_scripts_dir()
 
 
 def load_orientation():

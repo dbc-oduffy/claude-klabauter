@@ -71,7 +71,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
 )
-from coordinator_core.orient_assemble.reader_result import ReaderResult
+from coordinator_core.contract.decision_object.reader_result import ReaderResult
 
 __all__ = ["collect"]
 

@@ -36,6 +36,7 @@ from typing import Optional
 
 import yaml
 
+from coordinator_core.session import record_homes
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     replace_fm_field,
@@ -62,7 +63,7 @@ _OVERWRITABLE_FROM = {"shape": frozenset({"roadmap", "accept_multi_session"})}
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _PARAMS_HINT = (
-    "params: sizing (required, path under state/sizings/), "
+    "params: sizing (required, path under the sizings home), "
     f"xl_exit (required, one of {list(XL_EXIT_PICKS)}), pm_quote (required), decided_on"
 )
 
@@ -90,7 +91,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `locked_rmw`), so an `async def` would make DISPATCH_TIMEOUT_SECS unenforceable.
 
     Params:
-        sizing     (str) — path to the sizing-object under `state/sizings/`. Required.
+        sizing     (str) — path to the sizing-object under the sizings home. Required.
         xl_exit    (str) — shape | roadmap | accept_multi_session. Required.
         pm_quote   (str) — the PM's verbatim words picking the exit. Required, non-empty.
         decided_on (str) — YYYY-MM-DD the PM decided. Defaults to today.
@@ -99,7 +100,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Exit-code contract:
         exit_code 1 — a missing param; an unknown xl_exit; a malformed decided_on; a
-                      sizing escaping state/sizings/ or absent; a re-record the
+                      sizing escaping the sizings home or absent; a re-record the
                       invariant refuses; schema validation failure; lock timeout.
         exit_code 0, applied True  — xl_exit and pm_resolution were written.
         exit_code 0, applied False — the same pick was already recorded; no-op.
@@ -130,9 +131,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     p = Path(sizing_raw)
     if not p.is_absolute():
         p = worktree / p
-    p = contained_path(p, [worktree / "state" / "sizings"])
+    p = contained_path(p, [Path(record_homes.home_dir(str(worktree), "sizings"))])
     if p is None:
-        return _err(f"sizing escapes state/sizings/: {sizing_raw!r}")
+        return _err(f"sizing escapes the sizings home: {sizing_raw!r}")
     if not p.is_file():
         return _err(f"sizing-object not found on disk: {sizing_raw}")
 

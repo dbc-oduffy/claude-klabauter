@@ -50,6 +50,7 @@ import cc_invoke  # noqa: E402
 _ROUTED_TARGETS = {
     "pickup-assemble": "coordinator_core.pickup_brief",
     "baton-assemble": "coordinator_core.baton_assemble",
+    "orient-assemble": "coordinator_core.orient_brief",
     "workstream-complete-assemble": "coordinator_core.workstream_complete",
 }
 

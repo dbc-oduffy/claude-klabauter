@@ -78,7 +78,7 @@ def test_this_repos_live_discovery_finds_the_core_brief_packages() -> None:
         "consolidate_assemble",
         "learn_lessons_assemble",
         "merge_assemble",
-        "orient_assemble",
+        "orient_brief",
         "pickup_brief.py",
         "review_assemble",
         "workday_complete",

@@ -124,8 +124,14 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # (The 1.14.0 hop had left this pin unmoved and red.) 2.0.0 -> 2.1.0
         # (a5ed12bdf7) re-looked: one optional property added
         # (`external_reads_ungated`), no `required` delta, no existing property
-        # changed. Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "2.1.0")
+        # changed. 2.1.0 -> 3.5.0 (4650d6c273) re-looked: no row-level `required`
+        # delta; the new required sets are conditional (`reads` /
+        # `reads_at_head` / `consumes` in an allOf if/then) and the new
+        # `depends_on_plan` item shape, none of which a sample row carries.
+        # 3.5.0 -> 3.6.0 (208c9d61e6) re-looked: `depends_on_plan` items may
+        # take `status` instead of `chunk`; no row-level `required` delta.
+        # Equality, never a range -- see the docstring note.
+        self.assertEqual(schema.get("x-schema-version"), "3.6.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

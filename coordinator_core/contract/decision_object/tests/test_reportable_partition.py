@@ -445,32 +445,24 @@ def _sweep_pickup_assemble(acc: dict[str, set[str]], tmp_path: Path) -> None:
     # of what C6 settles.
 
 
-def _sweep_orient_assemble_readers_clean_ops(acc: dict[str, set[str]]) -> None:
-    # `readers_branch_reconcile.py` / `readers_health_reaper.py` /
-    # `reader_result.py` are NOT swept dynamically here: every
-    # `build_judgment_point` call site in those three files passes a
-    # LITERAL `recommendation=None` (verified by direct reading, all 6
-    # sites) -- structurally excluded from "recommendation-carrying"
-    # regardless of asked/reported classification, so there is no branch to
-    # construct.
-    from coordinator_core.orient_assemble import readers_clean_ops as roco
+def _sweep_orient_brief_em_environment(acc: dict[str, set[str]]) -> None:
+    # Every other `build_judgment_point` call site in `orient_brief` passes a
+    # LITERAL `recommendation=None`, which is structurally excluded from
+    # "recommendation-carrying" regardless of asked/reported classification, so
+    # only the EM-environment points need a dynamic sweep.
+    from coordinator_core.orient_brief import _work
 
     mp = _FakeMonkeyPatch()
-    # C5's TEST NOTE (load-bearing): `j-em-env-effort`/`j-em-env-model`
-    # emit ONLY when effort drifts off `medium` or the model off Opus. An
-    # execution sweep under default/ambient conditions observes zero of
-    # them and wrongly concludes they don't exist -- force BOTH drift
-    # conditions rather than relying on ambient session state.
-    mp.setattr(roco, "_resolve_effort", lambda proj, user_claude: ("high", "test-fixture"))
-    mp.setattr(roco, "_resolve_transcript", lambda explicit, user_claude, session_id: "fake-transcript.jsonl")
-    mp.setattr(roco, "_latest_model", lambda path: "claude-sonnet-5")
-    result = roco._read_em_environment()
-    # This reader builds no `directives[]` of its own (C5's scope: it feeds
-    # `judgment_points[]` only; `__init__.py`'s cadence dispatch owns
-    # wiring `directives[]` and is explicitly NOT this chunk's write scope
-    # per the plan) -- an empty `directives` list is the correct input, not
-    # a stand-in for a real one.
-    _gate_nothing_recommendation_carrying([], result.judgment_points, "orient_assemble/readers_clean_ops.py", acc)
+    # `j-em-env-effort`/`j-em-env-model` emit ONLY when effort drifts off
+    # `medium` or the model off Opus. An execution sweep under default/ambient
+    # conditions observes zero of them and wrongly concludes they don't exist,
+    # so force BOTH drift conditions rather than relying on ambient session state.
+    mp.setattr(_work, "_resolve_effort", lambda proj, user_claude: ("high", "test-fixture"))
+    mp.setattr(_work, "_transcript_path", lambda user_claude, session_id, proj: Path("fake-transcript.jsonl"))
+    mp.setattr(_work, "_latest_model", lambda path: "claude-sonnet-5")
+    points = _work._em_environment_points({})
+    # The reader builds no `directives[]`; an empty list is the correct input.
+    _gate_nothing_recommendation_carrying([], points, "orient_brief/_work.py", acc)
     mp.undo()
 
 
@@ -494,7 +486,7 @@ def _sweep_orient_assemble_readers_clean_ops(acc: dict[str, set[str]]) -> None:
 #: `reportable=True` -- acknowledgement-class, demoted into narration.
 EXPECTED_REPORTABLE_IDS: frozenset[str] = frozenset(
     {
-        # orient_assemble/readers_clean_ops.py (2, matches plan's "orient 2")
+        # orient_brief/_work.py (2, matches plan's "orient 2")
         "j-em-env-effort",
         "j-em-env-model",
         # workstream_complete (C2 redo, docs/plans/2026-08-15-judgment-points-
@@ -582,7 +574,7 @@ def test_census_of_gate_nothing_recommendation_carrying_judgment_points(monkeypa
     _sweep_consolidate_assemble(acc, tmp_path)
     _sweep_backlog_grind_assemble(acc)
     _sweep_pickup_assemble(acc, tmp_path)
-    _sweep_orient_assemble_readers_clean_ops(acc)
+    _sweep_orient_brief_em_environment(acc)
 
     computed_ids = frozenset(acc)
     unexpected = computed_ids - EXPECTED_GATE_NOTHING_RECOMMENDATION_CARRYING_IDS

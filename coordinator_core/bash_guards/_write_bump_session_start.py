@@ -15,7 +15,7 @@ bump, not mere corroboration of `CLAUDE_PROJECT_DIR`. `CLAUDE_PROJECT_DIR` was U
 present in a real PreToolUse(Bash) hook subprocess's environment before this probe — the only two
 call sites elsewhere in this codebase
 (coordinator/bin/workday-start-inbox-blitz-assemble.py, coordinator_core/ops/check_em_environment.py,
-coordinator_core/orient_assemble/readers_clean_ops.py) are all NON-hook call sites, and all three
+the `orient-assemble brief` clean-ops directive reader) are all NON-hook call sites, and all three
 fall back to `os.environ.get("PWD")` / `os.getcwd()` when it is absent — meaning nobody in this
 codebase actually depends on it being live. This module's own probe (run from a live confined
 Bash-tool subprocess, the closest first-party evidence obtainable without harness introspection

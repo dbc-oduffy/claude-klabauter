@@ -289,7 +289,7 @@ from coordinator_core.ops.review_brightline_gate import (
     _is_prose_bearing_path,  # 2026-08-20: code_loc stops counting prose, same predicate as the brightline gate's own mandate arms
     classify_surface,
 )
-from coordinator_core.orient_assemble.reader_result import ReaderResult
+from coordinator_core.contract.decision_object.reader_result import ReaderResult
 from coordinator_core.workstream_complete.directives_review import (
     ReviewScaleDecision,
     decide_review_scale,

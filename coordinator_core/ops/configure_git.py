@@ -120,8 +120,8 @@ _SETTINGS: tuple[GitSetting, ...] = (
     # fleet-sweep phase in `maximalist.py`. In that window `git maintenance
     # run --auto`-triggered tasks, including network-touching `prefetch`, keep
     # firing unconstrained — the exact state this key's own coupling comment
-    # calls unsafe. WHAT CLOSES IT: `orient_assemble.readers_health_reaper
-    # :: _read_git_perf_currency`, wired into the daily workday-start ceremony,
+    # calls unsafe. WHAT CLOSES IT: the `git-perf-currency` health probe
+    # of `orient-assemble brief --cadence day`, wired into the daily workday-start ceremony,
     # detects fleet drift on `core.untrackedCache` currency and its `--fix` path
     # runs `git_perf_config.apply_fleet` in-process, which also carries the three
     # maintenance keys (`_apply_maintenance_keys`) — so the window is bounded to

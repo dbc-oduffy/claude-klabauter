@@ -161,6 +161,39 @@ def _standing(nomination, repo_root: str, peer: str) -> NominationResult:
     return NominationResult(True, message, 0, record)
 
 
+def _self_standing(nomination, repo_root: str, session_id: str) -> NominationResult:
+    """First-person, read-only: does `session_id` hold Group EM for the repo? Compares session
+    ids only, never names. Verdict in `record["self_standing"]`: `holder` (exit 0, even when
+    the holder's own liveness reads not live), `not_holder` or `no_record` (exit 5)."""
+    record = nomination.who(repo_root)
+    if record is None:
+        return NominationResult(
+            False,
+            f"I am {session_id}; no Group EM is on record for {repo_root}",
+            5,
+            {"self_standing": "no_record"},
+        )
+    holder = str(record.get("session_id") or "")
+    nominated_at = record.get("nominated_at")
+    if session_id and holder == session_id:
+        record["self_standing"] = "holder"
+        message = f"I am {session_id} and I hold Group EM (nominated_at {nominated_at})"
+        if not record.get("live"):
+            message += f"; my own liveness reads not live ({record.get('live_reason')})"
+        return NominationResult(True, message, 0, record)
+    record["self_standing"] = "not_holder"
+    message = (
+        f"I am {session_id} and I do NOT hold Group EM; {holder} holds it "
+        f"(nominated_at {nominated_at})"
+    )
+    if session_id and session_id in (
+        record.get("displaced_holder"),
+        record.get("replaced_holder_session_id"),
+    ):
+        message += f"; {holder} displaced me"
+    return NominationResult(False, message, 5, record)
+
+
 def _resolve_session_id(explicit: Optional[str]) -> Optional[str]:
     return explicit or os.environ.get("CLAUDE_SESSION_ID")
 
@@ -189,6 +222,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_who = sub.add_parser("who", help="show the current Group EM nomination for a repo")
     p_who.add_argument("--repo", help="repo root; default cwd")
     p_who.add_argument("--json", action="store_true", help="emit the record as JSON")
+    p_who.add_argument(
+        "--self", dest="self_check", action="store_true",
+        help="first-person check: does this session hold the role? exit 0 holder, 5 otherwise",
+    )
+    p_who.add_argument("--session-id", help="with --self; default $CLAUDE_SESSION_ID")
 
     p_standing = sub.add_parser(
         "standing",
@@ -211,6 +249,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     if args.verb == "nominate":
+        from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv
+
+        try:
+            refuse_newline_argv(args.note, flag_name="--note", remedy="keep the note to one line.")
+        except ArgvFidelityError as exc:
+            parser.error(str(exc))
         session_id = _resolve_session_id(args.session_id)
         if not session_id:
             parser.error("give --session-id or set $CLAUDE_SESSION_ID")
@@ -222,6 +266,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.verb == "stand-down":
         result = _stand_down(nomination, atomic_record, repo, args.session_id)
         print(result.message, file=sys.stdout if result.ok else sys.stderr)
+        return result.exit_code
+
+    if args.verb == "who" and args.self_check:
+        session_id = _resolve_session_id(args.session_id)
+        if not session_id:
+            parser.error("give --session-id or set $CLAUDE_SESSION_ID")
+        result = _self_standing(nomination, repo, session_id)
+        if args.json:
+            print(json.dumps(result.record))
+        else:
+            print(result.message, file=sys.stdout if result.ok else sys.stderr)
         return result.exit_code
 
     if args.verb == "who":

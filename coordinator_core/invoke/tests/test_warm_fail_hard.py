@@ -38,6 +38,10 @@ def _run(
     file, which set this explicitly."""
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", boot_wait_secs)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", allow_unstamped)
+    # `_dispatch_argv_body` re-arms the allowance for any in-process dispatch
+    # under pytest when this env is set (ipc.allow_unstamped_dispatch_under_pytest),
+    # which would overwrite the flag pinned above.
+    monkeypatch.delenv(ipc.PYTEST_UNSTAMPED_DISPATCH_ENV, raising=False)
     # Isolates the warm-miss policy under test from the SEPARATE
     # dispatch-axis stamp gate (already covered by test_dispatch_message.py's
     # own gate tests) -- this repo's own tree is genuinely unstamped, so a

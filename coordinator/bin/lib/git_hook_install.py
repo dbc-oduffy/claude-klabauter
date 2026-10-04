@@ -87,7 +87,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import List, Optional
+from typing import List, Mapping, Optional
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.py_probe_sh import baked_python_lines
@@ -182,13 +182,41 @@ def _ml_get(ml_bin: Optional[str], key: str) -> Optional[str]:
         return None
 
 
+def _seam(registry: Optional[Mapping[str, object]]) -> dict:
+    """The check-only registry seam as call kwargs: empty when unset, so every
+    heal-path call keeps the exact shape its patchable callees were written
+    against."""
+    return {} if registry is None else {"registry": registry}
+
+
+def _registry_value(bin_dir: str, key: str, registry: Optional[Mapping[str, object]]) -> Optional[str]:
+    """One machine-local registry value.
+
+    `registry` is the check-only seam: a pre-resolved flat mapping (the shape
+    `merged_flat_registry()` returns) answers in place of `machine-local get`,
+    so a caller that already holds the registry pays zero spawns for the whole
+    walk. Unlike `_ml_get` it does not see the `MACHINE_LOCAL_<KEY>` env
+    override or concern-file layer; the only decision it feeds is whether a
+    helper script is present, never a value baked into a written hook. With
+    `registry=None` this is exactly the `_resolve_machine_local_bin` + `_ml_get`
+    pair every heal-path caller always used.
+    """
+    if registry is None:
+        return _ml_get(_resolve_machine_local_bin(bin_dir), key)
+    val = registry.get(key)
+    s = ("" if val is None else str(val)).strip()
+    return s or None
+
+
 def _helper_present(dir_path: str, script_name: str) -> bool:
     return os.path.isfile(os.path.join(dir_path, script_name)) or os.path.isfile(
         os.path.join(dir_path, f"{script_name}.py")
     )
 
 
-def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
+def _resolve_coord_bin(
+    bin_dir: str, script_name: str, registry: Optional[Mapping[str, object]] = None
+) -> str:
     """Resolve the coordinator bin dir to bake into the installed hook body.
 
     Post-2026-07 executable-surface migration (doctrine-repo commit b644d5a9), the
@@ -275,9 +303,10 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     correct opt-out-of-ambient-env answer instead.
     """
     home = os.path.expanduser("~")
-    ml_bin = _resolve_machine_local_bin(bin_dir)
 
-    coord_src = _ml_get(ml_bin, "plugin.mirrors.coordinator-claude.source_path")
+    coord_src = _registry_value(
+        bin_dir, "plugin.mirrors.coordinator-claude.source_path", registry
+    )
     if coord_src:
         cand_bin = os.path.join(coord_src, "bin")
         if _helper_present(cand_bin, script_name):
@@ -310,7 +339,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
                 if _helper_present(cand_bin, script_name):
                     return cand_bin
 
-    claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")
+    claude_klabauter_root = _registry_value(bin_dir, "repos.claude_klabauter", registry)
     if claude_klabauter_root:
         cand_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")
         if _helper_present(cand_bin, script_name):
@@ -335,9 +364,10 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     return os.path.join(home, _MARKETPLACE_SUFFIX)
 
 
-def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional[str]:
-    ml_bin = _resolve_machine_local_bin(bin_dir)
-    claude_klabauter_root = _ml_get(ml_bin, "repos.claude_klabauter")
+def _resolve_claude_klabauter_bin_sh(
+    bin_dir: str, script_name: str, registry: Optional[Mapping[str, object]] = None
+) -> Optional[str]:
+    claude_klabauter_root = _registry_value(bin_dir, "repos.claude_klabauter", registry)
     if not claude_klabauter_root:
         return None
     return _sh_path(os.path.join(claude_klabauter_root, "coordinator", "bin", script_name))
@@ -519,6 +549,7 @@ def _shim_body(
     bin_dir: str = "",
     skip_env: Optional[str] = None,
     skip_if_all_unset: tuple = (),
+    registry: Optional[Mapping[str, object]] = None,
 ) -> str:
     """Canonical fresh-install / self-heal shim body for a hook that runs one target.
 
@@ -604,7 +635,11 @@ def _shim_body(
         '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
         f'{script_name}'
     )
-    claude_klabauter_cand = _resolve_claude_klabauter_bin_sh(bin_dir, script_name) if bin_dir else None
+    claude_klabauter_cand = (
+        _resolve_claude_klabauter_bin_sh(bin_dir, script_name, **_seam(registry))
+        if bin_dir
+        else None
+    )
     klabauter_cand = _resolve_klabauter_bin_sh(script_name)
     claude_klabauter_probe = (
         f'_have_py "$SCRIPT" || SCRIPT="{claude_klabauter_cand}"\n'
@@ -754,7 +789,12 @@ def _shim_body(
 
 
 def _append_block(
-    coord_bin: str, script_name: str, header: str, invoke_expr: str, bin_dir: str = ""
+    coord_bin: str,
+    script_name: str,
+    header: str,
+    invoke_expr: str,
+    bin_dir: str = "",
+    registry: Optional[Mapping[str, object]] = None,
 ) -> str:
     fallback = _sh_path(os.path.join("$HOME", _MARKETPLACE_SUFFIX, script_name))
     coord_bin_sh = _sh_path(coord_bin)
@@ -767,7 +807,11 @@ def _append_block(
         '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
         f'{script_name}'
     )
-    claude_klabauter_cand = _resolve_claude_klabauter_bin_sh(bin_dir, script_name) if bin_dir else None
+    claude_klabauter_cand = (
+        _resolve_claude_klabauter_bin_sh(bin_dir, script_name, **_seam(registry))
+        if bin_dir
+        else None
+    )
     klabauter_cand = _resolve_klabauter_bin_sh(script_name)
     claude_klabauter_probe = (
         f'_have_py "$_T" || _T="{claude_klabauter_cand}"; _have_py "$_T" || _T="{claude_klabauter_cand}.py"; '
@@ -964,6 +1008,7 @@ def _ensure_hook(
     outcome: Optional[List[str]] = None,
     *,
     check_only: bool = False,
+    registry: Optional[Mapping[str, object]] = None,
 ) -> int:
     """Idempotent install/repair of a single git hook. Always returns 0.
 
@@ -1052,7 +1097,7 @@ def _ensure_hook(
         )
         return _note("skipped-no-root")
 
-    coord_bin = _resolve_coord_bin(bin_dir, script_name)
+    coord_bin = _resolve_coord_bin(bin_dir, script_name, **_seam(registry))
     if not _helper_present(coord_bin, script_name):
         print(
             f"[git_hook_install] WARNING: {hook_name} target '{script_name}' "
@@ -1191,6 +1236,7 @@ def ensure_prepare_commit_msg_hook(
     outcome: Optional[List[str]] = None,
     *,
     check_only: bool = False,
+    registry: Optional[Mapping[str, object]] = None,
 ) -> int:
     if root is None:
         root = _git_root()
@@ -1205,7 +1251,9 @@ def ensure_prepare_commit_msg_hook(
         if outcome is not None:
             outcome.append("skipped-no-root")
         return 0
-    coord_bin = _resolve_coord_bin(bin_dir, "coordinator-prepare-commit-msg")
+    coord_bin = _resolve_coord_bin(
+        bin_dir, "coordinator-prepare-commit-msg", **_seam(registry)
+    )
     script = "coordinator-prepare-commit-msg"
     header = "coordinator Session-Id trailer injection"
     invoke = 'exec "$_PY" "$SCRIPT" "$@"'
@@ -1216,6 +1264,7 @@ def ensure_prepare_commit_msg_hook(
         bin_dir=bin_dir,
         skip_env="COORDINATOR_TRAILERS_ALREADY_APPLIED",
         skip_if_all_unset=SESSION_ENV_PRECEDENCE,
+        registry=registry,
     )
     _start_marker, end_marker = _append_markers(header)
     append = _append_block(
@@ -1224,6 +1273,7 @@ def ensure_prepare_commit_msg_hook(
         header,
         '"$_PY" "$_T" "$@"',
         bin_dir=bin_dir,
+        registry=registry,
     ) + f" || true\n{end_marker}"
     return _ensure_hook(
         bin_dir,
@@ -1236,6 +1286,7 @@ def ensure_prepare_commit_msg_hook(
         root=root,
         outcome=outcome,
         check_only=check_only,
+        registry=registry,
     )
 
 
@@ -1255,7 +1306,9 @@ _HEALED_OUTCOMES = frozenset(
 _CONTAINER_REGISTRY_KEYS = frozenset({"repos.fleet_root"})
 
 
-def _registry_repo_roots(bin_dir: str) -> List[tuple]:
+def _registry_repo_roots(
+    bin_dir: str, registry: Optional[Mapping[str, object]] = None
+) -> List[tuple]:
     """Enumerate `(key, path)` for every `repos.*` entry set on this machine.
 
     Zero-spawn: reads `registry.local.toml` over `registry.toml` directly
@@ -1278,7 +1331,7 @@ def _registry_repo_roots(bin_dir: str) -> List[tuple]:
     session-boot path.
     """
     del bin_dir
-    flat = _merged_flat_registry()
+    flat = _merged_flat_registry() if registry is None else registry
     roots = []
     for key, val in flat.items():
         if not key.startswith("repos."):
@@ -1364,10 +1417,10 @@ def _hook_points_at_coordinator(root: str, hook_name: str) -> bool:
     return any(m in body for m in _COORDINATOR_HOOK_MARKERS)
 
 
-def _scan_dirs() -> List[str]:
+def _scan_dirs(registry: Optional[Mapping[str, object]] = None) -> List[str]:
     """Directories whose immediate children are candidate repos: each
     ``repos.*`` container key's value, plus the parent of every registered repo."""
-    flat = _merged_flat_registry()
+    flat = _merged_flat_registry() if registry is None else registry
     dirs = []
     for key in _CONTAINER_REGISTRY_KEYS:
         val = ("" if flat.get(key) is None else str(flat.get(key))).strip()
@@ -1376,11 +1429,13 @@ def _scan_dirs() -> List[str]:
     return dirs
 
 
-def _unregistered_hooked_repos(registered: "set[str]") -> List[tuple]:
+def _unregistered_hooked_repos(
+    registered: "set[str]", registry: Optional[Mapping[str, object]] = None
+) -> List[tuple]:
     """Repos outside the registry whose prepare-commit-msg hook names a
     coordinator path: children of the container dirs and siblings of registered
     repos. Bounded to one directory level."""
-    parents = {os.path.dirname(os.path.normpath(r)) for r in registered} | set(_scan_dirs())
+    parents = {os.path.dirname(os.path.normpath(r)) for r in registered} | set(_scan_dirs(registry))
     seen = {os.path.normpath(r) for r in registered}
     found: List[tuple] = []
     for parent in sorted(p for p in parents if p and os.path.isdir(p)):
@@ -1427,10 +1482,26 @@ def _apply_dispositions(
 
 
 def ensure_hooks_fleet(
-    bin_dir: str, *, check_only: bool = False, strict: bool = False
+    bin_dir: str,
+    *,
+    check_only: bool = False,
+    strict: bool = False,
+    registry: Optional[Mapping[str, object]] = None,
 ) -> int:
-    roots = _registry_repo_roots(bin_dir)
-    roots = roots + _unregistered_hooked_repos({r for _, r in roots})
+    """Walk the registered fleet and install/repair (or, `check_only`, report) hooks.
+
+    `registry`: check-only seam. A caller that already holds the flat machine-local
+    registry (`machine_resolver.merged_flat_registry()`) passes it here and the whole
+    walk resolves every key from it, spawning nothing, where the default path spawns
+    `machine-local get` once per key. Refused with `check_only=False`: the heal path
+    bakes resolved values into written hook bodies and keeps its `_ml_get` resolution
+    (override env and concern files included).
+    """
+    if registry is not None and not check_only:
+        raise ValueError("ensure_hooks_fleet: registry is a check_only seam")
+    seam = _seam(registry)
+    roots = _registry_repo_roots(bin_dir, **seam)
+    roots = roots + _unregistered_hooked_repos({r for _, r in roots}, **seam)
     if not roots:
         print(
             "[git_hook_install] WARNING: fleet heal found no registered repos "
@@ -1457,7 +1528,7 @@ def ensure_hooks_fleet(
         ):
             states: List[str] = []
             try:
-                fn(bin_dir, root=root, outcome=states, check_only=check_only)
+                fn(bin_dir, root=root, outcome=states, check_only=check_only, **seam)
             except Exception as exc:  # noqa: BLE001 - one bad repo must not
                 errored.append(f"{key} {label}: {type(exc).__name__}: {exc}")
                 if not check_only:
