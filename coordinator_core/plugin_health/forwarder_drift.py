@@ -167,7 +167,7 @@ extension named in doctrine was wrong. The failing invocation reports
 `command-not-found` naming the CLI, which reads as "this CLI does not exist"
 rather than "this CLI exists under a different spelling". This axis is scanned
 only via the Windows-specific Shape W citation shape
-(`$env:COORDINATOR_SETTINGS_HOME\bin\<name>`, see `_ENTRYPOINT_W_RE`) — the
+(`$env:COORDINATOR_SETTINGS_HOME\bin\<name>`, see `_ENTRYPOINT_W_RE`; shell-doc-ok: regex-matched shape) — the
 POSIX `${COORDINATOR_SETTINGS_HOME:-...}/bin/<name>` shape `_ENTRYPOINT_RE`
 matches has no notion of a Windows extension to get wrong. HOST GATE: the
 oracle for this axis is THIS machine's own settings-home/bin — a POSIX
@@ -294,6 +294,7 @@ _ENTRYPOINT_RE = re.compile(r"\$\{COORDINATOR_SETTINGS_HOME:-.*?\}/bin/([A-Za-z0
 
 # Shape W (rung 0 of coordinator-content-repo's `coordinator/snippets/resolve-coordinator-bin.md`
 # precedence ladder) — PowerShell has no `${VAR:-default}` fallback syntax, so a
+# shell-doc-ok: regex-matched shape quoted below.
 # Windows-authored citation spells the settings-home bin/ lookup as
 # `$env:COORDINATOR_SETTINGS_HOME\bin\<name>` instead, a shape `_ENTRYPOINT_RE`
 # above is structurally incapable of matching (no `${...}`, no POSIX `/bin/`
@@ -426,7 +427,7 @@ def _cited_entrypoint_sites(content_root: Path) -> Dict[str, List[str]]:
 def _cited_shape_w_sites(content_root: Path) -> Dict[str, List[str]]:
     """{cited spelling verbatim, extension included (e.g. "app-session.cmd"):
     [ "<rel-path-from-content-root>:<line>", ... ]} for every Shape W citation
-    (`$env:COORDINATOR_SETTINGS_HOME\\bin\\<name>` / `/bin/<name>`) across the
+    (`$env:COORDINATOR_SETTINGS_HOME\\bin\\<name>` / `/bin/<name>`; shell-doc-ok: regex-matched shape) across the
     same five coordinator-content-repo prompt-surface trees `_cited_entrypoint_sites` scans,
     with the same tests/fixtures exemption and the same best-effort per-file
     `OSError` skip.

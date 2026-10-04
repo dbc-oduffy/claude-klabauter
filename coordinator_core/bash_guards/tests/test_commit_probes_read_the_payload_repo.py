@@ -90,7 +90,8 @@ def test_a_leading_cd_prefix_wins_over_the_payload_cwd_for_amend(probe_cwds):
     named = "/cd-target-repo"
     _run("cd %s && git commit --amend -m x" % named)
     assert probe_cwds, "the amend provenance probe never ran"
-    assert set(probe_cwds) == {named}
+    # The cd resolver normalises separators (\ on win32), so compare normalised.
+    assert {os.path.normpath(c) for c in probe_cwds} == {os.path.normpath(named)}
 
 
 def test_a_leading_cd_prefix_still_loses_to_an_explicit_dash_c_for_amend(probe_cwds):

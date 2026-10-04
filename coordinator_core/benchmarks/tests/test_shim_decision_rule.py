@@ -19,7 +19,10 @@ from coordinator_core.telemetry import op_latency
 def _restore_benchmark_origin_env(monkeypatch):
     # calibrate_aa_noise_floor (via run_interleaved) declares benchmark origin into the
     # process-global env; monkeypatch restores the pre-test value on teardown.
-    monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
+    # setenv first: delenv(raising=False) on an absent key records no undo, so the
+    # declaration written during the test would survive teardown.
+    monkeypatch.setenv(op_latency.ORIGIN_ENV, "")
+    monkeypatch.delenv(op_latency.ORIGIN_ENV)
 
 
 def _stats(median_ms: float, p90_ms: float, sample_count: int) -> PrimitiveStats:

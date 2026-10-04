@@ -7,7 +7,7 @@ Purpose: the writer of a plan's ``gated_exit_criteria[*].met`` close-out flip. S
 
 Wire params:
     plan (str, required)  — plan path, repo-relative or absolute, inside the worktree.
-    rows (list, required) — ``[{"brightline": <name>, "evidence": <sha | path>}]``.
+    rows (list, required) — ``[{"brightline": <name>, "evidence": <sha | path>[+<sha | path>...]}]``.
         Evidence is a 7-40 hex commit sha reachable from HEAD (one batched
         ``rev-list --no-walk <shas> --not HEAD`` for all sha rows), else a
         repo-relative path that exists.
@@ -49,11 +49,14 @@ def _check_evidence(rows: List[Dict[str, str]], worktree_root: Path) -> None:
         ev = row["evidence"]
         if len(ev) > _EVIDENCE_MAX:
             raise ValueError(f"evidence for {row['brightline']} exceeds {_EVIDENCE_MAX} chars")
-        if _SHA.match(ev):
-            shas.append(ev.lower())
-        elif Path(ev).is_absolute() or contained_path(worktree_root / ev, [worktree_root]) is None \
-                or not (worktree_root / ev).exists():
-            raise ValueError(f"evidence for {row['brightline']} is not a commit sha or an existing path: {ev}")
+        # `a+b` names several pieces of evidence; each is checked on its own.
+        for part in ev.split("+"):
+            if _SHA.match(part):
+                shas.append(part.lower())
+            elif not part or Path(part).is_absolute() \
+                    or contained_path(worktree_root / part, [worktree_root]) is None \
+                    or not (worktree_root / part).exists():
+                raise ValueError(f"evidence for {row['brightline']} is not a commit sha or an existing path: {part}")
     if not shas:
         return
     res = git_native.rev_list_not(worktree_root, ["--no-walk", *shas], ["--not", "HEAD"])

@@ -102,6 +102,8 @@ Decision backlink: docs/decisions/DR-344-the-brightline-process-budget-for-claud
 
 from __future__ import annotations
 
+import os
+
 from typing import Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.telemetry import spawn_counter
@@ -249,6 +251,18 @@ def _as_text(raw) -> str:
     if isinstance(raw, bytes):
         return raw.decode("utf-8", "replace")
     return raw
+
+
+# Trap: a remote leg that cannot authenticate silently makes Git Credential
+# Manager raise an interactive account picker, and a retrying caller re-raises
+# it every few seconds on the operator's desktop. Remote legs fail fast instead.
+_NON_INTERACTIVE_CREDENTIALS = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+
+
+def _remote_env(env: Optional[Mapping[str, str]]) -> "dict[str, str]":
+    merged = dict(os.environ if env is None else env)
+    merged.update(_NON_INTERACTIVE_CREDENTIALS)
+    return merged
 
 
 def run_git(
@@ -418,7 +432,7 @@ def run_git(
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=dict(env) if env is not None else None,
+            env=_remote_env(env) if remote else (dict(env) if env is not None else None),
             **mode_kwargs,
             **no_console_creationflags(),
         ) as proc:

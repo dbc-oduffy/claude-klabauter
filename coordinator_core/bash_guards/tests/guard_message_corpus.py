@@ -1401,7 +1401,13 @@ def _validate_commit_frontmatter_setup(
 def _heredoc_repo_write_advise_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
-    return {_CWD_OVERRIDE_KEY: "/repo"}
+    # The target must read as inside a session repo or the guard stays silent;
+    # patch that seam rather than pointing cwd at a fake root, which the
+    # advisory counter would then create on disk.
+    from coordinator_core.bash_guards import dispatch_checks
+
+    mp.setattr(dispatch_checks, "_heredoc_target_outside_any_session_repo", lambda target, payload: False)
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
 def _noncanonical_branch_creation_hazard_setup(
@@ -1409,9 +1415,10 @@ def _noncanonical_branch_creation_hazard_setup(
 ) -> Dict[str, str]:
     from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
 
-    mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
+    root = str(scratch_dir)
+    mp.setattr(guard, "resolve_git_root", lambda cwd=None: root)
     mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-    return {_CWD_OVERRIDE_KEY: "/repo"}
+    return {_CWD_OVERRIDE_KEY: root}
 
 
 def _headless_plugin_dir_dev_install_setup(

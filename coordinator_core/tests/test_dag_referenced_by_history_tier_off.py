@@ -1,8 +1,9 @@
-"""Call-shape guard: dag.referenced_by* must never re-enable the git-history tier.
+"""Call-shape guard: dag.referenced_by* must never reach the git-history tier.
 
 Tier 3 of resolve_target spawns `git log --all` per (node, edge) pair and can
 only return the 'git-history' sentinel, which these scans collapse onto the
-unresolved branch.
+unresolved branch. The scans therefore resolve through `resolve_target_on_disk`
+(tiers 1-2 only, never spawns) and must not call `resolve_target` at all.
 """
 import ast
 from pathlib import Path
@@ -12,13 +13,13 @@ import coordinator_core.dag as dag
 _SCANS = ("referenced_by", "referenced_by_indexed")
 
 
-def _resolve_target_calls(fn: ast.FunctionDef) -> list[ast.Call]:
+def _calls_to(fn: ast.FunctionDef, name: str) -> list[ast.Call]:
     return [
         n
         for n in ast.walk(fn)
         if isinstance(n, ast.Call)
         and isinstance(n.func, ast.Name)
-        and n.func.id == "resolve_target"
+        and n.func.id == name
     ]
 
 
@@ -30,13 +31,11 @@ def test_referenced_by_scans_pass_include_history_tier_false():
         if isinstance(n, ast.FunctionDef) and n.name in _SCANS
     }
     assert set(fns) == set(_SCANS)
-    total = 0
     for name, fn in fns.items():
-        for call in _resolve_target_calls(fn):
-            total += 1
-            kw = {k.arg: k.value for k in call.keywords}
-            val = kw.get("include_history_tier")
-            assert isinstance(val, ast.Constant) and val.value is False, (
-                f"{name}: resolve_target must pass include_history_tier=False"
-            )
-    assert total >= 1
+        assert not _calls_to(fn, "resolve_target"), (
+            f"{name}: must resolve via resolve_target_on_disk, never resolve_target "
+            "(its tier 3 spawns `git log --all` per edge)"
+        )
+    assert _calls_to(fns["referenced_by"], "resolve_target_on_disk"), (
+        "referenced_by no longer resolves refs through resolve_target_on_disk"
+    )

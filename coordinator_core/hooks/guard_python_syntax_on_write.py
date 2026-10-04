@@ -103,7 +103,7 @@ def _deny_reason(target: str, exc: SyntaxError, after: str) -> str:
     where = f"line {exc.lineno}" if exc.lineno else "an unknown line"
     excerpt = _excerpt(after, exc.lineno)
     tail = f": {excerpt}" if excerpt else ""
-    return f"python syntax: unparseable at {where} -- {exc.msg}{tail}. Breaks every concurrent session on this live tree."
+    return f"python syntax: unparseable at {where} -- {exc.msg}{tail}. Breaks the live tree."
 
 
 @register_op("hooks.guard_python_syntax_on_write")

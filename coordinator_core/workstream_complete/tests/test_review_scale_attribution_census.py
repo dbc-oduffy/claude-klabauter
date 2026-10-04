@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.ops.ceremony import wsc_disposition
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -43,7 +44,7 @@ def repo(tmp_path, monkeypatch):
         "compute_session_shape_gate",
         lambda _root: wsc.SessionShapeGate(
             sid=_SID,
-            disposition="single-session",
+            disposition=wsc_disposition.SINGLE_SESSION,
             consumed_handoff="",
             diagnostics=[],
             consumed_handoff_paths=(),

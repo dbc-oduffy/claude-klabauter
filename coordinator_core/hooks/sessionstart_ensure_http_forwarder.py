@@ -237,8 +237,8 @@ def _spawn_forwarder_detached(forwarder_path: Path) -> bool:
         return False
 
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    detached = getattr(subprocess, "DETACHED_PROCESS", 0)
-    creationflags = no_window | detached
+    new_group = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    creationflags = no_window | new_group
 
     kwargs: dict = dict(
         stdin=subprocess.DEVNULL,
@@ -253,8 +253,8 @@ def _spawn_forwarder_detached(forwarder_path: Path) -> bool:
 
     try:
         # popup-safe-env-suppressed -- CREATE_NO_WINDOW is already ORed into
-        # creationflags above (Windows leg); DETACHED_PROCESS additionally
-        # detaches from this session's own console entirely.
+        # creationflags above (Windows leg); CREATE_NEW_PROCESS_GROUP keeps
+        # the child out of this session's Ctrl-C group.
         subprocess.Popen([sys.executable, str(forwarder_path)], **kwargs)
         return True
     except Exception:

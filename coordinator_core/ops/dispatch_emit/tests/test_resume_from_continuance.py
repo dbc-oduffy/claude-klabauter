@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
     _V5_FRAGMENT,
     _V5_STAGE_SCHEMAS,
 )
+from coordinator_core.session.record_homes import home_dir
 
 _RUN = "20260930T224705-ecdd6226"
 
@@ -67,7 +69,7 @@ def _repo(tmp_path):
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "p.md").write_text(_PLAN, encoding="utf-8")
-    inv = tmp_path / "state" / "mise-inventory"
+    inv = Path(home_dir(str(tmp_path), "mise-inventory"))
     inv.mkdir(parents=True)
     _lane(
         inv / f"{_RUN}-a.md",
@@ -134,7 +136,7 @@ def test_resume_emits_each_lane_with_unlanded_rows_and_names_the_rest(tmp_path, 
 
 def test_resume_from_a_record_with_no_lane_inventory_is_refused(tmp_path):
     (tmp_path / ".git").mkdir()
-    inv = tmp_path / "state" / "mise-inventory"
+    inv = Path(home_dir(str(tmp_path), "mise-inventory"))
     inv.mkdir(parents=True)
     record = inv / f"{_RUN}-continuance.md"
     record.write_text(f"---\nrun_id: {_RUN}\n---\n", encoding="utf-8")

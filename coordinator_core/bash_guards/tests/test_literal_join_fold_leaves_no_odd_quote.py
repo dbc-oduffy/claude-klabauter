@@ -6,6 +6,8 @@ the armed hook, and the file was on disk afterwards:
 
     echo probe > <Q>$S/CLAUDE<Q><Q><Q>.md      ->  allowed, wrote the governed name
 
+shell-doc-ok: quotes the bash command specimen under test.
+
 (`<Q>` stands for a double-quote character throughout this docstring: the
 literal bytes cannot be written here, because the shape under test is three
 adjacent double quotes and this is a triple-quoted string.)

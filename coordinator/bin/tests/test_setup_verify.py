@@ -727,3 +727,81 @@ def test_plugin_registered_state3_no_plugin_dir_given_unregistered_fails(tmp_pat
     err = capsys.readouterr().err
     assert rc == 1
     assert "FAIL" in err
+
+
+# ---------------------------------------------------------------------------
+# check-settings-membership — retired coordinator-claude plugins
+# ---------------------------------------------------------------------------
+
+def _retired_settings(tmp_path: Path) -> Path:
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({
+        "model": "opus",
+        "enabledPlugins": {
+            "coordinator@coordinator-claude": True,
+            "web-dev@coordinator-claude": True,
+            "notebooklm@coordinator-claude": False,
+            "other@elsewhere": True,
+        },
+    }))
+    return settings
+
+
+def _manifest(tmp_path: Path, names: list[str]) -> Path:
+    m = tmp_path / "marketplace.json"
+    m.write_text(json.dumps({"plugins": [{"name": n} for n in names]}))
+    return m
+
+
+def test_retired_plugins_warn_without_writing(tmp_path: Path, capsys) -> None:
+    settings = _retired_settings(tmp_path)
+    before = settings.read_text()
+    ns = _mod.build_parser().parse_args([
+        "check-settings-membership", "--settings", str(settings),
+        "--marketplace-manifest", str(_manifest(tmp_path, ["coordinator"])),
+    ])
+    assert ns.func(ns) == 0
+    err = capsys.readouterr().err
+    assert "web-dev@coordinator-claude" in err and "notebooklm@coordinator-claude" in err
+    assert "--prune-retired" in err
+    assert "other@elsewhere" not in err
+    assert settings.read_text() == before
+
+
+def test_retired_plugins_pruned_preserving_rest(tmp_path: Path, capsys) -> None:
+    settings = _retired_settings(tmp_path)
+    ns = _mod.build_parser().parse_args([
+        "check-settings-membership", "--settings", str(settings), "--prune-retired",
+        "--marketplace-manifest", str(_manifest(tmp_path, ["coordinator"])),
+    ])
+    assert ns.func(ns) == 0
+    data = json.loads(settings.read_text())
+    assert data["model"] == "opus"
+    assert data["enabledPlugins"] == {
+        "coordinator@coordinator-claude": True, "other@elsewhere": True,
+    }
+    assert not list(tmp_path.glob(".settings.json.*.tmp"))
+
+
+def test_retired_plugins_manifest_names_are_shipped(tmp_path: Path, capsys) -> None:
+    settings = _retired_settings(tmp_path)
+    ns = _mod.build_parser().parse_args([
+        "check-settings-membership", "--settings", str(settings),
+        "--marketplace-manifest",
+        str(_manifest(tmp_path, ["coordinator", "web-dev", "notebooklm"])),
+    ])
+    assert ns.func(ns) == 0
+    assert "retired" not in capsys.readouterr().err
+
+
+def test_retired_plugins_unreachable_manifest_falls_back_to_coordinator(
+    tmp_path: Path, capsys
+) -> None:
+    settings = _retired_settings(tmp_path)
+    ns = _mod.build_parser().parse_args([
+        "check-settings-membership", "--settings", str(settings),
+        "--marketplace-manifest", str(tmp_path / "missing.json"),
+    ])
+    assert ns.func(ns) == 0
+    err = capsys.readouterr().err
+    assert "web-dev@coordinator-claude" in err

@@ -40,9 +40,8 @@ _PCT_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
 _WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 MESSAGE = (
-    "Context compaction is near for this subagent (~{pct}% of the way to auto-compaction, "
-    "~{tokens} tokens; estimated from your transcript). Write your forward log now -- decisions, "
-    "files touched, what remains -- before continuing, so the work survives a compaction."
+    "Context compaction is near for this subagent (~{pct}% of auto-compaction, ~{tokens} tokens). "
+    "Write your forward log now: decisions, files touched, what remains."
 )
 
 

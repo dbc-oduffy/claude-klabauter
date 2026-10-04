@@ -21,6 +21,8 @@ from coordinator_core.install.live_plugin_registration import (
     STATUS_ALREADY_LIVE,
     STATUS_NO_ENTRY,
     STATUS_REPOINTED,
+    STATUS_LIVE_ROOT_MISSING,
+    STATUS_NOT_DEV_CLONE,
     STATUS_UNREADABLE,
     assert_live_plugin_registration,
     format_report,
@@ -31,6 +33,7 @@ from coordinator_core.install.live_plugin_registration import (
 def _clone(tmp_path: Path, name: str = "coordinator") -> Path:
     root = tmp_path / "clone" / "coordinator"
     (root / ".claude-plugin").mkdir(parents=True)
+    (root.parent / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
     (root / ".claude-plugin" / "plugin.json").write_text(
         json.dumps({"name": name, "version": "4.0.0"}), encoding="utf-8"
     )
@@ -154,7 +157,7 @@ def test_a_live_cache_root_is_not_repointed_or_called_inert(tmp_path):
 
     report = assert_live_plugin_registration(home, cache_dir)
 
-    assert report["status"] == STATUS_ALREADY_LIVE
+    assert report["status"] == STATUS_NOT_DEV_CLONE
     assert report["entries"] == []
     assert record_file.read_bytes() == before
     assert not any("inert" in line for line in format_report(report))
@@ -258,5 +261,45 @@ def test_the_plugin_name_is_read_from_the_clone_never_hardcoded(tmp_path):
 
 def test_a_clone_without_a_plugin_manifest_asserts_nothing(tmp_path):
     home = _claude_home(tmp_path, {"version": 2, "plugins": {}})
-    report = assert_live_plugin_registration(home, tmp_path / "not-a-plugin")
+    not_a_plugin = tmp_path / "repo" / "not-a-plugin"
+    not_a_plugin.mkdir(parents=True)
+    (not_a_plugin.parent / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
+    report = assert_live_plugin_registration(home, not_a_plugin)
     assert report["status"] == STATUS_NO_ENTRY
+
+
+def test_a_consumer_clone_without_the_dev_sentinel_is_never_repointed(tmp_path):
+    clone = _clone(tmp_path)
+    (clone.parent / ".coordinator-dev-repo").unlink()
+    home = _claude_home(tmp_path, None)
+    record_file = home / "plugins" / "installed_plugins.json"
+    record_file.write_text(json.dumps(_cached_record(home)), encoding="utf-8")
+    before = record_file.read_bytes()
+
+    report = assert_live_plugin_registration(home, clone)
+
+    assert report["status"] == STATUS_NOT_DEV_CLONE
+    assert record_file.read_bytes() == before
+    assert all(line.startswith("SKIP") for line in format_report(report))
+
+
+def test_a_nonexistent_live_root_is_never_written_into_a_record(tmp_path):
+    home = _claude_home(tmp_path, None)
+    record_file = home / "plugins" / "installed_plugins.json"
+    record_file.write_text(json.dumps(_cached_record(home)), encoding="utf-8")
+    before = record_file.read_bytes()
+
+    report = assert_live_plugin_registration(home, tmp_path / "gone" / "coordinator")
+
+    assert report["status"] == STATUS_LIVE_ROOT_MISSING
+    assert record_file.read_bytes() == before
+
+
+def test_a_repointed_entry_whose_target_vanished_is_not_a_pass(tmp_path):
+    report = {
+        "status": STATUS_REPOINTED,
+        "live_path": str(tmp_path / "gone"),
+        "entries": [{"key": "coordinator@x", "previous_path": "/cache/x", "displaced_copy": None}],
+    }
+    lines = format_report(report)
+    assert lines and not any(line.startswith("PASS") for line in lines)

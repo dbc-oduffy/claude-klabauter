@@ -1401,8 +1401,8 @@ def _resolve_minted_by_line() -> str | None:
     every consumer. Unresolvable identity omits the key entirely (no null, no
     sentinel), matching ``handoff_normalize``.
     """
+    _bootstrap_engine()
     try:
-        _ensure_engine_on_path()
         from coordinator_core.person_resolver import resolve_operating_person
         alias = resolve_operating_person().get("github")
     except Exception:  # noqa: BLE001 -- identity seam absent; omit the key

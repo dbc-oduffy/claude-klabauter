@@ -704,8 +704,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "test_sizing_assemble.py",
     "test_wire_paths_separator.py",
     "tests/_baton_dag_oracle.py",
-    "tests/guard_witnesses/bash_other_a.py",
-    "tests/guard_witnesses/bash_other_b.py",
     "tests/guard_witnesses/write_advisory_a.py",
     "tests/guard_witnesses/write_advisory_b.py",
     "tests/guard_witnesses/write_hard_deny_a.py",

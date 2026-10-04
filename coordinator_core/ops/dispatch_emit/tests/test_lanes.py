@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import jsonschema
 import pytest
 
 from coordinator_core.ops.dispatch_emit import lanes
 from coordinator_core.ops.dispatch_emit.inventory_mint import parse_chunk_table
+from coordinator_core.session.record_homes import record_path
 from coordinator_core.ops.dispatch_emit.lanes import (
     LaneMapStaleError,
     LaneParams,
@@ -55,7 +56,7 @@ def _part(rows, **kw):
         fixed_bytes=0,
         bound_plans=frozenset(),
         run_id="m",
-        source_inventory="state/mise-inventory/m.md",
+        source_inventory=PurePath(record_path("", "mise-inventory", "m.md")).as_posix(),
         start_sha="abc",
     )
     args.update(kw)

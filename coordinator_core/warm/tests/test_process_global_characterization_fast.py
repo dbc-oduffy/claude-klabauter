@@ -26,7 +26,19 @@ Spec backlink: docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md § C30 (W21)
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.warm.tests import test_process_global_characterization as _slow
+
+
+@pytest.fixture(autouse=True)
+def _engine_root_env_unset(monkeypatch):
+    """The repo-root `conftest.py` exports `COORDINATOR_ENGINE_ROOT` process-wide at
+    import. `coordinator_engine_root_with_class` answers from that rung before it ever
+    loads the gate shim, so Site 9's memo test (which clears only the retired
+    `CLAUDE_KLABAUTER_ROOT`) sees zero gate walks whenever a run's collection loaded that conftest.
+    The slow module's bodies are shared by reference, so the env is cleared here."""
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
 
 test_blanket_disarm_cache_does_not_fail_open_past_expiry = (
     _slow.test_blanket_disarm_cache_does_not_fail_open_past_expiry

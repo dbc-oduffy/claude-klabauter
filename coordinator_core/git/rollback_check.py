@@ -23,7 +23,7 @@ counts the path's own VERSIONS (a commit that did not touch it adds none):
 V(1) is `head_sha`'s value, and `N == V(d+1)` is a rollback at depth `d`,
 discarding the `d` most recent changes. `N == V(1)` is no change and never a
 finding; `depth=1` undoes only the latest change. `refusal()` applies K-016's rule: refuse if any single
-finding has `depth >= 2`, or three or more paths each have a finding at any
+finding has depth of at least 2, or three or more paths each have a finding at any
 depth ("breadth-3").
 
 Negative spec:

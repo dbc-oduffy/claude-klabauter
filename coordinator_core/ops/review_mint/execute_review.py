@@ -58,7 +58,8 @@ _DELIVERY_VERIFIER_ROLE_PREAMBLE = (
 
 
 def _resolve_schema_refs(schema, stage_schemas: Dict[str, dict], *, _seen=None):
-    """Inline every ``{"$ref": "#/$defs/<name>"}`` in ``schema`` against
+    """shell-doc-ok: the JSON-Schema keyword ``$ref``, not a shell variable.
+    Inline every ``{"$ref": "#/$defs/<name>"}`` in ``schema`` against
     ``stage_schemas`` (DoE's ``review-stage.schema.json`` ``$defs``) so the
     result is self-contained: no ``$ref`` that resolves only against a
     sibling ``$defs`` entry the emitted script never receives (the per-agent

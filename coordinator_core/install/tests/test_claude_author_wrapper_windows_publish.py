@@ -14,6 +14,14 @@ def orch():
     return maximalist._Orchestrator()
 
 
+@pytest.fixture(autouse=True)
+def _allow_machine_mutation(monkeypatch):
+    # The suite-wide conftest sets COORDINATOR_DISABLE_MACHINE_MUTATION=1, which
+    # makes the installer return before the publish path under test; every
+    # destination here is under tmp_path.
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+
+
 def _make_wrapper_src(tmp_path):
     src = tmp_path / "claude-author.py"
     src.write_text("#!/usr/bin/env python3\nprint('claude-author')\n")

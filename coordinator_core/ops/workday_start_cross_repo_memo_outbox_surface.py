@@ -92,6 +92,7 @@ from typing import List, Optional
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.state_root import StateRootError, coordinator_state_root as _native_state_root
+from coordinator_core.timestamps import with_age
 from coordinator_core.win_portability import no_console_creationflags
 
 _TO_RE = re.compile(r"^to:\s*(.*)$")
@@ -226,7 +227,7 @@ def _gone_delivery_lines(repo_root_arg: str) -> List[str]:
                 f"from the receiver's tree"
             )
             lines.append(
-                f"  → no receiver workday-start since {sent_at} restored it "
+                f"  → no receiver workday-start since {with_age(sent_at)} restored it "
                 f"— ping {to} to run one"
             )
     return lines

@@ -647,7 +647,9 @@ def test_same_repo_write_does_not_bump(env, monkeypatch):
 
 
 def test_unexpanded_variable_redirect_target_bumps(env, monkeypatch):
-    """Bug-backlog record 2026-08-14 (4a1e7c93b256): `> $D` resolves `$D`
+    """shell-doc-ok: quotes the bash command specimen under test.
+
+    Bug-backlog record 2026-08-14 (4a1e7c93b256): `> $D` resolves `$D`
     LITERALLY against the anchor cwd, landing at `<repo>/$D` -- which the
     git-root check would otherwise find INSIDE the anchor's own repo and
     silently skip (this guard's whole predicate is "no git root at all").
@@ -1640,7 +1642,9 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
 
 
 def test_c1_ac7_dollar_var_target_class_now_bumps(env, monkeypatch):
-    """`echo hi > $D` -- the `$D`-style unexpanded-variable class the C1
+    """shell-doc-ok: quotes the bash command specimen under test.
+
+    `echo hi > $D` -- the `$D`-style unexpanded-variable class the C1
     plan explicitly deferred (its own Out of scope), and which was then
     recorded as bug-backlog 2026-08-14-write-guards-fail-open-on-
     unexpanded-variable-targets-4a1e7c93b256 precisely because deferring it

@@ -133,7 +133,8 @@ def migrate_legacy_config() -> MigrationResult:
     """Copy a legacy-named root into the content-root registry key and pointer.
 
     Acts only when `repos.content_root` is absent or empty and a legacy source resolves.
-    Never deletes a legacy source; a second call is a no-op; spawns no process.
+    Never deletes the legacy pointer file; `registry_set` retires the paired legacy registry
+    key. A second call is a no-op; spawns no process.
     """
     home, override = _home_context()
     if not (home or override):

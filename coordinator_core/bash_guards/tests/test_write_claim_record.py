@@ -642,6 +642,11 @@ def test_c1_resolve_read_targets_never_raises_on_garbage_input():
     assert resolve_read_targets("cat 'unterminated") == []
 
 
+# `/abs/y.py` is not absolute on win32 (no drive), and the post-`cd` filter
+# keeps only `os.path.isabs` operands.
+_ABS_READ_TARGET = os.path.abspath("/abs/y.py")
+
+
 @pytest.mark.parametrize(
     "cmd, expected",
     [
@@ -651,7 +656,7 @@ def test_c1_resolve_read_targets_never_raises_on_garbage_input():
         ("cat a.py > out.txt", ["a.py"]),
         ("cat < in.txt", ["in.txt"]),
         ("cd /elsewhere && sed -n 1,5p meta.json", []),
-        ("cd /elsewhere && cat /abs/y.py", ["/abs/y.py"]),
+        (f"cd /elsewhere && cat {_ABS_READ_TARGET}", [_ABS_READ_TARGET]),
     ],
 )
 def test_read_targets_never_claim_redirect_tokens_or_cd_relative_paths(cmd, expected):

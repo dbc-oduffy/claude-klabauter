@@ -11,7 +11,7 @@ today.
 This row takes NO measurement of its own. The hard bar it asserts
 (`GATE_HARD_CEILING_MS = 500.0`) is DR-344's brightline, a doctrine constant,
 never derived from a sample. The per-brief regression high-water is landed
-here as an explicit PLACEHOLDER, named as such -- C2 runs the one real `n>=10`
+here as an explicit PLACEHOLDER, named as such -- C2 runs the one real n-at-least-10
 cold-CLI measurement campaign this plan performs, and C6 sets the first real
 high-water off C2's figures. Freezing today's ad hoc single-sample figures as
 a high-water here would commit a ceiling nobody measured on purpose.

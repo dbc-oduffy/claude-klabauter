@@ -390,6 +390,7 @@ def _has_indirection_marker(text: str) -> bool:
 #: character on BOTH sides. Pair-folding alone leaves an ODD quote standing,
 #: and one surviving quote separates the name just as well as two did.
 #: Measured live 2026-08-31, a real Bash call that was ALLOWED and created
+#: shell-doc-ok: quotes the live bash specimen the guard parses.
 #: the file: ``echo probe > "$S/CLAUDE""".md``. Three adjacent quotes; the
 #: pair rule consumed two and left ``claude".md``, which matches no governed
 #: identifier. Real bash concatenates the lot and wrote ``CLAUDE.md``.
@@ -1005,6 +1006,8 @@ def _local_assignment_values(segments: "list[str]") -> "dict[str, str]":
 def _expand_local_assignments(cmd: str) -> str:
     """`cmd` with `$NAME`/`${NAME}` replaced by values assigned in `cmd`.
 
+    shell-doc-ok: quotes the bash command specimens this guard parses.
+
     THE CLASS THIS CLOSES. `_mentions_governed_identifier` is a substring
     test, so it needs the governed name to appear CONTIGUOUSLY. A command can
     split it across an assignment boundary and never satisfy that:
@@ -1082,6 +1085,8 @@ def _assignment_indirection_reaches_a_write(
     segments: "list[str]", identifiers_lower: Tuple[str, ...]
 ) -> bool:
     """Point 4's by-SINK narrowing -- MEASURED FALSE POSITIVE FIX.
+
+    shell-doc-ok: quotes the bash command specimens this guard parses.
 
     Point 4 denied on "some segment assigns a governed path to a variable"
     AND "a write marker exists ANYWHERE in the whole command". The second

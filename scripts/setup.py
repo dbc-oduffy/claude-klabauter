@@ -2070,6 +2070,9 @@ def _content_source_from_registry() -> "tuple[Path, str] | None":
         if not value:
             continue
         raw = Path(value)
+        if not raw.is_dir():
+            print(f"[ADVISORY] {key} names {raw}, which does not exist; skipping this rung.", file=sys.stderr)
+            continue
         derived = _resolve_plugin_root_for_machine_local(raw) or raw
         if _is_publish_mirror(derived) or _is_publish_mirror(raw):
             continue
@@ -2416,6 +2419,8 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  (an OSS source clone not registered under publish.mirrors.*.path, or a DoE-style", file=sys.stderr)
         print("  dev clone with the coordinator/ dev-clone markers -- see _looks_like_coordinator_claude_source).", file=sys.stderr)
         print(file=sys.stderr)
+        print("  If this box is no longer a publisher, retire its publisher config in one step:", file=sys.stderr)
+        print("    machine-local retire-publisher", file=sys.stderr)
         print(file=sys.stderr)
         # Item 11 (2026-09-01 dogfood ledger): under `> log 2>&1` this
         # stderr block did not appear at all, only truncated stdout — the
@@ -2456,7 +2461,7 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  To install coordinator-claude:", file=sys.stderr)
         print(f"    git clone https://github.com/dbc-oduffy/coordinator-claude {coord_path}", file=sys.stderr)
     else:
-        print(f"  coordinator-claude not found at the provided --coordinator-root/COORDINATOR_CLAUDE_ROOT location: {coord_path}", file=sys.stderr)
+        print(f"  coordinator-claude not found at {coord_path} (resolved from: {coord_source.display})", file=sys.stderr)
     print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
     print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
     print(file=sys.stderr)

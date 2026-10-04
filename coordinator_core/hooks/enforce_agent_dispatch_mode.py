@@ -115,9 +115,8 @@ def _teammate_name_deny_message(name: str) -> Optional[str]:
         return None
     offending_char = match.group(0)
     prose = (
-        "[named-dispatch guard] denied: `name` contains {char!r} (illegal in "
-        "a path segment -- becomes the sidecar path). Use letters, digits, "
-        "`.`, `_`, `@`, `-` only."
+        "denied: `name` contains {char!r}, illegal in a sidecar path. Use "
+        "letters, digits, `.`, `_`, `@`, `-`."
     ).format(char=offending_char)
     return render(compose(prose))
 

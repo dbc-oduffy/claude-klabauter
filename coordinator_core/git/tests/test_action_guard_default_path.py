@@ -271,7 +271,7 @@ def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo):
 
 # test_measured_process_time_for_the_default_path_call was deleted here
 # (review-integrator, Finding 4): its only assertions were
-# `>= 0.0` on a `time.process_time()` delta, which is tautologically true
+# a non-negativity check on a `time.process_time()` delta, which is tautologically true
 # regardless of what commit_paths() does -- it could never fail and
 # provided no regression protection. This repo measures process time and
 # spawn count as a matter of discipline (DR-344), but a measurement wants

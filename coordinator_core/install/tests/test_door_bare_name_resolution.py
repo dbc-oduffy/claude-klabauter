@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.install import forwarder_door_census as census
 from coordinator_core.install.forwarder_door_census import (
     bare_name_starts_an_interpreter,
     resolve_bare_name,
@@ -245,13 +246,17 @@ def test_exact_case_directory_falls_back_to_the_real_file_in_its_bucket(
     )
 
 
-def test_posix_rules_ignore_a_powershell_sibling(tmp_path: Path) -> None:
+def test_posix_rules_ignore_a_powershell_sibling(tmp_path: Path, monkeypatch) -> None:
     """`rules="posix"` drops the `.ps1` arm: no shell there executes a `.ps1`, so
     ranking it ahead of the real image reports a file no POSIX caller can run as
-    the winner -- and then as a BREAK-CLASS interpreter start."""
+    the winner -- and then as a BREAK-CLASS interpreter start.
+
+    The exec-bit predicate is pinned true: this test is about the `.ps1` arm, and
+    an extensionless file is never launchable on NTFS, so the real predicate would
+    fail the door here. The mode-bit rule has its own POSIX-only test below."""
+    monkeypatch.setattr(census, "is_executable", lambda _p: True)
     bin_dir = tmp_path / "settings" / "bin"
     door = _touch(bin_dir, _STEM)
-    door.chmod(0o755)
     _touch(bin_dir, f"{_STEM}.ps1")
 
     hits = resolve_bare_name(_STEM, [str(bin_dir)], "", rules="posix")

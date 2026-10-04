@@ -223,7 +223,7 @@ def _published_engine_root(env: dict) -> str:
     settings_home_dir = _settings_home_dir_from_env(env)
     if not settings_home_dir:
         return ""
-    root = (_registry_key(settings_home_dir, PUBLISHED_ENGINE_KEY) or "").rstrip("\n")
+    root = (_registry_key(settings_home_dir, PUBLISHED_ENGINE_KEY) or "").rstrip("\n").replace("\\", "/")
     if root.endswith("/"):
         root = root[:-1]
     if not root or not _has_engine_stamp(root):

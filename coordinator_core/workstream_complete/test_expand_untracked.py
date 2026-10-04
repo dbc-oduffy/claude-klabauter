@@ -100,6 +100,10 @@ def test_unwalkable_directory_returns_none(tmp_path, monkeypatch):
         yield str(target), [], ["real.py"]
         raise PermissionError("denied mid-walk")
 
-    monkeypatch.setattr(wsc.os, "walk", _raising_walk)
+    # Scoped to the call: `os.walk` is process-global, and tmp_path teardown
+    # runs while a function-scoped patch is still live (Windows rmtree walks).
+    with monkeypatch.context() as scoped:
+        scoped.setattr(wsc.os, "walk", _raising_walk)
+        result = wsc._expand_untracked(tmp_path, "tree")
 
-    assert wsc._expand_untracked(tmp_path, "tree") is None
+    assert result is None

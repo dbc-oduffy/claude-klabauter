@@ -3,6 +3,7 @@ coordinator_core.ops.workflow_fire.tests.test_fire_env_settings_bin --
 acceptance surface for ``build_fire_env``'s settings-home PATH fix
 (claude-klabauter#45 class D).
 
+shell-doc-ok: the launcher path below is quoted as the shell spelling it runs under.
 Purpose: an emitted executor invokes settings-home launchers (e.g.
 ``cross-repo-memo``) by bare name from its row body. The launcher lives at
 ``$COORDINATOR_SETTINGS_HOME/bin/<name>`` and runs fine by absolute path,

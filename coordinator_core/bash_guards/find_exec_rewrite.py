@@ -208,6 +208,8 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
 def _bt_parse_for_loop_find(tokens: List[str]) -> Optional[Dict[str, Any]]:
     """Parse `for f in $(find <path> [-name <pat>]); do <verb> "$f"; done`.
 
+    shell-doc-ok: quotes the bash loop shape this parser recognizes.
+
     C5 of `docs/plans/2026-08-31-the-batched-form-the-guard-never-offers.md`.
     The shape forks one process per match exactly as `-exec ... \\;` does, so
     the spawn-budget harm this guard exists to prevent is fully present --

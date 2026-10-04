@@ -7,6 +7,9 @@ import pytest
 import yaml
 
 import coordinator_core.sizing_assemble as sizing_assemble
+from coordinator_core.session import record_homes
+
+_SIZING_NAME = "2026-10-02-x.yaml"
 
 _DRAFT = """schema: sizing-object
 intent: "Ship the thing"
@@ -28,12 +31,12 @@ deliverable_id: null
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     return tmp_path
 
 
 def _sizing(repo: Path, text: str = _DRAFT) -> Path:
-    path = repo / "state" / "sizings" / "2026-10-02-x.yaml"
+    path = Path(record_homes.record_path(str(repo), "sizings", _SIZING_NAME))
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -53,7 +56,7 @@ def test_write_sets_estimate_route_detents_and_status(repo: Path) -> None:
     decision = _decision("M", premise_provenance="read")
     sizing_assemble.write_back(
         repo,
-        "state/sizings/2026-10-02-x.yaml",
+        Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
         decision,
         premise_provenance="read",
         premise_evidence="tests/x.py:3",

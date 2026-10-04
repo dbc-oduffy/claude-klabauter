@@ -58,7 +58,8 @@ def isolated_svc_root_impl(monkeypatch: pytest.MonkeyPatch) -> Generator[None, N
       - Do NOT use pytest's tmp_path here — it produces deep paths under
         /tmp/pytest-<N>/test_<name>/<N>/ that may approach or exceed 103 bytes.
     """
-    _short_base = "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir()
+    # os.name guard: on Windows "/tmp" resolves to <drive>:\tmp, a drive-root write.
+    _short_base = "/tmp" if os.name != "nt" and os.path.isdir("/tmp") else tempfile.gettempdir()
     tmpdir = tempfile.mkdtemp(prefix="ccsvc-", dir=_short_base)
     monkeypatch.setenv("COORDINATOR_SVC_ROOT", tmpdir)
     yield

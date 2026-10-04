@@ -146,10 +146,10 @@ class TestDenyTextNamesAlternativeAndConsequence:
         assert "overwritten" in reason.lower()
         assert "no error" in reason.lower()
 
-    def test_deny_text_names_the_target_path(self):
+    def test_deny_text_omits_the_machine_absolute_target_path(self):
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "/Users/alice/.claude/CLAUDE.md" in reason
+        assert "/Users/alice" not in reason
 
     def test_deny_text_names_no_override_route_at_all(self, monkeypatch):
         """Inverted (was: `..._routes_to_the_override_doc_not_the_key`,
@@ -171,7 +171,8 @@ class TestDenyTextNamesAlternativeAndConsequence:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "guard-override-keys.md" not in reason
         assert guard._OVERRIDE_ENV_VAR not in reason
-        assert "/opt/authoring/global-doctrine/CLAUDE.md" in reason
+        assert "<repos.content_root>/global-doctrine/CLAUDE.md" in reason
+        assert "/opt/authoring" not in reason
 
     def test_deny_text_resolves_authoring_root_via_registry(self, monkeypatch):
         monkeypatch.setattr(
@@ -179,7 +180,8 @@ class TestDenyTextNamesAlternativeAndConsequence:
         )
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "/opt/some/coordinator-content-repo/global-doctrine/CLAUDE.md" in reason
+        assert "<repos.content_root>/global-doctrine/CLAUDE.md" in reason
+        assert "/opt/some/coordinator-content-repo" not in reason
 
     def test_unregistered_root_allows_the_write(self, monkeypatch):
         monkeypatch.setattr(guard, "registry_get", lambda key: None)
@@ -195,5 +197,5 @@ class TestDenyTextNamesAlternativeAndConsequence:
         else:
             out = result["hookSpecificOutput"]
             assert out["permissionDecision"] == "allow"
-            assert "blast radius" in out[expect]
+            assert "Doctrine surfaces reach every session" in out[expect]
             assert "machine-local set coordinator.guard_level" in out[expect]

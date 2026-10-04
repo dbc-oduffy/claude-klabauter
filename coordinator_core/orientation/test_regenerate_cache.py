@@ -1666,7 +1666,7 @@ def _time_delta_seconds(seconds: float):
 def test_fresh_commit_inside_cadence_window_is_silent(tmp_path: Path) -> None:
     """Fleet-wide false positive, 2026-08-30. C6/C7 deleted the per-commit
     detached push; `warm.push_cadence` publishes on a 600s tick instead, so a
-    just-committed repo is unpushed BY DESIGN. The unchanged `unpushed >= 1`
+    just-committed repo is unpushed BY DESIGN. The unchanged trigger of one or more unpushed commits
     trigger fired on every healthy repo on the box -- 3 of 14 at the moment it
     was caught -- putting "auto-push lagging" into the boot context of sessions
     with nothing wrong with them, which is what teaches a reader to skip the

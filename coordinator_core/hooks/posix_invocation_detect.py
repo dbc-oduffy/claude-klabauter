@@ -60,6 +60,7 @@ _TRAILING_WINDOW = 200
 
 #: A Shape W invocation: the PowerShell call operator (`&`) applied to a
 #: quoted path ending `\bin\<cli>.cmd` -- `resolve-coordinator-bin.md` rung
+#: shell-doc-ok: quotes the PowerShell entrypoint shapes the regex matches.
 #: 0's own documented form, e.g.
 #: `& "$env:COORDINATOR_SETTINGS_HOME\bin\coordinator-doc-new.cmd" ...`.
 #: The path prefix before `\bin\` varies (`$env:COORDINATOR_SETTINGS_HOME`,

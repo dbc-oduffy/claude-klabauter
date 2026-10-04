@@ -338,6 +338,7 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # dropped from 2 to 1 (only the `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS`
     # OVERRIDE alternative is unaffected by the quarantine).
     "check_raw_pid_liveness": 2,
+    # shell-doc-ok: quotes the bash offer text the probe receives.
     # The `ls-files ... > "${TMPDIR:-/tmp}/p"` offer carries a redirect to a
     # shell-expanded path, so its probe cannot run it as written.
     "check_blanket_git_add": 1,
@@ -874,3 +875,23 @@ class TestPlainIndentedOffers:
             self._hso("BLOCKED.\n\n  git add -- path/to/file\n"), override_route_known=True
         )
         assert alts == []
+
+
+class TestWindowsPosixTwinResolution:
+    def test_only_the_colliding_system32_binary_is_remapped(self, tmp_path, monkeypatch):
+        system = tmp_path / "Windows" / "System32"
+        system.mkdir(parents=True)
+        monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))
+        git_root = tmp_path / "Git"
+        (git_root / "cmd").mkdir(parents=True)
+        (git_root / "usr" / "bin").mkdir(parents=True)
+        (git_root / "usr" / "bin" / "find.exe").write_text("")
+        (git_root / "usr" / "bin" / "grep.exe").write_text("")
+        monkeypatch.setattr(altlive.shutil, "which", lambda name: str(git_root / "cmd" / "git.exe"))
+
+        twin = altlive._posix_twin_of_windows_builtin("find", str(system / "find.EXE"))
+        assert twin == str(git_root / "usr" / "bin" / "find.exe")
+
+        elsewhere = tmp_path / "tools" / "find.exe"
+        assert altlive._posix_twin_of_windows_builtin("find", str(elsewhere)) is None
+        assert altlive._posix_twin_of_windows_builtin("grep", str(system / "grep.exe")) is None

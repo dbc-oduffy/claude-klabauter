@@ -446,7 +446,7 @@ def test_derived_agent_helper_forwarders_have_cmd_parity(_installed_dirs) -> Non
     file (`<name>.exe` on Windows, bare `<name>` on POSIX). A name present
     in `<settings-home>/bin/` under some OTHER shape only — a `.cmd`, a
     `.ps1`, a suffixed script — is the live regression this pins: the
-    corpus invokes `"$CC_BIN/<name>"` with no extension, so a forwarder one
+    corpus invokes the forwarder by bare name under CC_BIN with no extension, so a forwarder one
     platform cannot resolve from that is a 127 there and nowhere else.
     """
     bin_dst = _installed_dirs

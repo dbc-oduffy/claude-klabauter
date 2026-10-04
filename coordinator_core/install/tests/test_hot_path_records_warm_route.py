@@ -381,9 +381,9 @@ def test_door_route_signal_recorded_route_value_set_is_pinned():
 
     # `DoorRouteResult` is a three-field NamedTuple: `route` (str), `entry`
     # (the raw sink row, or None only when route is UNRESOLVED) and `detail`
-    # (the dispatch refusal message, default None) -- pinned so
-    # a field rename or reorder here is caught directly rather than only
-    # showing up as an AttributeError deep in a caller.
+    # (the dispatch refusal message of a refused control invocation, else
+    # None) -- pinned so a field rename or reorder here is caught directly
+    # rather than only showing up as an AttributeError deep in a caller.
     result = door_route_signal.DoorRouteResult(route=door_route_signal.WARM_SERVER, entry={"op": "ping"})
     assert result.route == door_route_signal.WARM_SERVER
     assert result.entry == {"op": "ping"}

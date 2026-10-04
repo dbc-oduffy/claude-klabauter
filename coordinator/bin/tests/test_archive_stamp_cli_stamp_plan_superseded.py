@@ -162,8 +162,11 @@ class StampPlanSupersededEngineBehaviorTest(unittest.TestCase):
             rc = self.arstamp.cs_stamp_plan_superseded(str(plan), str(successor))
             self.assertEqual(rc, 0)
             text = plan.read_text(encoding="utf-8")
-            self.assertIn("status: superseded", text)
-            self.assertIn(f"superseded_by: {successor}", text)
+            import yaml
+
+            fm = yaml.safe_load(text.split("---", 2)[1])
+            self.assertEqual(fm["status"], "superseded")
+            self.assertEqual(fm["superseded_by"], str(successor))
 
     def test_missing_by_is_usage_error_no_write(self):
         import tempfile

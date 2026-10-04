@@ -591,7 +591,7 @@ def test_clean_round_pushes_by_default(tmp_path, monkeypatch):
 
     push_calls = [c for c in spy.calls if c and str(c[0]) == "git" and any(str(t) == "push" for t in c)]
     assert len(push_calls) == 1
-    assert push_calls[0] == ["git", "-C", str(dest), "push"]
+    assert push_calls[0] == ["git", "-C", str(dest), "-c", "credential.interactive=never", "push"]
     assert f"Published: pushed to {dest}." in out
 
     # The commit leg no longer shares `push`'s subprocess call-order list --

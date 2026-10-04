@@ -97,7 +97,9 @@ def test_the_absent_signal_branch_returns_none_rather_than_a_dead_handler(monkey
     def _must_not_run(*a, **kw):  # pragma: no cover -- the assertion is that it never runs
         raise AssertionError("faulthandler.register reached on a platform with no SIGUSR1")
 
-    monkeypatch.setattr(srv.faulthandler, "register", _must_not_run)
+    # `faulthandler.register` does not exist on Windows; `raising=False` lets the
+    # same trap be armed on every platform.
+    monkeypatch.setattr(srv.faulthandler, "register", _must_not_run, raising=False)
 
     assert srv._register_stack_dump_signal() is None
 
@@ -113,7 +115,11 @@ def test_a_registration_failure_never_takes_the_server_down(monkeypatch, boom):
     def _boom(*a, **kw):
         raise boom
 
-    monkeypatch.setattr(srv.faulthandler, "register", _boom)
+    # Windows has neither SIGUSR1 nor `faulthandler.register`; supply both so the
+    # failure path is exercised there too instead of short-circuiting on the
+    # absent-signal branch.
+    monkeypatch.setattr(srv.signal, "SIGUSR1", 10, raising=False)
+    monkeypatch.setattr(srv.faulthandler, "register", _boom, raising=False)
 
     assert srv._register_stack_dump_signal() is None
     assert srv._STACK_DUMP_FILE is None

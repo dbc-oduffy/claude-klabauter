@@ -828,6 +828,7 @@ def check_bump_outside_repo_write(
     assigned = _names_assigned_in(cmd)
     for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
         if _is_unexpanded_variable_target(raw_target, assigned):
+            # shell-doc-ok: quotes the bash command shape this guard parses.
             # Own branch, BEFORE git-root resolution: `_resolve_relative`
             # already resolved `$D` LITERALLY against `effective_cwd`, so
             # from a repo root it lands at `<repo>/$D` -- which the

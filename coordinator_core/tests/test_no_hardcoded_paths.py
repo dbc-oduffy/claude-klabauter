@@ -219,6 +219,30 @@ _EXEMPT_SITES: set[str] = {
     # machine-local hardcode, and there is no registry key that could resolve
     # it. Same shape as `sh_interpreter`'s `/bin/sh` rung above. 2026-08-29.
     "coordinator_core/git/content_hash.py::_system_gitconfig_paths",
+    # Absent-by-contract sentinel: `UNRESOLVED_PLUGIN_CLI_ROOT` is a root-anchored
+    # path that is guaranteed not to exist, so a caller that skips the resolver
+    # fails loudly instead of resolving to a real directory. No registry key
+    # could resolve a path that is absent by contract. 2026-10-02.
+    "coordinator_core/ceremony_common/cli_dispatch.py::<module>",
+    # Same class as the cli_dispatch sentinel: the doctrine content root's
+    # absent-by-contract fallback when no content root resolves. 2026-10-02.
+    "coordinator_core/hooks/doctrine_changelog_prose.py::_resolve_doctrine_content_root",
+    # Git's POSIX `/etc/gitconfig` system rung, identical on every POSIX host.
+    # Same class as `content_hash.py::_system_gitconfig_paths`. 2026-10-02.
+    "coordinator_core/git/commit.py::_config_identity",
+    # Git's POSIX `/etc/gitconfig` system rung; same class as above. 2026-10-02.
+    "coordinator_core/git/commit.py::_gpgsign_config_files",
+    # Git's POSIX `/etc/gitconfig` system rung; same class as above. 2026-10-02.
+    "coordinator_core/git/commit_trailers.py::_host_trailer_config_files",
+    # Cloud-sandbox mount points (`/root`, `/home/user`), the same in every
+    # cloud container; no registry key resolves them. 2026-10-02.
+    "coordinator_core/hooks/repin_cloud_engine_root.py::<module>",
+    # Cloud-sandbox checkout roots (`/home/user`, `/workspace`), the same in
+    # every cloud container. 2026-10-02.
+    "coordinator_core/hooks/session_start_cloud_focus.py::<module>",
+    # `/proc` inside the POSIX-only branch of the forwarder pid probe. Same
+    # class as `lifecycle.py::global_sentinel_dir`. 2026-10-02.
+    "coordinator_core/hooks/sessionstart_ensure_http_forwarder.py::_pid_is_a_forwarder_posix",
 }
 
 

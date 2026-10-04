@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -181,9 +182,15 @@ def test_engine_link_repointed_since_start_reports_a_move(monkeypatch, tmp_path)
         http_listener, "_link_realpath_at_start", str(old_target.resolve()), raising=False
     )
 
-    link_tmp = link.with_name(link.name + ".tmp")
-    link_tmp.symlink_to(new_target)
-    link_tmp.replace(link)
+    if sys.platform == "win32":
+        # os.replace cannot overwrite a directory symlink on Windows; unlink-then-relink is the
+        # closest re-point (the atomic swap is a POSIX publish detail this test does not pin).
+        link.unlink()
+        link.symlink_to(new_target)
+    else:
+        link_tmp = link.with_name(link.name + ".tmp")
+        link_tmp.symlink_to(new_target)
+        link_tmp.replace(link)
 
     assert http_listener._engine_link_has_moved() is True
 

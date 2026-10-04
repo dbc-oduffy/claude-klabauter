@@ -32,7 +32,7 @@ from coordinator_core.ops.session import guard_settings_integrity as guard_mod
 
 
 def test_init_anchor_injection_state_unresolved_root_names_no_repo(monkeypatch):
-    monkeypatch.setattr(init_mod, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(init_mod, "read_content_root", lambda: "")
 
     with pytest.raises(RuntimeError) as excinfo:
         init_mod._handler({})

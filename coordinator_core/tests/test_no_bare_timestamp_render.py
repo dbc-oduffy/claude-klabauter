@@ -53,6 +53,9 @@ from typing import Optional
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 EXEMPT: dict[tuple[str, str], str] = {
+    ("completion_receipts/model.py", "concluded_at"): (
+        "rejects a malformed stamp; quoting it verbatim is the point"
+    ),
     ("claims_emit.py", "ran_at"): (
         "validation error naming a stamp that does not parse -- an age is "
         "impossible by construction of the branch that prints it"

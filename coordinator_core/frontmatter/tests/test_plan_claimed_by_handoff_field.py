@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
+from coordinator_core.session import record_homes
 
 _PLAN_SCHEMA = Path(__file__).parent.parent / 'schemas' / 'plan.schema.json'
 
@@ -33,7 +34,7 @@ def test_absent_ok():
 
 
 def test_string_ok():
-    assert not _field_errors(_valid_plan(claimed_by_handoff='state/handoffs/2026-10-02-x.md'))
+    assert not _field_errors(_valid_plan(claimed_by_handoff=Path(record_homes.record_path('', 'handoffs', '2026-10-02-x.md')).as_posix()))
 
 
 def test_null_ok():

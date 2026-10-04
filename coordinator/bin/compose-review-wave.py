@@ -874,8 +874,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="The session id the FIRED phases will run under -- for a workflow "
         "spawn that is the EM's own session, since a workflow-spawned agent "
         "inherits it. Required, never synthesized: the Edit confinement guard "
-        "confines each agent's writes to state/subagent-share/<its own session "
-        "id>/, so a sidecar provisioned anywhere else is one no fired phase can "
+        "confines each agent's writes to <machinery_root>/subagent-share/<its own "
+        "session id>/, so a sidecar provisioned anywhere else is one no fired phase can "
         "write to, and the wave is lost on the reviewer leg.",
     )
     parser.add_argument(

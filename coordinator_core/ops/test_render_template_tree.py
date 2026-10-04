@@ -101,6 +101,9 @@ def content_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
+    # CONTENT_ROOT outranks REPO_CONTENT_ROOT in _resolve_content_root; an ambient one
+    # would shadow every fixture-staged content_root below.
+    monkeypatch.delenv("CONTENT_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
 
 

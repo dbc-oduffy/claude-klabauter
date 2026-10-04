@@ -72,8 +72,14 @@ def test_interpreter_present_on_path_is_ok_and_quiet(content_root: Path, monkeyp
 
     path_dir = tmp_path / "fake-bin"
     path_dir.mkdir()
-    interpreter_path = path_dir / "findable-interpreter"
-    interpreter_path.write_text("#!/bin/sh\nexit 0\n")
+    # win32 resolves a bareword only via PATHEXT, so the stub needs a `.cmd` suffix there;
+    # `shutil.which("findable-interpreter")` matches it either way.
+    if os.name == "nt":
+        interpreter_path = path_dir / "findable-interpreter.cmd"
+        interpreter_path.write_bytes(b"@exit /b 0\r\n")
+    else:
+        interpreter_path = path_dir / "findable-interpreter"
+        interpreter_path.write_text("#!/bin/sh\nexit 0\n")
     interpreter_path.chmod(interpreter_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     monkeypatch.setenv("PATH", str(path_dir))
 

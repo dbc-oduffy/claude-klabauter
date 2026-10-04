@@ -123,7 +123,7 @@ def claude_home() -> str:
 
     Precedence mirrors ``claude_config_dir()`` exactly: ``CLAUDE_CONFIG_DIR``
     is returned unchanged (it already names the ``.claude`` dir itself);
-    else ``CLAUDE_HOME`` is a ``$HOME`` substitute and ``<CLAUDE_HOME>/.claude``
+    else ``CLAUDE_HOME`` is a HOME substitute and CLAUDE_HOME plus ``.claude``
     is returned (Convention A — the same convention
     ``check_install_singularity._claude_base_dir()`` enforces). This module
     cannot import that seam (see module docstring — the whole point of this

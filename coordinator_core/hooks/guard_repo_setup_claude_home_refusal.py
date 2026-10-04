@@ -66,6 +66,7 @@ import re
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
     _canonical,
+    _deny_reason,
     _join_onto_cwd,
 )
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -198,14 +199,6 @@ def is_denied_repo_setup_claude_home(
         return False
 
     return resolved_candidate == claude_home
-
-
-def _deny_reason() -> str:
-    return (
-        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- it is not "
-        "a working tree. Run repo-setup against the project clone you mean to "
-        "set up: /repo-setup --root <path-to-that-clone>."
-    )
 
 
 @register_op("hooks.guard_repo_setup_claude_home_refusal")

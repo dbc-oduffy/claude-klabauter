@@ -10,6 +10,12 @@ import jsonschema
 import pytest
 
 from coordinator_core.ops.dispatch_emit import wake_digest
+from coordinator_core.session import record_homes
+
+
+def _inv(name: str) -> str:
+    return Path(record_homes.record_path("", "mise-inventory", name)).as_posix()
+
 
 _SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "mise-lane-map.schema.json").read_text(encoding="utf-8")
@@ -18,7 +24,7 @@ _SCHEMA = json.loads(
 _VALID = {
     "schema_version": 1,
     "run_id": "r1",
-    "source_inventory": "state/mise-inventory/r1.md",
+    "source_inventory": _inv("r1.md"),
     "start_sha": None,
     "params": {"lanes": 3, "hot_files": 40, "byte_cap": 524288, "headroom": 0.95},
     "hot_files": ["a.py"],
@@ -28,9 +34,9 @@ _VALID = {
             "kind": "hub",
             "parts": [
                 {"id": "hub-p1", "after": [], "rows": ["X-C1"],
-                 "inventory": "state/mise-inventory/r1-hub-p1.md", "script": None, "bytes": 0},
+                 "inventory": _inv("r1-hub-p1.md"), "script": None, "bytes": 0},
                 {"id": "hub-p2", "after": ["hub-p1"], "rows": ["X-C2"],
-                 "inventory": "state/mise-inventory/r1-hub-p2.md", "script": "s.mjs", "bytes": 10},
+                 "inventory": _inv("r1-hub-p2.md"), "script": "s.mjs", "bytes": 10},
             ],
         },
         {
@@ -38,7 +44,7 @@ _VALID = {
             "kind": "component",
             "parts": [
                 {"id": "a", "after": [], "rows": ["Y-C1"],
-                 "inventory": "state/mise-inventory/r1-a.md", "script": None, "bytes": 0}
+                 "inventory": _inv("r1-a.md"), "script": None, "bytes": 0}
             ],
         },
     ],

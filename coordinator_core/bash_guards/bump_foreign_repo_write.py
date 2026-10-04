@@ -1286,7 +1286,9 @@ def _is_expansion_valued(target: str) -> bool:
     NEGATIVE SPEC -- never composed onto a cwd: `$S/install2.log` after
     `cd <mirror>` joined to `<mirror>/$S/install2.log` and bumped a write that
     actually lands in `$S`. Unknowable means no verdict (FAIL OPEN); the bare
-    `$D` unset-variable shape is `bump_outside_repo_write`'s, not this guard's."""
+    `$D` unset-variable shape is `bump_outside_repo_write`'s, not this guard's.
+
+    shell-doc-ok: quotes the bash command shapes this guard parses."""
     return "$" in target or "`" in target
 
 

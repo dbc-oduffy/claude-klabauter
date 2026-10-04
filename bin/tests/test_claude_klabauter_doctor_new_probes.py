@@ -320,6 +320,25 @@ class TestVersionSanityProbe:
         assert isinstance(result.status, str) and len(result.status) > 0
 
 
+@pytest.fixture
+def plain_subprocess_ping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the cold ping through `subprocess.run` so tests can fake it.
+
+    On Windows/Darwin `_spawn_cold_ping` spawns through
+    `single_invocation_tree_process_time` and never reaches `subprocess.run`;
+    a NotImplementedError from it selects the plain-`subprocess.run` arm, the
+    same one non-measuring platforms take. The probe imports the name locally
+    per call, so patching the real module is what it sees.
+    """
+    from coordinator_core.benchmarks import process_time as ptm
+
+    def _unmeasured(*a, **kw):
+        raise NotImplementedError("forced plain subprocess arm")
+
+    monkeypatch.setattr(ptm, "single_invocation_tree_process_time", _unmeasured)
+
+
+@pytest.mark.usefixtures("plain_subprocess_ping")
 class TestInvokeSmokeProbe:
 
     @pytest.fixture
@@ -683,6 +702,7 @@ class TestOrphanedExecnetGatewaysProbe:
         assert result.data["orphaned_pids"] == []
 
 
+@pytest.mark.usefixtures("plain_subprocess_ping")
 class TestInvokeSmokeDispatchRoot:
 
     @staticmethod

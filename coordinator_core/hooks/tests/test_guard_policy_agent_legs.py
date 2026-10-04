@@ -60,7 +60,7 @@ def _hso(envelope):
 def test_unmodeled_default_is_allow_with_context(tmp_path, monkeypatch):
     hso = _hso(bwua._handler(_unmodeled_payload(tmp_path)))
     assert hso["permissionDecision"] == "allow"
-    assert "Advisory (block-workflow-unmodeled-agent" in hso["additionalContext"]
+    assert "coordinator.guard_level.block-workflow-unmodeled-agent off" in hso["additionalContext"]
 
 
 def test_unmodeled_global_strict_denies(tmp_path, monkeypatch):

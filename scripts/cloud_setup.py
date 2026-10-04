@@ -1065,7 +1065,7 @@ def pin_session_path(report: Report) -> None:
 
     The cloud dialog's env-var box REPLACES PATH, expands nothing, and is an
     operator must-remember. A box left carrying its template placeholder
-    (`<npm global bin dir>:$PATH`) is stored verbatim, so a session starts with
+    (the npm-global-bin-dir-colon-PATH placeholder) is stored verbatim, so a session starts with
     no real directory on PATH: `python3` stops resolving, every coordinator hook
     fails open, and the session still boots and still loads its plugin. The
     running session's PATH is not observable from here (the box does not reach
@@ -1326,7 +1326,7 @@ def record_warm_engine_verdict(report: Report) -> None:
     path_value = (report.session_path_pin or {}).get("value") or (
         report.session_path or {}
     ).get("env_box_value") or ""
-    entries = [e for e in path_value.split(":") if e]
+    entries = [e for e in path_value.split(os.pathsep) if e]
 
     names: list[str] = []
     try:
@@ -2987,7 +2987,7 @@ def _keep_failed_output(log: Path, text: str, verdict: dict) -> None:
     """Persist a failing child's combined output where the session can read it
     after boot, and name the file on `verdict`. A failed write is recorded, never raised."""
     try:
-        log.write_text(text or "", encoding="utf-8")
+        log.write_text(text or "", encoding="utf-8", newline="\n")
         verdict["output_log"] = str(log)
     except OSError as exc:
         verdict["output_log"] = f"unwritable: {exc}"
@@ -3461,7 +3461,7 @@ def _focus_repo_machine_local_key(project_root: str, report: Report) -> str | No
 
 
 def _set_plugin_settings_env(key: str, value: str, report: Report) -> None:
-    """Merge one `env.<key>` write into `$CLAUDE_HOME/settings.json`, the same
+    """Merge one `env.KEY` write into the claude-home settings.json, the same
     file and merge discipline `register_plugin_settings` uses.
 
     Best-effort: an unreadable existing file is recorded rather than raised —
@@ -3878,7 +3878,7 @@ def resolve_session_path(report: Report) -> None:
     """Determine the PATH value the cloud dialog's env-var box must carry.
 
     That box replaces PATH outright, expands nothing, and strips surrounding
-    quotes. A value written as `<npm global bin dir>:$PATH` is therefore stored
+    quotes. A value written as the npm-global-bin-dir-colon-PATH placeholder is therefore stored
     verbatim, leaving no real directory on PATH: `python3` stops resolving and
     every coordinator hook fails open, while the session still boots, still
     loads its plugin and still reads its `CLAUDE.md`, so the only symptom is

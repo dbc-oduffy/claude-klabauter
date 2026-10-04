@@ -9,8 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core.session import claims
+from coordinator_core.session import claims, record_homes
 from coordinator_core.tests.git_seed import seeded_repo
+
+_HANDOFFS = Path(record_homes.home_dir("", "handoffs")).as_posix()
+
+
+def _rel(name: str) -> str:
+    return Path(record_homes.record_path("", "handoffs", name)).as_posix()
 
 _SID_A = "cb90a56e-33f1-4992-b665-c2af3070c00c"
 _SID_B = "11111111-2222-3333-4444-555555555555"
@@ -60,35 +66,35 @@ def _field(path: Path):
 
 def test_rerun_after_corpus_growth_writes_only_new_batons(tmp_path):
     tmp_path = Path(seeded_repo(tmp_path, readme="x"))
-    first = _write_baton(tmp_path, "state/handoffs", "first.md", _reaper_note(_SID_A))
-    no_note = _write_baton(tmp_path, "state/handoffs", "no-note.md", None)
+    first = _write_baton(tmp_path, _HANDOFFS, "first.md", _reaper_note(_SID_A))
+    no_note = _write_baton(tmp_path, _HANDOFFS, "no-note.md", None)
     malformed = _write_baton(
-        tmp_path, "state/handoffs", "malformed.md", _MALFORMED_NOTE
+        tmp_path, _HANDOFFS, "malformed.md", _MALFORMED_NOTE
     )
 
     run1 = claims.backfill_reaped_from_session(tmp_path)
-    assert run1["written"] == ["state/handoffs/first.md"]
+    assert run1["written"] == [_rel("first.md")]
     assert sorted(run1["skipped"]) == [
-        "state/handoffs/malformed.md",
-        "state/handoffs/no-note.md",
+        _rel("malformed.md"),
+        _rel("no-note.md"),
     ]
     assert run1["errors"] == []
     snapshot = {p: p.read_bytes() for p in (first, no_note, malformed)}
 
-    second = _write_baton(tmp_path, "state/handoffs", "second.md", _reaper_note(_SID_B))
-    third = _write_baton(tmp_path, "state/handoffs", "third.md", _reaper_note(_SID_C))
-    late_no_note = _write_baton(tmp_path, "state/handoffs", "late-no-note.md", None)
+    second = _write_baton(tmp_path, _HANDOFFS, "second.md", _reaper_note(_SID_B))
+    third = _write_baton(tmp_path, _HANDOFFS, "third.md", _reaper_note(_SID_C))
+    late_no_note = _write_baton(tmp_path, _HANDOFFS, "late-no-note.md", None)
 
     run2 = claims.backfill_reaped_from_session(tmp_path)
     assert run2["written"] == [
-        "state/handoffs/second.md",
-        "state/handoffs/third.md",
+        _rel("second.md"),
+        _rel("third.md"),
     ]
     assert sorted(run2["skipped"]) == [
-        "state/handoffs/first.md",
-        "state/handoffs/late-no-note.md",
-        "state/handoffs/malformed.md",
-        "state/handoffs/no-note.md",
+        _rel("first.md"),
+        _rel("late-no-note.md"),
+        _rel("malformed.md"),
+        _rel("no-note.md"),
     ]
     assert run2["errors"] == []
 
@@ -109,7 +115,7 @@ def test_rerun_after_corpus_growth_writes_only_new_batons(tmp_path):
 
 def test_rerun_never_reaches_batons_archived_between_runs(tmp_path):
     tmp_path = Path(seeded_repo(tmp_path, readme="x"))
-    live = _write_baton(tmp_path, "state/handoffs", "live.md", _reaper_note(_SID_A))
+    live = _write_baton(tmp_path, _HANDOFFS, "live.md", _reaper_note(_SID_A))
     claims.backfill_reaped_from_session(tmp_path)
 
     archived = _write_baton(
@@ -120,7 +126,7 @@ def test_rerun_never_reaches_batons_archived_between_runs(tmp_path):
 
     run2 = claims.backfill_reaped_from_session(tmp_path)
     assert run2["written"] == []
-    assert run2["skipped"] == ["state/handoffs/live.md"]
+    assert run2["skipped"] == [_rel("live.md")]
     assert archived.read_bytes() == archived_before
     assert live.read_bytes() == live_before
 
@@ -128,14 +134,14 @@ def test_rerun_never_reaches_batons_archived_between_runs(tmp_path):
 def test_rerun_over_a_large_grown_corpus_is_exact(tmp_path):
     tmp_path = Path(seeded_repo(tmp_path, readme="x"))
     originals = [
-        _write_baton(tmp_path, "state/handoffs", f"orig-{i:03d}.md", _reaper_note(f"{i:08d}-0000-0000-0000-000000000000"))
+        _write_baton(tmp_path, _HANDOFFS, f"orig-{i:03d}.md", _reaper_note(f"{i:08d}-0000-0000-0000-000000000000"))
         for i in range(60)
     ]
     assert len(claims.backfill_reaped_from_session(tmp_path)["written"]) == 60
     before = {p: p.read_bytes() for p in originals}
 
     grown = [
-        _write_baton(tmp_path, "state/handoffs", f"new-{i:03d}.md", _reaper_note(f"{i:08d}-1111-1111-1111-111111111111"))
+        _write_baton(tmp_path, _HANDOFFS, f"new-{i:03d}.md", _reaper_note(f"{i:08d}-1111-1111-1111-111111111111"))
         for i in range(60)
     ]
     run2 = claims.backfill_reaped_from_session(tmp_path)

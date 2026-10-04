@@ -202,10 +202,10 @@ class TestDenyMessageContent:
         assert "CONFIG-ONLY" in reason
         assert "claude-home" in reason
 
-    def test_deny_message_names_the_destination_inbox_path(self, _fake_home):
+    def test_deny_message_omits_the_inbox_path(self, _fake_home):
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         reason = guard._deny_reason(target)
-        assert "cross-repo/inbox/" in reason
+        assert "cross-repo/inbox/" not in reason
 
     def test_deny_message_names_the_real_receiver_and_live_cli_form(self, _fake_home):
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
@@ -219,50 +219,5 @@ class TestDenyMessageContent:
         target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
         result = guard.check(_payload(target))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        for needle in ("CONFIG-ONLY", "cross-repo/inbox/", "claude-home", "coordinator-content-repo-em"):
+        for needle in ("CONFIG-ONLY", "cross-repo-memo draft", "claude-home", "coordinator-content-repo-em"):
             assert needle in reason, "missing needle: %r in %r" % (needle, reason)
-
-
-class TestDenyMessageInboxResolution:
-    """The inbox path is RESOLVED, never a hardcoded host literal (item 30,
-    plan body)."""
-
-    def test_inbox_path_falls_back_to_placeholder_when_content_root_unresolvable(
-        self, monkeypatch, _fake_home
-    ):
-        monkeypatch.setattr(
-            "coordinator_core.content_root.read_content_root",
-            lambda: "",
-        )
-        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
-        reason = guard._deny_reason(target)
-        assert "<content_root>/cross-repo/inbox/" in reason
-
-    def test_inbox_path_resolves_to_the_actual_receiver_root(
-        self, monkeypatch, tmp_path, _fake_home
-    ):
-        content_root = tmp_path / "coordinator-content-repo"
-        (content_root / "state" / "cross-repo").mkdir(parents=True)
-        monkeypatch.setattr(
-            "coordinator_core.content_root.read_content_root",
-            lambda: str(content_root),
-        )
-        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
-        reason = guard._deny_reason(target)
-        expected = str(content_root / "state" / "cross-repo" / "inbox").replace("\\", "/") + "/"
-        assert expected in reason
-
-    def test_inbox_resolution_failure_does_not_raise(self, monkeypatch, _fake_home):
-        """Fail-open on the deny path's own message composition: an
-        exception here must degrade to the placeholder text, never bubble
-        out of ``_deny_reason`` (this module's own never-raises contract)."""
-        def _boom():
-            raise RuntimeError("registry unreadable")
-
-        monkeypatch.setattr(
-            "coordinator_core.content_root.read_content_root",
-            _boom,
-        )
-        target = str(_fake_home / ".claude" / "cross-repo" / "inbox" / "x.md")
-        reason = guard._deny_reason(target)
-        assert "<content_root>/cross-repo/inbox/" in reason

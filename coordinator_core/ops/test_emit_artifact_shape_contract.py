@@ -624,8 +624,6 @@ class TestRealTreeParity:
 
 from coordinator_core.ops import emit_artifact_shape_contract as _emit_module  # noqa: E402
 
-_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
-
 
 def _write_two_schema_corpus(schemas_dir: Path) -> None:
     schemas_dir.mkdir(parents=True, exist_ok=True)
@@ -655,19 +653,11 @@ def _neutralise_subset_guard(monkeypatch) -> None:
 
 def _authoring_coordinator_root() -> Path | None:
     """A coordinator-content-repo AUTHORING coordinator root (`<repo>/coordinator` carrying
-    `schemas/`, sentinel at `<repo>`), or None. Never a hardcoded path: tries the
-    ratified resolver first, then scans this checkout's sibling directories for
-    the fleet-wide `.coordinator-dev-repo` sentinel — the flat mirror the resolver
-    lands on in a consumer container never carries it."""
+    `schemas/`), or None. Resolved through the ratified content-root resolver only."""
     candidates = []
     resolved = resolve_content_root()
     if resolved:
         candidates.append(Path(resolved) / "coordinator")
-    try:
-        siblings = sorted(_CLAUDE_KLABAUTER_ROOT.parent.iterdir())
-    except OSError:
-        siblings = []
-    candidates.extend(sib / "coordinator" for sib in siblings if (sib / ".coordinator-dev-repo").exists())
     for cand in candidates:
         if (cand / "schemas").is_dir() and published_subset_reason(cand / "schemas") is None:
             return cand

@@ -387,7 +387,8 @@ def test_cited_missing_field_carries_sites_for_the_cited_set(tmp_path: Path, two
 
 
 def _write_shape_w_citation(content_root: Path, skill_relpath: str, cited_spelling: str, sep: str = "\\") -> None:
-    """A Shape W (Windows PowerShell) settings-home entrypoint citation —
+    """shell-doc-ok: quotes the shape the regex matches.
+    A Shape W (Windows PowerShell) settings-home entrypoint citation —
     `$env:COORDINATOR_SETTINGS_HOME\\bin\\<cited_spelling>` — matching
     `resolve-coordinator-bin.md`'s rung 0 form. ``sep`` lets a caller exercise
     the `/`-separated variant too."""

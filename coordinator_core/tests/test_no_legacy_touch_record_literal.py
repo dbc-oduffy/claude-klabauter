@@ -175,6 +175,11 @@ _PRODUCTION_EXEMPT_SITES: frozenset[str] = frozenset({
     # replace; see the module's own docstring § "Retired-record filename
     # constant" for the full citation.
     "coordinator_core/ops/reap_orphaned_agent_dirs.py::<module>",
+    # ADDED 2026-10-02 — `_touched_txt_paths` is the hook-side legacy leg of
+    # `_touch_lines`: it reads an old-dialect `touched.txt` left in a live
+    # session dir after the jsonl cutover. Retires when
+    # `legacy_touch_corpus_drain_check` reads zero and the leg is deleted.
+    "coordinator_core/hooks/support/touch_record.py::_touched_txt_paths",
 })
 
 

@@ -163,6 +163,7 @@ from coordinator_core.bash_guards._alternative_liveness import (
     _INDENTED_CMD_RE,
     _LABELED_INDENT_BLOCK_RE,
 )
+from coordinator_core import machine_profile
 from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards.dispatch import GuardBand
@@ -483,6 +484,26 @@ def _tail_bytes(text: str) -> int:
     return len(_OVERRIDE_NOTE_TAIL.encode("utf-8")) if _OVERRIDE_NOTE_TAIL and _OVERRIDE_NOTE_TAIL in text else 0
 
 
+_ADVISORY_TAIL_RE = re.compile(re.escape(machine_profile.advisory_tail("NAMEX")).replace("NAMEX", "[a-z0-9-]+"))
+
+
+def _split_advisory_frame(text: str) -> Tuple[int, str]:
+    """Bytes of the mechanism-owned warn-advisory frame (prefix + route tail) in `text`,
+    and `text` with that frame removed."""
+    frame = 0
+    stripped = text
+    tail = _ADVISORY_TAIL_RE.search(stripped)
+    if tail is None:
+        return 0, text
+    frame += len(tail.group(0).encode("utf-8"))
+    stripped = stripped[: tail.start()] + stripped[tail.end():]
+    idx = stripped.find(machine_profile.ADVISORY_PREFIX)
+    if idx >= 0:
+        frame += len(machine_profile.ADVISORY_PREFIX.encode("utf-8"))
+        stripped = stripped[:idx] + stripped[idx + len(machine_profile.ADVISORY_PREFIX):]
+    return frame, stripped
+
+
 def _provenance_marker_bytes(text: str) -> int:
     """Bytes of the `[coordinator]` provenance marker present in `text`, or 0.
 
@@ -605,8 +626,9 @@ def measure_envelope(
     text = _extract_prose_text(envelope)
     total_bytes = len(text.encode("utf-8"))
     relayed_bytes, authored = _split_relayed_prose(text)
+    frame_bytes, authored = _split_advisory_frame(authored)
     exempt_bytes = _exempt_span_bytes(authored) + _provenance_marker_bytes(authored)
-    tail_bytes = _tail_bytes(authored)
+    tail_bytes = _tail_bytes(authored) + frame_bytes
     data_bytes = _data_block_bytes(authored)
     prose_bytes = max(0, total_bytes - relayed_bytes - exempt_bytes - tail_bytes - data_bytes)
     return MessageSizeMeasurement(

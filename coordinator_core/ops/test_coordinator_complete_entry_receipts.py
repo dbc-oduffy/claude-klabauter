@@ -14,6 +14,7 @@ from coordinator_core.completion_receipts.model import receipt_rel_path
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.ops import coordinator_complete_entry as m
+from coordinator_core.ops.ceremony import wsc_disposition
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -81,7 +82,7 @@ def _commit_receipt(repo: Path, rid: str, actual) -> str:
 
 
 def _run() -> tuple[int, dict, str]:
-    rc = m.main(["--sid", "abcdef123456", "--disposition", "single-session", "--governing-plan-slug", _SLUG])
+    rc = m.main(["--sid", "abcdef123456", "--disposition", wsc_disposition.SINGLE_SESSION, "--governing-plan-slug", _SLUG])
     assert rc == 0
     entry = next(Path("archive/completed").rglob("*.md"))
     text = entry.read_text(encoding="utf-8")

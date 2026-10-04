@@ -16,7 +16,9 @@ from coordinator_core.dag import _parse_frontmatter
 from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.lifecycle_constants import SPEC_RIPE_STATUSES
+from coordinator_core.session import record_homes
 
+_HANDOFFS_ROOT = Path(record_homes.home_dir("", "handoffs")).as_posix()
 _PREFILTER_STUB = b"stub_id"
 _PREFILTER_CLOSES = b"closes_stubs"
 _LIVE_STATES = frozenset({"ready_to_fire", "awaiting_gate"})
@@ -124,7 +126,7 @@ def survey(repo_root: Path) -> OriginStubSurvey:
         return sorted(found)
 
     roots = (
-        ("state/handoffs", False, "handoff"),
+        (_HANDOFFS_ROOT, False, "handoff"),
         ("archive/handoffs", True, "handoff"),
         ("docs/plans", False, "plan"),
         ("archive/specs", True, "plan"),
@@ -157,7 +159,7 @@ def survey(repo_root: Path) -> OriginStubSurvey:
                 for pair in pairs:
                     evidence.setdefault(pair, []).append((rel, "handoff"))
             elif (
-                root == "state/handoffs"
+                root == _HANDOFFS_ROOT
                 and state in _LIVE_STATES
                 and is_baton_kind(meta.get("kind"))
                 and own is not None

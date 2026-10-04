@@ -293,7 +293,9 @@ def test_is_writable_predicate(tmp_path):
     assert mod._is_writable(str(tmp_path / "missing.txt")) is True
     os.chmod(f, stat.S_IRUSR | stat.S_IRGRP)
     assert mod._is_writable(str(f)) is False
-    os.chmod(f, stat.S_IRUSR | stat.S_IWGRP)
-    assert mod._is_writable(str(f)) is True
+    if os.name != "nt":
+        # Windows chmod honours only S_IWRITE (the read-only attribute); group-only write is POSIX-only.
+        os.chmod(f, stat.S_IRUSR | stat.S_IWGRP)
+        assert mod._is_writable(str(f)) is True
     os.chmod(f, stat.S_IRUSR | stat.S_IWUSR)
     assert mod._is_writable(str(f)) is True

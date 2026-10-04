@@ -278,6 +278,7 @@
       "_rationale": "Measured 2026-09-30 with coordinator_core/benchmarks/spawn_counter.py::_count_spawns_attributed (docs/plans/2026-07-19-engine-migration-high-traffic-strangle.md, B1) over the unit fixture coordinator_core/ops/memo/tests/test_memo_transition_commit_ownership.py::_setup_memo(_OPEN_FIXTURE) (tracked clean open memo in a tmp git repo), one `claim` through memo_transition._handler; exit_code 0, applied True; identical count on 3 runs. green_path=2: (1) `git hash-object -w` via git_native.py::_hash_object_stdin_bytes (a direct subprocess.run, reached from memo_transition._commit_terminal_write -> git_native.commit_authored_content; the counter attributes it `unattributed` because _hash_object_stdin_bytes is not one of its three attributed frames), (2) `git update-index --add --cacheinfo` via git_native.py::_git._invoke. Wall time of the same invocation 53-71ms, under the 200ms/500ms brightline. Enforced by coordinator_core/ops/memo/tests/test_memo_transition_whole_op_spawn_count.py. target_ms/tolerance copy the MUTATING class default and satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
     },
     "hooks.stop_dispatch": {
+      "_tier": "HOOK_PORT: deliberately shadowed -- the one bounded git spawn makes the 15ms warm-hook band unreachable, so this op is held to its own 300ms target and spawn_count_budget instead",
       "target_ms": 300,
       "tolerance": {
         "kind": "relative",
@@ -333,6 +334,7 @@
       "_rationale": "One `git check-ignore -z --stdin` over the whole run's declared-write union (dispatch_emit/emit.py::_gitignored_paths via git/run.py::run_git), batched so the count does not grow with rows or waves; a gitignored write path can never be committed and would otherwise halt the run at preflight. The host commit-trailer read (commit_trailers.read_host_commit_trailers) parses the git config files and starts no process. Counted by coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py with exact equality."
     },
     "hooks.postuse_advisory_dispatch": {
+      "_tier": "HOOK_PORT: deliberately shadowed -- the non-ASCII write touch costs one git spawn, so the 15ms warm-hook band is unreachable on that path and this op is held to its own 300ms target and spawn_count_budget instead",
       "target_ms": 300,
       "tolerance": {
         "kind": "relative",

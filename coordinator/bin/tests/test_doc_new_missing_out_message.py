@@ -51,7 +51,7 @@ def test_session_id_segment_is_sanitized(doc_new, monkeypatch, no_session_env):
 
     leaf = msg.split(f"{SHARE_RELDIR}/", 1)[1].split("/", 1)[0]
     assert "/" not in leaf and "\\" not in leaf
-    assert leaf == "....etcpasswd"
+    assert leaf == "..-..-etc-passwd"
 
 
 def test_identityless_reader_gets_the_missing_identity_named(doc_new, no_session_env):

@@ -5,12 +5,14 @@ leaving them pending."""
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import op as op_mod
 from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
     _V5_FRAGMENT,
     _V5_STAGE_SCHEMAS,
 )
+from coordinator_core.session.record_homes import home_dir
 
 _SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -57,7 +59,7 @@ def _repo(tmp_path):
     plans.mkdir(parents=True)
     for n in (1, 2, 3):
         (plans / f"p{n}.md").write_text(_PLAN.format(n=n), encoding="utf-8")
-    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir = Path(home_dir(str(tmp_path), "mise-inventory"))
     inv_dir.mkdir(parents=True)
     inventory = inv_dir / "run.md"
     inventory.write_text(

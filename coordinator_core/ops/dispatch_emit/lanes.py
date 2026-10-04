@@ -12,6 +12,7 @@ import heapq
 import posixpath
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from coordinator_core.ops.dispatch_emit.inventory_mint import (
@@ -28,8 +29,9 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     _normalize_path,
     _paths_overlap,
 )
+from coordinator_core.session.record_homes import home_dir
 
-_INVENTORY_DIR = "state/mise-inventory"
+_INVENTORY_DIR = PurePath(home_dir("", "mise-inventory")).as_posix()
 _HUB = "hub"
 
 

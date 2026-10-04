@@ -121,6 +121,7 @@ _DOOR_STEM = "coordinator-invoke"
 #: sibling `install_warm_door :: claim_bare_name` exists to strip, so the
 #: resolver below must model it or it cannot see the original hazard.
 #:
+#: shell-doc-ok: quotes the PowerShell probe that was run on this host.
 #: VERIFIED (2026-08-27) on this PowerShell host, not assumed: a directory
 #: containing ONLY `zzprobe.ps1` and `zzprobe.cmd`, prepended to PATH.
 #:   `$env:PATHEXT -split ';' -contains '.PS1'`  ->  False   (.ps1 is NOT in PATHEXT)

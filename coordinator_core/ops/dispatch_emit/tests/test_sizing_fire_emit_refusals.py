@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit import sizing_fire as sf
+from pathlib import PurePath
 
-REL = "state/sizings/a.yaml"
+from coordinator_core.ops.dispatch_emit import sizing_fire as sf
+from coordinator_core.session.record_homes import record_path
+
+REL = PurePath(record_path("", "sizings", "a.yaml")).as_posix()
 
 
 def _fireable(**over):

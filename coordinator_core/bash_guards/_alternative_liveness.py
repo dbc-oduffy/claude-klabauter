@@ -1534,11 +1534,40 @@ def _dummy_substitute(token: str) -> str:
     return token
 
 
+#: Windows system binaries that share a bare name with a POSIX utility the
+#: guards name in their alternatives. A guard's alternative runs under bash,
+#: where the name means the POSIX tool; the System32 ``find.exe`` is a text
+#: searcher that rejects POSIX flags.
+_WINDOWS_NAME_COLLISIONS = frozenset({"find", "sort"})
+
+
+def _posix_twin_of_windows_builtin(name: str, found: str) -> Optional[str]:
+    """The Git for Windows ``usr/bin`` twin of ``name`` when ``found`` is the
+    colliding System32 binary; None when ``found`` is not that binary or no
+    Git for Windows install sits above ``git`` on PATH."""
+    stem = os.path.splitext(os.path.basename(name))[0].lower()
+    if stem not in _WINDOWS_NAME_COLLISIONS:
+        return None
+    system_dir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    if os.path.normcase(os.path.dirname(found)) != os.path.normcase(system_dir):
+        return None
+    git = shutil.which("git")
+    if not git:
+        return None
+    for parent in Path(git).resolve().parents:
+        twin = parent / "usr" / "bin" / (stem + ".exe")
+        if twin.is_file():
+            return str(twin)
+    return None
+
+
 def _resolve_on_path_or_settings_home(name: str) -> Optional[str]:
     """Resolve an executable by bare name on PATH, then under the
     settings-home bin dir (the forwarder convention every coordinator CLI
     outside claude-klabauter's own tree uses) -- never a hardcoded absolute path."""
     found = shutil.which(name)
+    if found and os.name == "nt":
+        found = _posix_twin_of_windows_builtin(name, found) or found
     if found:
         return found
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(

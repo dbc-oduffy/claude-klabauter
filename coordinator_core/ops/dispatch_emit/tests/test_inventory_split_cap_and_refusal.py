@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
     _V5_FRAGMENT,
     _V5_STAGE_SCHEMAS,
 )
+from coordinator_core.session.record_homes import home_dir, record_path
 
 _RUN_ID = "20261002T000000-split"
 _ITEMS = 8
@@ -30,7 +32,7 @@ def _review_inputs(monkeypatch):
 
 def _repo_with_inventory(tmp_path, *, items: int = _ITEMS, deps_on_first: bool = False):
     (tmp_path / ".git").mkdir()
-    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir = Path(home_dir(str(tmp_path), "mise-inventory"))
     inv_dir.mkdir(parents=True)
     lines = []
     for i in range(1, items + 1):
@@ -100,7 +102,7 @@ def test_plan_route_over_cap_exits_non_zero(tmp_path, monkeypatch):
 def test_over_cap_inventory_is_split_into_parts_with_distinct_run_ids(tmp_path, monkeypatch, capsys):
     cap = _cap_between_whole_and_part(tmp_path, monkeypatch)
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
-    inventory = tmp_path / "state" / "mise-inventory" / f"{_RUN_ID}.md"
+    inventory = Path(record_path(str(tmp_path), "mise-inventory", f"{_RUN_ID}.md"))
     capsys.readouterr()
 
     rc = cli_module.main(_argv(tmp_path, inventory))
@@ -144,7 +146,7 @@ def test_part_edge_onto_a_later_part_is_refused(tmp_path):
 def test_fire_with_split_refuses_and_fires_nothing(tmp_path, monkeypatch):
     cap = _cap_between_whole_and_part(tmp_path, monkeypatch)
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
-    inventory = tmp_path / "state" / "mise-inventory" / f"{_RUN_ID}.md"
+    inventory = Path(record_path(str(tmp_path), "mise-inventory", f"{_RUN_ID}.md"))
 
     rc = cli_module.main([*_argv(tmp_path, inventory), "--fire"])
 

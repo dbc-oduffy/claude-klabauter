@@ -274,7 +274,7 @@ def test_clean_dest_with_commits_pushes(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_OK
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert len(push_calls) == 1
-    assert push_calls[0] == ["git", "-C", dest, "push"]
+    assert push_calls[0] == ["git", "-C", dest, "-c", "credential.interactive=never", "push"]
 
 
 def test_reconcile_refusal_blocks_push_rather_than_racing_a_peer(tmp_path, monkeypatch, capsys):
@@ -587,7 +587,7 @@ def test_feature_branch_without_promote_pushes_but_refuses_merge_into_default(
     assert rc == _mod._EXIT_USAGE
     assert [c for c in spy.calls if c[:1] == ["gh"]] == []
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
-    assert push_calls == [["git", "-C", dest, "push"]]
+    assert push_calls == [["git", "-C", dest, "-c", "credential.interactive=never", "push"]]
     err = capsys.readouterr().err
     assert "'feature-x' pushed, not merged into 'main'" in err
     assert "percolate-push alpha --promote" in err
@@ -626,7 +626,7 @@ def test_release_channel_branch_pushes_and_never_invokes_gh(tmp_path, monkeypatc
     assert gh_calls == []
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert len(push_calls) == 1
-    assert push_calls[0] == ["git", "-C", dest, "push"]
+    assert push_calls[0] == ["git", "-C", dest, "-c", "credential.interactive=never", "push"]
 
 
 def test_non_default_non_channel_branch_still_opens_and_merges_pr(tmp_path, monkeypatch):

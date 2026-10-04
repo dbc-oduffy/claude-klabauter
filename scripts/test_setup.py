@@ -107,9 +107,10 @@ def test_parse_args_break_system_packages_is_an_unknown_flag(setup_mod):
         setup_mod.parse_args(["--break-system-packages"])
 
 
-def test_closing_line_names_literal_setup_command_and_no_doc_pointer(setup_mod):
+def test_closing_line_names_runnable_chain_walk_command_and_no_doc_pointer(setup_mod):
     line = setup_mod.CLOSING_CHAIN_WALK_LINE
-    assert "/coordinator:setup" in line
+    assert "python3 coordinator/scripts/chain-walk.py" in line
+    assert "coordinator:" not in line
     assert "docs/" not in line
     assert "see " not in line
 
@@ -1701,6 +1702,48 @@ def test_sibling_mirror_without_registry_source_still_exits_90_naming_the_keys(s
     assert "plugin.mirrors.coordinator-claude.source_path" in err
     assert "engine.working_repos.content_root" in err
     assert "--skip-dep-check" not in err
+
+
+def test_dead_content_root_is_skipped_with_advisory_and_falls_through(setup_mod, monkeypatch, tmp_path, capsys):
+    b = tmp_path / "b"
+    b.mkdir()
+    _add_source_evidence(b)
+    dead = tmp_path / "gone" / "coordinator-content-repo"
+    repo, _ = _publisher_box(
+        setup_mod, monkeypatch, tmp_path,
+        {"engine.working_repos.content_root": str(dead),
+         "plugin.mirrors.coordinator-claude.source_path": str(b)},
+    )
+    assert setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())[0] == b
+    assert "engine.working_repos.content_root" in capsys.readouterr().err
+
+
+def test_dead_content_root_alone_names_the_mirror_and_retire_publisher(setup_mod, monkeypatch, tmp_path, capsys):
+    repo, _ = _publisher_box(
+        setup_mod, monkeypatch, tmp_path,
+        {"engine.working_repos.content_root": str(tmp_path / "gone")},
+    )
+    with pytest.raises(SystemExit):
+        setup_mod.check_coordinator_claude_dep(repo, setup_mod.Args())
+    err = capsys.readouterr().err
+    assert "PUBLISH MIRROR" in err
+    assert "machine-local retire-publisher" in err
+    assert "--coordinator-root/COORDINATOR_CLAUDE_ROOT" not in err
+
+
+def test_missing_root_error_names_the_rung_it_came_from(setup_mod, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_publish_destination",
+        lambda target_root, env=None: False,
+    )
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root_pointer", lambda: None)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_registry", lambda: tmp_path / "nope")
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    with pytest.raises(SystemExit):
+        setup_mod.check_coordinator_claude_dep(tmp_path / "repo", setup_mod.Args())
+    err = capsys.readouterr().err
+    assert "resolved from: engine.working_repos.content_root registry key" in err
+    assert "--coordinator-root/COORDINATOR_CLAUDE_ROOT location" not in err
 
 
 def test_check_coordinator_claude_dep_rejects_bare_directory_no_evidence(setup_mod, monkeypatch, tmp_path):

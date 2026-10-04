@@ -15,7 +15,7 @@ Daily changelogs are a per-DAY narrative, not per-device (2026-07-19 PM ruling):
 this scanner has exactly one row shape, keyed by day only — there is no machine
 column and no per-machine fan-out.
 
-  `<YYYY-MM-DD>\\t<commit_count>\\t<baseline_sha>\\t<tip_sha>`
+  `<YYYY-MM-DD>\\t<commit_count>\\t<baseline_sha>\\t<tip_sha>\\t<union_shas,...>`
 
 baseline_sha is the parent of that day's OLDEST commit (across the full-day
 union span, see below); tip_sha is NEWEST. Rows are emitted OLDEST-FIRST so the
@@ -739,7 +739,18 @@ def _parse_args(
     return lookback, today_override, repo_root, None
 
 
+_USAGE = (
+    "usage: workday-complete-backfill-scan [--lookback DAYS] [--today YYYY-MM-DD] "
+    "[--repo-root DIR]\n"
+    "Emits <day>\\t<commits>\\t<baseline_sha>\\t<tip_sha>\\t<union_shas> per past day with commits "
+    "but no daily summary; empty output = no gaps. --lookback defaults to 14."
+)
+
+
 def main(argv: List[str]) -> int:
+    if "-h" in argv or "--help" in argv:
+        print(_USAGE)
+        return 0
     lookback, today_override, repo_root_arg, err = _parse_args(argv)
     if err is not None:
         print(f"ERROR: {err}", file=sys.stderr)

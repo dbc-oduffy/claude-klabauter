@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import PurePath
+
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.session.record_homes import record_path
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -15,7 +18,7 @@ def _m_plus_script(monkeypatch):
     return compose_ask_script(
         repo_root="REPO",
         prompt=None,
-        sizing_rel="state/sizings/x.yaml",
+        sizing_rel=PurePath(record_path("", "sizings", "x.yaml")).as_posix(),
         run_id="run-1",
         session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]),

@@ -246,6 +246,19 @@ def is_deny_envelope(envelope: Any) -> bool:
     return _deny_body(envelope) is not None
 
 
+#: The warn-level advisory frame: mechanism-owned, not guard copy. The size
+#: harness classifies ``ADVISORY_PREFIX`` and ``advisory_tail`` bytes as tail.
+ADVISORY_PREFIX = "Advisory: "
+
+
+def advisory_tail(name: str) -> str:
+    """The fixed escalate/silence route that closes every warn advisory."""
+    return (
+        "Stricter: `machine-local set coordinator.guard_level strict`; "
+        "silence: `machine-local set coordinator.guard_level.%s off`." % name
+    )
+
+
 def apply_guard_level(
     guard_name: str,
     deny_envelope: Optional[Dict[str, Any]],
@@ -296,10 +309,7 @@ def apply_guard_level(
     out: Dict[str, Any] = {
         "hookEventName": event,
         "additionalContext": (
-            "Advisory (%s, level warn): %s "
-            "Stricter: `machine-local set coordinator.guard_level strict`; "
-            "silence: `machine-local set coordinator.guard_level.%s off`."
-            % (name, risk.strip(), name)
+            ADVISORY_PREFIX + risk.strip() + " " + advisory_tail(name)
         ),
     }
     if event == "PreToolUse":

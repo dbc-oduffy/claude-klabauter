@@ -110,3 +110,13 @@ def test_idempotent_rerun_writes_and_commits_nothing(repo):
     r = _run(root, rows)
     assert r["committed"] is False and r["changed"] == []
     assert (root / "docs/plans/p.md").read_text() == before and len(commits) == 1
+
+
+def test_plus_joined_evidence_checks_each_part():
+    from coordinator_core.ops.plan_gated_criteria_met import _check_evidence
+    root = Path(__file__).resolve().parents[3]
+    _check_evidence([{"brightline": "x", "evidence": "coordinator_core/ops/plan_gated_criteria_met.py+pyproject.toml"}], root)
+    with pytest.raises(ValueError):
+        _check_evidence([{"brightline": "x", "evidence": "pyproject.toml+no/such/file"}], root)
+    with pytest.raises(ValueError):
+        _check_evidence([{"brightline": "x", "evidence": "pyproject.toml+"}], root)

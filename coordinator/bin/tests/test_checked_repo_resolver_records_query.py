@@ -162,7 +162,7 @@ class TestResolveRepoRootBranching(unittest.TestCase):
 class TestResolveFromRepoBranching(unittest.TestCase):
 
     def test_match_returns_silently(self):
-        with mock.patch.object(cli_shared, "machine_local_repos_keys", return_value=[]), \
+        with mock.patch.object(cli_shared, "machine_local_dump_repos", return_value={}), \
              mock.patch.object(cli_shared, "machine_local_get", return_value=None), \
              mock.patch.object(
                  cli_shared,
@@ -181,7 +181,7 @@ class TestResolveFromRepoBranching(unittest.TestCase):
         exactly mirroring the predecessor's git-failure branch -- never a
         raise, and `em_id_for_root(None, ...)` names the fallback identity
         `"unknown-sender-em"`."""
-        with mock.patch.object(cli_shared, "machine_local_repos_keys", return_value=[]), \
+        with mock.patch.object(cli_shared, "machine_local_dump_repos", return_value={}), \
              mock.patch.object(cli_shared, "machine_local_get", return_value=None), \
              mock.patch.object(
                  cli_shared,
@@ -200,7 +200,7 @@ class TestResolveFromRepoBranching(unittest.TestCase):
         explains the stderr divergence between the two calls."""
         same_root = "/repo/same"
 
-        with mock.patch.object(cli_shared, "machine_local_repos_keys", return_value=[]), \
+        with mock.patch.object(cli_shared, "machine_local_dump_repos", return_value={}), \
              mock.patch.object(cli_shared, "machine_local_get", return_value=None), \
              mock.patch.object(
                  cli_shared,
@@ -212,7 +212,7 @@ class TestResolveFromRepoBranching(unittest.TestCase):
                 cli_shared.resolve_from_repo()
 
         mismatch_verdict = _verdict("MISMATCH", same_root)
-        with mock.patch.object(cli_shared, "machine_local_repos_keys", return_value=[]), \
+        with mock.patch.object(cli_shared, "machine_local_dump_repos", return_value={}), \
              mock.patch.object(cli_shared, "machine_local_get", return_value=None), \
              mock.patch.object(
                  cli_shared,

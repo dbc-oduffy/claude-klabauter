@@ -3,7 +3,9 @@ repo root is read at run time from `args.repoRoot`."""
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
@@ -17,10 +19,12 @@ _HOST_PATH = re.compile(r"(?:^|[\s'\"`(=:])(?:[A-Za-z]:[\\/]|/(?:home|Users|root
 def _emit(tmp_path, monkeypatch):
     claude_dir = tmp_path / "offpath"
     claude_dir.mkdir()
-    binary = claude_dir / "claude"
-    binary.write_text("#!/bin/sh\n")
+    # shutil.which resolves an extensionless file on POSIX only; Windows needs a PATHEXT suffix.
+    binary = claude_dir / ("claude.cmd" if sys.platform == "win32" else "claude")
+    binary.write_text("@echo off\n" if sys.platform == "win32" else "#!/bin/sh\n")
     binary.chmod(0o755)
-    monkeypatch.setenv("PATH", str(claude_dir))
+    # Prepended, not replaced: emit's `git check-ignore` must still resolve git.
+    monkeypatch.setenv("PATH", os.pathsep.join([str(claude_dir), os.environ.get("PATH", "")]))
     repo = tmp_path / "repo"
     repo.mkdir()
     script = emit.emit_script(_write_plan(tmp_path), repo_root=repo, **REVIEW_KW)

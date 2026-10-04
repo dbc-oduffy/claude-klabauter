@@ -383,6 +383,14 @@ def _reprice_git_version_floor() -> dict:
 GIT_VERSION_FLOOR_MS = None  # populated at collection-adjacent fixture time, see conftest note below
 
 
+def _bench_root() -> Path:
+    """Same-volume parent for the hardlinked clone (see `_clone_repo_at_scale`):
+    the repo's git-ignored `scratch/`, never the drive root."""
+    root = _CLAUDE_KLABAUTER_ROOT / "scratch"
+    root.mkdir(exist_ok=True)
+    return root
+
+
 def _clone_repo_at_scale(dest_root: Path) -> Path:
     """A LOCAL, hardlinked clone of THIS repo's own working tree and object
     store, at its own `work/*` branch HEAD -- this chunk's own anti-scope
@@ -391,8 +399,8 @@ def _clone_repo_at_scale(dest_root: Path) -> Path:
     than approximated with a synthetic fixture. `--local` on the SAME
     volume as the source repo hardlinks pack/loose objects (verified during
     this chunk's own authorship: a cross-volume destination fails hard with
-    "Improper link" -- `dest_root` below is therefore always derived from
-    `_CLAUDE_KLABAUTER_ROOT`'s own drive/anchor, never a hardcoded drive letter), so
+    "Improper link" -- `dest_root` below is therefore always under
+    `_CLAUDE_KLABAUTER_ROOT`'s git-ignored `scratch/`, never a drive root), so
     this clone reproduces the source repo's real 36k-tracked-file / ~410MB
     /6-pack shape in ~5s rather than copying 400MB+ byte-for-byte.
     """
@@ -572,7 +580,7 @@ def archival_commit_measurement(tmp_path_factory):
     """
     _require_windows()
 
-    dest_root = Path(_CLAUDE_KLABAUTER_ROOT.anchor) / f"_c6bench_{uuid.uuid4().hex[:10]}"
+    dest_root = _bench_root() / f"_c6bench_{uuid.uuid4().hex[:10]}"
     dest_root.mkdir(parents=True, exist_ok=False)
     try:
         repo = _clone_repo_at_scale(dest_root)
@@ -640,7 +648,7 @@ def ac1_restage_true_measurement(tmp_path_factory):
     """
     _require_windows()
 
-    dest_root = Path(_CLAUDE_KLABAUTER_ROOT.anchor) / f"_c6bench_ac1_{uuid.uuid4().hex[:10]}"
+    dest_root = _bench_root() / f"_c6bench_ac1_{uuid.uuid4().hex[:10]}"
     dest_root.mkdir(parents=True, exist_ok=False)
     try:
         repo = _clone_repo_at_scale(dest_root)

@@ -6,6 +6,8 @@ assignment and never satisfy that:
 
     N=<stem>; echo probe > "$SOME_DIR/$N.md"
 
+shell-doc-ok: quotes the bash command specimen under test.
+
 The stem sits in an assignment and the suffix is a separate literal, so the
 governed name appears nowhere, `is_denied_bash_write`'s opening gate returns
 False, no leg of the guard is reached, and the write lands. Measured as a

@@ -2,15 +2,17 @@
 
 import subprocess
 import time
+from pathlib import Path
 
 from coordinator_core.ops.origin_stub_staleness import survey
+from coordinator_core.session import record_homes
 
 _RECORDS = 600
 _STUB_EVERY = 20
 
 
 def _build(root):
-    handoffs = root / "state" / "handoffs"
+    handoffs = Path(record_homes.home_dir(str(root), "handoffs"))
     plans = root / "docs" / "plans"
     handoffs.mkdir(parents=True)
     plans.mkdir(parents=True)

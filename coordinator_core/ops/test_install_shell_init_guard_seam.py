@@ -153,7 +153,8 @@ def test_legacy_begin_only_block_is_replaced_not_duplicated(
         f'_cc_fsize_guard="{guard_src}"\n'
         'if [ -x "$_cc_fsize_guard" ]; then eval "$(python3 "$_cc_fsize_guard" 2>/dev/null)"; fi\n'
         "unset _cc_fsize_guard\n"
-        "# trailing operator line\n"
+        "# trailing operator line\n",
+        newline="\n",
     )
 
     rc = seam.main(["--rc", str(rc_path)])
@@ -173,7 +174,7 @@ def test_block_naming_another_engine_clone_is_rewritten_to_the_resolved_one(
     monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     other = str(tmp_path / "other-engine" / "bin" / "shell-init-guard.py")
-    rc_path.write_text(f"# keep\n\n{seam._render_block(other)}\n")
+    rc_path.write_text(f"# keep\n\n{seam._render_block(other)}\n", newline="\n")
 
     assert seam.main(["--check-only", "--rc", str(rc_path)]) == 1
     assert "would update" in capsys.readouterr().out

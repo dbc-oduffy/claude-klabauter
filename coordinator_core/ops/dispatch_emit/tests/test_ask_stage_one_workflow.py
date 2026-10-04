@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path, PurePath
 
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.session.record_homes import home_dir, record_path
 
 PLAN_REL = "docs/plans/2026-10-02-one-wf.md"
-SIZING_REL = "state/sizings/s.yaml"
+SIZING_REL = PurePath(record_path("", "sizings", "s.yaml")).as_posix()
 
 GATED = """---
 title: fixture
@@ -78,7 +80,7 @@ def _repo(tmp_path, plan: str, sizing: str | None = None):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
     if sizing is not None:
-        (tmp_path / "state" / "sizings").mkdir(parents=True)
+        Path(home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
         (tmp_path / SIZING_REL).write_text(sizing, encoding="utf-8", newline="\n")
 
 

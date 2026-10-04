@@ -224,15 +224,11 @@ def _authoring_path() -> Optional[str]:
     return root.replace("\\", "/").rstrip("/") + "/global-doctrine/CLAUDE.md"
 
 
-def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> str:
-    authoring = _authoring_path()
-    target = f"edit instead: `{authoring}`"
+def _deny_reason(payload: Optional[Dict[str, Any]] = None) -> str:
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
-        "BLOCKED: not the authoring source — a re-derivation hook leaves "
-        "edits here silently overwritten, with no error.\n"
-        "Use instead:\n"
-        f"  {target}, not {file_path}"
+        "BLOCKED: derived copy; edits are overwritten, no error.\n"
+        "Edit instead: `<repos.content_root>/global-doctrine/CLAUDE.md`"
         + ("\n\n" + _note if _note else "")
     )
 
@@ -259,13 +255,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(file_path, payload),
+            "permissionDecisionReason": _deny_reason(payload),
         }
     }
     return apply_guard_level(
         "block-derived-global-doctrine-write",
         denial,
         risk=doctrine_surface_risk(
-            f"{file_path} is re-derived from its authoring copy, so this edit may be overwritten."
+            "The derived global-doctrine copy is re-derived from its authoring copy, so this edit may be overwritten."
         ),
     )

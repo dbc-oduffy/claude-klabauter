@@ -764,4 +764,4 @@ def test_guard_level_governs_the_deny(two_roots, monkeypatch, level, denies):
         assert out is None
     else:
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert "blast radius" in out["hookSpecificOutput"]["additionalContext"]
+        assert "Doctrine surfaces reach every session" in out["hookSpecificOutput"]["additionalContext"]

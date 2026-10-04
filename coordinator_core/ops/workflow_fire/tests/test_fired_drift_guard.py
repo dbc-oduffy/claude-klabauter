@@ -72,7 +72,7 @@ def test_fire_with_expected_matching_on_disk_bytes_proceeds(tmp_path, monkeypatc
     guard is silent and the call still reaches ``fire.fire_workflow``."""
     script_path = tmp_path / "plan.workflow.mjs"
     script_text = "phase('Wave 1: C1');\n"
-    script_path.write_text(script_text, encoding="utf-8")
+    script_path.write_text(script_text, encoding="utf-8", newline="\n")
 
     called = {}
 

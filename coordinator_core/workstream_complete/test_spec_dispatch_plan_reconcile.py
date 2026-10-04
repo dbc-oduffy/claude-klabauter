@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.ops.ceremony import wsc_disposition
 from coordinator_core.session import claimed_plan
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -16,7 +17,7 @@ _REL = "docs/plans/2026-10-01-spec-dispatch-fixture.md"
 def _gate() -> wsc.SessionShapeGate:
     return wsc.SessionShapeGate(
         sid="testsid123",
-        disposition="single-session",
+        disposition=wsc_disposition.SINGLE_SESSION,
         consumed_handoff="",
         diagnostics=[],
         consumed_handoff_paths=(),

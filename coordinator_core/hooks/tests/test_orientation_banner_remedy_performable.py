@@ -9,13 +9,14 @@ import pytest
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks import project_orientation as po
+from coordinator_core.testing.content_root import resolve_content_root
 
 _SRC = Path(po.__file__).read_text(encoding="utf-8")
 _SLASH_REMEDIES = ("update-docs", "workweek-start", "workday-start")
 
 
 def _roster() -> set:
-    commands = Path(__file__).resolve().parents[3].parent / "coordinator-content-repo" / "coordinator" / "commands"
+    commands = Path(resolve_content_root() or "/content-root-unresolved") / "coordinator" / "commands"
     if not commands.is_dir():
         pytest.skip("coordinator-content-repo command roster not mounted beside this repo")
     return {p.stem for p in commands.glob("*.md")}

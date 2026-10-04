@@ -375,9 +375,10 @@ async function _fixStage(rowId) {
   else if (outcome === 'done') { row.touchedFiles = row.declaredFiles; }
   row.createdFiles = result.created_files || [];
   if (outcome === 'done' && result.close_result) {
-    row.removedFiles = row.removedFiles.concat([result.close_result.old || row.path]);
-    row.touchedFiles = row.touchedFiles.concat([result.close_result.new]);
-    row.closeResult = result.close_result;
+    const _archived = _archiveDestination(row.path);
+    row.removedFiles = row.removedFiles.concat([row.path]);
+    row.touchedFiles = row.touchedFiles.concat([_archived]);
+    row.closeResult = { old: row.path, new: _archived };
   }
   if (tradeoff) { row.done = true; _handBack(rowId, 'needs-judgment', 'fix reported a tradeoff'); return; }
   if (outcome === 'NEEDS_PLAN') { row.done = true; _handBack(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }

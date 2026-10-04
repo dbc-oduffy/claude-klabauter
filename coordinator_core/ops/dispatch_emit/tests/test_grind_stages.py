@@ -505,7 +505,7 @@ def test_commit_prompts_carry_an_explicit_subject_and_body():
 
 
 def test_judge_against_head_clause_present_in_module_at_least_once():
-    """`grep -c 'git show HEAD' grind_stages.py >= 1` (C2 acceptance)."""
+    """`grep -c 'git show HEAD' grind_stages.py` is at least 1 (C2 acceptance)."""
     module_path = __import__("pathlib").Path(grind_stages.__file__)
     text = module_path.read_text(encoding="utf-8")
     assert text.count("git show HEAD") >= 1

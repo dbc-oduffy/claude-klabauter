@@ -96,6 +96,14 @@ def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent():
     assert "item.new_path" not in script
 
 
+def test_fix_stage_archive_path_is_computed_not_relayed_from_fix_agent():
+    script = _compose()
+    assert "result.close_result.new" not in script
+    assert "result.close_result.old" not in script
+    assert "row.closeResult = result.close_result;" not in script
+    assert "row.closeResult = { old: row.path, new: _archived };" in script
+
+
 def test_every_phase_title_is_declared_in_meta_phases():
     script = _compose()
     m = re.search(r"export const meta = \{.*?\n\};", script, re.S)

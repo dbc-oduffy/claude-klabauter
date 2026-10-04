@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from coordinator_core.hooks import repin_cloud_engine_root as mod
 from coordinator_core.ipc import _REGISTRY
@@ -142,6 +145,11 @@ def test_does_not_repoint_to_unstamped_checkout(tmp_path):
     assert not link.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.replace over an existing directory symlink is POSIX-only (WinError 5 on Windows); "
+    "the hook runs only in the Linux cloud container",
+)
 def test_atomic_replace_leaves_valid_link(tmp_path):
     link = tmp_path / "engine-current"
     frozen = tmp_path / "klabauter"

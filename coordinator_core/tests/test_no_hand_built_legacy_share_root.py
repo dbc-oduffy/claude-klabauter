@@ -54,7 +54,6 @@ _EXEMPT = {
     "coordinator_core/ops/extract_cited_sidecars.py",
     "coordinator_core/ops/fleet_machinery_sweep.py",
     "coordinator_core/ops/review_brightline_gate.py",
-    "coordinator_core/ops/dispatch_emit/emit.py",
     "coordinator_core/ops/session/fix_concrete_path_citations.py",
     "coordinator_core/ops/session/guard_concrete_path_citations.py",
     "coordinator_core/write_guards/nudge_session_display_name_as_identifier.py",

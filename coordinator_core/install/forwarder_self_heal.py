@@ -263,7 +263,14 @@ def _self_heal_forwarders_inner() -> None:
                     if cutover is not None:
                         native_written.add(name)
                         continue
-                _write_agent_forwarder(name, bin_dst / name, False, target=target)
+                bare = bin_dst / name
+                if (
+                    sys.platform == "win32"
+                    and bare.exists()
+                    and not _python_forwarder_is_stale(bare, name, target)
+                ):
+                    continue
+                _write_agent_forwarder(name, bare, False, target=target)
             for name, target in sorted(stale.items()):
                 if _python_forwarder_is_stale(bin_dst / name, name, target):
                     _write_agent_forwarder(name, bin_dst / name, False, target=target)
@@ -285,7 +292,7 @@ def _python_forwarder_is_stale(path: Path, name: str, target: str) -> bool:
     expected = _agent_forwarder_content(name, target).encode("utf-8")
     try:
         with path.open("rb") as fh:
-            actual = fh.read(len(expected) + 1)
+            actual = fh.read(2 * len(expected) + 2).replace(b"\r\n", b"\n")
     except OSError:
         return False
     if actual == expected:

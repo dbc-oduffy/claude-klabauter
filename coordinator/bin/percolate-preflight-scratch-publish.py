@@ -144,11 +144,9 @@ def _import_main():
     with exit 3. A plain in-process import: no RPC hop.
     """
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    from cc_invoke import _resolve_claude_klabauter_root
+    from cc_invoke import require_dispatch_engine_on_path
 
-    root = _resolve_claude_klabauter_root()
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    require_dispatch_engine_on_path()
     from coordinator_core.cli_entry import run_op_main
 
     return run_op_main

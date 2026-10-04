@@ -119,6 +119,7 @@ from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import context_only, payload_of
 from coordinator_core.ipc import register_op
+from coordinator_core.timestamps import with_age
 
 _GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _CURRENCY_BANNER_STALE_HOURS = 24
@@ -847,7 +848,7 @@ def _orientation_cache_staleness_banner(
     out.append("\n")
     out.append(
         f"── Orientation cache STALE: {cache_head}→{short_head} "
-        f"({generated_at}) — refresh: {cli} --invoker workday-start ──\n"
+        f"({with_age(generated_at)}) — refresh: {cli} --invoker workday-start ──\n"
     )
 
 

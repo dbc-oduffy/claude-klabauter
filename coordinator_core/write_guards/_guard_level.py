@@ -5,11 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-_BLAST_RADIUS = (
-    "Doctrine surfaces reach every session and dispatched agent, so an edit "
-    "here has the widest blast radius and is rarely the best way to get "
-    "something done."
-)
+_BLAST_RADIUS = "Doctrine surfaces reach every session; edit here only when nothing structural fits."
 
 
 #: Shared by the Edit/Write and Bash doctrine-surface advisories.

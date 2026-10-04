@@ -61,7 +61,7 @@ def test_legacy_registry_key_only_is_migrated(box, tmp_path):
     assert result.migrated
     assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
     assert (box / cr.POINTER_NAME).is_file()
-    assert LEGACY_KEY in (box / "registry.local.toml").read_text(encoding="utf-8")
+    assert LEGACY_KEY not in (box / "registry.local.toml").read_text(encoding="utf-8")
 
 
 def test_engine_twin_is_migrated(box, tmp_path):

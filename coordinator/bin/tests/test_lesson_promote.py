@@ -576,8 +576,8 @@ class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
     it would be if the invoking shell had exported it.
     """
 
-    @classmethod
     @pytest.fixture(scope="class", autouse=True)
+    @classmethod
     def _inherited_shell_export(cls, tmp_path_factory):
         ambient_root = tmp_path_factory.mktemp("ambient-coordinator-content-repo")
         prior_content_root = os.environ.get("CONTENT_ROOT")

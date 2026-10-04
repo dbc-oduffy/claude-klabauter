@@ -64,24 +64,25 @@ def test_an_event_that_carries_env_is_not_overwritten(hook_run, monkeypatch):
     assert seen["params"]["payload"]["env"] == {"COORDINATOR_ALLOW_X": "1"}
 
 
-def test_the_sessions_home_and_project_dir_reach_the_payload(hook_run, monkeypatch):
+def test_the_sessions_home_and_project_dir_reach_the_payload(hook_run, monkeypatch, tmp_path):
     mod, seen = hook_run
-    for name, value in (
-        ("CLAUDE_HOME", "/s/home"),
-        ("CLAUDE_PROJECT_DIR", "/s/proj"),
-        ("HOME", "/s/h"),
-        ("USERPROFILE", "/s/u"),
-    ):
+    # Real tmp paths: Path.home() follows USERPROFILE on Windows, so a POSIX
+    # fake like "/s/u" lands machine-lock writes at the drive root.
+    expected = {
+        name: str(tmp_path / sub)
+        for name, sub in (
+            ("CLAUDE_HOME", "home"),
+            ("CLAUDE_PROJECT_DIR", "proj"),
+            ("HOME", "h"),
+            ("USERPROFILE", "u"),
+        )
+    }
+    for name, value in expected.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("UNRELATED_SECRET", "never")
 
     _run(mod, monkeypatch, dict(_EVENT))
 
     env = seen["params"]["payload"]["env"]
-    assert {k: env.get(k) for k in ("CLAUDE_HOME", "CLAUDE_PROJECT_DIR", "HOME", "USERPROFILE")} == {
-        "CLAUDE_HOME": "/s/home",
-        "CLAUDE_PROJECT_DIR": "/s/proj",
-        "HOME": "/s/h",
-        "USERPROFILE": "/s/u",
-    }
+    assert {k: env.get(k) for k in expected} == expected
     assert "UNRELATED_SECRET" not in env

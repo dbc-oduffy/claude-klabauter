@@ -7,12 +7,14 @@ grow with the number of batons. The figure is read from the budget manifest, nev
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops import roadmap_blitz_land
+from coordinator_core.session import record_homes
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -30,7 +32,7 @@ def _budget() -> dict:
 
 
 def _baton(root, stub_id: str) -> None:
-    path = root / "state" / "handoffs" / f"{stub_id}.md"
+    path = Path(record_homes.record_path(str(root), "handoffs", f"{stub_id}.md"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\nkind: roadmap-baton\ntitle: t\nstub_id: %s\nstatus: open\n"

@@ -259,6 +259,11 @@ def test_pipe_is_alive_fails_open_on_error_windows(monkeypatch: pytest.MonkeyPat
     assert breadcrumb._pipe_is_alive(r"\\.\pipe\fake") is True
 
 
+@pytest.mark.skipif(
+    __import__("os").name == "nt",
+    reason="the os.name dispatch reaches the POSIX arm only off Windows; "
+    "the arm itself is covered portably by test_unix_socket_is_alive_fails_open_on_error",
+)
 def test_pipe_is_alive_fails_open_on_error_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_pipe_is_alive` now branches on `os.name != "nt"` straight to
     `_unix_socket_is_alive` -- on THIS platform, a Windows-side `WinDLL`
@@ -274,6 +279,21 @@ def test_pipe_is_alive_fails_open_on_error_posix(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(_socket, "socket", _raise)
     assert breadcrumb._pipe_is_alive(r"\\.\pipe\fake") is True
+
+
+def test_unix_socket_is_alive_fails_open_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The POSIX arm called directly (portable: reachable on win32 too, where
+    `_pipe_is_alive` never dispatches to it). An unanticipated error building
+    the probe socket must degrade to True, not propagate. `AF_UNIX` is
+    patched in with `raising=False` because win32's `socket` module lacks it."""
+    import socket as _socket
+
+    def _raise(*args, **kwargs):
+        raise OSError("no sockets for you")
+
+    monkeypatch.setattr(_socket, "AF_UNIX", 1, raising=False)
+    monkeypatch.setattr(_socket, "socket", _raise)
+    assert breadcrumb._unix_socket_is_alive("/nonexistent.sock") is True
 
 
 def test_should_spawn_true_when_young_but_dead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

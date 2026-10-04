@@ -6,6 +6,7 @@ under a fleet repo root (a rogue venv's on-disk fingerprint).
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from coordinator_core.orientation import stray_venv_signal as sig
 
@@ -76,5 +77,7 @@ def test_unreadable_path_fails_open(tmp_path: Path, monkeypatch):
     def _boom(*_a, **_kw):
         raise OSError("permission denied")
 
-    monkeypatch.setattr(sig.os, "walk", _boom)
+    # Swap the module's `os` binding, not `os.walk` itself: patching the shared
+    # `os` module breaks pytest's own tmp_path cleanup, which walks directories.
+    monkeypatch.setattr(sig, "os", SimpleNamespace(walk=_boom))
     assert sig.emit_stray_venvs(tmp_path) == ""

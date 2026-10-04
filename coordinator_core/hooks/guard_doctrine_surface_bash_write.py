@@ -707,7 +707,7 @@ def _assignment_indirection_reaches_a_write(segments: "list[str]") -> bool:
     """Point 4's by-SINK narrowing: a REDIRECT counts as evidence of a
     governed write only when its own target names one -- when the target
     dereferences a variable bound to a governed path (`> $p`, `>
-    "${p}"`) or names a governed identifier outright. FAIL-CLOSED
+    "${p}"`; shell-doc-ok: quotes the redirect shapes the guard parses) or names a governed identifier outright. FAIL-CLOSED
     everywhere else, deliberately -- a segment carrying any OTHER write
     marker (`tee`, `cp`/`mv`, `sed -i`, an interpreter payload, `xargs`)
     keeps point 4's original broad behaviour, because this hook cannot

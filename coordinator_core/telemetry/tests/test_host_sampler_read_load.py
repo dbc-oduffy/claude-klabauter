@@ -52,7 +52,7 @@ def test_read_load_spawns_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_posix_cpu_load_unclamped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "getloadavg", lambda: (8.0, 8.0, 8.0))
+    monkeypatch.setattr(os, "getloadavg", lambda: (8.0, 8.0, 8.0), raising=False)
     monkeypatch.setattr(os, "cpu_count", lambda: 4)
     assert host_sampler._posix_cpu_load() == pytest.approx(2.0)
 
@@ -61,7 +61,7 @@ def test_posix_cpu_load_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom():
         raise OSError("no loadavg here")
 
-    monkeypatch.setattr(os, "getloadavg", _boom)
+    monkeypatch.setattr(os, "getloadavg", _boom, raising=False)
     assert host_sampler._posix_cpu_load() is None
 
 
@@ -156,7 +156,15 @@ def test_read_load_never_raises_when_every_primitive_raises(monkeypatch: pytest.
     assert row["cpu_load"] is None
 
 
-def test_read_load_cost_under_ceiling() -> None:
+def test_read_load_cost_under_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The ceiling gates the steady-state path (warm held snapshot). A cold
+    # Windows call pays _WINDOWS_CPU_SAMPLE_GAP_SECS (== the ceiling) by design,
+    # so seed an in-window snapshot instead of depending on test ordering.
+    if host_sampler._IS_WINDOWS:
+        seed = host_sampler._windows_get_system_times()
+        monkeypatch.setattr(
+            host_sampler, "_windows_last_load_snapshot", (time.monotonic() - 1.0, seed)
+        )
     t0 = time.perf_counter()
     row = host_sampler.read_load()
     wall_ms = (time.perf_counter() - t0) * 1000.0

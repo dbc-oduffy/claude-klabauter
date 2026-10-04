@@ -133,6 +133,12 @@ def test_pipe_server_boots_unchanged_when_discovery_is_unreadable(tmp_path, monk
     _stamp(tmp_path)
     _patch_boot_seams(monkeypatch, tmp_path)
 
+    # `should_spawn` is pinned because the real one claims `warm-http.json.boot.lock`
+    # via `breadcrumb.try_claim_boot`, whose fd is deliberately leaked for the
+    # process's life; on Windows that open handle makes the base fixture's
+    # teardown rmtree fail with `CloneTeardownLeak`. An absent record yields
+    # True from the real one, so this is the same decision without the leak.
+    monkeypatch.setattr(supervisor, "should_spawn", lambda *a, **kw: True)
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: False)
 
     served = []

@@ -62,4 +62,4 @@ def test_guard_level_relaxes(tmp_path, monkeypatch, level):
         assert out is None
     else:
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert "blast radius" in out["hookSpecificOutput"]["additionalContext"]
+        assert "Doctrine surfaces reach every session" in out["hookSpecificOutput"]["additionalContext"]

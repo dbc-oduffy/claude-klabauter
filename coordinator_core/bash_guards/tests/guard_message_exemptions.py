@@ -65,17 +65,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "in one change. Shortening belongs in a cross-repo memo that moves "
         "both texts at once, not a unilateral trim here."
     ),
-    ("guard-doctrine-surface-bash-write", "guard-doctrine-surface-bash-write-fire"): (
-        "the guard's own authored prose is under 100 bytes; the overage is "
-        "entirely the wiki-citation absolute path, resolved per-call off "
-        "`plugin_root` (see guard_doctrine_surface_bash_write.py's own "
-        "'RELOCATED DENY-REASON EXPLANATION' comment) -- in this corpus's "
-        "fixture that resolves through a pytest scratch tempdir "
-        "(`/private/var/folders/.../coordinator-guard-corpus-scratch/...`), "
-        "not the short, fixed path a real install resolves to. Trimming the "
-        "guard's own sentence cannot bring this cell under cap; the citation "
-        "path length is test-harness artifact, not authored prose."
-    ),
     ("guard-host-subagent-bash-ban", "guard-host-subagent-bash-ban-fire"): (
         "the corpus row's `resolve_wiki_citation` falls back to `_WIKI_ANCHOR` "
         "resolved through this dev checkout's own `~/X/coordinator-content-repo/...` "
@@ -165,18 +154,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "guard's own message, re-rendered through a different surface -- "
         "trimming belongs to that entry, not a second one here."
     ),
-    ("preuse_write_dispatch", "fire-claude-md-grant"): (
-        "a composed PreToolUse(Write) dispatcher that calls `write_guards."
-        "engine.evaluate()` and returns whatever registered write-guard "
-        "fired verbatim -- its corpus fixture (`file_path=\"CLAUDE.md\", "
-        "content=\"x\", agent_id=\"deadbeef0123\"`, no cwd `.git`) is "
-        "byte-identical to `write_guards.check_claude_md_size`'s own "
-        "`_wg_unauthorized_claude_md_fire` fixture, which is "
-        "`block_unauthorized_claude_md_write`'s `fire` row in the "
-        "`directory:write_guards` band. That row carries the measurement; "
-        "this cell is the same write-guard verdict re-rendered through the "
-        "hooks composed door."
-    ),
     ("guard_host_subagent_bash_ban", "fire-deny-policy"): (
         "the same guard, same fired text, as the already-exempted BASH-"
         "band entry above keyed `(\"guard-host-subagent-bash-ban\", "
@@ -242,24 +219,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "the overage and is what the advisory exists to offer."
     ),
 }
-
-def _guard_doctrine_surface_bash_write_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
-    (scratch_dir / "governed-authoring-surfaces.json").write_text(
-        '["docs/wiki/governed-thing.md"]', encoding="utf-8"
-    )
-    cmd = "echo corrupted > docs/wiki/governed-thing.md"
-    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
-    cwd = str(scratch_dir)
-    payload: Dict[str, Any] = {
-        "tool_name": "Bash",
-        "tool_input": {"command": cmd},
-        "session_id": session_id,
-        "cwd": cwd,
-        "plugin_root": str(scratch_dir),
-    }
-    return cmd, session_id, cwd, payload, False
-
 
 def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
     scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
@@ -383,10 +342,6 @@ def _block_subagent_destructive_action_fire_fixture() -> Tuple[str, str, str, Di
 #: reason with no reproducible cell to check is not a verifiable exemption.
 _EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dict[str, Any], bool]]] = {
     (
-        "guard-doctrine-surface-bash-write",
-        "guard-doctrine-surface-bash-write-fire",
-    ): _guard_doctrine_surface_bash_write_fire_fixture,
-    (
         "guard-host-subagent-bash-ban",
         "guard-host-subagent-bash-ban-fire",
     ): _guard_host_subagent_bash_ban_fire_fixture,
@@ -440,7 +395,6 @@ _HOOK_EXEMPTION_ROWS: Dict[Tuple[str, str], "guard_message_corpus.HookRow"] = {
         ("project_orientation", "fire-always"),
         ("sessionstart_dispatch", "fire-composed-legs"),
         ("preuse_bash_dispatch", "fire-host-ban"),
-        ("preuse_write_dispatch", "fire-claude-md-grant"),
         ("guard_host_subagent_bash_ban", "fire-deny-policy"),
         ("guard_host_subagent_bash_spawn_shapes", "fire-deny-spawn-shape"),
     }

@@ -4,6 +4,8 @@ import dataclasses
 
 import pytest
 
+from pathlib import Path
+
 from coordinator_core.ops.origin_stub_staleness import (
     OriginStubSurvey,
     StaleOriginStub,
@@ -11,6 +13,11 @@ from coordinator_core.ops.origin_stub_staleness import (
     read_closes_stubs,
     read_pair,
 )
+from coordinator_core.session import record_homes
+
+
+def _handoff(name):
+    return Path(record_homes.record_path("", "handoffs", name)).as_posix()
 
 
 def test_read_pair_well_formed_strips():
@@ -61,7 +68,7 @@ def test_is_baton_kind():
 
 def test_result_dataclasses_are_frozen():
     stub = StaleOriginStub(
-        path="state/handoffs/a.md",
+        path=_handoff("a.md"),
         pair=("r", "s"),
         deployment_state="ready_to_fire",
         evidence_path="docs/plans/p.md",
@@ -86,7 +93,7 @@ def _w(root, rel, text, binary=False):
 def _stub(root, name, rid, sid, state="ready_to_fire"):
     _w(
         root,
-        f"state/handoffs/{name}.md",
+        _handoff(f"{name}.md"),
         f"---\nkind: spinoff\nroadmap_id: {rid}\nstub_id: {sid}\n"
         f"deployment_state: {state}\n---\nbody\n",
     )
@@ -114,11 +121,12 @@ def test_survey_reports_stale_stubs_and_skips_unshipped(tmp_path):
 
     res = survey(tmp_path)
     got = {s.path: s for s in res.stale}
-    assert set(got) == {"state/handoffs/s1.md", "state/handoffs/s2.md"}
-    assert got["state/handoffs/s1.md"].evidence_path == "docs/plans/p.md"
-    assert got["state/handoffs/s1.md"].evidence_kind == "plan"
-    assert got["state/handoffs/s2.md"].evidence_path == "archive/handoffs/2026-01/h.md"
-    assert got["state/handoffs/s2.md"].evidence_kind == "handoff"
+    s1, s2 = _handoff("s1.md"), _handoff("s2.md")
+    assert set(got) == {s1, s2}
+    assert got[s1].evidence_path == "docs/plans/p.md"
+    assert got[s1].evidence_kind == "plan"
+    assert got[s2].evidence_path == "archive/handoffs/2026-01/h.md"
+    assert got[s2].evidence_kind == "handoff"
     assert res.live_with_pair == 6
     assert res.unreadable == ()
 
@@ -142,7 +150,7 @@ def test_survey_unreadable_file_is_listed_and_survey_continues(tmp_path):
     _w(tmp_path, "docs/plans/bad.md", b"---\nstub_id: \xff\xfe\n---\n", binary=True)
     res = survey(tmp_path)
     assert res.unreadable == ("docs/plans/bad.md",)
-    assert [s.path for s in res.stale] == ["state/handoffs/s1.md"]
+    assert [s.path for s in res.stale] == [_handoff("s1.md")]
 
 
 def test_survey_empty_repo(tmp_path):

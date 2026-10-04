@@ -248,6 +248,7 @@ from coordinator_core.ops.review_mint.roster import (
     require_emit_route,
 )
 from coordinator_core.session.core import resolve_session_id
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
 def _load_review_inputs(route: str) -> tuple:
@@ -823,9 +824,10 @@ def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
     root = Path(repo_root).resolve() if repo_root else _repo_root_for_plan(str(inventory))
     if root is None:
         return
-    if inventory.parent != root / "state" / "mise-inventory":
+    inventory_home = Path(home_dir(str(root), "mise-inventory"))
+    if inventory.parent != inventory_home:
         raise InventoryOutsideRepoError(
-            f"inventory {inventory_path!r} is not under {root / 'state' / 'mise-inventory'}; "
+            f"inventory {inventory_path!r} is not under {inventory_home}; "
             "plan specs resolve against that directory's repo, so this emission "
             "would carry no plan chunks. Move the record there, or pass --repo-root."
         )

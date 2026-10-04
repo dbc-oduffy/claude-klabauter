@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.frontmatter import primitives as prim
+from coordinator_core.session import record_homes
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import (
     APPROVED_BODY_CHANGED,
@@ -77,7 +78,7 @@ def test_blitz_land_approval_writes_the_stamp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bl, "_link_baton_to_plan", lambda *a, **k: False)
     (tmp_path / ".git").mkdir()
-    baton = tmp_path / "state" / "handoffs" / "b-1.md"
+    baton = Path(record_homes.record_path(str(tmp_path), "handoffs", "b-1.md"))
     baton.parent.mkdir(parents=True)
     baton.write_text(
         "---\nkind: roadmap-baton\ntitle: b-1\nstub_id: b-1\nstatus: open\n"
@@ -88,7 +89,7 @@ def test_blitz_land_approval_writes_the_stamp(tmp_path, monkeypatch):
     plan.parent.mkdir(parents=True)
     plan.write_text(_plan_text(status="draft", extra="deliverable_id: dlv-b-1\n"), encoding="utf-8")
 
-    out = bl.approve_ready(tmp_path, "state/handoffs/b-1.md", "docs/plans/p.md", {})
+    out = bl.approve_ready(tmp_path, Path(record_homes.record_path("", "handoffs", "b-1.md")).as_posix(), "docs/plans/p.md", {})
 
     assert out["stamped"] is True
     text = plan.read_text(encoding="utf-8")

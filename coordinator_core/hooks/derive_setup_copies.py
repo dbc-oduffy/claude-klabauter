@@ -180,8 +180,7 @@ def _write_failure_message(row: ResolvedRow, exc: Exception, repo_root: Path):
 
 
 def _success_message(row: ResolvedRow, source_bytes: bytes, repo_root: Path):
-    prose = f"re-derived {_display_path(row.derived, repo_root)} ({len(source_bytes)}B)."
-    return compose(prose, anchor=_WIKI_ANCHOR)
+    return compose(f"re-derived {row.derived.name} ({len(source_bytes)}B).")
 
 
 def _handle_canonical_write(row: ResolvedRow, repo_root: Path):

@@ -531,14 +531,15 @@ def _make_fake_install(root: Path) -> Path:
     default path deliberately touches nothing else in the package, so the
     copy needs no other engine module — which is itself the point: the
     rendezvous must be derivable without reference to the install.
+    `timestamps` (stdlib-only) rides along for the timeout diagnostic's
+    holder age, which `_describe_holder` imports on the refusal path.
     """
     pkg = root / "coordinator_core"
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    source = Path(_PROJECT_ROOT) / "coordinator_core" / "locked_write.py"
-    (pkg / "locked_write.py").write_text(
-        source.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    for name in ("locked_write.py", "timestamps.py"):
+        source = Path(_PROJECT_ROOT) / "coordinator_core" / name
+        (pkg / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     return root
 
 
@@ -731,11 +732,11 @@ class TestMachineRendezvousCrashRelease:
         contender_script = tmp_path / "install_contender.py"
         contender_script.write_text(_INSTALL_CONTENDER_SCRIPT, encoding="utf-8")
 
-        grandchild_pid = None
+        stop_file = tmp_path / "grandchild.stop"
         victim = subprocess.Popen(
             [
                 sys.executable, str(holder_script),
-                str(install_a), str(target), str(sleep_script), "60",
+                str(install_a), str(target), str(sleep_script), "60", str(stop_file),
             ],
             stdout=subprocess.PIPE,
             env=_isolated_env(machine_root),
@@ -744,7 +745,6 @@ class TestMachineRendezvousCrashRelease:
         try:
             line = victim.stdout.readline().strip().decode()
             assert line.startswith("LOCKED ")
-            grandchild_pid = int(line.split()[1])
 
             # SIGKILL the holder only — the grandchild is deliberately left
             # running, unkilled, to prove it never held the lock in the
@@ -768,18 +768,16 @@ class TestMachineRendezvousCrashRelease:
             if victim.poll() is None:
                 victim.kill()
                 victim.wait()
-            if grandchild_pid is not None:
-                try:
-                    os.kill(grandchild_pid, 9 if os.name != "nt" else 15)
-                except OSError:
-                    pass
+            # The grandchild is reparented once the holder dies, so the
+            # foreign-process tripwire refuses any kill; it exits on this file.
+            stop_file.touch()
 
 
 _GRANDCHILD_HOLDER_SCRIPT = textwrap.dedent("""\
     import subprocess, sys, time
     from pathlib import Path
 
-    install_root, target, sleep_forever_script, hold_secs = sys.argv[1:5]
+    install_root, target, sleep_forever_script, hold_secs, stop_file = sys.argv[1:6]
     sys.path.insert(0, install_root)
     from coordinator_core.locked_write import held_lock
 
@@ -788,16 +786,17 @@ _GRANDCHILD_HOLDER_SCRIPT = textwrap.dedent("""\
         # lock fd is open, mirroring a real subprocess launched from inside a
         # held_lock scope (e.g. a function-gate subprocess). Not detached and
         # not killed alongside the parent: outlives it deliberately.
-        child = subprocess.Popen([sys.executable, sleep_forever_script])
+        child = subprocess.Popen([sys.executable, sleep_forever_script, stop_file])
         sys.stdout.write("LOCKED %d\\n" % child.pid)
         sys.stdout.flush()
         time.sleep(float(hold_secs))
 """)
 
 _SLEEP_FOREVER_SCRIPT = textwrap.dedent("""\
-    import time
-    while True:
-        time.sleep(10)
+    import os, sys, time
+    deadline = time.monotonic() + 60
+    while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+        time.sleep(0.1)
 """)
 
 

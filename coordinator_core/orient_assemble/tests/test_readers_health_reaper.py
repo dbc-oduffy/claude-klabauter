@@ -14,7 +14,10 @@ import pytest
 from pathlib import Path
 
 from coordinator_core.orient_assemble import readers_health_reaper as rhr
+from coordinator_core.session import record_homes
 from coordinator_core.win_portability import no_console_creationflags
+
+_STUB_A = Path(record_homes.record_path("", "handoffs", "stub-a.md")).as_posix()
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -483,7 +486,7 @@ def _one_stale():
     from coordinator_core.ops.origin_stub_staleness import StaleOriginStub
 
     return StaleOriginStub(
-        path="state/handoffs/stub-a.md",
+        path=_STUB_A,
         pair=("r", "s"),
         deployment_state="ready_to_fire",
         evidence_path="docs/plans/shipped-plan.md",
@@ -516,7 +519,7 @@ def test_collect_day_surfaces_stale_origin_stub_judgment_point(monkeypatch, tmp_
     assert result.directives == []
     assert [jp["id"] for jp in result.judgment_points] == ["j-stale-origin-stubs"]
     evidence = result.judgment_points[0]["evidence"]
-    assert "state/handoffs/stub-a.md" in evidence
+    assert _STUB_A in evidence
     assert "docs/plans/shipped-plan.md" in evidence
 
 

@@ -111,9 +111,10 @@ def _noncanonical_branch_hazard_setup(
     exported for reuse)."""
     from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
 
-    mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
+    root = str(scratch_dir)
+    mp.setattr(guard, "resolve_git_root", lambda cwd=None: root)
     mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-    return {_CWD_OVERRIDE_KEY: "/repo"}
+    return {_CWD_OVERRIDE_KEY: root}
 
 
 def _subagent_stash_identity_setup(

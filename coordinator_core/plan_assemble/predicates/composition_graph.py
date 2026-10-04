@@ -469,8 +469,8 @@ def _beyond_scope(derived: set[str], scope_sites: set[str]) -> set[str]:
 def _head(site: str) -> str:
     """A declared path's first component, its overlap bucket key.
 
-    Memoized for the same reason `_overlaps` is: `_normalize_path` builds a
-    `PurePosixPath` per call, and this runs once per declared site on both
+    Memoized for the same reason `_overlaps` is: `_normalize_path` runs a
+    `posixpath.normpath` per call, and this runs once per declared site on both
     sides of every one of ~565 sibling documents, whose declared paths repeat
     heavily. Delegating to the shared normalizer (see below) put the widest
     plan in the corpus at a 531ms median, over the 500ms brightline; the cache
@@ -491,8 +491,10 @@ def _head(site: str) -> str:
     site (bucketed under `"."` instead of the real first component) and on
     backslash-folding, silently dropping genuine cross-plan overlaps.
     """
-    parts = _normalize_path(site).parts
-    return parts[0] if parts else ""
+    normalized = _normalize_path(site)
+    if normalized == ".":
+        return ""
+    return normalized.split("/", 1)[0]
 
 
 def _overlapping_sites(own_sites: set[str], other_sites: set[str]) -> list[str]:

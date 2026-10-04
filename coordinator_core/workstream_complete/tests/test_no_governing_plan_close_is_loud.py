@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.ops.ceremony import wsc_disposition
 from coordinator_core.workstream_complete import judgments
 
 POINT_ID = "no-governing-plan"
@@ -18,7 +19,7 @@ POINT_ID = "no-governing-plan"
 def _gate() -> wsc.SessionShapeGate:
     return wsc.SessionShapeGate(
         sid="testsid-no-gov-plan",
-        disposition="single-session",
+        disposition=wsc_disposition.SINGLE_SESSION,
         consumed_handoff="",
         diagnostics=[],
         consumed_handoff_paths=(),

@@ -243,7 +243,8 @@ class _FleetDelegationDetector(SentinelCreationDetector):
         """OVERRIDE, same reason as the approval-sentinel guard's own
         override: the parent's version only checks the literal-basename
         compare against the redirect's target token, missing a tainted-
-        variable-dereferenced redirect target (`S=<grant-file>; cat x > $S`)."""
+        variable-dereferenced redirect target (`S=<grant-file>; cat x > $S`).
+        shell-doc-ok: quotes the bash command shape this guard parses."""
         n = len(seg_tokens)
         for i, tok in enumerate(seg_tokens):
             m = _REDIR_PREFIX_RE.match(tok)

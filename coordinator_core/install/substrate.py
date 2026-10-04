@@ -3697,6 +3697,29 @@ def _write_python_bin_sidecar(bin_dst: Path, python3_cmd_resolved_bin: str) -> N
     atomic_write_bytes(sidecar, payload, preserve_mode=True)
 
 
+def _published_only_cli_map(
+    engine_root: "Optional[Path]",
+    agent_helper_target_map: "dict[str, str]",
+    static_family_names: "frozenset[str]",
+) -> "dict[str, str]":
+    """Installed-name -> target map for CLIs the engine ships under a name the
+    generator's own ``coordinator/bin/`` does not carry: the publish-time
+    rename targets (``gen-content-root-pointer`` ships as ``gen-content-root-pointer``).
+    The shipped corpus names the published spelling, so the engine on disk is
+    the oracle -- no rename table is read. Empty when the engine root is the
+    generator itself or carries no ``coordinator/bin/``."""
+    if engine_root is None:
+        return {}
+    engine_bin = Path(engine_root) / "coordinator" / "bin"
+    if not engine_bin.is_dir():
+        return {}
+    return {
+        name: target
+        for name, target in _derive_agent_helper_target_map(engine_bin).items()
+        if name not in agent_helper_target_map and name not in static_family_names
+    }
+
+
 def _installed_resolver_module(bin_dst: Path) -> str:
     """The stem of the ``_resolve_*.py`` module installed in ``bin_dst``.
 
@@ -3829,6 +3852,9 @@ def _write_agent_helper_forwarders(
     clobber a REAL install run's manifest with an empty one.
     """
     native_written: "set[str]" = set()
+    published_only = _published_only_cli_map(
+        engine_root, agent_helper_target_map, static_family_names,
+    )
 
     # PER-NAME FAILURE MUST NOT EXIT 0 SILENTLY (state/bug-backlog/2026-08-30-
     # install-substrate-exits-0-after-failing-45f4d5390b68.yaml). Measured live
@@ -3881,13 +3907,15 @@ def _write_agent_helper_forwarders(
                 door_source = door_install.install_door(bin_dst, engine_root, check_only=False)
             except (OSError, door_install.DoorInstallError, SystemExit):
                 door_source = None
-        for f, target in sorted(agent_helper_target_map.items()):
+        for f, target in sorted({**published_only, **agent_helper_target_map}.items()):
             try:
                 native_dst = _cut_over_to_native_door(
                     f, bin_dst, check_only, engine_root=engine_root,
                     static_family_names=static_family_names, source=door_source,
                 )
                 if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
+                    continue
+                if f in published_only and not isinstance(native_dst, Path):
                     continue
                 if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
                     # Off PATH entirely is the intended end state -- writing

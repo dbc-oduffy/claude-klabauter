@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
 from pathlib import Path
@@ -64,7 +63,6 @@ def test_declared_roster_key_wins_whatever_the_enumeration_order(
 def test_self_identity_resolves_to_the_canonical_em_id(collided_registry):
     from coordinator_core.ops.fleet import _memo_resolver
 
-    importlib.reload(_memo_resolver)
     assert _memo_resolver.resolve_self_em_id(collided_registry) == "claude-klabauter-em"
 
 
@@ -109,7 +107,6 @@ def test_undeclared_collision_is_stable_rather_than_arbitrary(
 def test_alias_still_resolves_as_a_receiver(collided_registry):
     from coordinator_core.ops.fleet import _memo_resolver
 
-    importlib.reload(_memo_resolver)
     inbox, repo_path, _ = _memo_resolver.resolve_receiver_inbox(
         "example-orchestration-hub-repo-em"
     )

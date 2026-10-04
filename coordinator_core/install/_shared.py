@@ -242,7 +242,7 @@ def resolve_coordinator_root(
            ``machine-local get`` CLI if that can't resolve ->
            ``_repo_to_coordinator_content_root(<repo>)``.
         3. ``REPO_CONTENT_ROOT`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
-        4. ``${CLAUDE_HOME:-$HOME}/.coordinator-content-root`` pointer file ->
+        4. the ``.coordinator-content-root`` pointer file under CLAUDE_HOME (else the home dir) ->
            ``_repo_to_coordinator_content_root(<repo>)``.
 
     Rungs 2-4 each resolve a ``repos.content_root``-shaped REPO root first, then

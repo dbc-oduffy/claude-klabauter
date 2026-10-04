@@ -35,16 +35,6 @@ class GitFreeSessionRepo:
         (sdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         return sdir
 
-    def seed_agent(self, aid: str, hours_ago: float) -> Path:
-        agents_dir = self.sessions_dir / ".agents"
-        adir = agents_dir / aid
-        adir.mkdir(parents=True, exist_ok=True)
-        touched = adir / "touched.txt"
-        touched.write_text("touched", encoding="utf-8")
-        past_time = time.time() - (hours_ago * 3600)
-        os.utime(str(touched), (past_time, past_time))
-        return adir
-
     def seed_claim(self, claim_type: str, claim_name: str) -> Path:
         """Create a claim dir under <sessions_dir>/<claim_type>/<claim_name>/.
 

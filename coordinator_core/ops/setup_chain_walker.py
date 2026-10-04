@@ -1218,8 +1218,10 @@ _COORDINATOR_ROOT_LADDER_REMEDIATION = (
 
 def _claude_home() -> Path:
     """The resolved claude home: $CLAUDE_HOME, else ``~/.claude``."""
-    env = os.environ.get("CLAUDE_HOME", "")
-    return Path(env) if env else Path.home() / ".claude"
+    explicit = os.environ.get("CLAUDE_HOME")
+    if explicit:
+        return Path(explicit)
+    return Path(os.environ.get("USERPROFILE") or Path.home()) / ".claude"
 
 
 def _plugin_root_rung_candidates() -> list[tuple[Path, str]]:

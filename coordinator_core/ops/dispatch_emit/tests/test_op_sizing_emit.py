@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path, PurePath
 
 import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+from coordinator_core.session.record_homes import home_dir, record_path
 from coordinator_core.win_portability import no_console_creationflags
 
-REL = "state/sizings/2026-10-02-emit.yaml"
+REL = PurePath(record_path("", "sizings", "2026-10-02-emit.yaml")).as_posix()
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 _ROUTE = {"XS": "dispatch", "S": "spec-dispatch", "M": "plan"}
 _ACCEPTED = {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}
@@ -20,7 +22,7 @@ _ACCEPTED = {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    Path(home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)
@@ -100,7 +102,7 @@ def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(re
     reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
     receipt = json.loads(open(reply["receipt"], encoding="utf-8").read())
     baton = receipt["batons"][0]
-    assert baton.startswith("state/handoffs/")
+    assert baton.startswith(PurePath(home_dir("", "handoffs")).as_posix() + "/")
     assert receipt["uncommitted"] == [baton, REL]
     assert reply["batons"] == [baton] and reply["uncommitted"] == [baton, REL]
     text = open(reply["path"], encoding="utf-8").read()

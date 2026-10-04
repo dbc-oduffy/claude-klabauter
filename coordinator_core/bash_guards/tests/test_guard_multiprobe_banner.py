@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from pathlib import Path
 
 import pytest
 
@@ -123,7 +124,10 @@ def _ctx(out):
     return hso["additionalContext"]
 
 
-_EXPECTED_SCRIPT_HINT_POSIX = "/fake/root/.coordinator-local/subagent-share/sess1/multiprobe.py"
+# The guard renders the hint through `Path`, so the separator is host-native.
+_EXPECTED_SCRIPT_HINT = str(
+    Path("/fake/root/.coordinator-local/subagent-share/sess1/multiprobe.py")
+)
 
 
 class TestNonBashOrEmpty:
@@ -358,7 +362,7 @@ class TestSubagentOutlet:
         )
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
-        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
+        assert "python3 " + _EXPECTED_SCRIPT_HINT in ctx
         assert "\"import os" not in ctx
         assert "'import os" not in ctx
 
@@ -371,7 +375,7 @@ class TestSubagentOutlet:
         )
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
-        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
+        assert "python3 " + _EXPECTED_SCRIPT_HINT in ctx
         assert '"import os' not in ctx
         assert "'import os" not in ctx
 
@@ -648,7 +652,7 @@ class TestPowerShellSubagentRemedy:
             "agent_id": "a" * 16,
         }
         ctx = _ctx(guard.check(payload, host_is_windows=True))
-        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
+        assert "python3 " + _EXPECTED_SCRIPT_HINT in ctx
         assert "-c '" not in ctx
         assert "import subprocess" not in ctx
 

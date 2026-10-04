@@ -147,7 +147,7 @@ def test_the_family_stays_quarantined_to_the_install_chain() -> None:
     leaks: List[str] = []
     for path in sorted(_REPO_ROOT.rglob("*.py")):
         rel = path.relative_to(_REPO_ROOT).as_posix()
-        if rel.startswith((".git/", "state/", "archive/")):
+        if rel.startswith((".git/", "state/", "archive/", "scratch/")):
             continue
         if rel.startswith(_QUARANTINE_PREFIXES):
             continue

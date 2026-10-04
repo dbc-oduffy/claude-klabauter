@@ -69,6 +69,14 @@ STATUS_NO_ENTRY = "no-entry"
 STATUS_ALREADY_LIVE = "already-live"
 STATUS_REPOINTED = "repointed"
 STATUS_UNREADABLE = "unreadable"
+STATUS_LIVE_ROOT_MISSING = "live-root-missing"
+STATUS_NOT_DEV_CLONE = "not-dev-clone"
+
+#: Fleet-wide dev-vs-consumer discriminant, at the repo root one level above the
+#: plugin root. A consumer box (plugin-cache install, or a published mirror clone)
+#: lacks it and keeps the record `claude plugin install/update` wrote — repointing
+#: there contradicts INSTALL.md 1d and ping-pongs with `claude plugin update`.
+DEV_REPO_SENTINEL = ".coordinator-dev-repo"
 
 
 WRITE_SURFACE = WriteSurfaceDeclaration(
@@ -187,7 +195,7 @@ def _assert_live_plugin_registration(
     claude_home: Path, live_plugin_root: Path, *, dry_run: bool
 ) -> dict[str, Any]:
     record_path = claude_home.joinpath(*_INSTALLED_PLUGINS_REL)
-    report: dict[str, Any] = {"path": str(record_path), "entries": []}
+    report: dict[str, Any] = {"path": str(record_path), "entries": [], "live_path": str(live_plugin_root)}
 
     if not record_path.is_file():
         report["status"] = STATUS_ABSENT
@@ -198,6 +206,16 @@ def _assert_live_plugin_registration(
     except (OSError, json.JSONDecodeError) as exc:
         report["status"] = STATUS_UNREADABLE
         report["evidence"] = f"{type(exc).__name__}: {exc}"
+        return report
+
+    if not live_plugin_root.is_dir():
+        report["status"] = STATUS_LIVE_ROOT_MISSING
+        report["evidence"] = str(live_plugin_root)
+        return report
+
+    if not (live_plugin_root.parent / DEV_REPO_SENTINEL).is_file():
+        report["status"] = STATUS_NOT_DEV_CLONE
+        report["evidence"] = str(live_plugin_root.parent / DEV_REPO_SENTINEL)
         return report
 
     plugin_name = read_plugin_name(live_plugin_root)
@@ -275,8 +293,22 @@ def format_report(report: dict[str, Any]) -> list[str]:
             f"WARN [plugin] {report['path']} unreadable ({report.get('evidence')}) — "
             "plain `claude` may serve a frozen copy; re-run after repairing it"
         ]
+    if status == STATUS_LIVE_ROOT_MISSING:
+        return [f"SKIP [plugin] live plugin root {report.get('evidence')} does not exist — record unchanged"]
+    if status == STATUS_NOT_DEV_CLONE:
+        return [
+            f"SKIP [plugin] not a dev clone (no {report.get('evidence')}) — "
+            "keeping the plugin-cache record `claude plugin install/update` manages"
+        ]
     lines = []
     for entry in report.get("entries", []):
+        target = entry.get("live_path") or report.get("live_path")
+        if target and not os.path.isdir(target):
+            lines.append(
+                f"WARN [plugin] {entry['key']} repointed at {target}, which does not exist "
+                f"(was {entry['previous_path']})"
+            )
+            continue
         lines.append(
             f"PASS [plugin] {entry['key']} now resolves live (was {entry['previous_path']})"
         )
