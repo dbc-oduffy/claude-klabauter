@@ -369,6 +369,44 @@ def _run_watch_liveness(repo_root: str, now_epoch: float):
         return None, _leg_error(exc)
 
 
+#: Entry-tick cadence: the cron floor `group_em.watch` declares for a single-tick wake.
+_ENTRY_INTERVAL_SECONDS = 23 * 60.0
+
+
+def _stamp_entry_heartbeat(
+    repo_root: str, caller_session_id: str, digest: Optional[dict], now_epoch: float
+) -> Optional[str]:
+    """Stamp the watch heartbeat for a CLAIMED entry; None on success or skip, else the error.
+
+    A record already held by this session is left alone: its own watch writes it, and an
+    entry stamp would overwrite a delegate's live `writer_session_id`/`tick_source`.
+    Declinations are the digest's `suppressed` rows. One small atomic write, no spawn.
+    """
+    try:
+        held = group_em_watch_heartbeat.read_liveness(repo_root, now_epoch)
+        if held.get("holder_session_id") == caller_session_id:
+            return None
+        suppressed = (digest or {}).get("suppressed") or []
+        declinations = [
+            {"session_id": row.get("session_id"), "gate": row.get("why"), "reason": row.get("reason")}
+            for row in suppressed
+            if isinstance(row, dict)
+        ]
+        stamped = group_em_watch_heartbeat.stamp(
+            repo_root,
+            caller_session_id,
+            declinations,
+            _ENTRY_INTERVAL_SECONDS,
+            subscribed_peers=0,
+            now_epoch=now_epoch,
+            tick_source="entry",
+            writer_session_id=caller_session_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _leg_error(exc)
+    return None if stamped else "stamp-not-written"
+
+
 @register_op("groupem.enter")
 def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.enter" handler.
@@ -472,6 +510,13 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     _leg(result, "digest", _run_digest(target_root, roster, caller_session_id))
 
     _leg(result, "teammates", _run_teammates(target_root, caller_session_id))
+
+    if caller_session_id:
+        stamp_error = _stamp_entry_heartbeat(
+            target_root, caller_session_id, result.get("digest"), now_epoch
+        )
+        if stamp_error is not None:
+            result["heartbeat_error"] = stamp_error
 
     _leg(result, "watch_liveness", _run_watch_liveness(target_root, now_epoch))
 

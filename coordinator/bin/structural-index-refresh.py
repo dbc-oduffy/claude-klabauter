@@ -38,7 +38,7 @@ RECORD_NAME = "refresh-last.json"
 STDERR_TAIL_LINES = 5
 
 
-def resolve_example_retrieval_repo() -> Optional[Path]:
+def resolve_index_repo() -> Optional[Path]:
     """example-retrieval-repo checkout from the machine-local registry; None when absent for any reason."""
     exe = shutil.which("machine-local")
     if not exe:
@@ -133,7 +133,7 @@ def refresh(root: Path, timeout: float, env: Optional[dict] = None) -> Optional[
     environ = os.environ if env is None else env
     if environ.get(KILL_SWITCH):
         return None
-    rag = resolve_example_retrieval_repo()
+    rag = resolve_index_repo()
     if rag is None:
         return None
     status = read_status(root)

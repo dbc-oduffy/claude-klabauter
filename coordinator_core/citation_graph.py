@@ -47,6 +47,12 @@ inherited bug):
     resolved relative to the CITING file's own directory -- the one form for
     which that join is correct.
 
+Anchor pass -- SEPARATE from the four classes above. `scan_anchors` runs over
+a `CorpusReport`'s `"live"` single-file verdicts only and yields
+`AnchorVerdict`s (`anchor_live` | `anchor_missing`) for `[t](x.md#frag)`
+fragment links and prose `x.md` § Heading citations. It never alters a
+`Verdict`, `resolve_citation` or `scan_corpus`.
+
 Negative-spec (Anti-scope): no CLI, no output formatting, no exit codes --
 pure functions over a root path returning structured (dataclass) results, so
 a caller's tests can assert on data. No ratchet baseline, no storage of a
@@ -242,7 +248,7 @@ class Verdict:
     """One resolution outcome for a single `Citation`."""
 
     citation: Citation
-    status: str  # "live" | "cross_surface" | "rot" | "ambiguous" | "dead_link" | "home_relative"
+    status: str  # "live" | "cross_surface" | "rot" | "ambiguous" | "dead_link" | "home_relative" | "moved"
     matches: "tuple[Path, ...]" = field(default_factory=tuple)
     #: Which candidate root resolved a `pathed` citation (`resolve_pathed`
     #: only) -- e.g. `PLUGIN_ROOT` or `REPO_ROOT` -- so the verdict is
@@ -459,7 +465,9 @@ def resolve_bare_basename(
 
 
 def resolve_pathed(
-    citation: Citation, roots: "tuple[Path, ...]" = PATHED_RESOLUTION_ROOTS
+    citation: Citation,
+    roots: "tuple[Path, ...]" = PATHED_RESOLUTION_ROOTS,
+    wiki_index: "dict[str, tuple[Path, ...]] | None" = None,
 ) -> Verdict:
     """Pathed reference (`docs/wiki/some-page.md`), resolved against each of
     `roots` in order -- never joined against the citing file's own
@@ -478,13 +486,27 @@ def resolve_pathed(
     `"home_relative"` rather than `"rot"`: "citation target renamed or
     deleted" and "citation was never a repo path to begin with" are
     different facts, and folding the second into the rot ratchet would both
-    inflate the rot count and hide a class no wiki edit can fix."""
+    inflate the rot count and hide a class no wiki edit can fix.
+
+    When every root misses AND the target sits under a `docs/wiki/` prefix,
+    the citation is a candidate for a wiki page that moved rather than
+    vanished: fall back to a basename lookup in `wiki_index`. Exactly one
+    match is `"moved"`, carrying the current path -- live but stale, outside
+    the rot ratchet. Several matches is `"ambiguous"`. Zero matches, no
+    `wiki_index`, or a target not under `docs/wiki/` is `"rot"`."""
     if citation.raw_target.startswith("~"):
         return Verdict(citation, "home_relative", ())
     for root in roots:
         candidate = root / citation.raw_target
         if candidate.is_file():
             return Verdict(citation, "live", (candidate,), resolved_root=root)
+    normalized = citation.raw_target.replace("\\", "/")
+    if wiki_index is not None and "docs/wiki/" in normalized:
+        matches = wiki_index.get(normalized.rsplit("/", 1)[-1], ())
+        if len(matches) == 1:
+            return Verdict(citation, "moved", matches)
+        if len(matches) > 1:
+            return Verdict(citation, "ambiguous", matches)
     return Verdict(citation, "rot", ())
 
 
@@ -507,7 +529,7 @@ def resolve_citation(
     if citation.kind == "bare_basename":
         return resolve_bare_basename(citation, wiki_index, repo_index)
     if citation.kind == "pathed":
-        return resolve_pathed(citation, roots)
+        return resolve_pathed(citation, roots, wiki_index)
     if citation.kind == "markdown_link":
         return resolve_markdown_link(citation)
     raise ValueError(f"unknown citation kind: {citation.kind!r}")
@@ -614,3 +636,233 @@ def sample_verdicts(
         return tuple(population)
     rng = random.Random(seed)
     return tuple(rng.sample(population, sample_size))
+
+
+# ---------------------------------------------------------------------------
+# Anchor pass -- separate from the four file-resolution classes. Runs only over
+# file-live single-target verdicts; never changes a Verdict.
+# ---------------------------------------------------------------------------
+
+#: Grammar G2: a `.md` target followed (optionally after a closing backtick)
+#: by `§` and a free-text tail.
+_SECTION_CITATION = re.compile(
+    r"(?P<t>[A-Za-z0-9_./-]+\.md)(?::\d+)?`?\s*§\s*"
+    r"(?P<tail>.*?)(?=`?[A-Za-z0-9_./-]+\.md|$)"
+)
+#: Grammar G1: `[text](x.md#frag)`.
+_FRAGMENT_LINK = re.compile(r"\[[^\]\n]*\]\(([^)\n#]+\.md)#([^)\n]*)\)")
+_SECTION_SPLIT = re.compile(r"\s*[,;]?\s*(?:and\s+|/\s*)?§\s*")
+_FENCE_ANY = re.compile(r"^\s*(```|~~~)")
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}[ \t]+(.*?)[ \t]*$")
+_CLOSING_HASHES = re.compile(r"[ \t]+#+$")
+_BOLD_LEAD_IN = re.compile(r"^\s*(?:[-*]\s+|\d+[.)]\s+)?\*\*(.{3,120}?)\*\*")
+_ID_LIKE_REF = re.compile(
+    r"^(?:[A-Z]{1,6}-?\d+[a-z]?(?:[.-]\d+)*|[A-Z]\.\d+|[A-Z]{2,}(?:-[A-Z0-9]+){2,})$"
+)
+_REF_CUT = re.compile(r"<!--|\s[-—–]\s|;|\)|\(|\.\s|:\s|,\s")
+_HEADING_SEGMENT_SPLIT = re.compile(r"\s-\s|[—–]|:\s|\(")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass(frozen=True)
+class AnchorVerdict:
+    """One anchor resolution for a citation whose file verdict is `live`."""
+
+    citation: Citation
+    anchor: str
+    grammar: str  # "fragment" | "section"
+    status: str  # "anchor_live" | "anchor_missing"
+
+
+@dataclass(frozen=True)
+class _Headings:
+    """Heading candidates of one file: raw lowercased texts (ATX + bold
+    lead-ins) for the section grammar, slugs of ATX headings for fragments."""
+
+    raw: "tuple[str, ...]"
+    slugs: "frozenset[str]"
+
+
+def _strip_marks(text: str) -> str:
+    return text.replace("`", "").replace("*", "")
+
+
+def _norm(text: str) -> str:
+    return _NON_ALNUM.sub(" ", _strip_marks(text).lower()).strip()
+
+
+def _github_slug(heading: str) -> str:
+    cleaned = _strip_marks(heading).lower()
+    cleaned = re.sub(r"[^\w \-]", "", cleaned)
+    return cleaned.strip().replace(" ", "-")
+
+
+def extract_headings(text: str) -> _Headings:
+    """Fence-aware ATX headings plus bold lead-ins of one file's text; CRLF
+    normalised. A heading inside a fenced block does not exist."""
+    raw: "list[str]" = []
+    slugs: "set[str]" = set()
+    in_fence = False
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if _FENCE_ANY.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = _ATX_HEADING.match(line)
+        if m:
+            heading = _CLOSING_HASHES.sub("", m.group(1)).strip()
+            if heading:
+                raw.append(_strip_marks(heading).lower())
+                slugs.add(_github_slug(heading))
+            continue
+        b = _BOLD_LEAD_IN.match(line)
+        if b:
+            lead = b.group(1).strip().rstrip(".:-").strip()
+            if lead:
+                raw.append(lead.lower())
+    return _Headings(tuple(raw), frozenset(slugs))
+
+
+def _load_headings(
+    path: Path, cache: "dict[Path, _Headings | None]"
+) -> "_Headings | None":
+    if path not in cache:
+        try:
+            cache[path] = extract_headings(path.read_text(encoding="utf-8"))
+        except Exception:
+            cache[path] = None
+    return cache[path]
+
+
+def _cut_ref(ref: str) -> str:
+    """One `§` ref's heading text: quoted/backticked text when the ref opens
+    with a quote, else the ref cut at the first prose boundary."""
+    ref = ref.strip()
+    if not ref:
+        return ""
+    if ref[0] in "\"“":
+        m = re.match(r"[\"“](.*?)[\"”]", ref)
+        text = m.group(1) if m else ref[1:]
+    elif ref[0] == "'":
+        m = re.match(r"'(.*?)'(?!\w)", ref)
+        text = m.group(1) if m else ref[1:]
+    elif ref[0] == "`":
+        end = ref.find("`", 1)
+        text = ref[1:end] if end != -1 else ref[1:]
+    else:
+        cut = _REF_CUT.search(ref)
+        text = ref[: cut.start()] if cut else ref
+    text = re.sub(r"\s+(?:and|or|&)\s*$", "", text.split("-->", 1)[0])
+    return text.strip().strip("`'\"*“”").strip()
+
+
+def _words_prefix(a: str, b: str) -> bool:
+    """`a == b` or `a` starts with `b` plus a word boundary."""
+    return bool(b) and (a == b or a.startswith(b + " "))
+
+
+def _section_matches(ref: str, headings: "tuple[str, ...]") -> bool:
+    """True if the `§` ref names one of `headings` under any of the lenient
+    match rules: word-prefix either way, numbered/phased step, whole-word
+    containment, heading-segment prefix, or a numeric token lead."""
+    n = _norm(ref)
+    norms = [_norm(h) for h in headings]
+    for h in norms:
+        if h and (_words_prefix(n, h) or _words_prefix(h, n)):
+            return True
+    num = re.match(r"(?:step )?(\d+)", n)
+    if num:
+        pat = re.compile(rf"^(?:step )?{num.group(1)}(?:[.): ]|$)")
+        if any(pat.match(h) for h in headings):
+            return True
+    phased = re.match(r"(?:phase|step|part|section) (\d+)", n)
+    if phased:
+        word = re.compile(rf"\b{phased.group(1)}\b")
+        lead = re.compile(r"^(?:(?:phase|step|part|section) )?\d")
+        if any(lead.match(h) and word.search(h) for h in norms):
+            return True
+    if len(n) >= 4 and any(f" {n} " in f" {h} " for h in norms):
+        return True
+    for heading in headings:
+        for seg in _HEADING_SEGMENT_SPLIT.split(heading):
+            s = _norm(seg)
+            if len(s) >= 4 and (_words_prefix(n, s) or _words_prefix(s, n)):
+                return True
+    tok = re.match(r"\d+[a-z]?", n)
+    if tok:
+        pat = re.compile(rf"^(?:[a-z]{{0,2}}\s*)?{re.escape(tok.group(0))}(?:[.): ]|$)")
+        if any(pat.match(h) for h in headings):
+            return True
+    return False
+
+
+def resolve_anchor(
+    citation: Citation,
+    anchor: str,
+    grammar: str,
+    target: Path,
+    cache: "dict[Path, _Headings | None] | None" = None,
+) -> "AnchorVerdict | None":
+    """`AnchorVerdict` for one anchor against the single resolved `target`
+    file, or `None` when the anchor is not checkable (unreadable target,
+    empty or ID-like section ref). `cache` memoises headings per path within
+    one scan."""
+    headings = _load_headings(target, {} if cache is None else cache)
+    if headings is None:
+        return None
+    if grammar == "fragment":
+        from urllib.parse import unquote
+
+        found = unquote(anchor).strip().lower() in headings.slugs
+    elif grammar == "section":
+        if not anchor or not _norm(anchor) or _ID_LIKE_REF.match(anchor):
+            return None
+        found = _section_matches(anchor, headings.raw)
+    else:
+        raise ValueError(f"unknown anchor grammar: {grammar!r}")
+    return AnchorVerdict(citation, anchor, grammar, "anchor_live" if found else "anchor_missing")
+
+
+def scan_anchors(report: CorpusReport) -> "tuple[AnchorVerdict, ...]":
+    """Anchor verdicts for every `[t](x.md#frag)` and `x.md` § Heading
+    citation behind a `"live"` verdict resolving to exactly one file. Reads
+    each citing file once; never touches `report` or any `Verdict`."""
+    by_file: "dict[Path, dict[tuple[int, str], Verdict]]" = {}
+    for v in report.verdicts:
+        if v.status == "live" and len(v.matches) == 1:
+            c = v.citation
+            by_file.setdefault(c.citing_file, {}).setdefault((c.line_no, c.raw_target), v)
+
+    cache: "dict[Path, _Headings | None]" = {}
+    out: "list[AnchorVerdict]" = []
+    for citing_file in sorted(by_file):
+        try:
+            text = citing_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        live = by_file[citing_file]
+        in_fence = False
+        for line_no, line in enumerate(
+            text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), start=1
+        ):
+            if _FENCE_ANY.match(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            for m in _FRAGMENT_LINK.finditer(line):
+                v = live.get((line_no, m.group(1)))
+                if v is not None and v.citation.kind == "markdown_link":
+                    av = resolve_anchor(v.citation, m.group(2), "fragment", v.matches[0], cache)
+                    if av is not None:
+                        out.append(av)
+            for m in _SECTION_CITATION.finditer(line):
+                v = live.get((line_no, m.group("t")))
+                if v is None:
+                    continue
+                for ref in _SECTION_SPLIT.split(m.group("tail")):
+                    av = resolve_anchor(v.citation, _cut_ref(ref), "section", v.matches[0], cache)
+                    if av is not None:
+                        out.append(av)
+    return tuple(out)

@@ -691,6 +691,8 @@ def test_watch_liveness_reports_absent_when_nothing_ever_stamped(tmp_path, monke
         session_id,
     )
 
+    monkeypatch.setattr(gee, "_stamp_entry_heartbeat", lambda *a, **k: None)
+
     result = gee._group_em_enter({"repo_root": repo_root})
 
     assert result["teammates"]["dispatch_required"] is False
@@ -1019,3 +1021,74 @@ def test_a_failing_intake_drain_never_blocks_entry(monkeypatch):
     monkeypatch.setattr(op.next_move_ledger, "drain_all_intakes", boom)
     monkeypatch.setattr(op.group_em_send_pass, "build_send_digest", lambda *a: {"entries": []})
     assert op._run_digest("R", [], "sid") == ({"entries": []}, None)
+
+
+def _arm_entry(monkeypatch, sid, claimed):
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: sid)
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {
+            "entries": [],
+            "suppressed": [{"session_id": "peer-1", "why": "cooldown", "reason": "armed"}],
+        },
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {
+            "claimed": claimed,
+            "holder": sid if claimed else "incumbent-sid",
+            "already_held": False,
+            "superseded_incumbent": None,
+        },
+    )
+
+
+def test_claimed_entry_stamps_the_watch_heartbeat(tmp_path, monkeypatch):
+    _arm_entry(monkeypatch, "caller-sid-hb1", claimed=True)
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    record = gee.group_em_watch_heartbeat._read_record(
+        gee.group_em_watch_heartbeat.watch_path(str(tmp_path))
+    )
+    assert record is not None
+    assert record["holder_session_id"] == "caller-sid-hb1"
+    assert record["tick_source"] == "entry"
+    assert record["declinations"] == [
+        {"session_id": "peer-1", "gate": "cooldown", "reason": "armed"}
+    ]
+    assert "heartbeat_error" not in result
+    assert result["watch_liveness"]["verdict"] == "armed"
+
+
+def test_refused_entry_does_not_stamp_the_watch_heartbeat(tmp_path, monkeypatch):
+    _arm_entry(monkeypatch, "caller-sid-hb2", claimed=False)
+
+    gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert not Path(gee.group_em_watch_heartbeat.watch_path(str(tmp_path))).exists()
+
+
+def test_stamp_failure_does_not_block_entry(tmp_path, monkeypatch):
+    _arm_entry(monkeypatch, "caller-sid-hb3", claimed=True)
+
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gee.group_em_watch_heartbeat, "stamp", _boom)
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["nomination"]["claimed"] is True
+    assert result["roster"] == []
+    assert result["baseline"]["first_tick"] is True
+    assert result["heartbeat_error"] == "OSError: disk full"

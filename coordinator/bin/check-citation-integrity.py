@@ -26,7 +26,12 @@ Violation classes tracked by C2: `rot`, `ambiguous`, `dead_link` -- the
 three `citation_graph.Verdict.status` values that name a citation genuinely
 broken (as opposed to `live`, `cross_surface` -- real,
 out-of-scope-for-this-ratchet -- or `home_relative`, never a repo path to
-begin with).
+begin with). `moved` (a pathed wiki citation whose basename resolved after
+every root missed -- see `citation_graph.resolve_pathed`) is likewise kept
+OUT of the rot ratchet: the citation is live but stale, not broken, so it
+is reported as its own count (`moved_count` in the JSON summary, its own
+line in the human report) and never folded into `VIOLATION_CLASSES` or any
+baseline partition.
 
 C3 and C4 add three more classes, each its OWN partition, never merged into
 an existing one:
@@ -47,6 +52,14 @@ an existing one:
     completeness percentage (pages absent from the guide entirely) is a
     plain count reported alongside it, not itself a violation identity, and
     is NOT baselined -- see `guide_drift` vs `absent_count` below.
+
+`anchor_missing` -- a live file citation whose `#fragment` or `§ Heading`
+does not resolve inside the target file (`citation_graph.scan_anchors`). It
+is an evidentiary figure only: reported as `anchor_missing_count` and listed
+by identity (`citation_identity` form plus `#<anchor>`), never added to
+`ALL_CLASSES`, never baselined, never able to move the exit code -- the same
+treatment as `absent_count`. `docs/decisions/` is not scanned: decision
+records are historical and do-not-repoint.
 
 A later chunk introducing a new violation CLASS adds only that class's own
 partition to the baseline, in the same commit that introduces the gate
@@ -429,8 +442,24 @@ def build_baseline_payload(
     }
 
 
+def anchor_missing_identities(anchors: "tuple[cg.AnchorVerdict, ...]") -> "list[str]":
+    """Sorted `citation_identity#<anchor>` strings for every `anchor_missing`
+    verdict. Evidentiary only -- never gated or baselined."""
+    return sorted(
+        {
+            f"{citation_identity(av)}#{av.anchor}"
+            for av in anchors
+            if av.status == "anchor_missing"
+        }
+    )
+
+
 def _summary(
-    report: "cg.CorpusReport", diffs: "dict[str, list[str]]", health: dict, drift: dict
+    report: "cg.CorpusReport",
+    diffs: "dict[str, list[str]]",
+    health: dict,
+    drift: dict,
+    anchor_missing: "list[str]",
 ) -> dict:
     return {
         "wiki_file_count": report.wiki_file_count,
@@ -443,6 +472,8 @@ def _summary(
         "guide_dead_rows_count": len(drift["dead_rows"]),
         "guide_absent_count": drift["absent_count"],
         "guide_page_count": drift["guide_page_count"],
+        "moved_count": report.counts().get("moved", 0),
+        "anchor_missing_count": len(anchor_missing),
     }
 
 
@@ -452,6 +483,7 @@ def _human_report(
     baseline: dict,
     current: "dict[str, set[str]]",
     drift: dict,
+    anchor_missing: "list[str]",
 ) -> str:
     lines = [
         f"citation-integrity: {report.wiki_file_count} wiki files @ "
@@ -466,6 +498,19 @@ def _human_report(
         "  evidentiary (one-time, not gated): guide completeness "
         f"{drift['guide_page_count'] - drift['absent_count']}/{drift['guide_page_count']} "
         f"wiki pages reachable from DIRECTORY_GUIDE.md ({drift['absent_count']} absent)"
+    )
+    lines.append(
+        f"  moved (not gated, not baselined): {report.counts().get('moved', 0)} pathed "
+        "citation(s) resolved by basename after every root missed"
+    )
+    lines.append(
+        f"  anchor_missing (evidentiary, not gated): {len(anchor_missing)} live citation(s) "
+        "whose #fragment or section heading does not resolve in the target file"
+    )
+    for identity in anchor_missing:
+        lines.append(f"    {identity}")
+    lines.append(
+        "  docs/decisions/ is not scanned: decision records are historical and do-not-repoint."
     )
     if not diffs:
         lines.append("PASS -- no violation is new against the committed baseline.")
@@ -497,11 +542,12 @@ def run(
     current["dead_end"] = set(health["dead_ends"])
     current["guide_drift"] = set(drift["dead_rows"])
     diffs = diff_against_baseline(current, baseline)
+    anchor_missing = anchor_missing_identities(_cg().scan_anchors(report))
     exit_code = 1 if diffs else 0
     return (
         exit_code,
-        _summary(report, diffs, health, drift),
-        _human_report(report, diffs, baseline, current, drift),
+        _summary(report, diffs, health, drift, anchor_missing),
+        _human_report(report, diffs, baseline, current, drift, anchor_missing),
     )
 
 

@@ -32,7 +32,14 @@ property, a wrong type, a closed-enum violation, a missing required key on an ed
 and fails; a retired `change_kind` value or an absent legacy conditional key the schema's own
 `x-bump-note` says is deliberately NOT retro-opened is LEGACY and does not.
 
-A THIRD CLASS, ADVISORY, NEVER FATAL EITHER WAY. `--for-execution` marks the plan as
+A THIRD CLASS, PM-BRIEF TRACEABILITY, STRUCTURAL. When a plan carries a `## PM brief` body
+section (`coordinator/bin/lib/pm_brief.py :: extract_brief_section`), every non-deferred row whose
+`disposition` is `open` or `coded` must carry a `traces_to_brief` that is a substring of that
+section (`pm_brief.trace_ok`); a row left untraced fails the same exit as the first class. A plan
+with no `## PM brief` section reports a single informational `NO-BRIEF` line and sets no failure:
+that plan never opted in.
+
+A FOURTH CLASS, ADVISORY, NEVER FATAL EITHER WAY. `--for-execution` marks the plan as
 execution-bound. Without the flag, an `open`, `execution_mode: agent` row with UNDECLARED `writes`
 (key absent or null, and no `writes_under`) is reported `advisory`, never fatal. WITH the flag,
 that same finding is STRUCTURAL and sets the failing exit. `writes: []` is a positive "writes
@@ -194,6 +201,14 @@ def _schema_path() -> Path:
     import coordinator_core.frontmatter as frontmatter
 
     return Path(frontmatter.__file__).resolve().parent / "schemas" / "plan-tasks.schema.json"
+
+
+def _pm_brief_module():
+    """Import `coordinator/bin/lib/pm_brief.py` through the `lib` bootstrap."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    import pm_brief
+
+    return pm_brief
 
 
 def _locate_spine(text: str):
@@ -385,6 +400,36 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
                 }
             )
 
+    pm_brief = _pm_brief_module()
+    brief_section = pm_brief.extract_brief_section(text)
+    if brief_section is None:
+        no_brief = True
+    else:
+        no_brief = False
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            row_id = row.get("id")
+            label = row_id or f"row {index + 1} (no id)"
+            if row.get("deferred") is True:
+                continue
+            if row.get("disposition", "open") not in ("open", "coded"):
+                continue
+            trace = row.get("traces_to_brief")
+            if not pm_brief.trace_ok(trace, brief_section):
+                findings.append(
+                    {
+                        "row": label,
+                        "error": (
+                            "missing traces_to_brief"
+                            if not trace
+                            else "traces_to_brief is not a substring of the plan's `## PM brief` section"
+                        ),
+                        "at": "traces_to_brief",
+                        "class": "structural",
+                    }
+                )
+
     if any(f["class"] == "structural" for f in findings):
         verdict = "INVALID"
     elif findings:
@@ -396,6 +441,7 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
         "verdict": verdict,
         "detail": None,
         "rows": findings,
+        "no_brief": no_brief,
         "advisories": advisories,
         "width": width,
         "width_unavailable": width_unavailable,
@@ -404,6 +450,9 @@ def _check_spine(path: Path, text: str, for_execution: bool) -> dict:
 
 def _render(report: dict) -> str:
     name = Path(report["path"]).name
+    no_brief_line = "\n  NO-BRIEF (no `## PM brief` section; trace check not applicable)" if (
+        report.get("no_brief") is True
+    ) else ""
     advisory_lines = [
         f"  {a['row']} at `{a['at']}`: {a['error']}  [advisory, not fatal]"
         for a in report.get("advisories", [])
@@ -420,11 +469,11 @@ def _render(report: dict) -> str:
         advisory_lines = [f"  WIDTH unavailable: {report['width_unavailable']}"] + advisory_lines
     advisory_block = ("\n" + "\n".join(advisory_lines)) if advisory_lines else ""
     if report["verdict"] in ("VALID", "NO-SPINE"):
-        return f"plan-spine-check: {report['verdict']} — {name}{advisory_block}"
+        return f"plan-spine-check: {report['verdict']} — {name}{no_brief_line}{advisory_block}"
     if report["verdict"] == "LEGACY":
         return (
             f"plan-spine-check: LEGACY — {name} ({len(report['rows'])} tolerated finding(s), "
-            f"no structural defect){advisory_block}"
+            f"no structural defect){no_brief_line}{advisory_block}"
         )
     lines = [f"plan-spine-check: {report['verdict']} — {name}"]
     if report["detail"]:
@@ -433,6 +482,8 @@ def _render(report: dict) -> str:
         at = f" at `{finding['at']}`" if finding["at"] else ""
         tag = "" if finding["class"] == "structural" else "  [legacy, not fatal]"
         lines.append(f"  {finding['row']}{at}: {finding['error']}{tag}")
+    if no_brief_line:
+        lines.append(no_brief_line.strip())
     if advisory_lines:
         lines.extend(advisory_lines)
     return "\n".join(lines)

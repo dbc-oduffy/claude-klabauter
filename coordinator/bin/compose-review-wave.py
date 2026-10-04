@@ -99,7 +99,14 @@ CLI:
 
 Manifest shape (JSON):
     { "slices": [ { "id": "<slice-id>", "diffPath": "<repo-relative-path>" }
-                   | { "id": "<slice-id>", "range": "<git-range>" }, ... ] }
+                   | { "id": "<slice-id>", "range": "<git-range>" }, ... ],
+      "plans": [ "<repo-relative-plan-path>", ... ] }
+
+`plans` is optional. Each plan's PM brief is rendered reviewer-framed and
+appended to every slice's REVIEWER `contractBlocks` after the role framing.
+With no `plans` key or an empty list, the line "No plan PM brief was
+supplied for this review." is appended instead. A listed plan that resolves
+no brief is a `ComposeError`.
 
 A slice entry carries EITHER a pre-frozen `diffPath` (passed through
 verbatim) OR a `range`, which this script freezes itself by delegating to
@@ -125,6 +132,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _COORDINATOR_ROOT = _SCRIPT_DIR.parent
 _REPO_ROOT = _COORDINATOR_ROOT.parent
 _WASTE_SIGNAL_SCRIPT = _SCRIPT_DIR / "waste-signal.py"
+
+#: Declared-absence line appended to the reviewer's contractBlocks when the
+#: manifest carries no `plans` key, or an empty one -- a plan-less review is
+#: not a failure, but the absence must be visible, never silent.
+_NO_PLAN_BRIEF_LINE = "No plan PM brief was supplied for this review."
 
 #: Wall-clock ceiling for one slice's attribution child. Generous relative to a
 #: normal covering-test run; it exists to bound a HANG, not to police slow tests.
@@ -686,6 +698,38 @@ def _write_waste_report(report: dict, run_id: str, slice_id: str) -> Path:
     return out_path
 
 
+def _resolve_plan_path(plan_str: str, repo_root: Path) -> Path:
+    """Repo-relative or absolute -- mirrors `pm-brief.py`'s own CLI resolution
+    so a caller passing either shape behaves identically through both seams."""
+    candidate = Path(plan_str)
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def _reviewer_plan_brief_block(manifest: dict, repo_root: Path) -> str:
+    """The text appended to the REVIEWER role's contractBlocks only, after
+    `role_append` -- the declared-absence line with no `plans` key or an
+    empty list, or one `render_block(brief, "reviewer")` per listed plan,
+    joined verbatim. A plan that resolves no brief is a `ComposeError`,
+    same fail-loud rule as every other precondition in this module."""
+    plans = manifest.get("plans")
+    if not isinstance(plans, list) or not plans:
+        return _NO_PLAN_BRIEF_LINE
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from pm_brief import NoPmBriefError, render_block, resolve as resolve_pm_brief
+
+    blocks: list[str] = []
+    for plan_str in plans:
+        if not isinstance(plan_str, str) or not plan_str:
+            raise ComposeError(f"manifest 'plans' entry is not a non-empty string: {plan_str!r}")
+        plan_path = _resolve_plan_path(plan_str, repo_root)
+        try:
+            brief = resolve_pm_brief(plan_path, repo_root)
+        except NoPmBriefError as exc:
+            raise ComposeError(str(exc)) from exc
+        blocks.append(render_block(brief, "reviewer"))
+    return "\n\n".join(blocks)
+
+
 def compose(
     manifest: dict,
     *,
@@ -705,6 +749,10 @@ def compose(
     slices_in = manifest.get("slices")
     if not isinstance(slices_in, list) or not slices_in:
         raise ComposeError("manifest carries no slices")
+
+    # Resolved once for the whole wave: every slice's reviewer gets the same
+    # plan-scoped PM brief text.
+    reviewer_plan_brief_block = _reviewer_plan_brief_block(manifest, _REPO_ROOT)
 
     # The sidecar directory MUST be the session the fired phases actually run
     # under, never a synthetic one. `provision_report` resolves a sidecar to
@@ -837,6 +885,8 @@ def compose(
             # enforce-agent-dispatch-mode.py's own ordering (content repo)
             # (sidecar offer -> injected contract -> role framing).
             contract_blocks_text = injected_blocks.rstrip("\n") + "\n\n" + role_append
+            if role == "reviewer":
+                contract_blocks_text += "\n\n" + reviewer_plan_brief_block
             role_payloads[role] = {
                 "sidecarPath": sidecar_path,
                 "contractBlocks": contract_blocks_text,
