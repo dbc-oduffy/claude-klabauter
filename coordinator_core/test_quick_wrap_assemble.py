@@ -1010,7 +1010,7 @@ def test_pin_entry_test_all_conditions_pass(tmp_path: Path):
                 "condition": "Work is finished — nothing in-flight for a successor",
                 "passed": None,
                 "evidence": "EM judgment — deliberately not computed",
-                "route_on_fail": "/handoff, only if context pressure genuinely forces the stop",
+                "route_on_fail": "commit and checkpoint the in-flight work, then continue it",
             },
         ],
         "computed_failures": [],

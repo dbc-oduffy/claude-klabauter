@@ -37,3 +37,11 @@ def test_underscore_spelling_and_clean_file(tmp_path):
 
 def test_helper_source_is_clean():
     assert unmarked_hits(["coordinator_core/tests/_legacy_root_scan.py", "coordinator_core/testing/content_root.py"]) == []
+
+
+def test_a_dated_record_id_is_history_not_a_live_root(tmp_path):
+    from coordinator_core.tests._legacy_root_scan import unmarked_hits
+
+    name = "d" "oe-root"
+    (tmp_path / "g.json").write_text(f'["2026-07-22-em-shim-{name}-seam-landed"]\n["{name}"]\n', encoding="utf-8")
+    assert [h[1] for h in unmarked_hits(["g.json"], root=tmp_path)] == [2]

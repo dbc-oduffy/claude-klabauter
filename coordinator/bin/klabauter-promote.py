@@ -238,7 +238,8 @@ def _check_cross_machine_observed(dest: str, target: str) -> Optional[str]:
     would need (a registry that records, per candidate ref sha, which
     machines have fetched/checked it out).
 
-    NEGATIVE SPEC: does not accept an operator assertion flag, and fails
+    NEGATIVE SPEC: accepts no operator assertion (only a cited PM ruling, at
+    the caller, waives it), and fails
     CLOSED (refuses) on any git error rather than guessing the age.
     """
     _bootstrap_engine()
@@ -330,7 +331,8 @@ def _check_source_head_not_wip(dest: str, percolate_root: str) -> Optional[str]:
 
 
 def _evaluate_promotion_bar(
-    dest: str, target: str, percolate_root: str, candidate_branch: str, main_branch: str
+    dest: str, target: str, percolate_root: str, candidate_branch: str, main_branch: str,
+    pm_soak_override: str = "",
 ) -> List[str]:
     _bootstrap_engine()
     refusals: List[str] = []
@@ -357,6 +359,11 @@ def _evaluate_promotion_bar(
                 refusals.append(ff_refusal)
 
     cross_machine_refusal = _check_cross_machine_observed(dest, target)
+    if cross_machine_refusal and pm_soak_override:
+        # Predicate 4 is the one declared UNENFORCED (a soak-time proxy); only it
+        # yields to a PM ruling, and the ruling's words are printed, never implied.
+        print(f"klabauter-promote: predicate 4 waived by PM ruling: {pm_soak_override!r}", file=sys.stderr)
+        cross_machine_refusal = None
     if cross_machine_refusal:
         refusals.append(f"klabauter-promote: predicate 4 (cross-machine observation) FAILED —\n{cross_machine_refusal}")
 
@@ -385,7 +392,8 @@ def _cmd_promote(args: argparse.Namespace) -> int:
         return _EXIT_FAIL
 
     refusals = _evaluate_promotion_bar(
-        dest, target, percolate_root, _CANDIDATE_BRANCH, main_branch
+        dest, target, percolate_root, _CANDIDATE_BRANCH, main_branch,
+        pm_soak_override=(args.pm_soak_override or "").strip(),
     )
     if refusals:
         for refusal in refusals:
@@ -410,10 +418,12 @@ def _cmd_promote(args: argparse.Namespace) -> int:
 
     push_refspec = f"{_CANDIDATE_BRANCH}:{main_branch}"
     result = _run(
-        ["git", "-C", dest, "push", "origin", "--ff-only", push_refspec],
-        capture_output=False,
+        # A non-force push already refuses anything but a fast-forward; git
+        # push has no --ff-only. `_run` captures, so the refusal is re-printed.
+        ["git", "-C", dest, "push", "origin", push_refspec],
     )
     if result.returncode != 0:
+        print((result.stderr or result.stdout or "").strip(), file=sys.stderr)
         return _EXIT_FAIL
 
     print(
@@ -447,6 +457,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Actually push the fast-forward promotion. Omit for a dry-run.",
+    )
+    parser.add_argument(
+        "--pm-soak-override",
+        metavar="PM_WORDS",
+        default="",
+        help="Waive predicate 4's soak floor only, citing the PM's verbatim ruling.",
     )
     parser.set_defaults(func=_cmd_promote)
     return parser

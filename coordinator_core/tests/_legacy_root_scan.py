@@ -12,6 +12,9 @@ from pathlib import Path
 
 _PATTERN = re.compile("d" "oe[-_]root|(repos|working_repos)\\.d" "oe_", re.IGNORECASE)
 _MARKER = "private-name-ok"
+# A dated record id (`2026-07-22-...-seam-landed`) names a past memo, not a live
+# root; JSON data lines cannot carry the marker, so the id itself is the exemption.
+_DATED_RECORD_ID = re.compile(r"\b\d{4}-\d{2}-\d{2}-[a-z0-9-]+")
 _EXCLUDED_PREFIXES = ("archive/", "state/", "docs/", "tasks/", ".coordinator-local/", ".structural-index/")
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -48,6 +51,6 @@ def unmarked_hits(paths=None, *, root: Path | None = None) -> list[tuple[str, in
         except (OSError, UnicodeDecodeError):
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if _MARKER not in line and _PATTERN.search(line):
+            if _MARKER not in line and _PATTERN.search(_DATED_RECORD_ID.sub("", line)):
                 hits.append((posix, lineno, line.strip()))
     return hits

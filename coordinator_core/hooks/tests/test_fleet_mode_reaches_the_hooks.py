@@ -15,8 +15,10 @@ Two properties, both required:
 Covers both precedence branches, since C3 is the only chunk that can:
     - ``autonomous`` (session-wins) via ``nudge_em_code_dispatch.op()`` and
       ``postuse_advisory_dispatch._check_runtime_tripwire_sync``.
-    - ``compaction_warnings`` (fleet-wins) via
-      ``postuse_advisory_dispatch._check_context_pressure_sync``.
+    - ``compaction_warnings`` (fleet-wins) is registered, but
+      ``postuse_advisory_dispatch._check_context_pressure_sync`` no longer
+      reads it: the red band is informational and handoff-free under every
+      value (PM ruling 2026-10-04).
 
 Spec backlink: docs/plans/2026-08-28-the-fleet-gets-one-file-and-the-floor-
 moves-to-the-reader.md § C3.
@@ -154,55 +156,32 @@ def _write_usage(session_id: str, used_percentage: float, now: float):
     )
 
 
-class TestContextPressureCompactionWarningsFleetWins:
-    """`compaction_warnings` is a VARIANT SELECTOR, never an off switch:
-    for every value the key admits, the function still returns non-empty
-    advisory text at the 40% and 43% bands."""
+def _red(session_id: str, percentage: float = 50.0) -> str:
+    _write_usage(session_id, percentage, 1_000_000.0)
+    return postuse_advisory_dispatch._check_context_pressure_sync(
+        session_id, "/does/not/matter/transcript.jsonl"
+    )
 
-    def test_no_fleet_file_standard_variant_in_the_red_band(self, _isolate_sentinel_and_fleet):
-        now = 1_000_000.0
-        _write_usage("cp1", 50.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp1", "/does/not/matter/transcript.jsonl"
-        )
-        assert "HANDOFF NOW" in text
-        assert "INFORMATIONAL" not in text
 
-    def test_fleet_informational_selects_variant_in_the_red_band(self, _isolate_sentinel_and_fleet):
+def _assert_informational_and_handoff_free(text: str) -> None:
+    assert "CONTEXT PRESSURE — INFORMATIONAL" in text
+    assert "commit and checkpoint" in text
+    assert "/handoff" not in text
+    assert "HANDOFF" not in text
+
+
+class TestContextPressureRedBandIgnoresCompactionWarnings:
+    """The red band is informational and handoff-free whatever the fleet file
+    or the environment says; the orange band never returns empty."""
+
+    def test_no_fleet_file_red_band_is_informational(self, _isolate_sentinel_and_fleet):
+        _assert_informational_and_handoff_free(_red("cp1"))
+
+    def test_fleet_informational_red_band_is_informational(self, _isolate_sentinel_and_fleet):
         _write_fleet({"compaction_warnings": "informational"})
-        now = 1_000_000.0
-        _write_usage("cp2", 50.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp2", "/does/not/matter/transcript.jsonl"
-        )
-        assert text
-        assert "INFORMATIONAL" in text
-        assert "commit and checkpoint now" in text
+        _assert_informational_and_handoff_free(_red("cp2"))
 
-    def test_cloud_box_gets_the_informational_variant_with_no_config_at_all(
-        self, _isolate_sentinel_and_fleet, monkeypatch
-    ):
-        # ONE POSITIONAL `env`, matching the real signature: the registry
-        # entry calls this with the caller's env, so a zero-arg stub answered
-        # nothing -- it raised `TypeError` into the resolver's fail-open
-        # `except`, and this test asserted against the STATIC default with the
-        # leg it names never run. A stub whose arity does not match the thing
-        # it stands in for pins the fallback, not the seam.
-        monkeypatch.setattr(
-            "coordinator_core.session.mode_resolution."
-            "_compaction_default_for_environment",
-            lambda env=None: "informational",
-        )
-        _write_usage("cp-cloud", 50.0, 1_000_000.0)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp-cloud", "/does/not/matter/transcript.jsonl"
-        )
-        assert "INFORMATIONAL" in text
-        assert "HANDOFF NOW" not in text, (
-            "a cloud box must not be told to run a ceremony it cannot run"
-        )
-
-    def test_an_explicit_fleet_value_still_beats_the_environment(
+    def test_fleet_standard_no_longer_selects_a_handoff_variant(
         self, _isolate_sentinel_and_fleet, monkeypatch
     ):
         monkeypatch.setattr(
@@ -211,60 +190,45 @@ class TestContextPressureCompactionWarningsFleetWins:
             lambda env=None: "informational",
         )
         _write_fleet({"compaction_warnings": "standard"})
-        _write_usage("cp-override", 50.0, 1_000_000.0)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp-override", "/does/not/matter/transcript.jsonl"
-        )
-        assert "HANDOFF NOW" in text
+        _assert_informational_and_handoff_free(_red("cp-override"))
 
-    def test_fleet_informational_selects_variant_at_40(self, _isolate_sentinel_and_fleet):
-        _write_fleet({"compaction_warnings": "informational"})
-        now = 1_000_000.0
-        _write_usage("cp3", 41.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp3", "/does/not/matter/transcript.jsonl"
+    def test_cloud_environment_reading_is_the_same_informational_text(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda env=None: "informational",
         )
-        assert text
+        _assert_informational_and_handoff_free(_red("cp-cloud"))
+
+    def test_fleet_informational_at_40(self, _isolate_sentinel_and_fleet):
+        _write_fleet({"compaction_warnings": "informational"})
+        text = _red("cp3", 41.0)
         assert "INFORMATIONAL" in text
+        assert "/handoff" not in text and "HANDOFF" not in text
 
     def test_fleet_standard_never_returns_empty_at_band(self, _isolate_sentinel_and_fleet):
         _write_fleet({"compaction_warnings": "standard"})
-        now = 1_000_000.0
-        _write_usage("cp4", 48.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp4", "/does/not/matter/transcript.jsonl"
-        )
-        assert text
+        assert _red("cp4", 48.0)
 
-    def test_fleet_malformed_value_never_returns_empty_at_band(self, _isolate_sentinel_and_fleet):
+    def test_fleet_out_of_enum_value_is_informational_and_handoff_free(
+        self, _isolate_sentinel_and_fleet
+    ):
         _write_fleet({"compaction_warnings": "silent"})
-        now = 1_000_000.0
-        _write_usage("cp5", 48.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp5", "/does/not/matter/transcript.jsonl"
-        )
-        assert text
-        assert "HANDOFF NOW" in text
+        _assert_informational_and_handoff_free(_red("cp5", 48.0))
 
     def test_absent_key_never_returns_empty_at_band(self, _isolate_sentinel_and_fleet):
-        now = 1_000_000.0
-        _write_usage("cp6", 40.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp6", "/does/not/matter/transcript.jsonl"
-        )
-        assert text
+        assert _red("cp6", 40.0)
 
-    def test_autonomous_sentinel_still_selects_informational_baseline(
+    def test_autonomous_sentinel_names_the_autonomous_run(
         self, _isolate_sentinel_and_fleet
     ):
         tmp_path, _home = _isolate_sentinel_and_fleet
         _touch_autonomous_sentinel(tmp_path, "cp7")
-        now = 1_000_000.0
-        _write_usage("cp7", 47.0, now)
-        text = postuse_advisory_dispatch._check_context_pressure_sync(
-            "cp7", "/does/not/matter/transcript.jsonl"
-        )
+        text = _red("cp7", 47.0)
         assert "INFORMATIONAL" in text
+        assert "/handoff" not in text and "HANDOFF" not in text
 
 
 class TestModeKeysRegistryStillValid:
@@ -304,11 +268,6 @@ class TestBatonAffordanceIsNamedInBothBands:
     ):
         tmp_path = _isolate_sentinel_and_fleet[0]
         baton = self._with_baton(monkeypatch, tmp_path, "cp-43")
-        monkeypatch.setattr(
-            "coordinator_core.session.mode_resolution."
-            "_compaction_default_for_environment",
-            lambda env=None: "informational",
-        )
         _write_usage("cp-43", 50.0, 1_000_000.0)
         text = postuse_advisory_dispatch._check_context_pressure_sync(
             "cp-43", "/does/not/matter/transcript.jsonl"
@@ -359,21 +318,6 @@ _FLEET_VALUE_CASES = [
     pytest.param({"value": "informational"}, id="dict"),
 ]
 
-#: Non-string classes (including the out-of-enum string) that must degrade
-#: to the STANDARD variant at the red band -- never silently coerced to
-#: `informational`. `_NO_FLEET_FILE`/"standard" already assert STANDARD via
-#: the baseline tests above and are excluded here to avoid duplicating that
-#: assertion under a different fixture id.
-_DEGRADES_TO_STANDARD_IDS = {
-    "out_of_enum_string",
-    "bool_true",
-    "int_one",
-    "null",
-    "list",
-    "dict",
-}
-
-
 class TestCompactionWarningsFullCrossProduct:
     @pytest.fixture(autouse=True)
     def _standard_environment_default(self, monkeypatch):
@@ -404,7 +348,4 @@ class TestCompactionWarningsFullCrossProduct:
     def test_red_band_never_empty(self, _isolate_sentinel_and_fleet, fleet_value, request):
         session_id = f"xp-red-{request.node.callspec.id}"
         text = self._resolve(fleet_value, session_id, 48.0)
-        assert text
-        if request.node.callspec.id in _DEGRADES_TO_STANDARD_IDS:
-            assert "HANDOFF NOW" in text
-            assert "INFORMATIONAL" not in text
+        _assert_informational_and_handoff_free(text)

@@ -180,9 +180,9 @@ class ModeKey:
 
     It exists because some defaults are wrong in a way that is knowable from
     the environment rather than from the operator. The motivating case: the
-    context-pressure advisory's `standard` variant recommends `/handoff`, and
-    on a cloud box that remedy does not exist — no `/clear`, and passing a
-    baton means a PR merge, a new session and a re-point. Making the operator
+    context-pressure advisory once recommended `/handoff`, and on a cloud box
+    that remedy does not exist — no `/clear`, and passing a baton means a PR
+    merge, a new session and a re-point. Making the operator
     remember to set that per box is exactly the failure the discharge test
     names; the environment already knows.
     """

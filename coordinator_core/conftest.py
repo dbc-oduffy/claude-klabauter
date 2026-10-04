@@ -1228,9 +1228,7 @@ def _no_live_inbox_writes_from_suite():
 #
 # `MODE_KEYS` entries may declare an `environment_default` (see
 # `coordinator_core.session.mode_resolution`). `compaction_warnings` does: it
-# answers `informational` on a box that is not the developer's own, because the
-# `standard` variant recommends `/handoff` and that ceremony does not exist
-# there. Correct behaviour, and it makes an AMBIENT MACHINE FACT load-bearing
+# answers `informational` on a box that is not the developer's own. Correct behaviour, and it makes an AMBIENT MACHINE FACT load-bearing
 # for every test asserting anything downstream of that key.
 #
 # Left unpinned, such a test passes on an attended box and fails in a cloud

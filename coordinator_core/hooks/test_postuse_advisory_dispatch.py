@@ -78,7 +78,8 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     )
 
     first = pad._check_context_pressure_sync(session_id, "")
-    assert "CONTEXT PRESSURE — HANDOFF NOW" in first
+    assert "CONTEXT PRESSURE — INFORMATIONAL" in first
+    assert "/handoff" not in first and "HANDOFF" not in first
 
     state_path = pad._advisory_state_path(tempfile.gettempdir(), session_id)
     assert os.path.isfile(state_path)

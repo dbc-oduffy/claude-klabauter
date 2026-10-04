@@ -251,9 +251,8 @@ def _unset_variant(key: str, enum_values: tuple) -> tuple:
     came from.
 
     WHY THIS CONSULTS THE RESOLVER. A key may carry an ``environment_default``
-    -- ``compaction_warnings`` does, answering ``informational`` on a box where
-    the ``standard`` variant's ``/handoff`` recommendation is not an available
-    remedy. Reporting the STATIC default here would make ``show`` state a
+    -- ``compaction_warnings`` does, answering ``informational`` on a box that
+    is not the developer's own. Reporting the STATIC default here would make ``show`` state a
     variant other than the one that actually fires, which defeats this op's own
     load-bearing requirement (see module docstring: a session has to be able to
     explain its own behaviour). A ``show`` that misreports is worse than no

@@ -109,15 +109,14 @@ def main(argv: List[str]) -> int:
         rc = enable(mode="autonomous")
         if rc == 0:
             print(
-                "Autonomous mode enabled — context pressure hook will emit "
-                "informational-only messages (no /handoff nudge). Use "
-                "`/autonomous off` to restore normal behavior."
+                "Autonomous mode enabled — context-pressure messages name this "
+                "session as an autonomous run. Use `/autonomous off` to disable."
             )
         return _reported_exit(rc)
 
     rc = disable()
     if rc == 0:
-        print("Autonomous mode disabled — context pressure hook will resume normal /handoff nudges.")
+        print("Autonomous mode disabled.")
     return _reported_exit(rc)
 
 

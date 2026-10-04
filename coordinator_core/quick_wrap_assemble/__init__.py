@@ -740,7 +740,7 @@ def _entry_test(
             "condition": "Work is finished — nothing in-flight for a successor",
             "passed": None,
             "evidence": "EM judgment — deliberately not computed",
-            "route_on_fail": "/handoff, only if context pressure genuinely forces the stop",
+            "route_on_fail": "commit and checkpoint the in-flight work, then continue it",
         },
     ]
 
@@ -862,8 +862,7 @@ def _judgment_points(
                 build_disposition(
                     "in-flight",
                     guidance=(
-                        "Route to /handoff, only if context pressure genuinely forces "
-                        "the stop."
+                        "Commit and checkpoint the in-flight work, then continue it."
                     ),
                 ),
             ],

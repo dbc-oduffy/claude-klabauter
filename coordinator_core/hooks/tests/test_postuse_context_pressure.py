@@ -20,9 +20,12 @@ inbound" C2 revision):
     >= threshold - _ORANGE_RUNWAY_TOKENS  INFORMATIONAL — checkpoint so the
                                            run is resumable; no handoff
                                            recommendation (PM ruling 2026-08-29)
-    >= threshold - _RED_RUNWAY_TOKENS     HANDOFF NOW — ahead of the
+    >= threshold - _RED_RUNWAY_TOKENS     INFORMATIONAL — commit and
+                                           checkpoint now, ahead of the
                                            session's own resolved
-                                           auto-compact cut
+                                           auto-compact cut; no handoff
+                                           recommendation in any mode
+                                           (PM ruling 2026-10-04)
     no usable reading                     silence, on every fire, for the
                                            whole session
 
@@ -231,21 +234,48 @@ def test_advisory_barks_once():
     assert _check(session_id) == ""
 
 
-def test_the_red_bound_fires_handoff_now():
+def _assert_handoff_free(text: str) -> None:
+    assert "/handoff" not in text
+    assert "HANDOFF" not in text
+
+
+def test_the_red_bound_fires_informational_commit_and_checkpoint():
     session_id = "session-red"
     pct = _red_bound_pct()
     _write_sidecar(session_id, pct)
     text = _check(session_id)
-    assert "CONTEXT PRESSURE — HANDOFF NOW" in text
+    assert "CONTEXT PRESSURE — INFORMATIONAL" in text
     assert f"~{round(pct)}% of window used" in text
-    assert "/handoff" in text
+    assert "commit and checkpoint now" in text
+    assert "Continue the run." in text
+    _assert_handoff_free(text)
 
 
-def test_deep_into_the_red_band_still_fires_handoff_now():
-    _write_sidecar("session-red-deep", _red_bound_pct() + 5)
-    assert "HANDOFF NOW" in _check("session-red-deep")
-    _write_sidecar("session-red-deeper", _red_bound_pct() + 10)
-    assert "HANDOFF NOW" in _check("session-red-deeper")
+def test_deep_into_the_red_band_still_fires_informational():
+    for sid, off in (("session-red-deep", 5), ("session-red-deeper", 10)):
+        _write_sidecar(sid, _red_bound_pct() + off)
+        text = _check(sid)
+        assert "CONTEXT PRESSURE — INFORMATIONAL" in text
+        _assert_handoff_free(text)
+
+
+def test_no_orange_or_red_output_names_a_handoff_in_any_sentinel_state(
+    tmp_path, monkeypatch
+):
+    """PM ruling 2026-10-04, pinned centrally across every band and sentinel
+    state (absent, autonomous, mise-en-place, unrecognised)."""
+    for mode in (None, "autonomous", "mise-en-place", "not-a-real-mode"):
+        for band, pct in (
+            ("orange", _orange_bound_pct() + 1),
+            ("red", _red_bound_pct() + 10),
+        ):
+            session_id = f"session-no-handoff-{mode}-{band}"
+            if mode is not None:
+                _under_sentinel(tmp_path, monkeypatch, session_id, mode=mode)
+            _write_sidecar(session_id, pct)
+            text = _check(session_id)
+            assert "INFORMATIONAL" in text, (mode, band)
+            _assert_handoff_free(text)
 
 
 def test_red_band_fires_ahead_of_the_resolved_threshold_with_positive_runway():
@@ -270,7 +300,7 @@ def test_threshold_matches_the_established_cloud_cut_under_the_env_override(
 def test_critical_suppresses_a_later_advisory_for_the_same_session():
     session_id = "session-jumped"
     _write_sidecar(session_id, _red_bound_pct() + 10)
-    assert "HANDOFF NOW" in _check(session_id)
+    assert "INFORMATIONAL" in _check(session_id)
     _bypass_throttle(session_id)
     _write_sidecar(session_id, _orange_bound_pct() + 1, now=time.time())
     assert _check(session_id) == ""
@@ -279,7 +309,7 @@ def test_critical_suppresses_a_later_advisory_for_the_same_session():
 def test_critical_barks_once():
     session_id = "session-red-once"
     _write_sidecar(session_id, _red_bound_pct() + 10)
-    assert "HANDOFF NOW" in _check(session_id)
+    assert "INFORMATIONAL" in _check(session_id)
     _bypass_throttle(session_id)
     assert _check(session_id) == ""
 
@@ -295,7 +325,7 @@ def test_stale_reading_is_reported_with_its_age_not_discarded():
     session_id = "session-stale"
     _write_sidecar(session_id, _red_bound_pct() + 10, now=time.time() - 900)
     text = _check(session_id)
-    assert "HANDOFF NOW" in text
+    assert "INFORMATIONAL" in text
     assert "measured 9" in text and "s ago" in text
 
 
@@ -316,7 +346,7 @@ class TestMiseContinuanceRedBand:
     autonomous one, instead of a CONTINUANCE tail-then-handoff instruction.
     """
 
-    def test_mise_en_place_red_band_names_the_tail_not_a_bare_handoff(
+    def test_mise_en_place_red_band_names_the_tail_and_no_handoff(
         self, tmp_path, monkeypatch
     ):
         session_id = "session-mise-continuance"
@@ -324,9 +354,8 @@ class TestMiseContinuanceRedBand:
         _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "Phase 6" in text
-        assert "then" in text and "author the handoff" in text
-        assert "This is the point to run /handoff" not in text
-        assert "INFORMATIONAL" not in text
+        assert "INFORMATIONAL" in text
+        _assert_handoff_free(text)
 
     def test_autonomous_mode_content_still_gets_the_informational_text(
         self, tmp_path, monkeypatch
@@ -338,12 +367,16 @@ class TestMiseContinuanceRedBand:
         assert "INFORMATIONAL" in text
         assert "Phase 6" not in text
 
-    def test_absent_sentinel_gets_the_plain_handoff_text(self, tmp_path):
+    def test_absent_sentinel_gets_the_informational_text_with_no_mode_clause(
+        self, tmp_path
+    ):
         session_id = "session-mise-no-sentinel"
         _write_sidecar(session_id, _red_bound_pct() + 1)
         text = _check(session_id)
-        assert "HANDOFF NOW" in text
+        assert "INFORMATIONAL" in text
+        assert "Autonomous run" not in text
         assert "Phase 6" not in text
+        _assert_handoff_free(text)
 
     def test_unrecognised_sentinel_content_degrades_to_current_behaviour(
         self, tmp_path, monkeypatch
@@ -352,16 +385,17 @@ class TestMiseContinuanceRedBand:
         not crash the hook and must not be treated as autonomous OR as a
         CONTINUANCE run -- C5: branch on sentinel CONTENT, not mere presence.
         Both `mise_continuance` and `autonomous_recognized` stay False, so the
-        red band falls straight through to the bare non-autonomous HANDOFF NOW
-        text, current (sentinel-absent) behaviour -- not the autonomous
-        informational text a mere-presence check would have picked."""
+        red band carries neither the "Autonomous run:" clause nor the Phase 6
+        tail -- the sentinel-absent text, not what a mere-presence check would
+        have picked."""
         session_id = "session-mise-garbage-sentinel"
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="not-a-real-mode")
         _write_sidecar(session_id, _red_bound_pct() + 1)
         text = _check(session_id)
-        assert "HANDOFF NOW" in text
-        assert "INFORMATIONAL" not in text
+        assert "INFORMATIONAL" in text
+        assert "Autonomous run" not in text
         assert "Phase 6" not in text
+        _assert_handoff_free(text)
 
 
 class TestAutonomousSentinelSuppressesTheRecommendation:
@@ -392,17 +426,19 @@ class TestAutonomousSentinelSuppressesTheRecommendation:
         _write_sidecar(session_id, pct)
         assert f"~{round(pct)}% of window used" in _check(session_id)
 
-    def test_without_the_sentinel_only_the_critical_band_recommends_handoff(self):
+    def test_without_the_sentinel_neither_band_recommends_handoff(self):
         _write_sidecar("session-no-sentinel-orange", _orange_bound_pct() + 1)
-        assert "/handoff" not in _check("session-no-sentinel-orange")
+        _assert_handoff_free(_check("session-no-sentinel-orange"))
         _write_sidecar("session-no-sentinel-red", _red_bound_pct() + 10)
-        assert "HANDOFF NOW" in _check("session-no-sentinel-red")
+        red = _check("session-no-sentinel-red")
+        assert "INFORMATIONAL" in red
+        _assert_handoff_free(red)
 
 
 def test_throttle_holds_between_checks():
     session_id = "session-throttled"
     _write_sidecar(session_id, _red_bound_pct() + 5)
-    assert "HANDOFF NOW" in _check(session_id)
+    assert "INFORMATIONAL" in _check(session_id)
     _write_sidecar(session_id, _red_bound_pct() + 6, now=time.time())
     assert _check(session_id) == ""
 
@@ -424,7 +460,7 @@ def test_fractional_percentage_is_an_exact_token_compare_not_a_rounded_one():
 
     red = _red_bound_pct() + 0.1
     _write_sidecar("session-past-red", red)
-    assert "HANDOFF NOW" in _check("session-past-red")
+    assert "INFORMATIONAL" in _check("session-past-red")
 
 
 def test_half_values_use_bankers_rounding_on_both_surfaces():
@@ -460,17 +496,9 @@ def _under_fleet_informational(monkeypatch) -> None:
 
 
 class TestModeClauseNamesOnlyWhatIsTrue:
-    """The red band's informational text opens with a mode clause, and which
-    clause it opens with is decided by WHICH side selected the variant.
-
-    The defect this pins: the text was written for the session-scoped sentinel
-    and hardcoded "Autonomous run:". `compaction_warnings` is fleet-wins with
-    `session_pair=None`, so it selects the same text for sessions that are not
-    autonomous — every one of which would have been told it was an autonomous
-    run. A message that asserts something untrue about its own reader is a
-    register defect (docs/wiki/guard-messaging.md), and it is invisible to any
-    test that only checks the INFORMATIONAL header is present.
-    """
+    """The red band's mode clause is "Autonomous run: " only when the session's
+    own sentinel is recognised; the fleet `compaction_warnings` value selects
+    nothing in this hook, so it can neither add the clause nor a variant."""
 
     def test_the_sentinel_path_still_names_the_autonomous_run(self, tmp_path, monkeypatch):
         session_id = "session-clause-sentinel"
@@ -480,22 +508,15 @@ class TestModeClauseNamesOnlyWhatIsTrue:
         assert "INFORMATIONAL" in text
         assert "Autonomous run:" in text
 
-    def test_the_fleet_path_never_claims_the_session_is_autonomous(self, monkeypatch):
+    def test_a_fleet_value_never_claims_the_session_is_autonomous(self, monkeypatch):
         session_id = "session-clause-fleet"
         _under_fleet_informational(monkeypatch)
         _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "INFORMATIONAL" in text
         assert "Autonomous run" not in text
-        assert "Informational mode:" in text
-
-    def test_the_fleet_path_still_suppresses_the_recommendation(self, monkeypatch):
-        session_id = "session-clause-fleet-handoff"
-        _under_fleet_informational(monkeypatch)
-        _write_sidecar(session_id, _red_bound_pct() + 10)
-        text = _check(session_id)
-        assert "/handoff" not in text
-        assert "HANDOFF NOW" not in text
+        assert "Informational mode" not in text
+        _assert_handoff_free(text)
 
 
 def _in_a_cloud_reading(monkeypatch) -> None:
@@ -523,8 +544,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
         assert "author the handoff" not in text
-        assert "/handoff" not in text
-        assert "HANDOFF NOW" not in text
+        _assert_handoff_free(text)
 
     def test_a_cloud_reading_still_owes_the_full_phase_six_tail(
         self, tmp_path, monkeypatch
@@ -554,12 +574,10 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         assert "commit and checkpoint" in text
         assert "Continue the run." in text
 
-    def test_the_fleet_key_selects_the_same_terminal_as_the_venue(
+    def test_the_fleet_key_leaves_the_mise_terminal_unchanged(
         self, tmp_path, monkeypatch
     ):
-        """The predicate is the RESOLVED variant, never a venue re-derived
-        here — so an operator who states `informational` fleet-wide gets the
-        same mise terminal a cloud box gets, on a box of any kind."""
+        """The mise terminal does not vary with `compaction_warnings`."""
         session_id = "session-mise-fleet-informational"
         _under_fleet_informational(monkeypatch)
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
@@ -568,7 +586,7 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         assert "Phase 6" in text
         assert "author the handoff" not in text
 
-    def test_an_attended_box_keeps_the_tail_then_handoff_terminal(
+    def test_an_attended_box_gets_the_same_tail_with_no_handoff(
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
@@ -580,9 +598,10 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
         _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
         _write_sidecar(session_id, _red_bound_pct() + 10)
         text = _check(session_id)
-        assert "HANDOFF NOW" in text
+        assert "INFORMATIONAL" in text
         assert "Phase 6" in text
-        assert "then author the handoff" in text
+        assert "author the handoff" not in text
+        _assert_handoff_free(text)
 
     def test_an_autonomous_sentinel_is_not_a_mise_sentinel_in_either_venue(
         self, tmp_path, monkeypatch
@@ -598,58 +617,13 @@ class TestMiseEnPlaceTerminalIsVenueConditional:
 
 class TestTheCallerEnvReachesTheModeSeam:
     """`resolve_mode`'s environment rung ends at `env_locality.locality(env)`,
-    whose contract is "`env` IS A PARAMETER, NEVER AN AMBIENT READ". Reading it
-    ambiently is correct on the cold rung and on the warm `isolated=True` leg,
-    and wrong on the warm `isolated=False` leg, where `os.environ` belongs to
-    the daemon rather than to the session that dispatched the hook.
-
-    These pin the THREADING — that whatever env the caller carries is the env
-    the rung resolves against — not a venue answer.
+    whose contract is "`env` IS A PARAMETER, NEVER AN AMBIENT READ". These pin
+    the THREADING of the caller's env into the one `resolve_mode` read this
+    hook makes (`autonomous`), not a venue answer.
     """
 
-    def test_an_explicit_caller_env_is_what_the_environment_rung_sees(
-        self, monkeypatch
-    ):
-        seen = []
-
-        def _record(env=None):
-            seen.append(env)
-            return "informational" if (env or {}).get("CLAUDE_CODE_REMOTE") == "true" else None
-
-        monkeypatch.setattr(
-            "coordinator_core.session.mode_resolution."
-            "_compaction_default_for_environment",
-            _record,
-        )
-        session_id = "session-env-threaded"
-        _write_sidecar(session_id, _red_bound_pct() + 10)
-        text = pad._check_context_pressure_sync(
-            session_id, "", {"CLAUDE_CODE_REMOTE": "true"}
-        )
-        assert seen and seen[0] == {"CLAUDE_CODE_REMOTE": "true"}
-        assert "INFORMATIONAL" in text
-        assert "HANDOFF NOW" not in text
-
-    def test_a_caller_carrying_no_env_resolves_ambiently_not_by_accident(
-        self, monkeypatch
-    ):
-        seen = []
-
-        def _record(env=None):
-            seen.append(env)
-            return None
-
-        monkeypatch.setattr(
-            "coordinator_core.session.mode_resolution."
-            "_compaction_default_for_environment",
-            _record,
-        )
-        session_id = "session-env-absent"
-        _write_sidecar(session_id, _red_bound_pct() + 10)
-        assert "HANDOFF NOW" in _check(session_id)
-        assert seen == [None]
-
-    def test_both_mode_reads_carry_the_same_caller_env(self, monkeypatch):
+    @staticmethod
+    def _spy(monkeypatch):
         calls = []
         real = pad.resolve_mode
 
@@ -658,11 +632,37 @@ class TestTheCallerEnvReachesTheModeSeam:
             return real(key, session_id, env=env)
 
         monkeypatch.setattr(pad, "resolve_mode", _spy)
-        session_id = "session-env-both-keys"
+        return calls
+
+    def test_an_explicit_caller_env_is_what_the_mode_read_sees(self, monkeypatch):
+        calls = self._spy(monkeypatch)
+        session_id = "session-env-threaded"
+        _write_sidecar(session_id, _red_bound_pct() + 10)
+        carried = {"CLAUDE_CODE_REMOTE": "true"}
+        text = pad._check_context_pressure_sync(session_id, "", carried)
+        assert calls and calls[0][1] is carried
+        assert "INFORMATIONAL" in text
+        _assert_handoff_free(text)
+
+    def test_a_caller_carrying_no_env_resolves_ambiently_not_by_accident(
+        self, monkeypatch
+    ):
+        calls = self._spy(monkeypatch)
+        session_id = "session-env-absent"
+        _write_sidecar(session_id, _red_bound_pct() + 10)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert [env for _, env in calls] == [None]
+
+    def test_autonomous_is_the_only_mode_read_and_carries_the_caller_env(
+        self, monkeypatch
+    ):
+        calls = self._spy(monkeypatch)
+        session_id = "session-env-one-key"
         _write_sidecar(session_id, _red_bound_pct() + 10)
         carried = {"CLAUDE_CODE_REMOTE": "true"}
         pad._check_context_pressure_sync(session_id, "", carried)
-        assert [key for key, _ in calls] == ["autonomous", "compaction_warnings"]
+        assert [key for key, _ in calls] == ["autonomous"]
         assert all(env is carried for _, env in calls)
 
 

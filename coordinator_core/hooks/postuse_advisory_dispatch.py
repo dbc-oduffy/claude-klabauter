@@ -498,7 +498,7 @@ def _check_context_pressure_sync(
         session's own resolved auto-compact threshold (see
         `_auto_compact_threshold_tokens`): ORANGE (consider a handoff if the
         work cannot close within `_ORANGE_RUNWAY_TOKENS` more) and RED
-        (handoff now, ahead of compaction, with `_RED_RUNWAY_TOKENS` runway
+        (commit and checkpoint now, ahead of compaction, with `_RED_RUNWAY_TOKENS` runway
         to bring the task spine current and commit). Nothing fires short of
         the orange bound, and a session with no usable reading gets silence,
         not an escalating UNKNOWN notice.
@@ -516,7 +516,7 @@ def _check_context_pressure_sync(
         by a hash of transcript_path (stable for the life of a session — this
         never opens the transcript).
 
-    `env` is the CALLER's environment, threaded to both `resolve_mode` reads
+    `env` is the CALLER's environment, threaded to the `resolve_mode` read
     rather than left to an ambient `os.environ` read inside them. `None` means
     "this caller carries none", which resolves ambiently — correct on the two
     legs where ambient IS the caller's environment (the cold fresh-process
@@ -647,7 +647,7 @@ def _check_context_pressure_sync(
     # T15 fix: this used to `return ""` here, BEFORE the 40/43 band
     # comparisons below ever ran — so a red-band (43+) condition arriving
     # inside the 5-minute throttle window was suppressed exactly like a
-    # sub-40 reading, even though red is "handoff now" severity and the
+    # sub-40 reading, even though red is the commit-now band and the
     # throttle exists to rate-limit the ORANGE band's noise, not to sit on a
     # hard call. The throttle decision is now made AFTER the band
     # comparisons run (see `throttled` used just above the 40-band check
@@ -687,15 +687,6 @@ def _check_context_pressure_sync(
     # SELECTOR ONLY — never an off switch. No value of this key returns "" here
     # where the function would otherwise return advisory text; it only picks
     # which non-empty variant fires (see mode_resolution module docstring).
-    # Scope, since PM ruling 2026-08-29: this key governs the red band ONLY. The
-    # 40 band is informational for every session regardless, so there is no
-    # variant left there to select — see that branch's own comment.
-    # Cost: one stat + one small json.loads via read_fleet_mode() on this hot
-    # path (fires every PostToolUse turn boundary, every session) — documented
-    # never-raise/fail-open, 27.6us median / 69.0us p99. See
-    # coordinator_core.session.fleet_mode.read_fleet_mode's docstring for the
-    # budget this call site draws against.
-    compaction_warnings_variant = resolve_mode("compaction_warnings", session_id, env=env)
 
     # --- mise-en-place CONTINUANCE detection (content-level, not mere
     # presence). `autonomous_run` above answers "does the sentinel exist",
@@ -784,10 +775,8 @@ def _check_context_pressure_sync(
     # a given venue happens to report (see the module-level derivation
     # comment above `_AUTO_COMPACT_RESERVE_TOKENS`).
     #
-    # ORANGE. "Consider a handoff if this work cannot close within
-    #      `_ORANGE_RUNWAY_TOKENS` more." An orientation signal, not an
-    #      instruction.
-    # RED. "Go to handoff now, before compaction takes the choice away."
+    # ORANGE. An orientation signal: checkpoint at the next boundary.
+    # RED. Commit and checkpoint now; compaction is next.
     #
     # NOTHING fires above the orange bound's own floor -- see
     # `_ORANGE_RUNWAY_TOKENS`'s and `_RED_RUNWAY_TOKENS`'s own comments for
@@ -800,90 +789,37 @@ def _check_context_pressure_sync(
     ):
         _mark_advisory_fired(cp_state, transcript_hash, critical=True)
         _save_advisory_state(tmpdir, session_id, cp_state)
-        # The autonomous variant REPLACES the recommendation rather than
-        # appending to it. Under the sentinel these messages are
-        # informational-only and carry no `/handoff` recommendation — the mode
-        # exists so a session rides through compaction instead of stopping, so
-        # appending a checkpoint clause to text that still says "run /handoff"
-        # delivers the exact nudge the PM switched the mode on to remove, at
-        # the moment a long run is most likely to take it.
-        # (Reported by coordinator-content-repo-41, observed firing twice in one session.)
+        # No context-pressure message recommends /handoff, in any mode (PM
+        # ruling 2026-10-04): a session commits, checkpoints and rides
+        # compaction. The mise CONTINUANCE terminal still owes its Phase 6 tail.
         if mise_continuance:
-            # CONTINUANCE terminal (docs/plans/2026-08-02-mise-completion-
-            # semantics.md, AC14/C8): name the tail explicitly rather than a
-            # bare "/handoff" nudge — the latter invites skipping the review
-            # loop, verification, and tracker sweep that a mise run still
-            # owes before its handoff.
-            #
-            # THE TAIL IS OWED IN BOTH VENUES; ONLY THE TERMINAL DIFFERS.
-            # This branch is evaluated BEFORE the informational one, so before
-            # this split a mise-en-place run in a cloud container took the
-            # handoff recommendation the venue ruling stands down — the
-            # stood-down instruction wearing a different hat. In a venue where
-            # compaction IS the continuation primitive, picking up means a new
-            # container and a fresh clone: the handoff is the expensive path
-            # there, not the safe one, so the run commits, checkpoints and
-            # keeps going. Coordinator-content-repo docs/decisions/DR-cloud-is-a-venue-where-
-            # compaction-is-the-continuation-primitive.md.
-            if compaction_warnings_variant == "informational":
-                return (
-                    f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of"
-                    f" window used{age_note}, measured from the harness's own"
-                    f" context_window block. Mise-en-place: compaction from"
-                    f" here is involuntary and lossy, so state that is not on"
-                    f" disk is state that is lost. Run the full Phase 6 tail"
-                    f" now (review loop to zero findings, end-of-run"
-                    f" verification, tracker sweep, baton disposition), then"
-                    f" bring the task spine current -- TaskUpdate in-flight"
-                    f" rows, record metadata.tried_and_abandoned on anything"
-                    f" abandoned -- then commit and checkpoint."
-                    f"{_baton_affordance_clause(session_id)}"
-                    f" Continue the run."
-                )
             return (
-                f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window"
-                f" used{age_note}, measured from the harness's own"
-                f" context_window block. Mise-en-place: run the full Phase 6"
-                f" tail now (review loop to zero findings, end-of-run"
+                f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of"
+                f" window used{age_note}, measured from the harness's own"
+                f" context_window block. Mise-en-place: compaction from"
+                f" here is involuntary and lossy, so state that is not on"
+                f" disk is state that is lost. Run the full Phase 6 tail"
+                f" now (review loop to zero findings, end-of-run"
                 f" verification, tracker sweep, baton disposition), then"
-                f" author the handoff — compaction from here is involuntary"
-                f" and lossy."
-            )
-        if autonomous_recognized or compaction_warnings_variant == "informational":
-            # The mode clause is chosen by WHICH side selected this variant, not
-            # by the variant itself. `autonomous_recognized` is the session's own
-            # sentinel CONTENT (not mere presence -- C5), so naming it is a fact
-            # about this session. The fleet key is fleet-wins with no session
-            # pair, so it selects this text for sessions that are NOT
-            # autonomous -- opening those with "Autonomous run:" would assert
-            # something about the reader that is not true.
-            mode_clause = (
-                "Autonomous run:" if autonomous_recognized else "Informational mode:"
-            )
-            # The baton clause is what makes this variant actionable rather
-            # than merely quieter. The mode exists so a session rides through
-            # compaction instead of stopping; riding it is only survivable if
-            # the session can make its current awareness durable, and on a
-            # cloud box the handoff route that would normally do that is
-            # unavailable (no `/clear`, and passing a baton means a PR merge,
-            # a new session and a re-point).
-            return (
-                f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
-                f" used{age_note}, measured from the harness's own context_window"
-                f" block. {mode_clause} compaction from here is involuntary and"
-                f" lossy, so state that is not on disk is state that is lost."
-                f" Bring the task spine current first -- TaskUpdate in-flight"
+                f" bring the task spine current -- TaskUpdate in-flight"
                 f" rows, record metadata.tried_and_abandoned on anything"
-                f" abandoned -- then commit and checkpoint now."
+                f" abandoned -- then commit and checkpoint."
                 f"{_baton_affordance_clause(session_id)}"
                 f" Continue the run."
             )
+        # The clause names the session's own sentinel only when it is set; the
+        # fleet key selects nothing here any more, so it cannot mislabel a reader.
+        mode_clause = "Autonomous run: " if autonomous_recognized else ""
         return (
-            f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window used{age_note},"
-            f" measured from the harness's own context_window block."
-            f" This is the point to run /handoff, not to finish one more thing first —"
-            f" the handoff itself consumes context, and compaction from here is"
-            f" involuntary and lossy."
+            f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
+            f" used{age_note}, measured from the harness's own context_window"
+            f" block. {mode_clause}compaction from here is involuntary and"
+            f" lossy, so state that is not on disk is state that is lost."
+            f" Bring the task spine current first -- TaskUpdate in-flight"
+            f" rows, record metadata.tried_and_abandoned on anything"
+            f" abandoned -- then commit and checkpoint now."
+            f"{_baton_affordance_clause(session_id)}"
+            f" Continue the run."
         )
 
     if (
@@ -899,14 +835,11 @@ def _check_context_pressure_sync(
         # the wrong job by flipping both together. 40 is an orientation reading
         # -- "you are here, checkpoint so this is resumable" -- and there is no
         # posture, autonomous or not, in which the right response to it is to
-        # stop and hand off; the earlier wording recommended exactly that. The
-        # red band keeps the hard call above, because that is the last band
-        # with runway to compose a handoff.
+        # stop and hand off; the earlier wording recommended exactly that.
         #
         # `compaction_warnings` and `autonomous_run` are deliberately NOT read
         # in this branch: with 40 informational for everyone there is nothing
-        # left here for either to select between. The key still governs the
-        # red band.
+        # left here for either to select between.
         # The baton clause belongs here MORE than in the red band, not less:
         # this band already says "checkpoint state to disk", and the baton is
         # the cheapest durable place to put it — at 40 there is still runway to
@@ -921,7 +854,7 @@ def _check_context_pressure_sync(
             f" block. Checkpoint state to disk at the next natural boundary so"
             f" the run is resumable."
             f"{_baton_affordance_clause(session_id)}"
-            f" The hard call comes at ~{threshold_display_pct}%."
+            f" The commit-and-checkpoint call comes at ~{threshold_display_pct}%."
         )
 
     _save_advisory_state(tmpdir, session_id, cp_state)
