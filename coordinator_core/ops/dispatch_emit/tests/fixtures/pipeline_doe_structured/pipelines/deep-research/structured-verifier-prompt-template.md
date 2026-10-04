@@ -44,8 +44,8 @@ subject (current values for those fields, so you can assign change types); the a
 criteria; the gate rules.
 
 **Gate rules (self-check before converging):** you must self-evaluate the brief's gate rules
-before you return. If criteria are not met and time < ceiling, run additional targeted
-searches to close the gap.
+before you return. If criteria are not met and time < ceiling, close the gap by WebFetch of the
+scout's sources first, then targeted searches within the 5-search budget (§ 1).
 
 ## Timing — Self-Governance
 
@@ -133,7 +133,7 @@ Before converging:
 1. Review the brief's acceptance criteria — mark each MET / NOT MET / PARTIAL
 2. Review the brief's gate rules — self-evaluate each rule
 3. If any criteria or rules are NOT MET and time < ceiling, run additional targeted
-   searches to close the gap before converging
+   searches (within the 5-search budget) to close the gap before converging
 4. Document your self-check in the output
 
 ### 6. Adversarial Cross-Pollination with Peers
@@ -178,7 +178,7 @@ Begin convergence when ANY of these conditions are met (AND the floor is satisfi
 Convergence steps:
 1. Append final challenges and findings to peers' mailboxes (within the 3-per-peer cap)
 2. Read your own inbox and answer what you can with evidence; append `{"read": true}`
-3. Self-check acceptance criteria AND gate rules (add more searches if needed and time allows)
+3. Self-check acceptance criteria AND gate rules (add searches only within the 5-search budget, and only if time allows)
 4. Write your complete findings to {{scratch_dir}}/{{item.topic}}-findings.md
 5. Return `{topic, challenged}` — `topic` is `{{item.topic}}`; `challenged` lists the topic id of
    every peer whose mailbox you appended a challenge to

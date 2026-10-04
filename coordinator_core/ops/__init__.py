@@ -182,6 +182,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.plan_cross_plan_gate", 'registers "plan.cross_plan_gate"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
+    ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
     ("coordinator_core.ops.decision_record_mint",
      'registers "decision_record.mint_id" + "decision_record.release_id"'),
@@ -374,6 +375,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_author_fork", 'registers "handoff.author_fork"'),
     ("coordinator_core.ops.handoff_lineage_ancestry", 'registers "handoff.lineage_ancestry"'),
     ("coordinator_core.ops.plan_tasks_mutate", ""),
+    ("coordinator_core.ops.plan_narrow_criterion", 'registers "plan.narrow_criterion"'),
     ("coordinator_core.ops.plan_tasks_grouping_digest", 'registers "plan.tasks.grouping_digest"'),
     (
         "coordinator_core.ops.plan_tasks_spine_drift_check",

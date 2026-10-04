@@ -32,6 +32,8 @@ from coordinator_core.ops.review_mint.execute_review import (
     _agent_opts_for,
     _schema_literal,
     compose_criterion_judge,
+    delivery_supersession_clause,
+    resolve_operative_criterion_for_plan,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
@@ -153,6 +155,7 @@ def compose_reverify_script(
     head_sha: str,
     claims: List[dict],
     rerun_tests: bool = False,
+    repo_root: Optional[Path] = None,
 ) -> str:
     """A Workflow script holding one delivery-verifier agent call, briefed with the prior FAIL's
     unbacked claims and told to verify them at `head_sha`, then the roster's criterion judge
@@ -165,6 +168,7 @@ def compose_reverify_script(
         f"- {c['claim']} [lacked: {c.get('anchor')}]" for c in claims
     )
     base = run_base_sha or "run_base_sha"
+    criterion = resolve_operative_criterion_for_plan(plan_path, repo_root)
     if claims:
         lead = (
             "Re-verify delivery at HEAD. A prior verdict FAILed this run with the unbacked claims "
@@ -185,6 +189,7 @@ def compose_reverify_script(
     prompt = (
         f"{_DELIVERY_VERIFIER_ROLE_PREAMBLE}\n\n"
         f"{lead}"
+        f"{delivery_supersession_clause(criterion).lstrip()}{chr(10) if criterion and criterion.superseded else ''}"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {base}\n"
         f"head_sha: {head_sha}\n"
@@ -206,6 +211,7 @@ def compose_reverify_script(
         plan_path=plan_path,
         run_base_sha=base,
         falsifier=None,
+        criterion=criterion,
         prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
     )
     phases = [_js_string_literal(_PHASE)]
@@ -489,6 +495,7 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
         head_sha=_head_sha(repo_root),
         claims=claims,
         rerun_tests=_tests_stale(record),
+        repo_root=repo_root,
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
     from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt

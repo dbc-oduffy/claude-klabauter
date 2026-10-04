@@ -46,3 +46,33 @@ def post_stamp_refusal(statement: object) -> Optional[str]:
         "produces it. Restate as the pre-stamp mechanism: the test that proves the "
         "cascade would fire."
     )
+
+
+_EXIT_HEADING = re.compile(r"^#{1,6}\s+exit criteria\b", re.IGNORECASE)
+_ITEM = re.compile(r"^\s{0,3}\d+[.)]\s+")
+
+
+def exit_criteria_items(plan_text: str) -> list[str]:
+    """Each numbered item of the plan body's `## Exit criteria` section, continuation lines joined."""
+    items: list[str] = []
+    in_section = False
+    for line in plan_text.splitlines():
+        if line.startswith("#"):
+            in_section = bool(_EXIT_HEADING.match(line))
+            continue
+        if not in_section:
+            continue
+        if _ITEM.match(line):
+            items.append(_ITEM.sub("", line).strip())
+        elif items and line.strip() and line[:1].isspace():
+            items[-1] += " " + line.strip()
+    return items
+
+
+def post_stamp_body_refusal(plan_text: str) -> Optional[str]:
+    """Refusal for the first body exit-criteria item naming a post-stamp state, else None."""
+    for n, item in enumerate(exit_criteria_items(plan_text), 1):
+        refusal = post_stamp_refusal(item)
+        if refusal is not None:
+            return f"body exit criterion {n}: {refusal}"
+    return None

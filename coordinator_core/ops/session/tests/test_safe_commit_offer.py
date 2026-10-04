@@ -3018,3 +3018,14 @@ class TestSpawnBudget:
         assert "status" in argv
         assert "--porcelain" in argv
         assert "--untracked-files=all" in argv
+
+
+def test_agent_touched_dotgit_entry_never_becomes_a_candidate():
+    from coordinator_core.ops.session import safe_commit_offer
+
+    for e in (
+        ".git/coordinator-sessions/s/review-targets.txt",
+        "sub/.git/x",
+        ".git/",
+    ):
+        assert safe_commit_offer._normalize_agent_touched_entry(e) is None

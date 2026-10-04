@@ -6814,6 +6814,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "memo.correct_note": 4,
     "memo.heal_inbox": 3,
     "p4.register_workspace": 1,
+    # plan.gated_criteria_met: one batched rev-list plus commit_authored_content's sites.
+    "plan.gated_criteria_met": 4,
+    # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
+    "plan.narrow_criterion": 4,
     "review_mint.bookkeep_wave": 5,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site.
     "review_mint.record_superseding_review": 5,

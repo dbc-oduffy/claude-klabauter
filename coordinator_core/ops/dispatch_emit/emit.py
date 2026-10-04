@@ -328,6 +328,8 @@ from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
     compose_criterion_judge,
+    OperativeCriterion,
+    resolve_operative_criterion,
     compose_execute_review,
 )
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, parse_execute_review
@@ -1279,6 +1281,8 @@ class PlanContext:
     #: by `_claude_is_off_default_path`); the preamble then carries a
     #: directory-free PATH hint.
     claude_off_path: bool = False
+    #: The criterion the judge is held to, resolved from the same plan text.
+    operative_criterion: Optional[OperativeCriterion] = None
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1618,6 +1622,9 @@ def derive_plan_context(
         goal=goal,
         problem_excerpt=problem_excerpt,
         exit_criterion=_prime_exit_criterion_statement(plan_text),
+        operative_criterion=resolve_operative_criterion(
+            plan_text, Path(repo_root) if repo_root is not None else None
+        ),
         repo_root=repo_root,
         claude_off_path=_claude_is_off_default_path(),
     )
@@ -3684,6 +3691,7 @@ def compose_script(
         run_base_sha=run_base_sha or "",
         declared_paths=declared_paths,
         prompt_head=review_prompt_head,
+        criterion=plan_context.operative_criterion if plan_context is not None else None,
     ):
         phase_titles.append(title)
         guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
@@ -3694,6 +3702,7 @@ def compose_script(
         run_base_sha=run_base_sha or "",
         falsifier=falsifier,
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+        criterion=plan_context.operative_criterion if plan_context is not None else None,
     )
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)

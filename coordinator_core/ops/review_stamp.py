@@ -581,7 +581,20 @@ def mint(
     criterion = integration_data.get("criterion")
     criterion_status = criterion.get("status") if isinstance(criterion, dict) else None
 
-    refusal = mint_refusal({**integration_data, "delivery": delivery_data}, prep_data, build_test_data)
+    narrowing_receipt = None
+    if criterion_status == "not_met" and delivery_verdict == "PASS" and tests_status == "pass":
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import _newest_supersession
+        from coordinator_core.ops.plan_narrow_criterion import criterion_waiver
+
+        newest = _newest_supersession(repo_root, integration_path.relative_to(repo_root).as_posix()) \
+            if integration_path is not None else None
+        narrowing_receipt = criterion_waiver(
+            text, criterion, (newest or {}).get("recorded_at") or integration_data.get("recorded_at")
+        )
+    gate_integration = {**integration_data, "delivery": delivery_data}
+    if narrowing_receipt:
+        gate_integration["criterion"] = {**criterion, "status": "not_run"}
+    refusal = mint_refusal(gate_integration, prep_data, build_test_data)
     if refusal is not None:
         if delivery_verdict == "FAIL":
             refusal += (
@@ -627,8 +640,8 @@ def mint(
         stamp["superseding_record"] = stamp["integration_sidecar"]
     if isinstance(criterion, dict) and criterion_status:
         stamp["criterion"] = {
-            "status": criterion_status,
-            "observation": criterion.get("observation"),
+            "status": "not_run" if narrowing_receipt else criterion_status,
+            "observation": narrowing_receipt or criterion.get("observation"),
             "sidecar": criterion.get("sidecar"),
         }
     from datetime import datetime, timezone

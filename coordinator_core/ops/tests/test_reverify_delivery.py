@@ -291,3 +291,47 @@ def test_blank_record_resolves_a_run_id_named_bookkeeping_by_its_plan_id(tmp_pat
     out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
     result = rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record="", out_path=str(out))
     assert result["supersedes"].endswith("ask-20261003T231507-1b2cb4.review-wave-bookkeeping.md")
+
+
+def _amended_repo(tmp_path, amendments):
+    import yaml
+
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    crit = {"statement": "ORIGINAL", "amendments": amendments}
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(
+        yaml.safe_dump({"exit_criterion": crit}), encoding="utf-8"
+    )
+    (tmp_path / "docs" / "plans" / "p.md").write_text(
+        "---\nprime_exit_criterion:\n  statement: ORIGINAL\n  derived_from: state/sizings/s.yaml\n---\nbody\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def _judge_script(repo):
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].append(
+        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
+                                      "effort": "low", "schema": "judge-result"}]}
+    )
+    schemas = {**_STAGE_SCHEMAS, "judge-result": {"type": "object", "properties": {"status": {"type": "string"}},
+                                                  "required": ["status"]}}
+    return rd.compose_reverify_script(
+        fragment=fragment, stage_schemas=schemas, plan_path="docs/plans/p.md",
+        run_record_rel="r.md", plan_id="pln-1", run_base_sha="a" * 40,
+        head_sha="b" * 40, claims=_CLAIMS, repo_root=repo,
+    )
+
+
+def test_judge_prompt_carries_latest_sizing_amendment_as_operative(tmp_path):
+    repo = _amended_repo(tmp_path, [{"statement": "FIRST AMENDED"}, {"statement": "LATEST AMENDED"}])
+    script = _judge_script(repo)
+    assert "operative exit criterion" in script and "LATEST AMENDED" in script
+    assert "FIRST AMENDED" not in script
+    assert "superseded" in script and "ORIGINAL" in script
+
+
+def test_judge_prompt_is_unchanged_when_the_sizing_has_no_amendments(tmp_path):
+    script = _judge_script(_amended_repo(tmp_path, []))
+    assert "operative exit criterion" not in script

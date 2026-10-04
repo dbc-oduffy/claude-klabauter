@@ -711,6 +711,8 @@ def _normalize_agent_touched_entry(entry: str) -> Optional[str]:
     if not stripped:
         return None
     combined = posixpath.normpath(stripped)
+    if ".git" in combined.lower().split("/"):
+        return None
     if combined in (".", "..") or combined.startswith("../") or posixpath.isabs(combined):
         return None
     return combined + "/" if is_dir else combined

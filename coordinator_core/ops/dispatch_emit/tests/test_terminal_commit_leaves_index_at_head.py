@@ -138,7 +138,7 @@ def test_persistent_splice_failure_reports_index_stale(repo, monkeypatch):
     """A splice that keeps failing yields committed: true, the sha, and index_stale naming the paths."""
     calls = {"n": 0}
 
-    def busy(repo_path, updates):
+    def busy(_repo_path, _updates):
         calls["n"] += 1
         raise index_write.IndexWriteLockBusy("simulated peer lock")
 

@@ -215,6 +215,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     # coordinator/bin/mise-prep-gate.py and the two must agree.
     "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
+    "plan.gated_criteria_met":                "coordinator_core.ops.plan_gated_criteria_met",
     "plan.cross_plan_gate":                   "coordinator_core.ops.plan_cross_plan_gate",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
@@ -286,6 +287,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.author_fork":                    "coordinator_core.ops.handoff_author_fork",
     "handoff.scaffold_from_queue":            "coordinator_core.ops.queue_scaffold_baton",
     "handoff.lineage_ancestry":               "coordinator_core.ops.handoff_lineage_ancestry",
+    "plan.narrow_criterion":                  "coordinator_core.ops.plan_narrow_criterion",
     "plan.tasks.mutate":                      "coordinator_core.ops.plan_tasks_mutate",
     "plan.tasks.grouping_digest":             "coordinator_core.ops.plan_tasks_grouping_digest",
     "plan.tasks.spine_drift_check":           "coordinator_core.ops.plan_tasks_spine_drift_check",

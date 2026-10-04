@@ -1274,6 +1274,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2(v) (no git commit): this op does not commit; the EM retains that.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
     "plan.stamp_prepped": OpClass.MUTATING,
+    # plan.gated_criteria_met — MUTATING: flips met/evidence on named gated_exit_criteria
+    # rows of one caller-named docs/plans/*.md under locked_rmw, then commits that file via
+    # git_native.commit_authored_content (ops/plan_gated_criteria_met.py).
+    "plan.gated_criteria_met": OpClass.MUTATING,
+    # plan.narrow_criterion — MUTATING: rewrites prime_exit_criterion.statement/narrowed_by of one
+    # docs/plans/*.md under locked_rmw, then commits it (ops/plan_narrow_criterion.py).
+    "plan.narrow_criterion": OpClass.MUTATING,
     # commit.anchors — COMPUTE_ONLY: derives git-trailer text (Plan/Plan-Id/Deliverable/
     # Nature/Anchor) from the staged diff + on-disk read-model and RETURNS it; the git-message
     # write is done by the prepare-commit-msg hook, NOT this op (causal-direction test,

@@ -287,6 +287,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry dispatch resolves repo_root=None and the handler refuses outright.
     "plan.prep_gate":                        "common_dir",
     "plan.stamp_prepped":                    "common_dir",
+    "plan.gated_criteria_met":               "common_dir",
     "plan.cross_plan_gate":                  "common_dir",
     "goal.match_candidates":                 "common_dir",
     "goal.close_day":                        "common_dir",
@@ -383,6 +384,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # wrong worktree. Never writes.
     # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
     "ceremony.update_docs_scan":               "common_dir",
+    "deliverable.cascade_terminal":             "common_dir",
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
     "deliverable.cascade_divergence_report":    "common_dir",
@@ -556,6 +558,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.persist_capture":                  "common_dir",
     "plan.tasks.mutate":                     "common_dir",
     "plan.tasks.grouping_digest":             "common_dir",
+    "plan.narrow_criterion":                  "common_dir",
     "session_ledger.aggregate_chain_loe":    "common_dir",
     "session_hierarchy.derive":              "none",
     "deferral.detect_orphan_memo":           "common_dir",

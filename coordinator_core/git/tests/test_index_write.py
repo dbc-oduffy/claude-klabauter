@@ -265,3 +265,12 @@ def test_missing_key_absent_keeps_the_entry_block_verbatim(tmp_path):
     _, body_end = index_write._walk_entries(before, count)
     assert after[12:-20] == before[12:body_end]
     assert _status(repo).strip() == ""
+
+
+def test_splice_index_refuses_dotgit_component(tmp_path):
+    import pytest
+    from coordinator_core.git import index_write
+
+    for name in (".git/coordinator-sessions/s/review-targets.txt", "a/.GIT/x", "a\\.git\\x"):
+        with pytest.raises(index_write.DotGitPathRefused):
+            index_write.splice_index(tmp_path, {name: index_write.ABSENT})

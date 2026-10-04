@@ -107,7 +107,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
-from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal
+from coordinator_core.roadmap.post_stamp_clause import post_stamp_body_refusal, post_stamp_refusal
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -1468,7 +1468,9 @@ def _falsifier_shape_defect(
     return "; ".join(candidates)
 
 
-def _prime_exit(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
+def _prime_exit(
+    fm: Dict[str, Any], repo_root: Optional[Path] = None, text: Optional[str] = None
+) -> Dict[str, Any]:
     """``prime_exit_criterion.statement`` and ``.derived_from`` non-empty, at
     every size.
 
@@ -1510,6 +1512,9 @@ def _prime_exit(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[st
     post_stamp = post_stamp_refusal(statement)
     if post_stamp is not None:
         return _defect("prime-exit-post-stamp", post_stamp)
+    body_post_stamp = post_stamp_body_refusal(text) if text else None
+    if body_post_stamp is not None:
+        return _defect("prime-exit-post-stamp", body_post_stamp)
     derived_from = criterion.get("derived_from")
     if not str(derived_from or "").strip():
         return _defect(
@@ -1781,7 +1786,7 @@ def evaluate_plan(
     fm = plan_frontmatter(text)
     parse_error = frontmatter_parse_error(text)
     try:
-        prime_exit = _prime_exit(fm, repo_root)
+        prime_exit = _prime_exit(fm, repo_root, text)
         classes = {
             "SPINE": _spine(plan_path, text, repo_root),
             "CENSUS": _census(fm),

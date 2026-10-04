@@ -19,6 +19,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.dispatch_emit.predispatch import AgentSpec
+from coordinator_core.ops.review_mint.execute_review import resolve_operative_criterion
 
 REVIEW_PHASE_TITLE = "Falsifier integrity"
 REVIEWER_AGENT_TYPE = "coordinator:falsifier-integrity-reviewer"
@@ -120,7 +121,7 @@ def review_inputs(
         out.append(
             ReviewInput(
                 plan_path=plan_path,
-                criterion=emit._prime_exit_criterion_statement(text) or "",
+                criterion=getattr(resolve_operative_criterion(text, repo_root), "statement", ""),
                 how=fals["how"],
                 baseline_output=fals.get("baseline_output"),
                 expected_when_true=fals["expected_when_true"],

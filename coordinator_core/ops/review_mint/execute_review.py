@@ -27,6 +27,12 @@ from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+from coordinator_core.frontmatter.primitives import split_frontmatter
 
 _DELIVERY_VERIFIER_AGENT_TYPE = "coordinator:delivery-verifier"
 
@@ -159,6 +165,7 @@ def compose_execute_review(
     declared_paths_js: Optional[str] = None,
     prompt_head: str = "",
     prep_suffix_js: Optional[str] = None,
+    criterion: Optional["OperativeCriterion"] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -321,7 +328,11 @@ def compose_execute_review(
 
     for agent in whole_diff_agents:
         is_delivery_verifier = agent.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE
-        role_note = f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}" if is_delivery_verifier else ""
+        role_note = (
+            f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}"
+            if is_delivery_verifier
+            else ""
+        )
         wave_prompt = (
             f"{prompt_head}\n\n"
             f"Review this run's whole diff.\n"
@@ -458,6 +469,98 @@ def _widen_judge_schema(schema_literal: str) -> str:
 CRITERION_JUDGE_PHASE_TITLE = "Criterion judge"
 
 
+@dataclass(frozen=True)
+class OperativeCriterion:
+    """The criterion statement a judge is held to. ``superseded`` is the plan's
+    own statement when a sizing amendment replaced it, else ``None``."""
+
+    statement: str
+    superseded: Optional[str] = None
+
+
+def _one_line(value: object) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split()) or None
+
+
+def resolve_operative_criterion(
+    plan_text: str, repo_root: Optional[Path]
+) -> Optional[OperativeCriterion]:
+    """The single resolver for the criterion text any judge reads.
+
+    The plan's ``prime_exit_criterion.statement``, unless its ``derived_from``
+    names a sizing whose ``exit_criterion.amendments`` is non-empty: then the
+    latest amendment's statement is operative and the plan's is superseded.
+    Fail-soft to ``None`` / the plan's statement on any unreadable input.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    block = doc.get("prime_exit_criterion") if isinstance(doc, dict) else None
+    if not isinstance(block, dict):
+        return None
+    original = _one_line(block.get("statement"))
+    derived = block.get("derived_from")
+    if repo_root is not None and isinstance(derived, str) and derived.startswith("state/sizings/"):
+        try:
+            root = Path(repo_root).resolve()
+            target = (root / derived.strip()).resolve()
+            target.relative_to(root)
+            sizing = yaml.safe_load(target.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError, yaml.YAMLError):
+            sizing = None
+        crit = sizing.get("exit_criterion") if isinstance(sizing, dict) else None
+        amendments = crit.get("amendments") if isinstance(crit, dict) else None
+        if isinstance(amendments, list) and amendments:
+            last = amendments[-1]
+            latest = _one_line(last.get("statement")) if isinstance(last, dict) else None
+            if latest:
+                return OperativeCriterion(latest, original if original != latest else None)
+    return OperativeCriterion(original) if original else None
+
+
+def resolve_operative_criterion_for_plan(
+    plan_path: str, repo_root: Optional[Path]
+) -> Optional[OperativeCriterion]:
+    """``resolve_operative_criterion`` over the plan file at ``plan_path``
+    (relative paths resolve against ``repo_root``); ``None`` when unreadable."""
+    path = Path(plan_path)
+    if not path.is_absolute() and repo_root is not None:
+        path = Path(repo_root) / path
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return resolve_operative_criterion(text, repo_root)
+
+
+def _criterion_clause(criterion: Optional[OperativeCriterion]) -> str:
+    if criterion is None or criterion.superseded is None:
+        return ""
+    return (
+        f"\noperative exit criterion (a sizing amendment; judge against THIS): {criterion.statement}"
+        f"\nsuperseded, the plan's original prime_exit_criterion.statement (do not judge against it): {criterion.superseded}"
+    )
+
+
+def delivery_supersession_clause(criterion: Optional[OperativeCriterion]) -> str:
+    """Delivery-verifier prompt text naming an amended operative statement as the
+    delivery claims, in place of the plan body's numbered exit-criteria list;
+    empty when no amendment supersedes the plan's own criterion."""
+    if criterion is None or criterion.superseded is None:
+        return ""
+    return (
+        "\nThe plan body's numbered exit-criteria list is SUPERSEDED for delivery claims: "
+        "do not treat its items as claims. Check each clause of the operative exit criterion "
+        f"(a sizing amendment) instead: {criterion.statement}"
+    )
+
+
 def compose_criterion_judge(
     review: ExecuteReview,
     *,
@@ -466,6 +569,7 @@ def compose_criterion_judge(
     run_base_sha: str,
     falsifier: Optional[dict],
     prompt_head: str = "",
+    criterion: Optional[OperativeCriterion] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. Pointers only: the engine
@@ -484,6 +588,7 @@ def compose_criterion_judge(
         f"{prompt_head}\n\n{_JUDGE_PREAMBLE}\n"
         f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
         f"run_base_sha: {run_base_sha}"
+        f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
     ).strip()
     return _agent_call_literal(

@@ -177,7 +177,7 @@
       "2. <REPLACE: the plan's acceptance oracle, named and run — or \"none — no acceptance oracle in",
       "   play,\" a positive claim, not an omission.>",
       "3. <REPLACE: any further plan-specific exit steps, e.g. gated_exit_criteria rows carrying",
-      "   close-out evidence and flipping met: true.>",
+      "   close-out evidence and flipping met: true (op plan.gated_criteria_met).>",
       "",
       "The repo's fast tier and full suite are **never** a criterion for this plan — not the prime exit",
       "criterion, not a gated exit criterion, not a chunk's test surface, and not a plan deliverable.",

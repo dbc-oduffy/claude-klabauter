@@ -66,6 +66,17 @@ class IndexWriteError(Exception):
     pass
 
 
+class DotGitPathRefused(IndexWriteError):
+    pass
+
+
+def refuse_dotgit(names) -> None:
+    """Chokepoint: no index entry may carry a `.git` component (GitHub `hasDotgit`)."""
+    for n in names:
+        if ".git" in str(n).replace("\\", "/").lower().split("/"):
+            raise DotGitPathRefused(f"refused: .git path: {n}")
+
+
 class IndexWriteLockBusy(IndexWriteError):
     pass
 
@@ -175,6 +186,7 @@ def splice_index(
     repo: Union[str, Path],
     updates: Mapping[str, object],
 ) -> None:
+    refuse_dotgit(updates)
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
     lock_path = gitdir / "index.lock"

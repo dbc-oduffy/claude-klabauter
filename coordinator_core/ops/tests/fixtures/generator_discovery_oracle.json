@@ -1833,6 +1833,15 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/plan_gated_criteria_met.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_gated_criteria_met.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/plan_stamp_prepped.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/plan_stamp_prepped.py",
     "mutates": [

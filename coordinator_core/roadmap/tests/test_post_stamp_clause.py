@@ -73,3 +73,26 @@ def test_under_50ms():
     t = time.perf_counter()
     post_stamp_clause(FOLLOW_ONS)
     assert time.perf_counter() - t < 0.05
+
+
+_BODY = """## Exit criteria — verification
+
+1. The targeted tests are green.
+2. The sizing reaches `shipped` through the cascade after DoE lands.
+
+## Next
+"""
+
+
+def test_body_exit_list_is_gated():
+    from coordinator_core.roadmap.post_stamp_clause import exit_criteria_items, post_stamp_body_refusal
+
+    assert len(exit_criteria_items(_BODY)) == 2
+    assert "body exit criterion 2" in post_stamp_body_refusal(_BODY)
+    assert post_stamp_body_refusal(_BODY.replace("The sizing reaches `shipped`", "a test proves")) is None
+
+
+def test_prime_exit_refuses_body_item():
+    fm = {"prime_exit_criterion": {"statement": "the gate refuses X", "derived_from": "state/sizings/x.yaml"}}
+    assert pg._prime_exit(fm, None, _BODY)["kind"] == "prime-exit-post-stamp"
+    assert pg._prime_exit(fm, None, None)["status"] == "PASS"

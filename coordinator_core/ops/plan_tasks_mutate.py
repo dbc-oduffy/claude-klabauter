@@ -1600,6 +1600,13 @@ def _resolve(
             if isinstance(row, dict)
         )
 
+        if governed and any(r["disposition"] == "spun_off" for r in resolutions):
+            from coordinator_core.ops.plan_narrow_criterion import narrow_call_hint
+
+            _state["narrow_hint"] = narrow_call_hint(
+                old_text, [r["id"] for r in resolutions if r["disposition"] == "spun_off"]
+            )
+
         _state["applied"] = True
         if len(resolved_ids) == 1:
             _state["message"] = (
@@ -1619,6 +1626,8 @@ def _resolve(
         return _err(exc.args[0] if exc.args else "resolve: mutation aborted")
 
     result = _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
+    if _state.get("narrow_hint"):
+        result["narrow_criterion"] = _state["narrow_hint"]
 
     # `status: landed` via the EXISTING sole writer
     if _state["applied"] and _state["all_resolved"]:
