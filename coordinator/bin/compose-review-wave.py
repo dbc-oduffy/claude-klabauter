@@ -886,6 +886,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument(
         "--claude-klabauter-live-root",
+        dest="engine_root_override",  # neutral: the publish transform renames codename identifiers
         default=None,
         help="Explicit override for engine-root resolution (testing/CI use). "
         "Defaults to the shared cc_invoke dispatch-engine resolution ladder.",
@@ -914,7 +915,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             run_id=args.run_id,
             session_id=args.session_id,
             policy_file=args.policy,
-            claude_klabauter_root_override=args.claude_klabauter_root,
+            claude_klabauter_root_override=args.engine_root_override,
         )
     except ComposeError as exc:
         print(f"compose-review-wave: {exc}", file=sys.stderr)

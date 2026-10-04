@@ -193,6 +193,7 @@ from coordinator_core.group_em import read_pass as group_em_read_pass
 from coordinator_core.group_em import send_pass as group_em_send_pass
 from coordinator_core.group_em import teammates as group_em_teammates
 from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbeat
+from coordinator_core.hooks.support import next_move_ledger
 
 
 def _leg_error(exc: BaseException) -> str:
@@ -255,6 +256,13 @@ def _run_digest(
 ) -> tuple[Optional[dict], Optional[str]]:
     if roster is None:
         return None, "roster-leg-failed"
+    # An idle peer never Stops again to fold its own obligations-inbound rows, and an idle
+    # peer with an undischarged obligation is the row this digest exists to raise. Fails
+    # open: an unfolded intake degrades ranking, never entry.
+    try:
+        next_move_ledger.drain_all_intakes(repo_root)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         return group_em_send_pass.build_send_digest(repo_root, roster, caller_session_id), None
     except Exception as exc:  # noqa: BLE001

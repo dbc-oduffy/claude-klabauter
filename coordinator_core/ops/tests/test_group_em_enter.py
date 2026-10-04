@@ -993,3 +993,29 @@ def test_classify_peer_runs_exactly_once_per_peer_per_invocation(tmp_path, monke
     gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert sorted(calls) == ["peer-a", "peer-b", "peer-c"]
+
+
+def test_entry_drains_every_peer_intake_before_the_digest(monkeypatch):
+    """An idle peer never Stops again to fold its own obligations-inbound rows,
+    so entry folds them before the digest ranks on them."""
+    from coordinator_core.ops import group_em_enter as op
+
+    order = []
+    monkeypatch.setattr(op.next_move_ledger, "drain_all_intakes", lambda root: order.append(("drain", root)))
+    monkeypatch.setattr(
+        op.group_em_send_pass, "build_send_digest",
+        lambda root, roster, sid: order.append(("digest", root)) or {"entries": []},
+    )
+    digest, err = op._run_digest("R", [], "sid")
+    assert err is None and order == [("drain", "R"), ("digest", "R")]
+
+
+def test_a_failing_intake_drain_never_blocks_entry(monkeypatch):
+    from coordinator_core.ops import group_em_enter as op
+
+    def boom(root):
+        raise OSError("ledger unreachable")
+
+    monkeypatch.setattr(op.next_move_ledger, "drain_all_intakes", boom)
+    monkeypatch.setattr(op.group_em_send_pass, "build_send_digest", lambda *a: {"entries": []})
+    assert op._run_digest("R", [], "sid") == ({"entries": []}, None)

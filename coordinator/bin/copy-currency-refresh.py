@@ -81,7 +81,9 @@ def _engine_entry(po, ctx, publish_lag: Optional[Callable], now_epoch: float, or
     eml = po._copies_mod("_copy_leg_engine_mirror")
     key = po.copies_engine_key(ctx)
     entry: dict = {"key": key, "computed_at": now_epoch, "lag": None}
-    if ctx.live_tree or not ctx.claude_klabauter_root or not ctx.engine_root or not key["stamp"]:
+    # `authoring_root` is the contract name: the publish transform renames codename identifiers.
+    authoring_root = getattr(ctx, "authoring_root", None)
+    if ctx.live_tree or not authoring_root or not ctx.engine_root or not key["stamp"]:
         return entry
     entry["import_origin"] = (origin or find_import_origin)()
     try:
@@ -91,7 +93,7 @@ def _engine_entry(po, ctx, publish_lag: Optional[Callable], now_epoch: float, or
             if fn is None:
                 entry["error"] = reason
                 return entry
-        lag = fn(Path(ctx.engine_root), Path(ctx.claude_klabauter_root))
+        lag = fn(Path(ctx.engine_root), Path(authoring_root))
         if lag is not None:
             entry["lag"] = {
                 "engine_commits_behind": getattr(lag, "engine_commits_behind", None),
