@@ -9,8 +9,7 @@ provisioners. A provisioner disappearing does not un-provision what a
 prior session already built -- a `pyvenv.cfg` left behind by an earlier
 `fleet-env`/`ensure-venv`/hand-run `python -m venv` is a rogue venv this
 box is still silently running against until someone notices and removes
-it. This is a passive REPORT, mirroring `abandoned_claim_signal`'s and
-`budget_breach_signal`'s posture -- it never deletes anything.
+it. This is a passive REPORT, mirroring `budget_breach_signal`'s posture -- it never deletes anything.
 
 Cost shape (must stay cheap -- session-start orientation regen, not a
 hot path): ONE bounded `os.walk` from `repo_root`, pruning `.git`,

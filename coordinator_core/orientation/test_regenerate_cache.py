@@ -770,6 +770,14 @@ def test_full_regen_renders_no_hook_cancellation_section(tmp_path):
     assert "Hook cancellation miss rate" not in result["output"]
 
 
+def test_full_regen_renders_no_abandoned_claims_section(tmp_path):
+    repo = _make_repo(tmp_path)
+
+    result = mod.build_cache(invoker="workday-start", repo_root=repo)
+
+    assert "Abandoned claims" not in result["output"]
+
+
 def test_enforce_cache_budget_never_zeroes_an_unrecognized_section():
     """A ``## Heading`` this module has no name for (e.g. a ceremony-supplied
     section _render_cache never emits, like ``Week priorities``) is trimmable

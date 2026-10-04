@@ -592,8 +592,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "orient_assemble/readers_health_reaper.py",
     "orient_assemble/tests/test_readers_handoff_triage_claim.py",
     "orient_assemble/tests/test_scan_scope_regression.py",
-    "orientation/abandoned_claim_signal.py",
-    "orientation/test_abandoned_claim_signal.py",
     "orientation/test_expired_grant_signal.py",
     "pickup_assemble/__init__.py",
     "pickup_assemble/apply.py",

@@ -88,8 +88,7 @@ _TAIL_SCAN_BYTES = 256 * 1024
 
 #: At most this many op names are named in the line. The aggregate an operator
 #: needs is "which routes, how many sessions"; a full enumeration on a bad day
-#: would be a wall of text in a start-up surface. Matches
-#: `abandoned_claim_signal`'s `_MAX_NAMED` posture.
+#: would be a wall of text in a start-up surface. Keeps the section one line.
 _MAX_NAMED = 4
 
 

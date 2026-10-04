@@ -2176,13 +2176,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/orientation/abandoned_claim_signal.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/orientation/abandoned_claim_signal.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
-  },
-  {
     "detail": "coordinator_core/orientation/expired_grant_signal.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/orientation/expired_grant_signal.py",
     "mutates": [],
@@ -2199,7 +2192,6 @@
         "generator": "coordinator_core/orientation/regenerate_cache.py",
         "sources": [
           "coordinator_core/orientation/regenerate_cache.py",
-          "coordinator_core/orientation/abandoned_claim_signal.py",
           "coordinator_core/orientation/budget_breach_signal.py",
           "coordinator_core/orientation/expired_grant_signal.py",
           "coordinator_core/orientation/route_unreachable_signal.py",

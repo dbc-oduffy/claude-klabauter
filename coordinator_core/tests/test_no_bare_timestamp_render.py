@@ -98,11 +98,6 @@ EXEMPT: dict[tuple[str, str], str] = {
         "YAML as a comment line. A relative age is true only at write time, so "
         "baking one into a durable artifact makes it wrong by tomorrow"
     ),
-    ("orientation/abandoned_claim_signal.py", "claimed_at"): (
-        "PERSISTED prose: the signal text is written into the orientation "
-        "cache by regenerate_cache, where a computed age would go stale in "
-        "place while reading as measured"
-    ),
     ("group_em/watch.py", "armed_struck_at"): (
         "not a stored stamp -- minted from `time.time()` on the line above the "
         "render, so its age is trivially zero"

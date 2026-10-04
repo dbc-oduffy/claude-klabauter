@@ -219,7 +219,6 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         route_unreachable_line="",
         budget_breach_line="",
         expired_grant_lines="",
-        abandoned_claim_lines="",
         stray_venv_lines="",
         housekeeping_lines=[],
         pinboard_final="",
