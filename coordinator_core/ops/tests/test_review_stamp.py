@@ -82,6 +82,7 @@ def _setup_repo(tmp_path: Path, plan_id: str = "pln-example-abc123") -> Path:
             plan_id: {plan_id}
             scope:
               - docs/plans/example.md
+              - coordinator_core/foo.py
             ---
 
             # Example
@@ -336,13 +337,28 @@ def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
     plan_path = repo / "docs" / "plans" / "example.md"
     m.mint(plan_path, repo, build_test_path=str(build_test))
 
-    # A later commit touches the plan's own declared `scope` write.
-    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\nmore\n", encoding="utf-8")
+    # A later commit touches a declared write that is reviewed work.
+    foo = repo / "coordinator_core" / "foo.py"
+    foo.parent.mkdir(exist_ok=True)
+    foo.write_text("changed later\n", encoding="utf-8")
     _commit(repo, "later touch")
 
     reason = m.check(plan_path, repo, supersession=True)
     assert reason is not None
     assert "later commit" in reason
+
+
+def test_check_supersession_ignores_the_plans_own_close_out(tmp_path):
+    """The close-out writes the falsifier and exit_criterion_met into the plan,
+    which is in its own scope; that edit is not a later change to reviewed work."""
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\nclose-out\n", encoding="utf-8")
+    _commit(repo, "close-out")
+
+    assert m.check(plan_path, repo, supersession=True) is None
 
 
 def test_check_ignores_supersession_when_not_asked(tmp_path):
@@ -616,6 +632,27 @@ def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_
     assert stamp["delivery"]["verdict"] == "PASS"
     assert stamp["fixes_applied"] == 2
     assert stamp["unresolved"] == []
+
+
+def test_mint_repair_without_a_prep_sidecar_names_its_producer(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    session_id = "sess1"
+    share = repo / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+    _write_sidecar(
+        share / "2026-09-28-integration-old.md",
+        {"agent_type": "coordinator:code-reviewer", "lead_session_id": session_id},
+    )
+    _commit(repo, "land\n\nInline-Review: applies 2026-09-28-integration-old -- execute-review: 1 slices, 0 fixes")
+    build_test = share / "2026-09-28-test-runner.md"
+    _write_sidecar(build_test, {"status": "pass", "run": 1, "failed": 0})
+    plan_path.with_name("example.workflow.mjs.emitted.json").write_text(
+        f'{{"session_id": "{session_id}", "plan": "example.md"}}', encoding="utf-8"
+    )
+
+    with pytest.raises(m.MintRefusal, match="coordinator:test-runner execute-review prep"):
+        m.mint(plan_path, repo, build_test_path=str(build_test), repair=True)
 
 
 def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path):

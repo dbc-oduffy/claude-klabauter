@@ -380,6 +380,7 @@ def _render_record_frontmatter(record: Dict[str, Any]) -> str:
 
 
 from coordinator_core.ipc import register_op  # noqa: E402 — after CLI-safe module body
+from coordinator_core.lifecycle import main_worktree_root  # noqa: E402 — the dispatcher hands common_dir ops <worktree>/.git
 
 
 @register_op("review_mint.bookkeep_wave")
@@ -390,7 +391,7 @@ def _bookkeep_wave_handler(params: dict, repo_root: Optional[Path] = None) -> di
     Params: wave_sidecar_paths (list[str]), session_id, plan_id,
     prep_sidecar, record_stem. `repo_root` param wins when the caller's own
     resolved repo_root is not supplied."""
-    root = repo_root or Path(params.get("repo_root") or ".")
+    root = main_worktree_root(repo_root) if repo_root else Path(params.get("repo_root") or ".")
     wave_sidecar_paths = [Path(p) for p in params.get("wave_sidecar_paths") or []]
     record = bookkeep_wave(
         wave_sidecar_paths,

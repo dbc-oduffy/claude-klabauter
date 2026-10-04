@@ -38,6 +38,7 @@ import yaml
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, assemble_from_share
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
@@ -89,6 +90,31 @@ def _resolve_plan_id(repo_root: Path, plan: str) -> str:
     return str(plan_id)
 
 
+def _write_range_prep(repo_root: Path, session_id: str, plan: str, base: str, head: str) -> Path:
+    """Write the prep sidecar for an ad-hoc review of ``base..head``: the
+    fields ``share_stages`` reads off the emitted workflow's prep stage, with
+    ``product_files`` counted over the range. One git spawn."""
+    proc = run_git(["diff", "--name-only", f"{base}..{head}"], cwd=str(repo_root), timeout=_GIT_TIMEOUT_SECS)
+    files = [line for line in proc.stdout.splitlines() if line.strip()]
+    share = repo_root / ".coordinator-local" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+    target = share / f"{review_wave_bookkeeping_stem(plan, session_id)}.range-prep.md"
+    fm = {
+        "agent_type": "engine:range-prep",
+        "plan_id": plan,
+        "run_base_sha": base,
+        "head_sha": head,
+        "product_files": len(files),
+        "whole_diff_sidecars": {},
+    }
+    target.write_text(
+        "---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n",
+        encoding="utf-8", newline="\n",
+    )
+    declare_write(str(target))
+    return target
+
+
 def record_superseding_review(
     *,
     repo_root: Path,
@@ -124,11 +150,21 @@ def record_superseding_review(
 
     used = None
     if from_share:
-        try:
-            assembled = assemble_from_share(
+        def assemble() -> Dict[str, Any]:
+            return assemble_from_share(
                 repo_root=repo_root, session_id=session_id, plan_id=plan, plan_stem=plan_stem, head=head,
                 judge_result=judge_result,
             )
+
+        try:
+            try:
+                assembled = assemble()
+            except ShareStageMissing as exc:
+                # A post-run review has no emitted prep stage; the range itself is the prep.
+                if exc.stage != "prep":
+                    raise
+                _write_range_prep(repo_root, session_id, plan, base, head)
+                assembled = assemble()
         except (ShareStageMissing, ValueError) as exc:
             raise SupersedeRefused(str(exc))
         prep_sidecar = assembled["prep_sidecar"]
@@ -190,7 +226,7 @@ def _record_superseding_review_handler(params: dict, repo_root: Optional[Path] =
     prep_sidecar, stage_returns, session_id, optional supersedes, optional
     from_share (assemble the three from the share dir; refused naming the
     first missing stage)."""
-    root = repo_root or Path(params.get("repo_root") or ".")
+    root = main_worktree_root(repo_root) if repo_root else Path(params.get("repo_root") or ".")
     try:
         result = record_superseding_review(
             repo_root=root,

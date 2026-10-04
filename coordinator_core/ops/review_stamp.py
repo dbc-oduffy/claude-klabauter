@@ -393,7 +393,10 @@ def _repair_build_bookkeeping_record(
 
     prep_path = _repair_discover_prep_sidecar(share_dir)
     if prep_path is None:
-        raise MintRefusal(f"review-stamp: --repair could not locate a prep-shaped sidecar under {share_dir}")
+        raise MintRefusal(
+            f"review-stamp: --repair could not locate a prep-shaped sidecar under {share_dir}; "
+            "produce one with coordinator:test-runner execute-review prep"
+        )
     prep_rel = str(prep_path.relative_to(repo_root)).replace("\\", "/")
 
     exclude = {prep_path}
@@ -721,8 +724,16 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
             writes = [writes]
         writes = [str(w) for w in writes if isinstance(w, str)]
         if writes:
+            # The plan's own close-out (falsifier, exit_criterion_met, the stamp itself) is written
+            # after the terminal commit by design; it is never a later change to the reviewed work.
+            own = Path(plan_path).resolve()
             try:
-                out = _run_git(["log", "--format=%H", f"{terminal}..HEAD", "--", *writes], cwd=str(repo_root))
+                own_rel = own.relative_to(Path(repo_root).resolve()).as_posix()
+            except ValueError:
+                own_rel = None
+            spec = [*writes, f":(exclude){own_rel}"] if own_rel else writes
+            try:
+                out = _run_git(["log", "--format=%H", f"{terminal}..HEAD", "--", *spec], cwd=str(repo_root))
             except _GitUnavailable as exc:
                 return f"review-stamp: could not check supersession: {exc}"
             if out.strip():
@@ -811,12 +822,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 from coordinator_core.ipc import register_op  # noqa: E402 — after CLI-safe module body
+from coordinator_core.lifecycle import main_worktree_root  # noqa: E402 — the dispatcher hands common_dir ops <worktree>/.git
 
 
 @register_op("review_stamp.mint")
 def _mint_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = Path(params["plan"])
-    root = repo_root or Path(params.get("repo_root") or ".")
+    root = main_worktree_root(repo_root) if repo_root else Path(params.get("repo_root") or ".")
     record = params.get("superseding_record")
     stamp = mint(
         plan_path,
@@ -831,7 +843,7 @@ def _mint_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 @register_op("review_stamp.check")
 def _check_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = Path(params["plan"])
-    root = repo_root or Path(params.get("repo_root") or ".")
+    root = main_worktree_root(repo_root) if repo_root else Path(params.get("repo_root") or ".")
     reason = check(plan_path, root, supersession=bool(params.get("supersession", False)))
     return {"status": "valid" if reason is None else "refused", "reason": reason}
 

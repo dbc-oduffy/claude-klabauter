@@ -74,11 +74,11 @@ _SUPPORTED_PERIOD = "week"
 
 def git_root_walk(start: str | None = None) -> str | None:
     """`_git_root_walk.git_root_walk`, imported on first call so a bare import of
-    this module leaves `sys.path` untouched. A bare claude-klabauter checkout (hooks/scripts
-    absent) falls back to this file's own repo root."""
-    scripts_dir = str(Path(__file__).resolve().parents[1] / "hooks" / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
+    this module leaves `sys.path` untouched. A tree without coordinator/lib
+    falls back to this file's own repo root."""
+    lib_dir_walk = str(Path(__file__).resolve().parents[1] / "lib")
+    if lib_dir_walk not in sys.path:
+        sys.path.insert(0, lib_dir_walk)
     try:
         from _git_root_walk import git_root_walk as _impl
     except ImportError:

@@ -24,8 +24,7 @@ _NS_RE = re.compile(r"mcp__([A-Za-z0-9_.-]+?)__")
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "lib"))
 from frontmatter_scan import read_text, scan_frontmatter  # noqa: E402
-sys.path.insert(0, str(_ROOT / "hooks" / "scripts"))
-try:  # hooks/scripts is overlaid at publish; absent in a bare claude-klabauter checkout
+try:  # a lone copy of this script (tests) carries no coordinator/lib sibling
     from _git_root_walk import git_root_walk  # noqa: E402
 except ImportError:
     def git_root_walk():

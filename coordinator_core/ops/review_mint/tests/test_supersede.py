@@ -236,3 +236,23 @@ def test_from_share_takes_the_judge_verdict_from_its_returned_json(repo):
     assert res["used"]["criterion"] == ["(judge result JSON)"]
     with pytest.raises(SupersedeRefused, match="not met"):
         _share_call(root, s, judge_result={"status": "not_met", "observation": "x", "sidecar_path": ""})
+
+
+def test_from_share_without_a_prep_stage_writes_the_range_prep(repo):
+    """An ad-hoc post-run review has no emitted prep stage: the share holds only
+    reviewer, test-runner and delivery sidecars plus the judge's returned JSON."""
+    root, s = repo
+    share = root / ".coordinator-local" / "subagent-share" / "sess-1"
+    _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
+    _sc(share, "coordinator-test-runner.t1.md", agent_type="coordinator:test-runner",
+        target_plan=PLAN, status="pass", run=4, failed=0)
+    _sc(share, "coordinator-delivery-verifier.d1.md", agent_type="coordinator:delivery-verifier",
+        plan=PLAN, verdict="PASS")
+    res = _share_call(root, s, judge_result={"status": "met", "observation": "green at head", "sidecar_path": ""})
+    prep = res["used"]["prep"][0]
+    assert prep.endswith(".range-prep.md")
+    fm = yaml.safe_load((root / prep).read_text().split("---\n")[1])
+    assert fm["run_base_sha"] == s[0] and fm["head_sha"] == s[2]
+    assert fm["product_files"] == 2
+    record = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
+    assert record["prep_sidecar"] == prep
