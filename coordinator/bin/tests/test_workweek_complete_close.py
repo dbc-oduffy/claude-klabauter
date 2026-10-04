@@ -98,6 +98,37 @@ def test_week_only_clean_shards_deletes_shards(tmp_path: Path) -> None:
     assert not (review_trail_dir / shard_name).exists()
 
 
+def test_default_mode_buckets_daily_files_by_own_week(tmp_path: Path) -> None:
+    (
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        _,
+        _,
+    ) = _setup_week_only_fixture(tmp_path)
+    (week_changelog_dir / "2026-08-17.md").write_text("a", encoding="utf-8")
+    (week_changelog_dir / "2026-08-26.md").write_text("b", encoding="utf-8")
+    touched: list[Path] = []
+
+    _mod.perform_archive_files(
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        "2026-08-17",
+        "v0.6.0",
+        "deadbeef",
+        "2026-08-31",
+        touched_out=touched,
+    )
+
+    assert (archive_week_root / "2026-08-17" / "2026-08-17.md").exists()
+    assert (archive_week_root / "2026-08-24" / "2026-08-26.md").exists()
+    assert (week_changelog_dir / "HEADER.md").exists()
+    assert archive_week_root / "2026-08-24" / "2026-08-26.md" in touched
+
+
 def test_has_pathspec_content_empty_dir_is_false(tmp_path: Path) -> None:
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -113,3 +144,31 @@ def test_has_pathspec_content_dir_with_file_is_true(tmp_path: Path) -> None:
 
 def test_has_pathspec_content_missing_path_is_false(tmp_path: Path) -> None:
     assert _mod._has_pathspec_content(tmp_path / "does-not-exist") is False
+
+
+def test_buckets_follow_week_starting_weekday_chain(tmp_path: Path) -> None:
+    """A Tuesday week_starting (DoE's chain) buckets earlier weeks on Tuesdays."""
+    (
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        _,
+        _,
+    ) = _setup_week_only_fixture(tmp_path)
+    (week_changelog_dir / "2026-09-14.md").write_text("a", encoding="utf-8")  # Mon, in the 09-08 Tue week
+    (week_changelog_dir / "2026-09-23.md").write_text("b", encoding="utf-8")  # Wed, in the closing 09-22 week
+
+    _mod.perform_archive_files(
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        "2026-09-22",
+        "v0.6.0",
+        "deadbeef",
+        "2026-09-28",
+    )
+
+    assert (archive_week_root / "2026-09-08" / "2026-09-14.md").exists()
+    assert (archive_week_root / "2026-09-22" / "2026-09-23.md").exists()

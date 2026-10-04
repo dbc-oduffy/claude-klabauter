@@ -110,7 +110,7 @@ _SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas"
 _MANIFEST_SCHEMA_PATH = _SCHEMAS_DIR / "capability-manifest.schema.json"
 _INDEX_SCHEMA_PATH = _SCHEMAS_DIR / "fleet-capability-index.schema.json"
 
-_DEFAULT_TTL = "P1D"
+_DEFAULT_TTL = "P7D"  # the fleet index changes weekly; P1D left it permanently expired
 
 _MANIFEST_REL_PATH = ("state", "capabilities", "manifest.json")
 _INDEX_REL_PATH = ("state", "capabilities", "fleet-index.json")

@@ -44,11 +44,15 @@ def _workstation_leg(monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: False)
 
 
-def test_cloud_box_denies_a_broad_suite_command(repo, free_mutex, monkeypatch):
+def test_cloud_box_allows_the_em_a_broad_suite_command(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
-    result = guard.check(_payload("pytest", repo))
-    assert result is not None
-    assert "cloud box" in json.dumps(result)
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    assert guard.check(_payload("pytest", repo)) is None
+
+
+def test_cloud_box_still_denies_a_subagent_broad_suite_command(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
+    assert guard.check(_payload("pytest", repo, agent_id="a1")) is not None
 
 
 @pytest.fixture

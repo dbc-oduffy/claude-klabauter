@@ -114,4 +114,31 @@ def test_kill_switch(indexed_repo, monkeypatch):
 def test_advice_fits_message_register():
     assert len(m._GENERAL_ADVICE) <= 280
     for shape in m.SHAPES:
-        assert len(shape.advice.format(symbol="x" * 40)) <= 280
+        assert len(shape.advice.format(symbol="x" * 40, sidx=" Offline: .structural-index/symbols.ndjson.")) <= 280
+
+
+@pytest.mark.parametrize(
+    "pattern, shape_text",
+    [
+        (r"^(def|class) ", "File outline: project_code_outline"),
+        (r"^\s*def\b", "File outline: project_code_outline"),
+        ("^timeout:", 'config key: project_symbol(symbol_name="timeout")'),
+        ('"plugin_root":', 'config key: project_symbol(symbol_name="plugin_root")'),
+        ("coordinator.dayBranch =", 'config key: project_symbol(symbol_name="coordinator.dayBranch")'),
+    ],
+)
+def test_outline_and_config_key_shapes(indexed_repo, pattern, shape_text):
+    assert shape_text in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
+
+
+@pytest.mark.parametrize("pattern", ["TODO:", "Note:", "a:"])
+def test_prose_markers_are_not_config_keys(indexed_repo, pattern):
+    assert "config key" not in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
+
+
+def test_structural_index_named_only_when_present(indexed_repo):
+    assert "symbols.ndjson" not in _ctx(m._handler(_payload(indexed_repo, pattern="def _alpha_beta")))
+    sidx = indexed_repo / ".structural-index"
+    sidx.mkdir()
+    (sidx / "symbols.ndjson").write_text("{}\n", encoding="utf-8")
+    assert ".structural-index/symbols.ndjson" in _ctx(m._handler(_payload(indexed_repo, pattern="def _gamma_delta")))

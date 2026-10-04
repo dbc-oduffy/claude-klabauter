@@ -1453,10 +1453,10 @@ def evaluate_payload_json(
     return result
 
 
-def _apply_guard_level(name: str, envelope: Any) -> Any:
+def _apply_guard_level(name: str, envelope: Any, subagent: bool = False) -> Any:
     from coordinator_core.machine_profile import apply_guard_level
 
-    return apply_guard_level(name, envelope)
+    return apply_guard_level(name, envelope, subagent=subagent)
 
 
 def _evaluate_payload_json_budgeted(
@@ -1828,7 +1828,8 @@ def _evaluate_payload_json_budgeted(
                 )
                 out = None
         if out is not None and _is_deny_envelope(out):
-            _leveled = _apply_guard_level(name, out)
+            from coordinator_core.bash_guards.check_test_suite_invocation import _caller_is_subagent
+            _leveled = _apply_guard_level(name, out, subagent=_caller_is_subagent(payload))
             _demoted = not _is_deny_envelope(_leveled)
             out = _leveled
         if out is not None:

@@ -606,8 +606,39 @@ def scan(target: str, today: Optional[date] = None) -> Tuple[List[str], int]:
 # ---------------------------------------------------------------------------
 
 
+def build_handoff_owner_index(repo_root: Path) -> Dict[str, str]:
+    """One pass over `<repo_root>/state/handoffs/*.md`: deliverable_id ->
+    repo-relative path of the first (name-sorted) `open`/`claimed` handoff
+    carrying it. Callers resolving many plans build this once.
+    """
+    index: Dict[str, str] = {}
+    handoffs_dir = Path(repo_root) / "state" / "handoffs"
+    try:
+        names = sorted(os.listdir(handoffs_dir))
+    except OSError:
+        return index
+    for name in names:
+        if not name.endswith(".md"):
+            continue
+        hf_path = handoffs_dir / name
+        try:
+            hf_text = hf_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # unreadable/non-UTF-8/non-file handoff cannot be aged; skip it
+            continue
+        if extract_frontmatter_scalar(hf_text, "status") not in ("open", "claimed"):
+            continue
+        hf_id = extract_frontmatter_scalar(hf_text, "deliverable_id")
+        if hf_id and hf_id not in index:
+            index[hf_id] = "/".join(("state", "handoffs", name))
+    return index
+
+
 def resolve_plan_owner(
-    plan_path: Path, repo_root: Path, plan_text: Optional[str] = None
+    plan_path: Path,
+    repo_root: Path,
+    plan_text: Optional[str] = None,
+    owner_index: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """AC1/AC2 ownership resolver: does an `open`/`claimed` handoff under
     `<repo_root>/state/handoffs/*.md` own *plan_path*?
@@ -625,6 +656,8 @@ def resolve_plan_owner(
             pass it through to avoid a duplicate read. When omitted (the
             default), this function reads the file itself, preserving the
             original standalone-call signature/behaviour.
+        owner_index: optional `build_handoff_owner_index(repo_root)` result,
+            built once by a caller resolving many plans.
 
     Returns:
         The repo-relative path (str, forward-slash separated) of the OWNING
@@ -654,36 +687,9 @@ def resolve_plan_owner(
         # plan with no deliverable_id at all now resolves to no owner rather
         # than falling to the retired path-pointer secondary key.
         return None
-    handoffs_dir = repo_root / "state" / "handoffs"
-    if not handoffs_dir.is_dir():
-        return None
-
-    try:
-        names = sorted(os.listdir(handoffs_dir))
-    except OSError:
-        return None
-
-    for name in names:
-        if not name.endswith(".md"):
-            continue
-        hf_path = handoffs_dir / name
-        if not hf_path.is_file():
-            continue
-        try:
-            hf_text = hf_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # unreadable/non-UTF-8 handoff cannot be aged; skip it
-            continue
-
-        status = extract_frontmatter_scalar(hf_text, "status")
-        if status not in ("open", "claimed"):
-            continue
-
-        hf_deliverable_id = extract_frontmatter_scalar(hf_text, "deliverable_id")
-        if hf_deliverable_id and hf_deliverable_id == plan_deliverable_id:
-            return "/".join(("state", "handoffs", name))
-
-    return None
+    if owner_index is None:
+        owner_index = build_handoff_owner_index(repo_root)
+    return owner_index.get(plan_deliverable_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1205,6 +1211,7 @@ def list_orphaned(
     legacy_unjoinable_count = 0
     population_count = 0
     owned_count = 0
+    owner_index = build_handoff_owner_index(repo_root)
     # non_plan_excluded_count / scanned_count / terminal_count — see the
     # "Non-plan exclusion" / "Accounting invariant" module docstring
     # paragraphs above this function for the invariant these three satisfy
@@ -1281,7 +1288,9 @@ def list_orphaned(
         if status not in _KNOWN_NON_TERMINAL_PLAN_STATUSES:
             unrecognized_status.append({"path": rel_path, "status": status})
 
-        owner = resolve_plan_owner(file_path, repo_root, plan_text=text)
+        owner = resolve_plan_owner(
+            file_path, repo_root, plan_text=text, owner_index=owner_index
+        )
         if owner is not None:
             owned_count += 1
             continue

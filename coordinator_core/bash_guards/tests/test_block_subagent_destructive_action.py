@@ -1324,6 +1324,34 @@ def test_git_merge_base_is_ancestor_allows():
     assert guard.check(payload) is None
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    ["git cherry main", "git cherry -v origin/main HEAD", "git -C . cherry -v main"],
+)
+def test_git_cherry_allows(cmd):
+    payload = _payload(cmd, agent_type="coordinator:executor")
+    assert guard.check(payload) is None
+
+
+def test_git_cherry_pick_verdict_unchanged():
+    payload = _payload("git cherry-pick abc123", agent_type="coordinator:executor")
+    assert guard.check(payload) is None
+
+
+def test_git_cherry_pick_write_flag_still_gated():
+    payload = _payload(
+        "git cherry-pick --output=x abc123", agent_type="coordinator:executor"
+    )
+    assert guard.check(payload) is not None
+
+
+def test_legacy_safe_verb_re_cherry_does_not_prefix_match():
+    assert guard._SAFE_VERB_RE.search("git cherry -v main")
+    assert guard._SAFE_VERB_RE.search("git cherry-pick abc")
+    assert not guard._SAFE_VERB_RE.search("git cherryx main")
+    assert "cherry-pick" not in guard._SAFE_VERB_RE.search("git cherry -v main").group(0)
+
+
 def test_git_merge_still_denies():
     payload = _payload("git merge foo", agent_type="coordinator:executor")
     result = guard.check(payload)

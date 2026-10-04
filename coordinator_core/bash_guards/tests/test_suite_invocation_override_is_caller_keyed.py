@@ -67,7 +67,7 @@ class TestSubagentIdentityFailsClosed:
         assert guard._OVERRIDE_ENV_VAR not in text
 
 
-class TestCloudBoxDeniesBroadSuiteForEm:
+class TestCloudBoxAllowsBroadSuiteForEm:
     def _em(self, env):
         return {
             "tool_name": "Bash",
@@ -77,12 +77,10 @@ class TestCloudBoxDeniesBroadSuiteForEm:
             "env": env,
         }
 
-    def test_cloud_denies_even_with_a_live_grant(self, monkeypatch):
-        monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
-        r = guard.check(self._em({"CLAUDE_CODE_REMOTE": "true"}))
-        assert "cloud box" in r["hookSpecificOutput"]["permissionDecisionReason"]
+    def test_cloud_em_runs_with_no_grant(self, monkeypatch):
+        monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+        assert guard.check(self._em({"CLAUDE_CODE_REMOTE": "true"})) is None
 
-    def test_local_with_grant_is_not_cloud_denied(self, monkeypatch):
-        monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
-        r = guard.check(self._em({}))
-        assert r is None or "cloud box" not in r["hookSpecificOutput"]["permissionDecisionReason"]
+    def test_local_em_without_grant_is_denied(self, monkeypatch):
+        monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+        assert guard.check(self._em({})) is not None

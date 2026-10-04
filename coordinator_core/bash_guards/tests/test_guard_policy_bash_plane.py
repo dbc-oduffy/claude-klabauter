@@ -62,8 +62,14 @@ def test_global_strict_denies(monkeypatch):
 def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_RUNAWAY-FIND", "strict")
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "warn")
     assert _decision(_run(_FIND)) == "deny"
     assert _decision(_run(_PYTEST, session="sess-policy-2")) != "deny"
+
+
+def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
+    assert _decision(_run(_PYTEST, session="sess-policy-3")) == "deny"
 
 
 def test_floor_guard_denies_with_no_flags():

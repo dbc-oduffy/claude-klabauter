@@ -7,7 +7,7 @@ else ``consumer``.
 
 ``coordinator.guard_level`` is ``strict``, ``warn`` or ``off``, with a
 per-guard override ``coordinator.guard_level.<guard-name>``. Absent, it is
-``warn`` on every box, author or consumer; strict is reached only by setting the key.
+``warn`` on every box, author or consumer, except a ``GUARD_DEFAULT_LEVEL`` guard.
 ``FLOOR_GUARDS`` (irreversible-harm guards and the consumed-handoff freeze)
 never consult it.
 
@@ -199,7 +199,8 @@ def feature_refusal(name: str) -> Optional[str]:
 def guard_level(guard_name: str) -> str:
     """``strict``, ``warn`` or ``off`` for ``guard_name``.
 
-    Per-guard key beats the global key; absent both, ``warn`` on every profile.
+    Per-guard key, then the guard's ``GUARD_DEFAULT_LEVEL`` entry, then the
+    global key; absent all three, ``warn`` on every profile.
     """
     slot = _slot()
     memo = "level:" + guard_name
@@ -208,11 +209,25 @@ def guard_level(guard_name: str) -> str:
         return cached
     level = (
         _explicit(LEVEL_KEY + "." + guard_name, LEVELS)
+        or GUARD_DEFAULT_LEVEL.get(guard_name)
         or _explicit(LEVEL_KEY, LEVELS)
         or "warn"
     )
     slot[memo] = level
     return level
+
+
+#: Per-guard unset default that outranks the global ``coordinator.guard_level``.
+#: Not the floor: the per-guard key still lowers these.
+GUARD_DEFAULT_LEVEL = {
+    # PM ruling 2026-10-04: a fast/full suite run for a one-line change is the
+    # waste this guard exists to stop, so a box-wide `warn` must not open it.
+    "check-test-suite-invocation": "strict",
+}
+
+#: Guards whose deny is floor for a dispatched caller only: no level lowers it
+#: for a subagent, while the EM's deny still follows ``guard_level``.
+SUBAGENT_FLOOR_GUARDS = frozenset({"check-test-suite-invocation"})
 
 
 #: Guards whose deny prevents irreversible harm; ``apply_guard_level`` returns
@@ -265,13 +280,15 @@ def apply_guard_level(
     *,
     risk: Optional[str] = None,
     once: Optional[Tuple[Any, str]] = None,
+    subagent: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Map a guard's deny envelope through its configured level.
 
     Input that is not a ``permissionDecision: "deny"`` envelope is returned
     unchanged, so a seam may re-apply to an already-resolved envelope.
     ``guard_name`` is kebab-normalised. A ``FLOOR_GUARDS`` member's deny is
-    returned unchanged at every level. strict returns the deny; off returns
+    returned unchanged at every level, as is a ``SUBAGENT_FLOOR_GUARDS``
+    member's when ``subagent`` is true. strict returns the deny; off returns
     ``None``; warn returns a one-line advisory shaped by the envelope's
     ``hookEventName``: PreToolUse becomes ``allow`` plus ``additionalContext``,
     any other event ``additionalContext`` alone. ``risk=None`` derives the text
@@ -283,7 +300,7 @@ def apply_guard_level(
     if hso is None:
         return deny_envelope
     name = guard_name.replace("_", "-")
-    if name in FLOOR_GUARDS:
+    if name in FLOOR_GUARDS or (subagent and name in SUBAGENT_FLOOR_GUARDS):
         return deny_envelope
     level = guard_level(name)
     if level == "strict":

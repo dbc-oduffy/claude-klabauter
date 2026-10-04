@@ -2202,7 +2202,6 @@
           "coordinator_core/orientation/abandoned_claim_signal.py",
           "coordinator_core/orientation/budget_breach_signal.py",
           "coordinator_core/orientation/expired_grant_signal.py",
-          "coordinator_core/orientation/hook_cancellation_signal.py",
           "coordinator_core/orientation/route_unreachable_signal.py",
           "coordinator_core/orientation/warm_health_signal.py"
         ],

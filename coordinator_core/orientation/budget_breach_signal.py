@@ -21,7 +21,7 @@ nobody opened"). Two independent occurrences make the pattern the point: an
 instrument nobody calls is indistinguishable from an instrument that was never
 built, and the second one is cheaper to notice.
 
-Posture follows `warm_health_signal`, not `hook_cancellation_signal`: a healthy box
+Posture follows `warm_health_signal`: a healthy box
 renders NOTHING here, every session, forever. An op over the bar is a defect under
 DR-344's kill bar, not an accepted residual, so a standing line would train the eye
 to skip it. Only a breach with enough attempts behind it to mean something earns

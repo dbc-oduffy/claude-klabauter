@@ -94,6 +94,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import textwrap
@@ -113,6 +114,47 @@ from coordinator_core.ops.workflow_fire import fire
 #: module docstring's load-norm-aware cost note.
 _LIVE_FIRE_POLL_BUDGET_S = 480
 _LIVE_FIRE_POLL_INTERVAL_S = 5
+
+
+def _claude_json_path() -> Path:
+    return Path.home() / ".claude.json"
+
+
+def _project_keys(config_path: Path) -> set[str]:
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    projects = data.get("projects") if isinstance(data, dict) else None
+    return set(projects) if isinstance(projects, dict) else set()
+
+
+def _is_under(key: str, root: Path) -> bool:
+    try:
+        return Path(key).resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def _prune_projects_under(config_path: Path, root: Path) -> None:
+    """Drop ``projects`` entries whose path lies under ``root``, re-reading the
+    file at write time and replacing it atomically so a concurrent session's
+    own additions survive."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    projects = data.get("projects") if isinstance(data, dict) else None
+    if not isinstance(projects, dict):
+        return
+    doomed = [k for k in projects if _is_under(k, root)]
+    if not doomed:
+        return
+    for k in doomed:
+        del projects[k]
+    tmp = config_path.with_name(config_path.name + f".prune.{os.getpid()}")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, config_path)
 
 
 def _git(args: list, cwd: Path) -> subprocess.CompletedProcess:
@@ -246,10 +288,26 @@ def test_fired_workflow_lands_a_real_commit_in_the_scratch_repo(tmp_path):
     ``env=`` override, so a quarantined child inherits that throwaway HOME,
     finds no credentials, and dies at "Not logged in" before reaching any
     phase -- indistinguishable from a real auth outage without reading the
-    log. This test is otherwise READ-ONLY against the real home: every
-    write it makes (scratch repo, emitted script, fire registry) targets
-    ``tmp_path``, asserted below, never the real home the marker restores.
+    log. Its own writes (scratch repo, emitted script, fire registry) target
+    ``tmp_path``; the one real-home side effect is the harness registering the
+    child's cwd under ``projects`` in the real ``~/.claude.json``. That entry
+    is pruned in a ``finally`` (atomic rewrite, only keys under ``tmp_path``)
+    and the pre-existing key set is asserted intact.
     """
+    config_path = _claude_json_path()
+    keys_before = _project_keys(config_path)
+    try:
+        _run_live_fire(tmp_path)
+    finally:
+        _prune_projects_under(config_path, tmp_path)
+    keys_after = _project_keys(config_path)
+    assert keys_before <= keys_after, "pre-existing ~/.claude.json projects were lost"
+    assert not any(_is_under(k, tmp_path) for k in keys_after), (
+        "scratch repo path left registered in ~/.claude.json projects"
+    )
+
+
+def _run_live_fire(tmp_path: Path) -> None:
     scratch_repo = _seed_scratch_repo(tmp_path)
     assert scratch_repo.is_relative_to(tmp_path), (
         "scratch_repo must stay under tmp_path -- this test runs with "

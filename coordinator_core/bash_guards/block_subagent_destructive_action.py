@@ -1557,7 +1557,7 @@ _LEGACY_WORKTREE_READONLY = frozenset({"list"})
 _LEGACY_REMOTE_READONLY = frozenset({"-v", "show", "get-url"})
 
 _SAFE_VERB_RE = re.compile(
-    r"\b(?:add|commit|status|log|diff|show|fetch|cherry-pick|rev-parse|rev-list|"
+    r"\b(?:add|commit|status|log|diff|show|fetch|cherry-pick|cherry(?![-\w])|rev-parse|rev-list|"
     r"ls-files|describe)\b"
 )
 _PULL_WORD_RE = re.compile(r"\bpull\b")
@@ -2037,6 +2037,7 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
         "show",
         "fetch",
         "cherry-pick",
+        "cherry",
         "rev-parse",
         "rev-list",
         "ls-files",

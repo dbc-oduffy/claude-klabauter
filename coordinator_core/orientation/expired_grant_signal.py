@@ -37,7 +37,7 @@ reproduced in the module written by copying it. The producer is now attached to
 the consumer here, and `test_expired_grant_signal.py` fails if they are ever
 separated again.
 
-Posture follows `budget_breach_signal`, NOT `hook_cancellation_signal`: render
+Posture follows `budget_breach_signal`: render
 NOTHING when no grant is past expiry (including "no index exists yet", which
 is indistinguishable from "no grant is overdue" by design — the same
 fail-open-to-silence contract every `emit_*` helper in this package already

@@ -13,9 +13,7 @@ def emit_warm_engine_health() -> str:
     Returns "" (omit) when: `warm.telemetry` cannot be imported or read, the
     combined warm+cold sample size is below `MIN_SAMPLES`, or the observed warm
     rate is at or above `DEGRADED_WARM_RATE`. Renders a line only when there is
-    both enough signal and a real degradation -- the inverse of
-    `hook_cancellation_signal.emit_hook_cancellation_rate`'s always-show-once-
-    there's-data posture, deliberately: see module docstring.
+    both enough signal and a real degradation: see module docstring.
     """
     try:
         from coordinator_core.warm.telemetry import warm_rate

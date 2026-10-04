@@ -70,6 +70,24 @@ class EmitTestRedRecordTest(unittest.TestCase):
         self.assertEqual(written["exit_code"], 0)
         self.assertEqual(written["sha"], "deadbeef")
 
+    def test_t5_record_roots_at_cwd_not_engine_root(self) -> None:
+        import pathlib
+        import tempfile
+
+        mod = _load_cli_module()
+        written = {}
+        with tempfile.TemporaryDirectory() as d:
+            consumer = pathlib.Path(d).resolve()
+            prev = os.getcwd()
+            os.chdir(consumer)
+            try:
+                with mock.patch.object(mod, "write_test_red_record",
+                                       side_effect=lambda **kw: written.update(kw)),                      mock.patch.object(mod, "_git_head_sha", return_value="deadbeef"):
+                    mod._emit_test_red_record(0, "", 0)
+            finally:
+                os.chdir(prev)
+        self.assertEqual(written["repo_root"].resolve(), consumer)
+
     def test_t2_failure_run_derives_runner_and_failing_from_captured_content(self) -> None:
         mod = _load_cli_module()
         written = {}

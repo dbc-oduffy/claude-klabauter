@@ -6,7 +6,8 @@ decision), both fail open to `no_advisory()`:
 
   1. General — the first Grep/Glob per (session, agent) against a repo that
      example-retrieval-repo answers for names the structural tools once.
-  2. Shape — a Grep whose pattern matches a `SHAPES` row names the exact
+  2. Shape — a Grep whose pattern matches a `SHAPES` row (file outline,
+     definition, config key, call site, bare identifier) names the exact
      tool for that shape, once per (session, agent, shape). The table is the
      extension point: add a row, not a branch.
 
@@ -64,6 +65,15 @@ _DEFINITION_RE = re.compile(
 )
 _CALL_SITE_RE = re.compile(r"^" + _WB + _IDENT + r"\\?\($")
 _BARE_IDENT_RE = re.compile(r"^" + _WB + _IDENT + _WB + r"$")
+# `timeout:`, `"plugin_root":`, `coordinator.dayBranch =` -- a key lookup, not prose.
+_CONFIG_KEY_RE = re.compile(
+    r'^\^?(?:\\s\*|\s*)"?([A-Za-z_][A-Za-z0-9_.-]{2,})"?(?:\\s\*|\s*)[:=]$'
+)
+_DECL_KEYWORDS = frozenset(
+    {"def", "class", "function", "fn", "struct", "interface", "async", "enum", "trait", "impl"}
+)
+# Regex furniture stripped before an outline pattern is read as keywords.
+_REGEX_NOISE_RE = re.compile(r"\\[sbwSdB][+*?]?|[\^$()|?+*\[\]\s.]")
 
 
 def _looks_like_code_symbol(name: str) -> bool:
@@ -82,6 +92,23 @@ def _match_call_site(pattern: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _match_config_key(pattern: str) -> Optional[str]:
+    """Key-shaped only: `TODO:` / `Note:` are prose markers, not keys."""
+    m = _CONFIG_KEY_RE.match(pattern)
+    if not m:
+        return None
+    key = m.group(1)
+    if re.search(r"[_.-]", key) or re.search(r"[a-z][A-Z]", key) or (key.islower() and len(key) >= 4):
+        return key
+    return None
+
+
+def _match_outline(pattern: str) -> Optional[str]:
+    """Declaration keywords only (`^(def|class) `): a listing, not a lookup."""
+    words = _REGEX_NOISE_RE.sub(" ", pattern).split()
+    return "outline" if words and set(words) <= _DECL_KEYWORDS else None
+
+
 def _match_bare_identifier(pattern: str) -> Optional[str]:
     m = _BARE_IDENT_RE.match(pattern)
     if m and _looks_like_code_symbol(m.group(1)):
@@ -98,9 +125,19 @@ class SearchShape:
 
 SHAPES: Tuple[SearchShape, ...] = (
     SearchShape(
+        "outline",
+        _match_outline,
+        "File outline: project_code_outline(path=...).{sidx}",
+    ),
+    SearchShape(
         "definition",
         _match_definition,
-        "`{symbol}` definition: project_symbol(symbol_name=\"{symbol}\").",
+        "`{symbol}` definition: project_symbol(symbol_name=\"{symbol}\").{sidx}",
+    ),
+    SearchShape(
+        "config-key",
+        _match_config_key,
+        "`{symbol}` config key: project_symbol(symbol_name=\"{symbol}\").{sidx}",
     ),
     SearchShape(
         "call-site",
@@ -134,6 +171,16 @@ def _indexed_repo_root(search_root: str) -> Optional[str]:
     if not rag_dir or not os.path.isfile(os.path.join(rag_dir, "graph.db")):
         return None
     return os.path.dirname(rag_dir)
+
+
+_STRUCTURAL_INDEX = os.path.join(".structural-index", "symbols.ndjson")
+
+
+def _structural_index_hint(indexed_root: str) -> str:
+    """Names the offline symbol table when this repo has one; one stat."""
+    if os.path.isfile(os.path.join(indexed_root, _STRUCTURAL_INDEX)):
+        return " Offline: .structural-index/symbols.ndjson."
+    return ""
 
 
 def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
@@ -189,7 +236,8 @@ def _handler(params: dict, repo_root=None) -> dict:
             if symbol is None:
                 continue
             if _claim_once(session_dir, session_id, f"example-retrieval-repo-shape-{shape.shape_id}{suffix}"):
-                parts.append(shape.advice.format(symbol=symbol))
+                parts.append(shape.advice.format(
+                    symbol=symbol, sidx=_structural_index_hint(indexed_root)))
             break
 
     if not parts:

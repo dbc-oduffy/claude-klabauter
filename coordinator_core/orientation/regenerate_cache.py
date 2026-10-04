@@ -205,7 +205,6 @@ from coordinator_core.engine_root import coordinator_engine_root_env
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.ipc import register_op
-from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
 from coordinator_core.orientation.route_unreachable_signal import emit_route_unreachable
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
@@ -251,7 +250,6 @@ GENERATES = [
             "coordinator_core/orientation/abandoned_claim_signal.py",
             "coordinator_core/orientation/budget_breach_signal.py",
             "coordinator_core/orientation/expired_grant_signal.py",
-            "coordinator_core/orientation/hook_cancellation_signal.py",
             "coordinator_core/orientation/route_unreachable_signal.py",
             "coordinator_core/orientation/warm_health_signal.py",
         ],
@@ -1278,7 +1276,6 @@ def _render_cache(
     capability_pointers_lines: List[str],
     fast_test_lines: List[str],
     audits_lines: List[str],
-    hook_cancellation_line: str,
     warm_engine_line: str,
     route_unreachable_line: str,
     budget_breach_line: str,
@@ -1326,9 +1323,6 @@ def _render_cache(
 
     if audits_lines:
         parts.append("\n## Audits & censuses\n" + "\n".join(audits_lines) + "\n")
-
-    if hook_cancellation_line:
-        parts.append("\n## Hook cancellation miss rate\n" + hook_cancellation_line + "\n")
 
     if warm_engine_line:
         parts.append("\n## Warm engine\n" + warm_engine_line + "\n")
@@ -1428,7 +1422,6 @@ def build_cache(
     capability_pointers_lines = emit_capability_pointers(repo_root)
     fast_test_lines = emit_fast_test(repo_root)
     audits_lines = emit_audits_index(state_root)
-    hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
     route_unreachable_line = emit_route_unreachable()
     budget_breach_line = emit_budget_breaches(repo_root)
@@ -1460,7 +1453,6 @@ def build_cache(
         capability_pointers_lines=capability_pointers_lines,
         fast_test_lines=fast_test_lines,
         audits_lines=audits_lines,
-        hook_cancellation_line=hook_cancellation_line,
         warm_engine_line=warm_engine_line,
         route_unreachable_line=route_unreachable_line,
         budget_breach_line=budget_breach_line,
@@ -1648,14 +1640,14 @@ _CACHE_PROTECTED_SECTIONS = frozenset({
 # it renders ONLY when a PM grant has actually passed its own deferred_until
 # (emit_expired_grants), which makes it a defect report -- an expired grant is
 # a defect to act on, not an accepted residual (C5's own posture instruction,
-# mirroring emit_budget_breaches over emit_hook_cancellation_rate) -- and a
+# mirroring emit_budget_breaches over emit_warm_engine_health) -- and a
 # defect report trimmed largest-first, exactly on a crowded/busy box, is a
 # line nobody ever reads. One line, small by construction, absent entirely on
 # a repo with no overdue grant, so protecting it costs a healthy repo nothing.
 # → coordinator_core.orientation.expired_grant_signal
 # "Budget breaches" is PROTECTED, breaking from the one-informational-line
-# precedent that put "Warm engine" and "Hook cancellation miss rate" in the
-# elastic set below, and the break is the point. Those two are rates an agent
+# precedent that put "Warm engine" in the
+# elastic set below, and the break is the point. That one is a rate an agent
 # can miss at no cost. This one renders ONLY when an op is failing DR-344's kill
 # bar on real evidence (emit_budget_breaches' two thresholds), which makes it a
 # defect report, and it exists specifically because such a report went unread
@@ -1674,20 +1666,15 @@ _CACHE_PROTECTED_SECTIONS = frozenset({
 _CACHE_ELASTIC_SECTIONS = frozenset({
     "Housekeeping", "Active workstreams", "Auto-push health",
     "Recent commits", "Wiki", "Architecture atlas", "Capabilities",
-    "Fast test", "Audits & censuses", "Hook cancellation miss rate",
-    "Warm engine",
+    "Fast test", "Audits & censuses", "Warm engine",
 })
-# "Hook cancellation miss rate" is elastic, not protected, on the same ground as
-# "Capabilities" above: a single informational rate line trimmed by the byte budget costs
-# an agent nothing it needed at boot (DR-310 already rules this residual out of any
-# gate/alert path) -- see coordinator_core.orientation.hook_cancellation_signal.
 # "Capabilities" is elastic, not protected, by deliberate ruling (memo
 # cross-repo/inbox/2026-08-14-coordinator-content-repo-em-orientation-cache-capability-pointers.md):
 # a pointer trimmed by the byte budget costs an agent one lookup, not a wrong
 # belief, so protecting it would defend against a cost this section does not
 # actually impose.
-# "Warm engine" is elastic, not protected, on the same ground as "Hook cancellation
-# miss rate" above: a single degraded-warm-rate line, already gated to appear only
+# "Warm engine" is elastic, not protected, on the same ground as "Capabilities"
+# above: a single degraded-warm-rate line, already gated to appear only
 # when the engine is genuinely underperforming (emit_warm_engine_health's own
 # threshold), costs an agent nothing it needed at boot if trimmed under pressure --
 # see coordinator_core.orientation.warm_health_signal.

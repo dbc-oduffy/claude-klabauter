@@ -2867,15 +2867,6 @@ def _is_cloud_box(payload: Dict[str, Any]) -> bool:
     return hit is not None and hit.call == "cloud"
 
 
-def _deny_reason_cloud(detected: str, cmd_safe: str) -> str:
-    return (
-        "Broad test suites do not run on a cloud box, for any caller. Use instead:\n"
-        "  python3 -m pytest path/to/test_file.py::test_the_case_you_changed\n"
-        "  Detected: %s\n"
-        "  Command:  %s\n\n"
-        "Reshaping the command text does not bypass this." % (detected, cmd_safe)
-    )
-
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Read the override off the PER-CALL payload, not this process's environ.
@@ -3026,8 +3017,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
     collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
     if matched_tiers & {"U", "F"} and not collect_only:
+        # PM ruling 2026-10-04: a cloud EM has an uncontended box and runs any
+        # suite; subagents were already denied above, everywhere.
         if _is_cloud_box(payload):
-            return _deny(_deny_reason_cloud(detected, cmd_safe))
+            return None
         # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
         # tier legitimately unscoped (``coordinator_core.session.
         # fast_tier_declaration`` owns that declaration and its key). This

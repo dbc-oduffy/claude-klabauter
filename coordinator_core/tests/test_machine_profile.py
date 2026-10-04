@@ -254,3 +254,13 @@ def test_source_explicit_rung_beats_sentinel(reg, tmp_path):
     assert mp.machine_profile_source() == ("consumer", "explicit-key", mp.PROFILE_KEY)
     _write(reg, '"coordinator.machine_profile" = "author"\n')
     assert mp.machine_profile_source() == ("author", "explicit-key", mp.PROFILE_KEY)
+
+
+def test_suite_guard_subagent_deny_survives_off(monkeypatch):
+    """A subagent's suite deny is floor: even a per-guard `off` keeps it."""
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "off")
+    mp.reset_cache()
+    deny = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": "BLOCKED: suite"}}
+    assert mp.apply_guard_level("check-test-suite-invocation", deny, subagent=True) is deny
+    assert mp.apply_guard_level("check-test-suite-invocation", deny) is None
