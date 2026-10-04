@@ -165,7 +165,7 @@ def _repo_root() -> Path:
             "generate-doctrine-surface-split: cannot resolve the coordinator "
             "plugin root -- resolve_caller_context().plugin_root returned no "
             "result. Set CLAUDE_PLUGIN_ROOT, or register the coordinator-claude "
-            "plugin install / .coordinator-content-root pointer (see resolve_plugin_root())."
+            "plugin install / content-root pointer (see resolve_plugin_root())."
         )
     return Path(plugin_root).resolve().parent
 

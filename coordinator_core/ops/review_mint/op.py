@@ -2,9 +2,9 @@
 coordinator_core.ops.review_mint.op — ``load_fragment()``, the one runtime
 reader of coordinator-content-repo's review-roster fragment.
 
-Resolves the sibling root via ``coordinator_core.content_root_pointer.
-read_content_root_pointer()`` and joins ``contract/review-roster-fragment.json``
-onto the content root — never a hardcoded cross-repo path. Registers no op.
+Resolves the content root via ``coordinator_core.content_root.
+read_content_root()`` and joins ``contract/review-roster-fragment.json``
+onto it — never a hardcoded cross-repo path. Registers no op.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core._content_root_primitive import content_root_for
 
 #: Relative to the content root, which is `<doe>/coordinator` in a private
@@ -40,16 +40,16 @@ def load_fragment(repo_root: Optional[Path] = None) -> dict:
 
 
 def _doe_content_root() -> Path:
-    content_root = read_content_root_pointer()
-    if not content_root:
+    root = read_content_root()
+    if not root:
         raise FileNotFoundError(
-            "could not resolve the coordinator-content-repo sibling "
-            "root (read_content_root_pointer() returned empty)"
+            "could not resolve the content root "
+            "(read_content_root() returned empty)"
         )
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(root)
     if content_root is None:
         raise FileNotFoundError(
-            f"{content_root} is neither a private clone "
+            f"{root} is neither a private clone "
             "(no coordinator/) nor a flat mirror (no plugin marker)"
         )
     return content_root

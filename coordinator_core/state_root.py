@@ -10,7 +10,7 @@ Port of: coordinator-state-root.sh (DoE 6fb5fb37, 2026-07-22).
 
 COMPOSED — this module does NOT reimplement the four sibling resolver ladders. It
 dispatches the 5-rule state-root routing on top of the already-native peers:
-  - coordinator_core.ops.coordinator_content_root.coordinator_content_root()  (Optional[str])
+  - coordinator_core.content_root.read_content_root()                 (str, "" when unset)
   - coordinator_core.engine_root.coordinator_engine_root()            (str, raises)
   - coordinator_core.artifact_subject.classify()                     (engine|doctrine|cross-cutting)
   - coordinator_core.meta_repo_identity.is_meta_repo()               (bool, raises)
@@ -23,8 +23,8 @@ Spec backlinks:
 Five routing rules (verbatim from the bash oracle's header):
 
   Rule 1  central=True, subject="doctrine"
-            -> <coordinator_content_root()>/state
-            Fail-loud (StateRootError) if the DoE root cannot resolve. Does NOT
+            -> <content repo root>/state
+            Fail-loud (StateRootError) if the content root cannot resolve. Does NOT
             fall back to claude-klabauter.
 
   Rule 2  central=True, subject="engine"
@@ -133,7 +133,8 @@ from coordinator_core.meta_repo_identity import (
     MetaRepoResolutionError,
     is_meta_repo,
 )
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core._content_root_primitive import repo_root_from_plugin_root_candidate
+from coordinator_core.content_root import read_content_root
 
 _STATE_SUBDIR = "state"
 
@@ -165,16 +166,22 @@ def _state_of(root: str) -> str:
     return os.path.join(root, _STATE_SUBDIR)
 
 
+def _content_repo_root() -> Optional[str]:
+    """The content repo root (the content root's repo, not its plugin subdir), or None."""
+    raw = read_content_root()
+    return repo_root_from_plugin_root_candidate(raw) if raw else None
+
+
 def _doe_state() -> str:
-    doe = coordinator_content_root()
-    if not doe:
+    content = _content_repo_root()
+    if not content:
         raise StateRootError(
-            "coordinator_state_root: cannot resolve DoE doctrine root — "
+            "coordinator_state_root: cannot resolve the content doctrine root — "
             "repos.content_root is not set. Does NOT fall back to claude-klabauter for the "
             "doctrine subject. Remediate: machine-local set repos.content_root "
             "<path>, or re-run /coordinator:install."
         )
-    return _state_of(doe)
+    return _state_of(content)
 
 
 def _claude_klabauter_state() -> str:
@@ -366,9 +373,9 @@ def coordinator_state_root_central() -> str:
 def print_map() -> str:
     subjects: dict = {}
 
-    doe = coordinator_content_root()
-    if doe:
-        subjects["doctrine"] = _state_of(doe)
+    content = _content_repo_root()
+    if content:
+        subjects["doctrine"] = _state_of(content)
     else:
         sys.stderr.write(
             "coordinator_state_root --print-map: doctrine root unresolvable — "

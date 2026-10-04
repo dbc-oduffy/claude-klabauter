@@ -176,9 +176,8 @@ def _check_launcher_consumes_content_root(launcher_dir: Path, failures: "list[st
     ps1 = launcher_dir / _LAUNCHER_PS1
     text = ps1.read_text(encoding="utf-8", errors="replace")
     group = _group_after(text, "$selfFlags")
-    bad = [f for f in ("--content-root", "--content-root") if group is not None and f in group]
-    if bad:
-        flag = bad[0]
+    flag = "--content-root"
+    if group is not None and flag in group:
         failures.append(
             f"{ps1} lists {flag} among its self-terminating flags, so a {flag} "
             "launch — the shape the `claude` shim uses on EVERY launch — delegates the "

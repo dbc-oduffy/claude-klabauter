@@ -42,7 +42,7 @@ root exactly as that section names: `coordinator_core.warm.caller_context ::
 resolve_caller_context`, falling back to
 `coordinator_core.subagent_sandbox.provision_report :: resolve_plugin_root`'s
 own three-rung ambient probe (`CLAUDE_PLUGIN_ROOT` env var -> plugin dir ->
-`.coordinator-content-root` pointer) — the same pair chunk W2-C9's mise-prep-entry.py already
+Content-root pointer) — the same pair chunk W2-C9's mise-prep-entry.py already
 uses for its own doctrine-asset seam. The DoE original derived its own repo
 root from `Path(__file__).resolve().parent.parent.parent` — the
 Coordinator-content-repo@b644d5a9 lesson this whole wave exists to fix: that resolved
@@ -111,7 +111,7 @@ def _repo_root() -> Path:
             "generate-doctrine-surfaces: cannot resolve the coordinator plugin "
             "root -- resolve_caller_context().plugin_root returned no result. "
             "Set CLAUDE_PLUGIN_ROOT, or register the coordinator-claude plugin "
-            "install / .coordinator-content-root pointer (see resolve_plugin_root())."
+            "install / content-root pointer (see resolve_plugin_root())."
         )
     return Path(plugin_root).resolve().parent
 

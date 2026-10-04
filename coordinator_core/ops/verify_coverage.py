@@ -101,7 +101,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set, Tuple
-from coordinator_core.content_root_pointer import read_content_root_pointer_file
+from coordinator_core.content_root import read_pointer_files
 
 
 _USAGE = (
@@ -140,7 +140,7 @@ def parse_args(argv: List[str]) -> dict:
 def default_root(home_dir: Optional[str] = None) -> str:
     if home_dir is None:
         home_dir = os.path.expanduser("~")
-    content_root = read_content_root_pointer_file(home_dir)
+    content_root = read_pointer_files(home_dir)
     if content_root:
         return content_root
     return os.path.join(home_dir, ".claude", "plugins", "coordinator-claude")

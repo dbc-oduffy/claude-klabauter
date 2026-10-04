@@ -108,7 +108,7 @@ def _default_resolver(worktree_root: PathLike) -> Resolver:
     repo-qualified, matching every pre-C7 test's expectation unchanged. Only
     a citation this repo's index cannot resolve to a real id (local MISS,
     AMBIGUITY, or a HIT whose record carries neither id as real) falls
-    through to a LAZILY-built coordinator-content-repo peer index (`content_root()`), mirroring
+    through to a LAZILY-built coordinator-content-repo peer index (`read_content_root()`), mirroring
     C1's `resolve()` peer-laziness contract: the peer index is built at most
     ONCE per resolver instance (on the first citation that needs it, not
     eagerly at resolver-construction time, and not once per citation) via a

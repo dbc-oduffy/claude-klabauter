@@ -40,7 +40,7 @@ Interface — env-only (mirrors the original script; no CLI args):
                                             sets this explicitly before calling
                                             main() — see its _resolve_plugin_root()
                                             (env override wins verbatim, else
-                                            resolves via coordinator_registry.content_root()
+                                            resolves via the content root
                                             + "/coordinator").
     COORDINATOR_CURRENCY_SCRIPT_DIR      — the CALLING trampoline's own directory.
                                             DoE-side contract fact (path resolution

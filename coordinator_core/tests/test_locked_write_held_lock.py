@@ -40,6 +40,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -771,6 +772,11 @@ class TestMachineRendezvousCrashRelease:
             # The grandchild is reparented once the holder dies, so the
             # foreign-process tripwire refuses any kill; it exits on this file.
             stop_file.touch()
+            exited = Path(str(stop_file) + ".exited")
+            deadline = time.monotonic() + 5
+            while not exited.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert exited.exists(), "sleep_forever grandchild outlived the test"
 
 
 _GRANDCHILD_HOLDER_SCRIPT = textwrap.dedent("""\
@@ -797,6 +803,7 @@ _SLEEP_FOREVER_SCRIPT = textwrap.dedent("""\
     deadline = time.monotonic() + 60
     while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
         time.sleep(0.1)
+    open(sys.argv[1] + ".exited", "w").close()
 """)
 
 

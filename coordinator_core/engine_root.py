@@ -5,8 +5,8 @@ coordinator_core.engine_root — ported from coordinator/lib/coordinator-claude-
 in a later gated wave, per port-template variant "SOURCED LIB").
 
 Purpose: resolves the claude-klabauter sibling-repo root, analogous to how CLAUDE_HOME->~/.claude
-works for the coordinator meta-repo. Mirror-image of `coordinator_core.ops.gen_content_root_pointer`
-(which resolves CONTENT_ROOT from inside a DoE-clone-relative context) — this module resolves
+works for the coordinator meta-repo. Mirror-image of the content-root pointer generator
+(which resolves the content root from inside a clone-relative context) — this module resolves
 CLAUDE_KLABAUTER_ROOT for callers already running inside the claude-klabauter engine.
 
 Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C1 / AC1
@@ -35,22 +35,18 @@ Public API:
 Negative-spec:
     - Does NOT reimplement the machine-local registry.toml/registry.local.toml parser —
       shells out to the `machine-local` CLI (PATH-resolved), exactly like the bash
-      oracle's Rung 2 and gen_content_root_pointer.py's Tier 2.
+      oracle's Rung 2 and the pointer generator's Tier 2.
     - Does NOT export CLAUDE_KLABAUTER_ROOT to os.environ as a side effect (the bash oracle does,
       per its own §4b idempotency-gate docstring) — a pure resolver is safer to import
       from a long-lived process (e.g. a future op) where implicit env mutation on
       import-time-adjacent calls would be a surprising side effect. Callers that need
       the shell's idempotency-gate behavior opt in explicitly.
-      This note previously recorded a deliberate
-      ASYMMETRY against `coordinator_core.ops.coordinator_content_root`, which did
-      export `REPO_CONTENT_ROOT` to os.environ on every successful resolution to
-      mirror ITS bash oracle's `export`. That asymmetry was retired on
-      2026-07-21: the export leaked interpreter-global state across tests and
-      into every subprocess child's inherited env, and `coordinator_content_root` is
-      now pure too (its re-resolution guard moved to an explicit module-scope
-      memo with a reset seam). Both resolvers now make the SAME choice, and this
-      module's was the one that turned out right — see that module's docstring
-      § DECISION REVERSAL.
+      A sibling content-root resolver once exported `REPO_CONTENT_ROOT` to
+      os.environ on every successful resolution; that was retired on
+      2026-07-21 because the export leaked interpreter-global state across
+      tests and into every subprocess child's inherited env. Its
+      re-resolution guard became an explicit module-scope memo with a reset
+      seam, the same choice this module made.
     - Does NOT spawn a subprocess for Rung 1 — only Rung 2 shells out.
     - The bash oracle's `set -uo pipefail` / BASH_VERSINFO guard notes have no meaning
       here — this is a pure-Python module. Omitted intentionally.
@@ -306,9 +302,7 @@ def _reset_skew_advisory() -> None:
 
 
 #: Module-scope memo for the (expensive) two-tier gate answer, keyed on
-#: `(registry mtime pair, session root)`. Mirrors
-#: `coordinator_core.ops.coordinator_content_root`'s DECISION REVERSAL shape
-#: (module docstring § DECISION REVERSAL) — an explicit memo with a reset
+#: `(registry mtime pair, session root)`. An explicit memo with a reset
 #: seam, not an `os.environ` export, so the cache dies with the test/process
 #: boundary rather than leaking into subprocess children or across pytest
 #: cases.

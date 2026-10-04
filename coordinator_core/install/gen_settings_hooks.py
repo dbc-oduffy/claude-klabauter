@@ -129,10 +129,10 @@ Negative-spec (faithful bash-oracle reproduction, NOT a fix):
     resolution (when ``--coordinator-root`` is not given) delegates to
     :func:`coordinator_core.install._shared.resolve_coordinator_root`,
     which is a strict SUPERSET of the bash oracle's own resolution order.
-    The bash oracle only tried ``machine-local get repos.content_root`` then
+    The bash oracle only tried the registry's content-root key then
     ``$REPO_CONTENT_ROOT`` before failing loud; the shared helper additionally
-    tries an explicit ``$COORDINATOR_ROOT`` env var first and a
-    ``${CLAUDE_HOME:-$HOME}/.coordinator-content-root`` pointer file as a final fallback
+    tries an explicit ``$COORDINATOR_ROOT`` env var first and the
+    content-root pointer files (via ``content_root.read_content_root``)
     before failing loud. Every input that resolved under the bash oracle
     still resolves identically here (win-only — this can only turn a prior
     failure into a success, never the reverse); the shared helper's own
@@ -351,7 +351,7 @@ def _usage_text() -> str:
         "  -h, --help                Show this help\n"
         "\n"
         "Environment:\n"
-        "  REPO_CONTENT_ROOT           Fallback if machine-local get repos.content_root fails\n"
+        "  REPO_CONTENT_ROOT           Fallback if the registry's repos.content_root is unset\n"
         "\n"
         "Exit codes:\n"
         "  0  success (including operator-kill-switch no-op)\n"

@@ -38,7 +38,7 @@ from coordinator_core._settings_home import (  # noqa: F401  (settings_home re-e
 )
 from coordinator_core.atomic_replace import atomic_write_bytes  # noqa: F401  (re-exported by name; see below)
 from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
-from coordinator_core.machine_resolver import registry_get
+from coordinator_core.content_root import read_content_root
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -145,10 +145,10 @@ def claude_dir(claude_home: str) -> Path:
     `require_home` returns a $HOME SUBSTITUTE (its own docstring: "CLAUDE_HOME
     names the PARENT of `.claude` and every caller appends that segment"), and
     for a long time most call sites did not append it — targeting
-    ``<home>/settings.json``, ``<home>/bin``, ``<home>/.coordinator-content-root`` while every
+    ``<home>/settings.json``, ``<home>/bin``, ``<home>/<pointer file>`` while every
     writer puts those under ``<home>/.claude/``. Those readers silently found
     nothing, and a destructive one found nothing and reported success.
-    Verified against a live install 2026-09-02: settings.json, .coordinator-content-root,
+    Verified against a live install 2026-09-02: settings.json, the content-root pointer,
     coordinator-identity.yaml, working-repos.yaml, machine-local, plugins/,
     bin/, shell/ and agents/ are all under ``~/.claude/``.
 
@@ -160,15 +160,15 @@ def claude_dir(claude_home: str) -> Path:
     call site uses rather than by whether whoever wrote it remembered.
 
     An EMPTY ``claude_home`` yields ``.claude`` RELATIVE TO CWD, not an
-    absolute path -- `resolve_coordinator_root`'s rung 4 passes "" when
-    `require_home` raises, and only survives it because the caller gates on
-    `.is_file()`. Do not introduce a caller that writes or deletes through
-    this helper without an absolute-home check of its own.
+    absolute path -- a caller that passes "" when `require_home` raises only
+    survives it by gating on `.is_file()`. Do not introduce a caller that
+    writes or deletes through this helper without an absolute-home check of
+    its own.
 
     Lives here rather than in `uninstall_legs` because the segment is not an
-    uninstall fact: `resolve_coordinator_root`'s own `.coordinator-content-root` rung reads it
-    too, and that reader was missed by the first sweep precisely because the
-    helper was module-local.
+    uninstall fact: readers outside the uninstall legs need it too, and one
+    was missed by the first sweep precisely because the helper was
+    module-local.
     """
     return Path(claude_home) / ".claude"
 
@@ -203,11 +203,10 @@ def _repo_to_coordinator_content_root(repo_root: str) -> str:
     content_root_for`` (the primitive most of its ~45 other call sites now
     use for the same join): that primitive accepts a nested
     ``<repo>/coordinator`` candidate by ``isdir`` alone, with no plugin-marker
-    probe. ``gen_content_root_pointer.py`` already treats bare ``isdir`` as
-    insufficient for this exact question — it fails CLOSED unless the
-    resolved root carries one of the plugin markers
+    probe. Bare ``isdir`` is insufficient for this exact question: the root
+    must carry one of the plugin markers
     (``coordinator/templates/bin/_machine_local.py``,
-    ``templates/bin/_machine_local.py``, or ``.claude-plugin/plugin.json``) —
+    ``templates/bin/_machine_local.py``, or ``.claude-plugin/plugin.json``),
     and every caller of this helper (``resolve_coordinator_root``, in turn the
     settings-hook identity strip and the uninstall legs) feeds that same
     machine-local/plugin-dir resolution, so it holds to the same, stricter
@@ -229,23 +228,18 @@ def resolve_coordinator_root(
 ) -> str:
     """Resolve ``<coordinator_root>`` using the SAME seam the settings.json
     hook generator uses, so a strip's identity-key prefix matches the paths
-    actually baked into settings.json. Resolution order (DR-071, 2026-07-22 —
-    the registry ``repos.content_root`` read is now direct-tomllib first, the
-    ``machine-local`` CLI a fallback rung, for reset-safety: the CLI's
-    reader/exec bits live under the resettable ``~/.claude/bin/``, so
-    "``machine-local get`` works" is not proof the registry itself is
-    reachable after a reset):
+    actually baked into settings.json. Resolution order (the registry read is
+    direct-tomllib, never the ``machine-local`` CLI: the CLI's reader/exec bits
+    live under the resettable ``~/.claude/bin/``, so "``machine-local get``
+    works" is not proof the registry itself is reachable after a reset):
 
         1. ``COORDINATOR_ROOT`` env var (explicit override).
-        2. machine-local registry ``repos.content_root`` — direct tomllib read
-           via ``machine_resolver.registry_get``, falling back to the
-           ``machine-local get`` CLI if that can't resolve ->
+        2. ``content_root.read_content_root()`` — registry ``repos.content_root``,
+           the content-root pointer files and their compat fallbacks ->
            ``_repo_to_coordinator_content_root(<repo>)``.
         3. ``REPO_CONTENT_ROOT`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
-        4. the ``.coordinator-content-root`` pointer file under CLAUDE_HOME (else the home dir) ->
-           ``_repo_to_coordinator_content_root(<repo>)``.
 
-    Rungs 2-4 each resolve a ``repos.content_root``-shaped REPO root first, then
+    Rungs 2-3 each resolve a ``repos.content_root``-shaped REPO root first, then
     decide nested-vs-flat CONTENT root by marker via
     ``_repo_to_coordinator_content_root`` (claude-klabauter#6 / DoE F7) —
     a dev clone nests the plugin payload under ``<repo>/coordinator``, the
@@ -264,46 +258,19 @@ def resolve_coordinator_root(
         root = _strip_trailing_sep(env_root)
 
     if not root:
-        content_root = registry_get("repos.content_root")
-        if not content_root:
-            ml = _which("machine-local")
-            if ml:
-                content_root = _run_quiet([ml, "get", "repos.content_root"])
+        content_root = read_content_root()
         if content_root:
             root = _repo_to_coordinator_content_root(_strip_trailing_sep(content_root))
 
     if not root and os.environ.get("REPO_CONTENT_ROOT"):
         root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_CONTENT_ROOT"]))
 
-    if not root:
-        try:
-            claude_home = require_home("resolve_coordinator_root")
-        except RequireHomeError:
-            claude_home = ""
-        content_root_pointer = claude_dir(claude_home) / ".coordinator-content-root"
-        if content_root_pointer.is_file():
-            try:
-                content_root = content_root_pointer.read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:
-                print(f"_shared: cannot read {content_root_pointer}: {exc}", file=sys.stderr)
-                content_root = ""
-            if "\n" in content_root.rstrip("\n"):
-                print(
-                    f"uninstall-legs: {content_root_pointer} is malformed (multi-line) "
-                    "— expected a single path",
-                )
-                content_root = ""
-            content_root = _strip_trailing_sep(content_root.strip())
-            if content_root:
-                root = _repo_to_coordinator_content_root(content_root)
-
     if not root or not os.path.isdir(root):
         msg = [
             "uninstall-legs: cannot determine which hook paths are "
             "coordinator-owned — resolve coordinator root or pass --coordinator-root",
-            "  Tried: COORDINATOR_ROOT env, machine-local registry repos.content_root",
-            "         (direct read, then machine-local CLI fallback),",
-            "         REPO_CONTENT_ROOT env, ${CLAUDE_HOME:-$HOME}/.coordinator-content-root pointer.",
+            "  Tried: COORDINATOR_ROOT env, content root (registry repos.content_root,",
+            "         content-root pointer), REPO_CONTENT_ROOT env.",
         ]
         if root:
             msg.append(f"  Resolved candidate does not exist on disk: {root}")

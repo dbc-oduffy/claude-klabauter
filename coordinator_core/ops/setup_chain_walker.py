@@ -76,6 +76,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.content_root import ENGINE_CONTENT_ROOT_KEY
 from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.install import prereq_probe
 from coordinator_core.install.manifest_reader import _dep_to_record
@@ -1201,10 +1202,9 @@ _COORDINATOR_ROOT_LADDER_REMEDIATION = (
     "  (repos.coordinator_claude stays RETIRED -- it names the publish-mirror\n"
     "  location, never a working checkout; see publish.mirrors.<name>.path in\n"
     "  the machine-local registry for the mirror this repo actually resolves\n"
-    "  that key to. `engine.working_repos.content_root` is written by DoE's own\n"
-    "  installer / self-heal, never by claude-klabauter -- claude-klabauter only reads this\n"
-    "  namespace. Absent: `machine-local set engine.working_repos.content_root\n"
-    "  <path>`.)\n"
+    "  that key to. `engine.working_repos.content_root` is written by the\n"
+    "  installer's content-root migration. Absent: `machine-local set\n"
+    "  engine.working_repos.content_root <path>`.)\n"
     "  Every rung additionally requires the candidate to (a) NOT be a\n"
     "  registered publish.mirrors.*.path entry, and (b) show positive\n"
     "  evidence of a real coordinator-claude plugin source checkout\n"
@@ -1324,9 +1324,10 @@ def _resolve_coordinator_root_ladder(
     never pass gate 2 below). Absent key, empty value, or a derivation that
     returns `None` is a rung MISS, not an error — fail-open, so an OSS
     single-tree box with no such key behaves byte-identically to today.
-    This rung is written by DoE's own installer / self-heal via
-    `machine-local set engine.working_repos.content_root <path>` — claude-klabauter only
-    reads this namespace, never writes another repo's registry entry.
+    This rung is written by the installer's content-root migration
+    (`content_root.migrate_legacy_config`) or by
+    `machine-local set engine.working_repos.content_root <path>`; a box that
+    carries only the legacy key is migrated, not read through here.
 
     Every candidate from any rung must clear TWO gates, in order, before
     it is accepted:
@@ -1369,11 +1370,11 @@ def _resolve_coordinator_root_ladder(
     if env_val:
         candidates.append((Path(env_val), "$COORDINATOR_CLAUDE_ROOT env"))
 
-    registry_val = registry_get("engine.working_repos.content_root")
+    registry_val = registry_get(ENGINE_CONTENT_ROOT_KEY)
     if registry_val:
         derived = _resolve_plugin_root_for_machine_local(Path(registry_val))
         if derived is not None:
-            candidates.append((derived, "engine.working_repos.content_root registry key"))
+            candidates.append((derived, f"{ENGINE_CONTENT_ROOT_KEY} registry key"))
 
     for plugin_candidate in _plugin_root_rung_candidates():
         if _looks_like_coordinator_claude_source(plugin_candidate[0]):

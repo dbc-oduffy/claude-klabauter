@@ -24,9 +24,9 @@ materially (design decision, strang-08 Design decisions section):
     - Write:       upgraded to atomic temp+os.replace (non-observable output-byte change;
                    legacy was plain open() — atomicity is safe to add, not a parity break).
     - Env override: ``LESSON_PROMOTE_OUTBOX_ROOT`` (not QUEUE_APPEND_OUTPUT_ROOT).
-    - DoE root: NO cwd fallback on unresolvable coordinator-content-repo root (C12 negative-spec,
-      mirrored onto the ContentRooted seam — same negative-spec as the claude-klabauter-rooted
-      queue.append central scope, just against the DoE resolver instead).
+    - Content root: NO cwd fallback on an unresolvable content root (C12 negative-spec,
+      mirrored onto the content-rooted seam — same negative-spec as the claude-klabauter-rooted
+      queue.append central scope, just against the content-root resolver instead).
 
 Output path: ``<outbox_root>/<ISO-ts-safe>-<slug>-<digest12>.yaml``
     ISO-ts-safe: ``now(utc).isoformat(timespec="seconds")`` with ``:`` and ``+`` → ``-``.
@@ -43,9 +43,9 @@ No in-memory state retained (store-less-ness invariant).
 
 Caller repo_root threading (F1): handler third arg receives ``git_common_dir(caller_worktree)``
 via ``_OP_KEY_SCOPE: common_dir`` (ipc.py). The outbox root always routes to the
-Coordinator-content-repo central root (lessons-outbox is central state owned by coordinator-content-repo, NOT
+central content root (lessons-outbox is central state owned by coordinator-content-repo, NOT
 Claude-klabauter — claude-klabauter is just one of many senders), so ``caller_worktree`` is not used for
-path routing — but the coordinator-content-repo root MUST be resolvable; unresolvable → WARN+skip
+path routing — but the content root MUST be resolvable; unresolvable → WARN+skip
 exit 0.
 
 Registered as ``queue.promote`` in ops/__init__.py and classified ``OpClass.MUTATING``
@@ -76,7 +76,7 @@ from typing import Optional
 from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 from coordinator_core.frontmatter.schema_validate import describe as _describe_schema
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.telemetry import op_latency
 
@@ -88,11 +88,11 @@ _SLUG_MAX_CHARS = 40
 _OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
 
 
-class _DoeUnresolvable(RuntimeError):
+class _ContentRootUnresolvable(RuntimeError):
     pass
 
 
-class _OssMirrorWriteRefused(_DoeUnresolvable):
+class _OssMirrorWriteRefused(_ContentRootUnresolvable):
     pass
 
 
@@ -100,9 +100,8 @@ def _is_oss_publish_mirror(root: str) -> bool:
     """True if `root` carries the OSS publish-mirror marketplace marker
     (``.claude-plugin/plugin.json``) — the SAME marker
     ``coordinator_core._content_root_primitive.FLAT_CONTENT_ROOT_MARKER``
-    and ``coordinator_content_root.py``'s own flat-layout/marketplace-cache/
-    plugin-root rungs already use to recognize a marketplace-clone/OSS-mirror
-    layout. Reused rather than a second hand-rolled probe
+    and ``content_root.py``'s own plugin-root rung already use to recognize a
+    marketplace-clone/OSS-mirror layout. Reused rather than a second hand-rolled probe
     (claude-klabauter#39 asks for exactly this reuse).
 
     Never raises: an unusable ``root`` (empty, not a string-like path) is
@@ -145,25 +144,24 @@ def _outbox_root(content_root: Optional[str] = None) -> str:
     Resolution:
         1. ``LESSON_PROMOTE_OUTBOX_ROOT`` env var (test isolation).
         2. ``<content_root>/state/lessons-outbox/`` for a caller-resolved ``content_root``
-           param — the CLI resolves the root once (honouring the CALLER's
-           ``CONTENT_ROOT``) and validates ``--target-wiki`` against that same root, so
-           the write must land there too (claude-klabauter#33). Read as a param,
-           never from this process's env: under the warm engine that env belongs
-           to whichever session spawned the server.
-        3. ``<content_root>/state/lessons-outbox/`` via ``coordinator_content_root()`` — the
+           param — the CLI resolves the root once and validates ``--target-wiki``
+           against that same root, so the write must land there too
+           (claude-klabauter#33). Read as a param, never from this process's env:
+           under the warm engine that env belongs to whichever session spawned
+           the server.
+        3. ``<content_root>/state/lessons-outbox/`` via ``read_content_root()`` — the
            lessons-outbox is central state owned by coordinator-content-repo (the central lessons
            repo), NOT claude-klabauter. Matches the documented CLI oracle contract
-           (``coordinator-lesson-promote``'s ``_outbox_root()``, which resolves via
-           ``coordinator_registry.content_root()``).
+           (``coordinator-lesson-promote``'s ``_outbox_root()``).
 
     Raises:
-        _DoeUnresolvable — when the coordinator-content-repo root is unresolvable and no env override.
-        _OssMirrorWriteRefused (a _DoeUnresolvable subclass) — when the resolved root
+        _ContentRootUnresolvable — when the content root is unresolvable and no env override.
+        _OssMirrorWriteRefused (a _ContentRootUnresolvable subclass) — when the resolved root
             is the OSS publish mirror, not a working tree (claude-klabauter#39).
 
-    Negative-spec: DOES NOT fall back to cwd-relative state/ when the DoE root is
+    Negative-spec: DOES NOT fall back to cwd-relative state/ when the content root is
     unresolvable — that silent fallback was the landmine closed by stop-the-rot C12,
-    mirrored here against the DoE-side resolver.
+    mirrored here against the content-root resolver.
 
     Spec backlink: pln-stop-the-rot-claude-klabauter-state-home-placement-4cc787 § C12 / AC13
     Parity oracle: [coordinator-content-repo] coordinator/bin/coordinator-lesson-promote § _outbox_root
@@ -171,20 +169,20 @@ def _outbox_root(content_root: Optional[str] = None) -> str:
     override = _outbox_root_override()
     if override:
         return override
-    doe = content_root or coordinator_content_root()
-    if doe is None:
-        raise _DoeUnresolvable(
-            "repos.content_root not set in machine-local registry and REPO_CONTENT_ROOT env var not set"
+    root = content_root or read_content_root()
+    if not root:
+        raise _ContentRootUnresolvable(
+            "repos.content_root not set in machine-local registry and no content-root pointer found"
         )
-    if _is_oss_publish_mirror(doe):
+    if _is_oss_publish_mirror(root):
         source = "caller-resolved content_root param" if content_root else "repos.content_root machine-local registry key"
         raise _OssMirrorWriteRefused(
-            f"refusing to write lessons-outbox into {doe!r}: found the OSS publish-mirror "
+            f"refusing to write lessons-outbox into {root!r}: found the OSS publish-mirror "
             f"marker .claude-plugin/plugin.json there (resolved via {source}) — the OSS "
             "mirror is a publish target, never a working tree, and must never receive an "
             "outbox entry (claude-klabauter#39)"
         )
-    return os.path.join(doe, "state", "lessons-outbox")
+    return os.path.join(root, "state", "lessons-outbox")
 
 
 def _slug_from_title(title: str) -> str:
@@ -401,12 +399,12 @@ def _queue_promote_handler(
 
     Optional params:
         scope_tags (list or comma-separated str), evidence (str), from_repo (str),
-        content_root (str — the caller's resolved DoE root; see ``_outbox_root``).
+        content_root (str — the caller's resolved content root; see ``_outbox_root``).
 
     Returns:
         {out_path: str, entry_id: str, from_repo: str, change_kind: str, target_wiki: str}
 
-    On ``_DoeUnresolvable``: logs WARN, returns ``{skipped: true, reason: "..."}``.
+    On ``_ContentRootUnresolvable``: logs WARN, returns ``{skipped: true, reason: "..."}``.
     """
     caller_worktree: Optional[Path] = None
     if repo_root is not None:
@@ -432,11 +430,11 @@ def _queue_promote_handler(
             caller_worktree=caller_worktree,
             content_root=params.get("content_root") or None,
         )
-    except _DoeUnresolvable as exc:
+    except _ContentRootUnresolvable as exc:
         logger.warning(
-            "queue.promote: coordinator-content-repo root unresolvable — skipping write: %s. "
-            "Remediation: set REPO_CONTENT_ROOT or run "
-            "'machine-local set repos.content_root /path/to/coordinator-content-repo'.",
+            "queue.promote: content root unresolvable — skipping write: %s. "
+            "Remediation: run "
+            "'machine-local set repos.content_root /path/to/content-root'.",
             exc,
         )
         return {"skipped": True, "reason": str(exc)}

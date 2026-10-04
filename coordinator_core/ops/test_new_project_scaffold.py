@@ -75,7 +75,7 @@ def _write_render_template_tree_sh(bin_dir: Path) -> Path:
 
 @pytest.fixture()
 def content_root(tmp_path: Path) -> Path:
-    root = tmp_path / "doe-clone"
+    root = tmp_path / "content-clone"
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     _write_render_template_tree_sh(bin_dir)
@@ -89,7 +89,7 @@ def content_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.setattr(new_project_scaffold, "read_content_root", lambda: "")
     monkeypatch.delenv("COORDINATOR_PROJECTS_ROOT", raising=False)
 
 
@@ -129,7 +129,7 @@ def test_next_app_template_renders_and_seeds(tmp_path, monkeypatch, content_root
     # unconditionally, so this test's fixture-authored render-template-tree.py
     # (staged under content_root) would otherwise never run.
     monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(new_project_scaffold, "read_content_root", lambda: str(content_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -243,20 +243,19 @@ def test_occupied_nonempty_target_dir_fails(tmp_path):
 
 
 def test_next_app_missing_content_root_fails(tmp_path, monkeypatch):
-    # No REPO_CONTENT_ROOT, no machine-local on PATH -> DoE root unresolvable.
-    monkeypatch.setenv("PATH", "")
+    # The autouse fixture leaves the content root unresolved.
     parent = tmp_path / "parent"
     parent.mkdir()
 
-    rc = main(["--name", "nodoe", "--parent", str(parent), "--template", "next-app", "--no-smoke"])
+    rc = main(["--name", "nocontent", "--parent", str(parent), "--template", "next-app", "--no-smoke"])
 
     assert rc == 1
 
 
 def test_next_app_missing_template_dir_fails(tmp_path, monkeypatch):
-    bare_root = tmp_path / "bare-doe"
+    bare_root = tmp_path / "bare-content"
     (bare_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(bare_root))
+    monkeypatch.setattr(new_project_scaffold, "read_content_root", lambda: str(bare_root))
     parent = tmp_path / "parent"
     parent.mkdir()
 
@@ -266,13 +265,13 @@ def test_next_app_missing_template_dir_fails(tmp_path, monkeypatch):
 
 
 def test_next_app_missing_render_tree_script_fails(tmp_path, monkeypatch):
-    root = tmp_path / "no-render-tree-doe"
+    root = tmp_path / "no-render-tree-content"
     next_app = root / "coordinator" / "skills" / "new-project" / "templates" / "next-app"
     next_app.mkdir(parents=True)
     (next_app / "a.txt").write_text("hi\n")
     (root / "coordinator" / "bin").mkdir(parents=True)
     monkeypatch.setattr(new_project_scaffold, "_co_located_render_tree", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
+    monkeypatch.setattr(new_project_scaffold, "read_content_root", lambda: str(root))
     parent = tmp_path / "parent"
     parent.mkdir()
 

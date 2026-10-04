@@ -35,7 +35,7 @@ def trusted_env(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
 
-    content_root = tmp_path / "doe-checkout"
+    content_root = tmp_path / "content-checkout"
     plugin_root = content_root / "coordinator"
     (plugin_root / "bin").mkdir(parents=True)
     (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
@@ -91,7 +91,7 @@ def test_check_only_env_var_no_write(trusted_env, monkeypatch):
 def test_missing_helper_degrades_gracefully(tmp_path, monkeypatch, capsys):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
-    content_root = tmp_path / "doe-checkout"
+    content_root = tmp_path / "content-checkout"
     plugin_root = content_root / "coordinator"
     (plugin_root / "bin").mkdir(parents=True)
     (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")

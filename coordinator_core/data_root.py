@@ -2,7 +2,7 @@
 coordinator/bin/lib/coordinator_data_root.py's `data_root()` resolver.
 
 Purpose: coordinator_core (the engine plane) has callers that need a coordinator
-DATA dir (schemas/, templates/, snippets/, docs/) that stayed DoE-resident under
+DATA dir (schemas/, templates/, snippets/, docs/) that stayed content-resident under
 DR-047 (contract/data lives with DoE, engine with claude-klabauter) after the 2026-07-22
 executable-surface migration. `coordinator/bin/lib/coordinator_data_root.py`
 already solves this for bin/ CLIs, but coordinator_core cannot import that module
@@ -10,7 +10,7 @@ already solves this for bin/ CLIs, but coordinator_core cannot import that modul
 `sys.path` hack onto coordinator_core to reach sideways into a sibling tree's
 `bin/lib/` would be exactly the kind of fragile cross-tree coupling the split
 (DR-047) exists to avoid. This module provides the SAME two-rung contract
-(co-located, then DoE-resident) as a coordinator_core-native function, so
+(co-located, then content-resident) as a coordinator_core-native function, so
 coordinator_core callers get identical resolution semantics without the reach.
 
 Two live layouts (mirrors coordinator_data_root.py's docstring):
@@ -19,33 +19,18 @@ Two live layouts (mirrors coordinator_data_root.py's docstring):
                      migration DoE layout, and any OSS install that ships
                      both halves together). Free, no registration.
   2. Split-repo    — coordinator_core lives in claude-klabauter while the data
-                     dir stayed in coordinator-content-repo. Resolve the DoE root via
-                     `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`.
+                     dir stayed in the content repo. Resolve the content root via
+                     `coordinator_core.content_root.read_content_root()`.
 
 Rung 1 first so the co-located case costs nothing and needs no registration.
 
-Deliberate divergence from coordinator_data_root.py, not an oversight: rung 2
-here delegates to `coordinator_content_root()` — the already-ratified, richer
-full-ladder content-root resolver (REPO_CONTENT_ROOT env override -> machine-local
-registry `repos.content_root` (canonical) -> `plugin.mirrors.coordinator-claude.
-live_path` fallback -> the native `resolve_coordinator_clone` port, which itself
-covers the `.coordinator-content-root` pointer file and flat-layout rungs) that 9+ other
-coordinator_core callers already bind to — NOT
-`coordinator_core.content_root_pointer.read_content_root_pointer()` (a narrower 3-rung
-resolver: registry -> durable-file -> legacy-file, with no env-var rung of its
-own) and NOT a re-implementation of coordinator_data_root.py's own
-`CONTENT_ROOT`-env + `coordinator_registry.content_root()` chain. Re-deriving that
-CONTENT_ROOT-env check here would mint a SECOND override name for the same concept
-inside one process — worse than the cross-file naming divergence it would
-"fix". `REPO_CONTENT_ROOT` is coordinator_core's own already-established
-override convention (see `coordinator_core.ops.coordinator_content_root`'s
-docstring and its existing importers); this module reuses it rather than
-adding a competing one.
+Rung 2 here resolves the content root through
+`coordinator_core.content_root.read_content_root()` — the single content-root
+resolver (registry `repos.content_root`, pointer files, installed plugin root).
 
-Negative-spec: this module does NOT reimplement `coordinator_content_root()`'s
-resolution chain (env -> registry -> mirror fallback -> clone-root port) —
-that chain lives in exactly one place, and this module calls it rather than
-duplicating it.
+Negative-spec: this module does NOT reimplement `read_content_root()`'s
+resolution chain — that chain lives in exactly one place, and this module calls
+it rather than duplicating it.
 
 Public API:
     data_root(dir_name: str) -> Path
@@ -67,7 +52,7 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
     # The publish pre-swap FUNCTION gate imports this file as a FLAT, top-level
     # `data_root` module in a hermetic, OSS-shaped subprocess whose PYTHONPATH is
@@ -83,14 +68,14 @@ except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
     # and `_resolve_content_root()` below reads the global at call time so that keeps
     # working. Only the hard import-time FAILURE is removed; a real resolution
     # under a real package still imports here, at import time, unchanged.
-    coordinator_content_root = None  # type: ignore[assignment]
+    read_content_root = None  # type: ignore[assignment]
 
 
 def _resolve_content_root():
-    resolver = coordinator_content_root
+    resolver = read_content_root
     if resolver is None:
-        from coordinator_core.ops.coordinator_content_root import (  # noqa: PLC0415
-            coordinator_content_root as resolver,
+        from coordinator_core.content_root import (  # noqa: PLC0415
+            read_content_root as resolver,
         )
     return resolver()
 
@@ -122,57 +107,55 @@ def data_root(dir_name: str) -> Path:
     """Resolve `dir_name` (e.g. "snippets", "schemas", "templates", "docs") to
     its absolute, existing directory Path.
 
-    Resolution chain (two-rung, co-located -> DoE-resident):
+    Resolution chain (two-rung, co-located -> content-resident):
       1. Co-located — `<coordinator-root>/<dir_name>`, where `<coordinator-
          root>` is computed identically to `_colocated_root()` above. Free,
          no registration, wins whenever both halves ship together.
-      2. DoE-resident — `<coordinator_content_root()>/coordinator/<dir_name>`
-         (private layout), falling back to `<coordinator_content_root()>/<dir_name>`
+      2. Content-resident — `<read_content_root()>/coordinator/<dir_name>`
+         (private layout), falling back to `<read_content_root()>/<dir_name>`
          (OSS-flat layout, F2 fix 2026-08-08 -- see below), delegating the
-         REPO_CONTENT_ROOT/registry/mirror/clone-root resolution to
-         `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`
+         registry/pointer/plugin-root resolution to
+         `coordinator_core.content_root.read_content_root()`
          (never reimplemented here — see module docstring).
 
     Raises RuntimeError, naming `dir_name` and all candidate paths tried
-    (or the DoE-resolution failure reason), if neither rung resolves to an
+    (or the content-root resolution failure reason), if neither rung resolves to an
     existing directory. Never returns a path that doesn't exist.
     """
     colocated = _colocated_root() / dir_name
     if colocated.is_dir():
         return colocated
 
-    doe = _resolve_content_root()
-    if not doe:
+    content = _resolve_content_root()
+    if not content:
         raise RuntimeError(
             f"coordinator_core.data_root: cannot resolve data dir {dir_name!r}. "
             f"Rung 1 (co-located) tried: {colocated} (not found). "
-            "Rung 2 (DoE-resident) failed: coordinator_content_root() could not "
-            "resolve REPO_CONTENT_ROOT (env override, machine-local registry "
-            "repos.content_root, plugin.mirrors.coordinator-claude.live_path, "
-            "and the resolve_coordinator_clone fallback all unresolved)."
+            "Rung 2 (content-resident) failed: read_content_root() resolved "
+            "nothing (registry repos.content_root, content-root pointer files "
+            "and the installed plugin root all unresolved)."
         )
 
-    private_candidate = Path(doe) / "coordinator" / dir_name
+    private_candidate = Path(content) / "coordinator" / dir_name
     if private_candidate.is_dir():
         return private_candidate
 
-    flat_candidate = Path(doe) / dir_name
+    flat_candidate = Path(content) / dir_name
     if flat_candidate.is_dir():
         return flat_candidate
 
     raise RuntimeError(
         f"coordinator_core.data_root: cannot resolve data dir {dir_name!r}. "
         f"Rung 1 (co-located) tried: {colocated} (not found). "
-        f"Rung 2 (DoE-resident) tried: {private_candidate} (private layout, not found), "
+        f"Rung 2 (content-resident) tried: {private_candidate} (private layout, not found), "
         f"{flat_candidate} (OSS-flat layout, not found)."
     )
 
 # `content_root_for` and its marker are
 # PURE, no-intra-package-import primitives, moved to a leaf module so any
 # `coordinator_core` module can import them at module level without risking
-# the cycle that used to force `resolve_coordinator_clone.py` and
-# `coordinator_core/ops/coordinator_content_root.py` to hand-expand the join
-# instead (findings 4, 8). Re-exported here so every existing
+# the cycle that used to force `resolve_coordinator_clone.py` to hand-expand
+# the join instead (findings 4, 8). Re-exported here so every existing
 # `from coordinator_core.data_root import content_root_for` (and
 # `FLAT_CONTENT_ROOT_MARKER`) keeps working unchanged. See
 # `coordinator_core/_content_root_primitive.py` for the implementation and the

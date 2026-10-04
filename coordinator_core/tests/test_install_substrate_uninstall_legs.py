@@ -23,6 +23,7 @@ import sys
 
 import pytest
 
+from coordinator_core.content_root import _LEGACY_POINTER, POINTER_NAME
 from coordinator_core.install import _shared, substrate, uninstall_legs
 from coordinator_core.win_portability import is_executable
 
@@ -1005,6 +1006,8 @@ def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path, monkeypatch
     # can't accidentally see a real ambient settings-home registry.
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    # `read_content_root` rung 5 finds an ambient installed plugin on a dev box.
+    monkeypatch.setattr(_shared, "read_content_root", lambda: "")
     with pytest.raises(RuntimeError):
         _shared.resolve_coordinator_root()
 
@@ -1020,7 +1023,7 @@ def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, m
     `<repo>/coordinator`, carrying the machine-local marker) resolves to
     that nested dir -- unchanged dev-tree behavior."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.setattr(_shared, "registry_get", lambda key: None)
+    monkeypatch.setattr(_shared, "read_content_root", lambda: "")
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
     repo = tmp_path / "doe-clone"
     nested = repo / "coordinator"
@@ -1037,7 +1040,7 @@ def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_pat
     subdir) must resolve to the repo root itself, decided by the same
     machine-local marker probe -- never by guessing a fixed subpath."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.setattr(_shared, "registry_get", lambda key: None)
+    monkeypatch.setattr(_shared, "read_content_root", lambda: "")
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
     repo = tmp_path / "flat-clone"
     (repo / "templates" / "bin").mkdir(parents=True)
@@ -1048,11 +1051,11 @@ def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_pat
 
 
 def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp_path, monkeypatch):
-    """Native-Windows condition for the `.coordinator-content-root` pointer-file rung
+    """Native-Windows condition for the content-root pointer-file rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): HOME absent,
-    only USERPROFILE set. The rung must resolve via `require_home()` rather
-    than degrading to a cwd-relative pointer path when CLAUDE_HOME/HOME are
-    both unset."""
+    only USERPROFILE set. The rung must resolve via `read_content_root()`
+    rather than degrading to a cwd-relative pointer path when CLAUDE_HOME/HOME
+    are both unset."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
@@ -1060,19 +1063,18 @@ def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
-    monkeypatch.setattr(_shared, "registry_get", lambda key: None)
 
     userprofile_home = tmp_path / "winhome"
     userprofile_home.mkdir()
     monkeypatch.setenv("USERPROFILE", str(userprofile_home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
 
     coordinator_dir = userprofile_home / "coordinator"
     coordinator_dir.mkdir()
     # CLAUDE_HOME/USERPROFILE names the PARENT of `.claude`; the pointer the
-    # installer writes lives at `<home>/.claude/.coordinator-content-root` (verified against a
-    # live install), and `_shared.claude_dir` is now the one spelling of that.
+    # installer writes lives at `<home>/.claude/.coordinator-content-root`.
     (userprofile_home / ".claude").mkdir()
-    (userprofile_home / ".claude" / ".coordinator-content-root").write_text(
+    (userprofile_home / ".claude" / POINTER_NAME).write_text(
         str(userprofile_home), encoding="utf-8"
     )
 
@@ -1671,12 +1673,13 @@ def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatc
     dot_claude = home / ".claude"
     (dot_claude / "bin").mkdir(parents=True)
     (dot_claude / "bin" / "platform-localize.sh").write_text("ours", encoding="utf-8")
-    (dot_claude / ".coordinator-content-root").write_text("ours", encoding="utf-8")
+    (dot_claude / POINTER_NAME).write_text("ours", encoding="utf-8")
+    (dot_claude / _LEGACY_POINTER).write_text("ours", encoding="utf-8")
 
     # Decoys directly under the home — an operator's own files, off limits.
     (home / "bin").mkdir()
     (home / "bin" / "platform-localize.sh").write_text("theirs", encoding="utf-8")
-    (home / ".coordinator-content-root").write_text("theirs", encoding="utf-8")
+    (home / POINTER_NAME).write_text("theirs", encoding="utf-8")
 
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
@@ -1686,9 +1689,10 @@ def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatc
     assert uninstall_legs.uninstall_remove_substrate("full-remove") is True
 
     assert not (dot_claude / "bin" / "platform-localize.sh").exists()
-    assert not (dot_claude / ".coordinator-content-root").exists()
+    assert not (dot_claude / POINTER_NAME).exists()
+    assert not (dot_claude / _LEGACY_POINTER).exists()
     assert (home / "bin" / "platform-localize.sh").read_text(encoding="utf-8") == "theirs"
-    assert (home / ".coordinator-content-root").read_text(encoding="utf-8") == "theirs"
+    assert (home / POINTER_NAME).read_text(encoding="utf-8") == "theirs"
 
 
 def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkeypatch):

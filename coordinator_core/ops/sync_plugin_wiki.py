@@ -154,7 +154,7 @@ def _home_dir() -> str:
 def _resolve_plugin_root() -> str:
     """PLUGIN_ROOT resolution — see module docstring. `CLAUDE_PLUGIN_ROOT` env var
     wins immediately (matches the oracle's own rung 1); everything past it
-    (COORDINATOR_ROOT, registry live_path, versioned cache, .coordinator-content-root pointer,
+    (COORDINATOR_ROOT, registry live_path, versioned cache, content-root pointer,
     flat-layout manifest) is delegated to the shared native port of
     `resolve-coordinator-clone.sh --content-root`
     (`coordinator_core.resolve_coordinator_clone.resolve_content_root`). Returns

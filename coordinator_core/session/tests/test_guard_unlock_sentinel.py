@@ -121,12 +121,12 @@ class TestAnnotateDenyDoesNotNameACodename:
         assert "example-doctrine-repo" not in reason
 
     def test_doe_checkout_present_no_longer_changes_the_pointer(self, tmp_path, monkeypatch):
-        import coordinator_core.content_root_pointer as content_root_pointer_mod
+        import coordinator_core.content_root as content_root_mod
 
         content_root = tmp_path / "coordinator-content-repo"
         (content_root / "coordinator" / "docs" / "wiki").mkdir(parents=True)
         monkeypatch.setattr(
-            content_root_pointer_mod, "read_content_root_pointer", lambda: str(content_root)
+            content_root_mod, "read_content_root", lambda: str(content_root)
         )
         out_with_checkout = self._fire()
         reason_with_checkout = out_with_checkout["hookSpecificOutput"]["permissionDecisionReason"]

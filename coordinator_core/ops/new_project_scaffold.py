@@ -19,15 +19,12 @@ Port of: new-project-scaffold.sh (DoE 290997c7, 2026-07-22)
 Spec backlink: docs/plans/2026-06-22-new-project-bootstrap-skill.md § C3
 
 Content-root resolution: the templates/ tree (coordinator/skills/new-project/templates/) still
-lives in the DoE clone, so a content-root resolution remains needed for that lookup.
+lives in the content clone, so a `read_content_root()` resolution remains needed for that lookup.
 render-template-tree.py itself, however, is now co-located in THIS repo's coordinator/bin
 (migrated in the coordinator/bin executable-surface migration) and is resolved there first,
 relative to this repo's own root — no content-root hop needed to find it. Only if the
-co-located sibling is somehow absent does `_find_render_tree` fall back to the legacy
-Content-root lookup. That content-root resolution order (env override, then `machine-local`
-registry) mirrors coordinator_core.ops.render_template_tree's `_resolve_content_root` —
-duplicated rather than imported, per that module's own "kept small and local" convention
-(no shared private-helper import across op modules).
+co-located sibling is somehow absent does `_find_render_tree` fall back to the content-root
+lookup.
 
 Exit-code contract (matches the bash oracle's own documented table):
     0  Scaffold created successfully.
@@ -83,7 +80,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import resolve_machine_local_cli
-from coordinator_core.data_root import content_root_for
+from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.content_root import read_content_root
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
@@ -115,58 +113,6 @@ def _resolve_machine_local() -> Optional[str]:
     return resolve_machine_local_cli()
 
 
-def _resolve_content_root() -> Tuple[Optional[str], int]:
-    """Resolve the DoE clone root. Returns (root_or_None, exit_code_on_failure).
-
-    Tier 1: CONTENT_ROOT env var (permanent legacy alias — wins first when both
-        CONTENT_ROOT and REPO_CONTENT_ROOT are set, per coordinator_registry.content_root()).
-    Tier 2: REPO_CONTENT_ROOT env var (operator override).
-    Tier 3: `machine-local get repos.content_root` (registry).
-    Mirrors coordinator_core.ops.render_template_tree's `_resolve_content_root`
-    and coordinator_registry.content_root()'s precedence.
-
-    CONTENT_ROOT was previously
-    missing from this hand-rolled resolver, silently dropping the legacy-alias
-    rung the shared coordinator_registry.content_root() honors.
-
-    Tier 3 itself tries `registry_get` first, zero-spawn, and falls back to
-    the `machine-local get` CLI only on a miss -- `registry_get` alone
-    doesn't reach the CLI's autodiscovery/`path-exceptions.toml` rungs, and
-    this repo's own `.coordinator-dev-repo` marker proves autodiscovery is
-    live for `repos.content_root` on a real machine, not a hypothetical
-    (2026-08-16 review finding).
-    """
-    content_root_override = os.environ.get("CONTENT_ROOT", "")
-    if content_root_override:
-        return content_root_override, 0
-
-    env_override = os.environ.get("REPO_CONTENT_ROOT", "")
-    if env_override:
-        return env_override, 0
-
-    value = _registry_get("repos.content_root") or ""
-    if not value:
-        ml_bin = _resolve_machine_local()
-        if ml_bin is not None:
-            try:
-                proc = subprocess.run(
-                    [ml_bin, "get", "repos.content_root"],
-                    capture_output=True,
-                    text=True,
-                    timeout=_MACHINE_LOCAL_TIMEOUT,
-                    stdin=subprocess.DEVNULL,
-                    **_CREATIONFLAGS,
-                )
-                if proc.returncode == 0:
-                    value = proc.stdout.strip()
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-    if not value:
-        print(f"{_PROG}: could not resolve repos.content_root via the registry", file=sys.stderr)
-        return None, 1
-    return value, 0
-
-
 def _co_located_render_tree() -> Optional[str]:
     this_repo_root = Path(__file__).resolve().parents[2]
     candidate = this_repo_root / "coordinator" / "bin" / "render-template-tree.py"
@@ -175,11 +121,11 @@ def _co_located_render_tree() -> Optional[str]:
     return None
 
 
-def _find_render_tree(content_root: str) -> Optional[str]:
+def _find_render_tree(root: str) -> Optional[str]:
     co_located = _co_located_render_tree()
     if co_located is not None:
         return co_located
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(root)
     if content_root is None:
         return None
     candidate = str(content_root / "bin" / "render-template-tree.py")
@@ -397,14 +343,15 @@ def main(argv: List[str]) -> int:
         return git_rc
 
     if template == "next-app":
-        content_root, doe_rc = _resolve_content_root()
-        if content_root is None:
-            return doe_rc
+        root = read_content_root()
+        if not root:
+            print(f"{_PROG}: could not resolve the content root", file=sys.stderr)
+            return 1
 
-        content_root = content_root_for(content_root)
+        content_root = content_root_for(root)
         if content_root is None:
             print(
-                f"ERROR: no coordinator content root under the resolved DoE root: {content_root}",
+                f"ERROR: no coordinator content root under the resolved content root: {root}",
                 file=sys.stderr,
             )
             return 1
@@ -414,7 +361,7 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: next-app template not found at: {template_src}", file=sys.stderr)
             return 1
 
-        render_tree = _find_render_tree(content_root)
+        render_tree = _find_render_tree(root)
         if render_tree is None:
             print("ERROR: render-template-tree.sh not found or not executable", file=sys.stderr)
             return 1

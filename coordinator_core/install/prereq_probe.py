@@ -25,7 +25,7 @@ no_console_creationflags` — itself inside this closure, which is why
 `win_portability.py` is required rather than incidental; `win_portability.py`
 itself is stdlib-only (`os`, `stat`, `pathlib`, `typing`). Caveat:
 `probe_all()` reaches `probe_skill_frontmatter_valid`, whose two
-function-local imports (`coordinator_core.ops.coordinator_content_root`,
+function-local imports (`coordinator_core.content_root`,
 `coordinator_core.frontmatter.schema_validate`) sit outside this closure —
 a vendor calling `probe_all()` wholesale needs those two modules too.
 
@@ -855,7 +855,7 @@ def shell_login_env_reconstruction_source() -> str:
 # Verifies a representative skill file (coordinator-claude's own
 # coordinator/skills/setup/SKILL.md) has parseable YAML frontmatter with a
 # non-empty description field. Reads the OPERATOR's coordinator-claude
-# installation tree (resolved via coordinator_content_root()), not the caller's
+# installation tree (resolved via read_content_root()), not the caller's
 # own dispatching repo — "none" scope-verdict, same class as probe_ue's
 # EXAMPLE_GAME_REPO_UE_ROOT read.
 # ---------------------------------------------------------------------------
@@ -868,7 +868,7 @@ def _check_skill_frontmatter_valid(coordinator_root: Optional[str] = None) -> di
     """Core check: {"ok": bool, "error": str|None}.
 
     `coordinator_root` (the setup walker's resolved root) wins over
-    `coordinator_content_root()`. Both the checkout layout
+    `read_content_root()`. Both the checkout layout
     (`<root>/coordinator/skills/setup/SKILL.md`) and the plugin-cache layout
     (`<root>/skills/setup/SKILL.md`) are tried.
 
@@ -879,11 +879,11 @@ def _check_skill_frontmatter_valid(coordinator_root: Optional[str] = None) -> di
     """
     content_root = coordinator_root
     if not content_root:
-        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+        from coordinator_core.content_root import read_content_root
 
-        content_root = coordinator_content_root()
+        content_root = read_content_root()
     if not content_root:
-        return {"ok": False, "error": "coordinator-claude root unresolvable (coordinator_content_root() returned None)"}
+        return {"ok": False, "error": "coordinator-claude root unresolvable (read_content_root() returned empty)"}
 
     candidates = (
         Path(content_root).joinpath(*_SKILL_FRONTMATTER_CHECK_REL_PATH),

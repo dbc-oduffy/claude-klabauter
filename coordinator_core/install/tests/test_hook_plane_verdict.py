@@ -25,6 +25,8 @@ TEN_KEYS = {
     "content_root_bin_resolves",
 }
 KEY = "coord@market"
+POINTER = ".coordinator-content-root"
+REGISTRY_KEY = "repos.content_root"
 
 
 def _json(path: Path, data) -> None:
@@ -105,33 +107,33 @@ def test_content_root_rungs(tmp_path):
     assert plane["content_root_bin_dir"] is None
 
     home.mkdir()
-    (home / ".coordinator-content-root").write_text("/legacy\n", encoding="utf-8")
+    (home / POINTER).write_text("/home-pointer\n", encoding="utf-8")
     plane = derive()
     assert plane["content_root_resolves"] is True
-    assert plane["content_root_bin_dir"] == str(Path("/legacy") / "coordinator" / "bin")
+    assert plane["content_root_bin_dir"] == str(Path("/home-pointer") / "coordinator" / "bin")
 
-    (ml / ".coordinator-content-root").write_text("/settings-file\n", encoding="utf-8")
+    (ml / POINTER).write_text("/settings-file\n", encoding="utf-8")
     assert derive()["content_root_bin_dir"] == str(Path("/settings-file") / "coordinator" / "bin")
 
-    (ml / "registry.toml").write_text('"repos.content_root" = \'/registry\'\n', encoding="utf-8")
+    (ml / "registry.toml").write_text(f'"{REGISTRY_KEY}" = \'/registry\'\n', encoding="utf-8")
     plane = derive()
-    assert plane["content_root_rungs"]["registry repos.content_root"] == "/registry"
+    assert plane["content_root_rungs"][f"registry {REGISTRY_KEY}"] == "/registry"
     assert plane["content_root_bin_dir"] == str(Path("/registry") / "coordinator" / "bin")
 
-    (ml / "registry.local.toml").write_text('"repos.content_root" = \'/local\'\n', encoding="utf-8")
-    assert derive()["content_root_rungs"]["registry repos.content_root"] == "/local"
+    (ml / "registry.local.toml").write_text(f'"{REGISTRY_KEY}" = \'/local\'\n', encoding="utf-8")
+    assert derive()["content_root_rungs"][f"registry {REGISTRY_KEY}"] == "/local"
 
 
 def test_no_settings_home_uses_placeholder_rung(tmp_path):
     plane = hpv.derive_hook_plane(claude_home=tmp_path, plugin_root=None, settings_home=None)
-    assert "<settings-home>/machine-local/.coordinator-content-root" in plane["content_root_rungs"]
+    assert f"<settings-home>/machine-local/{POINTER}" in plane["content_root_rungs"]
     assert plane["settings_read_error"] is not None
 
 
 def test_bin_dir_resolves_when_present(tmp_path):
-    doe = tmp_path / "doe"
-    (doe / "coordinator" / "bin").mkdir(parents=True)
-    (tmp_path / ".coordinator-content-root").write_text(str(doe), encoding="utf-8")
+    content = tmp_path / "content"
+    (content / "coordinator" / "bin").mkdir(parents=True)
+    (tmp_path / POINTER).write_text(str(content), encoding="utf-8")
     plane = hpv.derive_hook_plane(claude_home=tmp_path, plugin_root=None, settings_home=None)
     assert plane["content_root_bin_resolves"] is True
 
@@ -228,7 +230,7 @@ def test_content_root_bin_dir_resolves_on_flat_mirror(tmp_path):
     (flat / "bin").mkdir()
     home = tmp_path / "home"
     home.mkdir()
-    (home / ".coordinator-content-root").write_text(f"{flat}\n", encoding="utf-8")
+    (home / POINTER).write_text(f"{flat}\n", encoding="utf-8")
     plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=None)
     assert plane["content_root_bin_dir"] == str(flat / "bin")
     assert plane["content_root_bin_resolves"] is True
@@ -250,7 +252,7 @@ def _http_plane(tmp_path: Path, port: int) -> dict:
     )
     _record(home, root)
     _json(home / "settings.json", {"enabledPlugins": {KEY: True}})
-    (home / ".coordinator-content-root").write_text("/legacy\n", encoding="utf-8")
+    (home / POINTER).write_text("/pointed\n", encoding="utf-8")
     return hpv.derive_hook_plane(claude_home=home, plugin_root=root, settings_home=None)
 
 
@@ -296,15 +298,14 @@ def test_no_http_hook_means_no_probe(tmp_path):
     assert hpv.forwarder_dark_reason(plane) is None
 
 
-def test_registry_scrub_twin_key_resolves(tmp_path):
+def test_registry_key_resolves(tmp_path):
     sh = tmp_path / "sh"
     ml = sh / "machine-local"
     ml.mkdir(parents=True)
-    twin = "repos." + "content_root"
-    (ml / "registry.toml").write_text(f'"{twin}" = \'/twin\'\n', encoding="utf-8")
+    (ml / "registry.toml").write_text(f'"{REGISTRY_KEY}" = \'/registered\'\n', encoding="utf-8")
     plane = hpv.derive_hook_plane(claude_home=tmp_path / "home", plugin_root=None, settings_home=sh)
     assert plane["content_root_resolves"] is True
-    assert plane["content_root_rungs"][f"registry {twin}"] == "/twin"
+    assert plane["content_root_rungs"][f"registry {REGISTRY_KEY}"] == "/registered"
 
 
 def _block_tomllib(monkeypatch):
@@ -318,7 +319,7 @@ def test_missing_tomllib_is_a_registry_error_not_an_absent_rung(tmp_path, monkey
     sh = tmp_path / "sh"
     ml = sh / "machine-local"
     ml.mkdir(parents=True)
-    (ml / "registry.toml").write_text("\"repos.content_root\" = '/registry'\n", encoding="utf-8")
+    (ml / "registry.toml").write_text(f"\"{REGISTRY_KEY}\" = '/registry'\n", encoding="utf-8")
     _block_tomllib(monkeypatch)
     plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=sh)
     assert plane["content_root_resolves"] is False
@@ -336,9 +337,9 @@ def test_unparseable_registry_is_reported_and_other_file_still_read(tmp_path):
     ml = sh / "machine-local"
     ml.mkdir(parents=True)
     (ml / "registry.local.toml").write_text("not = = toml", encoding="utf-8")
-    (ml / "registry.toml").write_text("\"repos.content_root\" = '/registry'\n", encoding="utf-8")
+    (ml / "registry.toml").write_text(f"\"{REGISTRY_KEY}\" = '/registry'\n", encoding="utf-8")
     plane = hpv.derive_hook_plane(claude_home=home, plugin_root=None, settings_home=sh)
-    assert plane["content_root_rungs"]["registry repos.content_root"] == "/registry"
+    assert plane["content_root_rungs"][f"registry {REGISTRY_KEY}"] == "/registry"
     assert any("registry.local.toml" in e for e in plane["registry_read_errors"])
     assert hpv.hook_plane_problems(plane)[-1].startswith("registry unreadable: ")
 
@@ -346,4 +347,4 @@ def test_unparseable_registry_is_reported_and_other_file_still_read(tmp_path):
 def test_absent_registry_files_are_not_errors(tmp_path):
     ml = tmp_path / "machine-local"
     ml.mkdir()
-    assert hpv.read_registry(ml, "repos.content_root") == (None, [])
+    assert hpv.read_registry(ml, REGISTRY_KEY) == (None, [])

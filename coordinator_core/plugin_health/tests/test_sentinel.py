@@ -270,7 +270,7 @@ def test_p11_calls_verify_templates_setup_sync_main_in_process_with_no_sibling_o
 ):
     _block_subprocess(monkeypatch)
     plugins_root = tmp_path / "plugins"  # deliberately does NOT exist
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     seen_plugin_root = {}
 
     def _fake_main(argv):
@@ -291,7 +291,7 @@ def test_p11_prefers_coordinator_root_when_given(tmp_path, monkeypatch):
     preferred as CLAUDE_PLUGIN_ROOT over the plugins_root-derived
     marketplace path — marker-verified, not assumed (_doe_payload_root)."""
     _block_subprocess(monkeypatch)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     plugins_root = tmp_path / "plugins"
     coordinator_root = tmp_path / "doe-clone" / "coordinator"
     (coordinator_root / "templates" / "setup").mkdir(parents=True)
@@ -385,7 +385,7 @@ def test_p11_real_main_stale_twin_publish_sync_reports_amber(tmp_path, monkeypat
     a live `publish_sync.py`, byte-identical, whose `sync_mirror` lacks
     `copy_file` (the production regression this plan's oracle now catches)."""
     _block_subprocess(monkeypatch)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
 
     stale_twin_publish_sync = (
         "def sync_mirror(renamed_dir_names, sweep_top_level_orphans, renamed_file_names):\n"
@@ -678,7 +678,7 @@ def test_registry_keys_returns_none_when_no_registry_file_exists(tmp_path):
 
 def test_registry_keys_reads_the_registry_in_process(tmp_path, monkeypatch):
     (tmp_path / "registry.toml").write_text(
-        'schema = 1\n\n[repos]\ncontent_root = "/tmp/doe"\n', encoding="utf-8"
+        'schema = 1\n\n[repos]\ncontent_root = "/tmp/content"\n', encoding="utf-8"
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
     assert "repos.content_root" in S._registry_keys(tmp_path)
@@ -697,10 +697,10 @@ def test_currency_plugin_root_prefers_content_root_when_schema_file_present(tmp_
 def test_currency_plugin_root_falls_back_when_content_root_lacks_schema_file(tmp_path, monkeypatch):
     """Marketplace-layout non-regression: the DoE-clone value is only verified
     for the dev-clone layout, so it is used only when it demonstrably carries
-    the schema-version file the probe needs. coordinator_content_root() is
+    the schema-version file the probe needs. read_content_root() is
     monkeypatched to None so this stays hermetic against the real machine's
     own DoE clone (which may itself carry the marker)."""
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     doe = tmp_path / "doe" / "coordinator"
     doe.mkdir(parents=True)
     plugins_root = tmp_path / "plugins"
@@ -710,7 +710,7 @@ def test_currency_plugin_root_falls_back_when_content_root_lacks_schema_file(tmp
 
 
 def test_currency_plugin_root_falls_back_when_content_root_is_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     plugins_root = tmp_path / "plugins"
     assert _currency_plugin_root(None, plugins_root) == (
         plugins_root / "coordinator-claude" / "coordinator"
@@ -718,36 +718,34 @@ def test_currency_plugin_root_falls_back_when_content_root_is_none(tmp_path, mon
 
 
 # --- Review: code-reviewer (P2, Finding 1) — _doe_coordinator_root()'s own
-# resolution ladder, repointed onto coordinator_content_root() so P-11/P-13 honor
-# REPO_CONTENT_ROOT/machine-local like every other consumer in the content-root-sweep
-# wave. Prior coverage above only exercised _currency_plugin_root()'s downstream
+# resolution ladder, repointed onto read_content_root() so P-11/P-13 honor
+# the machine-local registry like every other content-root consumer. Prior coverage above only exercised _currency_plugin_root()'s downstream
 # fallback given an already-resolved value; these pin the resolver itself.
 
 
 def test_doe_coordinator_root_prefers_coordinator_bin_root_override(monkeypatch, tmp_path):
     """COORDINATOR_BIN_ROOT stays rung 1 — sentinel's own documented
-    test-isolation seam, ahead of the shared coordinator_content_root() ladder."""
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    test-isolation seam, ahead of the shared read_content_root() ladder."""
+    monkeypatch.delenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", raising=False)
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_BIN_ROOT", str(bin_dir))
     assert S._doe_coordinator_root() == tmp_path / "coordinator"
 
 
-def test_doe_coordinator_root_resolves_via_repo_content_root_env(monkeypatch, tmp_path):
-    """REPO_CONTENT_ROOT alone (no ~/.claude/.coordinator-content-root file) must resolve —
-    this is the exact gap Finding 1 identified: the pre-fix resolver only ever
-    read ~/.claude/.coordinator-content-root directly and never consulted REPO_CONTENT_ROOT."""
+def test_doe_coordinator_root_resolves_via_content_root_env(monkeypatch, tmp_path):
+    """The registry env override alone (no pointer file) must resolve — the
+    resolver goes through the shared ladder, never a pointer file read directly."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
     fake_content_root = tmp_path / "fake-coordinator-content-repo"
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_content_root))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(fake_content_root))
     assert S._doe_coordinator_root() == fake_content_root / "coordinator"
 
 
 def test_doe_coordinator_root_returns_none_when_ladder_unresolvable(monkeypatch, tmp_path):
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.delenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", raising=False)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     assert S._doe_coordinator_root() is None
 
 
@@ -1014,14 +1012,14 @@ def test_default_manifest_path_coordinator_bin_root_override_still_wins(monkeypa
 def test_run_triage_end_to_end_resolves_manifest_without_content_root(monkeypatch, tmp_path):
     """End-to-end: `_run("triage", "")` must not hard-fail at the selector even
     when the content-root ladder is entirely unresolvable (REPO_CONTENT_ROOT unset,
-    COORDINATOR_BIN_ROOT unset, coordinator_content_root() patched to None) and
+    COORDINATOR_BIN_ROOT unset, read_content_root() patched to None) and
     DOCTOR_PROBES_MANIFEST is not set -- the exact repro from the bug report
     (`python3 -m coordinator_core.plugin_health.sentinel --triage` exiting 3
     with "selector error: inconclusive: manifest not found")."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("DOCTOR_PROBES_MANIFEST", raising=False)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     stdout_lines, stderr_lines, exit_code = S._run("triage", "")
     assert exit_code == 0, (
         f"expected the probe suite to actually run and produce a verdict "
@@ -1102,7 +1100,7 @@ def test_p20_unparsable_version_output_is_inconclusive(monkeypatch):
 def test_p21_passes_on_durable_pointer(monkeypatch, tmp_path):
     ml_dir = tmp_path / "settings-home" / "machine-local"
     ml_dir.mkdir(parents=True)
-    (ml_dir / ".coordinator-content-root").write_text("/some/coordinator-content-repo\n", encoding="utf-8")
+    (ml_dir / S.POINTER_NAME).write_text("/some/coordinator-content-repo\n", encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home-unused"))
@@ -1114,7 +1112,7 @@ def test_p21_pass_on_durable_pointer_never_touches_legacy_fallback(monkeypatch, 
     fallback — the legacy candidate dir here is deliberately absent."""
     ml_dir = tmp_path / "settings-home" / "machine-local"
     ml_dir.mkdir(parents=True)
-    (ml_dir / ".coordinator-content-root").write_text("/some/coordinator-content-repo\n", encoding="utf-8")
+    (ml_dir / S.POINTER_NAME).write_text("/some/coordinator-content-repo\n", encoding="utf-8")
     claude_home = tmp_path / "claude-home-absent"  # deliberately does NOT exist
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
@@ -1126,7 +1124,7 @@ def test_p21_pass_on_durable_pointer_never_touches_legacy_fallback(monkeypatch, 
 def test_p21_falls_back_to_legacy_pointer(monkeypatch, tmp_path):
     claude_home = tmp_path / "claude-home"
     (claude_home / ".claude").mkdir(parents=True)
-    (claude_home / ".claude" / ".coordinator-content-root").write_text("/some/coordinator-content-repo\n", encoding="utf-8")
+    (claude_home / ".claude" / S.POINTER_NAME).write_text("/some/coordinator-content-repo\n", encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-empty"))
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -1155,7 +1153,7 @@ def test_subset_mode_labels_inconclusive_probe_separately_from_failing(monkeypat
     rendering logic against exactly that note shape."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
         Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
     ))
@@ -1182,7 +1180,7 @@ def test_subset_mode_separates_a_genuine_failure_from_a_concurrent_inconclusive(
     unrelated inconclusive id, in either direction."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.setattr(S, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(S, "read_content_root", lambda: None)
     monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
         Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
     ))

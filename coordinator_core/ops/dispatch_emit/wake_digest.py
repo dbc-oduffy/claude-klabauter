@@ -37,6 +37,12 @@ RUNTIME_VARS = (
     "_halted",
     "_verifications",
     "_blockedChunks",
+    "_alreadyDone",
+    "_routedOutPlans",
+    "_routedOut",
+    "_skippedDone",
+    "_unusableChecks",
+    "_reviews",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -205,6 +211,7 @@ def next_action_parts(
     script_path: Optional[str] = None,
     session_id: Optional[str] = None,
     anchor_plan_path: Optional[str] = None,
+    predispatch: bool = False,
 ) -> tuple:
     """`(kind, op, params)` JS source for a script's `next_action`; the one composer both the
     plan route's wake-digest and the ask script's return render, so the params are
@@ -338,9 +345,12 @@ def next_action_parts(
         # takes verbatim; either is omitted, never emitted null, when unknown.
         # A row a halt kept from starting never landed either: terminal_commit
         # stamps every row NOT named here as coded.
+        skipped_spread = (
+            ", ..." + RUNTIME_VARS[10] + ", ..." + RUNTIME_VARS[9] if predispatch else ""
+        )
         params_expr = (
             "{ incomplete_chunks: [...new Set([..." + RUNTIME_VARS[0]
-            + ", ..." + RUNTIME_VARS[3] + "])], "
+            + ", ..." + RUNTIME_VARS[3] + skipped_spread + "])], "
             + (f"script_path: {_js_lit(script_path)}, " if script_path else "")
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
@@ -372,6 +382,7 @@ def completion_return_js(
     script_path: Optional[str] = None,
     session_id: Optional[str] = None,
     anchor_plan_path: Optional[str] = None,
+    predispatch: Optional[dict] = None,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -382,6 +393,11 @@ def completion_return_js(
     stage-result bindings the caller passes in (`test_var`, `verification_var`,
     `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
     `plan_path`, ...) — never an executor's own free-text reply.
+
+    `predispatch` (`{"checks_run": int}`) is passed only by a script that composed the
+    pre-dispatch phase: its digest block, the `already_done` / `routed_out` deviation
+    kinds and the terminal-commit `incomplete_chunks` spread then read the pre-phase
+    bindings. Absent, the block renders `null` and no pre-phase binding is referenced.
     """
     schema = load_schema()
 
@@ -416,11 +432,14 @@ def completion_return_js(
         script_path=script_path,
         session_id=session_id,
         anchor_plan_path=anchor_plan_path,
+        predispatch=predispatch is not None,
     )
 
+    routed_out_var, skipped_done_var = RUNTIME_VARS[9], RUNTIME_VARS[10]
+    routed_out_or = f" || {routed_out_var}.length" if predispatch is not None else ""
     outcome_expr = (
         f"({RUNTIME_VARS[4]} ? 'halted' : "
-        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length) ? 'incomplete' : 'completed'))"
+        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length{routed_out_or}) ? 'incomplete' : 'completed'))"
     )
     completed_expr = f"({outcome_expr} === 'completed')"
 
@@ -447,8 +466,11 @@ def completion_return_js(
     # has WRITTEN files; only a row the halt kept from starting never did. Each
     # id is deduped (an unanswered row rides both arrays) and named by what
     # happened to it, never blanket `not_started`.
+    pre_ids = (
+        f", ...{skipped_done_var}, ...{routed_out_var}" if predispatch is not None else ""
+    )
     deviation_ids_expr = (
-        f"[...new Set([...{RUNTIME_VARS[0]}, ...{RUNTIME_VARS[1]}, ...{RUNTIME_VARS[3]}])]"
+        f"[...new Set([...{RUNTIME_VARS[0]}, ...{RUNTIME_VARS[1]}, ...{RUNTIME_VARS[3]}{pre_ids}])]"
     )
     deviation_kind_expr = (
         f"({RUNTIME_VARS[3]}.includes(id) ? 'not_started' : "
@@ -456,6 +478,12 @@ def completion_return_js(
         f"({RUNTIME_VARS[1]}.includes(id) ? 'no_answer' : "
         f"({RUNTIME_VARS[6]}.includes(id) ? 'blocked' : 'partial'))))"
     )
+    if predispatch is not None:
+        deviation_kind_expr = (
+            f"({skipped_done_var}.includes(id) ? 'already_done' : "
+            f"({routed_out_var}.includes(id) ? 'routed_out' : {deviation_kind_expr}))"
+        )
+    reviews_var = RUNTIME_VARS[12]
 
     table = {
         "schema": "'wake-digest'",
@@ -556,6 +584,16 @@ def completion_return_js(
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),
+        "predispatch.checks_run": _js_lit(predispatch["checks_run"]) if predispatch is not None else "null",
+        "predispatch.already_done": f"{skipped_done_var}.length",
+        "predispatch.unusable_checks": f"[...{RUNTIME_VARS[11]}]",
+        "predispatch.reviews[].plan": (
+            f"_cap(r.plan, {_maxlength(schema, 'predispatch.reviews[].plan')})"
+        ),
+        "predispatch.reviews[].verdict": "r.verdict",
+        "predispatch.reviews[].tells": (
+            f"r.tells.map(t => _cap(t, {_maxlength(schema, 'predispatch.reviews[].tells[]')}))"
+        ),
         "width.runtime_cap": "'min(16, CPUs-2)'",
         "width.runtime_cap_on_emitting_host": _js_lit(width["runtime_cap_on_emitting_host"]),
         "decision_required": f"_cap({decision_required_expr}, {_maxlength(schema, 'decision_required')})",
@@ -674,6 +712,22 @@ def completion_return_js(
             table["width.runtime_cap_on_emitting_host"],
         )
     )
+    if predispatch is None:
+        lines.append("  predispatch: null,")
+    else:
+        lines.append(
+            "  predispatch: { checks_run: %s, already_done: %s, unusable_checks: %s, "
+            "reviews: %s.map(r => ({ plan: %s, verdict: %s, tells: %s })) },"
+            % (
+                table["predispatch.checks_run"],
+                table["predispatch.already_done"],
+                table["predispatch.unusable_checks"],
+                reviews_var,
+                table["predispatch.reviews[].plan"],
+                table["predispatch.reviews[].verdict"],
+                table["predispatch.reviews[].tells"],
+            )
+        )
     lines.append(f"  decision_required: {table['decision_required']},")
     lines.append(
         "  next_action: { kind: %s, op: %s, params: %s },"

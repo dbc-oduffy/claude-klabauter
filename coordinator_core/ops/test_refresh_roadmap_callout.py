@@ -284,18 +284,19 @@ def test_self_commit_false_default_never_commits(tmp_path, monkeypatch):
     assert _log_subjects(tmp_path) == before
 
 
-def _seed_doe_pointer(tmp_path, monkeypatch, content_root: Path) -> None:
+def _seed_content_pointer(tmp_path, monkeypatch, content_root: Path) -> None:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     (home / ".claude" / ".coordinator-content-root").write_text(str(content_root) + "\n", encoding="utf-8")
     monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
 
 
 def test_resolve_cc_root_private_layout(tmp_path, monkeypatch):
-    content_root = tmp_path / "doe-clone"
+    content_root = tmp_path / "content-clone"
     (content_root / "coordinator").mkdir(parents=True)
-    _seed_doe_pointer(tmp_path, monkeypatch, content_root)
+    _seed_content_pointer(tmp_path, monkeypatch, content_root)
     assert refresh_roadmap_callout._resolve_cc_root() == str(content_root / "coordinator")
 
 
@@ -303,12 +304,12 @@ def test_resolve_cc_root_flat_mirror_layout(tmp_path, monkeypatch):
     content_root = tmp_path / "flat-mirror"
     (content_root / ".claude-plugin").mkdir(parents=True)
     (content_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
-    _seed_doe_pointer(tmp_path, monkeypatch, content_root)
+    _seed_content_pointer(tmp_path, monkeypatch, content_root)
     assert refresh_roadmap_callout._resolve_cc_root() == str(content_root)
 
 
 def test_resolve_cc_root_bare_directory_is_unresolved(tmp_path, monkeypatch):
     content_root = tmp_path / "bare"
     content_root.mkdir()
-    _seed_doe_pointer(tmp_path, monkeypatch, content_root)
+    _seed_content_pointer(tmp_path, monkeypatch, content_root)
     assert refresh_roadmap_callout._resolve_cc_root() == ""

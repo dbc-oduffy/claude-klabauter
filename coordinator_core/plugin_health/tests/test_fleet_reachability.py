@@ -632,7 +632,7 @@ def test_skip_when_content_root_unresolvable(tmp_path: Path, monkeypatch):
     agent_bin = tmp_path / "claude-klabauter-bin"
     agent_bin.mkdir()
 
-    monkeypatch.setattr(fr, "read_content_root_pointer", lambda: "")
+    monkeypatch.setattr(fr, "read_content_root", lambda: "")
 
     result = fr.check_fleet_reachability(agent_bin=agent_bin)
 

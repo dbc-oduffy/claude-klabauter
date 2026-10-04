@@ -94,12 +94,12 @@ def _resolve_content_root_for_tests() -> str:
 
 _CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
 if _CONTENT_ROOT_FOR_TESTS:
-    os.environ.setdefault("CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
+    os.environ.setdefault("REPO_CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
 
 
 def _with_content_root(env: dict) -> dict:
-    if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
-        env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
+    if "REPO_CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
+        env = {**env, "REPO_CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
     # The isolated registry reads as a consumer box, where memos default off.
     return {"MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS": "on", **env}
 

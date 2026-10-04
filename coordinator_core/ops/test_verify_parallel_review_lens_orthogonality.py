@@ -201,7 +201,7 @@ def test_run_missing_chunk_manifest_value_goes_to_stderr(tmp_path):
 def test_run_unresolvable_content_root_fails_with_business_code(tmp_path):
     stdout, stderr, rc = run([], content_root="")
     assert rc == 1
-    assert any("could not resolve the coordinator-content-repo repo root" in line for line in stdout)
+    assert any("could not resolve the content root" in line for line in stdout)
 
 
 def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path, monkeypatch, capsys):

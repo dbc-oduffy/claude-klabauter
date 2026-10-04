@@ -81,11 +81,25 @@ from coordinator_core.install.setup_template_manifest import (
     SubstrateFatalError,
     _load_setup_template_manifest,
 )
-from coordinator_core.ops.coordinator_content_root import (
-    repo_root_from_plugin_root_candidate,
-)
-
 _PUBLISH_SYNC_RELPATH = "publish_sync.py"
+_PLUGIN_MARKER = Path(".claude-plugin") / "plugin.json"
+_REGISTRY_MANIFEST = Path("coordinator") / "schemas" / "coordinator-registry.manifest.json"
+
+
+def _repo_root_of_content_root(content_root: Path) -> Path:
+    """The repo root that owns `content_root` (CLAUDE_PLUGIN_ROOT-shaped).
+
+    Flat layout: the plugin marker sits in `content_root`, which is the repo
+    root. Private layout: `content_root` is `<repo>/coordinator`, one level
+    below the repo root, which carries the marker or the registry manifest.
+    Anything else is returned unchanged.
+    """
+    if (content_root / _PLUGIN_MARKER).is_file() or content_root.name != "coordinator":
+        return content_root
+    parent = content_root.parent
+    if (parent / _PLUGIN_MARKER).is_file() or (parent / _REGISTRY_MANIFEST).is_file():
+        return parent
+    return content_root
 
 
 class PluginRootUnresolved(RuntimeError):
@@ -110,7 +124,7 @@ def _resolve_plugin_root() -> Path:
     guards against. Resolving the coordinator-content-repo repo root is the CALLER's
     job (topology knowledge the caller has and this module does not): the
     coordinator/bin/verify-templates-setup-sync.py trampoline sets
-    CLAUDE_PLUGIN_ROOT via the content_root() registry helper before invoking
+    CLAUDE_PLUGIN_ROOT via the content-root resolver before invoking
     main(); coordinator_core.plugin_health.sentinel's in-process probe P-11
     call sets it directly from its own resolved plugins_root. Both callers
     are responsible for setting the env var — this function's only job is
@@ -121,8 +135,8 @@ def _resolve_plugin_root() -> Path:
         return Path(env_root)
     raise PluginRootUnresolved(
         "CLAUDE_PLUGIN_ROOT is unset — cannot resolve the plugin root that "
-        "owns templates/setup/. The caller must resolve the coordinator-content-repo repo "
-        "root (e.g. via the coordinator_registry.content_root() ladder) and set "
+        "owns templates/setup/. The caller must resolve the content root "
+        "(coordinator_core.content_root.read_content_root()) and set "
         "CLAUDE_PLUGIN_ROOT before calling main()."
     )
 
@@ -296,8 +310,7 @@ def main(argv: List[str]) -> int:
     templates_setup = plugin_root / "templates" / "setup"
     live_setup = claude_config_dir() / "setup"
 
-    repo_root = repo_root_from_plugin_root_candidate(str(plugin_root))
-    source_setup = Path(repo_root) / "setup"
+    source_setup = _repo_root_of_content_root(plugin_root) / "setup"
 
     lines, exit_code = check_pairs(templates_setup, live_setup, tracked_relpaths, source_setup)
     for line in lines:

@@ -9,7 +9,7 @@
   "required": [
     "schema", "version", "plan", "outcome", "completed", "halted", "chunks",
     "criterion", "tests", "review", "deviations", "run_base_sha", "width",
-    "decision_required", "next_action"
+    "predispatch", "decision_required", "next_action"
   ],
   "properties": {
     "schema": { "const": "wake-digest" },
@@ -142,7 +142,10 @@
           "chunk": { "type": "string" },
           "kind": {
             "type": "string",
-            "enum": ["partial", "blocked", "no_answer", "stop_rule", "not_started"]
+            "enum": [
+              "partial", "blocked", "no_answer", "stop_rule", "not_started",
+              "already_done", "routed_out"
+            ]
           },
           "anchor": { "type": "string", "maxLength": 300 }
         }
@@ -168,6 +171,34 @@
         "runtime_cap": { "const": "min(16, CPUs-2)" },
         "runtime_cap_on_emitting_host": { "type": "integer" }
       }
+    },
+    "predispatch": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["checks_run", "already_done", "unusable_checks", "reviews"],
+          "properties": {
+            "checks_run": { "type": "integer" },
+            "already_done": { "type": "integer" },
+            "unusable_checks": { "type": "array", "items": { "type": "string" } },
+            "reviews": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["plan", "verdict", "tells"],
+                "properties": {
+                  "plan": { "type": "string", "maxLength": 300 },
+                  "verdict": { "type": "string", "enum": ["SOUND", "BROKEN", "UNREVIEWABLE"] },
+                  "tells": { "type": "array", "items": { "type": "string", "maxLength": 80 } }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "decision_required": { "type": ["string", "null"], "maxLength": 300 },
     "next_action": {

@@ -75,7 +75,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.engine_root import (
     coordinator_engine_root,
     engine_source_root,
@@ -567,18 +567,16 @@ def resolve_doe_repo_path() -> Optional[Path]:
 
     Ladder (first rung that yields a directory containing `coordinator/schemas/` wins):
       1. REPO_CONTENT_ROOT env var — the operator/caller override honoured fleet-wide.
-      2. `coordinator_core.content_root_pointer.read_content_root_pointer()` — registry-first
-         (DR-071 `repos.content_root`), durable-pointer-file, then legacy-pointer-file
-         fallback (see that module's docstring for the full 3-sub-rung ladder). This
-         already IS the reset-safe, registry-anchored resolution — it does not assume
-         any fixed checkout layout.
+      2. `coordinator_core.content_root.read_content_root()` — registry-first
+         (`repos.content_root`), then pointer file, with its own legacy read-through
+         (see that module's docstring). This already IS the reset-safe,
+         registry-anchored resolution — it does not assume any fixed checkout layout.
 
     Returns None when no rung resolves — the honest "DoE clone not present on this
     machine" answer (fresh machine, CI without the sibling checked out, or a machine
     whose registry has no `repos.content_root` entry yet). Deliberately subprocess-free:
-    this runs inside a doctor probe on the cheap first-pass triage path, so the
-    `machine-local get` spawn rung used by `coordinator_core.ops.coordinator_content_root`
-    is NOT part of this ladder.
+    this runs inside a doctor probe on the cheap first-pass triage path, so no
+    `machine-local get` spawn rung is part of this ladder.
 
     Negative-spec:
       - Never raises, and never returns a path lacking `coordinator/schemas/` — a
@@ -589,9 +587,9 @@ def resolve_doe_repo_path() -> Optional[Path]:
         this file AND a flat-sibling directory layout, so it silently reported "DoE
         clone not present" on any machine where coordinator-content-repo isn't checked out next
         to claude-klabauter — the antipattern `coordinator_core/tests/test_no_hardcoded_paths.py`
-        now gates against fleet-wide. `read_content_root_pointer()`'s registry rung
+        now gates against fleet-wide. `read_content_root()`'s registry rung
         already subsumes the case that depth-walk existed for (a coordinator-content-repo clone
-        present but not yet pointer-configured) — once `repos.content_root` or either
+        present but not yet pointer-configured) — once `repos.content_root` or its
         pointer file is populated, which every install-chain walk does, rung 2
         resolves it correctly regardless of checkout layout. No replacement rung is
         added; there is nothing left for it to cover.
@@ -603,7 +601,7 @@ def resolve_doe_repo_path() -> Optional[Path]:
         candidates.append(Path(env_root))
 
     try:
-        pointer_root = read_content_root_pointer().strip()
+        pointer_root = read_content_root().strip()
     except Exception:
         pointer_root = ""
     if pointer_root:
@@ -812,7 +810,7 @@ def _scan(
             "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
             "summary": (
                 "No sibling schema-source clone resolved on this machine (checked "
-                "REPO_CONTENT_ROOT, the .coordinator-content-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
+                "REPO_CONTENT_ROOT, the content-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
                 "registry repos.example_cockpit_repo key) — vendored drift is not determinable "
                 "here."
             ),

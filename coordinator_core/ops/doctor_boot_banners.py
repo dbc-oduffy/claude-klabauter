@@ -44,10 +44,10 @@ def hook_plane_layer(config_dir: Path) -> Layer:
         hook_plane_problems,
         hook_plane_status_line,
     )
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = coordinator_content_root()
-    plugin_root = content_root_for(content_root) if content_root else None
+    root = read_content_root()
+    plugin_root = content_root_for(Path(root)) if root else None
     try:
         settings_home_path: Path | None = settings_home()
     except RuntimeError:

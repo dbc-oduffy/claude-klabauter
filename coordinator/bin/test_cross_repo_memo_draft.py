@@ -69,7 +69,7 @@ def _sibling_content_root_probe() -> str:
 
     Exists because `coordinator_core.testing.content_root.resolve_content_root()`
     is itself CLAUDE_HOME/COORDINATOR_SETTINGS_HOME-anchored (registry +
-    `.coordinator-content-root` pointer rungs) -- on a machine where those env vars are
+    content-root pointer rungs) -- on a machine where those env vars are
     pinned to an isolated tmpdir (every test in this file does this, and a
     fully-isolated-home CI/reproducer run does it for the WHOLE process),
     that resolver returns "" even though the sibling checkout is sitting
@@ -97,7 +97,7 @@ def _sibling_content_root_probe() -> str:
 
 
 def _resolve_content_root_for_tests() -> str:
-    """Best-effort coordinator-content-repo sibling root, forwarded as CONTENT_ROOT to every
+    """Best-effort coordinator-content-repo sibling root, forwarded as REPO_CONTENT_ROOT to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_CONTENT_ROOT_FOR_TESTS` bootstrap) so any in-process
     import of `coordinator_registry` resolves too.
@@ -107,7 +107,7 @@ def _resolve_content_root_for_tests() -> str:
     COORDINATOR_SETTINGS_HOME-anchored -- every test in this file points those
     at an isolated tmpdir for fixture isolation, which collaterally starves
     that fallback too. Resolving it once here and forwarding it as an
-    explicit CONTENT_ROOT override (coordinator_registry.py's own rung-1 override)
+    explicit REPO_CONTENT_ROOT override (coordinator_registry.py's own rung-1b override)
     keeps the manifest read working without touching what each test actually
     asserts on. Mirrors coordinator/bin/test_coordinator_queue_append.py's
     helper of the same name.
@@ -132,11 +132,11 @@ def _resolve_content_root_for_tests() -> str:
 _CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
 # Pinned into THIS process's environ (not just forwarded per-subprocess) so
 # any in-process import of `coordinator_registry` sees the same override
-# coordinator_registry.py's own rung-1 (`CONTENT_ROOT` env) already honors,
+# coordinator_registry.py's own rung-1b (`REPO_CONTENT_ROOT` env) already honors,
 # rather than raising FileNotFoundError before any subprocess is even
-# spawned. `setdefault` respects an operator's own pre-set CONTENT_ROOT.
+# spawned. `setdefault` respects an operator's own pre-set REPO_CONTENT_ROOT.
 if _CONTENT_ROOT_FOR_TESTS:
-    os.environ.setdefault("CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
+    os.environ.setdefault("REPO_CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
 
 
 def _load_dispatcher_module():
@@ -155,9 +155,9 @@ def _python() -> str:
 
 
 def _with_content_root(env: dict[str, str]) -> dict[str, str]:
-    """Forward CONTENT_ROOT into a test env dict unless the caller already set it."""
-    if "CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
-        env = {**env, "CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
+    """Forward REPO_CONTENT_ROOT into a test env dict unless the caller already set it."""
+    if "REPO_CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
+        env = {**env, "REPO_CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
     # The isolated registry reads as a consumer box, where memos default off.
     return {"MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS": "on", **env}
 
@@ -261,7 +261,7 @@ def _repo_key_for(to: str) -> str:
     """Mirror memo_send.py's convention_repo_key (strip trailing '-em', dashes->
     underscores, prefix 'repos.') for the isolated registry.toml a real-op test
     writes — the engine resolves `to` against this exact convention when no
-    `.coordinator-content-root` manifest/alias is present in the isolated fixture (there is
+    content-root manifest/alias is present in the isolated fixture (there is
     none — CLAUDE_HOME points at an isolated tmpdir with no sentinel)."""
     suffix = to[:-3] if to.endswith("-em") else to
     return "repos." + suffix.replace("-", "_")
@@ -951,7 +951,7 @@ def test_compose_open_without_editor() -> None:
         env_with_no_editor["CLAUDE_HOME"] = claude_home
         env_with_no_editor["EDITOR"] = ""
         if _CONTENT_ROOT_FOR_TESTS:
-            env_with_no_editor["CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
+            env_with_no_editor["REPO_CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
 
         result = subprocess.run(
             [_python(), _script_path(), "compose", topic, "--open"],

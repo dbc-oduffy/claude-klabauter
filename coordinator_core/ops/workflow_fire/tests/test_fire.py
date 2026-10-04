@@ -165,7 +165,7 @@ def test_build_fire_command_prompt_relays_terminal_commit():
 # when both fail. `--print-plugin-dir` is a SHIM flag, not a `claude` flag
 # -- the raw `claude` binary `shutil.which` can resolve to on Windows does
 # not understand it (live coordinator finding). The native, in-process
-# `coordinator_content_root()` resolver is the primary path so the happy path
+# `read_content_root()` resolver is the primary path so the happy path
 # never depends on shelling out at all.
 # ---------------------------------------------------------------------------
 
@@ -181,11 +181,11 @@ def test_resolve_plugin_dir_prefers_native_resolver(monkeypatch):
 
 
 def test_resolve_plugin_dir_unmocked_against_real_resolver():
-    """Exercises `resolve_plugin_dir` against the real `coordinator_content_root()`
+    """Exercises `resolve_plugin_dir` against the real `read_content_root()`
     resolver, unmocked -- the gap that let the live Windows defect through
     was that every other test here stubs this seam. Skips cleanly (rather
     than failing) when no coordinator plugin install resolves at all --
-    e.g. a fresh clone with no coordinator-content-repo checkout -- since that is an
+    e.g. a fresh clone with no content checkout -- since that is an
     install-surface gap, not a `resolve_plugin_dir` defect."""
     try:
         resolved = fire.resolve_plugin_dir()
@@ -823,14 +823,14 @@ def test_write_record_returns_exactly_what_landed_on_disk(repo, script, monkeypa
 
 # ---------------------------------------------------------------------------
 # `_native_plugin_dir` resolves BOTH content layouts. A container registers the
-# published flat mirror as its DoE root, where `<root>/coordinator` cannot
+# published flat mirror as its content root, where `<root>/coordinator` cannot
 # exist -- the private-only join left every fired child with no plugin dir.
 # ---------------------------------------------------------------------------
 
 
 def _patch_content_root(monkeypatch, root):
     monkeypatch.setattr(
-        "coordinator_core.ops.coordinator_content_root.coordinator_content_root",
+        "coordinator_core.content_root.read_content_root",
         lambda: str(root),
     )
 

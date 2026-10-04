@@ -106,7 +106,7 @@ def test_forwarding_set_is_exactly_the_named_entries():
         "CLAUDE_CONFIG_DIR",
         "MACHINE_LOCAL_IMPL",
         "COORDINATOR_ROOT",
-        "CONTENT_ROOT",
+        "COORDINATOR_CONTENT_ROOT",
         "CLAUDE_PROJECT_DIR",
         # Execution locality: `env_locality`'s rung 0 is a per-caller fact and
         # the warm server's own environ belongs to its spawner.
@@ -126,7 +126,7 @@ def test_c7_widened_machine_constant_names_are_borrow_mode():
         "CLAUDE_CONFIG_DIR",
         "MACHINE_LOCAL_IMPL",
         "COORDINATOR_ROOT",
-        "CONTENT_ROOT",
+        "COORDINATOR_CONTENT_ROOT",
     }
     by_name = {e.name: e.mode for e in FORWARDING_SET}
     assert widened_names <= set(by_name)

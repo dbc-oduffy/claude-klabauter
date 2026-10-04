@@ -7,7 +7,7 @@ template (coordinator_core/install/substrate.py) and its co-located
 ``b644d5a9`` (DoE, 2026-07-22) relocated coordinator-content-repo's entire executable
 surface into claude-klabauter's own ``coordinator/bin/`` — the prior forwarder
 template still exec'd the now-empty DoE-side tree and the old
-``.coordinator-content-root``/``CLAUDE_PLUGIN_ROOT`` trust-prefix guard this file used to
+pointer-file/``CLAUDE_PLUGIN_ROOT`` trust-prefix guard this file used to
 test no longer exists (see ``_write_agent_forwarder``'s docstring for why
 that trust posture was deliberately NOT carried forward). This file's
 filename is kept for git-history continuity across the port; its content is

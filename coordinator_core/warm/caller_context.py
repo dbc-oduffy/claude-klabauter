@@ -37,7 +37,7 @@ NEGATIVE SPEC.
 
 - **No new resolution logic for plugin_root.** This module does not re-derive
   `resolve_plugin_root`'s three-rung ambient probe (`CLAUDE_PLUGIN_ROOT` env var ->
-  `claude_config_dir()/plugins/coordinator-claude` -> `.coordinator-content-root` pointer) -- it reuses
+  `claude_config_dir()/plugins/coordinator-claude` -> content-root pointer) -- it reuses
   `subagent_sandbox.provision_report.resolve_plugin_root` verbatim as the fallback rung, so the
   two probes cannot drift apart. What this module adds is the payload-first rung IN FRONT of
   that whole chain, not a replacement for it.
@@ -136,7 +136,7 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
     Fallback rungs, one per field, DEMOTED (never rung 1):
 
       - `plugin_root` -> `subagent_sandbox.provision_report.resolve_plugin_root()`'s own
-        ambient three-rung probe (env var -> plugin dir -> `.coordinator-content-root` pointer).
+        ambient three-rung probe (env var -> plugin dir -> content-root pointer).
       - `cwd` -> `os.getcwd()`, this PROCESS's own working directory -- correct only when the
         caller and this process are the same, which a per-call payload miss cannot confirm; a
         genuinely fresh dispatch (payload absent entirely, e.g. a direct in-process call with

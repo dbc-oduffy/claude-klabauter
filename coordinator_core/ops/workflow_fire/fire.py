@@ -383,7 +383,7 @@ def _native_plugin_dir() -> Optional[str]:
     """Resolve the coordinator plugin root in-process, no subprocess spawn.
 
     House precedent: ``coordinator_core.bash_guards.commit_tripwires.
-    _resolve_doe_coordinator_root`` (same ``coordinator_content_root()`` resolve,
+    _resolve_plugin_content_root`` (same ``read_content_root()`` resolve,
     same ``content_root_for`` layout gate -- both the private authoring tree
     and the published flat mirror qualify, so a container that registered the
     flat mirror still resolves a plugin dir). Primary path here rather than a
@@ -393,15 +393,15 @@ def _native_plugin_dir() -> Optional[str]:
     failure; ``resolve_plugin_dir`` decides what a ``None`` means.
     """
     try:
-        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
-        from coordinator_core.data_root import content_root_for
+        from coordinator_core.content_root import read_content_root
+        from coordinator_core._content_root_primitive import content_root_for
     except Exception:
         return None
     try:
-        content_root = coordinator_content_root()
+        root = read_content_root()
     except Exception:
         return None
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(root)
     return str(content_root) if content_root is not None else None
 
 
@@ -433,7 +433,7 @@ def _shim_plugin_dir(shim_bin: str = "claude-author") -> Optional[str]:
 def resolve_plugin_dir() -> str:
     """Resolve the coordinator plugin root.
 
-    Primary path: the native, in-process ``coordinator_content_root()``
+    Primary path: the native, in-process ``read_content_root()``
     resolver (``_native_plugin_dir``) -- no subprocess spawn. Falls back to
     shelling out to the ``claude-author`` SHIM (never bare ``claude`` --
     ``--print-plugin-dir`` is a shim flag the raw binary does not
@@ -462,7 +462,7 @@ def resolve_plugin_dir() -> str:
 
     raise PluginDirResolutionError(
         "could not resolve the coordinator plugin dir: neither the native "
-        "coordinator_content_root() resolver nor the claude-author shim's "
+        "read_content_root() resolver nor the claude-author shim's "
         "--print-plugin-dir yielded an existing directory"
     )
 

@@ -10,10 +10,10 @@ import pytest
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
 
 try:
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    _CONTENT_ROOT = coordinator_content_root()
-except Exception:  # noqa: BLE001 — no DoE checkout is a skip, never a suite error
+    _CONTENT_ROOT = read_content_root() or None
+except Exception:  # noqa: BLE001 — no content checkout is a skip, never a suite error
     _CONTENT_ROOT = None
 
 _CANONICAL_KEY = "repos.claude_klabauter"
@@ -70,7 +70,7 @@ def test_cli_sender_identity_resolves_to_the_canonical_em_id(
     collided_registry, monkeypatch
 ):
     if not _CONTENT_ROOT:
-        pytest.skip("no coordinator-content-repo checkout — coordinator_registry cannot import")
+        pytest.skip("no content checkout — coordinator_registry cannot import")
     # The fixture redirects CLAUDE_HOME, which is one rung of the ladder this
     # module reads its manifest through at IMPORT time. Name the real root on
     # the documented override rung so the redirect costs a registry, not an

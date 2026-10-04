@@ -39,6 +39,7 @@ from typing import Callable, List, Optional, Sequence
 from dataclasses import dataclass, field
 
 from coordinator_core._settings_home import doubled_claude_home_parent
+from coordinator_core.content_root import CONTENT_ROOT_KEY, POINTER_NAME, _LEGACY_KEY, _LEGACY_POINTER
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops import configure_git
 from coordinator_core.install import junction
@@ -1421,7 +1422,8 @@ def uninstall_remove_substrate(
             "plugin.mirrors.coordinator-claude.propagation_mode",
             "coordinator.python",
             "coordinator.whoami_src",
-            "repos.content_root",
+            CONTENT_ROOT_KEY,
+            _LEGACY_KEY,
         ):
             if not ml_set(key, "", plugin_root=plugin_root, registry_dir=ml_dir):
                 errors.append(f"failed to clear registry key {key}")
@@ -1458,8 +1460,11 @@ def uninstall_remove_substrate(
     )
     _sweep_orphaned_swap_dirs(_claude_dir(claude_home) / ".coordinator-venv")
 
-    # ---- #6: .coordinator-content-root pointer (BOTH modes) ----
-    _rm_target(_claude_dir(claude_home) / ".coordinator-content-root", ".coordinator-content-root", errors)
+    # ---- #6: content-root pointer (BOTH modes) ----
+    # The legacy-named pointer goes too: left behind, `read_content_root`'s
+    # compat fallback would keep resolving the root this uninstall removed.
+    for pointer_name in (POINTER_NAME, _LEGACY_POINTER):
+        _rm_target(_claude_dir(claude_home) / pointer_name, pointer_name, errors)
 
     # ---- installed percolation setup/ dir residuals (BOTH modes, C8/AC9/
     # AC10) ----  A stale setup/ affects root resolution (rung 3) the same
@@ -1927,7 +1932,7 @@ Usage: coordinator-uninstall.sh [OPTIONS]
 
 Reverses the maximalist coordinator install's out-of-repo surfaces
 (settings.json generated hooks, shell shim/wrapper, machine-local registry
-keys, whoami/venv, .coordinator-content-root pointer, ~/.claude/bin forwarders, plugin
+keys, whoami/venv, content-root pointer, ~/.claude/bin forwarders, plugin
 wiring). All filesystem/registry targets are resolved from environment
 overrides (CLAUDE_HOME, COORDINATOR_SETTINGS_HOME, MACHINE_LOCAL_REGISTRY_DIR)
 — never a hardcoded real-user path.
@@ -1942,7 +1947,7 @@ Options:
                              clears live_path, instead of removing wiring
                              entirely. Machine-local dir and ~/.claude/bin
                              forwarders are preserved (other surfaces may
-                             still depend on them post-revert); .coordinator-content-root is
+                             still depend on them post-revert); the content-root pointer is
                              REMOVED (it is a resolution-shadowing pointer
                              that would otherwise outrank the re-registered
                              flat tree and defeat the revert).
@@ -2032,7 +2037,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
     print("  3. strip cmd.exe AutoRun guard (HKCU Command Processor\\AutoRun)")
     print("  4. remove host-sampler scheduler registration (scheduled task / LaunchAgent / systemd units)")
     print(
-        "  5. remove substrate (registry keys, whoami/venv, .coordinator-content-root, "
+        "  5. remove substrate (registry keys, whoami/venv, content-root pointer, "
         "~/.claude/bin forwarders, settings-home tree)"
     )
     if purge_operator_config:
@@ -2068,8 +2073,8 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         return fail_loud(
             "settings.json generated hooks (surface #2)",
             "Resolve coordinator root explicitly (COORDINATOR_ROOT env, machine-local "
-            "repos.content_root, REPO_CONTENT_ROOT env, or ${CLAUDE_HOME:-$HOME}/.coordinator-content-root "
-            "pointer) and re-run.",
+            "repos.content_root, REPO_CONTENT_ROOT env, or the content-root pointer "
+            "under ${CLAUDE_HOME:-$HOME}/.claude) and re-run.",
         )
 
     if not uninstall_remove_shim():
@@ -2103,7 +2108,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         plugin_root=plugin_root,
     ):
         return fail_loud(
-            "substrate (registry keys / whoami / venv / .coordinator-content-root / ~/.claude/bin "
+            "substrate (registry keys / whoami / venv / content-root pointer / ~/.claude/bin "
             "forwarders / settings-home tree, surfaces #3/#5/#6/#7/#8/#9)",
             "Check stderr above for the specific removal/registry-clear failure. If it "
             "names a hand-edited operator-config file, re-run with "
@@ -2153,8 +2158,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invoked directly, bypassing the coordinator-uninstall.sh wrapper that
     # normally exports it) must not silently degrade ml_set/resolve_machine_local_cli
     # to PATH-only resolution. resolve_coordinator_root() carries the same
-    # self-locating fallback chain (machine-local registry -> REPO_CONTENT_ROOT
-    # env -> .coordinator-content-root pointer) already used elsewhere in this module for the
+    # self-locating fallback chain (content root -> REPO_CONTENT_ROOT
+    # env) already used elsewhere in this module for the
     # analogous CLAUDE.local.md render seam.
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not plugin_root:

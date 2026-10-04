@@ -382,7 +382,7 @@ def test_multiline_body_roundtrip() -> None:
 
 # `_force_doe_unresolvable_env()` used to live here — DELETED 2026-08-25, and
 # deliberately not replaced. It claimed to make content_root() raise
-# _DoeUnresolvable by unsetting CONTENT_ROOT/REPO_CONTENT_ROOT and pointing
+# _DoeUnresolvable by unsetting REPO_CONTENT_ROOT and pointing
 # MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
 # rung spawned the `machine-local` CLI; it reads the registry in-process now,
 # and five codename-free rungs have since been added below it. The helper
@@ -530,7 +530,7 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
     `MACHINE_LOCAL_IMPL` was the single lever over the registry rung; that rung
     now reads the registry IN-PROCESS (`machine_local_impl_resolve.
     registry_get()`, CLI spawn only as fallback), and the ladder beneath it has
-    since grown five codename-free rungs (`.coordinator-content-root` pointer, marketplace
+    since grown five codename-free rungs (content-root pointer, marketplace
     cache, flat layout, CLAUDE_PLUGIN_ROOT, plugin-mirror live_path) that the
     helper never touched. On a real dev box those resolve, so the CLI reached
     the wiki-inventory check and exited 2 on a target-wiki miss — the test was
@@ -666,7 +666,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
 
 def test_native_route_carries_the_validated_content_root() -> None:
     """claude-klabauter#33 — the native queue.promote op must write under the DoE
-    root the CLI resolved (CONTENT_ROOT honoured), the same one --target-wiki was
+    root the CLI resolved, the same one --target-wiki was
     validated against, so the CLI hands it over as the `content_root` param."""
     import importlib.machinery
     import importlib.util as _importlib_util
@@ -698,8 +698,6 @@ def test_native_route_carries_the_validated_content_root() -> None:
         _mock.patch("sys.stdout", _io.StringIO()),
     ):
         env.pop("LESSON_PROMOTE_OUTBOX_ROOT", None)
-        # An ambient CONTENT_ROOT (other test modules pin one at import) forces the legacy write.
-        env.pop("CONTENT_ROOT", None)
         env.pop("REPO_CONTENT_ROOT", None)
         rc = cli_mod.main([
             "--title", "some title",

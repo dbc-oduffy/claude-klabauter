@@ -134,8 +134,8 @@ surface actually tells an agent to invoke it:
 
   coordinator-content-repo may legitimately be absent on this machine (OSS consumer, CI,
   a machine with no `repos.content_root` registered) — resolved via the same
-  registry seam `coordinator_core.ops.coordinator_content_root.
-  coordinator_content_root()` uses elsewhere (never a hardcoded path), and any
+  registry seam `coordinator_core.content_root.read_content_root()` uses
+  elsewhere (never a hardcoded path), and any
   resolution failure degrades this module to TODAY's undifferentiated
   advisory wording, never a hard failure — same never-raises contract as
   the rest of this module.
@@ -224,7 +224,7 @@ from coordinator_core._settings_home import home_dir, settings_home
 from coordinator_core.data_root import content_root_for
 from coordinator_core.ipc import register_op
 from coordinator_core.engine_root import coordinator_engine_root
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.content_root import read_content_root
 
 _PROG = "forwarder-drift"
 
@@ -379,28 +379,28 @@ def _resolve_compat_bin() -> Path:
 
 def _resolve_content_root() -> Optional[Path]:
     """coordinator-content-repo's repo root, via the same registry seam
-    `coordinator_core.ops.coordinator_content_root` uses elsewhere — never a
-    hardcoded path. `coordinator_content_root()` itself never raises (folds every
-    rung's failure to None, see that module's docstring); this wrapper adds
+    `coordinator_core.content_root.read_content_root` uses elsewhere — never a
+    hardcoded path. `read_content_root()` itself never raises (folds every
+    rung's failure to ""); this wrapper adds
     only the is-a-directory gate. Returns None on any unresolvable/absent
     state (OSS consumer, CI, no `repos.content_root` registered) — the caller
     degrades to the undifferentiated advisory wording in that case, never a
     hard failure (see module docstring's CITED-VS-UNCITED SPLIT)."""
-    root = coordinator_content_root()
+    root = read_content_root()
     if not root:
         return None
     candidate = Path(root)
     return candidate if candidate.is_dir() else None
 
 
-def _cited_entrypoint_sites(content_root: Path) -> Dict[str, List[str]]:
-    """{settings-home-bin CLI name: [ "<rel-path-from-content-root>:<line>", ... ]}
+def _cited_entrypoint_sites(repo_root: Path) -> Dict[str, List[str]]:
+    """{settings-home-bin CLI name: [ "<rel-path-from-repo-root>:<line>", ... ]}
     for every settings-home `bin/<name>` citation — the
     `${COORDINATOR_SETTINGS_HOME:-...}` expansion form — across
     coordinator-content-repo's five prompt-surface trees (see module docstring). Best-effort
     per file — an unreadable file is skipped, never a hard failure."""
     sites: Dict[str, List[str]] = {}
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(repo_root)
     if content_root is None:
         return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
@@ -409,7 +409,7 @@ def _cited_entrypoint_sites(content_root: Path) -> Dict[str, List[str]]:
             continue
         for path in sorted(root_dir.rglob("*.md")):
             try:
-                rel = path.relative_to(content_root)
+                rel = path.relative_to(repo_root)
             except ValueError:
                 continue
             if _DOE_EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
@@ -424,9 +424,9 @@ def _cited_entrypoint_sites(content_root: Path) -> Dict[str, List[str]]:
     return sites
 
 
-def _cited_shape_w_sites(content_root: Path) -> Dict[str, List[str]]:
+def _cited_shape_w_sites(repo_root: Path) -> Dict[str, List[str]]:
     """{cited spelling verbatim, extension included (e.g. "app-session.cmd"):
-    [ "<rel-path-from-content-root>:<line>", ... ]} for every Shape W citation
+    [ "<rel-path-from-repo-root>:<line>", ... ]} for every Shape W citation
     (`$env:COORDINATOR_SETTINGS_HOME\\bin\\<name>` / `/bin/<name>`; shell-doc-ok: regex-matched shape) across the
     same five coordinator-content-repo prompt-surface trees `_cited_entrypoint_sites` scans,
     with the same tests/fixtures exemption and the same best-effort per-file
@@ -441,7 +441,7 @@ def _cited_shape_w_sites(content_root: Path) -> Dict[str, List[str]]:
     `` `...\\bin\\workweek-complete-brief.exe`. `` — the regex has no notion
     of sentence boundaries, so the caller strips the artifact instead."""
     sites: Dict[str, List[str]] = {}
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(repo_root)
     if content_root is None:
         return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
@@ -450,7 +450,7 @@ def _cited_shape_w_sites(content_root: Path) -> Dict[str, List[str]]:
             continue
         for path in sorted(root_dir.rglob("*.md")):
             try:
-                rel = path.relative_to(content_root)
+                rel = path.relative_to(repo_root)
             except ValueError:
                 continue
             if _DOE_EXEMPT_PATH_SEGMENTS.intersection(rel.parts[:-1]):
@@ -490,7 +490,7 @@ def _is_windows_host() -> bool:
 
 
 def _check_extension_axis(
-    content_root: Optional[Path], settings_bin: Path
+    repo_root: Optional[Path], settings_bin: Path
 ) -> "tuple[List[str], Dict[str, List[str]]]":
     """EXTENSION axis (see module docstring) — does the extension a Shape W
     citation tells an EM to type match what is actually installed at
@@ -526,7 +526,7 @@ def _check_extension_axis(
             [f"[skip] {_PROG} (extension axis): non-Windows host — Shape W is a Windows-only citation shape, nothing to check here"],
             {},
         )
-    if content_root is None:
+    if repo_root is None:
         return (
             [f"[skip] {_PROG} (extension axis): engine sibling repo unresolvable — nothing to compare"],
             {},
@@ -538,7 +538,7 @@ def _check_extension_axis(
         )
 
     installed_names = {entry.name for entry in settings_bin.iterdir() if entry.is_file()}
-    cited_sites = _cited_shape_w_sites(content_root)
+    cited_sites = _cited_shape_w_sites(repo_root)
 
     mismatch: Dict[str, List[str]] = {}
     for spelling in sorted(cited_sites):
@@ -782,7 +782,7 @@ def check_forwarder_drift(
         if not result.ok:
             any_drift = True
 
-    extension_lines, extension_mismatch = _check_extension_axis(resolved_content_root, resolved_settings_bin)
+    extension_lines, extension_mismatch = _check_extension_axis(resolved_content_root,resolved_settings_bin)
     lines.extend(extension_lines)
     if extension_mismatch:
         any_drift = True

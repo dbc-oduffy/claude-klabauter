@@ -28,6 +28,9 @@ Every real computation lives one layer down:
     parity: `emit-dispatch-workflow.py :: _guard_against_fired_drift`,
     called the same way at its own `fire()` wrapper.
 
+`--inventory --lanes` runs the same `_dispatch_emit` with `lanes=True`: it emits
+one script per ready part and prints one `Workflow(...)` line each.
+
 This module owns nothing but argv parsing, the exit-code mapping over
 those three functions' own return/raise contracts, and one added step:
 running load-aware admission (`admission.await_admission`) before emission
@@ -294,6 +297,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         type=int,
         help="budget_tokens override (queue route)",
+    )
+    parser.add_argument(
+        "--lanes",
+        action="store_true",
+        help="with --inventory: partition into write-disjoint lanes and byte-bounded "
+        "parts, pin <run-id>.lanes.json, and emit one script per ready part",
+    )
+    parser.add_argument(
+        "--part", default=None, help="with --lanes: emit only this part (refuses when not ready)"
+    )
+    parser.add_argument(
+        "--lane-count",
+        dest="lane_count",
+        default=None,
+        type=int,
+        help="with --lanes: concurrent lane count when the lane map is first written (default 3)",
+    )
+    parser.add_argument(
+        "--hot-files",
+        dest="hot_files",
+        default=None,
+        type=int,
+        help="with --lanes: how many most-shared files form the hub lane (default 40)",
     )
     parser.add_argument(
         "--force",
@@ -802,6 +828,30 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    lane_flags = [
+        flag
+        for flag, value in (
+            ("--lanes", args.lanes),
+            ("--part", args.part),
+            ("--lane-count", args.lane_count),
+            ("--hot-files", args.hot_files),
+        )
+        if value is not None and value is not False
+    ]
+    if lane_flags:
+        problem = None
+        if not args.inventory:
+            problem = f"{', '.join(lane_flags)} requires --inventory"
+        elif args.part and not args.lanes:
+            problem = "--part requires --lanes"
+        elif (args.lane_count or args.hot_files) and not args.lanes:
+            problem = "--lane-count/--hot-files require --lanes"
+        elif args.out_path or args.fire:
+            problem = "--lanes derives each part's script path and is exclusive of --out/--fire"
+        if problem:
+            print(f"emit-dispatch-workflow: ERROR — {problem}", file=sys.stderr)
+            return EXIT_USAGE
+
     if args.where and args.where_file:
         print(
             "emit-dispatch-workflow: ERROR — --where is exclusive of --where-file",
@@ -867,7 +917,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         # keep requiring --out explicitly.
         args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
-    if not args.out_path and not is_ask_route and not is_pipeline_route:
+    if not args.out_path and not is_ask_route and not is_pipeline_route and not args.lanes:
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
@@ -945,6 +995,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:
             params["max_rows"] = args.max_rows
+        if args.lanes:
+            params["lanes"] = True
+            for name in ("part", "lane_count", "hot_files"):
+                if getattr(args, name) is not None:
+                    params[name] = getattr(args, name)
         inventory_root = repo_root or _default_repo_root_from_cwd()
         if inventory_root is not None:
             params["inventory_repo_root"] = str(inventory_root)
@@ -1004,7 +1059,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
         except ScriptOverCapError as over:
-            if not args.inventory:
+            if not args.inventory or args.lanes:
                 raise
             return _emit_inventory_parts(params, repo_root, over, args.fire, admission_record)
     except PipelineEmitRefused as exc:
@@ -1017,9 +1072,16 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     result["admission"] = admission_record
     print(json.dumps(result, indent=2, sort_keys=True))
-    _print_workflow_invocation(
-        result, is_queue_route=is_queue_route, profile_dir=args.profile_dir, repo_root=repo_root
-    )
+    if args.lanes:
+        for emitted in result["parts"]:
+            _print_workflow_invocation(
+                {**emitted, "fire_args": result.get("fire_args")},
+                is_queue_route=False,
+            )
+    else:
+        _print_workflow_invocation(
+            result, is_queue_route=is_queue_route, profile_dir=args.profile_dir, repo_root=repo_root
+        )
 
     for key in ("batons", "uncommitted"):
         if key in result:

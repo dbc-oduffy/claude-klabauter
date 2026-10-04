@@ -40,9 +40,13 @@ _SCRIPT_EXTENSIONS = (".py", ".sh", ".mjs", ".js")
 
 _PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}/"
 
-#: Registry keys naming the content repo. The publish scrub rewrites the first
-#: spelling to the second, so each is built from halves to survive it.
-_REGISTRY_KEYS = ("repos." + "doe_" + "claude", "repos." + "content_" + "root")
+#: Registry key naming the content repo. A legacy-named root is migrated into it
+#: by `content_root.migrate_legacy_config` before the installer derives a verdict;
+#: this stdlib-only module never reads the legacy spelling itself.
+_REGISTRY_KEY = "repos.content_root"
+
+#: Content-root pointer file, under `<settings-home>/machine-local/` and `<claude_home>/`.
+_POINTER_NAME = ".coordinator-content-root"
 
 #: One TCP connect, never a request: the forwarder either accepts or it is dark.
 _PORT_PROBE_TIMEOUT_S = 0.25
@@ -254,9 +258,9 @@ def derive_hook_plane(
     """Read, against disk, whether a session launched here will run hooks.
 
     Two facts: at least one delivery surface registers hooks (`settings.json`'s
-    `hooks` block or the plugin's `hooks/hooks.json`), and `.coordinator-content-root` resolves
-    through at least one rung (registry, `<settings-home>/machine-local/.coordinator-content-root`,
-    legacy `<claude_home>/.coordinator-content-root`). Never raises; returns the eleven-key dict.
+    `hooks` block or the plugin's `hooks/hooks.json`), and the content root resolves
+    through at least one rung (registry, `<settings-home>/machine-local/<pointer>`,
+    `<claude_home>/<pointer>`). Never raises; returns the eleven-key dict.
     """
     claude_home = Path(claude_home)
     settings_path = claude_home / "settings.json"
@@ -287,18 +291,17 @@ def derive_hook_plane(
     registry_errors: list[str] = []
     if settings_home_str:
         machine_local = Path(settings_home_str) / "machine-local"
-        for key in _REGISTRY_KEYS:
-            value, errors = read_registry(machine_local, key)
-            rungs[f"registry {key}"] = value
-            registry_errors.extend(e for e in errors if e not in registry_errors)
-        rungs[f"{settings_home_str}/machine-local/.coordinator-content-root"] = first_line_or_none(
-            machine_local / ".coordinator-content-root"
+        value, errors = read_registry(machine_local, _REGISTRY_KEY)
+        rungs[f"registry {_REGISTRY_KEY}"] = value
+        registry_errors.extend(e for e in errors if e not in registry_errors)
+        rungs[f"{settings_home_str}/machine-local/{_POINTER_NAME}"] = first_line_or_none(
+            machine_local / _POINTER_NAME
         )
     else:
-        rungs[f"registry {_REGISTRY_KEYS[0]}"] = None
-        rungs["<settings-home>/machine-local/.coordinator-content-root"] = None
-    legacy = claude_home / ".coordinator-content-root"
-    rungs[str(legacy)] = first_line_or_none(legacy)
+        rungs[f"registry {_REGISTRY_KEY}"] = None
+        rungs[f"<settings-home>/machine-local/{_POINTER_NAME}"] = None
+    home_pointer = claude_home / _POINTER_NAME
+    rungs[str(home_pointer)] = first_line_or_none(home_pointer)
     content_root_resolves = any(value for value in rungs.values())
 
     resolved_content_root = next((value for value in rungs.values() if value), None)
@@ -342,7 +345,7 @@ def hook_plane_problems(hook_plane: dict) -> list[str]:
     elif not hook_plane.get("content_root_resolves"):
         # An unreadable registry is its own problem above: the registry rungs were
         # never consulted, so "no rung resolves" would misreport the cause.
-        problems.append("`.coordinator-content-root` resolves through no rung the no-launcher fences read")
+        problems.append("the content root resolves through no rung the no-launcher fences read")
     return problems
 
 
@@ -372,7 +375,7 @@ def forwarder_dark_reason(hook_plane: dict | None) -> str | None:
 def hook_plane_status_line(hook_plane: dict | None, *, extra_failure: str | None = None) -> str:
     """`HOOK PLANE: ARMED|UNARMED (delivery: <surface>)`, the first line of a verdict.
 
-    ARMED needs a registered hook surface, a resolving `.coordinator-content-root`, an answering
+    ARMED needs a registered hook surface, a resolving content root, an answering
     listener on every registered http-hook port (probed only in a live session;
     otherwise ARMED carries a not-probed qualifier), and no `extra_failure`; a
     failure forces UNARMED and is appended after `; `. An absent `hook_plane` reports UNARMED with delivery `unknown`.

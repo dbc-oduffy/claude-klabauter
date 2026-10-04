@@ -56,8 +56,7 @@ Documented divergence from the bash oracle (structural, not a scope-drop):
     the subprocess's PYTHONPATH) is moot here and is not reproduced.
   - 2026-07-21 (retire-all-bash C13): the remaining ten ``["bash", ...]``
     per-phase subprocess spawns (detect-existing-claude-home,
-    install-health-run, gen-content-root-pointer, gen-claude-author-shim,
-    gen-claude-author-launcher, register-coordinator-mirror,
+    install-health-run, gen-claude-author-launcher, register-coordinator-mirror,
     check-install-singularity, capture-fan-out-threshold,
     platform-localize, coordinator-setup-state record setup_concluded) are
     now **direct in-process calls**, same idiom as Step 3.5c's
@@ -165,6 +164,7 @@ if not sys.path or sys.path[0] != _EXPECTED_REPO_ROOT:
     sys.path.insert(0, _EXPECTED_REPO_ROOT)
 
 from coordinator_core._settings_home import native_path_form, settings_home
+from coordinator_core.content_root import CONTENT_ROOT_KEY
 from coordinator_core.win_portability import leaf_spawn_creationflags, no_console_creationflags
 from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
 from coordinator_core.git import git_state
@@ -215,11 +215,9 @@ What this does:
     2.  seed repos.content_root registry (best-effort, self-resolved clone path)
     3.  install-health-run.sh          (Phase 3 Step 1b -- drop-in health scripts;
                                           after the seed, which its trust guard reads)
-    4.  gen-content-root-pointer.sh        (Step 3.5a.1 -- ~/.claude/.coordinator-content-root pointer)
-    5.  gen-claude-author-shim.sh         (Step 3.5a.2 -- claude() shell shim)
     6.  claude-author wrapper install     (Step 3.5b -- ~/.local/bin/claude-author)
     6.5 gen-claude-author-launcher.sh     (Step 3.5b.2 -- Windows-only launcher; no-op elsewhere)
-        (4-6.5 skip when the clone is the standalone plugin -- no DoE root to point at)
+        (6-6.5 skip when the clone is the standalone plugin -- no content-repo launcher to wrap)
     7.  gen-settings-hooks.sh          (Step 3.5c -- settings.json hook block)
     8.  register-coordinator-mirror.sh (Step 5 -- plugin.mirrors registration)
     9.  ensure-coordinator-venv         (Step 6 -- coordinator_whoami venv; native;
@@ -1157,11 +1155,12 @@ def _is_standalone_plugin_clone(doe_clone: str) -> bool:
     (`.claude-plugin/plugin.json` at its root, no `coordinator/` subdir) rather
     than a coordinator-content-repo working repo.
 
-    The `.coordinator-content-root` pointer and the claude-author shim, wrapper and launcher exist
-    to launch `claude --plugin-dir <DoE>/coordinator` for someone working ON the
+    The claude-author wrapper and launcher exist to launch
+    `claude --plugin-dir <DoE>/coordinator` for someone working ON the
     doctrine repo. A consumer (coordinator-claude + klabauter, e.g. the cloud
-    pre-boot) loads the plugin through the marketplace instead, has no DoE root
-    to point at, and must not be failed for lacking one (claude-klabauter#15).
+    pre-boot) loads the plugin through the marketplace instead, has no such
+    working repo to launch from, and must not be failed for lacking one
+    (claude-klabauter#15).
     """
     return (
         os.path.isfile(os.path.join(doe_clone, ".claude-plugin", "plugin.json"))
@@ -1658,12 +1657,12 @@ def _run_body(
     # resolves this under Git-Bash on Windows, where `pwd` yields the MSYS mount
     # form (`/x/coordinator-content-repo`); handed on verbatim it is re-read by native-Windows
     # node / py.exe consumers as drive-relative `C:\x\coordinator-content-repo` (doubled
-    # drive), which is how `repos.content_root` and the `.coordinator-content-root` pointer came to
-    # hold an unresolvable path. Normalizing once HERE covers every downstream
+    # drive), which is how `repos.content_root` and the content-root pointer came
+    # to hold an unresolvable path. Normalizing once HERE covers every downstream
     # derivation in one place -- the REPO_CONTENT_ROOT env overlay handed to child
     # phases, the `.coordinator-dev-repo` sentinel probe, and the
-    # `machine-local set repos.content_root` seed that gen_content_root_pointer later
-    # reads. No-op off Windows and on already-native paths.
+    # `machine-local set repos.content_root` seed. No-op off Windows and on
+    # already-native paths.
     doe_clone = native_path_form(doe_clone)
 
     env = dict(os.environ)
@@ -1791,7 +1790,7 @@ def _run_body(
 
     # -- Phase 3 Step 3 (partial) -- best-effort seed repos.content_root --
     if check_only:
-        current = _registry_get_for_check("repos.content_root")
+        current = _registry_get_for_check(CONTENT_ROOT_KEY)
         if current == doe_clone:
             orch.skip_note("repos.content_root registry key", f"already seeded and verified ({doe_clone})", mandatory=False)
         else:
@@ -1810,12 +1809,12 @@ def _run_body(
             found = shutil.which("machine-local")
             ml_argv = [found] if found else None
         if ml_argv:
-            rc = _run([*ml_argv, "set", "repos.content_root", doe_clone], env=env)
+            rc = _run([*ml_argv, "set", CONTENT_ROOT_KEY, doe_clone], env=env)
             if rc == 0:
-                _verify_registry_seed("repos.content_root", doe_clone)
+                _verify_registry_seed(CONTENT_ROOT_KEY, doe_clone)
                 from coordinator_core.machine_resolver import retire_paired_content_root_key
 
-                if retire_paired_content_root_key("repos.content_root"):
+                if retire_paired_content_root_key(CONTENT_ROOT_KEY):
                     print("repos.content_root: retired the paired spelling naming the same clone")
             else:
                 print(
@@ -1941,79 +1940,12 @@ def _run_body(
 
     if _is_standalone_plugin_clone(doe_clone):
         orch.skip_note(
-            "DoE launch chain (Steps 3.5a.1-3.5b.2 -- .coordinator-content-root pointer, claude-author shim, "
-            "wrapper, launcher)",
+            "DoE launch chain (Steps 3.5b-3.5b.2 -- claude-author wrapper, launcher)",
             f"{doe_clone} is the standalone plugin, not a coordinator-content-repo "
             "working repo; the plugin loads through the marketplace",
             mandatory=False,
         )
     else:
-        # -- Step 3.5a.1 -- gen-content-root-pointer --
-        # Retired the ["bash", gen-content-root-pointer.sh] spawn (C13): that DoE-side
-        # script was only a thin polyglot trampoline back into THIS repo's
-        # coordinator_core.ops.gen_content_root_pointer -- called in-process now.
-        from coordinator_core.ops.gen_content_root_pointer import (  # local import: avoid import cost on --help
-            main as _gen_content_root_pointer_main,
-        )
-
-        pointer_args = ["--check-only"] if check_only else []
-        orch.run_required_py(
-            "gen-content-root-pointer (Step 3.5a.1 -- ~/.claude/.coordinator-content-root pointer)",
-            _gen_content_root_pointer_main,
-            pointer_args,
-            env=env,
-        )
-
-        # -- Step 3.5a.2 -- gen-claude-author-shim --
-        # Retired the ["bash", gen-claude-author-shim.sh] spawn (C13): that DoE-side
-        # script was only a thin polyglot trampoline back into THIS repo's
-        # coordinator_core.ops.gen_claude_author_shim -- called in-process now.
-        from coordinator_core.ops.gen_claude_author_shim import (  # local import: avoid import cost on --help
-            _default_shell_family as _gen_claude_author_shim_default_family,
-            main as _gen_claude_author_shim_main,
-        )
-
-        # `gen_claude_author_shim.main()` has no co-located DoE-side script path of
-        # its own to derive the oracle's `${_script_dir}/../templates/shell/...`
-        # default from -- its own docstring says the DoE trampoline resolves
-        # that default and always passes `--template` explicitly. `coord_root`
-        # (this repo's resolved DoE-clone `coordinator/` dir) is exactly that
-        # default location: `<coord_root>/templates/shell/claude-author-shim.sh.tmpl`
-        # -- `templates/` is DoE doctrine content, unaffected by the b644d5a9
-        # `bin/` migration, so `coord_root` (not `claude_klabauter_root`) is correct here.
-        # D7 cold-install dogfood fix (2026-07-24): this call site previously
-        # omitted `--template` entirely, so every `--check-only` (and live) run
-        # hard-failed this required phase with "no default resolvable". `
-        # --check-only` is listed first so it stays a literal prefix of the
-        # logged argv line (test_c13_check_only_forwarded_to_each_native_phase
-        # substring-matches "gen-claude-author-shim --check-only").
-        # The template must follow the SHELL FAMILY, not be hardcoded. The generator
-        # copies template bytes verbatim but names its destination from the family
-        # (`_shim_filename`), and that family defaults to "powershell" on native
-        # Windows. A hardcoded `.sh.tmpl` here therefore wrote 62 lines of bash into
-        # `claude-author-shim.ps1`, whose dot-source defines no `claude()` at all — a
-        # plugin-less session on every launch, with the profile's sentinel block
-        # present and correct so nothing downstream reported a problem.
-        # `--shell` is passed explicitly rather than left to the default so the
-        # template and the family cannot drift apart again from this call site.
-        _shim_family = _gen_claude_author_shim_default_family()
-        _shim_tmpl_name = (
-            "claude-author-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-author-shim.sh.tmpl"
-        )
-        _shim_tmpl = os.path.join(coord_root, "templates", "shell", _shim_tmpl_name)
-        shim_args = (["--check-only"] if check_only else []) + [
-            "--template",
-            _shim_tmpl,
-            "--shell",
-            _shim_family,
-        ]
-        orch.run_required_py(
-            "gen-claude-author-shim (Step 3.5a.2 -- claude() shell shim)",
-            _gen_claude_author_shim_main,
-            shim_args,
-            env=env,
-        )
-
         # -- Step 3.5b -- claude-author wrapper install --
         _install_claude_author_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)
 
@@ -2026,12 +1958,11 @@ def _run_body(
             main as _gen_claude_author_launcher_main,
         )
 
-        # Same class of bug as the shim call site above: `gen_claude_author_launcher`
-        # has no co-located script path to derive its `--template-dir` default
-        # from, and expects the DoE trampoline to pass it explicitly (default
-        # location: `<coord_root>/templates/bin` -- also DoE doctrine content,
-        # unaffected by the `bin/` migration). `--check-only` first for the same
-        # logged-argv-substring reason as the shim call site.
+        # `gen_claude_author_launcher` has no co-located script path to derive its
+        # `--template-dir` default from, and expects the DoE trampoline to pass it
+        # explicitly (default location: `<coord_root>/templates/bin` -- DoE
+        # doctrine content, unaffected by the `bin/` migration). `--check-only`
+        # is listed first so it stays a literal prefix of the logged argv line.
         _launcher_tmpl_dir = os.path.join(coord_root, "templates", "bin")
         launcher_args = (["--check-only"] if check_only else []) + ["--template-dir", _launcher_tmpl_dir]
         orch.run_required_py(
@@ -2137,8 +2068,7 @@ def _run_body(
         elif hooks_status == "skipped (clone absent)":
             orch.skip_note(
                 _hooks_desc,
-                "DoE clone not resolved yet; complete Step 3.5a "
-                "(gen-content-root-pointer / repos.content_root seed) first, then re-run.",
+                "DoE clone not resolved yet; complete the repos.content_root seed first, then re-run.",
                 mandatory=True,
             )
         else:
@@ -2554,8 +2484,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     ),
 )
 """This module is a genuine ORCHESTRATOR for every OTHER phase — Phase 3
-Step 1 (install-substrate), install-health-run, gen-content-root-pointer,
-gen-claude-author-shim, gen-claude-author-launcher, gen-settings-hooks,
+Step 1 (install-substrate), install-health-run,
+gen-claude-author-launcher, gen-settings-hooks,
 register-coordinator-mirror, ensure-coordinator-venv, scaffold-canonical-
 structure, check-install-singularity, capture-fan-out-threshold,
 platform-localize, and coordinator-setup-state are each called in-process

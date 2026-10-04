@@ -135,9 +135,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator_core/_claude_klabauter_root.py::_machine_local_get",
         "coordinator_core/engine_root.py::coordinator_engine_root",
         "coordinator_core/ops/gen_claude_author_shim.py::main",
-        "coordinator_core/ops/gen_content_root_pointer.py::_resolve_content_root",
-        "coordinator_core/ops/new_project_scaffold.py::_resolve_content_root",
-        "coordinator_core/ops/render_template_tree.py::_resolve_content_root",
+        "coordinator_core/ops/gen_content_root_pointer.py::_resolve_content_root",  # private-name-ok: compat-fallback
         "coordinator_core/ops/repo_bootstrap.py::_machine_local_registry_get",
     }
 )
@@ -159,17 +157,17 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # (`cruft-sweep.py`), `_registry_repo_roots` (`git_hook_install.py`), and
 # seven of the sixteen C7 rows (`bootstrap_repo.py`,
 # `capture_fan_out_threshold.py`, `central_run_due.py`,
-# `check_registry_codename_leak.py`, `gen_content_root_pointer.py`'s
+# `check_registry_codename_leak.py`, the pointer generator's
 # `plugin.mirrors.coordinator-claude.source_path` row,
 # `new_project_scaffold.py`'s `_register_repo` verify-read row,
 # `setup_seed_health_ledger.py`) are fully converted (flat `registry_get`,
 # no CLI subprocess at all) and NOT in this set. The other five C7
-# `repos.*` rows (`gen_claude_author_shim.py`, `gen_content_root_pointer.py`'s
-# `repos.content_root` row, `new_project_scaffold.py`'s `_resolve_content_root`
+# `repos.*` rows (`gen_claude_author_shim.py`, the pointer generator's
+# `repos.content_root` row, `new_project_scaffold.py`'s content-root resolver
 # row, `render_template_tree.py`, `repo_bootstrap.py`) are back IN this set
 # as ladder-preserving fallback compositions -- see the 2026-08-16
 # REPOS.* LADDER-LOSS FIX note below for why.
-# C7b converted the four C7 EXCEPTIONS (`coordinator_content_root.py:158`,
+# C7b converted the four C7 EXCEPTIONS (the content-root resolver op, line 158,
 # `ensure_doe_clone.py:68`, `install_shell_init_guard_seam.py:138`,
 # `verify_ue_overrides.py:121`): each site's own test suite now seeds the
 # machine-local registry FILE (`MACHINE_LOCAL_REGISTRY_DIR` + a scratch
@@ -303,7 +301,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # would have recognized).
 #
 # `coordinator_core/ops/gen_claude_author_shim.py:414`,
-# `coordinator_core/ops/gen_content_root_pointer.py:127`,
+# the pointer generator (`coordinator_core/ops/`, line 127),
 # `coordinator_core/ops/new_project_scaffold.py:159`,
 # `coordinator_core/ops/render_template_tree.py:96` -- all resolve
 # `repos.content_root` for install/scaffold gating. Verified live, not
@@ -312,7 +310,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # `slug: coordinator-content-repo`, so the CLI's rung-2 autodiscovery is a real,
 # load-bearing path for this exact key on a real machine -- the
 # `REPO_CONTENT_ROOT` env rung each site already preserved does not cover it.
-# `gen_content_root_pointer.py`'s own module
+# the pointer generator's own module
 # docstring negative-spec ("does NOT reimplement the machine-local
 # registry.toml/registry.local.toml parser -- shells out to the
 # `machine-local` CLI... so the registry-merge logic has exactly one

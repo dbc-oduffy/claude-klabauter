@@ -22,12 +22,10 @@ bypassed and the code under test resolves the REAL ``C:\\Users\\<you>``.
 
 That is not a theoretical leak. On 2026-07-20 three sibling repos independently
 reported that running this suite on Windows wrote a pytest tmpdir into the real
-``~/.claude/.coordinator-content-root``, repointing every coordinator skill on the machine at a
-directory that vanishes on the next tmp reap. See:
-
-- ``cross-repo/inbox/2026-07-20-claude-central-em-content-root-pointer-test-clobbers-real-home.md``
-- ``cross-repo/inbox/2026-07-20-claude-central-em-content-root-pointer-test-corrupts-live-machine-config.md``
-- ``cross-repo/inbox/2026-07-20-example-cockpit-repo-em-content-root-clobbered-by-windows-test-home-leak.md``
+``~/.claude`` content-root pointer, repointing every coordinator skill on the machine at a
+directory that vanishes on the next tmp reap. The three cross-repo inbox memos of
+2026-07-20 (pointer-test-clobbers-real-home, pointer-test-corrupts-live-machine-config,
+windows-test-home-leak) record it.
 
 The fix is structural rather than per-site: point EVERY home-resolution
 variable at a throwaway per-test directory before the test runs. A test that
@@ -267,17 +265,17 @@ _REAL_SETTINGS_HOME = _capture_real_settings_home()
 
 
 def _capture_real_content_root() -> str:
-    """Resolve the sibling coordinator-content-repo checkout ONCE, at collection time, under
+    """Resolve the sibling content checkout ONCE, at collection time, under
     the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
-    into a throwaway stub (see ``_STUB_CONTENT_ROOT`` below). The real path itself
-    is never seeded into a quarantined test's ``.coordinator-content-root`` pointer.
+    into a throwaway stub (see ``_build_stub_content_root`` below). The real path itself
+    is never seeded into a quarantined test's content-root pointer.
 
     Same capture-before-quarantine shape as ``_REAL_USER_SITE`` above, for the
     same class of reason. ``coordinator/bin/lib/coordinator_registry.py``
     resolves its manifest (``coordinator/schemas/coordinator-registry.manifest
     .json``, which DR-047 keeps in coordinator-content-repo while this repo owns the engine)
     at IMPORT time, through a ladder whose every live rung is home-anchored:
-    the ``.coordinator-content-root`` pointer files, the marketplace-cache probe, the flat
+    the content-root pointer files, the marketplace-cache probe, the flat
     plugin-layout probe, and the machine-local registry CLI all hang off
     ``$HOME``/settings-home. Quarantining HOME therefore does not isolate that
     module — it makes it unresolvable, and it fails loud with an
@@ -318,10 +316,10 @@ _STUB_DOE_SEED_RELPATHS = (
 
 
 def _real_doe_seed_source(relpath: str) -> str:
-    """Locate one seed file inside ``_REAL_CONTENT_ROOT``, tolerant of BOTH DoE
+    """Locate one seed file inside ``_REAL_CONTENT_ROOT``, tolerant of BOTH
     layouts, and return its absolute path ("" when absent).
 
-    The private coordinator-content-repo checkout keeps these under ``coordinator/…``; the
+    The private content checkout keeps these under ``coordinator/…``; the
     published `coordinator-claude` mirror ships them FLAT at its repo root,
     and that mirror is what a cloud container registers as `repos.content_root`
     — so `resolve_content_root()` legitimately hands back a flat root there.
@@ -329,7 +327,7 @@ def _real_doe_seed_source(relpath: str) -> str:
     already probes both arms for exactly this reason; hardcoding only the
     ``coordinator/`` arm here made the stub builder blind to the flat mirror,
     returned "" from `_build_stub_content_root`, and left the quarantined HOME
-    with no ``.coordinator-content-root`` pointer at all — so every test that loads a
+    with no content-root pointer at all — so every test that loads a
     `coordinator/bin/` CLI died at import on the registry's install-integrity
     `FileNotFoundError`, which is the failure this whole seeding path exists
     to prevent.
@@ -352,17 +350,17 @@ def _real_doe_seed_source(relpath: str) -> str:
 
 
 def _build_stub_content_root(base_dir: str) -> str:
-    """Build a throwaway coordinator-content-repo STUB under ``base_dir`` and return its path.
+    """Build a throwaway content-checkout STUB under ``base_dir`` and return its path.
 
     Copies only the explicitly named files quarantined tests actually need
     to READ — listed in ``_STUB_DOE_SEED_RELPATHS`` above — out of the real
     checkout captured by ``_capture_real_content_root``. Nothing else from the
     real repo is copied or referenced. A file earns a place in that tuple
-    only when a quarantined test genuinely reads it from the DoE side, added
+    only when a quarantined test genuinely reads it from the content side, added
     deliberately one at a time — this must never become a whole-tree copy.
 
-    This is the fix for a P1: seeding the REAL coordinator-content-repo path into a
-    quarantined test's ``.coordinator-content-root`` pointer made the manifest READ succeed,
+    This is the fix for a P1: seeding the REAL content path into a
+    quarantined test's content-root pointer made the manifest READ succeed,
     but ``coordinator_registry.py::content_root()`` is also the documented anchor
     other call sites join WRITE targets onto (``state/lessons-outbox``,
     ``state/improvement-queue``) — so any quarantined test that reached a
@@ -376,7 +374,7 @@ def _build_stub_content_root(base_dir: str) -> str:
     an explicit named tuple rather than a directory copy: every additional
     file widens the exposure the stub was built to shrink.
 
-    Returns "" if the real DoE root or the REGISTRY MANIFEST cannot be
+    Returns "" if the real content root or the REGISTRY MANIFEST cannot be
     located, mirroring ``_capture_real_content_root``'s graceful degradation —
     callers must treat an empty return the same as "nothing to seed". The
     manifest is deliberately load-bearing rather than one seed among equals:
@@ -451,7 +449,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.delenv("HOMEPATH", raising=False)
     # COORDINATOR_SETTINGS_HOME is checked by `_settings_home.settings_home()`
     # AHEAD of every home var, so leaving it set defeats this whole fixture on
-    # any box that exports it: the durable `.coordinator-content-root` rung, the machine-local
+    # any box that exports it: the durable content-root pointer rung, the machine-local
     # registry rung, and the engine-build path all keep reading the operator's
     # LIVE settings tree no matter what home a test then sets. Measured
     # 2026-09-06 across eleven test files: 58 failures with it set, 1 with it
@@ -590,7 +588,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setenv(_warm_breadcrumb.RUNTIME_BASE_ENV, str(_warm_base))
 
     # Make the throwaway home a FAITHFUL home rather than an empty one for the
-    # one read the quarantine would otherwise break outright: the `.coordinator-content-root`
+    # one read the quarantine would otherwise break outright: the content-root
     # pointer that `coordinator_registry`'s import-time manifest bootstrap
     # resolves through (see `_capture_real_content_root` above for the mechanism).
     # Seeded as a FILE inside the quarantine, not as a `REPO_CONTENT_ROOT` env
@@ -613,11 +611,11 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # lands inside this test's own throwaway quarantine directory.
     #
     # Both locations are written because a real install carries both and the
-    # reader (`coordinator/lib/read_content_root_pointer.py`) tries them in this
-    # order: `${settings-home}/machine-local/.coordinator-content-root` (durable, DR-072) then
-    # `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` (legacy fallback). Seeding only
-    # the first would leave any test that redirects COORDINATOR_SETTINGS_HOME
-    # on its own back at an unresolvable pointer.
+    # reader (`coordinator_core.content_root.read_pointer_files`) tries them in
+    # this order: `${settings-home}/machine-local/.coordinator-content-root`
+    # (durable, DR-072) then `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`
+    # (fallback). Seeding only the first would leave any test that redirects
+    # COORDINATOR_SETTINGS_HOME on its own back at an unresolvable pointer.
     stub_content_root = _build_stub_content_root(str(quarantine))
     if stub_content_root:
         for pointer in (
@@ -639,13 +637,6 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
         )
         override_doc_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(override_doc_src, override_doc_dst)
-
-    try:
-        from coordinator_core.ops.coordinator_content_root import _reset_content_root_cache
-
-        _reset_content_root_cache()
-    except ImportError:  # pragma: no cover - defensive, mirrors the capture helper
-        pass
 
     return quarantine
 
@@ -751,7 +742,7 @@ def _reset_engine_root_process_state():
 # across thousands of tests, plus inheritance into every `subprocess.run` child's env.
 # Cluster fixed in 048d8acc; this fixture is the backstop that keeps it from recurring.
 #
-# The per-module cache-reset fixtures (test_coordinator_content_root.py::_clean_env,
+# The per-module cache-reset fixtures (the content-root resolver test's _clean_env,
 # test_deliverable_rollup.py::_reset_central_root_memo) own the deliberate
 # interpreter-lifetime MEMOS we kept; queue_append's cache is path-keyed so it needs no
 # reset. Those live beside their tests on purpose — this conftest guard is only the
@@ -1006,7 +997,7 @@ _OWN_LIVE_STATE_DIRS = (
 )
 
 def _resolve_live_doe_lessons_outbox():
-    root = (os.environ.get("CONTENT_ROOT") or os.environ.get("REPO_CONTENT_ROOT") or "").strip()
+    root = (os.environ.get("REPO_CONTENT_ROOT") or "").strip()
     if not root:
         # Load coordinator_registry BY LOCATION, and do not leave
         # `coordinator/bin/lib` on `sys.path`. An earlier version inserted it at
@@ -1066,7 +1057,7 @@ def _no_live_state_corpus_writes(request):
                 f"_no_live_state_corpus_writes: {d} gained {sorted(gained)!r} during "
                 f"{request.node.nodeid} -- a write-root rung was not neutralized. "
                 f"Set the seam's isolation root (QUEUE_APPEND_OUTPUT_ROOT / "
-                f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip CONTENT_ROOT / "
+                f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip "
                 f"REPO_CONTENT_ROOT / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
                 f"warm-served CLI never receives any of them.",
                 pytrace=False,

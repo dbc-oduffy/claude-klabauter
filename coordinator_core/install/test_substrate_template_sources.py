@@ -70,7 +70,7 @@ def test_ml_bin_literals_present_in_source():
 
 
 @pytest.mark.real_home  # live-tree oracle: resolves the real coordinator-content-repo coordinator root via
-# `_shared.resolve_coordinator_root` (registry_get / .coordinator-content-root pointer), which the suite-root
+# `_shared.resolve_coordinator_root` (`read_content_root()` / content-root pointer), which the suite-root
 # `_quarantine_real_home` autouse fixture would otherwise hide, turning this into an
 # unconditional skip. Read-only (Path.is_file/is_dir checks only, no writes).
 def test_ml_bin_literals_exist_in_real_doe_templates_bin():

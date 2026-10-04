@@ -2029,7 +2029,7 @@ def _write_agent_forwarder(
     contract (registry-key-then-sentinel resolution rungs, `coordinator/bin`
     composition, `..`-traversal guard, on-disk existence checks, executable
     sentinel probe, distinct fail-loud messages) and for why the old
-    `.coordinator-content-root`/`CLAUDE_PLUGIN_ROOT` trust-prefix dance (`_cc_trusted` et
+    content-root-pointer/`CLAUDE_PLUGIN_ROOT` trust-prefix dance (`_cc_trusted` et
     al.) is deliberately NOT carried forward.
 
     NO `#!/bin/sh` polyglot trampoline line -- retired by the 2026-07-21 PM
@@ -3704,7 +3704,7 @@ def _published_only_cli_map(
 ) -> "dict[str, str]":
     """Installed-name -> target map for CLIs the engine ships under a name the
     generator's own ``coordinator/bin/`` does not carry: the publish-time
-    rename targets (``gen-content-root-pointer`` ships as ``gen-content-root-pointer``).
+    rename targets (a bin family's published spelling differs from the generator's own).
     The shipped corpus names the published spelling, so the engine on disk is
     the oracle -- no rename table is read. Empty when the engine root is the
     generator itself or carries no ``coordinator/bin/``."""

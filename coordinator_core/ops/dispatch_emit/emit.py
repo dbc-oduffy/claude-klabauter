@@ -271,7 +271,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Sequence
 
 import yaml
 
@@ -310,7 +310,19 @@ from coordinator_core.ops.dispatch_emit.memo_row import (
     check_memo_rows,
     memo_fence_clause,
 )
-from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
+from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEW_PHASE_TITLE
+from coordinator_core.ops.dispatch_emit.predispatch import (
+    ALREADY_DONE_RULE,
+    ALREADY_DONE_RULE_MARKER,
+    CHECK_PHASE_TITLE,
+    AgentSpec,
+    check_specs,
+)
+from coordinator_core.ops.dispatch_emit.spine_read import (
+    UNDECLARED,
+    load_frontmatter_doc,
+    read_spine,
+)
 from coordinator_core.ops.dispatch_emit.wave_map import (
     WaveRow,
     _normalize_path,
@@ -1649,7 +1661,7 @@ def _prime_exit_criterion_statement(plan_text: str) -> Optional[str]:
     if split is None:
         return None
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return None
     if not isinstance(doc, dict):
@@ -1683,10 +1695,10 @@ def _prime_exit_criterion_falsifier(plan_text: str) -> Optional[dict]:
     the gate.
     """
     split = split_frontmatter(plan_text)
-    if split is None:
+    if split is None or "falsifier" not in split.fm_text:
         return None
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return None
     if not isinstance(doc, dict):
@@ -1742,7 +1754,7 @@ def _plan_id(plan_text: str) -> Optional[str]:
     if split is None:
         return None
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return None
     if not isinstance(doc, dict):
@@ -2923,8 +2935,14 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         _degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host)
     )
     return (
+        "  const _alreadyDone = new Set();\n"
+        "  const _routedOutPlans = new Map();\n"
+        "  const _routedOut = [];\n"
+        "  const _skippedDone = [];\n"
+        "  const _unusableChecks = [];\n"
+        "  const _reviews = [];\n"
         "  async function _runRow(id, deps, verifyScope, run, commit) {\n"
-        "    await Promise.all(deps);\n"
+        "    const _depResults = await Promise.all(deps);\n"
         "    const plan = _rowPlan[id];\n"
         "    if (_halted) {\n"
         "      _notStarted.push(id);\n"
@@ -2934,6 +2952,20 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _notStarted.push(id);\n"
         "      return 'BLOCKED: plan halted by stop rule in ' + "
         "_haltedPlanReasons.get(plan);\n"
+        "    }\n"
+        "    if (plan && _routedOutPlans.has(plan)) {\n"
+        "      _routedOut.push(id);\n"
+        "      return 'ROUTED-OUT: falsifier integrity BROKEN (' + "
+        "_routedOutPlans.get(plan).join(', ') + ')';\n"
+        "    }\n"
+        "    if (_depResults.some(r => typeof r === 'string' && "
+        "r.startsWith('ROUTED-OUT:'))) {\n"
+        "      _routedOut.push(id);\n"
+        "      return 'ROUTED-OUT: a dependency was routed out';\n"
+        "    }\n"
+        "    if (_alreadyDone.has(id)) {\n"
+        "      _skippedDone.push(id);\n"
+        "      return 'ALREADY-DONE: pre-dispatch check';\n"
         "    }\n"
         "    let result;\n"
         "    try {\n"
@@ -3128,6 +3160,141 @@ def _checkpoint_commit_js(
     return "\n".join(lines)
 
 
+_PRE_SCHEMAS_VAR = "_PRE_SCHEMAS"
+
+#: Runtime fold of the pre-phase verdicts into the script-level sets
+#: ``_run_row_helper_js`` reads. An ``already-done`` with no usable evidence
+#: and a null or malformed check both fold to still-open; a null or malformed
+#: review is recorded UNREVIEWABLE and the plan proceeds.
+_PRE_PHASE_FOLD_JS = (
+    "  _checkIds.forEach((id, i) => {\n"
+    "    const r = _preResults[i];\n"
+    "    if (!r || (r.verdict !== 'already-done' && r.verdict !== 'still-open')) {\n"
+    "      _unusableChecks.push(id);\n"
+    "      return;\n"
+    "    }\n"
+    "    if (r.verdict === 'already-done') {\n"
+    "      const ev = Array.isArray(r.evidence) ? r.evidence : [];\n"
+    "      if (ev.length === 0 || ev.some(e => !e || !e.path || !e.excerpt)) {\n"
+    "        _unusableChecks.push(id);\n"
+    "        return;\n"
+    "      }\n"
+    "      _alreadyDone.add(id);\n"
+    "    }\n"
+    "  });\n"
+    "  _reviewPlans.forEach((plan, j) => {\n"
+    "    const r = _preResults[_checkIds.length + j];\n"
+    "    const known = !!r && ['SOUND', 'BROKEN', 'UNREVIEWABLE'].includes(r.verdict);\n"
+    "    const fired = known && Array.isArray(r.tells)\n"
+    "      ? r.tells.filter(t => t && t.status === 'FIRED').map(t => String(t.tell))\n"
+    "      : [];\n"
+    "    _reviews.push({ plan, verdict: known ? r.verdict : 'UNREVIEWABLE', tells: fired });\n"
+    "    if (known && r.verdict === 'BROKEN') _routedOutPlans.set(plan, fired);\n"
+    "  });"
+)
+
+
+def _spec_prompt_expr(spec: AgentSpec, shared: SharedBlocks) -> str:
+    """The JS expression for ``spec.prompt``: the already-done rule marker
+    becomes a ``SharedBlocks`` read, so the rule text is declared once."""
+    head, *tails = spec.prompt.split(ALREADY_DONE_RULE_MARKER)
+    pieces = [_resolve_markers_plus(head)]
+    for tail in tails:
+        pieces.append(shared.expr(ALREADY_DONE_RULE))
+        pieces.append(_resolve_markers_plus(tail))
+    return " + ".join(pieces)
+
+
+def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optional[str]) -> str:
+    opts = [
+        f"label: {_js_string_literal(spec.label)}",
+        f"phase: {_js_string_literal(spec.phase)}",
+    ]
+    if spec.agent_type is not None:
+        opts.append(
+            f"agentType: {_js_string_literal(_degrade_agent_type(spec.agent_type, agent_type_host))}"
+        )
+    opts.append(_model_opt(spec.agent_type or "", spec.model))
+    opts.append(f"schema: {_PRE_SCHEMAS_VAR}[{_js_string_literal(spec.schema)}]")
+    return (
+        "async () => { try { return await agent("
+        f"{_spec_prompt_expr(spec, shared)}, {{ {', '.join(opts)} }}); "
+        "} catch (e) { return null; } }"
+    )
+
+
+def _pre_phase_blocks(
+    specs: Sequence[AgentSpec],
+    review_specs: Sequence[AgentSpec],
+    shared: SharedBlocks,
+    agent_type_host: Optional[str],
+) -> list[str]:
+    """The script blocks for the pre-dispatch phase: one ``parallel([...])`` of
+    every check and review thunk, then the fold into the ``_run_row_helper_js``
+    sets. Emitted after the runtime-var declarations and before the first row
+    registration, so the sets are complete before any row registers."""
+    all_specs = [*specs, *review_specs]
+    schemas = ", ".join(
+        f"{_js_string_literal(name)}: {stage_schema_literal(name)}"
+        for name in sorted({spec.schema for spec in all_specs})
+    )
+    thunks = ",\n".join(
+        f"    {_spec_thunk_js(spec, shared, agent_type_host)}" for spec in all_specs
+    )
+    return [
+        f"  const {_PRE_SCHEMAS_VAR} = {{ {schemas} }};",
+        f"  phase({_js_string_literal(CHECK_PHASE_TITLE)});",
+        f"  const _preResults = await parallel([\n{thunks}\n  ]);",
+        "  const _checkIds = ["
+        + ", ".join(_js_string_literal(spec.key) for spec in specs)
+        + "];",
+        "  const _reviewPlans = ["
+        + ", ".join(_js_string_literal(spec.key) for spec in review_specs)
+        + "];",
+        _PRE_PHASE_FOLD_JS,
+    ]
+
+
+def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, int]:
+    """Estimated emitted UTF-8 bytes per row id: its registration and prompt,
+    plus its check thunk when ``predispatch``. A packing heuristic only -- the
+    composed script is the authority. Shared prompt text is counted by the
+    caller's fixed bytes, not per row.
+
+    ``compose_context`` keys: ``plan_path``, ``plan_context``, ``repo_root``,
+    ``agent_type_host``, ``preamble``, ``memo_deliveries``.
+    """
+    shared = SharedBlocks()
+    repo_root = compose_context.get("repo_root")
+    checks = {spec.key: spec for spec in check_specs(rows)} if predispatch else {}
+    out: dict[str, int] = {}
+    for row in rows:
+        call_expr = _row_agent_call_expr(
+            row,
+            compose_context.get("plan_path"),
+            compose_context.get("plan_context"),
+            shared,
+            agent_type_host=compose_context.get("agent_type_host"),
+            preamble=compose_context.get("preamble"),
+            new_module_paths=tuple(_new_module_paths(row, repo_root)),
+            memo_deliveries=compose_context.get("memo_deliveries"),
+        )
+        deps = ", ".join(f"_rows[{_js_string_literal(d)}]" for d in row.depends_on)
+        text = (
+            f"  _rows[{_js_string_literal(row.id)}] = _runRow("
+            f"{_js_string_literal(row.id)}, [{deps}], null, async () => ({call_expr}), "
+            f"{{ title: {_js_string_literal(row.title)}, paths: [] }});"
+        )
+        size = len(text.encode("utf-8"))
+        if row.writes is not UNDECLARED:
+            size += sum(len(path.encode("utf-8")) + 8 for path in row.writes)
+        spec = checks.get(row.id)
+        if spec is not None:
+            size += len(_spec_thunk_js(spec, shared, None).encode("utf-8")) + 6
+        out[row.id] = size
+    return out
+
+
 def _runtime_cap_on_host() -> int:
     """``min(16, CPUs-2)`` on the EMITTING host (AC10/D1's ``width.
     runtime_cap_on_emitting_host``) -- ``os.cpu_count()`` read once, here,
@@ -3272,6 +3439,8 @@ def compose_script(
     expected_branch: Optional[str] = None,
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     chatty: bool = False,
+    predispatch: bool = False,
+    review_specs: Sequence[AgentSpec] = (),
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3313,6 +3482,12 @@ def compose_script(
     None when detached or unreadable) threads into the same marker; the
     terminal commit refuses when HEAD is on another branch.
 
+    ``predispatch`` composes the pre-dispatch phase before the first row
+    registration: one check agent per row (``predispatch.check_specs``) plus
+    one ``review_specs`` agent per falsifier-carrying plan, in one
+    ``parallel([...])``. ``review_specs`` without ``predispatch`` raises
+    ``ValueError``. Review prompts get no plan-context preamble.
+
     ``chatty`` (opt-in, default off; absent leaves every emitted byte
     unchanged) composes a schema-valid roster template (``chatty.build_roster``),
     embeds it in an overseer agent's brief (the overseer writes ``<run-dir>/roster.json``; the emitter writes no file), and
@@ -3325,6 +3500,8 @@ def compose_script(
     Rendered once as a ``_shared`` const (module docstring § reuse of
     ``SharedBlocks``), never inlined per row -- see ``_prompt_head``.
     """
+    if review_specs and not predispatch:
+        raise ValueError("review_specs requires predispatch=True")
     if not waves:
         raise NoWavesError(
             "spine derives zero waves — refusing to emit an empty script "
@@ -3454,6 +3631,16 @@ def compose_script(
         )
     )
     body_blocks.append(_run_row_helper_js(agent_type_host))
+
+    pre_check_specs: list[AgentSpec] = []
+    if predispatch:
+        pre_check_specs = check_specs(flat_rows)
+        phase_titles.append(CHECK_PHASE_TITLE)
+        if review_specs:
+            phase_titles.append(REVIEW_PHASE_TITLE)
+        body_blocks.extend(
+            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host)
+        )
 
     phase_titles.append(_EXECUTE_PHASE_TITLE)
     body_blocks.append(f"  phase({_js_string_literal(_EXECUTE_PHASE_TITLE)});")
@@ -3808,6 +3995,7 @@ def compose_script(
             anchor_plan_path=plan_path,
             script_path=script_path,
             session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
+            predispatch={"checks_run": len(pre_check_specs)} if predispatch else None,
         )
     )
 
@@ -3837,7 +4025,9 @@ def compose_script(
         raise ScriptOverCapError(
             f"composed script is {script_size} bytes, over the Workflow "
             f"runner's {_WORKFLOW_SCRIPT_BYTE_CAP}-byte cap ({row_count} "
-            "row(s)) -- split the inventory into parts of fewer rows",
+            "row(s)) -- split the inventory into parts of fewer rows "
+            "(`emit-dispatch-workflow --inventory <record> --lanes` writes "
+            "write-disjoint, byte-bounded parts)",
             script_size=script_size,
             row_count=row_count,
         )
@@ -4274,6 +4464,8 @@ def emit_script(
     findings_out: Optional[list] = None,
     landed_rows: Optional[frozenset] = None,
     chatty: bool = False,
+    predispatch: bool = False,
+    review_specs: Sequence[AgentSpec] = (),
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
@@ -4440,6 +4632,8 @@ def emit_script(
         expected_branch=expected_branch,
         memo_deliveries=memo_deliveries,
         chatty=chatty,
+        predispatch=predispatch,
+        review_specs=review_specs,
     )
 
 

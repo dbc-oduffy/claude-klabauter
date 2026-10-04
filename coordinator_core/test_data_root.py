@@ -20,21 +20,21 @@ def test_colocated_rung_wins_when_dir_present(tmp_path, monkeypatch):
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: tmp_path)
     monkeypatch.setattr(
         dr_mod,
-        "coordinator_content_root",
+        "read_content_root",
         lambda: (_ for _ in ()).throw(AssertionError("rung 2 should not run")),
     )
     result = dr_mod.data_root("schemas")
     assert result == tmp_path / "schemas"
 
 
-def test_doe_resident_rung_used_when_colocated_missing(tmp_path, monkeypatch):
+def test_content_resident_rung_used_when_colocated_missing(tmp_path, monkeypatch):
     colocated_base = tmp_path / "colocated"
     colocated_base.mkdir()
-    content_root = tmp_path / "doe"
+    content_root = tmp_path / "content"
     (content_root / "coordinator" / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: str(content_root))
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: str(content_root))
 
     result = dr_mod.data_root("schemas")
     assert result == content_root / "coordinator" / "schemas"
@@ -45,7 +45,7 @@ def test_raises_when_content_root_unresolved(tmp_path, monkeypatch):
     colocated_base.mkdir()
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: "")
 
     with pytest.raises(RuntimeError, match="cannot resolve data dir 'schemas'"):
         dr_mod.data_root("schemas")
@@ -54,11 +54,11 @@ def test_raises_when_content_root_unresolved(tmp_path, monkeypatch):
 def test_raises_when_content_root_resolved_but_dir_missing(tmp_path, monkeypatch):
     colocated_base = tmp_path / "colocated"
     colocated_base.mkdir()
-    content_root = tmp_path / "doe"
+    content_root = tmp_path / "content"
     content_root.mkdir()
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: str(content_root))
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: str(content_root))
 
     with pytest.raises(RuntimeError, match="cannot resolve data dir 'schemas'"):
         dr_mod.data_root("schemas")
@@ -71,7 +71,7 @@ def test_f2_oss_flat_layout_fallback_when_private_join_absent(tmp_path, monkeypa
     (content_root / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: str(content_root))
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: str(content_root))
 
     result = dr_mod.data_root("schemas")
     assert result == content_root / "schemas"
@@ -85,7 +85,7 @@ def test_f2_private_layout_still_wins_when_both_would_resolve(tmp_path, monkeypa
     (content_root / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: str(content_root))
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: str(content_root))
 
     result = dr_mod.data_root("schemas")
     assert result == content_root / "coordinator" / "schemas"
@@ -102,8 +102,6 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     if str(_BIN_LIB_DIR) not in sys.path:
         sys.path.insert(0, str(_BIN_LIB_DIR))
     import coordinator_registry  # noqa: PLC0415 (bin/lib sibling)
-    from coordinator_core.ops import coordinator_content_root as content_root_mod
-
     colocated_core_miss = tmp_path / "core-miss"
     colocated_core_miss.mkdir()
     colocated_bin_miss = tmp_path / "bin-miss"
@@ -115,17 +113,16 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     empty_settings_home.mkdir()
 
     plugin_root = tmp_path / "plugin-root"
-    (plugin_root / "coordinator" / "schemas").mkdir(parents=True)
-    (plugin_root / "coordinator" / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
-    (plugin_root / "coordinator" / "snippets").mkdir(parents=True)
+    (plugin_root / "schemas").mkdir(parents=True)
+    (plugin_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+    (plugin_root / "snippets").mkdir(parents=True)
 
-    # coordinator_content_root() is NOT stubbed — it IS the C1B ladder this test
+    # read_content_root() is NOT stubbed — it IS the ladder this test
     # proves engine-side gets "for free" via delegation (per C2's finding:
-    # this module needs no ladder of its own). Its rung-1 env override
-    # (REPO_CONTENT_ROOT) is cleared so it does not short-circuit ahead of the
+    # this module needs no ladder of its own). The REPO_CONTENT_ROOT env
+    # override is cleared so it does not short-circuit ahead of the
     # ladder this test targets.
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_core_miss)
 
     if str(_BIN_LIB_DIR) not in sys.path:
@@ -143,14 +140,10 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(empty_settings_home))
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
 
-    content_root_mod._reset_content_root_cache()
-    try:
-        core_result = dr_mod.data_root("snippets")
-        bin_result = cdr_mod.data_root("snippets")
-    finally:
-        content_root_mod._reset_content_root_cache()
+    core_result = dr_mod.data_root("snippets")
+    bin_result = cdr_mod.data_root("snippets")
 
-    expected = plugin_root / "coordinator" / "snippets"
+    expected = plugin_root / "snippets"
     assert core_result == expected
     assert bin_result == expected
     assert core_result == bin_result
@@ -166,8 +159,8 @@ def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path
     _function_gate_modules_and_search_paths_for_repo_root` strips the
     `coordinator_core` prefix for a row staged at its own root).
 
-    Regression, 2026-08-21: a module-level `from coordinator_core.ops.
-    coordinator_content_root import coordinator_content_root` failed that gate with
+    Regression, 2026-08-21: a module-level import of a content-root resolver
+    from the `coordinator_core` package failed that gate with
     `ModuleNotFoundError: No module named 'coordinator_core'`, so the ENGINE row
     of the claude-klabauter target never published while the other eight landed —
     the mirror silently lagged the source tree fleet-wide
@@ -198,11 +191,11 @@ def test_module_imports_standalone_in_an_oss_shaped_hermetic_subprocess(tmp_path
 
 def test_deferred_resolver_still_honours_a_monkeypatched_module_attribute(tmp_path, monkeypatch) -> None:
     colocated_base = tmp_path / "colocated-miss"
-    content_root = tmp_path / "doe"
+    content_root = tmp_path / "content"
     (content_root / "coordinator" / "schemas").mkdir(parents=True)
 
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_base)
-    monkeypatch.setattr(dr_mod, "coordinator_content_root", lambda: str(content_root))
+    monkeypatch.setattr(dr_mod, "read_content_root", lambda: str(content_root))
 
     assert dr_mod._resolve_content_root() == str(content_root)
     assert dr_mod.data_root("schemas") == content_root / "coordinator" / "schemas"

@@ -1335,8 +1335,8 @@ def _plugin_cli_resolution_payload() -> dict[str, Any]:
     "provenance plus a loud fallback" shape `_lesson_capture_route_payload`
     already carries for the other producer this module cannot always
     reach. `root`/`source` come from `resolve_plugin_cli_script_root()`'s
-    own verdict and `coordinator_content_root_in_process()`'s own memoized
-    tuple -- never a second ladder run, and never a per-name `.exists()`
+    own verdict and the fixed `content_root` source label -- never a second
+    ladder run, and never a per-name `.exists()`
     stat inside this function: the resolver already checked the directory
     once (AC6), and re-checking here would spend this module's own
     4-open headroom on a question already answered.
@@ -1356,24 +1356,20 @@ def _plugin_cli_resolution_payload() -> dict[str, Any]:
     no blocking force by being read here.
     """
     from coordinator_core.ceremony_common.cli_dispatch import resolve_plugin_cli_script_root
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root_in_process
 
     script_root = resolve_plugin_cli_script_root()
-    _content_root, rung = coordinator_content_root_in_process()
     reachable = script_root is not None
     payload: dict[str, Any] = {
         "root": str(script_root) if reachable else None,
-        "source": rung,
+        "source": "content_root",
         "reachable": {name: reachable for name in _PLUGIN_LOCAL_CLI_HAND_RUN},
     }
     if not reachable:
         payload["reason"] = (
-            "resolve_plugin_cli_script_root() resolved no DoE-anchored "
-            "coordinator/bin directory -- coordinator_content_root_in_process() "
-            "exhausted rungs 1, 2, 2.5 and 2.75 (env, repos.content_root, "
-            "plugin.mirrors.live_path, codename-free) with no admissible "
-            "root, or the joined coordinator/bin at the resolved root is not "
-            "a directory (a stale or moved clone)."
+            "resolve_plugin_cli_script_root() resolved no content-anchored "
+            "coordinator/bin directory -- read_content_root() found no "
+            "admissible root, or the joined coordinator/bin at the resolved "
+            "root is not a directory (a stale or moved clone)."
         )
         payload["fallback"] = {
             name: f"Run by hand at the coordinator-content-repo clone: {cmd}"

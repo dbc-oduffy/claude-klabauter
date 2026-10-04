@@ -11,7 +11,7 @@ to exist, only the source line to be there (per C6's own brief).
 This is what stops a future tightening pass (a blanket suppression, a lint auto-fix, a
 find-and-replace) from quietly eating a message that has to carry a foreign-repo name to remain
 actionable — the audit's own sample makes the point: `queue_promote.py`'s
-`"machine-local set repos.content_root /path/to/coordinator-content-repo"` and `state_root.py`'s `"engine.source_root
+`"machine-local set repos.content_root /path/to/content-repo"` and `state_root.py`'s `"engine.source_root
 <path-to-live-claude-klabauter>"` are the remedy, not noise beside it. Re-run after the disposition
 half (C6) to prove no subject-class site regressed.
 
@@ -80,7 +80,6 @@ def _read(rel_path: str) -> str:
 
 _SUBJECT_SITES = [
     ("coordinator_core/engine_root.py", "broken or partial claude-klabauter checkout"),
-    ("coordinator_core/ops/coordinator_content_root.py", "machine-local set repos.content_root /path/to/coordinator-content-repo"),
     ("coordinator_core/ops/check_rag_state.py", "python3 <claude-klabauter>/scripts/setup.py"),
     ("coordinator_core/ops/generate_repomap.py", "python3 <claude-klabauter>/scripts/setup.py"),
     ("coordinator_core/ops/generate_repomap.py", "Install the coordinator-claude plugin"),

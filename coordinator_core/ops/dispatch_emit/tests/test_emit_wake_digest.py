@@ -365,6 +365,7 @@ def _simulate_return(
             "runtime_cap": "min(16, CPUs-2)",
             "runtime_cap_on_emitting_host": 2,
         },
+        "predispatch": None,
         "decision_required": halted,
         "next_action": {
             "kind": "terminal_commit",

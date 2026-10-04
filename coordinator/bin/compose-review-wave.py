@@ -95,7 +95,7 @@ CLI:
         --manifest <path-to-slice-manifest.json> \\
         --run-id <YYYYMMDD-HHMMSS>
         [--policy <path-to-subagent-sandbox-policy.yaml>]
-        [--claude-klabauter-live-root <path>]
+        [--engine-root-override <path>]
 
 Manifest shape (JSON):
     { "slices": [ { "id": "<slice-id>", "diffPath": "<repo-relative-path>" }
@@ -304,7 +304,7 @@ def _resolve_report_type(policy: dict, agent_type: str) -> str:
 def _resolve_engine_root(explicit_root: Optional[str]) -> str:
     """Resolve the engine root, explicit override first.
 
-    `--claude-klabauter-live-root`, when given, is validated the same way the hook's own
+    `--engine-root-override`, when given, is validated the same way the hook's own
     rung-0 override is (must exist and contain `coordinator_core/`) --
     an unhealthy explicit override is exactly as unreachable as no root at
     all. Otherwise delegates to the shared `cc_invoke.require_dispatch_engine_on_path`
@@ -935,7 +935,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="policy path (default: resolved through the coordinator-claude plugin root)",
     )
     parser.add_argument(
-        "--claude-klabauter-live-root",
+        "--engine-root-override",
         dest="engine_root_override",  # neutral: the publish transform renames codename identifiers
         default=None,
         help="Explicit override for engine-root resolution (testing/CI use). "

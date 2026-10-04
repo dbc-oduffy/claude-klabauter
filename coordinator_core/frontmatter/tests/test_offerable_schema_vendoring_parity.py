@@ -43,14 +43,14 @@ from typing import Optional
 
 import pytest
 
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 _CLAUDE_KLABAUTER_SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas"
 
 
 def _resolve_manifest() -> Optional[dict]:
     try:
-        content_root = coordinator_content_root()
+        content_root = resolve_content_root()
     except Exception:  # noqa: BLE001 — resolution failure -> skip, not fail
         return None
     if not content_root:

@@ -1324,7 +1324,7 @@ def test_generates_when_content_root_cannot_be_resolved_at_all(
 ):
     # No CLAUDE_PLUGIN_ROOT, no COORDINATOR_ROOT -- and the autouse
     # `_quarantine_real_home` fixture already points HOME at an empty
-    # quarantine dir, so the registry/`.coordinator-content-root`-pointer rungs of
+    # quarantine dir, so the registry/content-root-pointer rungs of
     # `resolve_content_root()` cannot find anything either. This is the
     # "content root cannot be resolved at all" case.
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)

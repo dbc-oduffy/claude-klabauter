@@ -10,8 +10,8 @@ re-implements callout-body rendering). Clean no-op (exit 0 + one-line note)
 when the roadmap dir or callout is absent — a roadmap_id with no index is
 not an error.
 
-Trust guard: before delegating, resolves and trust-checks the DoE
-coordinator root (CLAUDE_PLUGIN_ROOT env, else `~/.claude/.coordinator-content-root` pointer
+Trust guard: before delegating, resolves and trust-checks the
+coordinator root (CLAUDE_PLUGIN_ROOT env, else `read_content_root()`
 + `/coordinator`) via the canonical
 `coordinator_core.trusted_root_guard.is_trusted` — see that module for the
 full anchor list. cc_root is still validated before any rendering proceeds,
@@ -51,7 +51,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.data_root import content_root_for
+from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.content_root import read_content_root
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 
@@ -115,7 +116,7 @@ def _resolve_root(root_arg: str) -> str:
 
 
 def _resolve_cc_root() -> str:
-    """CLAUDE_PLUGIN_ROOT env -> ~/.claude/.coordinator-content-root pointer + content root.
+    """CLAUDE_PLUGIN_ROOT env -> `read_content_root()` + content root.
 
     The content root is resolved for EITHER layout (private authoring tree or
     published flat mirror); "" still means unresolved, and the caller's
@@ -124,13 +125,7 @@ def _resolve_cc_root() -> str:
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     if env_root:
         return env_root
-    claude_home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
-    content_root_pointer = Path(claude_home) / ".claude" / ".coordinator-content-root"
-    try:
-        content_root = content_root_pointer.read_text(encoding="utf-8").strip()
-    except OSError:
-        content_root = ""
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(read_content_root())
     if content_root is None:
         return ""
     return str(content_root)
@@ -228,7 +223,7 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
 
     if not cc_root or not os.path.isdir(cc_root):
         print(
-            "ERROR: coordinator root unresolved — ~/.claude/.coordinator-content-root missing/invalid; "
+            "ERROR: coordinator root unresolved — content root missing/invalid; "
             "re-run coordinator:install",
             file=sys.stderr,
         )

@@ -326,6 +326,7 @@ def _base_digest(**overrides):
             "rows": 1, "max_concurrent_rows": 1, "critical_path_rows": 1,
             "runtime_cap": "min(16, CPUs-2)", "runtime_cap_on_emitting_host": 14,
         },
+        "predispatch": None,
         "decision_required": None,
         "next_action": {"kind": "none", "op": None, "params": None},
     }

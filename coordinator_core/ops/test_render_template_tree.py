@@ -92,7 +92,7 @@ def _write_render_template_sh(bin_dir: Path) -> Path:
 
 @pytest.fixture()
 def content_root(tmp_path: Path) -> Path:
-    root = tmp_path / "doe-clone"
+    root = tmp_path / "content-clone"
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     _write_render_template_sh(bin_dir)
@@ -101,10 +101,8 @@ def content_root(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_env(monkeypatch):
-    # CONTENT_ROOT outranks REPO_CONTENT_ROOT in _resolve_content_root; an ambient one
-    # would shadow every fixture-staged content_root below.
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    # An ambient content root would shadow every fixture-staged content_root below.
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: "")
 
 
 def _make_happy_src(tmp_path: Path) -> Path:
@@ -122,7 +120,7 @@ def test_happy_path_renders_and_copies(tmp_path, monkeypatch, content_root):
     # unconditionally, so this test's fixture-authored render-template.py
     # (staged under content_root) would otherwise never run.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = _make_happy_src(tmp_path)
     dst = tmp_path / "dst1"
 
@@ -143,7 +141,7 @@ def test_multiple_token_files_render_in_one_spawn(tmp_path, monkeypatch, content
     N spawns of render-template.py.
     """
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = tmp_path / "src-multi"
     (src / "sub").mkdir(parents=True)
     for i in range(5):
@@ -175,7 +173,7 @@ def test_multiple_token_files_render_in_one_spawn(tmp_path, monkeypatch, content
 def test_no_token_bearing_files_skips_spawn(tmp_path, monkeypatch, content_root):
     """No {{ }} anywhere in the tree -- zero spawns, not one wasted call."""
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = tmp_path / "src-notoken"
     src.mkdir()
     (src / "plain.txt").write_text("no tokens here\n")
@@ -202,7 +200,7 @@ def test_one_bad_file_does_not_block_the_rest(tmp_path, monkeypatch, content_roo
     delegates to renders every OTHER file rather than stopping at the first failure.
     """
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = tmp_path / "src-onebad"
     src.mkdir()
     (src / "good.txt").write_text("v={{V}}\n")
@@ -219,7 +217,7 @@ def test_one_bad_file_does_not_block_the_rest(tmp_path, monkeypatch, content_roo
 def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, content_root):
     # Force the content-root fallback rung — see test_happy_path_renders_and_copies.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = _make_happy_src(tmp_path)
     dst = tmp_path / "dst-empty"
     dst.mkdir()
@@ -236,19 +234,19 @@ def test_dst_may_be_pre_existing_empty_dir(tmp_path, monkeypatch, content_root):
 
 
 def test_usage_error_on_too_few_args(monkeypatch, content_root):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     rc = main(["only-one-arg"])
     assert rc == 1
 
 
 def test_missing_src_dir_fails(tmp_path, monkeypatch, content_root):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     rc = main([str(tmp_path / "nope"), str(tmp_path / "dst")])
     assert rc == 1
 
 
 def test_non_empty_dst_dir_fails(tmp_path, monkeypatch, content_root):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = tmp_path / "src3"
     src.mkdir()
     (src / "a.txt").write_text("hi\n")
@@ -262,7 +260,7 @@ def test_non_empty_dst_dir_fails(tmp_path, monkeypatch, content_root):
 
 
 def test_unsubstituted_token_fails_loud(tmp_path, monkeypatch, content_root, capsys):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(content_root))
     src = tmp_path / "src4"
     src.mkdir()
     (src / "broken.txt").write_text("hello={{UNDEFINED}}\n")
@@ -274,13 +272,13 @@ def test_unsubstituted_token_fails_loud(tmp_path, monkeypatch, content_root, cap
 
 
 def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
-    # Force the content-root fallback rung so the empty DoE clone (no
+    # Force the content-root fallback rung so the empty content clone (no
     # render-template.py sibling) is actually consulted, rather than the
     # real co-located script this repo ships winning unconditionally.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    empty_root = tmp_path / "empty-doe"
+    empty_root = tmp_path / "empty-content"
     (empty_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(empty_root))
+    monkeypatch.setattr(render_template_tree, "read_content_root", lambda: str(empty_root))
     src = tmp_path / "src5"
     src.mkdir()
     (src / "a.txt").write_text("hi\n")
@@ -293,10 +291,9 @@ def test_missing_render_template_sh_fails(tmp_path, monkeypatch):
 def test_content_root_unresolvable_fails(tmp_path, monkeypatch):
     # Force the content-root fallback rung so content-root unresolvability is
     # actually reached, rather than short-circuited by the real
-    # co-located script this repo ships.
+    # co-located script this repo ships. The autouse fixture leaves the
+    # content root unresolved.
     monkeypatch.setattr(render_template_tree, "_co_located_render_single", lambda: None)
-    # No REPO_CONTENT_ROOT, no machine-local on PATH.
-    monkeypatch.setenv("PATH", "")
     src = tmp_path / "src6"
     src.mkdir()
     (src / "a.txt").write_text("hi\n")

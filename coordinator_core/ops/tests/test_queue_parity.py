@@ -73,14 +73,14 @@ assert resolves("queue.promote"), (
 )
 
 import coordinator_core.ops.queue_append as _qa_mod  # noqa: E402
-from coordinator_core.ops import coordinator_content_root as _content_root_mod  # noqa: E402
+from coordinator_core.testing.content_root import content_root_and_present  # noqa: E402
 from coordinator_core.ops.queue_append import (  # noqa: E402
     _ClaudeKlabauterUnresolvable as _AppendUnresolvable,
     _queue_append_handler,
     append_queue_entry,
 )
 from coordinator_core.ops.queue_promote import (  # noqa: E402
-    _DoeUnresolvable as _PromoteUnresolvable,
+    _ContentRootUnresolvable as _PromoteUnresolvable,
     _queue_promote_handler,
     promote_lesson,
 )
@@ -92,23 +92,18 @@ from coordinator_core.ops.queue_promote import (  # noqa: E402
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 # ---------------------------------------------------------------------------
-# Oracle / schema-cli path resolution (reads ~/.claude/.coordinator-content-root sentinel)
+# Oracle / schema-cli path resolution (via the shared content-root test resolver)
 # ---------------------------------------------------------------------------
 
-_CONTENT_ROOT_SENTINEL = Path.home() / ".claude" / ".coordinator-content-root"
+_CONTENT_ROOT, _CONTENT_ROOT_PRESENT = content_root_and_present()
 _DOE_QUEUE_APPEND_CLI: Optional[Path] = None
 _DOE_LESSON_PROMOTE_CLI: Optional[Path] = None
 _DOE_SCHEMA_CLI: Optional[Path] = None
 
-if _CONTENT_ROOT_SENTINEL.exists():
-    try:
-        _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding="utf-8").strip()
-        _DOE_QUEUE_APPEND_CLI = Path(_content_root) / "coordinator" / "bin" / "coordinator-queue-append"
-        _DOE_LESSON_PROMOTE_CLI = Path(_content_root) / "coordinator" / "bin" / "coordinator-lesson-promote"
-        _DOE_SCHEMA_CLI = Path(_content_root) / "coordinator" / "bin" / "schema-cli.js"
-    except OSError:
-        print(f"skip: <module>: _content_root = _CONTENT_ROOT_SENTINEL.read_text(encoding=\"utf-8\").strip() failed: {sys.exc_info()[1]}", file=sys.stderr)
-        pass
+if _CONTENT_ROOT_PRESENT:
+    _DOE_QUEUE_APPEND_CLI = Path(_CONTENT_ROOT) / "coordinator" / "bin" / "coordinator-queue-append"
+    _DOE_LESSON_PROMOTE_CLI = Path(_CONTENT_ROOT) / "coordinator" / "bin" / "coordinator-lesson-promote"
+    _DOE_SCHEMA_CLI = Path(_CONTENT_ROOT) / "coordinator" / "bin" / "schema-cli.js"
 
 # ---------------------------------------------------------------------------
 # Precondition checks (F9/AC14 — explicit harness guard)
@@ -137,12 +132,12 @@ def _schema_cli_precondition_reason() -> str:
     parts: list[str] = []
     if not _NODE_AVAILABLE:
         parts.append("'node' not found on PATH — install Node.js (https://nodejs.org/)")
-    if not _CONTENT_ROOT_SENTINEL.exists():
-        parts.append("~/.claude/.coordinator-content-root sentinel absent (DoE root not configured)")
+    if not _CONTENT_ROOT_PRESENT:
+        parts.append("content root unresolved (repos.content_root not configured)")
     elif _DOE_SCHEMA_CLI is None or not _DOE_SCHEMA_CLI.is_file():
         parts.append(
             f"schema-cli.js not found at {_DOE_SCHEMA_CLI} — "
-            "check that DoE coordinator clone is present at the path in ~/.claude/.coordinator-content-root"
+            "check that the content clone is present at the resolved content root"
         )
     return "; ".join(parts) if parts else "ok"
 
@@ -409,7 +404,7 @@ class TestSchemaCliPrecondition:
         assert shutil.which("node") is not None
 
     def test_schema_cli_js_reachable(self):
-        """DoE-HEAD bin/schema-cli.js must be present at the .coordinator-content-root location (F9/AC14)."""
+        """DoE-HEAD bin/schema-cli.js must be present at the content-root location (F9/AC14)."""
         if not _SCHEMA_CLI_AVAILABLE:
             pytest.skip(
                 f"schema-cli.js precondition not met: {_SCHEMA_CLI_SKIP}. "
@@ -417,7 +412,7 @@ class TestSchemaCliPrecondition:
             )
         assert _DOE_SCHEMA_CLI is not None and _DOE_SCHEMA_CLI.is_file(), (
             f"schema-cli.js not found at {_DOE_SCHEMA_CLI}. "
-            "Ensure the DoE coordinator clone exists at the path in ~/.claude/.coordinator-content-root."
+            "Ensure the content clone exists at the resolved content root."
         )
 
     @_requires_schema_cli
@@ -1123,11 +1118,10 @@ class TestClaudeKlabauterUnresolvable:
     """Unresolvable-root → WARN+skip, exit 0, no cwd fallback (AC6).
 
     queue.append (queue_scope='central') triggers this path when CLAUDE_KLABAUTER_ROOT cannot
-    be resolved via env or machine-local registry. queue.promote triggers the DoE-side
-    counterpart when the coordinator-content-repo root cannot be resolved via
-    ``coordinator_content_root()`` (REPO_CONTENT_ROOT env / machine-local / pointer-file
-    rungs) — the outbox is ContentRooted, not claude-klabauter-rooted (see queue_promote's
-    ``_outbox_root`` docstring).
+    be resolved via env or machine-local registry. queue.promote triggers the content-side
+    counterpart when the content root cannot be resolved via
+    ``read_content_root()`` (registry / pointer-file rungs) — the outbox is
+    content-rooted, not claude-klabauter-rooted (see queue_promote's ``_outbox_root`` docstring).
     """
 
     def test_append_central_scope_raises_claude_klabauter_unresolvable(self, tmp_path, monkeypatch):
@@ -1187,27 +1181,19 @@ class TestClaudeKlabauterUnresolvable:
         )
 
     def _make_content_root_unresolvable(self, tmp_path, monkeypatch):
-        """Force coordinator_content_root() to fail loud (None): empty PATH (no
-        `machine-local` binary), no REPO_CONTENT_ROOT override, no pointer-file /
-        flat-layout rung 3 fallback (fake, empty CLAUDE_HOME), no passthrough env.
-        Mirrors coordinator_core/ops/test_coordinator_content_root.py's
-        test_negative_no_machine_local_no_pointer_file recipe.
+        """Force read_content_root() to resolve nothing: an empty settings home and an
+        empty CLAUDE_HOME, no CLAUDE_PLUGIN_ROOT, so neither the registry, a pointer
+        file nor the installed-plugin rung has anything to return.
         """
-        _content_root_mod._reset_content_root_cache()
-        empty_bin = tmp_path / "empty-bin"
-        empty_bin.mkdir(exist_ok=True)
         fake_home = tmp_path / "neg-empty-home"
         fake_home.mkdir(exist_ok=True)
-        monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-        monkeypatch.delenv("COORDINATOR_CLONE", raising=False)
-        monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-        monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-        monkeypatch.delenv("COORDINATOR_SOURCE_MODE", raising=False)
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "neg-empty-settings"))
         monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
-        monkeypatch.setenv("PATH", str(empty_bin))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_home / ".claude"))
+        monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
 
     def test_promote_raises_claude_klabauter_unresolvable_no_cwd_fallback(self, tmp_path, monkeypatch):
-        """promote_lesson with unresolvable coordinator-content-repo root → _DoeUnresolvable, no cwd fallback.
+        """promote_lesson with unresolvable content root → _ContentRootUnresolvable, no cwd fallback.
 
         Negative-spec: stop-the-rot C12 closes the cwd-fallback landmine.
         coordinator-lesson-promote's legacy cwd fallback is NOT replicated in the op.
@@ -1228,7 +1214,7 @@ class TestClaudeKlabauterUnresolvable:
             )
 
     def test_promote_handler_returns_skipped_on_unresolvable(self, tmp_path, monkeypatch):
-        """queue.promote handler wraps _DoeUnresolvable → returns {skipped: True} (AC6)."""
+        """queue.promote handler wraps _ContentRootUnresolvable → returns {skipped: True} (AC6)."""
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setenv("COORDINATOR_SCHEMA_CLI", str(_DOE_SCHEMA_CLI))
         self._make_content_root_unresolvable(tmp_path, monkeypatch)
@@ -1459,22 +1445,21 @@ class TestQueueAppendMachineLocalImplSettingsHomeRepoint:
         assert result == str(claude_home_root / "bin" / "_machine_local.py")
 
 
-class TestQueuePromoteRoutesViaDoeResolver:
+class TestQueuePromoteRoutesViaContentRootResolver:
     """queue_promote no longer owns a private machine-local/settings-home resolution
 
-    ladder — it delegates entirely to ``coordinator_core.ops.coordinator_content_root``
-    (shared coordinator-content-repo resolver seam), which owns its own settings-home/PATH
-    resolution and is covered by ``coordinator_core/ops/test_coordinator_content_root.py``.
+    ladder — it delegates entirely to ``coordinator_core.content_root.read_content_root``
+    (the one content-root resolver), covered by ``coordinator_core/test_content_root.py``.
     This is a thin regression guard that the delegation itself is wired, not a
     re-test of the resolver's internals.
     """
 
-    def test_outbox_root_delegates_to_coordinator_content_root(self, tmp_path, monkeypatch):
+    def test_outbox_root_delegates_to_read_content_root(self, tmp_path, monkeypatch):
         import coordinator_core.ops.queue_promote as _qp_mod
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setattr(
-            _qp_mod, "coordinator_content_root", lambda: str(tmp_path / "coordinator-content-repo")
+            _qp_mod, "read_content_root", lambda: str(tmp_path / "coordinator-content-repo")
         )
 
         result = _qp_mod._outbox_root()
@@ -1483,18 +1468,17 @@ class TestQueuePromoteRoutesViaDoeResolver:
 
     def test_outbox_root_explicit_content_root_param_wins_over_resolver(self, tmp_path, monkeypatch):
         """claude-klabauter#33: an explicit ``content_root`` param (the CALLER's own
-        already-resolved root, e.g. via a CONTENT_ROOT-honouring CLI) must win over
-        this op's own ``coordinator_content_root()`` resolution — which has no
-        CONTENT_ROOT rung — so a caller-side ``--target-wiki`` validation and the
-        write it authorizes always agree on the same coordinator-content-repo checkout.
+        already-resolved root) must win over this op's own ``read_content_root()``
+        resolution, so a caller-side ``--target-wiki`` validation and the
+        write it authorizes always agree on the same content checkout.
         """
         import coordinator_core.ops.queue_promote as _qp_mod
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
-        # coordinator_content_root() resolves to a DIFFERENT root than the explicit
+        # read_content_root() resolves to a DIFFERENT root than the explicit
         # param — if the param were ignored, this test would fail on the wrong path.
         monkeypatch.setattr(
-            _qp_mod, "coordinator_content_root", lambda: str(tmp_path / "resolver-coordinator-content-repo")
+            _qp_mod, "read_content_root", lambda: str(tmp_path / "resolver-coordinator-content-repo")
         )
         explicit_root = str(tmp_path / "explicit-coordinator-content-repo")
 
@@ -1504,13 +1488,13 @@ class TestQueuePromoteRoutesViaDoeResolver:
 
     def test_promote_lesson_writes_under_explicit_content_root_param(self, tmp_path, monkeypatch):
         """claude-klabauter#33: ``promote_lesson(content_root=...)`` writes under the
-        explicit root, never under whatever ``coordinator_content_root()`` would have
+        explicit root, never under whatever ``read_content_root()`` would have
         resolved on its own."""
         import coordinator_core.ops.queue_promote as _qp_mod
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setattr(
-            _qp_mod, "coordinator_content_root", lambda: str(tmp_path / "wrong-coordinator-content-repo")
+            _qp_mod, "read_content_root", lambda: str(tmp_path / "wrong-coordinator-content-repo")
         )
         explicit_root = tmp_path / "right-coordinator-content-repo"
 
@@ -1541,7 +1525,7 @@ class TestQueuePromoteRoutesViaDoeResolver:
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setattr(
-            _qp_mod, "coordinator_content_root", lambda: str(tmp_path / "wrong-coordinator-content-repo")
+            _qp_mod, "read_content_root", lambda: str(tmp_path / "wrong-coordinator-content-repo")
         )
         explicit_root = tmp_path / "right-coordinator-content-repo"
 
@@ -1568,7 +1552,7 @@ class TestQueuePromoteRoutesViaDoeResolver:
 #
 # Background: for weeks _outbox_root() was claude-klabauter-rooted (resolved via
 # CLAUDE_KLABAUTER_ROOT env / machine-local `repos.claude_klabauter`, mirroring
-# queue_append's central-scope resolver) instead of ContentRooted, causing ~103
+# queue_append's central-scope resolver) instead of content-rooted, causing ~103
 # lessons-outbox entries from OTHER repos' sessions to land in claude-klabauter's own
 # state/lessons-outbox/ (see queue_promote.py module docstring, corrected
 # 2026-07-22/23). The prose negative-spec at queue_promote.py:117-122 was
@@ -1579,28 +1563,28 @@ class TestQueuePromoteRoutesViaDoeResolver:
 # ---------------------------------------------------------------------------
 
 
-class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
-    """``_outbox_root()`` resolves under ``coordinator_content_root()`` — never under
+class TestOutboxRootContentRootedNotClaudeKlabauterRooted:
+    """``_outbox_root()`` resolves under ``read_content_root()`` — never under
     claude-klabauter's own root (CLAUDE_KLABAUTER_ROOT / ``main_worktree_root()``) and never with a
-    silent cwd-relative fallback on an unresolvable DoE root.
+    silent cwd-relative fallback on an unresolvable content root.
     """
 
     def test_outbox_root_is_content_rooted_not_claude_klabauter_rooted(self, tmp_path, monkeypatch):
-        """_outbox_root() with no env override resolves under coordinator_content_root(),
+        """_outbox_root() with no env override resolves under read_content_root(),
         and specifically NOT under claude-klabauter's root / CLAUDE_KLABAUTER_ROOT / main_worktree_root().
 
-        Fixture uses DISTINCT DoE and claude-klabauter roots so the negative assertion has
+        Fixture uses DISTINCT content and claude-klabauter roots so the negative assertion has
         teeth — a fixture where both happen to resolve to the same directory would
         pass even if the claude-klabauter-rooted bug reappeared.
 
         This recreates the historical bug's exact inputs: the pre-fix _outbox_root()
         resolved via CLAUDE_KLABAUTER_ROOT env (mirroring queue_append's central-scope
-        resolver) rather than coordinator_content_root() — setting both env vars to
+        resolver) rather than read_content_root() — setting both env vars to
         distinct values here means this test would have failed under that code.
         """
         import coordinator_core.ops.queue_promote as _qp_mod
 
-        content_root = tmp_path / "coordinator-content-repo-root"
+        content_root = tmp_path / "content-clone-root"
         claude_klabauter_root = tmp_path / "claude-klabauter-live-root"
         content_root.mkdir()
         claude_klabauter_root.mkdir()
@@ -1608,7 +1592,7 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(claude_klabauter_root))
-        monkeypatch.setattr(_qp_mod, "coordinator_content_root", lambda: str(content_root))
+        monkeypatch.setattr(_qp_mod, "read_content_root", lambda: str(content_root))
         monkeypatch.setattr(
             _qp_mod,
             "main_worktree_root",
@@ -1620,7 +1604,7 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
         result = _qp_mod._outbox_root()
 
         expected = str(content_root / "state" / "lessons-outbox")
-        assert result == expected, f"expected ContentRooted path, got: {result}"
+        assert result == expected, f"expected content-rooted path, got: {result}"
         assert not result.startswith(str(claude_klabauter_root)), (
             f"_outbox_root() must NOT resolve under claude-klabauter's root; got: {result}"
         )
@@ -1631,20 +1615,20 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
     def test_outbox_root_raises_when_content_root_unresolvable_no_fallback(
         self, tmp_path, monkeypatch
     ):
-        """_outbox_root() raises _DoeUnresolvable — no silent cwd/claude-klabauter fallback —
-        when coordinator_content_root() returns None and no env override is set.
+        """_outbox_root() raises _ContentRootUnresolvable — no silent cwd/claude-klabauter fallback —
+        when read_content_root() returns "" and no env override is set.
         """
         import coordinator_core.ops.queue_promote as _qp_mod
 
         monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
         monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-        monkeypatch.setattr(_qp_mod, "coordinator_content_root", lambda: None)
+        monkeypatch.setattr(_qp_mod, "read_content_root", lambda: "")
 
-        with pytest.raises(_qp_mod._DoeUnresolvable):
+        with pytest.raises(_qp_mod._ContentRootUnresolvable):
             _qp_mod._outbox_root()
 
     def test_outbox_root_env_override_takes_precedence(self, tmp_path, monkeypatch):
-        """LESSON_PROMOTE_OUTBOX_ROOT env override wins over coordinator_content_root()
+        """LESSON_PROMOTE_OUTBOX_ROOT env override wins over read_content_root()
         entirely (test-isolation contract, C-c) — the resolver is never even called.
         """
         import coordinator_core.ops.queue_promote as _qp_mod
@@ -1653,10 +1637,10 @@ class TestOutboxRootDoeRootedNotClaudeKlabauterRooted:
         monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(override_root))
         monkeypatch.setattr(
             _qp_mod,
-            "coordinator_content_root",
+            "read_content_root",
             lambda: (_ for _ in ()).throw(
                 AssertionError(
-                    "coordinator_content_root() must not be called when "
+                    "read_content_root() must not be called when "
                     "LESSON_PROMOTE_OUTBOX_ROOT is set"
                 )
             ),

@@ -121,6 +121,7 @@ from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.ops.dispatch_emit.spine_read import (
     SpineReadError,
+    load_rows_memo,
     read_spine,
     with_canonical_disposition,
 )
@@ -733,7 +734,7 @@ def _plan_raw_rows_by_id(
         except OSError:
             plan_cache[plan_path] = {}
         else:
-            result = load_rows(text)
+            result = load_rows_memo(text)
             if result.status is not LocateStatus.LOCATED:
                 plan_cache[plan_path] = {}
             else:

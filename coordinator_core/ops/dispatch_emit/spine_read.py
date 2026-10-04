@@ -612,12 +612,44 @@ class EmitterRow(NamedTuple):
     reads_at_head: tuple = ()
 
 
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_MEMO_LIMIT = 256
+_FM_DOCS: dict = {}
+_ROWS_MEMO: dict = {}
+
+
+def _remember(memo: dict, key: str, value):
+    if len(memo) >= _MEMO_LIMIT:
+        memo.clear()
+    memo[key] = value
+    return value
+
+
+def load_frontmatter_doc(fm_text: str):
+    """``yaml.safe_load(fm_text)`` memoised per process by text; raises ``yaml.YAMLError``.
+
+    The returned document is shared: callers must treat it as read-only.
+    """
+    try:
+        return _FM_DOCS[fm_text]
+    except KeyError:
+        return _remember(_FM_DOCS, fm_text, yaml.load(fm_text, Loader=_YAML_LOADER))
+
+
+def load_rows_memo(source: str):
+    """``load_rows(source)`` memoised per process by text; the result is read-only."""
+    hit = _ROWS_MEMO.get(source)
+    if hit is None:
+        hit = _remember(_ROWS_MEMO, source, load_rows(source))
+    return hit
+
+
 def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
     split = split_frontmatter(source)
     if split is None:
         return {}
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return {}
     if not isinstance(doc, dict):
@@ -739,7 +771,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     with open(plan_path, encoding="utf-8") as handle:
         source = handle.read()
 
-    result = load_rows(source)
+    result = load_rows_memo(source)
     if result.status is not LocateStatus.LOCATED:
         raise SpineReadError(
             f"plan {plan_path!r} task-spine block is {result.status.name}, not LOCATED"

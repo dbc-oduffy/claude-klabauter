@@ -55,7 +55,7 @@ PRECEDENCE` triple) plus `MACHINE_LOCAL_REGISTRY_DIR`.
 
 WIDENED SET (C7): seven more `borrow` names -- `CLAUDE_HOME`,
 `CLAUDE_PLUGIN_ROOT`, `CLAUDE_CONFIG_DIR`, `MACHINE_LOCAL_IMPL`,
-`COORDINATOR_ROOT`, `CONTENT_ROOT`, `CLAUDE_PROJECT_DIR` -- the remaining
+`COORDINATOR_ROOT`, `COORDINATOR_CONTENT_ROOT`, `CLAUDE_PROJECT_DIR` -- the remaining
 census names that are path-valued caller-owned facts read the same way
 `MACHINE_LOCAL_REGISTRY_DIR` already is. The OS-level census names
 (`HOME`, `USERPROFILE`, `PATH`, `LOCALAPPDATA`, `TMPDIR`, `SYSTEMROOT`)
@@ -103,7 +103,7 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("CLAUDE_CONFIG_DIR", BORROW),
     _entry("MACHINE_LOCAL_IMPL", BORROW),
     _entry("COORDINATOR_ROOT", BORROW),
-    _entry("CONTENT_ROOT", BORROW),
+    _entry("COORDINATOR_CONTENT_ROOT", BORROW),
     _entry("CLAUDE_PROJECT_DIR", CALLER),
     _entry("CLAUDE_CODE_REMOTE", CALLER),
     # Job mode. `session.mode_resolution`'s resolver reads this to learn

@@ -15,7 +15,7 @@ the box that needs it; never import `coordinator_core` here.
 Negative-spec: touches only the two shim files and text between the generator's
 own sentinel lines (`coordinator_core.ops.gen_claude_author_shim.SENTINEL_BEGIN` /
 `SENTINEL_END`, copied below because this file cannot import them). Never edits
-an operator's own rc lines, the `.coordinator-content-root` pointer, the registry, or the plugin.
+an operator's own rc lines, the content-root pointer, the registry, or the plugin.
 """
 
 from __future__ import annotations

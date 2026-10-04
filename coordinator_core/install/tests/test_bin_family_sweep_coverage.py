@@ -8,9 +8,9 @@ and remediates (see § Cross-plan coordination in the plan above); this chunk
 is verification only, per Anti-scope ("Do not edit anything under the
 Coordinator-content-repo clone tree").  # abs-path-ok: doc quote of the plan's Anti-scope
 # line, not a path literal used anywhere in this module's code — the actual
-# DoE root is resolved at runtime via read_content_root_pointer().
+# content root is resolved at runtime via read_content_root().
 Every assertion here reads coordinator-content-repo's tree read-only, resolved via
-`coordinator_core.content_root_pointer.read_content_root_pointer()` — never a
+`coordinator_core.content_root.read_content_root()` — never a
 hardcoded drive path, since this box's DoE checkout location is not portable
 across machines.
 
@@ -67,7 +67,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.install.substrate import (
     _CH_FAMILY_FILES,
     _RM_FAMILY_FILES,
@@ -78,7 +78,7 @@ from coordinator_core.install.substrate import (
 
 
 def _resolve_content_root() -> "Path | None":
-    root_str = read_content_root_pointer()
+    root_str = read_content_root()
     if not root_str:
         return None
     root = Path(root_str)
@@ -110,7 +110,7 @@ def _load_bin_impl_drift(content_root: Path):
 def content_root() -> Path:
     root = _resolve_content_root()
     if root is None:
-        pytest.skip("coordinator-content-repo root not resolvable on this box (repos.content_root unset)")
+        pytest.skip("content root not resolvable on this box (repos.content_root unset)")
     return root
 
 

@@ -22,7 +22,7 @@ the actual Step 0 spine-builder every coordinator-claude install session runs.
 Claude-klabauter does not vendor that template (it is coordinator-claude/DoE
 content, not claude-klabauter's — see claude-klabauter's own CLAUDE.md § What this repo
 is), so this test resolves the coordinator-content-repo repo root the same registry-first,
-machine-portable way ``coordinator_core.content_root_pointer`` is designed for and
+machine-portable way ``coordinator_core.content_root`` is designed for and
 SKIPS (never fails) when that root, or the template inside it, is not
 resolvable on the current machine — a missing sibling checkout is an
 environment fact, not a defect in the mechanism this test is proving.
@@ -62,7 +62,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core._settings_home import settings_home as _real_settings_home
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -140,7 +140,7 @@ def _extract_bash_block(template_text: str, marker: str) -> str:
 
 
 def _resolve_template_path() -> Path | None:
-    content_root = read_content_root_pointer()
+    content_root = read_content_root()
     if not content_root:
         return None
     candidate = Path(content_root) / _TEMPLATE_REL
@@ -169,7 +169,7 @@ def test_driven_leaf_seed_sweep_pickup(tmp_path: Path, monkeypatch: pytest.Monke
     template_path = _resolve_template_path()
     if template_path is None:
         pytest.skip(
-            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
+            "content root not resolvable via coordinator_core.content_root "
             "on this machine (or the template is missing there) — the real Step 0 "
             "sweep mechanism this test proves against is unavailable; not a defect "
             "in claude-klabauter."

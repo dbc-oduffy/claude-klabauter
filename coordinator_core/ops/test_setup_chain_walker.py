@@ -166,7 +166,7 @@ def test_resolve_coordinator_root_ladder_noop_when_no_mirrors_registered(tmp_pat
 
 
 def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, monkeypatch):
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
@@ -182,7 +182,7 @@ def test_resolve_coordinator_root_ladder_rung3_resolves_via_registry(tmp_path, m
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, monkeypatch):
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)
@@ -200,7 +200,7 @@ def test_resolve_coordinator_root_ladder_rung3_rejects_publish_mirror(tmp_path, 
 
 
 def test_resolve_coordinator_root_ladder_rung3_rejects_missing_positive_evidence(tmp_path, monkeypatch):
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     content_root.mkdir()
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(scw, "registry_get", lambda key: str(content_root) if key == "engine.working_repos.content_root" else None)
@@ -216,7 +216,7 @@ def test_resolve_coordinator_root_ladder_rung3_fail_open_when_key_absent(monkeyp
 
 
 def test_resolve_coordinator_root_ladder_flag_and_env_outrank_registry(tmp_path, monkeypatch):
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     plugin_root = content_root / "coordinator"
     plugin_root.mkdir(parents=True)
     _add_coordinator_claude_source_evidence(plugin_root)

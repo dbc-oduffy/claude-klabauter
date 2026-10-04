@@ -111,9 +111,8 @@ Negative-spec:
   script.
   Does NOT hardcode CLAUDE_KLABAUTER_ROOT — resolves via flag -> env -> repo-root ladder.
   Does NOT hardcode the coordinator-claude sibling-dir — resolves via
-  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared .coordinator-content-root
-  pointer -> engine.working_repos.content_root registry key -> settings-home
-  .coordinator-content-root sentinel -> sibling-dir default, so a packaging installer (e.g.
+  --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> the content root
+  (`read_content_root()`) -> sibling-dir default, so a packaging installer (e.g.
   example-os-repo) can inject the location instead of relying on side-by-side git
   clone placement. The sibling-dir default is the only rung that guesses, and
   it is existence-gated: an unverified guess comes back flagged in the source
@@ -128,9 +127,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-import io
 import json
 import os
 import re
@@ -300,8 +297,6 @@ from coordinator_core.install.timeouts import (  # noqa: E402
 from coordinator_core.engine_root import (  # noqa: E402
     _maybe_emit_engine_root_retired as _emit_claude_klabauter_root_retired,
 )
-from coordinator_core.cli_entry import run_op_main  # noqa: E402
-from coordinator_core.install._shared import env_overlay  # noqa: E402
 
 HELP_TEXT = """\
 Claude-klabauter installer — sets up the coordinator control-plane engine.
@@ -407,7 +402,6 @@ class Args:
         self.allow_venv_fallback = False
         self.container_optin = False
         self.with_test_deps = False
-        self.with_claude_author_launcher = False
         self.register_only = False
         self.check = False
         self.preflight = False
@@ -441,12 +435,6 @@ def parse_args(argv: list[str]) -> Args:
             args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
-        elif tok in ("--with-claude-author-launcher", "--with-claude-" + "doe-launcher"):
-            # The "--with-claude-" + "doe-launcher" spelling is the pre-rename alias, accepted for one release.
-            # The DoE-developer opt-in that lets this installer shadow the
-            # operator's `claude` command. Deliberately absent from HELP_TEXT:
-            # an OSS reader has no DoE clone and must never meet the concept.
-            args.with_claude_author_launcher = True
         elif tok == "--register-only":
             args.register_only = True
         elif tok == "--check":
@@ -1865,181 +1853,56 @@ def _looks_like_coordinator_claude_source(path: Path) -> bool:
     return has_oss_shape or has_dev_clone_shape
 
 
-def _coordinator_root_from_settings_home() -> "Path | None":
-    """Read the coordinator-claude source root recorded in the settings home.
+def _coordinator_root_from_content_root() -> "Path | None":
+    """The coordinator content root `coordinator_core.content_root.read_content_root()`
+    resolves, as a coordinator-claude source checkout.
 
-    The settings home is the standing read surface for every resolved path (it
-    is durable and Anthropic-independent, unlike `~/.claude`), and it already
-    carries `machine-local/.coordinator-content-root` naming the DoE dev clone. This rung reads
-    it so the resolver stops guessing a sibling directory that was never where
-    the checkout lives on this machine.
+    The raw value may be a clone root whose plugin source lives one directory
+    down, so a value that does not itself look like a source checkout goes
+    through `_resolve_plugin_root_for_machine_local` before being offered.
 
-    Returns None when the sentinel is absent, empty, or does not resolve to a
-    directory that still looks like a source checkout — a stale sentinel must
-    fall through to the remaining rungs, never pin the resolver to a dead path.
+    Returns None when nothing resolves, the path is not a directory, or neither
+    shape matches — a stale value falls through to the sibling-dir rung, never
+    pins the resolver to a dead path. A resolver failure prints an advisory and
+    reads as None: this rung is best-effort and must not abort the installer.
 
-    negative-spec: this rung deliberately does NOT read
-    `publish.mirrors.coordinator_claude.path`. That key names a generated
-    downstream publish mirror, which `_is_publish_mirror` exists to reject; the
-    hard-dep gate has to walk the SOURCE checkout. The two being different
-    places on the same machine is the normal case, not a misconfiguration.
-    """
-    # Narrowed from a bare
-    # `except Exception` so a broken resolution-machinery failure (an
-    # ImportError on `coordinator_core._settings_home`, or `settings_home()`
-    # itself misconfigured) surfaces instead of looking identical to "no
-    # sentinel recorded yet." Only the stale/absent-sentinel case (a missing
-    # file or an unreadable one) is meant to fall through silently to the
-    # sibling-dir rung; a resolver-machinery failure is printed to stderr
-    # before falling through, so it is visible without being fatal.
+    Imported in-function: this script runs before `coordinator_core`'s
+    third-party deps are provisioned.
+
+    negative-spec: does NOT read `publish.mirrors.coordinator_claude.path`, a
+    generated downstream mirror that `_is_publish_mirror` exists to reject."""
     try:
-        from coordinator_core._settings_home import settings_home
+        from coordinator_core.content_root import read_content_root
 
-        sentinel = settings_home() / "machine-local" / ".coordinator-content-root"
-    except Exception as exc:
-        # Kept non-fatal (print + None, not a re-raise): letting an
-        # ImportError/misconfiguration propagate here would abort the rest
-        # of setup over a rung that is itself best-effort (falls through to
-        # a sibling-dir guess). Printed so it is visible instead of looking
-        # identical to "no sentinel recorded yet" — see finding for the
-        # narrower alternative considered (letting it surface) and why this
-        # print-and-continue was picked instead.
-        print(f"[ADVISORY] settings-home resolution failed ({exc}); cannot read .coordinator-content-root sentinel.", file=sys.stderr)
-        return None
-    try:
-        if not sentinel.is_file():
+        recorded = read_content_root()
+        if not recorded:
             return None
-        recorded = sentinel.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        print(f"[ADVISORY] could not read .coordinator-content-root sentinel at {sentinel} ({exc}).", file=sys.stderr)
-        return None
-    if not recorded:
-        return None
-    candidate = Path(recorded)
-    if not candidate.is_dir() or not _looks_like_coordinator_claude_source(candidate):
-        return None
-    return candidate
-
-
-def _coordinator_root_from_content_root_pointer() -> "Path | None":
-    """Read the shared `.coordinator-content-root` pointer file via
-    `read_content_root_pointer.py::coordinator_read_content_root_pointer()` — private
-    dev-clone layout at `coordinator/lib/read_content_root_pointer.py`, published
-    payload layout (flattened, see C1F) at `lib/read_content_root_pointer.py` —
-    the durable settings-home sentinel first
-    (`${settings-home}/machine-local/.coordinator-content-root`), then the legacy cold-readable
-    fallback (`${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`).
-
-    Ranked ahead of BOTH the registry rung and the settings-home-only rung
-    below (2026-08-07, C1Cc). This does NOT reverse `da7cd333a`'s decision: it
-    ranked the registry rung above the settings-home SENTINEL rung; this new
-    rung is the shared pointer read (sentinel + legacy fallback) placed ahead
-    of both, not a reordering of the two `da7cd333a` already ordered.
-
-    The ordering was previously
-    justified as "setup.py runs before a registry is necessarily populated on
-    a fresh box," but nothing in THIS installer ever writes the
-    `.coordinator-content-root` sentinel either (checked every install-chain step:
-    `install_bin_forwarders`,
-    `install_percolate_identity`, `install_machine_identity` — none write
-    `.coordinator-content-root`), so that justification buys nothing on the fresh-box path it
-    names. The real justification: a pointer written by coordinator-claude's
-    OWN installer is stronger evidence than a key written by an arbitrary
-    peer installer (the registry rung), which in turn is stronger than a
-    locally-recorded breadcrumb (the settings-home sentinel). The ordering
-    only actually changes behavior on a box where coordinator-claude's own
-    installer already ran and wrote the pointer — i.e. a box where the
-    registry is likely populated too.
-
-    The shared lib dir (private `coordinator/lib`, published `lib`) is
-    stdlib-only and dependency-free (mirrors the `sys.path.insert` pattern
-    C1's landed ladder uses for the same helper — see
-    `coordinator/bin/lib/coordinator_registry.py::
-    _mp_content_root_pointer_rung`), so importing it here does not violate this
-    script's bootstrap-before-deps-provisioned discipline.
-
-    Returns None when the pointer is empty, does not resolve to a directory,
-    or does not look like a real coordinator-claude source checkout — a
-    stale/foreign pointer must fall through to the remaining rungs, never pin
-    the resolver to a dead or wrong path. Fails open (prints an advisory,
-    returns None) if the helper itself is unimportable."""
-    lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "lib"
-    if not (lib_dir / "read_content_root_pointer.py").is_file():
-        # Published payload flattens: the mirror ships the helper at
-        # "<repo root>/lib" with no "coordinator/" segment. Probed as a
-        # fallback — private tree wins first.
-        lib_dir = Path(__file__).resolve().parent.parent / "lib"
-    added = str(lib_dir) not in sys.path
-    if added:
-        sys.path.insert(0, str(lib_dir))
-    try:
-        from read_content_root_pointer import coordinator_read_content_root_pointer
-    except Exception as exc:
-        # Swallows: helper missing at both probed dirs, import error inside
-        # the helper itself — advisory-only, callers fall through to the
-        # remaining rungs (see docstring: fails open).
-        print(f"[ADVISORY] could not import read_content_root_pointer helper ({exc}); skipping .coordinator-content-root pointer rung.", file=sys.stderr)
-        return None
-    finally:
-        if added:
-            try:
-                sys.path.remove(str(lib_dir))
-            except ValueError:
-                pass
-    try:
-        recorded = coordinator_read_content_root_pointer()
-    except Exception as exc:
-        print(f"[ADVISORY] .coordinator-content-root pointer read failed ({exc}).", file=sys.stderr)
-        return None
-    if not recorded:
-        return None
-    candidate = Path(recorded)
-    if not candidate.is_dir() or not _looks_like_coordinator_claude_source(candidate):
-        return None
-    return candidate
-
-
-def _coordinator_root_from_registry() -> "Path | None":
-    """Read `engine.working_repos.content_root` — the DR-132-ratified registry
-    namespace each repo's own installer writes as an identity assertion for
-    "where is a coordinator-claude WORKING checkout" — via
-    `coordinator_core.machine_resolver.registry_get` (never a `machine-local`
-    subprocess shell-out; C1b's engine-side twin in
-    `coordinator_core.ops.setup_chain_walker._resolve_coordinator_root_ladder`
-    uses the same seam).
-
-    The raw registered value is a repo root whose plugin source lives one
-    directory down (verified live: it carries no `.claude-plugin/plugin.json`,
-    no `commands/`, no `hooks/` at its own top level), so it is passed through
-    C1a's shape derivation (`_resolve_plugin_root_for_machine_local`, this
-    file's thin wrapper over `coordinator_core.coordinator_root`) before being
-    offered as a candidate — mirroring the engine-side twin exactly.
-
-    Fails open (`None`) on an absent key, an empty value, or a derivation that
-    returns `None` — the caller falls through to the next rung, never treats a
-    registry miss as an error.
-
-    Imported in-function, not at module scope: this script is the bootstrap
-    installer and runs before `coordinator_core`'s third-party deps are
-    provisioned (same discipline as `_resolve_plugin_root_for_machine_local`
-    above).
-
-    This was the only rung with no
-    failure path: a corrupt/unreadable machine-local registry file, or a
-    `settings_home()` RuntimeError under a HOME-stripped environment, would
-    propagate out of this best-effort rung and abort the whole installer
-    with a bare traceback. Wrapped in the same print-advisory-and-return-None
-    shape the pointer and settings-home rungs already use."""
-    try:
-        from coordinator_core.machine_resolver import registry_get
-
-        registry_val = registry_get("engine.working_repos.content_root")
-        if not registry_val:
+        candidate = Path(recorded)
+        if not candidate.is_dir():
             return None
-        return _resolve_plugin_root_for_machine_local(Path(registry_val))
+        if _looks_like_coordinator_claude_source(candidate):
+            return candidate
+        return _resolve_plugin_root_for_machine_local(candidate)
     except Exception as exc:
-        print(f"[ADVISORY] registry resolution failed ({exc}); skipping engine.working_repos.content_root rung.", file=sys.stderr)
+        print(f"[ADVISORY] content-root resolution failed ({exc}); skipping that rung.", file=sys.stderr)
         return None
+
+
+def migrate_legacy_content_root() -> None:
+    """Carry a pre-rename machine config forward so `read_content_root()` resolves it.
+
+    Delegates to `coordinator_core.content_root.migrate_legacy_config()`, which
+    acts only when `repos.content_root` is unset and a legacy source resolves.
+    Prints one line when it migrated; a failure is an advisory, never fatal."""
+    try:
+        from coordinator_core.content_root import migrate_legacy_config
+
+        result = migrate_legacy_config()
+    except Exception as exc:
+        print(f"[ADVISORY] machine config migration skipped ({exc}).", file=sys.stderr)
+        return
+    if result.migrated:
+        print(f"MIGRATED [content-root] {result.value} (from {result.source}); wrote {', '.join(result.written)}")
 
 
 #: Registry keys naming the content SOURCE checkout, tried in order, when the
@@ -2102,9 +1965,7 @@ class CoordSourceRung(Enum):
 
     FLAG = auto()
     ENV = auto()
-    CONTENT_ROOT_POINTER = auto()
-    REGISTRY = auto()
-    SETTINGS_HOME = auto()
+    CONTENT_ROOT = auto()
     SIBLING_DIR_DEFAULT = auto()
     REGISTRY_CONTENT_SOURCE = auto()
 
@@ -2133,9 +1994,8 @@ class CoordSourceResolution:
 
 def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path, CoordSourceResolution]:
     """Resolve the coordinator-claude sibling root and describe the source
-    used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env -> shared
-    .coordinator-content-root pointer (durable + legacy) -> engine.working_repos.content_root
-    registry key -> settings-home .coordinator-content-root sentinel -> sibling-dir default
+    used: --coordinator-root flag -> COORDINATOR_CLAUDE_ROOT env ->
+    `read_content_root()` -> sibling-dir default
     (now honesty-gated, see below). Shared by `check_coordinator_claude_dep`
     and `register_claude_klabauter_root` so both resolve the SAME candidate root
     regardless of whether the (hard) dep-check ran (e.g. --skip-dep-check) —
@@ -2147,28 +2007,17 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     docstring for why identity (`.rung`) and presentation (`.display`) are
     kept apart (defect-class fix 2026-08-08).
 
-    Pointer rung (2026-08-07, C1Cc): `_coordinator_root_from_content_root_pointer`
-    outranks the registry rung specifically for this installer — see that
-    function's docstring for why (setup.py runs before a registry is
-    necessarily populated). It does NOT reverse the ordering `da7cd333a`
-    established between the registry rung and the settings-home sentinel
-    rung; those two keep their relative order below it.
-
-    Registry rung (2026-08-07, DR-132): `engine.working_repos.content_root` is
-    the generic, cross-fleet answer to "where is a coordinator-claude WORKING
-    checkout" — each repo's own installer writes it as an identity assertion.
-    It outranks the `.coordinator-content-root` sentinel (a locally-recorded breadcrumb) and
-    the sibling-dir default (merely a directory that happens to sit next
-    door): better evidence outranks weaker evidence. Explicit operator
-    overrides (flag/env) still outrank everything, including the registry.
-    On a box where BOTH a registered working checkout and a sibling dir
-    exist, this CHANGES which one wins — that is the intended fix, not a
-    side effect. See `_coordinator_root_from_registry` for the read/derive
-    mechanics.
+    Content-root rung: `_coordinator_root_from_content_root` reads the one
+    resolved content root (registry key, pointer files, installed plugin).
+    It outranks the sibling-dir default (merely a directory that happens to
+    sit next door): better evidence outranks weaker evidence. Explicit
+    operator overrides (flag/env) still outrank everything. On a box where
+    BOTH a registered content root and a sibling dir exist, this CHANGES
+    which one wins — that is the intended fix, not a side effect.
 
     Defect fix 2026-08-07: the sibling-dir default is NOT accepted blind —
     the returned `CoordSourceResolution.is_publish_mirror_rejected` is True
-    whenever the resolved candidate (from ANY rung, including the registry
+    whenever the resolved candidate (from ANY rung, including the content-root
     rung and an explicit override) is a registered `publish.mirrors.*.path`
     entry (a generated downstream copy, never the source checkout the
     hard-dep gate must walk). This function still returns the candidate path
@@ -2191,28 +2040,20 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
     already fails loud with an actionable git-clone remediation whenever
     `_looks_like_coordinator_claude_source(coord_path)` is False, which an
     unresolved guess always is."""
-    # The three lower rungs used to be
-    # evaluated eagerly, unconditionally, ahead of the flag/env override
-    # check below. Each can print an [ADVISORY] to stderr, and this function
-    # is called 4x per run, so an operator who passed --coordinator-root
-    # explicitly (and is entitled to no resolution chatter at all) could see
-    # the same advisory printed up to four times. Short-circuited: the lower
-    # rungs are only evaluated once no explicit override is present.
+    # The content-root rung can print an [ADVISORY] to stderr, and this
+    # function is called 4x per run, so an operator who passed
+    # --coordinator-root explicitly (and is entitled to no resolution chatter
+    # at all) must not see it. Short-circuited: the rung is only evaluated
+    # once no explicit override is present.
     is_unresolved = False
     if args.coordinator_root:
         candidate, rung, display = Path(args.coordinator_root), CoordSourceRung.FLAG, "--coordinator-root flag"
     elif os.environ.get("COORDINATOR_CLAUDE_ROOT"):
         candidate, rung, display = Path(os.environ["COORDINATOR_CLAUDE_ROOT"]), CoordSourceRung.ENV, "COORDINATOR_CLAUDE_ROOT env"
     else:
-        content_root_pointer_root = _coordinator_root_from_content_root_pointer()
-        registry_root = _coordinator_root_from_registry()
-        settings_home_root = _coordinator_root_from_settings_home()
-        if content_root_pointer_root is not None:
-            candidate, rung, display = content_root_pointer_root, CoordSourceRung.CONTENT_ROOT_POINTER, "shared .coordinator-content-root pointer"
-        elif registry_root is not None:
-            candidate, rung, display = registry_root, CoordSourceRung.REGISTRY, "engine.working_repos.content_root registry key"
-        elif settings_home_root is not None:
-            candidate, rung, display = settings_home_root, CoordSourceRung.SETTINGS_HOME, "settings-home .coordinator-content-root sentinel"
+        content_root = _coordinator_root_from_content_root()
+        if content_root is not None:
+            candidate, rung, display = content_root, CoordSourceRung.CONTENT_ROOT, "content root (repos.content_root)"
         else:
             candidate = repo_root.parent / "coordinator-claude"
             rung, display = CoordSourceRung.SIBLING_DIR_DEFAULT, "sibling-dir default"
@@ -2592,9 +2433,8 @@ def _discover_claude_klabauter_checkout(repo_root: Path) -> str | None:
     return None
 
 
-#: The registry key `coordinator_core.trusted_root_guard._content_root` reads first
-#: (DR-071's canonical coordinator-root anchor) — the value behind
-#: `resolve_operator_config`'s `content_root`.
+#: The registry key `read_content_root()` reads first: the canonical
+#: coordinator content-root anchor.
 _CONTENT_ROOT_ANCHOR_KEY = "repos.content_root"
 
 
@@ -2609,10 +2449,9 @@ def _unset_content_root_registration(
     own installer (`coordinator_core.install.maximalist`) or its SessionStart
     registrar hook. On a box where neither has run — an engine-first install,
     or a host that cannot restart Claude Code so no plugin hook ever fires —
-    every baton/handoff op then dies in `resolve_operator_config` with
-    "'content_root' resolved to a corrupt value ''", blaming operator config for a
-    value this installer was holding (docs/reference/
-    linux-cloud-dogfood-friction.md F1).
+    every baton/handoff op then dies in `resolve_operator_config` with a
+    corrupt empty content root, blaming operator config for a value this
+    installer was holding (docs/reference/linux-cloud-dogfood-friction.md F1).
 
     Returns `{key: value}` for `register_claude_klabauter_root` to append LAST to its
     ordered write loop, so the insertion-order contract for the identity keys
@@ -2623,18 +2462,15 @@ def _unset_content_root_registration(
         somewhere deliberate outranks a resolution ladder that may have
         bottomed out at a sibling-dir guess. An unreadable registry counts as
         set — this never writes on a value it could not see.
-      - Never writes `engine.working_repos.content_root`: that namespace is
-        DoE's own identity assertion, which claude-klabauter only reads
-        (`coordinator_core.ops.setup_chain_walker.
-        _COORDINATOR_ROOT_LADDER_REMEDIATION`; DR-132). The cfc55599
-        klabauter-side patch this descends from wrote both keys; only the
-        one the failing reader needs is kept.
-      - Never writes a REGISTRY-rung candidate: that rung returns the DERIVED
-        plugin root (`<clone>/coordinator` on a dev clone), not the clone root
-        the anchor names, and it only fires when DoE's installer already ran.
+      - Never writes `engine.working_repos.*`: that namespace is DoE's own
+        identity assertion, which claude-klabauter only reads.
+      - Never writes a CONTENT_ROOT-rung candidate: that rung already resolved
+        from a recorded value, and may return the DERIVED plugin root
+        (`<clone>/coordinator` on a dev clone), not the clone root the anchor
+        names.
       - Never writes a publish mirror, or a path that is not a
         coordinator-claude root in either shape (`plugin_root is None`)."""
-    if coord_source.rung is CoordSourceRung.REGISTRY:
+    if coord_source.rung is CoordSourceRung.CONTENT_ROOT:
         return {}
     if coord_source.is_publish_mirror_rejected or coord_source.is_unresolved:
         return {}
@@ -3540,15 +3376,12 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
 def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
     """Make plain `claude` resolve the LIVE coordinator clone, not a copy of it.
 
-    `install_claude_author_launcher_chain` above gives `claude-author` a live surface
-    via `--plugin-dir`. This gives plain `claude` the same one, by pointing the
-    installed-plugin record at the clone instead of a cache copy -- see
+    Points the installed-plugin record at the clone instead of a cache copy -- see
     `coordinator_core.install.live_plugin_registration` for the shape, the
     measurement, and why it is not a symlink.
 
     ADVISORY, matching every sibling phase in this block: a box whose plugin
-    record cannot be read still has a working `claude-author`, so this prints and
-    returns rather than failing the install.
+    record cannot be read prints and returns rather than failing the install.
     """
     coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
     live_plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
@@ -4063,417 +3896,6 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
         return True
     return False
-
-
-#: Dependency-ordered claude-author launcher chain: (label, CLI relpath under
-#: coordinator/bin/ -- kept only for the on-disk-presence guard and the
-#: "Re-run manually" hint, never loaded or executed (call shape (b),
-#: docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
-#: claims.md) --, extra argv, the op module `run_op_main` calls in-process).
-#: Order matters -- the root pointer must exist before anything that
-#: resolves through it at RUNTIME (the wrapper's `--print-plugin-dir` reads
-#: it, transitively, via the content-root ladder), and the wrapper/launcher (the
-#: artifacts the shim's rc block invokes BY PATH) must be installed before
-#: the shim (which wires the rc/profile sentinel that dot-sources/invokes
-#: them). See docs/reference/coordinator-plugin-load-chain.md § 4 for the
-#: full artifact -> generator -> source-of-truth table this constant mirrors.
-_CLAUDE_AUTHOR_CHAIN_STEPS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
-    ("content-root pointer", "gen-content-root-pointer.py", ("--graceful-skip-unresolved",),
-     "coordinator_core.ops.gen_content_root_pointer"),
-    ("claude-author wrapper", "install-claude-author-wrapper.py", (),
-     "coordinator_core.ops.install_claude_author_wrapper"),
-    ("claude-author launcher", "gen-claude-author-launcher.py", (),
-     "coordinator_core.ops.gen_claude_author_launcher"),
-    ("claude-author shim (rc/profile sentinel)", "gen-claude-author-shim.py", (),
-     "coordinator_core.ops.gen_claude_author_shim"),
-)
-
-
-def _doe_chain_default_wrapper_src(repo_root: Path) -> str:
-    """Port of install-claude-author-wrapper.py's `_default_wrapper_src` one-
-    liner (docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
-    claims.md, call shape (b)): the wrapper it installs is always co-located
-    at `coordinator/bin/claude-author.py`, no engine-root resolution needed."""
-    return str(repo_root / "coordinator" / "bin" / "claude-author.py")
-
-
-def _doe_chain_data_root_helpers():
-    """Scoped `coordinator/bin/lib` sys.path add to import `coordinator_data_root`,
-    mirroring `_mp_content_root_pointer_rung`'s add-then-remove pattern above (this
-    module's own bootstrap-before-deps-provisioned discipline): the path is
-    removed again once the import lands, never left shadowing anything setup.py
-    itself imports."""
-    lib_dir = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "lib"
-    added = str(lib_dir) not in sys.path
-    if added:
-        sys.path.insert(0, str(lib_dir))
-    try:
-        from coordinator_data_root import data_file, data_root
-        return data_root, data_file
-    finally:
-        if added:
-            try:
-                sys.path.remove(str(lib_dir))
-            except ValueError:
-                pass
-
-
-def _doe_chain_default_template_dir() -> str:
-    """Port of gen-claude-author-launcher.py's `_default_template_dir` one-liner."""
-    data_root, _data_file = _doe_chain_data_root_helpers()
-    return os.path.join(str(data_root("templates")), "bin")
-
-
-def _doe_chain_shell_family_from_argv(extra_argv: "tuple[str, ...]") -> str:
-    """Port of gen-claude-author-shim.py's `_shell_family_from_argv` one-liner."""
-    for i, arg in enumerate(extra_argv):
-        if arg == "--shell" and i + 1 < len(extra_argv):
-            return extra_argv[i + 1]
-    from coordinator_core.ops.gen_claude_author_shim import _default_shell_family
-
-    return _default_shell_family()
-
-
-def _doe_chain_default_template_path(shell_family: str) -> str:
-    """Port of gen-claude-author-shim.py's `_default_template_path` one-liner."""
-    _data_root, data_file = _doe_chain_data_root_helpers()
-    stem = "claude-author-shim.ps1.tmpl" if shell_family == "powershell" else "claude-author-shim.sh.tmpl"
-    return str(data_file("templates", "shell", stem))
-
-
-def _doe_chain_build_argv(cli_name: str, extra_argv: "tuple[str, ...]", repo_root: Path) -> "list[str]":
-    """Resolve the full argv for one launcher-chain step in-process, porting
-    each trampoline's own default-argv one-liner to the call site (spike
-    verdict call shape (b)) instead of loading the trampoline file."""
-    argv = list(extra_argv)
-    if cli_name == "install-claude-author-wrapper.py" and "--wrapper-src" not in argv:
-        argv = argv + ["--wrapper-src", _doe_chain_default_wrapper_src(repo_root)]
-    elif cli_name == "gen-claude-author-launcher.py" and (
-        "--template-dir" not in argv and "-h" not in argv and "--help" not in argv
-    ):
-        argv = argv + ["--template-dir", _doe_chain_default_template_dir()]
-    elif cli_name == "gen-claude-author-shim.py" and (
-        "--template" not in argv and "-h" not in argv and "--help" not in argv
-    ):
-        shell_family = _doe_chain_shell_family_from_argv(tuple(argv))
-        argv = argv + ["--template", _doe_chain_default_template_path(shell_family)]
-    return argv
-
-
-def _doe_dev_clone_root() -> Path | None:
-    """The DoE dev clone `repos.content_root` names, or None when it names nothing
-    that carries the `.coordinator-dev-repo` sentinel. The sentinel is the
-    fleet-wide dev-vs-OSS discriminant: a published coordinator-claude clone
-    never carries it, and a path that does not exist cannot."""
-    raw = os.environ.get("REPO_CONTENT_ROOT", "")
-    if not raw:
-        try:
-            from coordinator_core.machine_resolver import registry_get
-
-            raw = registry_get("repos.content_root") or ""
-        except Exception:  # noqa: BLE001 — unreadable registry reads as "no dev clone"
-            raw = ""
-    if not raw.strip():
-        return None
-    root = Path(raw.strip())
-    return root if (root / ".coordinator-dev-repo").is_file() else None
-
-
-def _rendered_claude_author_shims() -> list[Path]:
-    """Every rendered `claude()` shim on this box, including one under the
-    pre-rename file name — an earlier opt-in. The rc block only sources a shim
-    that exists, so these files are the whole of the hijack."""
-    from coordinator_core.ops.gen_claude_author_shim import _resolve_claude_home_base, _shim_filename
-
-    from coordinator_core.install.maximalist import legacy_doe_shim_files
-
-    shell_dir = Path(_resolve_claude_home_base()) / ".claude" / "shell"
-    current = [
-        shell_dir / _shim_filename(family)
-        for family in ("bash", "powershell")
-        if (shell_dir / _shim_filename(family)).is_file()
-    ]
-    return [*current, *(Path(p) for p in legacy_doe_shim_files(_resolve_claude_home_base()))]
-
-
-def _claude_author_launcher_opted_in(args: Args) -> bool:
-    """Whether this run may wire the `claude()` shim, removing any shim a
-    non-opted box was given.
-
-    The shim shadows the operator's bare `claude`, so it is wired only on a
-    box that CHOSE it: `--with-claude-author-launcher`, or a shim already present
-    from an earlier choice — and in both cases only beside a real DoE dev
-    clone. A shim on a box with no dev clone was never chosen (a consumer
-    install used to receive one) and is deleted, which returns `claude` to the
-    real binary on the next shell start. The rc block stays: it sources the
-    shim only if the file exists, so it is inert without it."""
-    shims = _rendered_claude_author_shims()
-    if _doe_dev_clone_root() is None:
-        for shim in shims:
-            from coordinator_core.install import substrate as _substrate
-
-            blocked = _substrate._refuse_machine_mutation(
-                str(shim), what=f"remove the claude-author shim {shim}", check_temp_path=False,
-            )
-            if blocked:
-                print(f"[claude-author-chain] REFUSED: {blocked}", file=sys.stderr)
-                continue
-            try:
-                shim.unlink()
-                print(f"REMOVED [claude-author-chain] {shim} — `claude` is the real binary again from the next shell")
-            except OSError as exc:
-                print(f"[ADVISORY] could not remove {shim} ({exc}); `claude --vanilla` bypasses it.", file=sys.stderr)
-        if args.with_claude_author_launcher:
-            print(
-                "[ADVISORY] --with-claude-author-launcher needs repos.content_root to name a DoE dev clone "
-                "(one carrying .coordinator-dev-repo); launcher not wired.",
-                file=sys.stderr,
-            )
-        else:
-            print("SKIP [claude-author-chain] not applicable — the plugin install needs none of it")
-        return False
-    if not (args.with_claude_author_launcher or shims):
-        print("SKIP [claude-author-chain] not opted in (--with-claude-author-launcher wires the dev-clone `claude()` shim)")
-        return False
-    return True
-
-
-def _retire_legacy_doe_launchers_and_callers(callers_only: bool = False) -> None:
-    """Retire the pre-rename launcher together with the shims and rc blocks that
-    call it. `callers_only` skips the binaries (a failed re-render keeps them)."""
-    try:
-        from coordinator_core._settings_home import settings_home
-        from coordinator_core.install._shared import require_home
-        from coordinator_core.install import maximalist
-
-        fn = maximalist.retire_legacy_doe_callers if callers_only else maximalist.retire_legacy_doe_launchers
-        fn(require_home("setup"), str(settings_home() / "bin"), check_only=False)
-    except Exception as exc:  # noqa: BLE001 -- cleanup of a superseded name never fails setup
-        print(f"[ADVISORY] legacy claude-author launchers not retired: {exc}", file=sys.stderr)
-
-
-_LAUNCHER_OWNED_FLAGS = ("--content-root", "--" + "doe" + "-root", "--dry-run", "--print-plugin-dir", "--vanilla")
-
-
-def _probe_launcher_with_shim_flags(cli: Path, shim: Path, clone_root: Path) -> str | None:
-    """Run the launcher's `main` with `--dry-run` and the flags the rendered shim
-    passes it, in-process: no `claude` launch and no spawn.
-
-    Returns None when the launcher consumed every launcher-owned flag, else the
-    failure reason naming the flag.
-    """
-    try:
-        text = shim.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return f"cannot read rendered shim {shim}: {exc}"
-    flags: list[str] = []
-    for line in text.splitlines():
-        if line.lstrip().startswith("#") or not re.search(r"\bclaude-author\b", line):
-            continue
-        for tok in re.findall(r"(?<![\w-])--[A-Za-z][\w-]*", line.split("claude-author", 1)[1]):
-            if tok not in flags:
-                flags.append(tok)
-    if not flags:
-        return f"no launcher invocation found in {shim}"
-    argv: list[str] = []
-    for tok in flags:
-        argv.append(tok)
-        if tok in _LAUNCHER_OWNED_FLAGS[:2]:
-            argv.append(str(clone_root))
-    argv.append("--dry-run")
-    shown = " ".join(flags)
-
-    out_buf, err_buf = io.StringIO(), io.StringIO()
-    try:
-        spec = importlib.util.spec_from_file_location("_claude_author_probe", cli)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            code = module.main(argv)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else 1
-    except Exception as exc:  # noqa: BLE001 -- a launcher that cannot even load is a FAIL, not a crash
-        return f"launcher --dry-run did not run ({exc})"
-    if code != 0:
-        detail = (err_buf.getvalue().strip().splitlines() or ["no stderr"])[0]
-        return f"launcher rejected the shim's flags ({shown}): {detail}"
-    forwarded: list[str] = []
-    for line in out_buf.getvalue().splitlines():
-        if line.startswith("forwarded-flags:"):
-            forwarded = line.split(":", 1)[1].split()
-    leaked = [f for f in forwarded if f in _LAUNCHER_OWNED_FLAGS]
-    if leaked:
-        return f"launcher forwarded {', '.join(leaked)} to claude instead of consuming it (shim flags: {shown})"
-    return None
-
-
-def install_claude_author_launcher_chain(repo_root: Path, engine_py: str, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Best-effort install-chain step: runs the four `coordinator/bin/*claude-author*`
-    generators that render/wire the interactive `claude-author` launch chain
-    (`.coordinator-content-root` pointer -> `claude-author` wrapper -> `claude-author.{cmd,ps1}`
-    launcher -> the rc/profile sentinel that dot-sources/invokes them --
-    see docs/reference/coordinator-plugin-load-chain.md § 4).
-
-    Root-cause fix, 2026-08-15 (sizing dlv-claude-author-launcher-generators-are-
-    absen-bb685e): `scripts/setup.py`/the manifest never called any of these
-    four generators, so a fresh clean install left claude-klabauter installed and
-    coordinator SILENTLY absent from every session -- no doctrine, no hooks,
-    no skills, no error. Mirrors `install_bin_forwarders`'s
-    ADVISORY shape: a launcher-chain failure must
-    never abort the rest of setup, but per this fix's own point (the prior
-    failure mode was SILENT), each step's outcome is printed loudly --
-    PASS/ADVISORY, never swallowed -- rather than folded into a single
-    pass/fail line that could hide which of the four steps actually failed.
-
-    Idempotent by construction, not by a call-site guard: all four generators
-    are ALREADY idempotent (sentinel-guarded rc edits, skip-if-current
-    renders, `cp -p`-then-verify installs -- see each op module's own
-    docstring), so a re-run over an already-working install is a clean no-op
-    at each step; this function adds no de-duplication of its own because
-    none is needed (CLAUDE.md: make the call site idempotent only when the
-    generator ISN'T -- these are).
-
-    Each step is run independently (a failure in one does not skip the
-    others) since only the RUNTIME resolution chain is order-dependent, not
-    generation itself -- an operator who fixes just the failing step later
-    does not need to re-run the whole chain.
-
-    Skipped entirely under `--register-only` (no coordinator-claude/plugin-
-    root resolution attempted in that mode, matching the other post-
-    registration steps it sits beside in `main`) -- callers gate that, not
-    this function.
-    """
-    print()
-    print("--- Install: claude-author launcher chain (coordinator/bin/*claude-author*) ---")
-
-    if not _claude_author_launcher_opted_in(args):
-        _retire_legacy_doe_launchers_and_callers()
-        return
-
-    # In-process, not four subprocess.run children (spike verdict, call shape
-    # (b): docs/research/spike-verdicts/2026-09-23-in-process-launcher-chain-
-    # claims.md). BOTH env names, same value — see install_bin_forwarders for
-    # why the retired name alone is the worse failure shape for a DoE child.
-    # Scoped for the loop's duration only (env_overlay restores the prior
-    # environment exactly on exit), not a process-wide os.environ write.
-    any_failed = False
-    with env_overlay({
-        "CLAUDE_KLABAUTER_ROOT": str(claude_klabauter_root_resolved),
-        "COORDINATOR_ENGINE_ROOT": str(claude_klabauter_root_resolved),
-    }):
-        for label, cli_name, extra_argv, op_module in _CLAUDE_AUTHOR_CHAIN_STEPS:
-            cli = repo_root / "coordinator" / "bin" / cli_name
-            if not cli.is_file():
-                any_failed = True
-                print(
-                    f"[ADVISORY] {cli} not found — skipping {label} install. "
-                    "Coordinator will NOT load in any interactive session on this box until this is fixed.",
-                    file=sys.stderr,
-                )
-                continue
-
-            rerun_hint = " ".join([engine_py, str(cli), *extra_argv])
-            argv = _doe_chain_build_argv(cli_name, extra_argv, repo_root)
-
-            out_buf = io.StringIO()
-            err_buf = io.StringIO()
-            raised = None
-            try:
-                with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-                    code = run_op_main(op_module, argv, cwd=str(claude_klabauter_root_resolved))
-            except SystemExit as exc:
-                code = exc.code if isinstance(exc.code, int) else 1
-            except Exception as exc:  # noqa: BLE001 — an op raising must ADVISORY, not abort setup
-                raised = exc
-                code = 1
-
-            if raised is not None:
-                any_failed = True
-                print(
-                    f"[ADVISORY] {label} install raised an unexpected error ({raised}) — "
-                    "coordinator will NOT load in any interactive session on this box until this is fixed.",
-                    file=sys.stderr,
-                )
-                print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
-                continue
-
-            output = (out_buf.getvalue() + err_buf.getvalue()).strip()
-            # `gen-content-root-pointer.py
-            # --graceful-skip-unresolved` exits 0 on a genuine skip (repos.content_root
-            # not yet resolved), so returncode alone can't distinguish "wrote it"
-            # from "gave up". Detect the `<label>: skipped` contract row and treat
-            # it as its own ADVISORY outcome — never PASS — with the explanation
-            # printed unconditionally (skip lines must survive agent_mode, unlike
-            # the general output-echo above, or a scripted install sees only a
-            # bare ADVISORY line with no reason).
-            skipped = any(
-                line.strip().endswith(": skipped") or ": skipped (" in line
-                for line in output.splitlines()
-                if line.strip().startswith("content_root_pointer:")
-            )
-            if not args.agent_mode and output and not skipped:
-                print(output)
-            if skipped:
-                # NOT APPLICABLE, not incomplete. This whole chain wires the
-                # dev-clone install mode: every step of it exists to point a
-                # `claude()` shell function at a coordinator-content-repo working clone via
-                # `.coordinator-content-root`. `docs/safety.md` rows 4 and 5 already say so --
-                # "only present in the maximalist/dev install mode", "not the
-                # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
-                # coordinator-claude and claude-klabauter installs never take the
-                # `--content-root` seam at all.
-                #
-                # An unresolved `repos.content_root` IS that discriminant: there is
-                # no DoE clone to point at, so the remaining three generators have
-                # nothing to render and the marketplace plugin loads without them.
-                # Reporting it as an incomplete chain told a correctly-installed
-                # OSS box that coordinator would not load -- shouting a dev-mode
-                # requirement at an install that does not have one, which a Linux
-                # cloud dogfood read as a hard break and worked around by hand.
-                print(f"SKIP [claude-author-chain] {label} — dev-clone mode not configured on this box")
-                print(
-                    "SKIP [claude-author-chain] remaining launcher-chain steps — the claude() shim "
-                    "wires the dev-clone install mode only; the marketplace plugin install needs "
-                    "none of it. To opt in: machine-local set repos.content_root <path>  then re-run.",
-                )
-                return
-            if code != 0:
-                any_failed = True
-                print(
-                    f"[ADVISORY] {label} install reported a non-zero exit (code {code}) — "
-                    "coordinator will NOT load in any interactive session on this box until this is fixed.",
-                    file=sys.stderr,
-                )
-                print(f"  Re-run manually: {rerun_hint}", file=sys.stderr)
-                continue
-            if cli_name == "gen-claude-author-shim.py":
-                clone = _doe_dev_clone_root()
-                shims = [p for p in _rendered_claude_author_shims() if "claude-author-shim" in p.name]
-                if clone is None or not shims:
-                    failure = "no rendered shim or dev clone to probe the launcher with"
-                else:
-                    failure = _probe_launcher_with_shim_flags(
-                        repo_root / "coordinator" / "bin" / "claude-author.py", shims[0], clone
-                    )
-                if failure:
-                    any_failed = True
-                    print(f"FAIL [claude-author-chain] {label} — {failure}")
-                    continue
-                print(f"PASS [claude-author-chain] {label} (launcher --dry-run accepted the shim's flags)")
-                continue
-            print(f"PASS [claude-author-chain] {label}")
-
-    if any_failed:
-        print(
-            "[ADVISORY] claude-author launcher chain incomplete — see the per-step ADVISORY lines above. "
-            "A session started on this box may look like vanilla Claude Code with no error.",
-            file=sys.stderr,
-        )
-        _retire_legacy_doe_launchers_and_callers(callers_only=True)
-        return
-    # Only once every step landed: a failed launcher render must not leave the
-    # box with neither name.
-    _retire_legacy_doe_launchers_and_callers()
 
 
 def _derive_identity_hints(repo_root: Path) -> dict[str, str]:
@@ -5198,6 +4620,8 @@ def main(argv: list[str]) -> int:
     if args.check:
         return run_check(claude_klabauter_root_resolved)
 
+    migrate_legacy_content_root()
+
     if not args.register_only:
         print("=== claude-klabauter setup (standalone) ===")
         print(f"Repo root: {repo_root}")
@@ -5280,7 +4704,6 @@ def main(argv: list[str]) -> int:
         _reset_resolution_journal()
         forwarders_failed = install_bin_forwarders(repo_root, engine_py, claude_klabauter_root_resolved, args)
         install_warm_door(repo_root, claude_klabauter_root_resolved, args)
-        install_claude_author_launcher_chain(repo_root, engine_py, claude_klabauter_root_resolved, args)
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1

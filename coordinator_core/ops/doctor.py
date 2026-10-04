@@ -67,7 +67,7 @@ LAYERS CHECKED (each is one `Layer` in `run_doctor()`'s return list; the last, i
        the content root or manifest cannot be read. Composed from
        `doctor_boot_banners`.
     10. Hook plane is armed   — the SessionStart reader `derive_hook_plane`:
-       will a session launched here run hooks, and does `.coordinator-content-root` resolve
+       will a session launched here run hooks, and does the content-root pointer resolve
        through a rung the no-launcher fences read? Composed from
        `doctor_boot_banners`.
     The kill-switch layer (4) renders the marker through
@@ -275,15 +275,15 @@ def _extract_script_path(argv: List[str]) -> Optional[str]:
     return None
 
 
-def _resolve_plugin_root_token(path: str, content_root: Optional[str]) -> str:
-    if _PLUGIN_ROOT_TOKEN not in path or not content_root:
+def _resolve_plugin_root_token(path: str, resolved_root: Optional[str]) -> str:
+    if _PLUGIN_ROOT_TOKEN not in path or not resolved_root:
         return path
-    # On a published flat mirror the plugin root IS the DoE root; expanding to
-    # `<content_root>/coordinator` there made every registered script read as
+    # On a published flat mirror the plugin root IS the resolved root; expanding to
+    # `<resolved_root>/coordinator` there made every registered script read as
     # missing on disk. content_root_or_private falls back to that same join
     # so a root that holds neither layout still reports the same path it
     # always did (overengineering-reviewer finding 2).
-    return path.replace(_PLUGIN_ROOT_TOKEN, content_root_or_private(content_root))
+    return path.replace(_PLUGIN_ROOT_TOKEN, content_root_or_private(resolved_root))
 
 
 def _iter_hook_commands(hooks_doc: Any):
@@ -359,10 +359,10 @@ def _check_sibling_resolution() -> Layer:
                 )
             )
 
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = coordinator_content_root()
-    if not content_root:
+    resolved_root = read_content_root()
+    if not resolved_root:
         status = "broken"
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
         findings.append(
@@ -374,7 +374,7 @@ def _check_sibling_resolution() -> Layer:
             )
         )
     else:
-        content_root = content_root_for(content_root)
+        content_root = content_root_for(resolved_root)
         hooks_json = None if content_root is None else content_root / "hooks" / "hooks.json"
         if hooks_json is None or not hooks_json.is_file():
             status = "broken"
@@ -388,7 +388,7 @@ def _check_sibling_resolution() -> Layer:
             findings.append(
                 Finding(
                     "broken",
-                    f"resolved content root '{content_root}' {detail} — "
+                    f"resolved content root '{resolved_root}' {detail} — "
                     "wrong path or partial checkout.",
                 )
             )
@@ -402,7 +402,7 @@ def _check_sibling_resolution() -> Layer:
 
 
 def _check_one_hooks_doc(
-    doc_path: Path, content_root: Optional[str], label: str
+    doc_path: Path, resolved_root: Optional[str], label: str
 ) -> "tuple[str, List[Finding], bool]":
     """Returns (status, findings, present). `present` is False only for the
     "file does not exist at all" case — the expected, silent, clean state for
@@ -468,7 +468,7 @@ def _check_one_hooks_doc(
                 Finding("broken", f"{label} [{event}/{m_idx}/{h_idx}]: command shape not understood.")
             )
             continue
-        resolved = _resolve_plugin_root_token(script, content_root)
+        resolved = _resolve_plugin_root_token(script, resolved_root)
         if not os.path.isfile(resolved):
             missing += 1
             findings.append(
@@ -522,16 +522,16 @@ def _check_one_hooks_doc(
 
 
 def _check_hook_registration() -> Layer:
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = coordinator_content_root()
+    resolved_root = read_content_root()
     findings: List[Finding] = []
     statuses: List[str] = []
 
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(resolved_root)
     if content_root is not None:
         hooks_json = content_root / "hooks" / "hooks.json"
-        status, doc_findings, present = _check_one_hooks_doc(hooks_json, content_root, "hooks.json")
+        status, doc_findings, present = _check_one_hooks_doc(hooks_json, resolved_root, "hooks.json")
         if present:
             statuses.append(status)
         findings.extend(doc_findings)
@@ -544,7 +544,7 @@ def _check_hook_registration() -> Layer:
 
     settings_path = _config_dir() / "settings.json"
     status, doc_findings, present = _check_one_hooks_doc(
-        settings_path, content_root, "settings.json hooks block"
+        settings_path, resolved_root, "settings.json hooks block"
     )
     # A present-and-empty (no hooks key at all) or genuinely-absent
     # settings.json is the expected clean state right now (plugin-side
@@ -630,9 +630,9 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
     already relies on. Idempotent: is_wrapped() entries are left untouched.
     Does NOT touch ~/.claude/settings.json — that file is bidirectionally
     synced and out of scope for auto-repair (see module docstring)."""
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = content_root_for(coordinator_content_root())
+    content_root = content_root_for(read_content_root())
     if content_root is None:
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
         fix_report.append("--fix: skipped hooks.json wrap — content root unresolved.")
@@ -1047,11 +1047,11 @@ def _check_hook_interpreter_resolvability() -> Layer:
     "Absence of a check must not read as the check passing").
     """
     name = "Hook-command interpreter resolvability"
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = coordinator_content_root()
+    resolved_root = read_content_root()
     doc_candidates: List[tuple[Path, str]] = []
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(resolved_root)
     if content_root is not None:
         doc_candidates.append((content_root / "hooks" / "hooks.json", "hooks.json"))
     doc_candidates.append((_config_dir() / "settings.json", "settings.json hooks block"))
@@ -1109,10 +1109,10 @@ def _check_hook_interpreter_resolvability() -> Layer:
 def _check_install_drift() -> Layer:
     """Imports the install script from the content root and runs its manifest/step drift check."""
     name = "Install manifest and steps agree"
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    content_root = coordinator_content_root()
-    content_root = content_root_for(content_root) if content_root else None
+    resolved_root = read_content_root()
+    content_root = content_root_for(resolved_root) if resolved_root else None
     script = None if content_root is None else content_root / "lib" / "install" / "coordinator_install.py"
     if script is None or not script.is_file():
         return Layer(name, "ok", [])

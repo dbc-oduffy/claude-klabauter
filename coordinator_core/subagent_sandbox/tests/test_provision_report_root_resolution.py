@@ -110,10 +110,10 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
     """FULL miss means EVERY rung misses -- all three, not the two this test
     originally knew about.
 
-    ``resolve_plugin_root`` grew a third rung (``machine_local_dir()/.coordinator-content-root``
-    + ``coordinator``, the fleet's dev-clone pointer file) after this test was
+    ``resolve_plugin_root`` grew a third rung (``read_content_root()``
+    + ``coordinator``, the configured content-root checkout) after this test was
     written; the test kept isolating only ``CLAUDE_PLUGIN_ROOT`` and
-    ``claude_config_dir()``, so on any box carrying a real ``.coordinator-content-root`` the
+    ``claude_config_dir()``, so on any box carrying a configured content root the
     unisolated rung resolved a LIVE plugin root (the machine's own coordinator-content-repo
     checkout) and the "full miss" this asserts was never actually constructed.
     Isolate
@@ -126,17 +126,10 @@ def test_resolve_plugin_root_returns_none_on_full_miss(
         lambda: Path("does-not-exist-anywhere"),
         raising=False,
     )
-    machine_local = tmp_path / "machine-local"
-    machine_local.mkdir()
-    monkeypatch.setattr(
-        provision_report,
-        "machine_local_dir",
-        lambda: machine_local,
-        raising=False,
-    )
+    monkeypatch.setattr(provision_report, "read_content_root", lambda: "")
 
     # No CLAUDE_PLUGIN_ROOT, an unresolvable claude_config_dir()-relative
-    # probe, and no .coordinator-content-root pointer -- every leg misses, so the resolver
+    # probe, and no configured content root -- every leg misses, so the resolver
     # must fail open to None rather than raise or fabricate a path.
     assert provision_report.resolve_plugin_root() is None
 

@@ -682,7 +682,7 @@ def _missing_out_message(type_label: str) -> str:
 #
 # Resolution order:
 #   1. cwd git-root → reverse-lookup against machine-local repos.* table
-#   2. Coordinator-content-repo repo (repos.content_root) path-match → "claude-central-em"
+#   2. content root (repos.content_root) path-match → the central EM id
 #   3. Unregistered git repo → basename of git root + "-em"
 #   4. Not in a git repo → "unknown-sender-em"
 #
@@ -1318,8 +1318,8 @@ def _resolve_from_repo() -> str:
     _bootstrap_engine()
     root = _current_repo_root()
     paths_dict = _machine_local_dump_repos()
-    # Ensure repos.content_root is present so the central-identity path-match in
-    # em_id_for_root fires even when the machine-local keys enumeration omits it.
+    # The content root is the central-identity anchor even when the machine-local
+    # keys enumeration omits it.
     paths_dict.setdefault("repos.content_root", _machine_local_get("repos.content_root"))
     return _em_id_for_root(root, paths_dict)
 

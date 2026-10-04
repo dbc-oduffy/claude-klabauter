@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from coordinator_core.ceremony_common.cli_dispatch import (
     resolve_plugin_cli_script_root,
 )
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
-from coordinator_core.ops import coordinator_content_root as _content_root_mod
+from coordinator_core import content_root as _content_root_mod
 
 
 def _write_script(tmp_path: Path, name: str, body: str) -> Path:
@@ -240,15 +241,13 @@ def _module_with_main(body: str):
 
 @pytest.fixture(autouse=True)
 def _plugin_cli_clean_env(monkeypatch, tmp_path):
-    _content_root_mod._reset_content_root_cache()
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     empty_registry = tmp_path / "ml-registry"
     empty_registry.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
     yield
-    _content_root_mod._reset_content_root_cache()
 
 
 def test_ac1_resolve_plugin_cli_script_root_takes_zero_parameters():
@@ -263,7 +262,7 @@ def test_ac1_resolve_cli_script_root_unchanged(tmp_path: Path):
 def test_ac2_i_resolves_from_a_fixture_content_root_with_coordinator_bin(tmp_path, monkeypatch):
     fixture_root = tmp_path / "content-root"
     (fixture_root / "coordinator" / "bin").mkdir(parents=True)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fixture_root))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(fixture_root))
 
     result = resolve_plugin_cli_script_root()
 
@@ -284,7 +283,7 @@ def test_ac2_ii_every_rung_unresolvable_returns_none_and_raises_nothing(tmp_path
 def test_ac2_iii_stale_clone_root_with_no_coordinator_bin_returns_none(tmp_path, monkeypatch):
     stale_root = tmp_path / "stale-content-root"
     stale_root.mkdir()
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(stale_root))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(stale_root))
 
     assert resolve_plugin_cli_script_root() is None
 
@@ -300,20 +299,10 @@ def test_ac2_iv_rung_cut_spawns_zero_processes(tmp_path, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise AssertionError("resolve_plugin_cli_script_root must not spawn a subprocess")
 
-    monkeypatch.setattr(
-        _content_root_mod._resolve_coordinator_clone, "resolve_clone_root", _boom
-    )
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
 
     assert resolve_plugin_cli_script_root() is None
-
-
-def test_ac2_iv_reset_clears_both_memo_pairs(tmp_path, monkeypatch):
-    _content_root_mod.coordinator_content_root_in_process()
-    _content_root_mod.coordinator_content_root()
-    _content_root_mod._reset_content_root_cache()
-
-    assert _content_root_mod._IN_PROCESS_CONTENT_ROOT_RESOLVED is False
-    assert _content_root_mod._CONTENT_ROOT_RESOLVED is False
 
 
 def test_ac2_v_flat_layout_root_resolves_its_bin_without_a_subprocess(tmp_path, monkeypatch):
@@ -323,25 +312,19 @@ def test_ac2_v_flat_layout_root_resolves_its_bin_without_a_subprocess(tmp_path, 
     flat_root = fake_home / ".claude" / "plugins" / "coordinator-claude"
     (flat_root / ".claude-plugin").mkdir(parents=True)
     (flat_root / ".claude-plugin" / "plugin.json").write_text("{}")
-    (flat_root / "schemas").mkdir()
-    (flat_root / "schemas" / "coordinator-registry.manifest.json").write_text("{}")
+    (flat_root / "agents").mkdir()
     (flat_root / "bin").mkdir()
 
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
     monkeypatch.setenv("PATH", str(empty_bin))
 
-    root, rung = _content_root_mod.coordinator_content_root_in_process()
-    assert root == str(flat_root)
-    assert rung == "codename-free"
-
-    _content_root_mod._reset_content_root_cache()
+    assert _content_root_mod.read_content_root() == str(flat_root)
 
     def _boom(*_args, **_kwargs):
         raise AssertionError("must not spawn a subprocess")
 
-    monkeypatch.setattr(
-        _content_root_mod._resolve_coordinator_clone, "resolve_clone_root", _boom
-    )
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
 
     assert resolve_plugin_cli_script_root() == flat_root / "bin"
 
@@ -351,6 +334,6 @@ def test_resolve_plugin_cli_script_root_on_flat_mirror(tmp_path, monkeypatch):
     (flat / ".claude-plugin").mkdir(parents=True)
     (flat / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
     (flat / "bin").mkdir()
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(flat))
 
     assert resolve_plugin_cli_script_root() == flat / "bin"

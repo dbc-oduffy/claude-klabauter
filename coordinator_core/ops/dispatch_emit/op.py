@@ -225,6 +225,7 @@ from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spa
 from coordinator_core.ops.dispatch_emit.emit import (
     check_agent_types_resolve,
     NoReviewStageError,
+    ScriptOverCapError,
     emit_script,
     resolve_agent_type_host,
 )
@@ -235,10 +236,26 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     subject_key,
 )
 from coordinator_core.ops.dispatch_emit.pipeline_inputs import normalize_lists, subjects_from_value
-from coordinator_core.ops.dispatch_emit.inventory_mint import DEFAULT_MAX_INVENTORY_ROWS, mint_spine
+from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
+    plans_with_falsifier,
+    review_inputs,
+    review_specs,
+)
+from coordinator_core.ops.dispatch_emit.inventory_mint import (
+    _DEP_KIND_LIVE,
+    DEFAULT_MAX_INVENTORY_ROWS,
+    _resolve_dep_kinds,
+    _row_body,
+    _split_footprint,
+    _split_id_list,
+    _strip_backtick,
+    mint_spine,
+    parse_chunk_table,
+)
 from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_landed
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.ops.review_mint import op as review_mint_op
 from coordinator_core.ops.review_mint.roster import (
     EMIT_ROUTE_INVENTORY,
@@ -778,7 +795,7 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
-            "inventory_repo_root", "pipeline", "brief", "scratch_dir",
+            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "part",
         )
     ),
     Field("inventory_part", "list"),
@@ -834,8 +851,17 @@ def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
 
 
 @register_op("dispatch.emit")
-def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _dispatch_emit(
+    params: dict,
+    repo_root: Optional[Path] = None,
+    *,
+    only_review_plans: Optional[frozenset] = None,
+) -> dict:
     """JSON-RPC "dispatch.emit" handler.
+
+    ``only_review_plans`` is the lanes flow's own seam (never a request
+    param): when not ``None``, an ``--inventory`` emission reviews only those
+    plans' falsifiers, the rest being reviewed by the part that owns them.
 
     Args (via params):
         plan_path (str): plan file to read the task spine from. Mutually
@@ -890,6 +916,16 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             alongside ``preamble_sha256``, never resolved or re-read here.
         preamble_sha256 (str, optional): the caller-computed digest of the
             preamble file's bytes -- recorded verbatim, never recomputed.
+        lanes (bool, optional): with ``inventory_path`` -- partition the
+            inventory into write-disjoint lanes and byte-bounded sequential
+            parts, pin ``<run-id>.lanes.json``, and emit one script per ready
+            part holding a live row (``_emit_lanes``). Exclusive of
+            ``output_path``.
+        part (str, optional): with ``lanes`` -- emit only this part; refuses
+            when it is not ready.
+        lane_count (int, optional, default 3), hot_files (int, optional,
+            default 40): partition parameters, honoured only when the lane
+            map is first written.
 
     Returns:
         {"path": str, "ok": bool, "findings": [<finding dict>, ...],
@@ -936,6 +972,22 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     receipt_extras: Optional[dict] = None
     pipeline_name = params.get("pipeline")
     pipeline_ctx: Optional[dict] = None
+    lanes_requested = bool(params.get("lanes"))
+    lane_flags = [
+        name
+        for name in ("lanes", "part", "lane_count", "hot_files")
+        if params.get(name) is not None and params.get(name) is not False
+    ]
+    if lane_flags and not inventory_path:
+        raise ValueError(
+            f"dispatch.emit {', '.join(lane_flags)} requires inventory_path"
+        )
+    if params.get("part") and not lanes_requested:
+        raise ValueError("dispatch.emit part requires lanes")
+    if lanes_requested and aliased_param(params, "output_path", "out_path"):
+        raise ValueError(
+            "dispatch.emit lanes derives each part's script path; output_path is not accepted"
+        )
 
     if pipeline_name:
         if plan_path or inventory_path or queue or profile_name or ask or sizing_path or params.get("cloud_spawn") is not None:
@@ -1041,6 +1093,10 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"(got plan_path={plan_path!r}, inventory_path={inventory_path!r})"
         )
 
+    if lanes_requested:
+        return _emit_lanes(params, repo_root)
+
+    inventory_review_specs: list = []
     if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
             _refuse_inventory_outside_repo(
@@ -1066,6 +1122,9 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
             landed_reconciled = reconcile_landed(Path(inventory_path))
+            inventory_review_specs = _inventory_review_specs(
+                Path(inventory_path), only_review_plans
+            )
 
         if not plan_path:
             raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
@@ -1232,6 +1291,8 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             findings_out=plan_findings,
             landed_rows=frozenset(params.get("landed_rows") or ()),
             chatty=bool(params.get("chatty")),
+            predispatch=bool(inventory_path),
+            review_specs=inventory_review_specs,
         )
 
     check_agent_types_resolve(
@@ -1336,6 +1397,402 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
 
     return reply
+
+
+_LANE_RUN_DIR = "state/mise-inventory"
+_MAX_HEADROOM_RETRIES = 3
+_HEADROOM_STEP = 0.05
+
+
+def _inventory_repo_root(inventory: Path) -> Path:
+    """The repo root an inventory record's relative paths resolve against: the
+    grandparent of its ``state/`` directory, as ``inventory_mint`` resolves spec paths."""
+    parents = inventory.resolve().parents
+    if len(parents) < 3:
+        raise ValueError(
+            f"inventory {str(inventory)!r} is not under <repo>/state/mise-inventory/"
+        )
+    return parents[2]
+
+
+def _live_spec_paths(chunk_rows: list) -> list:
+    kinds = _resolve_dep_kinds(chunk_rows)
+    return sorted(
+        {
+            _strip_backtick(r["spec path"])
+            for r in chunk_rows
+            if kinds[_strip_backtick(r["id"])] == _DEP_KIND_LIVE
+        }
+    )
+
+
+def _existing_plans(spec_paths, root: Path) -> list:
+    return [p for p in spec_paths if (root / p).is_file()]
+
+
+def _inventory_review_specs(inventory: Path, only: Optional[frozenset]) -> list:
+    """Blinded falsifier-integrity review specs for the plans the live rows of
+    ``inventory`` cite; writes each plan's can-report-red JSON beside the record."""
+    root = _inventory_repo_root(inventory)
+    run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
+    plans = sorted(
+        _existing_plans(
+            _live_spec_paths(parse_chunk_table(inventory.read_text(encoding="utf-8"))), root
+        )
+    )
+    if only is not None:
+        plans = [p for p in plans if p in only]
+    inputs = review_inputs(
+        plans, repo_root=root, report_dir=Path(f"{_LANE_RUN_DIR}/{run_id}.can-report-red")
+    )
+    for item in inputs:
+        if item.report_path is None:
+            continue
+        target = contained_path(root / item.report_path, [root])
+        if target is None:
+            raise PathEscapeError(f"can-report-red path escapes the repo root: {item.report_path!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(item.report_json, encoding="utf-8", newline="\n")
+    return review_specs(inputs)
+
+
+def _wave_row_of(chunk_row: dict):
+    from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+
+    row_id = _strip_backtick(chunk_row["id"])
+    writes, writes_under = _split_footprint(row_id, chunk_row["footprint"])
+    summary = chunk_row["summary"]
+    return WaveRow(
+        id=row_id,
+        title=summary,
+        surface=(writes or writes_under or [summary])[0],
+        writes=writes,
+        reads=[],
+        depends_on=_split_id_list(chunk_row["deps"]),
+        body=_row_body(
+            row_id,
+            _strip_backtick(chunk_row["spec path"]),
+            summary,
+            chunk_row["verification"],
+            chunk_row["complexity"],
+        ),
+        writes_under=tuple(writes_under),
+    )
+
+
+def _read_lane_map(path: Path) -> Optional[dict]:
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_lane_map(path: Path, lane_map: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(lane_map, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+
+
+def _cost_model(chunk_rows: list, *, root: Path, run_id: str, preamble: Optional[str]) -> tuple:
+    """``(row_bytes, fixed_bytes)`` for ``chunk_rows``: per-row estimates from
+    ``emit.row_block_bytes`` and the script shell measured off one composed probe row."""
+    from coordinator_core.ops.dispatch_emit import emit
+
+    wave_rows = [_wave_row_of(r) for r in chunk_rows]
+    context = {
+        "plan_path": f"{_LANE_RUN_DIR}/{run_id}.spine.md",
+        "repo_root": root,
+        "preamble": preamble,
+    }
+    row_bytes = emit.row_block_bytes(wave_rows, predispatch=True, **context)
+    fragment, schemas = _load_review_inputs(EMIT_ROUTE_INVENTORY)
+    probe = wave_rows[0]
+    shell = emit.compose_script(
+        [[probe]],
+        name="lane-probe",
+        description="lane-probe",
+        plan_path=context["plan_path"],
+        review_roster_fragment=fragment,
+        review_stage_schemas=schemas,
+        predispatch=True,
+        preamble=preamble,
+    )
+    fixed_bytes = max(0, len(shell.encode("utf-8")) - row_bytes[probe.id])
+    return row_bytes, fixed_bytes
+
+
+def _build_lane_map(
+    chunk_rows: list,
+    *,
+    root: Path,
+    inventory: Path,
+    run_id: str,
+    start_sha: Optional[str],
+    lane_count: int,
+    hot_files: int,
+    preamble: Optional[str],
+) -> dict:
+    from coordinator_core.ops.dispatch_emit import emit, lanes
+
+    row_bytes, fixed_bytes = _cost_model(chunk_rows, root=root, run_id=run_id, preamble=preamble)
+    params = lanes.LaneParams(
+        lanes=lane_count,
+        hot_files=hot_files,
+        byte_cap=emit._WORKFLOW_SCRIPT_BYTE_CAP,
+    )
+    bound = plans_with_falsifier(
+        _existing_plans(sorted({_strip_backtick(r["spec path"]) for r in chunk_rows}), root),
+        repo_root=root,
+    )
+    return lanes.partition(
+        chunk_rows,
+        params=params,
+        row_bytes=row_bytes,
+        fixed_bytes=fixed_bytes,
+        bound_plans=bound,
+        run_id=run_id,
+        source_inventory=inventory.resolve().relative_to(root).as_posix(),
+        start_sha=start_sha,
+    )
+
+
+def _resplit_part(
+    lane_map: dict,
+    part_id: str,
+    chunk_by_id: dict,
+    *,
+    root: Path,
+    preamble: Optional[str],
+    headroom: float,
+) -> Optional[str]:
+    """Repack one over-cap part at a tightened ``headroom``, in place: the part
+    becomes several sequential parts of its lane and later parts of that lane
+    are renumbered. Returns the id of the first resulting part, or ``None``
+    when the tightened estimate still fits it in one part. Only a never-emitted
+    part is split."""
+    from coordinator_core.ops.dispatch_emit import lanes
+
+    lane = next(l for l in lane_map["lanes"] if any(p["id"] == part_id for p in l["parts"]))
+    idx = next(i for i, p in enumerate(lane["parts"]) if p["id"] == part_id)
+    if any(p["script"] for p in lane["parts"][idx:]):
+        raise lanes.RowOverBudgetError(
+            f"part {part_id!r} or a later part of lane {lane['id']!r} is already emitted; "
+            f"delete {lanes.lane_map_path(lane_map['run_id'])} to re-partition"
+        )
+    row_bytes, fixed_bytes = _cost_model(
+        [chunk_by_id[r] for r in lane["parts"][idx]["rows"]],
+        root=root,
+        run_id=lane_map["run_id"],
+        preamble=preamble,
+    )
+    budget = lane_map["params"]["byte_cap"] * headroom
+    chunks: list = []
+    current: list = []
+    used = 0
+    for r in lane["parts"][idx]["rows"]:
+        cost = row_bytes[r] + fixed_bytes
+        if cost > budget:
+            raise lanes.RowOverBudgetError(
+                f"row {r!r}: {row_bytes[r]} row bytes + {fixed_bytes} fixed bytes exceeds "
+                f"the part budget {int(budget)}"
+            )
+        if current and used + cost > budget:
+            chunks.append(current)
+            current, used = [], 0
+        current.append(r)
+        used += row_bytes[r]
+    chunks.append(current)
+    if len(chunks) == 1:
+        return None
+    tail_rows = [p["rows"] for p in lane["parts"][idx + 1:]]
+    rebuilt = lane["parts"][:idx]
+    for rows in [*chunks, *tail_rows]:
+        pid = f"{lane['id']}-p{len(rebuilt) + 1}"
+        rebuilt.append(
+            {
+                "id": pid,
+                "after": [rebuilt[-1]["id"]] if rebuilt else [],
+                "rows": rows,
+                "inventory": f"{_LANE_RUN_DIR}/{lane_map['run_id']}-{pid}.md",
+                "script": None,
+                "bytes": 0,
+            }
+        )
+    lane["parts"] = rebuilt
+    plan_of = {r: _strip_backtick(chunk_by_id[r]["spec path"]) for r in chunk_by_id}
+    review: dict = {}
+    for l in lane_map["lanes"]:
+        for p in l["parts"]:
+            for r in p["rows"]:
+                if plan_of[r] in lane_map["falsifier_review_part"]:
+                    review.setdefault(plan_of[r], p["id"])
+    lane_map["falsifier_review_part"] = dict(sorted(review.items()))
+    return rebuilt[idx]["id"]
+
+
+def _int_param(params: dict, name: str, default: int, *, minimum: int = 1) -> int:
+    value = params.get(name)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"dispatch.emit {name} must be an integer >= {minimum}, got {value!r}")
+    return value
+
+
+def _waiting_on(lane_map: dict, dispositions: dict, part_id: str) -> list:
+    from coordinator_core.ops.dispatch_emit import lanes
+    from coordinator_core.ops.dispatch_emit.inventory_mint import _raw_disposition_kind
+
+    parts = lanes._parts_by_id(lane_map)
+    return sorted(
+        p
+        for p in lanes._after_closure(parts, part_id)
+        if any(
+            _raw_disposition_kind(r, dispositions[r]) == _DEP_KIND_LIVE
+            for r in parts[p]["rows"]
+        )
+    )
+
+
+def _part_already_emitted(root: Path, part: dict) -> bool:
+    """True when the lane map records ``part``'s script and that file is on disk."""
+    script = part.get("script")
+    return bool(script) and (root / script).is_file()
+
+
+def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
+    """The ``--lanes`` flow: pin or load the lane map, then emit one script per
+    ready part holding a live row. Returns ``{"ok", "lane_map", "parts", "not_ready", ...}``."""
+    from coordinator_core.ops.dispatch_emit import lanes
+
+    inventory = Path(params["inventory_path"])
+    _refuse_inventory_outside_repo(
+        str(inventory), params.get("inventory_repo_root") or repo_root
+    )
+    root = _inventory_repo_root(inventory)
+    master_text = inventory.read_text(encoding="utf-8")
+    run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
+    start_sha = read_frontmatter_field(str(inventory), "start_sha") or None
+    chunk_rows = parse_chunk_table(master_text)
+    dispositions = {_strip_backtick(r["id"]): r["disposition"] for r in chunk_rows}
+    map_path = root / lanes.lane_map_path(run_id)
+    lane_map = _read_lane_map(map_path)
+    pinned = lane_map is not None
+    if not pinned:
+        lane_map = _build_lane_map(
+            chunk_rows,
+            root=root,
+            inventory=inventory,
+            run_id=run_id,
+            start_sha=start_sha,
+            lane_count=_int_param(params, "lane_count", lanes.LaneParams.lanes),
+            hot_files=_int_param(params, "hot_files", lanes.LaneParams.hot_files, minimum=0),
+            preamble=params.get("preamble"),
+        )
+        _write_lane_map(map_path, lane_map)
+
+    inner = {
+        k: v
+        for k, v in params.items()
+        if k
+        not in ("lanes", "part", "lane_count", "hot_files", "inventory_path", "output_path", "inventory_part")
+    }
+    wanted = params.get("part")
+    chunk_by_id = {_strip_backtick(r["id"]): r for r in chunk_rows}
+    resplits = 0
+    emitted: dict = {}
+    skipped: list = []
+    while True:
+        ready = lanes.ready_parts(lane_map, dispositions)
+        parts_by_id = lanes._parts_by_id(lane_map)
+        if wanted:
+            if wanted not in parts_by_id:
+                raise ValueError(
+                    f"lane map {map_path.name} has no part {wanted!r}; parts: {sorted(parts_by_id)}"
+                )
+            if wanted not in ready:
+                raise lanes.PartNotReadyError(
+                    f"part {wanted!r} is not ready: waiting on "
+                    f"{_waiting_on(lane_map, dispositions, wanted)}"
+                )
+            targets = [wanted]
+        else:
+            targets = ready
+        pending_files: list = []
+        try:
+            for part_id in targets:
+                if part_id in emitted or part_id in skipped:
+                    continue
+                part = parts_by_id[part_id]
+                sub_text = lanes.render_part_inventory(master_text, lane_map, part_id)
+                if not _live_spec_paths(parse_chunk_table(sub_text)):
+                    skipped.append(part_id)
+                    continue
+                if not wanted and _part_already_emitted(root, part):
+                    continue
+                sub_path = root / part["inventory"]
+                sub_path.parent.mkdir(parents=True, exist_ok=True)
+                sub_path.write_text(sub_text, encoding="utf-8", newline="\n")
+                script_path = sub_path.with_name(sub_path.stem + ".workflow.mjs")
+                pending_files = [sub_path, sub_path.with_name(sub_path.stem + ".spine.md")]
+                review_here = frozenset(
+                    plan
+                    for plan, owner in lane_map["falsifier_review_part"].items()
+                    if owner == part_id
+                )
+                reply = _dispatch_emit(
+                    {**inner, "inventory_path": str(sub_path), "output_path": str(script_path)},
+                    repo_root,
+                    only_review_plans=review_here,
+                )
+                part["script"] = script_path.relative_to(root).as_posix()
+                part["bytes"] = script_path.stat().st_size
+                emitted[part_id] = {"part": part_id, **reply}
+        except ScriptOverCapError as exc:
+            for stale in pending_files:
+                stale.unlink(missing_ok=True)
+            headroom = lane_map["params"]["headroom"]
+            for attempt in range(1, _MAX_HEADROOM_RETRIES + 1):
+                first_new = _resplit_part(
+                    lane_map,
+                    part_id,
+                    chunk_by_id,
+                    root=root,
+                    preamble=params.get("preamble"),
+                    headroom=round(headroom - _HEADROOM_STEP * attempt, 4),
+                )
+                if first_new is not None:
+                    resplits += 1
+                    if wanted == part_id:
+                        wanted = first_new
+                    break
+            else:
+                raise lanes.RowOverBudgetError(
+                    f"part {part_id!r} composes over the byte cap after {_MAX_HEADROOM_RETRIES} "
+                    f"headroom reductions: {exc}"
+                ) from exc
+            continue
+        break
+
+    _write_lane_map(map_path, lane_map)
+    not_ready = [
+        {"part": p, "waiting_on": _waiting_on(lane_map, dispositions, p)}
+        for p in sorted(parts_by_id)
+        if p not in ready
+    ]
+    for item in not_ready:
+        print(
+            f"dispatch.emit: part {item['part']} not ready, waiting on {item['waiting_on']}",
+            file=sys.stderr,
+        )
+    return {
+        "ok": all(e["ok"] for e in emitted.values()),
+        "lane_map": map_path.relative_to(root).as_posix(),
+        "lane_map_pinned": pinned,
+        "part_resplits": resplits,
+        "parts": list(emitted.values()),
+        "skipped_closed_parts": skipped,
+        "not_ready": not_ready,
+        "fire_args": {"repoRoot": Path(repo_root or root).as_posix()},
+    }
 
 
 def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:

@@ -5,15 +5,14 @@ Port of: ``coordinator/bin/install-sandbox-check.sh`` (DoE b5a4192c,
 2026-07-20) [coordinator-content-repo repo] (BIG_PORT Wave C, item ``install-sandbox-check``,
 971 LOC oracle).
 Purpose (unchanged from bash): exercises the W4.1 install steps (DoE clone,
-``claude-author`` wrapper, ``gen-settings-hooks`` seeding, ``.coordinator-content-root`` pointer,
-``claude-author-shim.sh``, resolver cold-tier, publish-repo parameterization)
-against an isolated sandbox ``CLAUDE_HOME`` and asserts the resulting thin-
-``~/.claude`` + cloned-DoE shape. Validates Tier 1 (filesystem) of the
+``claude-author`` wrapper, ``gen-settings-hooks`` seeding, resolver cold-tier,
+publish-repo parameterization) against an isolated sandbox ``CLAUDE_HOME`` and
+asserts the resulting thin-``~/.claude`` + cloned-DoE shape. Validates Tier 1 (filesystem) of the
 install-surface-completeness contract; Tier 2 (running-in-Claude-Code) is
 printed as a DEFERRED manual-gate banner, unchanged in spirit from the oracle.
 
 FAMILY-I (fresh-install surface): on a cold machine ``REPO_CONTENT_ROOT`` /
-``machine-local`` may be unresolvable — every unresolved-clone branch below
+``repos.content_root`` may be unresolvable — every unresolved-clone branch below
 degrades to a SKIP with actionable remediation text, never a hard crash, and
 :func:`main` prints a dedicated engine-root-resolution remediation block if
 the claude-klabauter link itself cannot be established (the trampoline's own concern,
@@ -23,65 +22,22 @@ Of the dependency scripts this validator drives, only ``claude-author`` remains
 a genuine subprocess-exec of a DoE-owned artifact: it has no native claude-klabauter
 peer, and its OWN dry-run/exec-line behavior is what checks 7/7b/F5 assert
 on — there is no "port" of a wrapper whose entire job is to be invoked as a
-standalone binary. ``claude-author`` was PURE BASH on disk at the time this
-module was first ported (confirmed via ``file(1)``); coordinator-content-repo has since
-ported it to python3 (shebang ``#!/usr/bin/env python3``), so the invocation
-below (check 7) uses ``sys.executable`` directly rather than an explicit
-``bash`` spawn — feeding Python source to a bash interpreter fails outright
-(``from: command not found``). No dependency-script bash-spawn remains at
-check 7/7b: the F5 standalone-copy call (check 7b) already invoked the
-copied wrapper directly via shebang-exec (``[f5_wrapper, "--dry-run"]``,
-never explicit ``bash``) and needed no change. The one bash spawn that DOES
-remain in this module (:func:`_tier1b_mirror_and_cold_tier`'s cold-tier
-shim probe, ``["bash", "-c", "source '<shim>.sh' ..."]``) is a SANCTIONED
-carve-out (e) live-shell-environment artifact under test, by PM ruling
-2026-07-22 (commit ``09d6c382``) — see CLAUDE.md § Runtime conventions
-carve-out (e), which names :func:`_tier1b_mirror_and_cold_tier` as that
-class's sole site. Do NOT re-assert carve-out (d) interpreter/shell
-self-probe for this site: a prior classification under (d) was WRONG on two
-independent grounds (see
-``state/review-trail/findings/2026-07-22-adjudication-bash-carveout-7-13.md``
-§1, §3 for the full argument — that refutation stands; it is not what the
-(e) ruling revisits) — (1) carve-out (d) membership is by enumeration and
-its ``Sites:`` list names only ``first_run.py`` ``_bash_version_ok`` and
-``normalize_env.py`` ``_ne_verify_bash_profile_repair``; this site was never
-named there; (2) on the merits, ``source '<shim>'`` hands bash an external
-``.sh`` file's *logic* to execute — the shim is the subject under test, not
-bash itself — which is exactly what (d)'s anti-loophole clause excludes.
-Carve-out (e) instead names the *live shell environment* applying the shim
-as the subject under test, not the shim's logic in isolation — a distinct
-rationale from (d), not a re-run of it. The shim this probe sources
-(``claude-author-shim.sh``) is itself emitted by claude-klabauter's own
-:mod:`coordinator_core.ops.gen_claude_author_shim` op, which copies a
-DoE-authored *template*'s bytes verbatim rather than reimplementing the
-template body (see that module's own docstring) — so the shim is more
-precisely a claude-klabauter-emitted artifact carrying a DoE-template body, not
-purely "a DoE artifact," and this provenance is load-bearing for why the
-site qualifies under (e): asserting the live-shell-environment behavior of
-a byte-verbatim-copied template is the thing under test, not a foreign
-script's independent logic. Tracked as the reclassified (was: row #7) entry
-in ``state/audits/2026-07-21-pure-python-bash-spawn-audit.md``.
+standalone binary. The invocation (check 7) uses ``sys.executable`` directly
+rather than an explicit ``bash`` spawn, and the F5 standalone-copy call
+(check 7b) invokes the copied wrapper the same way; no bash spawn remains in
+this module.
 
-``gen-settings-hooks.sh`` (DoE a2078a9b, 2026-07-22),
-``gen-content-root-pointer.sh`` (DoE b5a4192c, 2026-07-20),
-``gen-claude-author-shim.sh`` (DoE b5a4192c, 2026-07-20), and
+``gen-settings-hooks.sh`` (DoE a2078a9b, 2026-07-22) and
 ``resolve-coordinator-clone.sh`` (DoE 290997c7, 2026-07-22)
-[coordinator-content-repo repo] are the FOUR bridges this module used to subprocess-exec
-(``bash <script> ...``, relying on the first three being sh/python polyglot
-trampolines) and now calls **in-process** instead, against claude-klabauter's own
-native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`,
-:mod:`coordinator_core.ops.gen_content_root_pointer`,
-:mod:`coordinator_core.ops.gen_claude_author_shim`, and
-:mod:`coordinator_core.resolve_coordinator_clone` respectively (see
-:func:`_call_gen_settings_hooks`, :func:`_call_gen_content_root_pointer`,
-:func:`_call_gen_claude_author_shim`, :func:`_call_resolve_coordinator_clone`,
-and the paired ``_assert_*_interface`` functions). Each DoE trampoline's only
-job was to import and call the same claude-klabauter-owned module this validator now
-calls directly — subprocess-exec'ing it was a circular, Windows-costly
-(~326ms shim tax measured for gen-settings-hooks.sh alone) round-trip through
-``bash``/``sh`` PATH-probing back into this repo's own Python, and (for the
-other three) a dependency on DoE `.sh` files being present/landed at all
-before this validator's OWN in-tree logic could be exercised. Repointed per
+[coordinator-content-repo repo] are the two bridges this module used to subprocess-exec
+(``bash <script> ...``) and now calls **in-process** instead, against claude-klabauter's
+own native peer modules — :mod:`coordinator_core.install.gen_settings_hooks`
+and :mod:`coordinator_core.resolve_coordinator_clone` respectively (see
+:func:`_call_gen_settings_hooks`, :func:`_call_resolve_coordinator_clone`,
+and the paired ``_assert_*_interface`` functions). Subprocess-exec'ing them
+was a circular, Windows-costly (~326ms shim tax measured for
+gen-settings-hooks.sh alone) round-trip through ``bash``/``sh`` PATH-probing
+back into this repo's own Python. Repointed per
 ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-execs-doe-shell-blocks-deletion.md``
 and its correction
 ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-doe-fix-blocks-deletion-correction.md``
@@ -89,30 +45,16 @@ and its correction
 3.5c/F8 were independently already red on a registry-less sandbox
 ``CLAUDE_HOME`` before that repoint, for a reason the repoint does NOT fix —
 see the correction memo's rc=3 ``CLAUDE_KLABAUTER_ROOT``-resolution finding); the same
-in-process pattern is extended here to the other three bridges as the
-general "reimplement native, do not subprocess a DoE oracle" doctrine for
-this plan (`docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`
+in-process pattern is the general "reimplement native, do not subprocess a
+DoE oracle" doctrine for this plan
+(`docs/plans/2026-07-21-claude-klabauter-pure-python-shop-retire-all-bash.md`
 § Decisions).
 
-Flagged behavioral broadening (not silent): because the pointer/shim/resolver
-calls no longer require the corresponding DoE ``.sh`` file to exist on disk,
-checks that used to report FAIL "not found (Cn not yet landed — expected
-RED)" now exercise the real native logic directly and can PASS even against
-a DoE clone that has not yet shipped those trampolines. This is the intended
-outcome of the port (the native module IS the authoritative implementation
-now, matching :mod:`coordinator_core.resolve_coordinator_clone`'s own
-"reimplement-native" docstring), not a masked regression — the shim/pointer
-TEMPLATE file (``coordinator/templates/shell/claude-author-shim.sh.tmpl``) still
-must exist, since ``gen_claude_author_shim`` has no default template of its own
-and fails loud without one.
-
 Unit decomposition (per porter brief):
-    unit1 — :func:`_resolve_doe_clone`, :class:`Reporter`, :func:`_run`, arg parse
+    unit1 — :func:`resolve_doe_clone`, :class:`Reporter`, :func:`_run`, arg parse
     unit2 — :func:`_tier1_filesystem_shape` (checks 1-7b)
-    unit3 — Tier1b banner (folded into :func:`_tier1b_maximalist_shape` header)
-    unit4a — :func:`_tier1b_pointer_and_shim` (checks 8-9, live-artifact baseline)
-    unit4b — :func:`_tier1b_mirror_and_cold_tier` (checks 10-13)
-    unit5 — :func:`_tier1c_publish_repo_parity` (F8, checks 14-17)
+    unit4b — :func:`_tier1b_mirror_and_cold_tier` (checks 10-11)
+    unit5 — :func:`_tier1c_publish_repo_parity` (F8, checks 15-17)
     unit6 — :func:`run_all` (summary), :func:`_tier2_deferred_banner`, :func:`main`
 
 Exit-code contract (addendum rule 3b — fail-loud VALIDATOR class):
@@ -170,8 +112,6 @@ import contextlib
 import io
 import json
 import os
-import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -182,8 +122,8 @@ from typing import Dict, List, Optional, Tuple
 
 from coordinator_core import machine_resolver, resolve_coordinator_clone
 from coordinator_core._settings_home import native_path_form
+from coordinator_core.content_root import CONTENT_ROOT_KEY, POINTER_NAME, migrate_legacy_config
 from coordinator_core.install import gen_settings_hooks
-from coordinator_core.ops import gen_claude_author_shim, gen_content_root_pointer
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 #: Named so `_sep_norm` reads without an escape-in-an-escape.
@@ -363,26 +303,6 @@ def _layout_note(clone: str) -> str:
     return ""
 
 
-def _host_home() -> str:
-    """This host's home directory.
-
-    ``HOME`` is the POSIX spelling and is routinely UNSET on Windows, where the
-    spelling is ``USERPROFILE``. A bare ``os.environ.get("HOME", "")`` therefore
-    yields an empty string on a whole first-class platform, and any assertion
-    guarded by that truthiness becomes a check that cannot fail there — see
-    :func:`_tier1b_pointer_and_shim`'s hardcoded-machine-path row. Returns ""
-    only when no spelling and no ``Path.home()`` answer, which callers must
-    report as UNEVALUABLE rather than pass."""
-    for spelling in ("HOME", "USERPROFILE"):
-        value = os.environ.get(spelling, "")
-        if value:
-            return value
-    try:
-        return str(Path.home())
-    except (RuntimeError, OSError):
-        return ""
-
-
 def _cold_bare_path() -> str:
     """A deliberately minimal PATH for the cold-tier probes: the host's system
     binary directories and nothing else.
@@ -429,11 +349,13 @@ def _python_launch(script: str, *args: str) -> List[str]:
 
 
 def resolve_doe_clone() -> Tuple[str, bool]:
-    """Order: ``REPO_CONTENT_ROOT`` env, then an in-process
-    ``machine_resolver.registry_get("repos.content_root")`` read, then
-    ``machine-local get repos.content_root`` (sibling-of-self or PATH) as the
-    CLI-spawn fallback rung. Returns ``("", False)`` on total failure — NEVER
-    raises (fresh-install machines routinely fail to resolve this; every
+    """Order: ``REPO_CONTENT_ROOT`` env, then ``migrate_legacy_config()`` (an
+    upgrade box carrying only a legacy-named pointer or key gains
+    ``repos.content_root``; a no-op otherwise, spawns nothing), then an
+    in-process ``machine_resolver.registry_get("repos.content_root")`` read,
+    then ``machine-local get repos.content_root`` (sibling-of-self or PATH) as
+    the CLI-spawn fallback rung. Returns ``("", False)`` on total failure —
+    NEVER raises (fresh-install machines routinely fail to resolve this; every
     downstream check degrades to SKIP, per the FAMILY-I contract in the
     module docstring).
 
@@ -445,20 +367,24 @@ def resolve_doe_clone() -> Tuple[str, bool]:
     again. ``registry_get`` does not normalize its return value the way the
     CLI does (``_to_native_drive_path``) — a wrong (unnormalized) value here
     would silently poison every downstream check that validates against it,
-    so its result is passed through ``native_path_form`` (the same
-    drive/MSYS repair ``gen_content_root_pointer.py :: _resolve_content_root`` wraps
-    both of its own rungs in) before being returned."""
+    so its result is passed through ``native_path_form`` (the drive/MSYS
+    repair) before being returned."""
     doe_clone = os.environ.get("REPO_CONTENT_ROOT", "")
     if doe_clone:
         return doe_clone, True
 
-    registry_value = machine_resolver.registry_get("repos.content_root")
+    try:
+        migrate_legacy_config()
+    except OSError:
+        pass  # an unwritable registry must not stop the read below
+
+    registry_value = machine_resolver.registry_get(CONTENT_ROOT_KEY)
     if registry_value:
         return native_path_form(registry_value), True
 
     ml = _which("machine-local")
     if ml:
-        cp = _run([ml, "get", "repos.content_root"], timeout=15)
+        cp = _run([ml, "get", CONTENT_ROOT_KEY], timeout=15)
         if cp.returncode == 0 and cp.stdout.strip():
             return cp.stdout.strip(), True
 
@@ -620,10 +546,8 @@ def _tier1_filesystem_shape(
         Path(sandbox_settings).write_text("{}", encoding="utf-8", newline="\n")
 
         # COORDINATOR_SETTINGS_HOME must be pinned into the sandbox, not merely
-        # inherited: since 2026-07-28 gen_content_root_pointer writes
-        # <settings-home>/machine-local/.coordinator-content-root, so an inherited real
-        # COORDINATOR_SETTINGS_HOME would redirect this sandbox write onto the
-        # LIVE pointer. CLAUDE_HOME alone no longer confines it.
+        # inherited: settings-home-rooted writes would otherwise land on the
+        # LIVE settings home. CLAUDE_HOME alone does not confine them.
         env = {
             **os.environ,
             "CLAUDE_HOME": sandbox,
@@ -849,73 +773,6 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
         os.environ.update(saved_env)
 
 
-def _assert_gen_content_root_pointer_interface(r: Reporter) -> None:
-    """Real interface assertion against the in-process
-    ``coordinator_core.ops.gen_content_root_pointer`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the DoE
-    ``gen-content-root-pointer.sh`` polyglot, which become meaningless once the
-    call site no longer reads that file at all. Asserts the module exposes
-    a callable ``main(argv)`` (the ``--check-only`` contract the call sites
-    below depend on — see :func:`_call_gen_content_root_pointer`)."""
-    main_fn = getattr(gen_content_root_pointer, "main", None)
-    if not callable(main_fn):
-        r.bad("coordinator_core.ops.gen_content_root_pointer has no callable main() (interface contract broken)")
-    else:
-        r.ok("gen_content_root_pointer.main() callable (interface contract verified)")
-
-
-def _call_gen_content_root_pointer(argv: List[str], env: Dict[str, str]) -> Tuple[int, str]:
-    """In-process call to :func:`gen_content_root_pointer.main`, replacing the
-    former ``bash gen-content-root-pointer.sh [--check-only]`` subprocess spawn.
-    Overlays ``env`` onto the current process's ``os.environ`` for the
-    duration of the call and restores the prior environment afterward
-    (save/restore, mirrors :func:`_call_gen_settings_hooks`). Returns
-    ``(rc, stderr_text)`` — same shape the ``subprocess.CompletedProcess``
-    call sites already branch on."""
-    saved_env = dict(os.environ)
-    stderr_buf = io.StringIO()
-    try:
-        os.environ.clear()
-        os.environ.update(env)
-        with contextlib.redirect_stderr(stderr_buf):
-            rc = gen_content_root_pointer.main(argv)
-        return rc, stderr_buf.getvalue()
-    finally:
-        os.environ.clear()
-        os.environ.update(saved_env)
-
-
-def _assert_gen_claude_author_shim_interface(r: Reporter) -> None:
-    """Real interface assertion against the in-process
-    ``coordinator_core.ops.gen_claude_author_shim`` module — replaces the
-    former ``bash -n``/``py_compile`` syntax checks of the DoE
-    ``gen-claude-author-shim.sh`` polyglot. Asserts the module exposes a
-    callable ``main(argv)`` (see :func:`_call_gen_claude_author_shim`)."""
-    main_fn = getattr(gen_claude_author_shim, "main", None)
-    if not callable(main_fn):
-        r.bad("coordinator_core.ops.gen_claude_author_shim has no callable main() (interface contract broken)")
-    else:
-        r.ok("gen_claude_author_shim.main() callable (interface contract verified)")
-
-
-def _call_gen_claude_author_shim(argv: List[str], env: Dict[str, str]) -> Tuple[int, str]:
-    """In-process call to :func:`gen_claude_author_shim.main`, replacing the
-    former ``bash gen-claude-author-shim.sh [...]`` subprocess spawn. Same
-    save/restore ``os.environ`` overlay as :func:`_call_gen_content_root_pointer`.
-    Returns ``(rc, stderr_text)``."""
-    saved_env = dict(os.environ)
-    stderr_buf = io.StringIO()
-    try:
-        os.environ.clear()
-        os.environ.update(env)
-        with contextlib.redirect_stderr(stderr_buf):
-            rc = gen_claude_author_shim.main(argv)
-        return rc, stderr_buf.getvalue()
-    finally:
-        os.environ.clear()
-        os.environ.update(saved_env)
-
-
 def _assert_resolve_coordinator_clone_interface(r: Reporter) -> None:
     """Real interface assertion against the in-process
     ``coordinator_core.resolve_coordinator_clone`` module — replaces the
@@ -960,325 +817,12 @@ def _call_resolve_coordinator_clone(mode: str, env: Dict[str, str]) -> Tuple[int
         os.environ.update(saved_env)
 
 
-# ---------------------------------------------------------------------------
-# unit4a — Tier 1b: pointer + shim artifacts, live-artifact baseline
-# ---------------------------------------------------------------------------
-
-
-#: Sentinel the AC2 probe passes to `claude` so the check can prove the shim
-#: forwards the caller's own arguments after the `--content-root` pair.
-_AC2_PROBE_ARG = "--ac2-argv-seam-probe"
-
-_AC2_STUB_ARG_PREFIX = "ARG:"
-_AC2_STUB_ENV_PREFIX = "ENV_REPO_CONTENT_ROOT:"
-
-
-def _write_claude_author_argv_stub(sandbox: str) -> str:
-    """Write an executable ``claude-author`` stub into its own sandbox bin dir and
-    return that dir, for the AC2 cold-shell probe to prepend to a cold PATH.
-
-    The stub reports the argv it was handed plus the ``REPO_CONTENT_ROOT`` it
-    inherited, and exits 0 without launching anything — AC2 asserts what the
-    shim PASSES to claude-author, and must never start a real session to find out.
-
-    The interpreter is a baked ``sys.executable``, not ``/usr/bin/env
-    python3``: the probe's whole point is a cold PATH, and a stub that
-    resolved its own interpreter through that PATH would be testing the
-    sandbox's PATH rather than the shim. The shebang line itself stays
-    ``#!/bin/sh`` — a shebang is parsed by the kernel with no shell-style
-    quote stripping, so a baked ``sys.executable`` containing a space (a
-    routine shape on Windows) would split into a garbage interpreter path
-    right there; ``exec``ing the quoted interpreter from inside `/bin/sh`
-    keeps the baked path intact.
-    """
-    stub_bin = os.path.join(sandbox, "ac2-cold-shell-bin")
-    os.makedirs(stub_bin, exist_ok=True)
-    body = os.path.join(stub_bin, "claude-author-body.py")
-    Path(body).write_text(
-        "import os, sys\n"
-        f"for _a in sys.argv[1:]:\n"
-        f"    print({_AC2_STUB_ARG_PREFIX!r} + _a)\n"
-        f"print({_AC2_STUB_ENV_PREFIX!r} + os.environ.get('REPO_CONTENT_ROOT', ''))\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    stub = os.path.join(stub_bin, "claude-author")
-    Path(stub).write_text(
-        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(body)} \"$@\"\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    os.chmod(stub, 0o755)
-    return stub_bin
-
-
-def _parse_claude_author_argv_stub(stdout: str) -> Tuple[List[str], str]:
-    """Split the AC2 stub's output into ``(argv, inherited_REPO_CONTENT_ROOT)``.
-
-    One argument per line, so a root containing spaces stays one argument."""
-    argv: List[str] = []
-    seen_env = ""
-    for line in stdout.splitlines():
-        if line.startswith(_AC2_STUB_ARG_PREFIX):
-            argv.append(line[len(_AC2_STUB_ARG_PREFIX) :])
-        elif line.startswith(_AC2_STUB_ENV_PREFIX):
-            seen_env = line[len(_AC2_STUB_ENV_PREFIX) :]
-    return argv, seen_env
-
-
-def _tier1b_pointer_and_shim(
-    r: Reporter,
-    sandbox: str,
-    doe_clone: str,
-    doe_clone_resolved: bool,
-    coordinator_root: str,
-) -> Tuple[bool, bool, str, str]:
-    """Returns ``(pointer_section_ran, shim_section_ran, live_content_root_bak, live_shim_bak)``."""
-    r.section(
-        "=== Tier 1b: Maximalist install shape (pointer/shim/resolver — native in-process) ==="
-    )
-
-    home = _host_home()
-    live_content_root = os.path.join(
-        os.environ.get("COORDINATOR_SETTINGS_HOME")
-        or os.path.join(home, ".coordinator-claude-settings"),
-        "machine-local",
-        ".coordinator-content-root",
-    )
-    live_shim_file = os.path.join(home, ".claude", "shell", "claude-author-shim.sh")
-    live_content_root_bak = os.path.join(sandbox, ".live-content-root.bak")
-    live_shim_bak = os.path.join(sandbox, ".live-shim.bak")
-
-    if os.path.isfile(live_content_root):
-        shutil.copy2(live_content_root, live_content_root_bak)
-    if os.path.isfile(live_shim_file):
-        shutil.copy2(live_shim_file, live_shim_bak)
-
-    # ---- 8. Pointer artifact ----
-    r.section("--- Pointer artifact (.coordinator-content-root) ---")
-    pointer_section_ran = False
-
-    _assert_gen_content_root_pointer_interface(r)
-
-    if doe_clone_resolved:
-        # COORDINATOR_SETTINGS_HOME pinned explicitly rather than inherited,
-        # matching the Step 3.5c gen-settings-hooks pin above and the F8
-        # tier's pin below. gen_content_root_pointer writes
-        # <settings-home>/machine-local/.coordinator-content-root, so this env decides which
-        # machine's pointer a sandbox run touches, and deciding it from
-        # ambient process state is the wrong way to decide it.
-        #
-        # HONEST SCOPE, because the commit that added this claimed more: this
-        # is HARDENING, not a demonstrated fix. Measured 2026-08-26, os.environ
-        # already carries a sandbox-scoped COORDINATOR_SETTINGS_HOME by the
-        # time this branch runs, so the inherited value here is not observably
-        # the live one and no test could be made to fail without this pin --
-        # two attempts produced pins that passed either way. The live-pointer
-        # pollution that prompted this (state/bug-backlog/2026-08-26-a-test-
-        # writes-the-live-claude-machine-lo-6cdf6bc87771.yaml) is REAL and its
-        # writer is still UNIDENTIFIED. Do not read this pin as having closed
-        # it.
-        env = {
-            **os.environ,
-            "CLAUDE_HOME": sandbox,
-            "COORDINATOR_SETTINGS_HOME": os.path.join(sandbox, ".coordinator-claude-settings"),
-            "REPO_CONTENT_ROOT": doe_clone,
-        }
-        rc, err = _call_gen_content_root_pointer([], env)
-        gp_err = os.path.join(sandbox, "gen-pointer-err.txt")
-        Path(gp_err).write_text(err or "", encoding="utf-8", newline="\n")
-        if rc == 0:
-            r.ok("gen_content_root_pointer.main() exited 0 against sandbox")
-            pointer_section_ran = True
-        else:
-            r.bad(f"gen_content_root_pointer.main() failed (see {gp_err})")
-
-        sandbox_content_root = os.path.join(
-            sandbox, ".coordinator-claude-settings", "machine-local", ".coordinator-content-root"
-        )
-        if os.path.isfile(sandbox_content_root):
-            r.ok(f".coordinator-content-root pointer present in sandbox: {sandbox_content_root}")
-            pointer_content = Path(sandbox_content_root).read_text(encoding="utf-8", errors="replace").rstrip("\n")
-            if pointer_content == doe_clone:
-                r.ok(f".coordinator-content-root content matches registry repos.content_root: {doe_clone}")
-            else:
-                r.bad(f".coordinator-content-root content mismatch: got '{pointer_content}', expected '{doe_clone}'")
-        else:
-            r.bad(f".coordinator-content-root not created in sandbox (expected at: {sandbox_content_root})")
-
-        if os.path.isfile(sandbox_content_root):
-            ptr_bak = os.path.join(sandbox, ".coordinator-content-root.bak-checkonly")
-            shutil.copy2(sandbox_content_root, ptr_bak)
-            rc_check, _err_check = _call_gen_content_root_pointer(["--check-only"], env)
-            if rc_check == 0:
-                if Path(ptr_bak).read_bytes() == Path(sandbox_content_root).read_bytes():
-                    r.ok("gen_content_root_pointer.main() --check-only: sandbox .coordinator-content-root byte-unchanged (dry-run-safe)")
-                else:
-                    r.bad("gen_content_root_pointer.main() --check-only: sandbox .coordinator-content-root was mutated (dry-run violation)")
-            else:
-                r.bad("gen_content_root_pointer.main() --check-only exited non-zero")
-
-        if os.path.isfile(sandbox_content_root):
-            ptr_v1_bak = os.path.join(sandbox, ".coordinator-content-root.bak-idem")
-            shutil.copy2(sandbox_content_root, ptr_v1_bak)
-            rc_idem, _err_idem = _call_gen_content_root_pointer([], env)
-            if rc_idem == 0:
-                if Path(ptr_v1_bak).read_bytes() == Path(sandbox_content_root).read_bytes():
-                    r.ok("gen_content_root_pointer.main() idempotent: second run — no pointer churn")
-                else:
-                    r.bad("gen_content_root_pointer.main() NOT idempotent: second run changed .coordinator-content-root content")
-            else:
-                r.bad("gen_content_root_pointer.main() failed on second (idempotency) run")
-    else:
-        r.skip("pointer sandbox run (clone path not resolved)")
-
-    # ---- 9. Shim artifact ----
-    r.section("--- Shim artifact (claude-author-shim.sh) ---")
-    shim_tmpl = os.path.join(coordinator_root, "templates", "shell", "claude-author-shim.sh.tmpl")
-    shim_section_ran = False
-
-    _assert_gen_claude_author_shim_interface(r)
-
-    if not os.path.isfile(shim_tmpl):
-        r.bad(f"claude-author-shim.sh.tmpl not found at: {shim_tmpl}{_layout_note(doe_clone)}")
-    else:
-        r.ok(f"claude-author-shim.sh.tmpl present: {shim_tmpl}")
-
-        sandbox_rc = os.path.join(sandbox, "sandbox-rc.sh")
-        Path(sandbox_rc).write_text("# sandbox-rc\n", encoding="utf-8", newline="\n")
-
-        env = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_CONTENT_ROOT": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc}
-        # This section probes the bash shim; without --shell the family defaults
-        # to powershell on Windows and the generator refuses the .sh template.
-        shim_argv = ["--template", shim_tmpl, "--shell", "bash"]
-        rc, err = _call_gen_claude_author_shim(shim_argv, env)
-        gs_err = os.path.join(sandbox, "gen-shim-err.txt")
-        Path(gs_err).write_text(err or "", encoding="utf-8", newline="\n")
-        if rc == 0:
-            r.ok("gen_claude_author_shim.main() exited 0 against sandbox")
-            shim_section_ran = True
-        else:
-            r.bad(f"gen_claude_author_shim.main() failed (see {gs_err})")
-
-        sandbox_shim = os.path.join(sandbox, ".claude", "shell", "claude-author-shim.sh")
-        if os.path.isfile(sandbox_shim):
-            r.ok(f"claude-author-shim.sh present in sandbox: {sandbox_shim}")
-            shim_body = Path(sandbox_shim).read_text(encoding="utf-8", errors="replace")
-
-            if "claude()" in shim_body:
-                r.ok("claude-author-shim.sh defines a claude() function")
-            else:
-                r.bad("claude-author-shim.sh does not define a claude() function")
-
-            if ".coordinator-content-root" in shim_body:
-                r.ok("claude-author-shim.sh references .coordinator-content-root (pointer-reading verified)")
-            else:
-                r.bad("claude-author-shim.sh does not reference .coordinator-content-root (pointer-read missing)")
-
-            # `os.environ["HOME"]` alone is the POSIX spelling only: unset on
-            # Windows, where the empty string short-circuited the `and` and this
-            # row PASSed without ever comparing anything. Resolve the host's home
-            # by either spelling (plus Path.home()), compare in separator-normal
-            # form so a backslash home still matches a forward-slash shim body,
-            # and report UNEVALUABLE rather than PASS if no home resolves at all.
-            home_literal = _host_home()
-            if not home_literal:
-                r.unevaluable(
-                    "claude-author-shim.sh hardcoded-home check: this host's home directory does not "
-                    "resolve (no HOME, no USERPROFILE, no Path.home()) — there is no literal to "
-                    "search the shim body for"
-                )
-            elif _path_mentioned(home_literal, shim_body):
-                r.bad(f"claude-author-shim.sh contains hardcoded machine path (literal home '{home_literal}' found in body)")
-            else:
-                r.ok(f"claude-author-shim.sh: no hardcoded machine path (literal home '{home_literal}' absent from body)")
-
-            # Windows home shapes (`C:\Users\alice`, `\\host\share\alice`) were
-            # outside this pattern entirely, so the hardcoded-path class it exists
-            # to catch could not be caught on a first-class platform. The pattern is
-            # host-INDEPENDENT by design: every host checks every shape, because a
-            # shim generated on one host can be read on another.
-            #
-            # code-reviewer S7 asked whether the UNC arm over-matches a
-            # non-path `\\` escape sequence in a shell body. It does not, and
-            # the arm stays as written: the arm demands `\\`, a host token, a
-            # SINGLE `\`, a share token, another single `\`, then a letter, and
-            # a doubled escape like `printf '\\n\\t\\x41'` fails it -- after the
-            # host token the next character is a backslash, which the share
-            # token's class excludes, with no backtracking that recovers. A
-            # narrower anchor was NOT adopted because no concrete over-matching
-            # body was produced, and narrowing risks missing the Windows shape
-            # this arm exists to catch.
-            hardcoded_pattern = re.compile(
-                r"^[^#].*("
-                r"/Users/[a-zA-Z_]"
-                r"|/home/[a-zA-Z_]"
-                r"|[A-Za-z]:[\\/](?:Users|home)[\\/][a-zA-Z_]"
-                r"|[\\]{2}[A-Za-z0-9._-]+[\\][A-Za-z0-9._$-]+[\\][a-zA-Z_]"
-                r")",
-                re.MULTILINE,
-            )
-            if hardcoded_pattern.search(shim_body):
-                r.bad("claude-author-shim.sh contains a hardcoded home-directory path (POSIX /Users//home/, Windows drive, or UNC share) on a non-comment line")
-            else:
-                r.ok("claude-author-shim.sh: no hardcoded home-directory paths (POSIX, Windows-drive or UNC shape) on non-comment lines")
-        else:
-            r.bad(f"claude-author-shim.sh not created in sandbox (expected at: {sandbox_shim})")
-
-        # Count matching LINES, not raw substring occurrences: EXPECTED_SOURCE_LINE
-        # itself contains the "claude-author-shim" token twice (the -f test and the
-        # source path both reference claude-author-shim.sh) -- a substring
-        # re.findall() over the whole body over-counts a single, correctly
-        # idempotent source line as 2 and would always FALSE-POSITIVE "duplicated
-        # source line" (a genuine bug caught while wiring this call in-process;
-        # this assertion never ran against real content before, since the DoE
-        # .sh bridge was always "not found" in every prior fixture run).
-        _source_line_re = re.compile(r"claude-author-shim|claude_author_shim")
-
-        def _count_source_lines(text: str) -> int:
-            return sum(1 for line in text.split("\n") if _source_line_re.search(line))
-
-        if os.path.isfile(sandbox_rc):
-            rc_body = Path(sandbox_rc).read_text(encoding="utf-8", errors="replace")
-            source_line_count = _count_source_lines(rc_body)
-            if source_line_count == 1:
-                r.ok(f"exactly one marked source line in sandbox rc (got: {source_line_count})")
-            elif source_line_count == 0:
-                r.bad("no source line for claude-author-shim found in sandbox rc (expected 1)")
-            else:
-                r.bad(f"multiple source lines for claude-author-shim in sandbox rc (expected 1, got: {source_line_count})")
-
-        if os.path.isfile(sandbox_rc):
-            rc2, _err2 = _call_gen_claude_author_shim(shim_argv, env)
-            if rc2 == 0:
-                rc_body2 = Path(sandbox_rc).read_text(encoding="utf-8", errors="replace")
-                count2 = _count_source_lines(rc_body2)
-                if count2 == 1:
-                    r.ok("idempotency: second gen_claude_author_shim.main() run — still exactly one source line (no duplication)")
-                else:
-                    r.bad(f"idempotency: second run produced {count2} source lines (expected 1 — duplicated source line)")
-            else:
-                r.bad("gen_claude_author_shim.main() failed on second (idempotency) run")
-
-        sandbox_rc_check = os.path.join(sandbox, "sandbox-rc-checkonly.sh")
-        Path(sandbox_rc_check).write_text("# sandbox-rc-checkonly\n", encoding="utf-8", newline="\n")
-        rc_bak = os.path.join(sandbox, "sandbox-rc-checkonly.bak")
-        shutil.copy2(sandbox_rc_check, rc_bak)
-        env_check = {**os.environ, "CLAUDE_HOME": sandbox, "REPO_CONTENT_ROOT": doe_clone or "", "COORDINATOR_SHIM_RC": sandbox_rc_check}
-        rc_check, _err_check = _call_gen_claude_author_shim(shim_argv + ["--check-only"], env_check)
-        if rc_check == 0:
-            if Path(rc_bak).read_bytes() == Path(sandbox_rc_check).read_bytes():
-                r.ok("gen_claude_author_shim.main() --check-only: sandbox rc byte-unchanged (dry-run-safe)")
-            else:
-                r.bad("gen_claude_author_shim.main() --check-only: sandbox rc was mutated (dry-run violation)")
-        else:
-            r.bad("gen_claude_author_shim.main() --check-only exited non-zero")
-
-    return pointer_section_ran, shim_section_ran, live_content_root_bak, live_shim_bak
+#: Opens Tier 1b; the checks that follow (10, 11) are native in-process.
+_TIER1B_BANNER = "=== Tier 1b: Maximalist install shape (mirror/resolver — native in-process) ==="
 
 
 # ---------------------------------------------------------------------------
-# unit4b — Tier 1b: mirror verification, cold tier, cold-shell, non-mutation
+# unit4b — Tier 1b: mirror verification, resolver cold tier
 # ---------------------------------------------------------------------------
 
 
@@ -1287,18 +831,8 @@ def _tier1b_mirror_and_cold_tier(
     sandbox: str,
     doe_clone: str,
     doe_clone_resolved: bool,
-    shim_section_ran: bool,
-    live_content_root_bak: str,
-    live_shim_bak: str,
 ) -> None:
-    home = _host_home()
-    live_content_root = os.path.join(
-        os.environ.get("COORDINATOR_SETTINGS_HOME")
-        or os.path.join(home, ".coordinator-claude-settings"),
-        "machine-local",
-        ".coordinator-content-root",
-    )
-    live_shim_file = os.path.join(home, ".claude", "shell", "claude-author-shim.sh")
+    r.section(_TIER1B_BANNER)
 
     # ---- 10. Mirror verification ----
     r.section("--- Mirror verification: live_path == <doe>/coordinator (AC5) ---")
@@ -1322,13 +856,14 @@ def _tier1b_mirror_and_cold_tier(
     if doe_clone_resolved:
         cold_env = os.path.join(sandbox, "cold-env")
         os.makedirs(os.path.join(cold_env, ".claude"), exist_ok=True)
-        Path(os.path.join(cold_env, ".claude", ".coordinator-content-root")).write_text(doe_clone, encoding="utf-8", newline="\n")
+        cold_pointer = os.path.join(cold_env, ".claude", POINTER_NAME)
+        Path(cold_pointer).write_text(doe_clone, encoding="utf-8", newline="\n")
 
-        cold_ptr_read = Path(os.path.join(cold_env, ".claude", ".coordinator-content-root")).read_text(encoding="utf-8", errors="replace")
+        cold_ptr_read = Path(cold_pointer).read_text(encoding="utf-8", errors="replace")
         if cold_ptr_read == doe_clone:
-            r.ok(f"cold-env .coordinator-content-root seeded: {doe_clone}")
+            r.ok(f"cold-env content-root pointer seeded: {doe_clone}")
         else:
-            r.bad(f"cold-env .coordinator-content-root setup failed (expected '{doe_clone}', got '{cold_ptr_read}')")
+            r.bad(f"cold-env content-root pointer setup failed (expected '{doe_clone}', got '{cold_ptr_read}')")
 
         cold_flat = os.path.join(cold_env, ".claude", "plugins", "coordinator-claude", "coordinator")
         if not os.path.isdir(cold_flat):
@@ -1398,91 +933,6 @@ def _tier1b_mirror_and_cold_tier(
     else:
         r.skip("resolver cold-tier tests (clone path not resolved)")
 
-    # ---- 12. Cold-shell launch ----
-    r.section("--- Cold-shell launch: --content-root argv seam from pointer alone (AC2) ---")
-    sandbox_shim_path = os.path.join(sandbox, ".claude", "shell", "claude-author-shim.sh")
-    if os.name == "nt":
-        # The probe sources a POSIX `.sh` shim under a hand-built cold PATH of
-        # /usr/bin:/bin. On Windows that PATH resolves nothing, the `.sh` shim
-        # is not the launch surface (the `.cmd`/`.ps1` twins are), so the
-        # claude() wrapper is never defined and the probe reported an install
-        # defect on every Windows run. Not applicable is not a failure.
-        r.skip("AC2 cold-shell (POSIX login-shell seam; not applicable on Windows)")
-    elif shim_section_ran and os.path.isfile(sandbox_shim_path):
-        cold_path = _cold_bare_path()
-        if os.path.isdir("/usr/local/opt/bash/bin"):
-            cold_path += f"{os.pathsep}/usr/local/opt/bash/bin"
-
-        stub_bin = _write_claude_author_argv_stub(sandbox)
-        cold_env_vars = {"PATH": f"{stub_bin}{os.pathsep}{cold_path}", "CLAUDE_HOME": sandbox, "HOME": home}
-        # This leg is POSIX-only (the `nt` branch above SKIPs it), so HOME is the
-        # right spelling here — but `home` must still be a resolved value rather
-        # than an empty string, or the sourced shim's `${CLAUDE_HOME:-$HOME}`
-        # fallback would expand to a bare path and the probe would measure the
-        # sandbox's own layout instead of the shim's pointer read.
-        if not home:
-            # unevaluable() is a
-            # terminal verdict for this subject; without this guard the probe
-            # still ran with HOME="" and could still record r.ok()/r.bad() for
-            # the same AC2 assertion the line above just declared unevaluable.
-            r.unevaluable("AC2 cold-shell: this host's home directory does not resolve, so the shim's ${CLAUDE_HOME:-$HOME} seam cannot be exercised")
-        else:
-            cp = _run(
-                ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; claude {_AC2_PROBE_ARG}"],
-                env=cold_env_vars,
-            )
-            argv, stub_saw_env = _parse_claude_author_argv_stub(cp.stdout)
-
-            if not argv:
-                r.bad(
-                    f"AC2 cold-shell: claude() did not reach claude-author under cold PATH "
-                    f"(stub output: {cp.stdout.strip()!r})"
-                )
-            elif argv[0] != "--content-root":
-                r.bad(
-                    f"AC2 cold-shell: claude() invoked claude-author with {argv!r}; DR-087 requires "
-                    f"the explicit `--content-root <pointer-value>` argv seam as the leading arguments"
-                )
-            elif len(argv) < 2 or not _paths_equal(argv[1], doe_clone):
-                r.bad(
-                    f"AC2 cold-shell: --content-root carried '{argv[1] if len(argv) > 1 else ''}', "
-                    f"expected the pointer value '{doe_clone}'"
-                )
-            elif _AC2_PROBE_ARG not in argv[2:]:
-                r.bad(f"AC2 cold-shell: claude() dropped the caller's own arguments; got {argv!r}")
-            else:
-                r.ok(f"AC2 cold-shell: claude-author --content-root resolved from pointer alone: {doe_clone}")
-
-            if argv and stub_saw_env:
-                r.bad(
-                    f"AC2 cold-shell: shim exported REPO_CONTENT_ROOT='{stub_saw_env}' — DR-087 demoted the "
-                    f"pointer mirror out of rung-1 authority; the root travels as --content-root only"
-                )
-            elif argv:
-                r.ok("AC2 cold-shell: shim left REPO_CONTENT_ROOT unset (DR-087 mirror-promotion stays retired)")
-    elif not shim_section_ran:
-        r.bad("AC2 cold-shell: skipped — gen_claude_author_shim.main() did not produce a sandbox shim")
-    else:
-        r.skip("AC2 cold-shell (sandbox shim not generated)")
-
-    # ---- 13. Live-artifact non-mutation ----
-    r.section("--- Live-artifact non-mutation (AC4) ---")
-    if os.path.isfile(live_content_root_bak):
-        if os.path.isfile(live_content_root) and Path(live_content_root_bak).read_bytes() == Path(live_content_root).read_bytes():
-            r.ok("AC4: live ~/.claude/.coordinator-content-root byte-unchanged after all sandbox runs")
-        else:
-            r.bad("AC4: live ~/.claude/.coordinator-content-root was MUTATED by a sandbox/check-only run (dry-run violation!)")
-    else:
-        r.skip("AC4 .coordinator-content-root live-non-mutation (live .coordinator-content-root absent — C1 not yet installed on this machine)")
-
-    if os.path.isfile(live_shim_bak):
-        if os.path.isfile(live_shim_file) and Path(live_shim_bak).read_bytes() == Path(live_shim_file).read_bytes():
-            r.ok("AC4: live ~/.claude/shell/claude-author-shim.sh byte-unchanged after all sandbox runs")
-        else:
-            r.bad("AC4: live ~/.claude/shell/claude-author-shim.sh was MUTATED by a sandbox/check-only run (dry-run violation!)")
-    else:
-        r.skip("AC4 shim live-non-mutation (live shim absent — C2 not yet installed on this machine)")
-
 
 # ---------------------------------------------------------------------------
 # unit5 — Tier 1c: publish-repo clean-install parity (F8)
@@ -1529,44 +979,10 @@ def _tier1c_publish_repo_parity(
     else:
         r.ok(f"F8 setup: publish-repo-shaped sandbox clone built at {pub_clone} (distinct from $RESOLVED_CLONE={doe_clone})")
 
-    # ---- 14. Pointer generator rooted at publish clone ----
-    r.section("--- F8: .coordinator-content-root pointer rooted at publish clone ---")
-    pub_home = os.path.join(sandbox, "publish-repo-check-home")
-    os.makedirs(pub_home, exist_ok=True)
-    # COORDINATOR_SETTINGS_HOME pinned into the sandbox for the same reason as
-    # the Tier-1b pointer section: the generator's target is settings-home-rooted
-    # since 2026-07-28, so an inherited real value would send this probe's write
-    # onto the LIVE pointer instead of the sandbox.
-    env = {
-        **os.environ,
-        "CLAUDE_HOME": pub_home,
-        "COORDINATOR_SETTINGS_HOME": os.path.join(pub_home, ".coordinator-claude-settings"),
-        "REPO_CONTENT_ROOT": pub_clone,
-    }
-    rc, err = _call_gen_content_root_pointer([], env)
-    if rc == 0:
-        pub_content_root = os.path.join(
-            pub_home, ".coordinator-claude-settings", "machine-local", ".coordinator-content-root"
-        )
-        if os.path.isfile(pub_content_root):
-            pub_pointer_content = Path(pub_content_root).read_text(encoding="utf-8", errors="replace").rstrip("\n")
-            if pub_pointer_content == pub_clone:
-                r.ok(f"F8: .coordinator-content-root pointer rooted at publish clone (got: {pub_pointer_content})")
-            else:
-                r.bad(f"F8: .coordinator-content-root pointer NOT rooted at publish clone — got '{pub_pointer_content}', expected '{pub_clone}'")
-            if pub_pointer_content != doe_clone:
-                r.ok("F8: .coordinator-content-root pointer does NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
-            else:
-                r.bad("F8: .coordinator-content-root pointer content equals the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_content_root_pointer (ignores REPO_CONTENT_ROOT)")
-        else:
-            r.bad(f"F8: .coordinator-content-root pointer not created for publish clone (expected at: {pub_content_root})")
-    else:
-        f8_err = os.path.join(sandbox, "f8-gen-pointer-err.txt")
-        Path(f8_err).write_text(err or "", encoding="utf-8", newline="\n")
-        r.bad(f"F8: gen_content_root_pointer.main() failed against publish clone (see {f8_err})")
-
     # ---- 15. Settings-hooks generator rooted at publish clone ----
     r.section("--- F8: settings.json hook commands rooted at publish clone ---")
+    pub_home = os.path.join(sandbox, "publish-repo-check-home")
+    os.makedirs(pub_home, exist_ok=True)
     pub_settings = os.path.join(pub_home, "settings.json")
     Path(pub_settings).write_text("{}", encoding="utf-8", newline="\n")
     env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_CONTENT_ROOT": pub_clone}
@@ -1763,12 +1179,7 @@ def run_all(
 
         r.section(f"\n=== Tier 1 summary (pre-1b): {r.pass_count} passed, {r.fail_count} failed ===")
 
-        pointer_ran, shim_ran, live_content_root_bak, live_shim_bak = _tier1b_pointer_and_shim(
-            r, sandbox, doe_clone, doe_clone_resolved, coordinator_root
-        )
-        _tier1b_mirror_and_cold_tier(
-            r, sandbox, doe_clone, doe_clone_resolved, shim_ran, live_content_root_bak, live_shim_bak
-        )
+        _tier1b_mirror_and_cold_tier(r, sandbox, doe_clone, doe_clone_resolved)
         _tier1c_publish_repo_parity(r, sandbox, doe_clone, doe_clone_resolved)
         _tier1d_registry_manifest_integrity(r, coordinator_root)
     finally:

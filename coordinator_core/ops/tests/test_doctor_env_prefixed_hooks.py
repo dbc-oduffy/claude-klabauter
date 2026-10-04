@@ -23,7 +23,7 @@ def _doc(command: str) -> dict:
 def hooks_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "content"
     (root / "coordinator" / "hooks").mkdir(parents=True)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(root))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg-empty"))
     return root
 
@@ -55,9 +55,9 @@ def test_unresolvable_interpreter_behind_env_prefix_still_fails(hooks_env: Path,
 
 
 def test_shipped_hooks_json_has_no_false_broken(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+    from coordinator_core.content_root import read_content_root
 
-    root = coordinator_content_root()
+    root = read_content_root()
     content = doctor.content_root_for(root) if root else None
     shipped = None if content is None else content / "hooks" / "hooks.json"
     if shipped is None or not shipped.is_file():

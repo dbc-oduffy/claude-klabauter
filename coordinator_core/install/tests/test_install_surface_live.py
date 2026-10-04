@@ -61,8 +61,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
+from coordinator_core.content_root import read_content_root
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.substrate import (
@@ -92,7 +92,7 @@ _FIVE_STATIC_SHIM_NAMES = (
 
 
 def _resolve_real_doe_bin_templates() -> "Path | None":
-    content_root_raw = machine_resolver.registry_get("repos.content_root")
+    content_root_raw = read_content_root()
     if not content_root_raw:
         return None
     candidate = Path(content_root_raw) / "coordinator" / "templates" / "bin"
@@ -125,7 +125,7 @@ def _skip_reason_if_unavailable() -> "str | None":
     if _resolve_real_doe_bin_templates() is None:
         return (
             "no real coordinator-content-repo templates/bin/ resolvable on this box "
-            "(repos.content_root registry key absent, or the checkout lacks "
+            "(repos.content_root unresolved, or the checkout lacks "
             "coordinator/templates/bin/) -- environment gap, not a test failure"
         )
     if not _resolve_real_ch_bin().is_dir():

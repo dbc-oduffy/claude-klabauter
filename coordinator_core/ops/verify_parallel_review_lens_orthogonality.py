@@ -41,8 +41,8 @@ Cross-repo note: this op lives in claude-klabauter but the manifest it checks
 (coordinator/skills/parallel-code-review/SKILL.md) and the agent files it
 verifies live in the coordinator-content-repo repo — the bash oracle never needed this
 resolution step because it ran FROM inside that repo (SCRIPT_DIR-relative).
-This port resolves the coordinator-content-repo root via
-`coordinator_core.ops.coordinator_content_root.coordinator_content_root()`. A
+This port resolves the content root via
+`coordinator_core.content_root.read_content_root()`. A
 resolution failure is folded into the same "cannot verify without the
 manifest" exit-1 stdout branch the oracle uses for a missing SKILL_FILE —
 semantically the same "verification could not run" outcome for callers, so
@@ -61,7 +61,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root as _resolve_content_root
+from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.content_root import read_content_root as _resolve_content_root
 
 _PROG = "verify-parallel-review-lens-orthogonality.sh"  # literal program-name prefix, matches bash oracle's $0
 _MIN_REVIEWER_COUNT = 4
@@ -245,7 +246,7 @@ def chunk_check(manifest_path: Path) -> Tuple[List[str], bool]:
 def run(
     argv: List[str], content_root: Optional[str] = None
 ) -> Tuple[List[str], List[str], int]:
-    """Core driver: parse args, resolve the coordinator-content-repo repo root, run static
+    """Core driver: parse args, resolve the content root, run static
     check then (if requested) chunk check.
 
     Returns (stdout_lines, stderr_lines, rc). CLI usage errors (unknown arg,
@@ -254,7 +255,7 @@ def run(
     stdout, matching the oracle's plain `echo`.
 
     content_root: injection seam for tests — when provided, skips the
-    coordinator_content_root() resolution call.
+    read_content_root() resolution call.
     """
     chunk_manifest: Optional[str] = None
     i = 0
@@ -275,21 +276,21 @@ def run(
                 1,
             )
 
-    repo_root_str = content_root if content_root is not None else _resolve_content_root()
-    if not repo_root_str:
+    root_str = content_root if content_root is not None else _resolve_content_root()
+    content_dir = content_root_for(root_str)
+    if content_dir is None:
         return (
             [
-                "ERROR: could not resolve the coordinator-content-repo repo root (needed to locate "
-                "coordinator/skills/parallel-code-review/SKILL.md).",
+                "ERROR: could not resolve the content root (needed to locate "
+                "skills/parallel-code-review/SKILL.md).",
                 "Cannot verify lens-orthogonality without the manifest.",
             ],
             [],
             1,
         )
 
-    repo_root = Path(repo_root_str)
-    skill_file = repo_root / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
-    agents_dir = repo_root / "coordinator" / "agents"
+    skill_file = content_dir / "skills" / "parallel-code-review" / "SKILL.md"
+    agents_dir = content_dir / "agents"
 
     lines, passed = static_check(skill_file, agents_dir)
     if not passed:

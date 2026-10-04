@@ -111,12 +111,11 @@ from typing import List, Optional, Sequence, Tuple
 from coordinator_core._settings_home import home_dir, normalize_native_path, settings_home
 from coordinator_core.bin_lib_binding import ensure_bin_lib_bound
 from coordinator_core.data_root import content_root_for
-from coordinator_core.content_root_pointer import read_content_root_pointer_file
+from coordinator_core.content_root import POINTER_NAME, read_content_root, read_pointer_files
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.machine_resolver import merged_flat_registry
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
 from coordinator_core.ops import probe_onboarding_currency, verify_templates_setup_sync, verify_ue_overrides
 from coordinator_core.plugin_health.probe_select import id_to_cluster, load_probes, resolve_active_probes
 from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
@@ -182,12 +181,9 @@ def _doe_coordinator_root() -> Optional[Path]:
          directly, mirroring the bash oracle's _SCRIPT_DIR variable). Kept
          first-rung: this is sentinel's own documented test-isolation seam,
          distinct from (and taking precedence over) the shared content-root ladder.
-      2. coordinator_core.ops.coordinator_content_root.coordinator_content_root() — the
-         same CONTENT_ROOT/REPO_CONTENT_ROOT/machine-local ladder every other
-         content-root-dependent script in the content-root-sweep wave resolves through
-         (Review: code-reviewer — sentinel previously read ~/.claude/.coordinator-content-root
-         directly and never consulted CONTENT_ROOT/REPO_CONTENT_ROOT, silently
-         diverging from every other consumer in the wave).
+      2. coordinator_core.content_root.read_content_root() — the same
+         registry/pointer-file ladder every other content-root-dependent script
+         resolves through (never a pointer file read directly).
 
     Returns None (never raises) when neither resolves — every dependent probe
     below degrades to its existing "sibling script absent -> silent skip / amber
@@ -198,7 +194,7 @@ def _doe_coordinator_root() -> Optional[Path]:
     if override:
         p = normalize_native_path(override)
         return p.parent if p.name == "bin" else p
-    root = coordinator_content_root()
+    root = read_content_root()
     if not root:
         return None
     # Either content layout — the published flat mirror IS its own content root,
@@ -225,10 +221,10 @@ def _claude_klabauter_bin_root() -> Path:
     machine-local registry lookup. This is NOT a cross-repo `__file__`-walk:
     sentinel.py and the manifest are co-located in the SAME repo post-migration.
 
-    Negative-spec: does NOT consult `coordinator_core.ops.coordinator_content_root`
+    Negative-spec: does NOT consult `coordinator_core.content_root.read_content_root`
     or `coordinator_core.engine_root.coordinator_engine_root()` for this
     default — the manifest is claude-klabauter-native data now, so resolving it through
-    a sibling-repo pointer (REPO_CONTENT_ROOT / machine-local `repos.content_root`)
+    a sibling-repo pointer (the machine-local `repos.content_root`)
     would still be wrong-repo-shaped even where it happens to resolve; the
     fix is to stop treating manifest location as a content-root question at all.
     """
@@ -246,8 +242,8 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
          test-isolation usage is unaffected.
       2. Default: claude-klabauter's own `coordinator/bin/doctor-probes.toml`
          (`_claude_klabauter_bin_root()`) — NOT the content-root ladder
-         (`coordinator_content_root()` / REPO_CONTENT_ROOT / machine-local
-         `repos.content_root`), which is what `bin_dir_sibling` resolves to for
+         (`read_content_root()` / machine-local `repos.content_root`),
+         which is what `bin_dir_sibling` resolves to for
          every OTHER caller of `_doe_coordinator_root()` (P-9/P-11/P-12/P-13's
          still-DoE-owned sibling scripts, left untouched by this fix).
 
@@ -961,7 +957,7 @@ def _doe_payload_root(
 
     1. `coordinator_root` when it carries the marker. On a marketplace install
        this is the right answer and stays first.
-    2. The content-root ladder (`coordinator_content_root()`), when THAT carries it.
+    2. The content-root ladder (`read_content_root()`), when THAT carries it.
        This is the rung the CLI path needs and did not have: `coordinator_root`
        arrives from `_doe_coordinator_root()`, whose first rung is
        COORDINATOR_BIN_ROOT — which the CLI entry sets to CLAUDE-KLABAUTER's bin. So the
@@ -982,7 +978,7 @@ def _doe_payload_root(
     if coordinator_root is not None and (coordinator_root / marker).exists():
         return coordinator_root
     try:
-        doe = coordinator_content_root()
+        doe = read_content_root()
         if doe:
             # Either content layout — a container that registered the published
             # FLAT mirror has its content at the root itself, so the bare
@@ -1516,30 +1512,30 @@ def probe_p20() -> List[ProbeNote]:
 def probe_p21() -> List[ProbeNote]:
     """Verify a durable coordinator-root pointer exists (DR-072).
 
-    Delegates to `coordinator_core.content_root_pointer.read_content_root_pointer_file()`
-    — the shared durable-then-legacy file-rungs reader every other `.coordinator-content-root`
+    Delegates to `coordinator_core.content_root.read_pointer_files()`
+    — the shared durable-then-fallback file-rungs reader every other
     pointer consumer in this codebase already uses — rather than re-deriving
-    the two candidate paths (`<settings-home>/machine-local/.coordinator-content-root`, then
-    `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`) here. That helper checks the
+    the two candidate paths (`<settings-home>/machine-local/<pointer>`, then
+    `${CLAUDE_HOME:-$HOME}/.claude/<pointer>`) here. That helper checks the
     durable location FIRST and returns as soon as it finds non-empty content
     there, so a pass on the durable location structurally never reaches the
     legacy fallback.
 
     Deliberately the file-rungs-only reader, not the registry-first
-    `read_content_root_pointer()`: this probe's manifest-declared symptom is the
+    `read_content_root()`: this probe's manifest-declared symptom is the
     absence of the pointer FILE itself (DR-072), not the resolved coordinator
     root by any means — `repos.content_root` registry presence is a different
     condition covered by P-3/P-4, not this probe's concern.
     """
-    if read_content_root_pointer_file():
+    if read_pointer_files():
         return []
     return [
         ProbeNote(
             "P-21",
             "red",
             "no durable coordinator-root pointer found: checked "
-            f"{settings_home() / 'machine-local' / '.coordinator-content-root'} (DR-072 durable location) "
-            "and the legacy fallback ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root — re-run "
+            f"{settings_home() / 'machine-local' / POINTER_NAME} (DR-072 durable location) "
+            f"and the fallback ${{CLAUDE_HOME:-$HOME}}/.claude/{POINTER_NAME} — re-run "
             "/coordinator:install to re-seed the durable coordinator-root pointer",
         )
     ]

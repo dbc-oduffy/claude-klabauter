@@ -491,7 +491,7 @@ class TestDoeCloneAbsent:
         """Ladder rungs that do not carry coordinator/schemas/ are rejected, not returned."""
         monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
         monkeypatch.setattr(
-            "coordinator_core.frontmatter.schema_drift_watch.read_content_root_pointer",
+            "coordinator_core.frontmatter.schema_drift_watch.read_content_root",
             lambda: str(tmp_path / "also-not-there"),
         )
         # The sibling-layout rung may legitimately resolve on a dev machine; only assert

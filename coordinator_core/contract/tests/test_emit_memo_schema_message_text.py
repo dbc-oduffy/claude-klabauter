@@ -20,7 +20,7 @@ disposition: this module's emitted JSON is a row in a later chunk's
 rendered-message corpus, gated by register rule B7, which fires on ANY
 REDACTION-class token in rendered text regardless of navigation intent — the
 codenames were removed from every description accordingly (registry keys
-`repos.content_root` / `repos.project_rag` are functional identifiers, stay).
+`repos.claude_klabauter` / `repos.project_rag` are functional identifiers, stay).
 This test locks that state in so a future edit re-introducing either
 navigation prose OR a bare REDACTION-class codename mention is caught here
 rather than only at OSS-publish time.
@@ -76,7 +76,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         repo.md): a REDACTION-class codename mention in rendered text is
         broken regardless of navigation intent — attribution prose that
         scrubs to a non-navigable placeholder still names nothing an OSS
-        reader can resolve. Registry keys (`repos.content_root`,
+        reader can resolve. Registry keys (`repos.claude_klabauter`,
         `repos.project_rag`) are functional identifiers, not prose mentions,
         and are exempted below via `test_functional_repo_keys_still_present`
         rather than here."""
@@ -96,7 +96,7 @@ class TestDescriptionsDoNotDirectReadersToUnreachableRepos:
         to_repo_desc = emitted["cross-repo-memo"]["properties"]["to_repo"][
             "description"
         ]
-        assert "repos.content_root" in to_repo_desc
+        assert "repos.claude_klabauter" in to_repo_desc
         assert "repos.project_rag" in to_repo_desc
 
 

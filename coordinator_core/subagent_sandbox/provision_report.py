@@ -60,7 +60,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core._settings_home import claude_config_dir
+from coordinator_core.content_root import read_content_root
 from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
@@ -1031,8 +1032,8 @@ def resolve_plugin_root() -> Optional[str]:
       3. ``claude_config_dir()/plugins/installed_plugins.json`` -- the harness's install
          registry; any ``coordinator@*`` entry's ``installPath``, both shapes. A cloud or
          marketplace install lands outside ``plugins/coordinator-claude`` entirely.
-      4. ``<machine_local_dir()>/.coordinator-content-root`` + ``coordinator`` -- the fleet's
-         own pointer file, an in-process read with no spawn. Required because
+      4. ``read_content_root()`` + ``coordinator`` -- the configured content
+         root (registry key or pointer file), an in-process read with no spawn. Required because
          on a dev-clone box the live plugin root is a checkout OUTSIDE
          ``.claude`` entirely (``C:\\coordinator-content-repo\\coordinator``), which rungs 1
          to 3 cannot see: rung 2's directory EXISTS there but holds only
@@ -1087,11 +1088,7 @@ def resolve_plugin_root() -> Optional[str]:
                 if _has_content(candidate):
                     return str(candidate)
 
-    try:
-        pointer = machine_local_dir() / ".coordinator-content-root"
-        content_root = pointer.read_text(encoding="utf-8").strip()
-    except OSError:
-        content_root = ""
+    content_root = read_content_root().strip()
     if content_root:
         candidate = content_root_for(content_root)
         if candidate is not None and _has_content(candidate):
@@ -1371,7 +1368,7 @@ def assemble_contract_block_parts_for_payload(
 
     # `payload["plugin_root"]` is the FIRST rung (C1, hook_http.payload_from_event's
     # computed body field, carried per-call from the forwarder). `resolve_plugin_root()`'s
-    # own ambient probe (env var -> plugin dir -> `.coordinator-content-root` pointer) is the FALLBACK,
+    # own ambient probe (env var -> plugin dir -> content-root pointer) is the FALLBACK,
     # reached only when the payload is silent -- e.g. a direct in-process caller
     # (`cater_subagent_start.py`, `fan-out-dispatch.py`) that never went through the HTTP
     # hook seam at all. Never the other way around: see this module's docstring for the

@@ -435,7 +435,7 @@ def payload_from_event(event: Mapping[str, Any], names: frozenset = frozenset())
     `warm/supervisor.py`'s HTTP handler -- the RESIDENT SERVER receiving the harness's POST
     -- not the harness/caller process. `resolve_caller_context(payload)` therefore falls
     through to its ambient probe (`CLAUDE_PLUGIN_ROOT` env, then machine-global config-dir
-    and `.coordinator-content-root` rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
+    and content-root rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
     on the event does not change the answer (measured). Benign today only because no wire
     carries a caller's real `plugin_root` for this function to prefer instead --
     `FORWARDED_ENV_PREFIXES` deliberately excludes `CLAUDE_PLUGIN_ROOT` (rehome plan

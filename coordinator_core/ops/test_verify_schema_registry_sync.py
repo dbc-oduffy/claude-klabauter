@@ -30,11 +30,11 @@ import pytest
 from coordinator_core._content_root_primitive import (
     FLAT_CONTENT_ROOT_MARKER as _FLAT_CONTENT_ROOT_MARKER,
 )
-from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.frontmatter.schema_corpus import (
     DEV_REPO_SENTINEL as _DEV_REPO_SENTINEL,
 )
 from coordinator_core.ops import verify_schema_registry_sync as vsrs
+from coordinator_core.testing.content_root import resolve_content_root
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
 _GOLDEN_NAMESPACE = "verify_schema_registry_sync"
@@ -165,21 +165,21 @@ def test_main_no_argv_success_path(tmp_path, monkeypatch, capsys):
 
 
 def _find_content_root() -> Optional[Path]:
-    """Resolve the coordinator-content-repo sibling repo's coordinator/ dir via the pointer-file
-    mechanism (coordinator_core.content_root_pointer, DR-072) -- the established
+    """Resolve the content checkout's coordinator/ dir via the shared test
+    resolver (`coordinator_core.testing.content_root`) -- the established
     sibling-resolution convention used across claude-klabauter's other suites, not an
     author-machine hardcoded path.
 
     Only ever consulted during an explicit CAPTURE_GOLDENS=1 recapture -- never on
     an ordinary test run (see the test's own docstring). Returns None (never
-    raises) if the pointer is absent/empty or the resolved directory doesn't
+    raises) if the root is unresolved or the resolved directory doesn't
     exist; the caller raises loudly in that case since a recapture with no
     oracle to capture from is a hard user error, not a skip.
     """
-    pointer = read_content_root_pointer()
-    if not pointer:
+    root = resolve_content_root()
+    if not root:
         return None
-    coordinator_dir = Path(pointer) / "coordinator"
+    coordinator_dir = Path(root) / "coordinator"
     return coordinator_dir if coordinator_dir.is_dir() else None
 
 
@@ -216,9 +216,8 @@ def test_golden_oracle_parity_against_live_doe_repo():
     deliberately via:
         CAPTURE_GOLDENS=1 python3 -m pytest \
             coordinator_core/ops/test_verify_schema_registry_sync.py -q
-    (requires the coordinator-content-repo sibling checkout to be resolvable via the
-    .coordinator-content-root pointer file -- see coordinator_core.content_root_pointer -- not
-    needed for an ordinary run).
+    (requires the content checkout to be resolvable via
+    `coordinator_core.testing.content_root` -- not needed for an ordinary run).
 
     Negative-spec: does NOT `pytest.skip` when the live coordinator-content-repo repo is
     unavailable -- that was the exact silent-green hazard this conversion
@@ -226,7 +225,7 @@ def test_golden_oracle_parity_against_live_doe_repo():
 
     Carries `@pytest.mark.real_home` (see `coordinator_core/conftest.py`'s
     `_quarantine_real_home` docstring): `_find_content_root()` resolves the
-    `.coordinator-content-root` pointer file under the real HOME, which the suite-root autouse
+    content-root pointer file under the real HOME, which the suite-root autouse
     fixture otherwise redirects to a per-test throwaway dir. This is the
     documented read-only-oracle opt-out, exercised only on the
     `is_capturing()` branch -- the ordinary (golden-load) path touches neither
@@ -236,8 +235,8 @@ def test_golden_oracle_parity_against_live_doe_repo():
         content_root = _find_content_root()
         if content_root is None:
             raise RuntimeError(
-                "CAPTURE_GOLDENS=1 recapture requires the coordinator-content-repo sibling "
-                "checkout (resolvable via the .coordinator-content-root pointer file) to be "
+                "CAPTURE_GOLDENS=1 recapture requires the content checkout "
+                "(resolvable via the content-root pointer file) to be "
                 "present -- not needed for an ordinary (non-capture) run."
             )
         exit_code, stdout_lines, stderr_lines = vsrs.run(content_root)

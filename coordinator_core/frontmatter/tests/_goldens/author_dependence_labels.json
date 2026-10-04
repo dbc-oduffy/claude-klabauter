@@ -3,15 +3,15 @@
     "a_and_b": 172,
     "a_only": 222,
     "b_blind_total": 430,
-    "b_observable_total": 1227,
+    "b_observable_total": 1226,
     "b_only": 340,
-    "neither": 493
+    "neither": 492
   },
   "corpus_totals": {
     "archive/handoffs": 980,
     "docs/plans": 378,
-    "state/handoffs": 299,
-    "total": 1657
+    "state/handoffs": 298,
+    "total": 1656
   },
   "discarded_properties": [
     "acceptance_criterion_no_checkbox",
@@ -12473,15 +12473,6 @@
       "verdict_flagged": false,
       "verdict_reasons": []
     },
-    "state/handoffs/2026-07-21_install-surface-debash-content-root-relocation.md": {
-      "b_blind": false,
-      "corpus": "state/handoffs",
-      "proxy_a": null,
-      "proxy_b": false,
-      "split": "train",
-      "verdict_flagged": false,
-      "verdict_reasons": []
-    },
     "state/handoffs/2026-07-22_121006_de-node-query-read-layer.md": {
       "b_blind": false,
       "corpus": "state/handoffs",
@@ -15057,11 +15048,11 @@
   "property_variance": {
     "missing_chunk_file_scope": {
       "fired": 25,
-      "of": 1150
+      "of": 1149
     },
     "unresolved_placeholder": {
       "fired": 21,
-      "of": 1150
+      "of": 1149
     }
   },
   "sha_excluded_by_corpus": {

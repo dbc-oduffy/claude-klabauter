@@ -1073,7 +1073,7 @@ def _normalize_clone_root(raw: str) -> Optional[Path]:
     stand on disk, not the plan text. The POSIX leg exports from a different site,
     and the distinction matters to anyone reasoning about who arrives header-less.
     `claude-author-shim.sh.tmpl` itself exports NOTHING and must not -- it resolves no plugin dir,
-    and DR-087 forbids promoting its `.coordinator-content-root` pointer to rung-1 authority (negative-spec
+    and DR-087 forbids promoting its content-root pointer to rung-1 authority (negative-spec
     pinned in `test_launcher_templates_export_clone_root.py`). It delegates instead, terminating
     in `claude-author`, and the engine's `coordinator/bin/claude-author.py:650` does the
     `setdefault` ABOVE its `os.name == "nt"` branch, so it runs on every platform. A

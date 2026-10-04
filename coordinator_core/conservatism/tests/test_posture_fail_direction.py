@@ -14,7 +14,7 @@ These tests assert the BEHAVIOUR and never the name of the anchor constant
 
 Why it lives in claude-klabauter's tree and not DoE's: this baton's anti-scope forbids
 authoring in `coordinator-content-repo`, and the assertion does not need to. It resolves the
-sibling root through the existing `coordinator_content_root` ladder (~39ms, no
+sibling root through the `content_root` ladder (~39ms, no
 spawn on a registered box) and loads the module by path -- the same
 import-by-path shape claude-klabauter already uses for `frontmatter/schema_validate.py`.
 It SKIPS rather than fails when the sibling is unresolvable, because an
@@ -31,13 +31,13 @@ import sys
 
 import pytest
 
-from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+from coordinator_core.testing.content_root import resolve_content_root
 
 _ANCHOR = "precision"
 
 
 def _load_posture():
-    root = coordinator_content_root()
+    root = resolve_content_root()
     if not root:
         pytest.skip("coordinator-claude sibling root unresolvable on this box")
     path = os.path.join(root, "coordinator", "hooks", "scripts", "_posture.py")

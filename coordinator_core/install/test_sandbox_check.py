@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import os
 import stat
-import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.content_root import _LEGACY_POINTER, CONTENT_ROOT_KEY, POINTER_NAME
 from coordinator_core.install import sandbox_check
 from coordinator_core.install.sandbox_check import (
     CLONE_LAYOUT_FLAT,
@@ -37,7 +37,6 @@ from coordinator_core.install.sandbox_check import (
     Reporter,
     SandboxCheckTransportError,
     _cold_bare_path,
-    _host_home,
     _run,
     clone_layout,
     main,
@@ -93,6 +92,8 @@ def test_resolve_doe_clone_prefers_env_var(monkeypatch):
 def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch):
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir-xyz")
+    monkeypatch.setattr(sandbox_check, "migrate_legacy_config", lambda: None)
+    monkeypatch.setattr(sandbox_check.machine_resolver, "registry_get", lambda key: "")
     clone, resolved = resolve_doe_clone()
     assert resolved is False
     assert clone == ""
@@ -112,7 +113,7 @@ def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spaw
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
-    (reg_dir / "registry.toml").write_text('"repos.content_root" = "/scratch/coordinator-content-repo"\n')
+    (reg_dir / "registry.toml").write_text(f'"{CONTENT_ROOT_KEY}" = "/scratch/coordinator-content-repo"\n')
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     clone, resolved = resolve_doe_clone()
@@ -126,6 +127,8 @@ def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatc
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setattr(sandbox_check, "migrate_legacy_config", lambda: None)
+    monkeypatch.setattr(sandbox_check.machine_resolver, "registry_get", lambda key: "")
 
     reached = {"called": False}
 
@@ -148,7 +151,7 @@ def test_ac4b_resolve_doe_clone_normalizes_msys_mount_form_registry_value(monkey
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
-    (reg_dir / "registry.toml").write_text('"repos.content_root" = "/x/coordinator-content-repo"\n')
+    (reg_dir / "registry.toml").write_text(f'"{CONTENT_ROOT_KEY}" = "/x/coordinator-content-repo"\n')
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
     clone, resolved = resolve_doe_clone()
@@ -157,6 +160,28 @@ def test_ac4b_resolve_doe_clone_normalizes_msys_mount_form_registry_value(monkey
         assert clone == "C:/coordinator-content-repo"
     else:
         assert clone == "/x/coordinator-content-repo"
+
+
+def test_resolve_doe_clone_migrates_an_upgrade_box_that_carries_only_the_legacy_pointer(
+    monkeypatch, tmp_path
+):
+    """An upgrade box has a legacy-named pointer and no `repos.content_root`:
+    the check must resolve it through `migrate_legacy_config`, never by
+    reading the legacy name itself, and leave the new pointer behind."""
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+    settings_home = tmp_path / "settings-home"
+    machine_local = settings_home / "machine-local"
+    machine_local.mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    (machine_local / _LEGACY_POINTER).write_text("/legacy/clone\n", encoding="utf-8")
+    monkeypatch.setattr("coordinator_core.install.sandbox_check._which", lambda name: None)
+
+    clone, resolved = resolve_doe_clone()
+
+    assert resolved is True
+    assert Path(clone).as_posix().endswith("/legacy/clone")
+    assert (machine_local / POINTER_NAME).read_text(encoding="utf-8").strip() == "/legacy/clone"
 
 
 def test_run_all_raises_transport_error_when_sandbox_creation_fails(monkeypatch):
@@ -233,23 +258,6 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     (clone / "coordinator" / "templates" / "bin" / "_machine_local.py").write_text(
         "# stand-in for the real machine-local registry reader\n", encoding="utf-8"
     )
-    (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
-    (clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl").write_text(
-        # Minimal stand-in for the real DoE template, in its DR-087 shape:
-        # the pointer is read at CALL time and handed to claude-author through
-        # the explicit `--content-root` argv seam, and REPO_CONTENT_ROOT is never
-        # exported (DR-087 demoted the pointer mirror out of rung-1
-        # authority). Variable expansion only -- no hardcoded machine path.
-        "claude() {\n"
-        '  _r="$(cat "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/machine-local/.coordinator-content-root" 2>/dev/null)"\n'
-        '  if [ -z "$_r" ]; then\n'
-        '    _r="$(cat "${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root" 2>/dev/null)"\n'
-        "  fi\n"
-        '  command claude-author --content-root "$_r" "$@"\n'
-        "}\n",
-        encoding="utf-8",
-    )
-
     wrapper = clone / "coordinator" / "bin" / "claude-author.py"
     _write_executable(
         wrapper,
@@ -278,10 +286,7 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
     assert any(
         "claude-author --dry-run exec line references clone's coordinator dir" in line for line in r.lines
     )
-    assert any("gen_content_root_pointer.main() exited 0 against sandbox" in line for line in r.lines)
-    assert any(".coordinator-content-root content matches registry repos.content_root" in line for line in r.lines)
-    assert any("gen_claude_author_shim.main() exited 0 against sandbox" in line for line in r.lines)
-    assert any("claude-author-shim.sh defines a claude() function" in line for line in r.lines)
+    assert any("cold-env content-root pointer seeded" in line for line in r.lines)
     assert any(
         "AC5: resolve_coordinator_clone.resolve_content_root()" in line and "returned expected" in line
         for line in r.lines
@@ -295,53 +300,7 @@ def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone:
         for line in r.lines
     )
     assert not any("settings.json hooks array empty" in line for line in r.lines)
-    # AC2 is derived against the DR-087 argv seam: a conforming shim hands
-    # claude-author `--content-root <pointer>` and exports nothing. Both rows PASS
-    # here, so an AC2 re-derived against REPO_CONTENT_ROOT would go RED on a
-    # correct install — which is the failure this fixture exists to catch.
-    # `run_all`'s own AC2 cold-shell leg sources a POSIX `.sh` shim under a
-    # hand-built `/usr/bin:/bin` PATH — not applicable on Windows (see
-    # sandbox_check.py's own `os.name == "nt"` SKIP branch there), so neither
-    # PASS row is ever emitted on this host.
-    if os.name != "nt":
-        assert any(
-            "AC2 cold-shell: claude-author --content-root resolved from pointer alone" in line for line in r.lines
-        )
-        assert any("AC2 cold-shell: shim left REPO_CONTENT_ROOT unset" in line for line in r.lines)
-    assert not any(line.startswith("FAIL") and "AC2" in line for line in r.lines)
     assert r.pass_count > 0
-
-
-def test_ac2_fails_on_pre_dr087_shim_that_promotes_the_pointer_mirror(fake_doe_clone: Path, monkeypatch):
-    """The shape DR-087 retired: export the pointer as rung-1
-    ``REPO_CONTENT_ROOT`` and invoke claude-author with no ``--content-root``. AC2 must
-    call BOTH halves out — a missing argv seam and a promoted mirror."""
-    if os.name == "nt":
-        pytest.skip(
-            "AC2 cold-shell sources a POSIX .sh shim under a hand-built "
-            "/usr/bin:/bin PATH -- run_all()'s own AC2 leg is a no-op SKIP "
-            "on Windows (sandbox_check.py's os.name == 'nt' branch), so "
-            "this fixture's FAIL lines can never appear here"
-        )
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
-    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl"
-    tmpl.write_text(
-        'export REPO_CONTENT_ROOT="$(cat "${CLAUDE_HOME:-$HOME}'
-        '/.coordinator-claude-settings/machine-local/.coordinator-content-root" 2>/dev/null)"\n'
-        "claude() {\n"
-        '  command claude-author "$@"\n'
-        "}\n",
-        encoding="utf-8",
-    )
-
-    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
-
-    assert any(
-        line.startswith("FAIL") and "DR-087 requires the explicit `--content-root" in line for line in r.lines
-    )
-    assert any(
-        line.startswith("FAIL") and "DR-087 demoted the pointer mirror" in line for line in r.lines
-    )
 
 
 def test_tier2_boot_check_names_the_sentinel_a_writer_actually_writes():
@@ -414,10 +373,6 @@ def flat_mirror_clone(tmp_path: Path) -> Path:
     (clone / "hooks").mkdir()
     (clone / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
     (clone / "skills").mkdir()
-    (clone / "templates" / "shell").mkdir(parents=True)
-    (clone / "templates" / "shell" / "claude-author-shim.sh.tmpl").write_text(
-        "claude() { command claude-author --content-root \"$_r\" \"$@\"; }\n", encoding="utf-8"
-    )
     return clone
 
 
@@ -468,67 +423,6 @@ def test_flat_mirror_f8_setup_names_the_missing_oracle_input_not_a_clone_build_f
         for line in r.lines
     ), r.lines
     assert not any("publish-repo-shaped sandbox clone build failed" in line for line in r.lines)
-
-
-def test_host_home_falls_back_to_userprofile_when_home_is_unset(monkeypatch):
-    monkeypatch.delenv("HOME", raising=False)
-    monkeypatch.setenv("USERPROFILE", r"C:\Users\sandbox-probe")
-    assert _host_home() == r"C:\Users\sandbox-probe"
-
-
-def test_host_home_prefers_home_when_both_spellings_are_present(monkeypatch):
-    monkeypatch.setenv("HOME", "/home/posix-probe")
-    monkeypatch.setenv("USERPROFILE", r"C:\Users\win-probe")
-    assert _host_home() == "/home/posix-probe"
-
-
-def test_hardcoded_home_row_is_unevaluable_when_no_home_resolves(
-    fake_doe_clone: Path, monkeypatch
-):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
-    monkeypatch.setattr(sandbox_check, "_host_home", lambda: "")
-
-    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
-
-    assert any(
-        line.startswith("UNEVALUABLE") and "hardcoded-home check" in line for line in r.lines
-    ), r.lines
-    assert not any("no hardcoded machine path" in line and line.startswith("PASS") for line in r.lines)
-
-
-def test_hardcoded_path_pattern_catches_windows_and_unc_shapes_on_every_host(
-    fake_doe_clone: Path, monkeypatch
-):
-    """Host-INDEPENDENT on purpose: a shim generated on Windows can be read on
-    Linux, so every host must catch every shape. The pattern was POSIX-only,
-    so the Windows-shaped hardcoding it exists to catch could not be caught."""
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
-    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-author-shim.sh.tmpl"
-
-    for hardcoded in (r"C:\Users\alice\.claude", r"\\fileserver\homes\alice\.claude"):
-        tmpl.write_text(
-            "claude() {\n"
-            f'  _r="{hardcoded}/.coordinator-content-root"\n'
-            '  command claude-author --content-root "$_r" "$@"\n'
-            "}\n",
-            encoding="utf-8",
-        )
-        r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
-        assert any(
-            line.startswith("FAIL") and "hardcoded home-directory path" in line for line in r.lines
-        ), (hardcoded, [line for line in r.lines if "hardcoded" in line])
-
-
-def test_hardcoded_path_pattern_still_passes_a_clean_variable_only_shim(
-    fake_doe_clone: Path, monkeypatch
-):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
-
-    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
-
-    assert any(
-        line.startswith("PASS") and "no hardcoded home-directory paths" in line for line in r.lines
-    ), [line for line in r.lines if "hardcoded" in line]
 
 
 def test_cold_bare_path_is_host_shaped_not_posix_only(monkeypatch):

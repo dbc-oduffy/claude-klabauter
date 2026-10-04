@@ -17,7 +17,7 @@ def _hooks_block(command: str) -> dict:
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
-    root = tmp_path / "doe"
+    root = tmp_path / "content"
     content = root / "coordinator"
     (content / "hooks" / "scripts").mkdir(parents=True)
     (content / _SCRIPT).write_text("print('x')\n")
@@ -27,7 +27,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     (settings_home / "machine-local").mkdir(parents=True)
     (settings_home / "machine-local" / ".coordinator-content-root").write_text(str(root) + "\n")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(root))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
     return {"root": root, "content": content, "config": config}
 
@@ -82,7 +82,7 @@ def test_content_root_resolving_through_no_rung_is_broken(env: dict, tmp_path: P
     (tmp_path / "settings-home" / "machine-local" / ".coordinator-content-root").unlink()
     layer = banners.hook_plane_layer(env["config"])
     assert layer.status == "broken"
-    assert any("`.coordinator-content-root` resolves through no rung" in f.message for f in layer.findings)
+    assert any("the content root resolves through no rung" in f.message for f in layer.findings)
 
 
 def test_armed_plane_is_ok_with_the_status_line(env: dict):

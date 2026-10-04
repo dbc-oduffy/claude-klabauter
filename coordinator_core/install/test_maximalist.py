@@ -23,8 +23,8 @@ transcription):
     copy path -- Test: claude_author_wrapper_preserves_exec_bit.
 
 2026-07-21 (retire-all-bash C13): the ten remaining `["bash", ...]` per-phase
-spawns (detect-existing-claude-home, install-health-run, gen-content-root-pointer,
-gen-claude-author-shim, gen-claude-author-launcher, register-coordinator-mirror,
+spawns (detect-existing-claude-home, install-health-run,
+gen-claude-author-launcher, register-coordinator-mirror,
 check-install-singularity, capture-fan-out-threshold, platform-localize,
 coordinator-setup-state) are now direct in-process calls into
 coordinator_core.ops/.install/.hooks modules that ALREADY lived in this
@@ -34,8 +34,7 @@ mechanism (`_BASH_SUB_SCRIPTS` / `_write_bash_stub`) this file used to build
 for those ten is retired along with them -- coverage moves to Python `_fake_*`
 monkeypatches, the same pattern already used for Step 6/Step 7/Step 3.5c
 (`_fake_ensure_venv` / `_fake_scaffold` / `_fake_gen_settings_hooks`). Each
-real engine module has its own co-located pytest coverage (test_gen_content_root_
-pointer.py, test_capture_fan_out_threshold.py, etc.) -- this file only proves
+real engine module has its own co-located pytest coverage (test_capture_fan_out_threshold.py, etc.) -- this file only proves
 maximalist.py reaches each one, in order, with the right argv/rc-propagation,
 and that no `bash` subprocess is spawned to get there.
 
@@ -70,8 +69,6 @@ from coordinator_core.ops import capture_fan_out_threshold as _threshold_module
 from coordinator_core.ops import coordinator_setup_state as _setup_state_module
 from coordinator_core.ops import detect_existing_claude_home as _detect_module
 from coordinator_core.ops import gen_claude_author_launcher as _launcher_module
-from coordinator_core.ops import gen_claude_author_shim as _shim_module
-from coordinator_core.ops import gen_content_root_pointer as _doe_pointer_module
 from coordinator_core.ops import install_health_run as _health_module
 from coordinator_core.ops import register_coordinator_mirror as _mirror_module
 
@@ -108,8 +105,6 @@ def _make_fake_op_main(step_name: str):
 
 _fake_detect_existing_claude_home = _make_fake_op_main("detect-existing-claude-home")
 _fake_install_health_run = _make_fake_op_main("install-health-run")
-_fake_gen_content_root_pointer = _make_fake_op_main("gen-content-root-pointer")
-_fake_gen_claude_author_shim = _make_fake_op_main("gen-claude-author-shim")
 _fake_gen_claude_author_launcher = _make_fake_op_main("gen-claude-author-launcher")
 _fake_register_coordinator_mirror = _make_fake_op_main("register-coordinator-mirror")
 _fake_check_install_singularity = _make_fake_op_main("check-install-singularity")
@@ -283,8 +278,6 @@ def stub_env(tmp_path, monkeypatch):
     # co-located pytest coverage.
     monkeypatch.setattr(_detect_module, "main", _fake_detect_existing_claude_home)
     monkeypatch.setattr(_health_module, "main", _fake_install_health_run)
-    monkeypatch.setattr(_doe_pointer_module, "main", _fake_gen_content_root_pointer)
-    monkeypatch.setattr(_shim_module, "main", _fake_gen_claude_author_shim)
     monkeypatch.setattr(_launcher_module, "main", _fake_gen_claude_author_launcher)
     monkeypatch.setattr(_mirror_module, "main", _fake_register_coordinator_mirror)
     monkeypatch.setattr(_singularity_module, "main", _fake_check_install_singularity)
@@ -365,8 +358,6 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
     expected_order = [
         "detect-existing-claude-home",
         "install-health-run",
-        "gen-content-root-pointer",
-        "gen-claude-author-shim",
         "gen-claude-author-launcher",
         "gen-settings-hooks",
         "register-coordinator-mirror",
@@ -409,7 +400,7 @@ def test_registry_seeds_run_before_install_health_run(stub_env, capsys):
 def test_standalone_plugin_clone_skips_the_doe_launch_chain(stub_env):
     """A consumer install hands the published plugin itself as the clone --
     `.claude-plugin/plugin.json` at its root, no `coordinator/` -- so there is
-    no DoE root to point at and no claude-author to launch. Those phases skip;
+    no content-repo launcher to wrap and no claude-author to launch. Those phases skip;
     the rest of the chain still runs and succeeds."""
     plugin = stub_env["claude_home"].parent / "coordinator-claude"
     (plugin / ".claude-plugin").mkdir(parents=True)
@@ -424,14 +415,13 @@ def test_standalone_plugin_clone_skips_the_doe_launch_chain(stub_env):
     )
     assert rc == 0
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
-    for skipped in ("gen-content-root-pointer", "gen-claude-author-shim", "gen-claude-author-launcher"):
-        assert skipped not in names
+    assert "gen-claude-author-launcher" not in names
     assert "gen-settings-hooks" in names
     assert "coordinator-setup-state" in names
 
 
 def test_halts_on_required_failure(stub_env, monkeypatch):
-    monkeypatch.setenv(_rc_env("gen-content-root-pointer"), "1")
+    monkeypatch.setenv(_rc_env("gen-claude-author-launcher"), "1")
     rc = maximalist.run(
         check_only=False,
         non_interactive=True,
@@ -442,9 +432,9 @@ def test_halts_on_required_failure(stub_env, monkeypatch):
     )
     assert rc == 1
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
-    assert "gen-content-root-pointer" in names
+    assert "gen-claude-author-launcher" in names
     # Nothing after the halted required phase ran.
-    assert "gen-claude-author-shim" not in names
+    assert "gen-settings-hooks" not in names
     assert "register-coordinator-mirror" not in names
     assert "coordinator-setup-state" not in names
 
@@ -547,7 +537,7 @@ def test_check_only_skips_mutating_not_singularity(stub_env):
     assert "ensure-coordinator-venv" not in names
     # Read-only phases still ran with --check-only forwarded.
     log_text = stub_env["call_log"].read_text()
-    assert "gen-content-root-pointer --check-only" in log_text
+    assert "gen-claude-author-launcher --check-only" in log_text
     assert "scaffold-canonical-structure --dry-run" in log_text
 
 
@@ -1112,8 +1102,6 @@ def test_c13_check_only_forwarded_to_each_native_phase(stub_env):
     )
     assert rc == 0
     log_text = stub_env["call_log"].read_text()
-    assert "gen-content-root-pointer --check-only" in log_text
-    assert "gen-claude-author-shim --check-only" in log_text
     assert "gen-claude-author-launcher --check-only" in log_text
     assert "capture-fan-out-threshold --check-only" in log_text
     assert "register-coordinator-mirror --check-only" in log_text
@@ -2017,15 +2005,15 @@ def test_writer_discovery_failure_is_loud_and_recorded_unreported(stub_env, monk
 
 @pytest.mark.skipif(os.name != "nt", reason="mount-form repair is os.name=='nt'-gated by design")
 def test_msys_mount_form_doe_clone_is_normalized_before_every_downstream_use(stub_env, capsys):
-    r"""This is the ROOT write-side seam for the `.coordinator-content-root` mis-resolution bug.
+    r"""This is the ROOT write-side seam for the content-root mis-resolution bug.
 
     The DoE-side trampoline resolves the clone root under Git-Bash on Windows,
     where it comes back as the MSYS mount form `/x/coordinator-content-repo`. Every consumer
     downstream of here is a native-Windows process that reads a leading `/x/` as
     drive-relative `C:\x\coordinator-content-repo`, so the form has to be repaired ONCE at
     ingest — before the REPO_CONTENT_ROOT env overlay handed to child phases and
-    before the `repos.content_root` registry seed that `gen_content_root_pointer` and
-    the trust anchor later read back.
+    before the `repos.content_root` registry seed that the trust anchor later
+    reads back.
     """
     native = Path(stub_env["doe_clone"]).as_posix()
     mount_form = f"/{native[0].lower()}{native[2:]}"

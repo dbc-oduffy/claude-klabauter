@@ -536,6 +536,9 @@ def _plan_tasks_str_representer(dumper: yaml.Dumper, data: str):
 
 
 _PlanTasksDumper.add_representer(str, _plan_tasks_str_representer)
+# A spine row is read on its own (per-row harvest, wave checkpoints), so an
+# anchor shared across rows strands every alias outside the anchoring row.
+_PlanTasksDumper.ignore_aliases = lambda self, data: True
 
 
 def _dump_rows(rows: list) -> str:

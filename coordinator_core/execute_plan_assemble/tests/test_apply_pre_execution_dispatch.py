@@ -182,7 +182,7 @@ def test_all_gates_proceed_dispatches_d3_and_d4(monkeypatch, tmp_path: Path):
 
 
 def test_emit_leg_out_is_explicit_and_session_scoped(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(apply_mod, "coordinator_content_root", lambda: "/fake/content-root")
+    monkeypatch.setattr(apply_mod, "read_content_root", lambda: "/fake/content-root")
     captured: dict[str, Any] = {}
 
     class _FakeCompleted:
@@ -210,7 +210,7 @@ def test_emit_leg_out_is_explicit_and_session_scoped(monkeypatch, tmp_path: Path
 
 
 def test_emit_leg_raises_when_content_root_unresolvable(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(apply_mod, "coordinator_content_root", lambda: None)
+    monkeypatch.setattr(apply_mod, "read_content_root", lambda: "")
     with apply_base.session_identity("sess-xyz"):
         with pytest.raises(RuntimeError):
             apply_mod._dispatch_emit_dispatch_workflow(["--plan", PLAN_PATH], tmp_path)
@@ -235,7 +235,7 @@ def test_emit_leg_script_resolves_on_flat_mirror(monkeypatch, tmp_path: Path):
     (flat / ".claude-plugin").mkdir(parents=True)
     (flat / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
     (flat / "bin").mkdir()
-    monkeypatch.setattr(apply_mod, "coordinator_content_root", lambda: str(flat))
+    monkeypatch.setattr(apply_mod, "read_content_root", lambda: str(flat))
     captured: dict[str, Any] = {}
 
     class _Done:

@@ -136,24 +136,23 @@ MACHINE_LOCAL_REPO_KEYS: dict[str, str] = {
 #: `coordinator_core/trusted_root_guard.py` resolves `CLAUDE_PLUGIN_ROOT`
 #: against: with neither key set, the orchestrator's own install-health phase
 #: fail-loud-refuses the clone THIS SCRIPT made and aborts mid-run, leaving the
-#: hook plane unwired and `.coordinator-content-root` unwritten. A clone destination this process
+#: hook plane unwired and the content root unwritten. A clone destination this process
 #: chose itself is not an untrusted root, and this is where that gets recorded
 #: rather than worked around with COORDINATOR_PLUGIN_ROOT_TRUSTED=1.
 CONTENT_ROOT_KEY = "repos.content_root"
 
 TRUST_ANCHOR_KEYS: dict[str, str] = {
-    "coordinator-claude": "repos.content_root",
+    "coordinator-claude": CONTENT_ROOT_KEY,
     "klabauter": "repos.claude_klabauter",
 }
 
 #: The SERVED plugin tree's own key, written for the coordinator clone in every
 #: shape. `repos.content_root` and this key mean two different things that coincide
-#: on a workstation and diverge here: the former names the coordinator-content-repo AUTHORING
-#: checkout (the fleet sibling-map entry, and what `coordinator_content_root` resolves
-#: for anything reading schemas, wikis or doctrine records), the latter names the
+#: on a workstation and diverge here: the former names where content (schemas,
+#: wikis, doctrine records) is READ from, the latter names the
 #: tree a session actually RUNS. This container serves the flat published mirror,
 #: which carries no `coordinator/schemas/`, no `docs/wiki/` and no decision
-#: records — so registering it under the authoring key makes every doctrine read
+#: records — so registering it under the content key makes every doctrine read
 #: resolve against a tree that does not carry the content, silently.
 #: Same key-split reasoning as `PUBLISH_MIRROR_KEYS` below, for the same reason.
 PLUGIN_MIRROR_LIVE_PATH_KEY = "plugin.mirrors.coordinator-claude.live_path"
@@ -337,9 +336,9 @@ class Report:
     container_optin_requested: bool | None = None
     setup_exit_code: int | None = None
     plugin_settings: dict | None = None
-    #: The coordinator-content-repo authoring checkout this container mounted, if any, and what
+    #: The authoring checkout this container mounted, if any, and what
     #: was done about it. None means a pure-consumer container — a supported shape.
-    doe_authoring_tree: str | None = None
+    authoring_tree: str | None = None
     #: Whether the cloned engine's guard trusts a registry anchor's own root, and
     #: so whether the install orchestrator can accept the flat served mirror at
     #: all. Recorded because the refusal it causes names no empty anchor, which
@@ -384,8 +383,8 @@ class Report:
     session_path_pin: dict | None = None
     #: The post-boot assertion that the hook plane is actually armed: hooks
     #: registered by `settings.json` or by the coordinator plugin's own manifest,
-    #: and a resolvable `.coordinator-content-root` at each
-    #: location the no-launcher fences read. The one check that converts "wired
+    #: and a resolvable content root at a rung
+    #: the no-launcher fences read. The one check that converts "wired
     #: nothing" from byte-identical-to-healthy into a named failure.
     #: `content_root_bin_resolves` records (never raises) whether that root carries
     #: the `coordinator/bin` the fences exec.
@@ -903,6 +902,28 @@ def link_machine_local_cli(report: Report) -> None:
         )
 
 
+def _migrate_legacy_content_root(report: Report) -> None:
+    """Fold a re-used home's legacy-only root into `repos.content_root`.
+
+    `coordinator_core` is imported from the cloned engine, as `_settings_env_module`
+    does. A no-op on a fresh container. Never raises: the seeding that follows
+    writes the key either way, and a failure is recorded, not fatal.
+    """
+    try:
+        try:
+            from coordinator_core import content_root
+        except ImportError:
+            sys.path.insert(0, str(Path(CLONES["klabauter"]["dest"])))
+            from coordinator_core import content_root
+        result = content_root.migrate_legacy_config()
+    except Exception as exc:  # noqa: BLE001 - recorded, never fatal
+        report.machine_local_keys["migrate_legacy_config"] = f"failed: {type(exc).__name__}: {exc}"
+        return
+    report.machine_local_keys["migrate_legacy_config"] = (
+        f"migrated from {result.source}" if result.migrated else "no legacy root to migrate"
+    )
+
+
 def seed_trust_anchor_keys(report: Report) -> None:
     """Register both clone roots in the machine-local registry BEFORE
     `scripts/setup.py` runs, so its own phases can trust them.
@@ -911,12 +932,10 @@ def seed_trust_anchor_keys(report: Report) -> None:
     `coordinator_core/trusted_root_guard.py` decides whether a resolved
     `CLAUDE_PLUGIN_ROOT` is trusted by comparing it against, among others, the
     registry keys `repos.content_root` and `repos.claude_klabauter`. Nothing on a
-    fresh container has written either: `.coordinator-content-root` is generated by
-    `scripts/setup.py` itself, which is where the pointer generator's own
-    prerequisites get installed. So every anchor resolved empty,
+    fresh container has written either, so every anchor resolved empty,
     `scripts/setup.py`'s install-health phase fail-loud-refused the clone
     this very process had just made, and the run aborted with the hook plane
-    unwired, `.coordinator-content-root` unwritten, and `cloud_setup.py` still exiting 0 — a
+    unwired, the content root unwritten, and `cloud_setup.py` still exiting 0 — a
     container behaviourally indistinguishable from a healthy one until an
     agent notices a hook that never fired.
 
@@ -926,14 +945,16 @@ def seed_trust_anchor_keys(report: Report) -> None:
     diagnostics say so), while this makes the anchor correct. A container that
     later re-resolves either root reads the same value a session would.
 
-    TWO KEYS, NOT ONE, for the coordinator clone. `repos.content_root` names the
-    coordinator-content-repo AUTHORING checkout — the fleet sibling-map entry, and what
-    `coordinator_core.ops.coordinator_content_root` resolves for anything reading
-    schemas, wikis or decision records. `plugin.mirrors.coordinator-claude.live_path`
-    names the tree a session RUNS. On a workstation those are one directory and the
+    A re-used home that carries only the pre-rename root is migrated first
+    (`_migrate_legacy_content_root`); this step never writes the old names.
+
+    TWO KEYS, NOT ONE, for the coordinator clone. `repos.content_root` names where
+    schemas, wikis and decision records are READ from.
+    `plugin.mirrors.coordinator-claude.live_path` names the tree a session RUNS.
+    On a workstation those are one directory and the
     distinction never surfaces; here they diverge, because what runs is the flat
     published mirror and the mirror publishes none of the authoring content. Writing
-    the mirror path into the authoring key made every doctrine read resolve against a
+    the mirror path into the content key made every doctrine read resolve against a
     tree that does not carry it — silently, since an absent doctrine file under a
     mirror is the documented normal case and therefore reads as nothing being wrong.
 
@@ -942,7 +963,7 @@ def seed_trust_anchor_keys(report: Report) -> None:
     `repos.content_root` is pointed at a mounted authoring tree when one is present,
     detected by the `.coordinator-dev-repo` sentinel. With no authoring tree mounted
     — the pure-consumer container, a supported shape — `repos.content_root` keeps
-    naming the mirror exactly as before: a demoted-but-present anchor beats an empty
+    naming the mirror: a demoted-but-present anchor beats an empty
     one, and the mirror is the only coordinator content that box has.
 
     Nothing here changes what the session RUNS. The marketplace registration in
@@ -953,6 +974,7 @@ def seed_trust_anchor_keys(report: Report) -> None:
     needs did not land, because a silent skip here is exactly the failure this
     function exists to end.
     """
+    _migrate_legacy_content_root(report)
     argv = _machine_local_argv()
     failures: list[str] = []
 
@@ -1025,29 +1047,23 @@ def seed_trust_anchor_keys(report: Report) -> None:
         report.engine_guard_anchor_root_trust = (
             "ABSENT: this container's engine clone matches registry trust anchors by "
             "strict descendant only, so the install orchestrator will refuse the flat "
-            f"served mirror at {mirror_root} even though repos.content_root names it "
+            f"served mirror at {mirror_root} even though {CONTENT_ROOT_KEY} names it "
             "exactly. Not fixable by any key this script writes — the engine needs a "
             "guard carrying the anchor-root equality arm published to it."
         )
 
-    authoring = locate_doe_authoring_tree()
+    authoring = locate_authoring_tree()
     if authoring is None:
-        report.doe_authoring_tree = None
+        report.authoring_tree = None
     elif not engine_guard_honours_plugin_mirror_anchor():
-        report.doe_authoring_tree = (
+        report.authoring_tree = (
             f"{authoring} (found, NOT registered: this container's engine clone has no "
-            f"{PLUGIN_MIRROR_LIVE_PATH_KEY} trust anchor, so repos.content_root is left "
+            f"{PLUGIN_MIRROR_LIVE_PATH_KEY} trust anchor, so {CONTENT_ROOT_KEY} is left "
             "naming the served mirror — the mirror's last anchor on that engine)"
         )
-    elif "repos.content_root" in targets:
-        report.doe_authoring_tree = str(authoring)
-        targets["repos.content_root"] = (str(authoring), True)
-
-    # The canonical spelling `data_root` / provision-sidecar resolve snippets
-    # through; the machine-local write retires the paired `repos.content_root`
-    # line, and reads of either spelling still answer.
-    if "repos.content_root" in targets:
-        targets[CONTENT_ROOT_KEY] = targets["repos.content_root"]
+    elif CONTENT_ROOT_KEY in targets:
+        report.authoring_tree = str(authoring)
+        targets[CONTENT_ROOT_KEY] = (str(authoring), True)
 
     for key, (value, fatal) in targets.items():
         _write(key, value, fatal=fatal)
@@ -1143,12 +1159,11 @@ def assert_hook_plane_armed(report: Report) -> None:
       entries are `drop_double_fired_settings_hooks`'s job, run after every
       writer and just before this; it either removes them or raises, so this
       assert does not re-detect them.
-    - `.coordinator-content-root` resolves through at least one rung the no-launcher fences read.
-      At least one, deliberately NOT all: `<settings-home>/machine-local/.coordinator-content-root`
-      is the canonical target and `~/.claude/.coordinator-content-root` is a legacy fallback that
-      `gen-content-root-pointer` refuses to dual-write, so requiring both would
-      encode a clobber that ruling exists to prevent. Each rung's outcome is
-      recorded so a reader sees which one answered.
+    - The content root resolves through at least one rung the no-launcher fences
+      read. At least one, deliberately NOT all: the registry key and the
+      pointer files are alternative targets, so requiring every one would encode
+      a clobber. Each rung's outcome is recorded so a reader sees which one
+      answered.
 
     RAISES on either failure, so the verdict surface names it and a session
     reads it as context. There is nothing this script can do to repair a hook
@@ -2271,8 +2286,8 @@ def locate_existing_checkout(name: str) -> Path | None:
     return None
 
 
-def locate_doe_authoring_tree() -> Path | None:
-    """The mounted coordinator-content-repo AUTHORING checkout, or None.
+def locate_authoring_tree() -> Path | None:
+    """The mounted coordinator AUTHORING checkout, or None.
 
     Detected by the `.coordinator-dev-repo` sentinel at a checkout's root — the
     discriminant coordinator-content-repo's `CLAUDE.md` names as fleet-wide — never by a
@@ -2320,7 +2335,7 @@ def engine_guard_honours_plugin_mirror_anchor() -> bool:
     """Whether THIS container's engine clone trusts a root by the served-mirror
     key, rather than only by `repos.content_root`.
 
-    An older engine has only the authoring key as its coordinator anchor, so
+    An older engine has only the content key as its coordinator anchor, so
     moving `repos.content_root` off the mirror there strips the mirror of its last
     anchor. The key split is therefore gated on this capability.
 
@@ -3952,7 +3967,7 @@ def _hook_plane_status_line(report: Report) -> str:
     and a clean run writing no verdict at all made silence indistinguishable
     from health — the exact failure mode this line exists to end. ARMED means
     everything `assert_hook_plane_armed` requires: at least one delivery
-    surface registers hooks and `.coordinator-content-root` resolves. `hook_plane` absent
+    surface registers hooks and the content root resolves. `hook_plane` absent
     (the probe never ran) reports UNARMED with an `unknown` delivery surface
     rather than silently omitting the line.
     """
@@ -4059,7 +4074,7 @@ def _verdict_body(report: Report) -> str:
             )
         if not hook_plane.get("content_root_resolves"):
             broken.append(
-                "`.coordinator-content-root` resolves through no rung — every no-launcher fence in a "
+                "the content root resolves through no rung — every no-launcher fence in a "
                 "ceremony exits 1"
             )
         sections.append(

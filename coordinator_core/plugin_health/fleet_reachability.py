@@ -184,7 +184,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from coordinator_core.data_root import content_root_for
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_resolver import registry_get
 
 _PROG = "fleet-reachability"
@@ -547,7 +547,7 @@ def _ledger_explains_missing(normalized_name: str, ledger_path: Optional[Path]) 
 
 
 def _resolve_content_root() -> Optional[Path]:
-    pointer = read_content_root_pointer()
+    pointer = read_content_root()
     if not pointer:
         return None
     candidate = Path(pointer)
@@ -565,7 +565,7 @@ def check_fleet_reachability(
     (`test_fleet_reachability.py`). `agent_bin` / `extra_oracle_dirs` /
     `content_root` / `ledger_path` are explicit overrides for tests; a caller
     that omits any of them gets the real resolution ladder (claude-klabauter's own
-    `coordinator_claude_klabauter_root()`, DoE's `read_content_root_pointer()`, and
+    `coordinator_claude_klabauter_root()`, `read_content_root()`, and
     `relocation_ledger`'s own `default_ledger_path()` — all registry-first,
     see each resolver's own docstring).
 

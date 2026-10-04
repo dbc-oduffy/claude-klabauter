@@ -34,7 +34,7 @@ budgeted-op-spawn-trace.md` § 5): a prior version of this test substituted
 real spawn — the fakes' own bodies, which is where any subprocess would
 actually happen, never ran. This version calls the REAL `content_root()` /
 `_claude_klabauter_root()` (no substitution) with every resolver env override
-(`REPO_CONTENT_ROOT`/`CONTENT_ROOT`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
+(`REPO_CONTENT_ROOT`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
 `LESSON_PROMOTE_OUTBOX_ROOT`) explicitly cleared — the steady state on an
 installed machine where none of those overrides is set — and counts real
 `subprocess.run` calls via a global patch on the `subprocess` module object
@@ -89,7 +89,6 @@ def _manifest_spawn_budget() -> dict:
 
 _ENV_OVERRIDES_TO_CLEAR = (
     "REPO_CONTENT_ROOT",
-    "CONTENT_ROOT",
     "CLAUDE_KLABAUTER_ROOT",
     "QUEUE_APPEND_OUTPUT_ROOT",
     "LESSON_PROMOTE_OUTBOX_ROOT",

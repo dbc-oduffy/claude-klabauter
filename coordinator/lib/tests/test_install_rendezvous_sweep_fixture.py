@@ -51,15 +51,15 @@ _TEMPLATE_REL = "coordinator/templates/handoffs/continue-onboarding-and-installa
 def _resolve_template_path() -> Path | None:
     """claude-klabauter does not vendor this template — it is coordinator-claude/
     DoE content (see this repo's own CLAUDE.md § What this repo is). Resolve
-    it via the coordinator-content-repo sibling root, same as
+    it via the content root, same as
     coordinator_core/tests/test_install_chain_driven_leaf_seed_sweep.py; the
     bash oracle this replaces used a hardcoded relative path
     (SCRIPT_DIR/../../templates/...) that has never resolved inside this repo
     (verified: running it produces "FATAL: template not found") — that
     hardcoded assumption is not reproduced here."""
-    from coordinator_core.content_root_pointer import read_content_root_pointer
+    from coordinator_core.content_root import read_content_root
 
-    content_root = read_content_root_pointer()
+    content_root = read_content_root()
     if not content_root:
         return None
     candidate = Path(content_root) / _TEMPLATE_REL
@@ -85,7 +85,7 @@ def template_text():
     template_path = _resolve_template_path()
     if template_path is None:
         pytest.skip(
-            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
+            "content root not resolvable via coordinator_core.content_root "
             "on this machine (or the template is missing there) — this template is "
             "not vendored in claude-klabauter; not a defect in claude-klabauter."
         )

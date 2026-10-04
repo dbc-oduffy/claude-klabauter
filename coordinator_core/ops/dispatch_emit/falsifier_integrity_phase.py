@@ -19,6 +19,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.dispatch_emit.predispatch import AgentSpec
+from coordinator_core.ops.dispatch_emit.spine_read import load_frontmatter_doc
 from coordinator_core.ops.review_mint.execute_review import resolve_operative_criterion
 
 REVIEW_PHASE_TITLE = "Falsifier integrity"
@@ -59,7 +60,7 @@ def _baseline_ref(plan_text: str) -> Optional[str]:
     if split is None:
         return None
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return None
     block = doc.get("prime_exit_criterion") if isinstance(doc, dict) else None
@@ -152,7 +153,7 @@ def review_specs(inputs: Sequence[ReviewInput]) -> list[AgentSpec]:
     """One blinded reviewer AgentSpec per input, labelled ``falsifier-integrity:<ordinal>``."""
     return [
         AgentSpec(
-            key=f"falsifier-integrity:{n}",
+            key=inp.plan_path,
             label=f"falsifier-integrity:{n}",
             phase=REVIEW_PHASE_TITLE,
             agent_type=REVIEWER_AGENT_TYPE,

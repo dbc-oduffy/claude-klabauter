@@ -31,15 +31,15 @@ Handler shapes, one per directive `pre_execution_directives()` ever emits:
     d4 the workflow emit — the one piece of genuinely new mechanism.
        `emit-dispatch-workflow.py` is plugin-local in coordinator-content-repo with ZERO
        claude-klabauter launchers, so it cannot be a bare `cli:` string; this handler
-       resolves the coordinator-content-repo sibling root itself via
-       `coordinator_core.ops.coordinator_content_root.coordinator_content_root()`
+       resolves the content root itself via
+       `coordinator_core.content_root.read_content_root()`
        and spawns that script directly. `--out` is EXPLICIT and
        session-scoped (never the emitter's plan-relative default — see
        state/memo-outbox/sent/emitter-repo-root-guard-landed-and-a-
        script-path-collision.md § 3), built from the session id this
        module's own `apply()` resolves via `apply_base.session_identity`.
-       Raises (rather than skipping) when `coordinator_content_root()` returns
-       `None`.
+       Raises (rather than skipping) when `read_content_root()` returns
+       an empty string.
 
 Negative-spec:
     - Do NOT import or call
@@ -74,7 +74,7 @@ from coordinator_core._content_root_primitive import content_root_or_private
 from coordinator_core.contract import apply_base
 from coordinator_core.execute_plan_assemble.pre_execution import pre_execution_directives
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.ops.coordinator_content_root import _REMEDIATION, coordinator_content_root
+from coordinator_core.content_root import read_content_root
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
@@ -178,9 +178,12 @@ def _dispatch_emit_dispatch_workflow(args: list[str], repo_root: Path) -> dict[s
         raise UnrecognizedDirective("emit-dispatch-workflow: expected --plan <plan-path>")
     plan_path = args[1]
 
-    content_root = coordinator_content_root()
-    if content_root is None:
-        raise RuntimeError(_REMEDIATION)
+    content_root = read_content_root()
+    if not content_root:
+        raise RuntimeError(
+            "emit-dispatch-workflow: content root unresolved. "
+            "Set it: machine-local set repos.content_root <path>"
+        )
 
     script = Path(content_root_or_private(content_root)) / "bin" / "emit-dispatch-workflow.py"
     out_path = _emit_out_path(repo_root, plan_path)

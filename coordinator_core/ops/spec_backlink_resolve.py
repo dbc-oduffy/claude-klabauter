@@ -30,7 +30,7 @@ Peer-repo (`<repo>:`-qualified) resolution is LAZY: the peer index is built
 only when a queried id actually carries a `<repo>:` prefix, never eagerly,
 since most calls this plan drives before C7 (cross-repo citation) lands are
 local-only. The peer root is resolved via
-`coordinator/bin/lib/coordinator_registry.py::content_root()` — NOT
+`coordinator_core.content_root.read_content_root()` — NOT
 `cc_invoke.py::_resolve_claude_klabauter_root()`, which resolves the engine root (this
 repo, dispatch axis) and has zero peer-repo awareness (see the plan's
 enrich-once correction).
@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from coordinator_core._fleet_names import doctrine_repo_name
+from coordinator_core.content_root import read_content_root
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.deliverable_rollup import (
@@ -300,14 +301,9 @@ def build_index(worktree_root: Path) -> _BacklinkIndex:
 
 def _content_root_path() -> Optional[Path]:
     try:
-        from coordinator.bin.lib.coordinator_registry import content_root
-    except ImportError as exc:
-        logger.warning("spec_backlink_resolve: could not import content_root(): %s", exc)
-        return None
-    try:
-        root = content_root()
+        root = read_content_root()
     except Exception as exc:  # noqa: BLE001 — a peer-root resolution failure is a typed miss
-        logger.warning("spec_backlink_resolve: content_root() failed: %s", exc)
+        logger.warning("spec_backlink_resolve: read_content_root() failed: %s", exc)
         return None
     if not root:
         return None
@@ -403,7 +399,7 @@ def resolve(worktree_root: Path, queried_id: str) -> dict:
 
     `worktree_root` is THIS repo's worktree root (already derived by the
     caller via main_worktree_root(repo_root)). A `<repo>:`-qualified id
-    triggers a lazy peer-repo index build rooted at content_root() instead of
+    triggers a lazy peer-repo index build rooted at read_content_root() instead of
     scanning worktree_root — the peer index is never built for a local-only
     query.
 

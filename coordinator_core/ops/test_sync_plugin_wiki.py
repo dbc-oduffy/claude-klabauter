@@ -148,7 +148,7 @@ class TestNegative:
         # COORDINATOR_SETTINGS_HOME is the same defect as the USERPROFILE rung
         # documented below, one rung further along: `settings_home()` prefers
         # that override over CLAUDE_HOME/HOME/USERPROFILE entirely, so on a box
-        # where an operator exports it the DURABLE `.coordinator-content-root` rung
+        # where an operator exports it the DURABLE content-root rung
         # (`<settings-home>/machine-local/.coordinator-content-root`) reads the operator's real
         # settings home and resolution succeeds -- this test then never reaches
         # the unresolvable path it names.
@@ -160,7 +160,7 @@ class TestNegative:
         # USERPROFILE on Windows and ignores HOME entirely -- without this,
         # the real dev box's own USERPROFILE survives `os.environ.clear()`+
         # `update(env)` in `_run_main` and rung 3 (registry live_path) or the
-        # legacy `.coordinator-content-root` rung resolves against the REAL machine's home,
+        # content-root pointer rung resolves against the REAL machine's home,
         # letting resolution silently succeed instead of exercising the
         # unresolvable path this test targets.
         env["USERPROFILE"] = str(tmp_path / "no-content-root-home")
