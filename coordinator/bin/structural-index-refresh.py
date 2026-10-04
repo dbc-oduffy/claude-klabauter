@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -40,15 +39,11 @@ STDERR_TAIL_LINES = 5
 
 def resolve_index_repo() -> Optional[Path]:
     """example-retrieval-repo checkout from the machine-local registry; None when absent for any reason."""
-    exe = shutil.which("machine-local")
-    if not exe:
-        return None
     try:
-        out = subprocess.run([exe, "get", REGISTRY_KEY], capture_output=True, text=True, timeout=15,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except (OSError, subprocess.SubprocessError):
+        from coordinator_core.machine_resolver import registry_get
+        value = registry_get(REGISTRY_KEY) or ""
+    except Exception:  # an unresolvable registry means no index repo, never a crash
         return None
-    value = out.stdout.strip() if out.returncode == 0 else ""
     if not value:
         return None
     path = Path(value)
