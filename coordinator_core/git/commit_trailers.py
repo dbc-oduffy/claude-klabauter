@@ -264,9 +264,34 @@ def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     if not isinstance(pickup, dict):
         return ""
     deliverable_id = pickup.get("deliverable_id")
-    if isinstance(deliverable_id, str) and deliverable_id.strip():
-        return deliverable_id.strip()
-    return ""
+    if not isinstance(deliverable_id, str) or not deliverable_id.strip():
+        return ""
+    if _picked_up_handoff_is_terminal(git_dir, pickup.get("handoff")):
+        return ""
+    return deliverable_id.strip()
+
+
+def _picked_up_handoff_is_terminal(git_dir: str, handoff_relpath: object) -> bool:
+    """The pickup tier never expires on its own: a session that picked up a
+    handoff hours ago still stamps its id after that deliverable closed. A
+    handoff archived out of `state/handoffs/` or carrying a terminal
+    `deployment_state` has closed, so its id is stale. One file read."""
+    if not isinstance(handoff_relpath, str) or not handoff_relpath.strip():
+        return False
+    handoff = Path(git_dir).parent / handoff_relpath.strip()
+    try:
+        text = handoff.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return True
+    except (OSError, UnicodeDecodeError):
+        return False
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+
+    split = split_frontmatter(text)
+    if split is None:
+        return False
+    return read_fm_field_unquoted(split.fm_text, "deployment_state") in HANDOFF_TERMINAL_DEPLOYMENT
 
 
 def _list_held_plan_claims(cwd: Union[str, Path]) -> List[tuple]:

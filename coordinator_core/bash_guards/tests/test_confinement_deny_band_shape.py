@@ -100,6 +100,14 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
 _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS: frozenset = frozenset()
 
 
+def _perforce_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+    """`block-perforce-submit` arms from machine-local policy; arm it for the row."""
+    from coordinator_core.bash_guards import block_perforce_submit as guard
+
+    mp.setattr(guard, "_armed", lambda: True)
+    return {}
+
+
 def _noncanonical_branch_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -156,6 +164,31 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_noncanonical_branch_hazard_setup,
+    ),
+    CorpusRow(
+        "block-perforce-submit",
+        "block-perforce-submit-fire",
+        "p4 submit -d shape-probe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_perforce_armed_setup,
+    ),
+    CorpusRow(
+        "block-unreal-engine-resave",
+        "block-unreal-engine-resave-fire",
+        "UnrealEditor-Cmd G.uproject -run=ResavePackages",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-editor-kill-by-name",
+        "block-editor-kill-by-name-fire",
+        "taskkill /F /IM UnrealEditor.exe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
     ),
     CorpusRow(
         "block-topic-branch",

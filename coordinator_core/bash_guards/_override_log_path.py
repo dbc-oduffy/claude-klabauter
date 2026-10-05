@@ -48,6 +48,10 @@ NO_SESSION_BUCKET = "no-session"
 def session_audit_log_dir(git_root: str, session_id: Optional[str]) -> Optional[str]:
     if not git_root:
         return None
+    # Never mint a repo: a fake root (a test's "/repo") would otherwise be
+    # created for real -- at the drive root on Windows.
+    if not os.path.exists(os.path.join(git_root, ".git")):
+        return None
     sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
     sid = session_id or NO_SESSION_BUCKET
     sid_dir = os.path.join(sessions_root, sid)
