@@ -128,7 +128,7 @@ def _registry_value(text: str, key: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _content_root_root(real_home: Path) -> Path | None:
+def _content_root(real_home: Path) -> Path | None:
     text = _registry_text(real_home)
     if text is None:
         return None
@@ -382,11 +382,11 @@ def test_leg2_real_hook_subprocess_reflects_fleet_value(tmp_path, real_home, eng
     Stating both is also strictly stronger than the original shape: it proves
     each value reaches a live hook fire, rather than one value plus a default.
     """
-    content_root = _content_root_root(real_home)
+    content_root = _content_root(real_home)
     if content_root is None or not content_root.is_dir():
         pytest.skip(
             "could not resolve repos.content_root from the real machine-local "
-            "registry -- the coordinator-content-repo root (home of the converted turn-boundary "
+            "registry -- the content root (home of the converted turn-boundary "
             "hook entry point) is unavailable on this machine"
         )
     script = _postuse_advisory_dispatch_script(content_root)

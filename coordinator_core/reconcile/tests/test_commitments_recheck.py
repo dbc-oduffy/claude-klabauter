@@ -34,7 +34,6 @@ from typing import List
 
 import pytest
 
-from coordinator_core import sibling_fact
 from coordinator_core.reconcile import commitments_recheck
 from coordinator_core.reconcile.commitments_recheck import recheck_commitments
 from coordinator_core.win_portability import no_console_creationflags
@@ -94,9 +93,9 @@ def sibling_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def as_content_root(monkeypatch: pytest.MonkeyPatch, sibling_repo: Path) -> Path:
-    """Route `repo: content_root` at `sibling_repo` via the same monkeypatch
-    seam `test_sibling_fact.py` uses — never a registry file write."""
-    monkeypatch.setattr(sibling_fact, "read_content_root_pointer", lambda: str(sibling_repo))
+    """Route the content repo at `sibling_repo` via the registry's env
+    override rung — never a registry file write."""
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(sibling_repo))
     return sibling_repo
 
 
@@ -294,9 +293,9 @@ def test_unmapped_committed_by_is_not_yet_resolvable(ledger_dir: Path) -> None:
 
 
 def test_unresolvable_sibling_repo_is_not_yet_resolvable(
-    monkeypatch: pytest.MonkeyPatch, ledger_dir: Path
+    monkeypatch: pytest.MonkeyPatch, ledger_dir: Path, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(sibling_fact, "read_content_root_pointer", lambda: "")
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(tmp_path / "absent-clone"))
 
     _write_record(
         ledger_dir,

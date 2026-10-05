@@ -522,13 +522,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator/bin/verify-content-root-seam-sync.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator/bin/verify-content-root-seam-sync.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
-  },
-  {
     "detail": "coordinator/bin/waste-signal.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator/bin/waste-signal.py",
     "mutates": [],
@@ -1084,13 +1077,6 @@
   {
     "detail": "coordinator_core/hooks/session_start_announce_job_mode.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator_core/hooks/session_start_announce_job_mode.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
-  },
-  {
-    "detail": "coordinator_core/hooks/session_start_register_content_root_root.py writes through an unresolved path expression and declares no GENERATES",
-    "generator": "coordinator_core/hooks/session_start_register_content_root_root.py",
     "mutates": [],
     "pairs": [],
     "verdict": "WRITE_TARGET_UNRESOLVED"
@@ -1672,13 +1658,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/gen_content_root_pointer.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/ops/gen_content_root_pointer.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
-  },
-  {
     "detail": "coordinator_core/ops/generate_exec_summary.py declares 1 pair(s)",
     "generator": "coordinator_core/ops/generate_exec_summary.py",
     "mutates": [],
@@ -1732,13 +1711,6 @@
     ],
     "pairs": [],
     "verdict": "MUTATES_DECLARED"
-  },
-  {
-    "detail": "coordinator_core/ops/install_content_root_precommit_hook.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/ops/install_content_root_precommit_hook.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
   },
   {
     "detail": "coordinator_core/ops/install_lfs_pre_push_hook.py declares GENERATES = [] (declared-empty, no artifacts)",

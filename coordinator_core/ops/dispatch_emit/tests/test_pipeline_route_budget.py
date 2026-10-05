@@ -26,7 +26,7 @@ def _params(tmp_path, name):
 
 
 def test_pipeline_emit_is_spawn_free_and_under_budget(monkeypatch, tmp_path):
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "doe")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: _FIXTURE)
 
     warm = _dispatch_emit(_params(tmp_path, "warm.mjs"))

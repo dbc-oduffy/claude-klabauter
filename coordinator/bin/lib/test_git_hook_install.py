@@ -124,7 +124,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "1fd0e3dcdd46dc6bdf8d78c74003a429d7a5daeb27f3be267d63f8dcba2f9b23"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "25f9f6b3212ad918a97a3df411fc7d1fcc10c66fe68e77a0ea990d7874ffe691"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -166,7 +166,7 @@ def test_interpreter_rung_costs_no_unconditional_subshell():
     one scheduler quantum on this box, and DR-344 makes a process-time figure
     inside the quantum a non-result.
 
-    The `.coordinator-content-root` rung's own `$(cat ...)` is deliberately NOT counted — it
+    The content-root pointer rung's own `$(cat ...)` is deliberately NOT counted — it
     sits behind `[ -f "$SCRIPT" ] ||` and never runs on a box whose earlier
     SCRIPT rungs resolve. Counting it would credit this fix with removing a
     process that was already conditional, and overstating a saving is the

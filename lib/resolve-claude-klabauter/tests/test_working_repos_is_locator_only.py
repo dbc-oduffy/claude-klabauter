@@ -194,28 +194,28 @@ def test_setup_chain_walker_locator_rung_still_resolves(tmp_path: Path, monkeypa
     scw = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     loader.exec_module(scw)
 
-    content_root = tmp_path / "coordinator-content-repo-plugin-source"
-    (content_root / ".claude-plugin").mkdir(parents=True)
-    (content_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
-    (content_root / "commands").mkdir()
+    plugin_source = tmp_path / "content-plugin-source"
+    (plugin_source / ".claude-plugin").mkdir(parents=True)
+    (plugin_source / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (plugin_source / "commands").mkdir()
 
     monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
     monkeypatch.setattr(
         scw,
         "registry_get",
-        lambda key: str(content_root.parent) if key == "engine.working_repos.content_root" else None,
+        lambda key: str(plugin_source.parent) if key == "engine.working_repos.content_root" else None,
     )
     monkeypatch.setattr(scw, "_is_publish_mirror", lambda path: False)
     monkeypatch.setattr(
         scw,
         "_resolve_plugin_root_for_machine_local",
-        lambda raw: content_root if raw == content_root.parent else None,
+        lambda raw: plugin_source if raw == plugin_source.parent else None,
     )
 
     candidate = scw._resolve_coordinator_root_ladder(argv=[])
     assert candidate is not None
     resolved_path, rung = candidate
-    assert resolved_path == content_root
+    assert resolved_path == plugin_source
     assert "engine.working_repos.content_root" in rung
 
 

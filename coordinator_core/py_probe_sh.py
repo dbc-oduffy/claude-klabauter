@@ -26,11 +26,8 @@ own hook-exec contract still forces a shell for its emitted trampoline, but
 that trampoline now bakes `sys.executable` at install time (a real
 filesystem path the running installer already resolved) instead of walking
 `$PATH` in shell, so it no longer calls `python_probe_lines` at all. Today's
-callers: `coordinator.bin.lib.git_hook_install` (two sites),
-`coordinator_core.ops.install_meta_repo_precommit_hook`, and
-`coordinator_core.ops.install_content_root_precommit_hook` (coordinator-content-repo's own
-hook -- another repo's surface, out of C17's scope; see that plan's C17 row
-for why only the claude-klabauter installer converts). Grep `python_probe_lines`
+callers: `coordinator.bin.lib.git_hook_install` (two sites) and
+`coordinator_core.ops.install_meta_repo_precommit_hook`. Grep `python_probe_lines`
 before quoting a count; this line drifts as consumers are added or removed
 and is not a substitute for the grep.
 
@@ -148,11 +145,10 @@ def baked_python_lines(var: str = "_py") -> str:
 
     Negative spec: this does NOT replace `python_probe_lines`, and that
     function's `$PATH` walk is not dead code.
-    `install_content_root_precommit_hook` and `install_meta_repo_precommit_hook`
-    emit hooks into OTHER repos, where the installing interpreter is not
-    necessarily the one the emitted hook should run under. Repointing those
-    is a cross-repo change needing their owners' sign-off, never a mechanical
-    sweep from here.
+    `install_meta_repo_precommit_hook` emits hooks into OTHER repos, where the
+    installing interpreter is not necessarily the one the emitted hook should
+    run under. Repointing it is a cross-repo change needing its owner's
+    sign-off, never a mechanical sweep from here.
     """
     baked = "/".join(split_path(sys.executable))
     walk = python_probe_lines(var)

@@ -94,7 +94,7 @@ tail-sanitizer, see ``_tail_slug`` below) is imported lazily, function-local,
 rather than at module level. Importing ANY name under ``coordinator_core.ops``
 forces Python to first fully execute ``coordinator_core/ops/__init__.py``,
 which (default/eager mode) walks its full op-module list — including
-``content_root_pointer``'s transitive chain back to THIS module's ``registry_get``.
+``content_root``'s transitive chain back to THIS module's ``registry_get``.
 A module-level import here raced that cascade: whichever of
 {``machine_resolver``, ``coordinator_core.ops``} was imported first left the
 other partially initialized, so the loser's needed name (``registry_get``,
@@ -248,7 +248,7 @@ def registry_get(key: str) -> Optional[str]:
     docstring negative-spec).
 
     Public promotion (DR-071, 2026-07-22): this is the direct-tomllib registry
-    reader every content-root anchor consumer (``coordinator_core.content_root_pointer``,
+    reader every content-root anchor consumer (``coordinator_core.content_root``,
     ``coordinator_core.trusted_root_guard``, ``coordinator_core.
     resolve_coordinator_clone``, ``coordinator_core.install._shared``) now binds
     ``repos.content_root`` reads to, in preference to the ``machine-local`` CLI —
@@ -665,7 +665,7 @@ def repo_key_to_em_id(key: str) -> str:
     import path (DR-047), so the engine could not call it where it used to
     live. `coordinator_registry.repo_key_to_em_id` now delegates here.
     """
-    if key == "repos.content_root":
+    if key in _CONTENT_ROOT_KEY_PAIR:
         return _identity_central_canonical_id()
     shortname = key[len("repos."):] if key.startswith("repos.") else key
     canonical = _identity_repo_aliases().get(shortname)
@@ -697,7 +697,9 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
     """
     if root is None:
         return "unknown-sender-em"
-    content_root_path = repo_key_paths.get("repos.content_root")
+    content_root_path = repo_key_paths.get("repos.content_root") or repo_key_paths.get(
+        _CONTENT_ROOT_KEY_PAIR["repos.content_root"]
+    )
     if content_root_path and _same_path(str(root), str(content_root_path)):
         return _identity_central_canonical_id()
     key = canonical_repo_key_for_root(root, repo_key_paths)
@@ -735,7 +737,7 @@ def _hostname_short() -> Optional[str]:
 
     `socket` is imported HERE, not at module scope. It costs ~4.3ms to import
     (it pulls `selectors` and `select` with it), this module is on the commit
-    hot path via `content_root_pointer`, and `compute_machine` resolves
+    hot path via `content_root`, and `compute_machine` resolves
     `$COORDINATOR_MACHINE` and the settings file BEFORE it ever asks for a
     hostname -- so the eager import was paid by every op and consumed by
     almost none.

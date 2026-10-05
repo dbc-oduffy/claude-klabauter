@@ -75,7 +75,7 @@ def _run_cli(
     env = None
     if content_root is not None:
         env = dict(os.environ)
-        env["REPO_CONTENT_ROOT"] = content_root
+        env["MACHINE_LOCAL_REPOS_CONTENT_ROOT"] = content_root
     return subprocess.run(
         [sys.executable, _CLI, *args],
         cwd=cwd,
@@ -104,13 +104,14 @@ _GOOD_SKILL_MD = """\
 """
 
 
-def _make_doe_fixture(tmp: str) -> str:
-    """Build a minimal coordinator-content-repo-shaped tree and return it as a REPO_CONTENT_ROOT root.
+def _make_content_fixture(tmp: str) -> str:
+    """Build a minimal coordinator-content-shaped tree and return it as a content root.
 
     Same fixture shape as the op's own characterization suite
     (`coordinator_core/ops/test_verify_parallel_review_lens_orthogonality.py ::
-    _make_repo`), reached here through rung 1 of `coordinator_content_root()` — the
-    operator override — because the guard CLI exposes no `--content-root` argv.
+    _make_repo`), reached here through the `repos.content_root` env override
+    (`MACHINE_LOCAL_REPOS_CONTENT_ROOT`) because the guard CLI exposes no
+    root argv.
 
     Only the CHUNK-mode cases use it. The static check runs FIRST and
     short-circuits, so a chunk case pointed at the live sibling repo is not
@@ -207,9 +208,9 @@ class TestGuardChunkManifest(unittest.TestCase):
 
     def test_missing_manifest_is_chunk_mode_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            doe = _make_doe_fixture(tmp)
+            content = _make_content_fixture(tmp)
             proc = _run_cli(
-                ["guard", "--chunk-manifest", "/nonexistent-manifest.tsv"], content_root=doe
+                ["guard", "--chunk-manifest", "/nonexistent-manifest.tsv"], content_root=content
             )
             self.assertEqual(proc.returncode, 1)
             self.assertIn(
@@ -220,9 +221,9 @@ class TestGuardChunkManifest(unittest.TestCase):
 
     def test_static_failure_under_chunk_mode_names_the_static_check(self):
         with tempfile.TemporaryDirectory() as tmp:
-            doe = _make_doe_fixture(tmp)
+            content = _make_content_fixture(tmp)
             skill = os.path.join(
-                doe, "coordinator", "skills", "parallel-code-review", "SKILL.md"
+                content, "coordinator", "skills", "parallel-code-review", "SKILL.md"
             )
             with open(skill, "w", encoding="utf-8") as f:
                 f.write("# parallel-code-review\n\nno manifest table here\n")
@@ -230,29 +231,29 @@ class TestGuardChunkManifest(unittest.TestCase):
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/b.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=content)
             self.assertEqual(proc.returncode, 1)
             self.assertIn("Lens-orthogonality assertion failed", proc.stderr)
             self.assertNotIn("Chunk partitions are not disjoint", proc.stderr)
 
     def test_disjoint_manifest_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
-            doe = _make_doe_fixture(tmp)
+            content = _make_content_fixture(tmp)
             manifest = os.path.join(tmp, "chunk-manifest.tsv")
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/b.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=content)
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
     def test_overlapping_manifest_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            doe = _make_doe_fixture(tmp)
+            content = _make_content_fixture(tmp)
             manifest = os.path.join(tmp, "chunk-manifest.tsv")
             with open(manifest, "w", encoding="utf-8") as f:
                 f.write("chunk-1\tsrc/a.py\n")
                 f.write("chunk-2\tsrc/a.py\n")
-            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=doe)
+            proc = _run_cli(["guard", "--chunk-manifest", manifest], content_root=content)
             self.assertEqual(proc.returncode, 1)
             self.assertIn(
                 "Chunk partitions are not disjoint by file-scope; refusing to dispatch.",

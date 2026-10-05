@@ -58,7 +58,7 @@ def test_no_resolvable_override_would_refuse_a_round():
     overrides = _resolvable_overrides()
     if not overrides:
         pytest.skip(
-            "no percolate root resolves on this box (`.coordinator-content-root` unset or absent) — "
+            "no percolate root resolves on this box (content-root pointer unset or absent) — "
             "nothing to compare against; this is a machine fact, not a pass"
         )
     refusing = {

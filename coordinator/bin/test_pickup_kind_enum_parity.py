@@ -32,8 +32,8 @@ FileNotFoundError, not a genuine drift):
     at a co-located path. Rather than hardcode an absolute path to a sibling
     clone (machine-dependent, breaks on any machine without that clone), the
     path is resolved the same way every other doctrine CLI in this repo
-    resolves the DoE root — `coordinator_registry.content_root()`
-    (CONTENT_ROOT env -> REPO_CONTENT_ROOT env -> machine-local repos.content_root).
+    resolves the content root — `coordinator_registry.content_root()`
+    (machine-local repos.content_root and its pointer rungs).
     When unresolvable, this leg is skipped (not silently passed) via
     pytest.skip with the reason on the record — an honest "cannot observe"
     rather than a false green.

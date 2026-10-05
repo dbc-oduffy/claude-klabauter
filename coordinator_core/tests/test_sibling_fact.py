@@ -7,7 +7,7 @@ Coverage (the Staff Engineer F10 — authored in the C2 chunk itself, not deferr
   (b) unregistered repo -> read_ok False, explicit reason, never a guess.
   (c) registered repo whose root is absent from disk ("absent clone") ->
       read_ok False, distinguished from "unregistered".
-  (d) `content_root` routes through `read_content_root_pointer`, every other repo id
+  (d) `content_root` routes through `read_content_root`, every other repo id
       through bare `registry_get`.
   (e) `frontmatter_field`: absent field, unreadable file, literal null, empty
       value, and a real value — five distinguishable outcomes, not one `""`.
@@ -140,11 +140,11 @@ def test_registered_but_absent_clone_is_read_ok_false(monkeypatch: pytest.Monkey
     assert "does not exist on disk" in observation["error"]
 
 
-def test_content_root_routes_through_content_root_pointer(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-    """`repo: content_root` MUST resolve via `read_content_root_pointer`, not bare
+def test_content_root_routes_through_content_root(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """`repo: content_root` MUST resolve via `read_content_root`, not bare
     `registry_get` (D6/eng-director F6) — asserted by making the two
     resolvers disagree and checking which one wins."""
-    monkeypatch.setattr(sibling_fact, "read_content_root_pointer", lambda: str(repo))
+    monkeypatch.setattr(sibling_fact, "read_content_root", lambda: str(repo))
     monkeypatch.setattr(sibling_fact, "registry_get", lambda key: None)
     leg = {"leg_id": "L1", "kind": "file_exists", "repo": "content_root", "path": "README.md"}
     observation = resolve_leg(leg)
@@ -152,11 +152,11 @@ def test_content_root_routes_through_content_root_pointer(monkeypatch: pytest.Mo
     assert observation["source"].startswith(str(repo))
 
 
-def test_non_doe_repo_never_calls_content_root_pointer(monkeypatch: pytest.MonkeyPatch, registered_repo: Path) -> None:
+def test_non_content_repo_never_calls_content_root(monkeypatch: pytest.MonkeyPatch, registered_repo: Path) -> None:
     def _fail() -> str:
-        raise AssertionError("read_content_root_pointer must not be called for a non-content_root repo id")
+        raise AssertionError("read_content_root must not be called for a non-content_root repo id")
 
-    monkeypatch.setattr(sibling_fact, "read_content_root_pointer", _fail)
+    monkeypatch.setattr(sibling_fact, "read_content_root", _fail)
     leg = {"leg_id": "L1", "kind": "file_exists", "repo": "fixture-repo", "path": "README.md"}
     resolve_leg(leg)  # must not raise
 

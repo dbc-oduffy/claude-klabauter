@@ -8,7 +8,7 @@ defect one rung higher: the private tree keeps the registry manifest under
 but the registry rung hardcoded the ``coordinator/`` arm, so a
 ``repos.content_root`` naming a flat mirror — the shape a cloud container
 registers — missed the manifest that was sitting right there. The ladder then
-fell through to rungs a not-yet-written ``.coordinator-content-root`` had already starved, and
+fell through to rungs a not-yet-written content-root pointer had already starved, and
 the module raised ``FileNotFoundError`` at import, which took out
 ``gen-claude-author-launcher`` and ``gen-claude-author-shim`` and left "coordinator
 will NOT load in any interactive session" in the install log.
@@ -76,7 +76,7 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
             "import coordinator_registry as reg\n"
             "print(json.dumps({'manifest': reg._MANIFEST_PATH}))\n"
         )
-        # Scrubbed env: CONTENT_ROOT / REPO_CONTENT_ROOT / CLAUDE_PLUGIN_ROOT absent, so
+        # Scrubbed env: REPO_CONTENT_ROOT / CLAUDE_PLUGIN_ROOT absent, so
         # the registry rung is the ONLY thing that can resolve the manifest. On
         # the pre-fix module this subprocess dies with FileNotFoundError.
         env = {

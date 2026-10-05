@@ -173,7 +173,7 @@ Negative-spec:
       already natively ported there (field-level merge, mkdir lock, atomic
       write — see that module's docstring), so this module no longer needs a
       `bash -c "source coordinator-session.sh && cs_session_shape_set ..."`
-      subprocess bridge. Retired the content-root-pointer bash-lib resolution
+      subprocess bridge. Retired the pointer-based bash-lib resolution
       (`_bash_lib_path`) and the subprocess wrapper (`_session_shape_set_bridge`)
       that carried it.
 """

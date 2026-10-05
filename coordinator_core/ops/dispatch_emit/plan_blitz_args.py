@@ -50,9 +50,9 @@ _MANIFEST_RELPATHS = (
 
 
 def _registry_manifest_prefix(engine_root: Path, plugin_root: Path) -> str:
-    """`CONTENT_ROOT=<a root the manifest actually resolves under> `, or empty.
+    """The consumer's root-override env assignment, valued with a root the manifest actually resolves under, or empty.
 
-    VALIDATE THE VALUE YOU EXPORT: `CONTENT_ROOT` is taken as-is ahead of every other rung and
+    VALIDATE THE VALUE YOU EXPORT: the override is taken as-is ahead of every other rung and
     is the state-write root, so a root the consumer cannot resolve the manifest from is
     worse than none. Both the plugin root and its parent are probed against the layouts the
     consumer probes. POSIX-shaped, deliberately not emitted elsewhere: `VAR=x cmd` is not a
@@ -64,7 +64,7 @@ def _registry_manifest_prefix(engine_root: Path, plugin_root: Path) -> str:
         return ""
     for candidate in (plugin_root.parent, plugin_root):
         if any((candidate / rel).is_file() for rel in _MANIFEST_RELPATHS):
-            return f"CONTENT_ROOT={shlex.quote(str(candidate))} "
+            return f"CONTENT_ROOT={shlex.quote(str(candidate))} "  # private-name-ok: external-contract
     return ""
 
 

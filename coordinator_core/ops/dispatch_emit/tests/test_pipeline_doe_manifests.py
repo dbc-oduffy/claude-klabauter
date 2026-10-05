@@ -35,7 +35,7 @@ def _doe_content_root() -> Path | None:
 
 
 def _emit(monkeypatch, tmp_path: Path, content_root: Path, pipeline: str, **params) -> str:
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "doe")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: content_root)
     out = tmp_path / "emitted.workflow.mjs"
     (tmp_path / "brief.md").write_text("a plausible brief", encoding="utf-8")

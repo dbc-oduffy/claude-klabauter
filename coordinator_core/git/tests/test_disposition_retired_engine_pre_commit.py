@@ -74,16 +74,6 @@ def test_absent_hook(clone, table):
     assert hd.apply_repo(root, check_only=False)[0][2] == "absent"
 
 
-def test_content_root_installer_hook_left_alone(clone, table):
-    from coordinator_core.ops import install_content_root_precommit_hook as doe
-
-    root, hooks = clone
-    body = doe._hook_body(doe._GATE_REGISTRY).encode()
-    (hooks / "pre-commit").write_bytes(body)
-    assert hd.apply_repo(root, check_only=False)[0][2] == "current"
-    assert (hooks / "pre-commit").read_bytes() == body
-
-
 def test_meta_repo_installer_hook_left_alone(clone, table):
     from coordinator_core.ops import install_meta_repo_precommit_hook as meta
 

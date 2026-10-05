@@ -51,19 +51,15 @@ _loader.exec_module(_cli_mod)
 
 # ---------------------------------------------------------------------------
 # Isolation — every test in this file drives main() through a mocked
-# _cc_route, but main()'s klabauter#33 CONTENT_ROOT-gate (coordinator-lesson-
-# promote.py, immediately above the _cc_route("queue.promote", ...) call)
-# fires on ambient env alone, before _cc_route is ever reached, and routes
-# straight to the real legacy write path instead. None of the tests below
-# set or depend on these four vars, so clearing them ambient-proofs the
-# mock without touching what any test asserts.
+# _cc_route. None of the tests below set or depend on these vars, so
+# clearing them ambient-proofs the mock without touching what any test
+# asserts.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
 def _clear_ambient_resolution_env(monkeypatch):
     for var in (
-        "CONTENT_ROOT",
         "REPO_CONTENT_ROOT",
         _cli_mod._OUTBOX_ROOT_ENV,
         _cli_mod._WIKI_ROOT_ENV,
@@ -153,9 +149,8 @@ def test_native_from_repo_explicit_in_params():
 def test_native_content_root_explicit_in_params():
     """claude-klabauter#33: the CLI's own resolved content_root() is passed explicitly
     in params so the native queue.promote op's write lands under the SAME
-    coordinator-content-repo root --target-wiki validation already checked, instead of the op
-    re-resolving on its own (which has no CONTENT_ROOT rung — see
-    coordinator_core.ops.coordinator_content_root's docstring)."""
+    content root --target-wiki validation already checked, instead of the op
+    re-resolving on its own."""
     fake_result = {"out_path": "/fake/path.yaml"}
 
     with (
@@ -229,12 +224,12 @@ def test_native_success_echoes_write_destination():
     )
 
 
-def test_native_skip_remediation_names_content_root_and_machine_local():
+def test_native_skip_remediation_names_machine_local_content_root():
     """claude-klabauter#33: a native skipped:true result must print a
-    Remediation block naming both levers (machine-local + CONTENT_ROOT), matching
+    Remediation block naming the machine-local content-root lever, matching
     the legacy_fn / --target-wiki validation skip messages — previously this
     branch printed only a bare warn line with no remediation guidance at all."""
-    skipped_result = {"skipped": True, "reason": "doe root unresolvable"}
+    skipped_result = {"skipped": True, "reason": "content root unresolvable"}
     captured_err = io.StringIO()
 
     with (
@@ -250,7 +245,6 @@ def test_native_skip_remediation_names_content_root_and_machine_local():
     err = captured_err.getvalue()
     assert "Remediation:" in err, "native skip must print a Remediation block"
     assert "machine-local set repos.content_root" in err
-    assert "CONTENT_ROOT=" in err
 
 
 def test_native_params_contain_required_fields():
@@ -478,9 +472,7 @@ def test_skipped_without_reason_key():
     assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
     # Assert the default fallback string is
     # used when reason key is absent; "warn:" alone is nearly unconditional.
-    # C1 (2026-07-06): lesson-promote now routes central writes to DoE, so the
-    # default fallback is "CONTENT_ROOT unresolvable" (was "CLAUDE_KLABAUTER_ROOT unresolvable").
-    assert "CONTENT_ROOT unresolvable" in captured_err.getvalue(), (
+    assert "content root unresolvable" in captured_err.getvalue(), (
         "default fallback string must appear when reason key absent"
     )
 
@@ -557,64 +549,6 @@ def test_no_retired_transport():
     for pattern in ("coordinator_core.client", "AF_UNIX", "auth_token", "three-state"):
         assert pattern not in source, (
             f"retired transport pattern '{pattern}' must not appear in coordinator-lesson-promote"
-        )
-
-
-class TestInheritedAmbientEnvDoesNotBypassMockedRoute:
-    """klabauter#33's CONTENT_ROOT-gate (immediately above the _cc_route("queue.promote",
-    ...) call in main()) reads os.environ directly and, when it fires, calls
-    legacy_fn() straight through, skipping _cc_route entirely. Every test in this
-    module mocks _cc_route but none of them controlled that env before
-    _clear_ambient_resolution_env existed, so a CONTENT_ROOT already present in the
-    process this suite runs under (a live coordinator-content-repo dev shell, say) would fire
-    the gate ahead of any test's own mocking and land a real write.
-
-    The class-scoped fixture below stands in for that inherited-before-pytest
-    state: class scope is instantiated ahead of the module's function-scoped
-    _clear_ambient_resolution_env, so by the time the test body (and that
-    isolation fixture) run, CONTENT_ROOT is already sitting in os.environ exactly as
-    it would be if the invoking shell had exported it.
-    """
-
-    @pytest.fixture(scope="class", autouse=True)
-    @classmethod
-    def _inherited_shell_export(cls, tmp_path_factory):
-        ambient_root = tmp_path_factory.mktemp("ambient-coordinator-content-repo")
-        prior_content_root = os.environ.get("CONTENT_ROOT")
-        prior_repo_content_root = os.environ.get("REPO_CONTENT_ROOT")
-        os.environ["CONTENT_ROOT"] = str(ambient_root)
-        os.environ.pop("REPO_CONTENT_ROOT", None)
-        try:
-            yield ambient_root
-        finally:
-            if prior_content_root is None:
-                os.environ.pop("CONTENT_ROOT", None)
-            else:
-                os.environ["CONTENT_ROOT"] = prior_content_root
-            if prior_repo_content_root is not None:
-                os.environ["REPO_CONTENT_ROOT"] = prior_repo_content_root
-
-    def test_route_is_still_exercised(self, _inherited_shell_export):
-        fake_result = {"out_path": "/fake/path.yaml"}
-        captured_out = io.StringIO()
-        with (
-            unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
-            unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
-            unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="coordinator-content-repo"),
-            unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
-            unittest.mock.patch("sys.stdout", captured_out),
-        ):
-            rc = _cli_mod.main(_MINIMAL_ARGV)
-
-        assert mock_route.call_count == 1, (
-            "an env inherited from the invoking process must not bypass the mocked _cc_route"
-        )
-        assert rc == 0
-
-        outbox = _inherited_shell_export / "state" / "lessons-outbox"
-        written = list(outbox.glob("*.yaml")) if outbox.is_dir() else []
-        assert written == [], (
-            f"no write may land under an inherited-ambient CONTENT_ROOT; found {written}"
         )
 
 

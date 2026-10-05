@@ -45,7 +45,7 @@ def test_suite_conftest_quarantines_real_home_by_default():
 # The marker means "resolve the real home", scoped by its own docstring to
 # read-only oracles. It used to be read BEFORE the fixture set
 # COORDINATOR_DISABLE_MACHINE_MUTATION, so a marked test got the real home AND
-# no kill switch — the pairing behind the live `.coordinator-content-root` pollution
+# no kill switch — the pairing behind the live content-root pointer pollution
 # (state/bug-backlog/2026-08-26-a-test-writes-the-live-claude-machine-lo-
 # 6cdf6bc87771.yaml). These three pin the three states apart.
 # ---------------------------------------------------------------------------

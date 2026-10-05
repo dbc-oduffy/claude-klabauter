@@ -1882,7 +1882,7 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
     mechanically from `enum`."""
     content_root = resolve_content_root()
     if not content_root:
-        pytest.skip("coordinator-content-repo repo not registered on this machine")
+        pytest.skip("content repo not registered on this machine")
     doe_repo = Path(content_root)
     if not doe_repo.exists():
         pytest.skip(f"DoE repo not found at {doe_repo}")

@@ -4,7 +4,7 @@ run's base.
 A run's delivery diff starts at `run_base_sha`, so a row coded before a resume (on another
 machine, in an earlier run) has no hunk in it and reads as unbacked. `rows_backed_before_base`
 names those rows: `disposition: coded` whose `disposition_ref` commit exists and is an ancestor
-of `run_base_sha`. Two git spawns for the whole spine, never one per row.
+of `run_base_sha` (a `repo_key:` prefix on the ref is stripped). Two git spawns for the whole spine, never one per row.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def rows_backed_before_base(repo_root: Path, plan_path: str, run_base_sha: Optio
     for row in result.rows:
         if not isinstance(row, dict) or row.get("disposition") != "coded":
             continue
-        ref = str(row.get("disposition_ref") or "").strip()
+        ref = str(row.get("disposition_ref") or "").strip().rpartition(":")[2].strip()
         match = _SHA.fullmatch(ref)
         if match and row.get("id"):
             by_ref.setdefault(ref, []).append(str(row["id"]))

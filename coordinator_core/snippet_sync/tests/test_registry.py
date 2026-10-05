@@ -223,7 +223,7 @@ def test_resolve_consumers_sibling_plugin_file_exists_home_fallback_when_no_clau
     tmp_path, monkeypatch
 ):
     """CLAUDE_HOME unset falls back to $HOME, per the established
-    content_root_pointer.py / trusted_root_guard.py convention.
+    content_root.py / trusted_root_guard.py convention.
     """
     fake_home = tmp_path / "plain-home"
     monkeypatch.delenv("CLAUDE_HOME", raising=False)

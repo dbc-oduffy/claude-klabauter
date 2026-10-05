@@ -57,7 +57,7 @@ Windows portability: uses `tempfile.mkstemp(dir=tempfile.gettempdir())` for the
 --check-only scratch file, NOT a hardcoded `/tmp` path (the oracle's own `mktemp
 /tmp/...` would crash a clean Windows install where /tmp does not exist — this is a
 platform-crash-class fix over the literal oracle, matching the identical fix already
-applied in the sibling ports gen_claude_author_launcher.py / gen_content_root_pointer.py).
+applied in the sibling port gen_claude_author_launcher.py).
 
 Transport-failure exit code note (porter-brief addendum § 3b): this module's own
 exit codes are pure CLI-usage/business codes (0 success, 1 failure) — it has no

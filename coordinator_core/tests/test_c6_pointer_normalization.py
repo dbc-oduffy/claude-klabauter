@@ -32,7 +32,7 @@ from typing import Set
 import pytest
 
 from coordinator_core import dag
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 
 from . import _baton_dag_oracle as oracle
 
@@ -358,10 +358,10 @@ class TestReverseEdgeIndexCoverage:
 class TestDifferentialOracleAgreement:
     @pytest.mark.real_home
     def test_content_root_predecessor_family(self):
-        content_root = read_content_root_pointer()
+        content_root = read_content_root()
         if not content_root or not os.path.isdir(os.path.join(content_root, "state", "handoffs")):
             pytest.skip(
-                "coordinator-content-repo root not resolvable via read_content_root_pointer() on this "
+                "content root not resolvable via read_content_root() on this "
                 "machine — this cross-repo differential check requires a coordinator-content-repo "
                 "sibling checkout and is not part of the portable pytest surface."
             )
@@ -369,10 +369,10 @@ class TestDifferentialOracleAgreement:
 
     @pytest.mark.real_home
     def test_content_root_origin_handoff_family(self):
-        content_root = read_content_root_pointer()
+        content_root = read_content_root()
         if not content_root or not os.path.isdir(os.path.join(content_root, "state", "handoffs")):
             pytest.skip(
-                "coordinator-content-repo root not resolvable via read_content_root_pointer() on this "
+                "content root not resolvable via read_content_root() on this "
                 "machine — this cross-repo differential check requires a coordinator-content-repo "
                 "sibling checkout and is not part of the portable pytest surface."
             )

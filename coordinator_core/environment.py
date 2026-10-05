@@ -138,6 +138,8 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
     `state/` and more — materially installed — it read "not installed" because
     `settings.json` happened to be absent.
     """
+    from coordinator_core.content_root import POINTER_NAME
+
     home = _settings_home(env)
     if home is None:
         return _cap("engine_installed", True, "settings home unresolvable; assuming installed", env)
@@ -146,7 +148,7 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
         for name, p in (
             ("settings.json", home / "settings.json"),
             ("machine-local/", home / "machine-local"),
-            (".coordinator-content-root", home / ".coordinator-content-root"),
+            (POINTER_NAME, home / POINTER_NAME),
         )
         if p.exists()
     ]
@@ -155,7 +157,7 @@ def _probe_engine_installed(env: Mapping[str, str]) -> Capability:
     return _cap(
         "engine_installed",
         False,
-        f"{home} carries none of settings.json, machine-local/, .coordinator-content-root",
+        f"{home} carries none of settings.json, machine-local/, {POINTER_NAME}",
         env,
     )
 

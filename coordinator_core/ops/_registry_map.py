@@ -134,7 +134,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.assert_em_role":                   "coordinator_core.hooks",
     "hooks.sweep_boot":                       "coordinator_core.hooks",
     "hooks.session_start_announce_job_mode":  "coordinator_core.hooks",
-    "hooks.session_start_register_content_root_root": "coordinator_core.hooks",
     "hooks.session_start_register_published_engine": "coordinator_core.hooks",
     "hooks.session_start_repin_cloud_engine_root": "coordinator_core.hooks",
     "hooks.session_start_watch_presence":     "coordinator_core.hooks",

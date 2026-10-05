@@ -994,7 +994,7 @@ def _verify_disposition_ref(
 #: above stays the same-repo-only check `_disposition_ref_evidence` and
 #: every `disposition_ref` caller uses). `<repo>` is a bare machine-local
 #: registry key (`registry_get("repos.<repo>")`, the same resolution rung
-#: `discover_working_repos`/`ensure_doe_clone` already use for a sibling
+#: `discover_working_repos` already uses for a sibling
 #: repo lookup) -- never a filesystem path, so a plan file never embeds a
 #: machine-specific path. Defined in `falsifier_shape` (re-export note
 #: above) -- same "used before its import line runs, safe at module-load

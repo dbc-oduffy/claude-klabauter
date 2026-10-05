@@ -16,14 +16,15 @@ Trust boundary: a resolved root is trusted iff it sits under one of five
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
      descendants only — that directory is a container, never a plugin root,
-  2. the DoE clone at the ``.coordinator-content-root`` sentinel's content, read registry-first
+  2. the content clone at the content-root pointer's content, read registry-first
      per DR-071 (2026-07-22 — the settings-home machine-local registry key
      ``repos.content_root`` is the canonical, authoritative coordinator-root
-     anchor; the ``.coordinator-content-root`` file is a demoted, non-authoritative mirror),
+     anchor; the pointer file is a demoted, non-authoritative mirror),
      with the durable/legacy file rungs retained as fallbacks:
      ``repos.content_root`` registry key first, then
      ``<settings-home>/machine-local/.coordinator-content-root``, then
-     ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``,
+     ``${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root``, each then
+     retried under the pre-rename pointer name an un-migrated box carries,
   3. the registry-resolved claude-klabauter root (2026-07-22 — the settings-home
      machine-local registry key ``repos.claude_klabauter``, the same anchor
      ``coordinator_core.engine_root.coordinator_engine_root()`` resolves for
@@ -35,7 +36,7 @@ anchors:
      own repo as untrusted, or
   4. the registry-resolved coordinator plugin mirror
      (``plugin.mirrors.coordinator-claude.live_path``) — the SERVED plugin
-     tree, which is a different thing from the DoE authoring checkout anchor
+     tree, which is a different thing from the authoring checkout anchor
      2 names and needs its own anchor wherever the two diverge (a cloud
      container serves a flat published mirror while ``repos.content_root``
      names an authoring tree that carries the doctrine corpus the mirror does
@@ -79,7 +80,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.machine_resolver import _flatten, _load_toml
+from coordinator_core.content_root import _LEGACY_POINTER, POINTER_NAME
+from coordinator_core.machine_resolver import _CONTENT_ROOT_KEY_PAIR, _flatten, _load_toml
 
 
 class UntrustedRootError(RuntimeError):
@@ -140,8 +142,8 @@ def _home_from_env(env: dict) -> str:
 
 def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
     found = _registry_key_exact(settings_home_dir, key)
-    if found is None and key == CONTENT_ROOT_KEY:
-        found = _registry_key_exact(settings_home_dir, CONTENT_ROOT_KEY)
+    if found is None and key in _CONTENT_ROOT_KEY_PAIR:
+        found = _registry_key_exact(settings_home_dir, _CONTENT_ROOT_KEY_PAIR[key])
     return found
 
 
@@ -160,12 +162,11 @@ def _registry_key_exact(settings_home_dir: str, key: str) -> Optional[str]:
 
 
 CONTENT_ROOT_KEY = "repos.content_root"
-CONTENT_ROOT_KEY = "repos.content_root"  # private-name-ok: compat-fallback
 CLAUDE_KLABAUTER_KEY = "repos.claude_klabauter"
 
 
 #: The registry key naming the coordinator plugin tree a machine SERVES, as
-#: distinct from `repos.content_root`, which names the coordinator-content-repo authoring
+#: distinct from `repos.content_root`, which names the content authoring
 #: checkout. On a workstation both spellings resolve to one tree and the
 #: distinction is invisible; where they diverge, only this key can say which
 #: directory a session's `CLAUDE_PLUGIN_ROOT` legitimately came from.
@@ -246,7 +247,7 @@ def _published_engine_root_rungs(env: dict) -> list[tuple[str, str]]:
 
 def _claude_klabauter_root(env: dict) -> str:
     """Read the registry-resolved claude-klabauter root — same shape as ``_content_root``
-    above, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
+    below, minus the legacy ``${CLAUDE_HOME:-$HOME}/.claude/`` rung (claude-klabauter
     has no such legacy sentinel; ``coordinator_core.engine_root.
     coordinator_engine_root()`` is the in-process analog for callers that
     also want the ``CLAUDE_KLABAUTER_ROOT`` env-var rung and the machine-local CLI
@@ -280,17 +281,19 @@ def _claude_klabauter_root(env: dict) -> str:
 
 
 def _content_root(env: dict) -> str:
-    """Read the ``.coordinator-content-root`` sentinel content, trailing-slash normalized.
+    """Read the content-root pointer content, trailing-slash normalized.
 
     Registry-first per DR-071 (2026-07-22 — the settings-home machine-local
     registry key ``repos.content_root`` is the canonical, authoritative
-    coordinator-root anchor; ``.coordinator-content-root`` is a demoted, non-authoritative
+    coordinator-root anchor; the pointer file is a demoted, non-authoritative
     mirror), durable-file-then-legacy-file fallback (Port of:
     coordinator-trusted-root-guard.sh (DoE bd8cc0e9, 2026-07-22),
     updated for DR-071):
-        1. registry ``repos.content_root``                    (canonical anchor)
-        2. <settings-home>/machine-local/.coordinator-content-root          (durable file mirror)
-        3. ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root          (legacy fallback)
+        1. registry ``repos.content_root``                   (canonical anchor)
+        2. <settings-home>/machine-local/<pointer>           (durable file mirror)
+        3. ${CLAUDE_HOME:-$HOME}/.claude/<pointer>           (legacy fallback)
+    where ``<pointer>`` is the content-root pointer name, retried under the
+    pre-rename name for a box that has not migrated.
     Mirrors the bash ``cat ... || true`` (missing sentinel -> empty string)
     plus the single trailing-slash strip (``${_cc_doe%/}``) for the two file
     rungs; the registry rung short-circuits before that normalization matters
@@ -314,7 +317,7 @@ def _content_root(env: dict) -> str:
         if registry_value:
             content = registry_value
 
-    for pointer_name in (".coordinator-content-root", ".coordinator-content-root"):
+    for pointer_name in (POINTER_NAME, _LEGACY_POINTER):
         if not content and settings_home_dir:
             durable = os.path.join(settings_home_dir, "machine-local", pointer_name)
             try:
@@ -339,7 +342,7 @@ def _norm(p: str) -> str:
     """Normalize a path for TEXTUAL prefix comparison on Windows only.
 
     On Windows the same location is spelled inconsistently across the anchors
-    this guard compares: ``.coordinator-content-root`` is written with forward slashes
+    this guard compares: the content-root pointer is written with forward slashes
     (``C:/coordinator-content-repo``) while ``CLAUDE_PLUGIN_ROOT`` arrives with backslashes
     (``C:\\coordinator-content-repo\\coordinator``), and the filesystem is case-insensitive.
     Without normalization the DoE-clone anchor can never match and the guard
@@ -361,29 +364,30 @@ def _content_root_rungs(env: dict) -> list[tuple[str, str]]:
     rungs: list[tuple[str, str]] = []
 
     if settings_home_dir:
-        rungs.append(("registry repos.content_root", _registry_key(settings_home_dir, CONTENT_ROOT_KEY) or "<absent>"))
+        rungs.append((f"registry {CONTENT_ROOT_KEY}", _registry_key(settings_home_dir, CONTENT_ROOT_KEY) or "<absent>"))
     else:
-        rungs.append(("registry repos.content_root", "<skipped: settings-home dir resolved empty>"))
+        rungs.append((f"registry {CONTENT_ROOT_KEY}", "<skipped: settings-home dir resolved empty>"))
 
-    if settings_home_dir:
-        durable = os.path.join(settings_home_dir, "machine-local", ".coordinator-content-root")
-        try:
-            with open(durable, "r", encoding="utf-8") as f:
-                rungs.append((f"file {durable}", f.read().rstrip("\n") or "<absent>"))
-        except OSError:
-            rungs.append((f"file {durable}", "<absent>"))
-    else:
-        rungs.append(("<settings-home>/machine-local/.coordinator-content-root", "<skipped: settings-home dir resolved empty>"))
+    for pointer_name in (POINTER_NAME, _LEGACY_POINTER):
+        if settings_home_dir:
+            durable = os.path.join(settings_home_dir, "machine-local", pointer_name)
+            try:
+                with open(durable, "r", encoding="utf-8") as f:
+                    rungs.append((f"file {durable}", f.read().rstrip("\n") or "<absent>"))
+            except OSError:
+                rungs.append((f"file {durable}", "<absent>"))
+        else:
+            rungs.append((f"<settings-home>/machine-local/{pointer_name}", "<skipped: settings-home dir resolved empty>"))
 
-    if home:
-        sentinel = os.path.join(home, ".claude", ".coordinator-content-root")
-        try:
-            with open(sentinel, "r", encoding="utf-8") as f:
-                rungs.append((f"legacy file {sentinel}", f.read().rstrip("\n") or "<absent>"))
-        except OSError:
-            rungs.append((f"legacy file {sentinel}", "<absent>"))
-    else:
-        rungs.append(("legacy ${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root", "<skipped: home resolved empty>"))
+        if home:
+            sentinel = os.path.join(home, ".claude", pointer_name)
+            try:
+                with open(sentinel, "r", encoding="utf-8") as f:
+                    rungs.append((f"legacy file {sentinel}", f.read().rstrip("\n") or "<absent>"))
+            except OSError:
+                rungs.append((f"legacy file {sentinel}", "<absent>"))
+        else:
+            rungs.append((f"legacy ${{CLAUDE_HOME:-$HOME}}/.claude/{pointer_name}", "<skipped: home resolved empty>"))
 
     return rungs
 
@@ -417,7 +421,7 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
         f"  settings-home dir:       {settings_home_dir!r}"
         + _flag(settings_home_dir, "skips every registry/durable-file rung below"),
         f"  marketplace anchor:      {trusted_prefix!r}",
-        f"  content_root resolved to:    {content_root!r}"
+        f"  content_root resolved to: {content_root!r}"
         + _flag(content_root, "every rung below returned nothing"),
     ]
     for label, val in _content_root_rungs(env):

@@ -2169,18 +2169,18 @@ def _run_probe_launch_chain() -> _ProbeResult:
         )
 
     try:
-        from coordinator_core.ops.coordinator_content_root import coordinator_content_root
+        from coordinator_core.content_root import read_content_root
 
-        content_root = coordinator_content_root()
+        content_root = read_content_root()
     except Exception:
         content_root = None
     if not content_root:
         return _ProbeResult(
             probe=_LAUNCH_CHAIN_PROBE,
             status=_INFO,
-            detail="no DoE clone resolves — not the source-clone launch shape",
+            detail="no content root resolves — not the source-clone launch shape",
             remediation=(
-                "Optional: check out the coordinator-content-repo sibling repo (or set REPO_CONTENT_ROOT) "
+                "Optional: set repos.content_root to a coordinator content checkout "
                 "to enable the launch-chain watch on this machine."
             ),
             required=False,

@@ -214,7 +214,6 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.assert_em_role",
     "coordinator_core.hooks.sweep_boot",
     "coordinator_core.hooks.session_start_announce_job_mode",
-    "coordinator_core.hooks.session_start_register_content_root_root",
     "coordinator_core.hooks.session_start_register_published_engine",
     "coordinator_core.hooks.repin_cloud_engine_root",
     "coordinator_core.hooks.session_start_watch_presence",

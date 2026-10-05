@@ -17,9 +17,9 @@ Pinned against `_resolve_plugin_root_for_machine_local` specifically, NOT
 `coordinator_core.data_root.content_root_for` (claude-klabauter#6 conflict
 resolution, 2026-09-18): `content_root_for` accepts a nested `<root>/coordinator`
 candidate by `isdir` alone, with no plugin-marker probe, which is looser than
-what a machine-local/plugin-dir resolution needs -- `gen_content_root_pointer.py`
-already fails CLOSED on a markerless nested `coordinator/` dir via this same
-engine twin, and the launcher holds to that same, stricter bar.
+what a machine-local/plugin-dir resolution needs -- the engine twin fails
+CLOSED on a markerless nested `coordinator/` dir, and the launcher holds to
+that same, stricter bar.
 
 `content_root_for` is nonetheless still reached from here for ONE narrower
 assertion -- `test_both_twins_declare_the_same_marker_tuple`, which pins that

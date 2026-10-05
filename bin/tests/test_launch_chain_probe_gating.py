@@ -11,7 +11,7 @@ The probe sets `required` PER RESULT, and both halves of that are load-bearing:
   An install that ends by calling itself healthy is the exact failure the probe
   exists to end — it is what happened on 2026-08-14.
 
-- The SKIP paths (no DoE clone resolves — the marketplace population, which never
+- The SKIP paths (no content root resolves — the marketplace population, which never
   has this chain; or a cloud/headless box, where the harness launches sessions and
   no interactive shell exists to carry one, claude-klabauter#29) return
   `required=False`. A skipped REQUIRED probe reduces to
@@ -59,13 +59,13 @@ def _require_module() -> ModuleType:
 
 @pytest.fixture
 def probe_env(tmp_path, monkeypatch):
-    """A sandboxed CLAUDE_HOME with a resolvable DoE clone."""
+    """A sandboxed CLAUDE_HOME with a resolvable content root."""
     shell_dir = tmp_path / ".claude" / "shell"
     shell_dir.mkdir(parents=True)
-    doe = tmp_path / "doe"
-    (doe / "coordinator").mkdir(parents=True)
+    content = tmp_path / "content"
+    (content / "coordinator").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(doe))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(content))
     _pin_locality(monkeypatch, "attended")
     return shell_dir
 
@@ -130,18 +130,18 @@ def test_healthy_shim_passes(probe_env):
     assert mod._local_reduce_overall([r]) == mod._PASS
 
 
-def test_no_doe_clone_skips_without_degrading(probe_env, monkeypatch):
+def test_no_content_root_skips_without_degrading(probe_env, monkeypatch):
     mod = _require_module()
-    import coordinator_core.ops.coordinator_content_root as cdr
+    import coordinator_core.content_root as cr
 
-    monkeypatch.setattr(cdr, "coordinator_content_root", lambda *a, **k: None)
+    monkeypatch.setattr(cr, "read_content_root", lambda: "")
 
     r = mod._run_probe_launch_chain()
 
     assert r.skipped is True
     assert r.required is False, (
         "a skipped REQUIRED probe reduces to DEGRADED — this would degrade every "
-        "install that legitimately has no DoE clone"
+        "install that legitimately has no content root"
     )
     assert mod._local_reduce_overall([r]) == mod._INFO
 

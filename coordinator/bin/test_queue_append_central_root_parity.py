@@ -2,7 +2,7 @@
 test_queue_append_central_root_parity.py — behavioral-parity CHARACTERIZATION test.
 
 Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-queue-append-central-scope-routes-to-claude-klabauter-not-doe.md
-(sibling-filed memo that surfaced the legacy CLI's stale content_root() routing;
+(sibling-filed memo that surfaced the legacy CLI's stale content-root routing;
 this test lands the claude-klabauter-side correction and the regression guard against
 future re-divergence).
 

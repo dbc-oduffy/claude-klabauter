@@ -15,7 +15,7 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 def _drop_settings_home_override(monkeypatch):
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
-    The trust core resolves the DoE root through the `.coordinator-content-root` pointer, whose
+    The trust core resolves the content root through the content-root pointer, whose
     DURABLE rung is ``<settings-home>/machine-local/.coordinator-content-root`` and whose
     settings-home resolver prefers ``COORDINATOR_SETTINGS_HOME`` over the
     CLAUDE_HOME each case sets. The suite-root home quarantine

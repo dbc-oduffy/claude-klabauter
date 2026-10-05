@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core._content_root_primitive import repo_root_from_plugin_root_candidate
 from coordinator_core.data_root import content_root_for
 
 
@@ -46,7 +47,7 @@ def test_a_flat_directory_without_its_plugin_manifest_is_not_a_content_root(tmp_
 
 
 @pytest.mark.parametrize("empty", ["", None])
-def test_an_unresolved_content_root_is_none_never_a_raise(empty):
+def test_an_unresolved_repo_root_is_none_never_a_raise(empty):
     assert content_root_for(empty) is None
 
 
@@ -70,4 +71,21 @@ def test_a_symlinked_content_root_still_resolves(tmp_path):
     link = tmp_path / "linked-coordinator-content-repo"
     link.symlink_to(real)
     assert content_root_for(str(link)) == link / "coordinator"
+
+
+def test_a_plugin_root_candidate_climbs_a_private_content_dir_to_the_repo_root(tmp_path):
+    repo = _flat_mirror(_private_tree(tmp_path / "authoring"))
+    assert repo_root_from_plugin_root_candidate(str(repo / "coordinator")) == str(repo)
+
+
+def test_a_flat_plugin_root_candidate_is_its_own_repo_root(tmp_path):
+    root = _flat_mirror(tmp_path / "coordinator-claude")
+    assert repo_root_from_plugin_root_candidate(str(root) + os.sep) == str(root)
+
+
+def test_an_unrecognised_plugin_root_candidate_falls_back_per_flag(tmp_path):
+    (tmp_path / "foreign").mkdir()
+    candidate = str(tmp_path / "foreign")
+    assert repo_root_from_plugin_root_candidate(candidate) == candidate
+    assert repo_root_from_plugin_root_candidate(candidate, allow_unchanged_fallback=False) == ""
 

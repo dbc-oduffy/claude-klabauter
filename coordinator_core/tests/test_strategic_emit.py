@@ -360,7 +360,7 @@ def _load_frozen_schema():
     if not content_root:
         pytest.skip(
             "No coordinator-content-repo sibling checkout resolvable (env override / machine-local "
-            "registry / .coordinator-content-root pointer all empty) — AC5 structural schema-subset "
+            "registry / content-root pointer all empty) — AC5 structural schema-subset "
             "validation requires the frozen schema from that checkout; skipping."
         )
     if not _FROZEN_SCHEMA_PATH.exists():

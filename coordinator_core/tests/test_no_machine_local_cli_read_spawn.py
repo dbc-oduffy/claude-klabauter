@@ -120,7 +120,6 @@ _SURFACE_MODULES = frozenset(
 # fix is to convert the site and remove its row, never to add rows freely.
 KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
     {
-        "coordinator/bin/classify-legacy-engine-noun-references.py::_resolve_sibling_root",
         "coordinator/bin/claude-author.py::_resolve_doe_clone",
         "coordinator/bin/claude-author.py::_resolve_doe_clone#2",
         "coordinator/bin/coordinator-lesson-add.py::_machine_local_get",
@@ -135,7 +134,6 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
         "coordinator_core/_claude_klabauter_root.py::_machine_local_get",
         "coordinator_core/engine_root.py::coordinator_engine_root",
         "coordinator_core/ops/gen_claude_author_shim.py::main",
-        "coordinator_core/ops/gen_content_root_pointer.py::_resolve_content_root",  # private-name-ok: compat-fallback
         "coordinator_core/ops/repo_bootstrap.py::_machine_local_registry_get",
     }
 )
@@ -168,7 +166,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # as ladder-preserving fallback compositions -- see the 2026-08-16
 # REPOS.* LADDER-LOSS FIX note below for why.
 # C7b converted the four C7 EXCEPTIONS (the content-root resolver op, line 158,
-# `ensure_doe_clone.py:68`, `install_shell_init_guard_seam.py:138`,
+# a retired clone-ensure op, `install_shell_init_guard_seam.py:138`,
 # `verify_ue_overrides.py:121`): each site's own test suite now seeds the
 # machine-local registry FILE (`MACHINE_LOCAL_REGISTRY_DIR` + a scratch
 # `registry.toml`) instead of faking the CLI as a real subprocess-invoked

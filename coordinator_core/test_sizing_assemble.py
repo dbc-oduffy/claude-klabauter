@@ -976,9 +976,9 @@ def test_write_guard_validate_frontmatter_schema_deny_accepts_real_xxl_sizing_ob
     from coordinator_core.testing.content_root import content_root_and_present
     from coordinator_core.write_guards import validate_frontmatter_schema_deny as guard
 
-    content_root, doe_present = content_root_and_present()
-    if not doe_present:
-        pytest.skip("sibling coordinator-content-repo checkout not found")
+    content_root, content_present = content_root_and_present()
+    if not content_present:
+        pytest.skip("content checkout not found")
     monkeypatch.setattr(guard, "read_content_root", lambda: str(content_root))
 
     import yaml

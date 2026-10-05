@@ -49,7 +49,7 @@ def test_doctrine_via_pointer(tmp_path, monkeypatch):
     repo = tmp_path / "Doc"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
-    (claude / ".coordinator-content-root").write_text(str(repo) + "\n")
+    (claude / ".coordinator-content-root").write_text(str(repo) + "\n")  # private-name-ok: upgrade-box fixture
     assert fn.doctrine_repo_name() == "Doc"
 
 
@@ -70,7 +70,7 @@ def test_pointer_without_sentinel_falls_through(tmp_path, monkeypatch):
     claude = _env(tmp_path, monkeypatch, registry=f'"repos.d" = "{doc.as_posix()}"\n')
     repo = tmp_path / "NoSentinel"
     repo.mkdir()
-    (claude / ".coordinator-content-root").write_text(str(repo))
+    (claude / ".coordinator-content-root").write_text(str(repo))  # private-name-ok: upgrade-box fixture
     assert fn.doctrine_repo_name() == "Scanned"
 
 

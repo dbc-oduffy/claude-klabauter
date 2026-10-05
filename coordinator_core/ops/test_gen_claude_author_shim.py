@@ -45,7 +45,7 @@ def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     # COORDINATOR_SETTINGS_HOME outranks CLAUDE_HOME/HOME in
     # `_settings_home.settings_home()`, so leaving it set points the durable
-    # `.coordinator-content-root` rung at the operator's REAL settings home -- the sandbox this
+    # content-root pointer rung at the operator's REAL settings home -- the sandbox this
     # fixture's docstring promises then covers the rc file but not the content-root
     # resolution the graceful-skip case turns on.
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)

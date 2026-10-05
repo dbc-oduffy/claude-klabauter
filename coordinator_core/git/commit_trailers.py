@@ -34,7 +34,7 @@ Mirrors: coordinator/bin/coordinator-prepare-commit-msg (resolution logic,
 verbatim ladder + fail-safe semantics -- including the 2026-07-27
 cross-repo Deliverable-Id fallback added to both files in the same change:
 `_resolve_deliverable_id()` now re-checks coordinator-content-repo's own git-dir, located
-via the `.coordinator-content-root` pointer convention, when the local git-dir's
+via the content-root pointer, when the local git-dir's
 `session-shape.json` lookup misses -- the structural miss for every commit
 landed directly into claude-klabauter under the DoE->claude-klabauter cross-repo write
 grant, since `session-shape.json` is written wherever `/pickup` actually
@@ -85,7 +85,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
-from coordinator_core.content_root_pointer import read_content_root_pointer_file
+from coordinator_core.content_root import read_pointer_files
 from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.session import core as _session_core
 
@@ -163,16 +163,15 @@ def _resolve_session_id(git_dir: str) -> str:
 
 
 def _resolve_content_root() -> str:
-    """Locate coordinator-content-repo's repo root via the `.coordinator-content-root` pointer convention
-    (settings-home machine-local pointer first, then legacy `~/.claude`).
-    Returns "" if neither resolves. No subprocess spawn -- verbatim parity
-    with the hook's `_resolve_content_root()` (2026-07-27 cross-repo-fallback
-    mirror)."""
+    """Locate the content repo's root via the content-root pointer files
+    (settings-home machine-local pointer first, then `~/.claude`).
+    Returns "" if neither resolves. No subprocess spawn -- parity with the
+    hook's resolver (2026-07-27 cross-repo-fallback mirror)."""
     # `expanduser("~")` passed explicitly rather than letting the helper default
     # to ${CLAUDE_HOME:-$HOME}: this runs from a git hook, where CLAUDE_HOME may
     # be set to something unrelated to the pointer's home. Behavior-identical to
     # the inline read this replaced.
-    return read_content_root_pointer_file(os.path.expanduser("~"))
+    return read_pointer_files(os.path.expanduser("~"))
 
 
 #: The one attribution line the engine stamps. Deliberately model-free: a

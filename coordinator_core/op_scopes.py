@@ -116,7 +116,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.assert_em_role":                   "none",
     "hooks.sweep_boot":                       "none",
     "hooks.session_start_announce_job_mode":  "none",
-    "hooks.session_start_register_content_root_root": "none",
     "hooks.session_start_register_published_engine": "none",
     "hooks.session_start_repin_cloud_engine_root": "none",
     "hooks.session_start_watch_presence":     "none",

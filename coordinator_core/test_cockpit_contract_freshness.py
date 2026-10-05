@@ -322,55 +322,25 @@ def test_unexpected_exception_anywhere_degrades_to_unknown_never_raises(monkeypa
 
 
 def test_env_root_ladder_nonexistent_content_root_fails_hard_registry_never_consulted(monkeypatch, tmp_path):
-    """An explicit CONTENT_ROOT that does not exist is a directive, not a hint —
-    resolution fails (UNKNOWN) rather than falling through to REPO_CONTENT_ROOT
-    or the machine-local registry."""
+    """An explicit REPO_CONTENT_ROOT that does not exist is a directive,
+    not a hint — resolution fails (UNKNOWN) rather than falling through to the
+    machine-local registry."""
     bad_path = str(tmp_path / "does-not-exist")
-    monkeypatch.setenv("CONTENT_ROOT", bad_path)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-
-    def _registry_spy():
-        raise AssertionError("registry must never be consulted when CONTENT_ROOT is set but invalid")
-
-    monkeypatch.setattr(ccf.doe_drift, "resolve_doe_clone", _registry_spy)
-
-    entry = ccf.compute_cockpit_contract_freshness()
-
-    assert entry["verdict"] == "UNKNOWN"
-    assert "CONTENT_ROOT" in entry["reason"]
-    assert bad_path in entry["reason"]
-
-
-def test_env_root_ladder_content_root_valid_dir_wins(monkeypatch, tmp_path):
-    monkeypatch.setenv("CONTENT_ROOT", str(tmp_path))
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-
-    resolved = ccf._resolve_content_root_local()
-
-    assert resolved == tmp_path
-
-
-def test_env_root_ladder_content_root_unset_repo_content_root_nonexistent_fails_hard(monkeypatch, tmp_path):
-    bad_path = str(tmp_path / "also-does-not-exist")
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
     monkeypatch.setenv("REPO_CONTENT_ROOT", bad_path)
 
     def _registry_spy():
         raise AssertionError("registry must never be consulted when REPO_CONTENT_ROOT is set but invalid")
 
-    monkeypatch.setattr(ccf.doe_drift, "resolve_doe_clone", _registry_spy)
+    monkeypatch.setattr(ccf, "read_content_root", _registry_spy)
 
     entry = ccf.compute_cockpit_contract_freshness()
 
     assert entry["verdict"] == "UNKNOWN"
     assert "REPO_CONTENT_ROOT" in entry["reason"]
-    assert bad_path in entry["reason"]
+    assert repr(bad_path) in entry["reason"]
 
 
-def test_env_root_ladder_empty_content_root_is_treated_as_unset(monkeypatch, tmp_path):
-    """An empty-string CONTENT_ROOT is UNSET, not a directive — REPO_CONTENT_ROOT
-    still gets to win."""
-    monkeypatch.setenv("CONTENT_ROOT", "")
+def test_env_root_ladder_content_root_valid_dir_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path))
 
     resolved = ccf._resolve_content_root_local()
@@ -378,22 +348,39 @@ def test_env_root_ladder_empty_content_root_is_treated_as_unset(monkeypatch, tmp
     assert resolved == tmp_path
 
 
-def test_env_root_ladder_both_unset_consults_registry(monkeypatch, tmp_path):
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
+def test_env_root_ladder_empty_content_root_is_treated_as_unset(monkeypatch, tmp_path):
+    """An empty-string REPO_CONTENT_ROOT is UNSET, not a directive — the
+    registry ladder still gets to answer."""
+    monkeypatch.setenv("REPO_CONTENT_ROOT", "")
+    monkeypatch.setattr(ccf, "read_content_root", lambda: str(tmp_path))
+
+    resolved = ccf._resolve_content_root_local()
+
+    assert resolved == tmp_path
+
+
+def test_env_root_ladder_env_unset_consults_registry(monkeypatch, tmp_path):
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
 
     calls = []
 
     def _registry():
         calls.append(True)
-        return tmp_path
+        return str(tmp_path)
 
-    monkeypatch.setattr(ccf.doe_drift, "resolve_doe_clone", _registry)
+    monkeypatch.setattr(ccf, "read_content_root", _registry)
 
     resolved = ccf._resolve_content_root_local()
 
     assert resolved == tmp_path
     assert calls == [True]
+
+
+def test_env_root_ladder_unresolved_registry_returns_none(monkeypatch):
+    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.setattr(ccf, "read_content_root", lambda: "")
+
+    assert ccf._resolve_content_root_local() is None
 
 
 def test_brief_carries_the_gate_and_never_raises(monkeypatch):

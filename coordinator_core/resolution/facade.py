@@ -9,8 +9,8 @@ discriminator — never a single generic ``validate_root()`` that would hide
 it:
 
     resolve_operator_config()   — operator-authored, gitignored, per-machine
-                                   config (settings home, claude-klabauter root/bin, DoE
-                                   root). Corruption-checked ONLY: these
+                                   config (settings home, claude-klabauter root/bin,
+                                   content root). Corruption-checked ONLY: these
                                    values are typo'd or stale, never
                                    adversarial, so this method never touches
                                    the trust boundary.
@@ -49,8 +49,8 @@ Negative-spec:
     implementation of that trust-core, tested exactly once
     (``coordinator_core/test_trusted_root_guard.py``).
   - Does NOT author a fourth TOML/sentinel parser — composes the
-    already-shipped readers (``coordinator_core.trusted_root_guard._content_root``
-    / ``._claude_klabauter_root``, which themselves reuse
+    already-shipped readers (``coordinator_core.content_root.read_content_root``
+    and ``coordinator_core.trusted_root_guard._claude_klabauter_root``, which reuse
     ``coordinator_core.machine_resolver._flatten`` / ``._load_toml``) rather
     than re-implementing registry/sentinel resolution here.
 """
@@ -61,8 +61,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from coordinator_core.content_root import migrate_legacy_config, read_content_root
 from coordinator_core.trusted_root_guard import (
-    _content_root,
     _claude_klabauter_root,
     _claude_klabauter_root_rungs,
     _settings_home_dir_from_env,
@@ -100,6 +100,45 @@ def _checked(name: str, value: str) -> str:
     return value
 
 
+_ENV_KEYS_READ = (
+    "CLAUDE_HOME",
+    "HOME",
+    "USERPROFILE",
+    "COORDINATOR_SETTINGS_HOME",
+    "MACHINE_LOCAL_REGISTRY_DIR",
+    "CLAUDE_PLUGIN_ROOT",
+)
+
+
+def _content_root_unchecked(env: dict) -> str:
+    """The content root via ``read_content_root()``, after a legacy migration.
+
+    ``migrate_legacy_config()`` runs first so an empty ``repos.content_root``
+    with a legacy pointer resolves instead of reading as corrupt. ``""`` means
+    unset (a fresh box), which the caller must not treat as corruption.
+    Both readers consult ``os.environ`` only, so a caller-supplied ``env`` is
+    overlaid for the duration of the read and restored after.
+    """
+    if env is os.environ:
+        migrate_legacy_config()
+        return read_content_root()
+    saved = {k: os.environ.get(k) for k in _ENV_KEYS_READ}
+    try:
+        for k in _ENV_KEYS_READ:
+            if k in env:
+                os.environ[k] = env[k]
+            else:
+                os.environ.pop(k, None)
+        migrate_legacy_config()
+        return read_content_root()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def resolve_operator_config(*, env: dict | None = None) -> dict:
     """Resolve the four operator-authored config paths — CORRUPTION-CHECKED
     ONLY, never trust-checked (see module docstring's provenance
@@ -108,14 +147,15 @@ def resolve_operator_config(*, env: dict | None = None) -> dict:
     ``guard_plugin_root``'s exclusive concern (see
     ``coordinator_core/resolution/test_facade.py``'s AC-2 regression test).
 
-    Composes the already-shipped registry/sentinel readers
-    (``trusted_root_guard._content_root``/``._claude_klabauter_root``, themselves built on
-    ``machine_resolver._flatten``/``._load_toml``) rather than re-deriving a
-    fourth parser.
+    Composes the already-shipped readers (``trusted_root_guard._claude_klabauter_root``,
+    built on ``machine_resolver._flatten``/``._load_toml``, and
+    ``content_root.read_content_root``) rather than re-deriving a fourth
+    parser.
 
     Returns a plain dict: ``{settings_home, claude_klabauter_bin, claude_klabauter_root,
     content_root}``. Raises ``OperatorConfigError`` naming the first corrupt
-    value found (checked in that same order).
+    value found (checked in that same order). An unset content root is ``""``,
+    not an error.
     """
     env = os.environ if env is None else env
 
@@ -124,7 +164,9 @@ def resolve_operator_config(*, env: dict | None = None) -> dict:
     claude_klabauter_bin = _checked(
         "claude_klabauter_bin", os.path.join(claude_klabauter_root, "coordinator", "bin")
     )
-    content_root = _checked("content_root", _content_root(env))
+    content_root = _content_root_unchecked(env)
+    if content_root:
+        content_root = _checked("content_root", content_root)
 
     return {
         "settings_home": settings_home,

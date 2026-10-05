@@ -188,10 +188,9 @@ def _import_checker_and_seam():
         sys.path.insert(0, _COORDINATOR_CORE_ROOT)
     from coordinator_core import _settings_home
     from coordinator_core.install import check_install_singularity
-    from coordinator_core.ops import coordinator_content_root
 
     importlib.reload(_settings_home)
-    return _settings_home, check_install_singularity, coordinator_content_root
+    return _settings_home, check_install_singularity
 
 
 def _norm(p):
@@ -200,40 +199,30 @@ def _norm(p):
 
 def test_agreement_pin_claude_home_only(monkeypatch, tmp_path):
     """CLAUDE_HOME set to a $HOME substitute, CLAUDE_CONFIG_DIR unset: mlir,
-    the checker, the canonical seam, and both engine rungs all name
+    the checker, and the canonical seam all name
     <CLAUDE_HOME>/.claude (mod separator normalization)."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    settings_home, checker, content_root_mod = _import_checker_and_seam()
+    settings_home, checker = _import_checker_and_seam()
 
     expected = os.path.join(str(tmp_path), ".claude")
     assert _norm(mlir.claude_home()) == _norm(expected)
     assert _norm(checker._claude_base_dir()) == _norm(expected)
     assert _norm(str(settings_home.claude_config_dir())) == _norm(expected)
 
-    claude_dir = content_root_mod._cf_claude_config_dir_or_none()
-    assert _norm(claude_dir) == _norm(expected)
-    assert _norm(os.path.join(claude_dir, "plugins", "coordinator-claude")) == _norm(
-        os.path.join(expected, "plugins", "coordinator-claude")
-    )
-    assert _norm(
-        os.path.join(claude_dir, "plugins", "cache", "coordinator-claude", "coordinator")
-    ) == _norm(os.path.join(expected, "plugins", "cache", "coordinator-claude", "coordinator"))
-
 
 def test_agreement_pin_claude_config_dir_set(monkeypatch, tmp_path):
-    """CLAUDE_CONFIG_DIR set: mlir, the canonical seam, and both engine rungs
+    """CLAUDE_CONFIG_DIR set: mlir and the canonical seam
     agree on CLAUDE_CONFIG_DIR verbatim; the checker (out of scope, Anti-scope)
     still derives <CLAUDE_HOME>/.claude, pinning the known divergence."""
     config_dir = tmp_path / "harness-config"
     home_substitute = tmp_path / "home-substitute"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("CLAUDE_HOME", str(home_substitute))
-    settings_home, checker, content_root_mod = _import_checker_and_seam()
+    settings_home, checker = _import_checker_and_seam()
 
     assert _norm(mlir.claude_home()) == _norm(str(config_dir))
     assert _norm(str(settings_home.claude_config_dir())) == _norm(str(config_dir))
-    assert _norm(content_root_mod._cf_claude_config_dir_or_none()) == _norm(str(config_dir))
     assert _norm(checker._claude_base_dir()) == _norm(
         os.path.join(str(home_substitute), ".claude")
     )
@@ -246,9 +235,47 @@ def test_agreement_pin_planted_violation_self_check(monkeypatch, tmp_path):
     exists to catch."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
-    settings_home, checker, content_root_mod = _import_checker_and_seam()
+    settings_home, checker = _import_checker_and_seam()
 
     monkeypatch.setattr(mlir, "claude_home", lambda: os.environ["CLAUDE_HOME"])
     expected = os.path.join(str(tmp_path), ".claude")
     assert _norm(mlir.claude_home()) != _norm(expected)
     assert _norm(mlir.claude_home()) == _norm(str(tmp_path))
+
+
+def _pointer_env(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    settings = tmp_path / "settings"
+    (settings / "machine-local").mkdir(parents=True)
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
+    return home, settings
+
+
+def test_read_content_root_pointer_prefers_settings_home_content_root_name(monkeypatch, tmp_path):
+    home, settings = _pointer_env(monkeypatch, tmp_path)
+    (settings / "machine-local" / mlir._CONTENT_ROOT_POINTER).write_text("/durable\n", encoding="utf-8")
+    (home / ".claude" / mlir._CONTENT_ROOT_POINTER).write_text("/home-level\n", encoding="utf-8")
+    assert mlir.read_content_root_pointer() == "/durable"
+
+
+def test_read_content_root_pointer_falls_back_to_claude_home_then_pre_rename_name(monkeypatch, tmp_path):
+    home, settings = _pointer_env(monkeypatch, tmp_path)
+    (settings / "machine-local" / mlir._LEGACY_ROOT_POINTER).write_text("/pre-rename\n", encoding="utf-8")
+    assert mlir.read_content_root_pointer() == "/pre-rename"
+    (home / ".claude" / mlir._CONTENT_ROOT_POINTER).write_text("/home-level\n", encoding="utf-8")
+    assert mlir.read_content_root_pointer() == "/home-level"
+
+
+def test_read_content_root_pointer_returns_empty_when_nothing_resolves(monkeypatch, tmp_path):
+    _pointer_env(monkeypatch, tmp_path)
+    assert mlir.read_content_root_pointer() == ""
+
+
+def test_read_content_root_pointer_returns_empty_without_a_home(monkeypatch, tmp_path):
+    for name in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    assert mlir.read_content_root_pointer() == ""

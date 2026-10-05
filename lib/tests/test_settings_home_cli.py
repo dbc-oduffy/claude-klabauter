@@ -28,15 +28,15 @@ CLAUDE_HOME_PY = _REPO_ROOT / "coordinator" / "lib" / "claude-home" / "_claude_h
 # sibling repo now — same cross-repo boundary as detect-hardware.sh/
 # spawn-hidden.sh's caller class (this repo's own CLAUDE.md: "Discovery-
 # resolved surfaces ... belong in coordinator-claude, not here"). T6-T8
-# resolve it via the coordinator-content-repo root pointer and skip (not fail) when that
+# resolve it via the content-root resolver and skip (not fail) when that
 # sibling checkout is unavailable on this machine.
 _CLI_REL = "coordinator/templates/bin/coordinator-settings-home"
 
 
 def _resolve_cli() -> Path | None:
-    from coordinator_core.content_root_pointer import read_content_root_pointer
+    from coordinator_core.content_root import read_content_root
 
-    content_root = read_content_root_pointer()
+    content_root = read_content_root()
     if not content_root:
         return None
     candidate = Path(content_root) / _CLI_REL
@@ -59,7 +59,7 @@ def _run_cli(fake_home: Path, subcmd: str | None = None, extra_env: dict[str, st
     cli = _resolve_cli()
     if cli is None:
         pytest.skip(
-            "coordinator-content-repo root not resolvable via coordinator_core.content_root_pointer "
+            "coordinator-content-repo root not resolvable via coordinator_core.content_root "
             "on this machine (or the resolver is missing there) — the CLI this "
             "test targets is not vendored in claude-klabauter; not a defect in "
             "claude-klabauter."

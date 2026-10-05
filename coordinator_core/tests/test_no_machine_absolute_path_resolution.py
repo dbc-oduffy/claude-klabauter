@@ -372,7 +372,7 @@ def _format(findings: List[ResolutionFinding]) -> str:
     lines.append("")
     lines.append(
         "Resolve through the ladder instead: `Path(__file__).resolve().parents[N]` "
-        "for this repo's own root, `read_content_root_pointer()` for the DoE sibling, "
+        "for this repo's own root, `read_content_root()` for the content sibling, "
         "`machine_resolver` for a registered repo."
     )
     return "\n".join(lines)

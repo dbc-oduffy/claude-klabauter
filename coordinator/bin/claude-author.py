@@ -520,9 +520,9 @@ def _resolve_plugin_root(coord_path: str) -> str | None:
     `isdir` alone the way `coordinator_core.data_root.content_root_for` does
     for its own, looser, ~45-call-site "content root" question — a nested
     `coordinator/` dir with no plugin payload in it is not a clone this
-    launcher can resolve `--plugin-dir` against, and `gen_content_root_pointer.py`
-    already fails CLOSED on exactly that shape via the same engine twin this
-    function mirrors (claude-klabauter#6 conflict resolution, 2026-09-18).
+    launcher can resolve `--plugin-dir` against; the engine twin this function
+    mirrors fails CLOSED on exactly that shape (claude-klabauter#6 conflict
+    resolution, 2026-09-18).
     """
     if not coord_path:
         # An unresolved root joined onto "coordinator" is a cwd-relative path,
@@ -650,8 +650,8 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
     # deriving a cwd-relative path). This wrapper is installed STANDALONE (see
     # file header), so it cannot assume a co-located resolver lib; the fixed-path
     # shim is position-independent by design and solves that chicken-and-egg. The
-    # shim reads the COLD `.coordinator-content-root` pointer (settings-home/machine-local/.coordinator-content-root
-    # or ~/.claude/.coordinator-content-root) as well as the flat-layout OSS rung, so a WIPED
+    # shim reads the COLD `.coordinator-content-root` pointer (settings-home/machine-local
+    # or ~/.claude) as well as the flat-layout OSS rung, so a WIPED
     # `repos.content_root` registry key — which the install-dogfood churn clears
     # intermittently — still resolves the clone here. Only reached when the
     # registry rungs above yielded nothing, preserving rungs 1-2 exactly as before.

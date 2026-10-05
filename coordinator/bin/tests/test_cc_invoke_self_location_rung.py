@@ -15,7 +15,7 @@ unpatched ladder just by hitting an earlier rung. Every case below therefore
 runs cc_invoke.py as a SUBPROCESS under a from-scratch environment: HOME
 redirected to a fresh empty temp directory (so the settings-home and
 claude-home mirrors both resolve to nonexistent paths — no ambient pointer
-file, no ambient registry impl reachable) and every CLAUDE_KLABAUTER_ROOT/CONTENT_ROOT/
+file, no ambient registry impl reachable) and every CLAUDE_KLABAUTER_ROOT/
 REPO_*/CLAUDE*/COORDINATOR_* variable dropped from the child's env by
 construction (the env dict is built explicitly, never inherited from
 `os.environ`).
@@ -78,14 +78,14 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 _DROP_PREFIXES = ("REPO_", "CLAUDE", "COORDINATOR_")
-_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "CONTENT_ROOT")
+_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT",)
 
 
 def _hermetic_child_env(isolated_home: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Build a from-scratch child env: HOME/USERPROFILE/CLAUDE_HOME anchored
     to a fresh empty directory, PATH/SYSTEMROOT passed through (needed to
     launch the child interpreter at all on Windows), and every
-    CLAUDE_KLABAUTER_ROOT/CONTENT_ROOT/REPO_*/CLAUDE*/COORDINATOR_* key from the AMBIENT
+    CLAUDE_KLABAUTER_ROOT/REPO_*/CLAUDE*/COORDINATOR_* key from the AMBIENT
     os.environ deliberately left OUT — this dict is built from a minimal
     passthrough set, never from `dict(os.environ)`, so there is nothing to
     strip: absence is the starting state, not a post-hoc deletion.

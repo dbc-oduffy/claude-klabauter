@@ -128,8 +128,7 @@ _FORWARD_SLASH_SCOPE = (
     "coordinator_core/trusted_root_guard.py",
     "coordinator/lib/settings_home.py",
     "coordinator_core/_settings_home.py",
-    "coordinator_core/content_root_pointer.py",
-    "coordinator_core/read_content_root_pointer.py",
+    "coordinator_core/content_root.py",
 )
 
 

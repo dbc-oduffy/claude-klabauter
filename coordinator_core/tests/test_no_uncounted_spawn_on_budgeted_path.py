@@ -1394,10 +1394,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/session_start_guard_plane_check.py",
         ("_handler",),
     ),
-    "hooks.session_start_register_content_root_root": (
-        "coordinator_core/hooks/session_start_register_content_root_root.py",
-        ("_handler",),
-    ),
     "hooks.session_start_register_published_engine": (
         "coordinator_core/hooks/session_start_register_published_engine.py",
         ("_handler",),
@@ -6677,7 +6673,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.propagate": 3,
     "plugin_health.forwarder_drift": 2,
     "release.cut_tag": 2,
-    # Lowered 2 -> 1 2026-10-02: 8e979f0826 swapped the content-root resolver for read_content_root.
+    # Lowered 2 -> 1 2026-10-02: 8e979f0826 swapped the legacy root resolver for read_content_root.
     "repo_setup.copy_console_subprocess_tripwire": 1,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,

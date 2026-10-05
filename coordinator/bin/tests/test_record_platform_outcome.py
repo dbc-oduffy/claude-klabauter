@@ -3,7 +3,7 @@ for the C1 platform-outcome schema).
 
 Invokes the CLI as a real subprocess (`sys.executable <path> --surface ... --command
 ... --exit-code ...`) against a scratch git repo standing in for the surface-providing
-repo (`CONTENT_ROOT` env override), and asserts the emitted record:
+repo (`MACHINE_LOCAL_REPOS_CONTENT_ROOT` env override), and asserts the emitted record:
   1. lands at the schema's RECORD LOCATION convention:
      <surface_root>/state/platform-outcomes/<platform>/<machine>/<surface>.yaml
   2. is schema-valid against `coordinator/schemas/platform-outcome.schema.json` —
@@ -72,10 +72,13 @@ def _load_cli(path: Path, module_name: str):
 
 
 _cli = _load_cli(_CLI_PATH, "record_platform_outcome")
+# The CLI binds the engine lazily, so loading it no longer imports
+# coordinator_registry; bootstrap explicitly.
+_cli._bootstrap_engine()
 
-# coordinator_registry is now import-time-resolvable (repo split, 4f74656c):
-# loading the CLI above pulled it into sys.modules already having walked its
-# own CONTENT_ROOT/REPO_CONTENT_ROOT/machine-local rungs against this process's
+# coordinator_registry is import-time-resolvable (repo split, 4f74656c):
+# bootstrapping the CLI above pulled it into sys.modules already having walked its
+# own content-root override/machine-local rungs against this process's
 # ambient env, so reuse its resolved manifest path rather than re-deriving
 # the schemas/ location — the real schemas dir is wherever that landed.
 _REAL_MANIFEST_PATH = Path(sys.modules["coordinator_registry"]._MANIFEST_PATH)
@@ -156,10 +159,9 @@ def _setup_surface(tmp_path):
     surface_root = str(tmp_path / "surface-repo")
     os.makedirs(surface_root)
     surface_sha = _init_scratch_repo(surface_root)
-    # _run_cli() points CONTENT_ROOT at surface_root, which coordinator_registry's
-    # own import-time manifest bootstrap also reads (CONTENT_ROOT wins over the
-    # ambient REPO_CONTENT_ROOT alias by design — same precedence as content_root()).
-    # A scratch stand-in for "the DoE/coordinator repo" must therefore carry
+    # _run_cli() points the content-root override at surface_root, which
+    # coordinator_registry's own import-time manifest bootstrap also reads.
+    # A scratch stand-in for "the coordinator content repo" must therefore carry
     # the schemas/ manifest too, or the CLI subprocess dies at import with an
     # install-integrity FileNotFoundError before ever reaching the surface
     # logic under test.
@@ -171,7 +173,8 @@ def _setup_surface(tmp_path):
 
 def _run_cli(surface_root, *, surface: str, command: str, exit_code: int) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["CONTENT_ROOT"] = surface_root
+    env["MACHINE_LOCAL_REPOS_CONTENT_ROOT"] = surface_root
+    env["REPO_CONTENT_ROOT"] = surface_root
     env["COORDINATOR_MACHINE"] = "test-machine"
     # Isolate the machine-local registry rung so a real developer machine's
     # coordinator.machine_slug can never leak in and override COORDINATOR_MACHINE
@@ -255,35 +258,33 @@ def test_invalid_surface_rejected(tmp_path) -> None:
 def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
     """Regression: an ambient `COORDINATOR_SETTINGS_HOME` (ubiquitous in any real
     coordinator-plugin session) previously survived this test's env scrub. Its
-    `machine-local/.coordinator-content-root` pointer resolved to the REAL checkout, so the CLI
+    `machine-local` content-root pointer resolved to the REAL checkout, so the CLI
     wrote a genuine record into the real repo's `state/platform-outcomes/`
     instead of raising — the exact opposite of what this test asserts. Every
-    rung that can resolve `content_root()` must be isolated, not just the two env
+    rung that can resolve `content_root()` must be isolated, not just the env
     aliases and `CLAUDE_HOME`."""
     surface_root, _surface_sha = _setup_surface(tmp_path)
     env = dict(os.environ)
-    env.pop("CONTENT_ROOT", None)
-    # REPO_CONTENT_ROOT is the ambient alias content_root() also checks (d5e22cb2) —
-    # left set, it resolves the real coordinator-content-repo clone regardless of the
-    # MACHINE_LOCAL_IMPL stub below, defeating the "fully unresolvable" premise
-    # this test exists to cover.
+    env.pop("MACHINE_LOCAL_REPOS_CONTENT_ROOT", None)
+    # REPO_CONTENT_ROOT is an ambient alias the registry also checks — left set,
+    # it resolves the real clone regardless of the MACHINE_LOCAL_IMPL stub
+    # below, defeating the "fully unresolvable" premise this test exists to cover.
     env.pop("REPO_CONTENT_ROOT", None)
     stub = str(tmp_path / "_machine_local_stub.py")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")
     env["MACHINE_LOCAL_IMPL"] = stub
-    # CLAUDE_HOME must also be isolated: content_root()'s codename-free rungs
-    # (`.coordinator-content-root` pointer file, marketplace-cache, flat plugin layout) all
+    # CLAUDE_HOME must also be isolated: content_root()'s pointer-file,
+    # marketplace-cache and flat plugin layout rungs all
     # derive their candidate paths from claude_home() independent of the
     # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
-    # ~/.claude/.coordinator-content-root (or <settings-home>/machine-local/.coordinator-content-root)
-    # resolves the real coordinator-content-repo clone and defeats the "fully unresolvable"
-    # premise this test exists to cover, exactly like the REPO_CONTENT_ROOT
-    # leak the comment above already guards against.
+    # content-root pointer file resolves the real clone and defeats the
+    # "fully unresolvable" premise this test exists to cover, exactly like
+    # the REPO_CONTENT_ROOT leak the comment above already guards against.
     env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
     # COORDINATOR_SETTINGS_HOME wins settings_home()'s FIRST rung, ahead of
     # CLAUDE_HOME entirely — an ambient value (present in every real
-    # coordinator session) would let the settings-home `.coordinator-content-root` pointer
+    # coordinator session) would let the settings-home content-root pointer
     # resolve to the real checkout regardless of the CLAUDE_HOME override
     # above. Must be isolated to a nonexistent path, not merely popped (an
     # unset var falls back to CLAUDE_HOME, which is already isolated, but
@@ -303,7 +304,7 @@ def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
         **no_console_creationflags(),
     )
     assert result.returncode != 0
-    assert "CONTENT_ROOT" in result.stderr
+    assert "repos.content_root" in result.stderr
     # Cheap guard: this test's whole premise is "no record gets written
     # anywhere" — assert the surface_root's own state/ tree was never
     # created (would-be evidence of a write landing somewhere unintended).

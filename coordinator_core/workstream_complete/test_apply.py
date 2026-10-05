@@ -2910,7 +2910,7 @@ _ZERO_SPAWN_IMPORT_SCRIPT = (
 
 
 def _live_doe_repo_root() -> Optional[str]:
-    """The coordinator-content-repo repo root this box's ladder actually resolves to, if
+    """The content repo root this box's ladder actually resolves to, if
     any — never a hardcoded path (a hardcoded box-specific path is wrong on
     every other host). `resolve_plugin_cli_script_root()` returns
     `<root>/coordinator/bin`; its grandparent is the repo root."""
@@ -2933,11 +2933,11 @@ def test_first_import_of_apply_costs_zero_process_spawns(use_resolvable_env: boo
     env = dict(os.environ)
     content_root = _live_doe_repo_root() if use_resolvable_env else None
     if use_resolvable_env and content_root is None:
-        pytest.skip("no resolvable coordinator-content-repo clone on this box")
+        pytest.skip("no resolvable content clone on this box")
     if content_root:
-        env["REPO_CONTENT_ROOT"] = content_root
+        env["MACHINE_LOCAL_REPOS_CONTENT_ROOT"] = content_root
     else:
-        env.pop("REPO_CONTENT_ROOT", None)
+        env.pop("MACHINE_LOCAL_REPOS_CONTENT_ROOT", None)
     repo_root = Path(__file__).resolve().parents[2]
 
     proc = subprocess.run(

@@ -5,7 +5,7 @@ on Windows: ``os.path.expanduser("~")`` prefers ``USERPROFILE``, then
 ``HOMEDRIVE``+``HOMEPATH``, and only falls back to ``HOME`` when all three are
 absent. Since ``USERPROFILE`` is always set on Windows, a HOME-only sandbox
 silently resolves to the real user profile — which is how this suite came to
-overwrite the live ``~/.claude/.coordinator-content-root`` on three machines (2026-07-20).
+overwrite the live ``~/.claude`` content-root pointer on three machines (2026-07-20).
 
 Use :func:`sandbox_home` anywhere a test needs the code under test to resolve
 ``~`` to a directory the test controls. The repo-root ``conftest.py`` applies

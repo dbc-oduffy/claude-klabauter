@@ -9,8 +9,8 @@ This test file is the ONLY place in this pair permitted to import
 `coordinator_core` — it is the parity oracle. `machine_local_impl_resolve.py`
 itself MUST NOT (see that module's docstring, HARD CONSTRAINT).
 
-Spec backlink: state/dispatch-briefs/2026-08-20-content-root-rung-2-stops-
-spawning/C1.md.
+Spec backlink: the 2026-08-20 dispatch brief for the rung-2 registry read
+that stops spawning (C1).
 """
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def test_parity_repos_key_normalizes_backslash_form(monkeypatch, tmp_path):
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
-        r'"repos.content_root" = "C:\\coordinator-content-repo\\worktree"' + "\n",
+        r'"repos.content_root" = "C:\\content-root\\worktree"' + "\n",  # abs-path-ok: synthetic fixture value
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     mine = mlir.registry_get("repos.content_root")
@@ -178,11 +178,11 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
-        '"repos.content_root" = "/x/coordinator-content-repo"\n',
+        '"repos.content_root" = "/x/content-root"\n',
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     mine = mlir.registry_get("repos.content_root")
-    assert mine == "C:/coordinator-content-repo"
+    assert mine == "C:/content-root"  # abs-path-ok: synthetic fixture value
 
     # PINNED DIVERGENCE (see module docstring's "Two divergences... ACCEPTED"
     # list, item 3): the oracle does no normalization anywhere in its body and
@@ -191,7 +191,7 @@ def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_pat
     # explicitly rather than leaving it merely unasserted (which is what let
     # this exact case go unpinned before this test was extended).
     theirs = machine_resolver.registry_get("repos.content_root")
-    assert theirs == "/x/coordinator-content-repo"
+    assert theirs == "/x/content-root"
     assert mine != theirs
 
 

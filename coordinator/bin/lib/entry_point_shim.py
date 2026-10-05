@@ -706,7 +706,7 @@ _load_module._counter = 0  # type: ignore[attr-defined]
 
 # --- GATE family (check-*/verify-*/assert-*), chunk C10 ---
 #
-# 59 entry points, one dispatcher (coordinator-gate.py). Same shim mechanism
+# 58 entry points, one dispatcher (coordinator-gate.py). Same shim mechanism
 # as ASSEMBLE_TARGETS above (in-process, no subprocess), but this family is
 # far less uniform than the 14 `-assemble` entries: at least four distinct
 # CLI-trampoline shapes coexist (a `cli_entry.run_op_main` wrapper with
@@ -773,7 +773,6 @@ GATE_TARGETS = (
     "verify-arch-audit-atlas-refresh",
     "verify-coverage",
     "verify-dist-publish-repo-sync",
-    "verify-content-root-seam-sync",
     "verify-no-console-flash",
     "verify-no-powershell-flash",
     "verify-orientation-cache-sync",
@@ -790,7 +789,7 @@ GATE_TARGETS = (
     "verify-ue-overrides",
 )
 
-assert len(GATE_TARGETS) == 59, f"expected 59 gate targets, counted {len(GATE_TARGETS)}"
+assert len(GATE_TARGETS) == 58, f"expected 58 gate targets, counted {len(GATE_TARGETS)}"
 
 # The corrected denominator for a shim-usage census (chunk C10 of
 # docs/plans/2026-08-21-the-cli-bootstrap-tax-dies-at-the-interpreter-floor.md).
@@ -935,7 +934,7 @@ def _gate_target_path(name: str) -> Path:
 
 
 def run_gate_target(name: str, argv: List[str]) -> int:
-    """Run one of the 59 GATE_TARGETS entry points in-process and return its
+    """Run one of the 58 GATE_TARGETS entry points in-process and return its
     exit code. `argv` excludes the subcommand name itself.
 
     Unlike `run_target` above (whose 14 ASSEMBLE_TARGETS members' `main`

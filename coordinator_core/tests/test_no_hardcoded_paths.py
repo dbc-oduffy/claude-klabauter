@@ -17,8 +17,8 @@ root", then guessed `claude_klabauter_root.parent / "coordinator-content-repo"` 
 clone's location — hardcoding both the checkout depth from this file AND a
 flat-sibling directory layout. Retired 2026-07-22 in the same change that
 added this gate; the fix delegates entirely to
-`coordinator_core.content_root_pointer.read_content_root_pointer()` (registry-first,
-DR-071), which resolves the DoE root without any assumption about checkout
+`coordinator_core.content_root.read_content_root()` (registry-first,
+DR-071), which resolves the content root without any assumption about checkout
 layout. See that module's docstring for the retirement negative-spec.
 
 Two independently-triggered teeth, per DEC-4's "teeth-tightening" of the
@@ -69,7 +69,7 @@ teeth — three real Tooth-2-shaped instances surfaced on 2026-07-25 alone,
 all in test code, none catchable by the gate as originally scoped:
 `coordinator_core/tests/test_step_zero_emit.py` and
 `coordinator_core/tests/test_normalize_snippet.py` (both fixed in
-`9057a88c`), and `_write_content_root_sentinel` in
+`9057a88c`), and the pointer-sentinel writer in
 `coordinator/bin/test_cross_repo_memo.py`, whose `Path(__file__).parents[3]`
 landed back inside claude-klabauter instead of at the sibling root, so
 `identity.redirectAliases` never resolved and three assertions had been
@@ -725,7 +725,7 @@ def test_no_hardcoded_cross_repo_paths_in_production_code():
     violations = find_hardcoded_path_violations(_SCAN_ROOT)
     assert violations == [], (
         "Found hardcoded-path violation(s) in coordinator_core/ production "
-        "code (resolve via the machine-local registry / content_root_pointer / "
+        "code (resolve via the machine-local registry / content_root / "
         "trusted_root_guard instead, or add a named, dated _EXEMPT_SITES "
         f"entry per DEC-4): {violations}"
     )

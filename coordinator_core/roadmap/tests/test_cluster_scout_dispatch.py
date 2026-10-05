@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.roadmap.cluster_scout import (
     Cluster,
     ClusterDispatchCapExceededError,
@@ -30,6 +29,7 @@ from coordinator_core.roadmap.cluster_scout import (
     load_fragment,
     plan_cluster_dispatch,
 )
+from coordinator_core.testing.content_root import resolve_content_root
 
 CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
 VENDORED_FRAGMENT = (
@@ -54,9 +54,9 @@ def test_vendored_fragment_is_byte_identical_to_doe_source() -> None:
     """AC17's fragment-verbatim pin, mirroring AC15/AC20: an unpinned second
     copy of a DoE-authored rule is the same defect class as the schema drift
     this plan avoids elsewhere."""
-    content_root = read_content_root_pointer()
+    content_root = resolve_content_root()
     if not content_root:
-        pytest.skip("coordinator-content-repo sibling root not resolvable on this machine")
+        pytest.skip("content root not resolvable on this machine")
     doe_source_fragment = Path(content_root) / _DOE_FRAGMENT_RELPATH
     if not doe_source_fragment.is_file():
         pytest.skip(f"DoE source fragment not found at {doe_source_fragment}")

@@ -18,14 +18,10 @@ that DOES surface async output needs no rewrite here.
 COMPOSED HERE, in DoE's REGISTRY order, each paired with its pinned `sources`
 set (all five of `startup`, `resume`, `clear`, `compact`, `fork`, except where
 noted):
-  - `session_start_register_content_root_root`
   - `session_start_repair_prepare_commit_msg_hook` (`startup` only)
   - `session_start_register_published_engine`
   - `sessionstart_ensure_http_forwarder`
   - `session_start_write_plugin_root_breadcrumb`
-  - `session_start_ensure_precommit_hook` — calls
-    `install_content_root_precommit_hook.main([<payload cwd>])` with stdout and
-    stderr captured; the captured text surfaces only on a non-zero return code.
 
 SOURCE-GATING lives here, because the caller is an http entry on the union
 matcher. The handler reads `payload["source"]`: a missing source runs no leg; a
@@ -46,15 +42,10 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import io
 from typing import Callable, Optional
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.hooks._envelope import context_only, no_advisory
-from coordinator_core.hooks.session_start_register_content_root_root import (
-    _handler as _session_start_register_content_root_root_handler,
-)
 from coordinator_core.hooks.session_start_register_published_engine import (
     _handler as _session_start_register_published_engine_handler,
 )
@@ -68,7 +59,6 @@ from coordinator_core.hooks.sessionstart_ensure_http_forwarder import (
     _handler as _sessionstart_ensure_http_forwarder_handler,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import install_content_root_precommit_hook as _install_precommit
 
 
 def _extract_context(result) -> "Optional[str]":
@@ -85,23 +75,8 @@ _ALL_SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
 _STARTUP_ONLY = frozenset({"startup"})
 
 
-def _ensure_precommit_hook(leg_params: dict) -> Optional[dict]:
-    cwd = payload_of(leg_params).get("cwd")
-    if not isinstance(cwd, str) or not cwd:
-        return None
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        rc = _install_precommit.main([cwd])
-    if rc == 0:
-        return None
-    text = (out.getvalue() + err.getvalue()).strip()
-    return context_only("SessionStart", text) if text else None
-
-
 # Legs resolve through module globals at call time so tests can patch them.
 _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
-    ("session_start_register_content_root_root", _ALL_SOURCES,
-     lambda p: _session_start_register_content_root_root_handler(p)),
     ("session_start_repair_prepare_commit_msg_hook", _STARTUP_ONLY,
      lambda p: _session_start_repair_prepare_commit_msg_hook_handler(p)),
     ("session_start_register_published_engine", _ALL_SOURCES,
@@ -110,8 +85,6 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _sessionstart_ensure_http_forwarder_handler(p)),
     ("session_start_write_plugin_root_breadcrumb", _ALL_SOURCES,
      lambda p: _session_start_write_plugin_root_breadcrumb_handler(p)),
-    ("session_start_ensure_precommit_hook", _ALL_SOURCES,
-     lambda p: _ensure_precommit_hook(p)),
 )
 
 

@@ -81,7 +81,7 @@ def _drop_settings_home_override(monkeypatch):
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
     Both the dep probe and ``register_claude_klabauter_root`` resolve through
-    settings-home: the dep ladder's `.coordinator-content-root` rung and the engine-build
+    settings-home: the dep ladder's content-root pointer rung and the engine-build
     provisioning path (which this file asserts against as
     ``$USERPROFILE/.coordinator-claude-settings/engine-build/...``, i.e. the
     quarantined home). ``_settings_home.settings_home()`` prefers

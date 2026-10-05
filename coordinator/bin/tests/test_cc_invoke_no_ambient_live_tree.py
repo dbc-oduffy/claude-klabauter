@@ -96,7 +96,7 @@ def test_pointer_rung_is_the_only_surviving_direct_return():
 
 
 _DROP_PREFIXES = ("REPO_", "CLAUDE", "COORDINATOR_")
-_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT", "CONTENT_ROOT")
+_DROP_EXACT = ("CLAUDE_KLABAUTER_ROOT",)
 
 
 def _hermetic_child_env(isolated_home: str, extra: dict[str, str] | None = None) -> dict[str, str]:

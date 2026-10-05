@@ -67,7 +67,7 @@ def _baseline_path() -> Path:
             "doctrine_surface_tiers: cannot resolve the coordinator-content-repo plugin root -- "
             "resolve_caller_context().plugin_root returned no result. Set "
             "CLAUDE_PLUGIN_ROOT, or register the coordinator-claude plugin "
-            "install / .coordinator-content-root pointer (see resolve_plugin_root())."
+            "install / content-root pointer (see resolve_plugin_root())."
         )
     return Path(plugin_root) / "tests" / "baselines" / "doctrine-surface-weight.json"
 

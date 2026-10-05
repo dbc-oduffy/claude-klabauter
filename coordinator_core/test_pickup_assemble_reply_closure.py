@@ -601,7 +601,7 @@ class TestLinkageMatching:
         for it."""
         # Deliberately NOT `self._setup` — `coordinator-content-repo-em` resolves through
         # `receiver_em_to_repo_key`'s convention path (strip `-em`, dashes to
-        # underscores) to `repos.content_root`, a different registry key than
+        # underscores) to its own `repos.<receiver>` key, a different registry key than
         # the shared helper's `repos.sender`.
         repo = tmp_path / "repo"
         repo.mkdir()

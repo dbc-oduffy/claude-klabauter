@@ -84,3 +84,22 @@ def test_rows_backed_before_base_uses_one_batch(tmp_path, monkeypatch):
     got = rows_backed_before_base(tmp_path, str(plan), base)
     assert got == ["r-old"]
     assert len(calls) <= 2
+
+
+@pytest.mark.spawns_process
+def test_rows_backed_before_base_strips_repo_key_prefix(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "f").write_text("1")
+    _git(tmp_path, "add", "f")
+    _git(tmp_path, "commit", "-qm", "one")
+    old = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "f").write_text("2")
+    _git(tmp_path, "commit", "-qam", "two")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    rows = (
+        "- id: r-q\n  disposition: coded\n"
+        f"  disposition_ref: 'claude-klabauter:{old[:10]}'\n"
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text(_plan(rows), encoding="utf-8")
+    assert rows_backed_before_base(tmp_path, str(plan), base) == ["r-q"]

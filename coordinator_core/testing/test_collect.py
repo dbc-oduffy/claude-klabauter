@@ -90,10 +90,10 @@ def test_no_stray_test_py_files_committed_under_testing_package() -> None:
     assert stray == [], f"stray test_*.py fixture(s) committed under {_TESTING_PKG_DIR}: {stray}"
 
 
-_CONTENT_ROOT, _DOE_PRESENT = content_root_and_present()
+_CONTENT_ROOT, _CONTENT_PRESENT = content_root_and_present()
 
 
-@pytest.mark.skipif(not _DOE_PRESENT, reason="DoE repo root not resolvable on this machine")
+@pytest.mark.skipif(not _CONTENT_PRESENT, reason="content repo root not resolvable on this machine")
 def test_doe_integration_discovers_and_classifies_real_tree() -> None:
     suites = discover(_CONTENT_ROOT)
 

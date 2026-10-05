@@ -418,7 +418,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.assert_em_role": OpClass.MUTATING,
     "hooks.sweep_boot": OpClass.MUTATING,
     "hooks.session_start_announce_job_mode": OpClass.MUTATING,
-    "hooks.session_start_register_content_root_root": OpClass.MUTATING,
     "hooks.session_start_register_published_engine": OpClass.MUTATING,
     "hooks.session_start_repin_cloud_engine_root": OpClass.MUTATING,
     "hooks.session_start_watch_presence": OpClass.COMPUTE_ONLY,

@@ -27,7 +27,6 @@ from coordinator_core.hooks import (
     guard_hook_generation_self_probe,
     session_start_announce_job_mode,
     session_start_guard_plane_check,
-    session_start_register_content_root_root,
     session_start_register_published_engine,
     session_start_repair_prepare_commit_msg_hook,
     session_start_write_plugin_root_breadcrumb,
@@ -52,7 +51,6 @@ _EXPECTED_OP_NAMES = (
     "hooks.session_start_guard_plane_check",
     "hooks.session_start_announce_job_mode",
     "hooks.guard_hook_generation_self_probe",
-    "hooks.session_start_register_content_root_root",
     "hooks.session_start_register_published_engine",
     "hooks.session_start_repair_prepare_commit_msg_hook",
     "hooks.session_start_write_plugin_root_breadcrumb",
@@ -160,37 +158,6 @@ def test_self_probe_returns_context_when_probe_emits_text(monkeypatch):
     monkeypatch.setattr(real_probe, "run_self_probe", lambda config_dir=None: "banner text")
     result = guard_hook_generation_self_probe._handler({})
     assert "banner text" in result["hookSpecificOutput"]["additionalContext"]
-
-
-# ---------------------------------------------------------------------------
-# session_start_register_content_root_root — wrong-repo guard, real computation
-# ---------------------------------------------------------------------------
-
-
-def test_content_root_wrong_repo_guard_rejects_missing_sentinel(tmp_path):
-    assert not session_start_register_content_root_root._is_genuine_content_root_repo(tmp_path)
-
-
-def test_content_root_wrong_repo_guard_rejects_prefix_sharing_slug(tmp_path):
-    (tmp_path / ".coordinator-dev-repo").write_text("slug: coordinator-content-repo-fork\n", encoding="utf-8")
-    assert not session_start_register_content_root_root._is_genuine_content_root_repo(tmp_path)
-
-
-def test_content_root_wrong_repo_guard_accepts_exact_slug(tmp_path):
-    (tmp_path / ".coordinator-dev-repo").write_text("slug: coordinator-content-repo\n", encoding="utf-8")
-    assert session_start_register_content_root_root._is_genuine_content_root_repo(tmp_path)
-
-
-def test_content_root_root_handler_no_op_when_nothing_confirmed(tmp_path):
-    result = session_start_register_content_root_root._handler(
-        {"payload": {"cwd": str(tmp_path)}}
-    )
-    assert result == {}  # no_advisory() -- tmp_path carries no dev-repo sentinel
-
-
-def test_content_root_root_handler_never_raises_on_absent_payload():
-    result = session_start_register_content_root_root._handler({})
-    assert result == {}
 
 
 # ---------------------------------------------------------------------------

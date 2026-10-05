@@ -38,7 +38,7 @@ def _subject_objects() -> list[dict]:
 
 
 def _emit(monkeypatch, tmp_path: Path, content_root: Path) -> str:
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "doe")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: content_root)
     out = tmp_path / "emitted.workflow.mjs"
     (tmp_path / "brief.md").write_text("parity check", encoding="utf-8")

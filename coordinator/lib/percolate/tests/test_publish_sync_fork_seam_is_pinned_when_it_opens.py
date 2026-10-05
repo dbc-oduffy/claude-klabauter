@@ -10,7 +10,7 @@ LANDS ONE".
 
 WHY THIS GUARD EXISTS, measured on the sibling repo 2026-08-26 rather than
 imagined here. Coordinator-content-repo DOES have a `setup/publish_sync.py`, and it won that
-seam for every ContentRooted run while having silently forked from the engine: it
+seam for every content-rooted run while having silently forked from the engine: it
 still parsed `COORDINATOR_OVERRIDE_ORPHAN_SWEEP` as `os.environ.get(...) ==
 "1"` long after the engine grew the scoped `=<name>[,<name>...]` form, with no
 `_orphan_sweep_override` and no `exempt`/`at_risk` split. The operator-facing

@@ -18,7 +18,7 @@ Residue directory (fixed resolution, no parallel ladder):
     os.path.join(resolve_content_root(), "skills", "review", "residue")
 via `coordinator_core.resolve_coordinator_clone.resolve_content_root` — the
 same content-root resolver every other computed-skill engine uses. This
-module deliberately does NOT read a content-root pointer directly (that
+module deliberately does NOT read a root pointer directly (that
 resolves only a DoE clone and breaks on a pure OSS install); it composes
 the shared resolver instead.
 

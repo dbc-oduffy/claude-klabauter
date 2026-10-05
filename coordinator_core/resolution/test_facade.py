@@ -45,7 +45,7 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
     settings_home.mkdir()
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     content_root.mkdir()
 
     env = {
@@ -143,9 +143,9 @@ def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity():
 def test_guard_plugin_root_content_root_sentinel_anchor_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "\n")
+    (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "content-clone") + "\n")
     env = {"HOME": str(home)}
-    root = str(tmp_path / "coordinator-content-repo" / "coordinator")
+    root = str(tmp_path / "content-clone" / "coordinator")
 
     expected = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert guard_plugin_root(root, mode="fail-open", env=env) == expected
@@ -188,10 +188,10 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
 def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
-    doe = tmp_path / "coordinator-content-repo"
-    (home / ".claude" / ".coordinator-content-root").write_text(str(doe).replace("\\", "/") + "\n")
+    clone = tmp_path / "content-clone"
+    (home / ".claude" / ".coordinator-content-root").write_text(str(clone).replace("\\", "/") + "\n")
     env = {"HOME": str(home)}
-    root = str(doe / "coordinator")
+    root = str(clone / "coordinator")
 
     expected = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
     assert guard_plugin_root(root, mode="fail-open", env=env) == expected
@@ -213,7 +213,7 @@ def _happy_env(tmp_path):
     (settings_home / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
     (claude_klabauter_root / "coordinator" / "bin").mkdir(parents=True)
-    content_root = tmp_path / "coordinator-content-repo"
+    content_root = tmp_path / "content-clone"
     content_root.mkdir()
 
     (settings_home / "machine-local" / "registry.local.toml").write_text(
@@ -272,7 +272,7 @@ def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path):
 def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
     env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".coordinator-content-root").write_text(
-        str(tmp_path / "coordinator-content-repo" / ".." / "evil") + "\n"
+        str(tmp_path / "content-clone" / ".." / "evil") + "\n"
     )
 
     with pytest.raises(OperatorConfigError, match="content_root"):
@@ -301,6 +301,28 @@ def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_co
 
     with pytest.raises(OperatorConfigError, match="content_root"):
         resolve_operator_config(env=env)
+
+
+def test_resolve_operator_config_empty_content_root_with_legacy_pointer_resolves(tmp_path):
+    env, settings_home, _claude_klabauter_root, content_root = _happy_env(tmp_path)
+    ml = settings_home / "machine-local"
+    (ml / ".coordinator-content-root").unlink()
+    (ml / ".coordinator-content-root").write_text(str(content_root) + "\n")  # private-name-ok: compat-fallback
+    with (ml / "registry.local.toml").open("a") as f:
+        f.write('"repos.content_root" = ""\n')
+
+    result = resolve_operator_config(env=env)
+
+    assert result["content_root"] == str(content_root)
+
+
+def test_resolve_operator_config_unset_content_root_does_not_raise(tmp_path):
+    env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
+    (settings_home / "machine-local" / ".coordinator-content-root").unlink()
+
+    result = resolve_operator_config(env=env)
+
+    assert result["content_root"] == ""
 
 
 def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path):

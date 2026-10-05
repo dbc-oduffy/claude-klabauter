@@ -53,10 +53,9 @@ is now closed: _candidate_search_dirs() checks each write seam's env override
 first, matching coordinator-queue-append/_output_path() and
 coordinator-lesson-promote's _outbox_root(). A follow-up review (2026-07-09,
 slice2 Finding 1) further found the fix's central/lessons legs mirrored only
-the CONTENT_ROOT-env leg of coordinator_registry.content_root()'s three-step
+the env leg of coordinator_registry.content_root()'s multi-step
 resolution chain, missing the machine-local-registry leg — that gap is also
-now closed by calling content_root() directly rather than re-deriving it; see
-test_harvest_content_root_machine_local_leg.py for that regression's own test.)
+now closed by calling content_root() directly rather than re-deriving it.)
 This suite's own harvest invocations still cwd into a `git init`-ed fixture
 dir per test (harmless with the fix in place — it exercises the git-root
 fallback leg used only when neither an env override nor content_root() resolve).
@@ -176,11 +175,10 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     os.makedirs(outbox_dir, exist_ok=True)
     env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
     env["COORDINATOR_WARM"] = "0"
-    # Avoid any ambient CONTENT_ROOT/REPO_CONTENT_ROOT/CLAUDE_KLABAUTER_ROOT bleeding writes
-    # out of the isolated tmpdir. REPO_CONTENT_ROOT is content_root()'s rung-1b
-    # ammo and is exported in a login shell on a provisioned machine —
-    # stripping only CONTENT_ROOT leaves the sibling repo one rung away.
-    env.pop("CONTENT_ROOT", None)
+    # Avoid any ambient content-root override or CLAUDE_KLABAUTER_ROOT bleeding writes
+    # out of the isolated tmpdir. REPO_CONTENT_ROOT is exported in a login
+    # shell on a provisioned machine — strip it alongside the registry override.
+    env.pop("MACHINE_LOCAL_REPOS_CONTENT_ROOT", None)
     env.pop("REPO_CONTENT_ROOT", None)
     env.pop("CLAUDE_KLABAUTER_ROOT", None)
     return env

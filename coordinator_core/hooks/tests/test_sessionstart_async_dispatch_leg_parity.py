@@ -12,16 +12,13 @@ ALL_FIVE = {"startup", "resume", "clear", "compact", "fork"}
 
 # Pinned at coordinator-content-repo@054f62ba51, sessionstart-async-dispatch.py REGISTRY order.
 PINNED_LEGS = [
-    ("session_start_register_content_root_root", ALL_FIVE),
     ("session_start_repair_prepare_commit_msg_hook", {"startup"}),
     ("session_start_register_published_engine", ALL_FIVE),
     ("sessionstart_ensure_http_forwarder", ALL_FIVE),
     ("session_start_write_plugin_root_breadcrumb", ALL_FIVE),
-    ("session_start_ensure_precommit_hook", ALL_FIVE),
 ]
 
 _LEG_ATTRS = {
-    "session_start_register_content_root_root": "_session_start_register_content_root_root_handler",
     "session_start_repair_prepare_commit_msg_hook": "_session_start_repair_prepare_commit_msg_hook_handler",
     "session_start_register_published_engine": "_session_start_register_published_engine_handler",
     "sessionstart_ensure_http_forwarder": "_sessionstart_ensure_http_forwarder_handler",
@@ -45,12 +42,6 @@ def calls(monkeypatch, tmp_path):
 
     for key, attr in _LEG_ATTRS.items():
         monkeypatch.setattr(mod, attr, make(key))
-
-    def fake_main(argv):
-        rec.append("session_start_ensure_precommit_hook")
-        return 0
-
-    monkeypatch.setattr(mod._install_precommit, "main", fake_main)
     return rec
 
 
@@ -91,33 +82,5 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_session_start_register_published_engine_handler", boom)
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
-    assert calls[-1] == "session_start_ensure_precommit_hook"
-    assert len(calls) == 5
-
-
-def test_precommit_leg_passes_cwd_and_surfaces_text_only_on_nonzero(monkeypatch, tmp_path):
-    seen = []
-
-    def failing(argv):
-        seen.append(argv)
-        print("hook install failed")
-        return 1
-
-    monkeypatch.setattr(mod._install_precommit, "main", failing)
-    out = mod._ensure_precommit_hook({"payload": {"cwd": str(tmp_path)}})
-    assert seen == [[str(tmp_path)]]
-    assert "hook install failed" in out["hookSpecificOutput"]["additionalContext"]
-
-    def ok(argv):
-        print("noisy success")
-        return 0
-
-    monkeypatch.setattr(mod._install_precommit, "main", ok)
-    assert mod._ensure_precommit_hook({"payload": {"cwd": str(tmp_path)}}) is None
-
-
-def test_precommit_leg_without_cwd_skips(monkeypatch):
-    monkeypatch.setattr(
-        mod._install_precommit, "main", lambda argv: pytest.fail("must not run")
-    )
-    assert mod._ensure_precommit_hook({"payload": {}}) is None
+    assert calls[-1] == "session_start_write_plugin_root_breadcrumb"
+    assert len(calls) == 3

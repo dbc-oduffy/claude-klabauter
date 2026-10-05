@@ -17,7 +17,7 @@ resolved at call time, so the monkeypatch is visible to `data_root()`.
 
 Rung-1.5 tests that want to isolate rung 2 (`content_root`) neutralize
 `cdr._cdr_codename_free_root` directly — on this dev machine the REAL
-`.coordinator-content-root` pointer file is present and would otherwise win rung 1.5 ahead of
+Content-root pointer file is present and would otherwise win rung 1.5 ahead of
 the rung-2 mock, since rung 1.5 runs first in `data_root()`.
 
 Rung-2 (`content_root` / `_DoeUnresolvable`) is exercised by monkeypatching

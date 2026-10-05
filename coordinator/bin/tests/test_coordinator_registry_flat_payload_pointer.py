@@ -13,102 +13,64 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import coordinator_registry as reg  # noqa: E402
-
-#: The payload's flat `lib/` ships `read_content_root_pointer.py` AND its sibling
-#: `settings_home.py` — verified against both publish mirrors (claude-klabauter,
-#: coordinator-claude). Both must be staged into the fixture: the helper resolves
-#: settings-home by importing `settings_home` from its OWN directory
-#: (`Path(__file__).resolve().parent`), so a fixture holding only the helper makes
-#: `_resolve_settings_home()` return "" and silently demotes the read to the
-#: LEGACY `${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root` rung — which on a configured
-#: dev box resolves the real DoE root and fails this assertion, and on an
-#: unconfigured box resolves "" and fails it differently. Negative spec: staging
-#: the helper alone does not reproduce the payload layout.
-_REAL_LIB_DIR = os.path.join(os.path.dirname(_BIN_DIR), "lib")
-_REAL_HELPER_SRCS = (
-    os.path.join(_REAL_LIB_DIR, "read_content_root_pointer.py"),
-    os.path.join(_REAL_LIB_DIR, "settings_home.py"),
-)
+import machine_local_impl_resolve as mlir  # noqa: E402
 
 
-class TestFlatPayloadPointerRung(unittest.TestCase):
+class TestContentRootPointerRung(unittest.TestCase):
+    """The pointer rung reads through `machine_local_impl_resolve`, a sibling
+    that ships beside `coordinator_registry` in every layout (private tree and
+    flat published payload), so no helper directory needs staging."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp(prefix="c1f-payload-fixture-")
         self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
 
-        flat_lib_dir = os.path.join(self._tmp, "lib")
-        os.makedirs(flat_lib_dir)
-        for _helper in _REAL_HELPER_SRCS:
-            shutil.copyfile(
-                _helper, os.path.join(flat_lib_dir, os.path.basename(_helper))
-            )
+        self._plugin_root = os.path.join(self._tmp, "plugin-root")
+        os.makedirs(os.path.join(self._plugin_root, "schemas"))
 
-        plugin_root = os.path.join(self._tmp, "plugin-root")
-        os.makedirs(os.path.join(plugin_root, "schemas"))
-        with open(
-            os.path.join(plugin_root, "schemas", "coordinator-registry.manifest.json"),
-            "w",
-            encoding="utf-8",
-        ) as fh:
-            fh.write("{}")
+        self._settings_home = os.path.join(self._tmp, "settings-home")
+        os.makedirs(os.path.join(self._settings_home, "machine-local"))
 
-        settings_home = os.path.join(self._tmp, "settings-home")
-        os.makedirs(os.path.join(settings_home, "machine-local"))
-        with open(
-            os.path.join(settings_home, "machine-local", ".coordinator-content-root"),
-            "w",
-            encoding="utf-8",
-        ) as fh:
-            fh.write(plugin_root + "\n")
-
-        self._plugin_root = plugin_root
-        self._flat_lib_dir = flat_lib_dir
-        self._orig_coordinator_lib_dir = reg._COORDINATOR_LIB_DIR
-        self._orig_coordinator_lib_dir_flat = getattr(
-            reg, "_COORDINATOR_LIB_DIR_FLAT", None
-        )
         # CLAUDE_HOME is pinned into the fixture alongside settings-home so the
-        # helper's LEGACY rung (`${CLAUDE_HOME:-$HOME}/.claude/.coordinator-content-root`) can
-        # only ever resolve inside this tmpdir. Without it the assertion below
-        # is a read of whatever the developer's own box has configured, and the
-        # test passes or fails on machine state rather than on the code it pins.
+        # home-level pointer can only ever resolve inside this tmpdir. Without it
+        # the assertions below read whatever the developer's own box has
+        # configured, and pass or fail on machine state rather than on the code
+        # they pin.
         claude_home = os.path.join(self._tmp, "claude-home")
         os.makedirs(os.path.join(claude_home, ".claude"))
 
-        self._env_patch = {
-            "COORDINATOR_SETTINGS_HOME": settings_home,
+        env_patch = {
+            "COORDINATOR_SETTINGS_HOME": self._settings_home,
             "CLAUDE_HOME": claude_home,
         }
-        self._orig_env = {
-            k: os.environ.get(k) for k in self._env_patch
-        }
-        os.environ.update(self._env_patch)
+        orig_env = {k: os.environ.get(k) for k in env_patch}
+        os.environ.update(env_patch)
+        self.addCleanup(self._restore_env, orig_env)
 
-    def tearDown(self) -> None:
-        reg._COORDINATOR_LIB_DIR = self._orig_coordinator_lib_dir
-        if self._orig_coordinator_lib_dir_flat is not None:
-            reg._COORDINATOR_LIB_DIR_FLAT = self._orig_coordinator_lib_dir_flat
-        for k, v in self._orig_env.items():
+    @staticmethod
+    def _restore_env(orig_env: dict) -> None:
+        for k, v in orig_env.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
 
-    def test_pointer_rung_resolves_via_flat_payload_helper_dir(self) -> None:
-        nonexistent_private_dir = os.path.join(self._tmp, "coordinator", "lib")
-        self.assertFalse(os.path.isdir(nonexistent_private_dir))
+    def _write_pointer(self, name: str) -> None:
+        with open(
+            os.path.join(self._settings_home, "machine-local", name), "w", encoding="utf-8"
+        ) as fh:
+            fh.write(self._plugin_root + "\n")
 
-        reg._COORDINATOR_LIB_DIR = nonexistent_private_dir
-        if not hasattr(reg, "_COORDINATOR_LIB_DIR_FLAT"):
-            self.fail(
-                "coordinator_registry.py has no _COORDINATOR_LIB_DIR_FLAT "
-                "fallback — pre-fix code, or fix regressed."
-            )
-        reg._COORDINATOR_LIB_DIR_FLAT = self._flat_lib_dir
+    def test_pointer_rung_resolves_the_content_root_pointer(self) -> None:
+        self._write_pointer(mlir._CONTENT_ROOT_POINTER)
+        self.assertEqual(reg._mp_content_root_pointer_rung(), self._plugin_root)
 
-        resolved = reg._mp_content_root_pointer_rung()
-        self.assertEqual(resolved, self._plugin_root)
+    def test_pointer_rung_resolves_a_box_carrying_only_the_pre_rename_pointer(self) -> None:
+        self._write_pointer(mlir._LEGACY_ROOT_POINTER)
+        self.assertEqual(reg._mp_content_root_pointer_rung(), self._plugin_root)
+
+    def test_pointer_rung_is_empty_when_no_pointer_exists(self) -> None:
+        self.assertEqual(reg._mp_content_root_pointer_rung(), "")
 
 
 if __name__ == "__main__":

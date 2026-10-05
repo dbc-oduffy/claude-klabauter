@@ -282,8 +282,6 @@ _BASELINE: set[tuple[str, str]] = {
      'bin/ git-hook emitter must be registered) keyed on a bash `cat > "$HOOK"`'),
     ('coordinator/tests/test_percolate_resolve_target.py',
      '${meta_root}/plugins/<key> with a warning (never raises, never consults'),
-    ('coordinator/tests/test_verify_content_root_seam_sync.py',
-     '--fix rewrites the `$HOME/.claude/.coordinator-content-root` (trailing 2>/dev/null) shape'),
 }
 
 

@@ -50,7 +50,7 @@ def stubs(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, f"{_PKG}.pipeline_compose",
                         types.SimpleNamespace(compose_pipeline_script=compose))
     content = tmp_path / "doe-content"
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "doe")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: content)
     seen["doe_content"] = content
     return seen
@@ -139,8 +139,8 @@ def test_validate_refusal_propagates_with_nothing_written(stubs, tmp_path):
 
 
 def test_empty_root_pointer_refuses_naming_the_root_and_writes_nothing(stubs, tmp_path, monkeypatch):
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "")
-    with pytest.raises(PipelineEmitRefused, match="read_content_root_pointer"):
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "")
+    with pytest.raises(PipelineEmitRefused, match="read_content_root"):
         _dispatch_emit(_params(tmp_path))
     assert _written(tmp_path) == []
 

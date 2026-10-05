@@ -24,7 +24,6 @@ from typing import Callable, Optional
 #: coordinator/bin without coordinator/hooks, so self-location alone fails there.
 _ROOT_POINTERS = (
     Path.home() / ".claude" / ".coordinator-content-root",
-    Path.home() / ".claude" / ".coordinator-content-root",
     Path.home() / ".coordinator-claude-settings" / ".coordinator-content-root",
 )
 

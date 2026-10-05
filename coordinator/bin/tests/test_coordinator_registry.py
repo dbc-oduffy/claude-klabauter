@@ -201,12 +201,12 @@ def test_content_root_em_alias_in_central_receiver_ids():
 # ---------------------------------------------------------------------------
 # C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
 #
-# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (CONTENT_ROOT,
-# REPO_CONTENT_ROOT, repos.content_root) into names no machine has ever set,
+# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (REPO_CONTENT_ROOT,
+# repos.content_root) into names no machine has ever set,
 # leaving the split-repo layout's manifest bootstrap with zero live rungs and
 # an import-time FileNotFoundError. These tests exercise the module in a
 # fresh subprocess (import-time behavior can't be observed by re-importing an
-# already-imported module) with CONTENT_ROOT/REPO_CONTENT_ROOT unset, covering both
+# already-imported module) with REPO_CONTENT_ROOT unset, covering both
 # the pointer-present and pointer-unreachable cases.
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
@@ -235,11 +235,10 @@ def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
 
 
 def test_bootstrap_import_succeeds_with_pointer_present():
-    """Case (a): CONTENT_ROOT/REPO_CONTENT_ROOT unset, real ambient pointer/registry
+    """Case (a): REPO_CONTENT_ROOT unset, real ambient pointer/registry
     state left intact — import must succeed via a codename-free rung (or the
     co-located rung, if this checkout happens to be co-located)."""
     env = dict(os.environ)
-    env.pop("CONTENT_ROOT", None)
     env.pop("REPO_CONTENT_ROOT", None)
     result = _run_import_subprocess(env)
     assert result.returncode == 0, (
@@ -250,7 +249,7 @@ def test_bootstrap_import_succeeds_with_pointer_present():
 
 
 def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable():
-    """Case (b): CONTENT_ROOT/REPO_CONTENT_ROOT unset AND HOME/CLAUDE_HOME/
+    """Case (b): REPO_CONTENT_ROOT unset AND HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no LIVE rung
     can resolve, proving the file rungs are load-bearing (not merely present)
     rather than accidentally passing on ambient state. Must NOT delete or
@@ -267,7 +266,6 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
     for the fallback rung's own dedicated coverage."""
     with tempfile.TemporaryDirectory() as _empty_home:
         env = dict(os.environ)
-        env.pop("CONTENT_ROOT", None)
         env.pop("REPO_CONTENT_ROOT", None)
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = _empty_home
@@ -291,7 +289,7 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
 # fixture tree (coordinator/bin/lib/ not flattened + lib/ flattened, per
 # setup/publish-targets.portable) imported under a genuinely OSS-shaped
 # environment (empty HOME/USERPROFILE/COORDINATOR_SETTINGS_HOME, no
-# CLAUDE_PLUGIN_ROOT, no .coordinator-content-root pointer reachable), with the manifest
+# CLAUDE_PLUGIN_ROOT, no content-root pointer reachable), with the manifest
 # reachable ONLY via the new marketplace-cache rung
 # (_mp_marketplace_cache_rung(), BLOCKER-1a) under a synthetic CLAUDE_HOME —
 # asserting import SUCCEEDS and _MANIFEST_PATH resolves inside that rung's
@@ -309,11 +307,10 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     payload_lib_dir: <root>/engine-payload/coordinator/bin/lib/ — holds a
     real copy of coordinator_registry.py + machine_local_impl_resolve.py,
     exactly where the payload ships them (coordinator/bin -> coordinator/bin,
-    NOT flattened, per setup/publish-targets.portable). Also plants the
-    flattened helper at <root>/engine-payload/lib/read_content_root_pointer.py
-    (coordinator/lib -> lib, flattened) so the pointer rung has its
-    published-shape dependency present, even though the pointer file itself
-    is deliberately absent (no ambient .coordinator-content-root on an OSS box).
+    NOT flattened, per setup/publish-targets.portable). The pointer rung reads
+    through `machine_local_impl_resolve`, which is copied alongside; the
+    pointer file itself is deliberately absent (no ambient content-root
+    pointer on an OSS box).
 
     claude_home_dir: <root>/claude-home/ — the `CLAUDE_HOME` env value, a
     `$HOME` substitute (Convention A). Its `.claude/` subdir holds ONLY the
@@ -328,13 +325,6 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     os.makedirs(payload_lib_dir)
     for _name in ("coordinator_registry.py", "machine_local_impl_resolve.py"):
         shutil.copyfile(os.path.join(_LIB_DIR, _name), os.path.join(payload_lib_dir, _name))
-
-    flat_helper_dir = os.path.join(root, "engine-payload", "lib")
-    os.makedirs(flat_helper_dir)
-    shutil.copyfile(
-        os.path.join(_REAL_COORDINATOR_LIB_DIR, "read_content_root_pointer.py"),
-        os.path.join(flat_helper_dir, "read_content_root_pointer.py"),
-    )
 
     claude_home_dir = os.path.join(root, "claude-home")
     cache_manifest_dir = os.path.join(
@@ -397,7 +387,7 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
 # C1D: content_root() gets the same codename-free rung ladder, in-process via
 # monkeypatch (not a subprocess — content_root() runs at CALL time, not import
 # time, so isolating just its own rungs from the ambient machine's real
-# CONTENT_ROOT/REPO_CONTENT_ROOT/registry state is enough; the module import at the
+# REPO_CONTENT_ROOT/registry state is enough; the module import at the
 # top of this file already proved import-time behavior above).
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
@@ -412,7 +402,7 @@ def _clear_content_root_env(monkeypatch):
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
 
-    CONTENT_ROOT/REPO_CONTENT_ROOT now run FIRST in
+    REPO_CONTENT_ROOT now runs FIRST in
     content_root(), ahead of the codename-free rungs, so they must be cleared
     here too (this function already did) for the codename-rung tests below
     to observe their own rung rather than short-circuiting on the reordered
@@ -422,7 +412,6 @@ def _clear_content_root_env(monkeypatch):
     that could accidentally resolve on a dev box with a real marketplace
     install; stub it like every other rung so isolation holds.
     """
-    monkeypatch.delenv("CONTENT_ROOT", raising=False)
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: "")
@@ -482,7 +471,7 @@ def test_content_root_flat_layout_rejected_without_state_dir(monkeypatch):
 def test_content_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
     """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
     (`<repo_root>/coordinator`), one level below the repo root content_root()
-    must return — the plugin-root-vs-content-root distinction this chunk exists
+    must return — the plugin-root-vs-content-repo-root distinction this chunk exists
     to close. The marker lives beside the repo root, not beside the content
     root, so the normalizer must climb one level. Gated (Review: staff-eng
     BLOCKER-2) on `<repo_root>/state` being a directory."""
@@ -518,12 +507,12 @@ def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeyp
     CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
     .claude-plugin/plugin.json under it, since it belongs to a foreign
     plugin's content, not the plugin root itself) must NOT be accepted, and
-    an explicit correct CONTENT_ROOT override must win instead."""
+    an explicit correct REPO_CONTENT_ROOT override must win instead."""
     with _tempfile.TemporaryDirectory() as _foreign_root, _tempfile.TemporaryDirectory() as _correct_root:
         os.makedirs(os.path.join(_correct_root, "state"), exist_ok=True)
         _clear_content_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _foreign_root)
-        monkeypatch.setenv("CONTENT_ROOT", _correct_root)
+        monkeypatch.setenv("REPO_CONTENT_ROOT", _correct_root)
         assert reg.content_root() == _correct_root
 
 
@@ -566,14 +555,13 @@ def test_content_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreach
 
 def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
     """With a
-    live `.coordinator-content-root` pointer AND an explicit CONTENT_ROOT/REPO_CONTENT_ROOT
+    live content-root pointer AND an explicit REPO_CONTENT_ROOT
     override both present, the explicit override must win (it is an
     operator's stated intent and cannot be present by accident); ambient
     pointer-file state must not outrank it."""
     with _tempfile.TemporaryDirectory() as _pointer_root, _tempfile.TemporaryDirectory() as _override_root:
         _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: _pointer_root)
-        monkeypatch.setenv("CONTENT_ROOT", _override_root)
         monkeypatch.setenv("REPO_CONTENT_ROOT", _override_root)
         assert reg.content_root() == _override_root
 

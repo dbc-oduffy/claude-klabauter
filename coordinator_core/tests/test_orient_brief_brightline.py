@@ -27,9 +27,9 @@ _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 def _trees() -> dict:
     flat = merged_flat_registry()
     trees = {"claude-klabauter": _ENGINE_ROOT}
-    doe = flat.get("repos.content_root")
-    if doe:
-        trees["coordinator-content-repo"] = Path(doe)
+    content = flat.get("repos.content_root")
+    if content:
+        trees["content-root"] = Path(content)
     return trees
 
 

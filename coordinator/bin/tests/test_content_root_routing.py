@@ -1,0 +1,836 @@
+"""test_content_root_routing.py — C1 routing tests for content_root() + central writes.
+
+Tests (AC1, AC2 from gate2-w23-state-seam-caller-switch.md):
+  AC1-pos   content_root() returns the REPO_CONTENT_ROOT env override when set.
+  AC1-pos   coordinator-lesson-promote._outbox_root() resolves under $(content_root)/state/lessons-outbox.
+  AC1-pos   coordinator-queue-append._output_path() central branch resolves under the claude-klabauter data home.
+  AC2-cold  coordinator-lesson-promote invoked cold (no registered content root, no env override):
+              WARN to stderr, non-zero exit, no file written anywhere.
+  AC2-cold  coordinator-queue-append invoked cold (no registered content root, no env override):
+              WARN to stderr, exit 0, no file written anywhere.
+
+Cold-path tests call the CALLING CLI's main() with _cc_route mocked to invoke legacy_fn()
+directly, so the full resolver chain executes without subprocess isolation gaps. This satisfies
+the lesson requirement (test entry point, not lib in isolation) while avoiding env-isolation
+issues where the subprocess CC seam takes a different code path before legacy_fn is reached.
+
+Every test isolates the resolver ladder by replacing os.environ wholesale and pointing the
+home/settings-home seams at an empty tmp dir, so neither an ambient override nor a real pointer
+file on the operator's box can leak through. Registry seeds carry the content-root key under both
+its current and its compat name so the file is valid on either side of the hub's own rename.
+
+Run: python3 -m pytest coordinator/bin/tests/test_content_root_routing.py
+
+Spec backlink: coordinator-content-repo:pln-gate-2-w2-3-live-caller-switch-3e51cf § C1
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+import contextlib as _contextlib
+import shutil as _shutil
+import tempfile as _tempfile
+import unittest.mock
+from pathlib import Path
+
+_TESTS_DIR = Path(__file__).resolve().parent
+_BIN_DIR = _TESTS_DIR.parent
+_LIB_DIR = _BIN_DIR / "lib"
+_LESSON_PROMOTE_PATH = _BIN_DIR / "coordinator-lesson-promote.py"
+_QUEUE_APPEND_PATH = _BIN_DIR / "coordinator-queue-append.py"
+
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+import coordinator_registry as _reg  # noqa: E402
+from coordinator_core.content_root import (  # noqa: E402
+    CONTENT_ROOT_KEY,
+    POINTER_NAME,
+    _LEGACY_KEY,  # private-name-ok: compat-fallback
+    _LEGACY_POINTER,  # private-name-ok: compat-fallback
+)
+
+_ROOT_KEYS = (CONTENT_ROOT_KEY, _LEGACY_KEY)
+
+
+def _load_cli(path: Path, module_name: str):
+    loader = importlib.machinery.SourceFileLoader(module_name, str(path))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(mod)
+    return mod
+
+
+_lesson_cli = _load_cli(_LESSON_PROMOTE_PATH, "coordinator_lesson_promote")
+_queue_cli = _load_cli(_QUEUE_APPEND_PATH, "coordinator_queue_append")
+
+
+def _isolated_env(home: Path | str, **extra: str) -> dict[str, str]:
+    """A replacement os.environ with only the process basics, every home and
+    settings-home seam pointed at `home`, and `extra` layered on top.
+
+    Used with `patch.dict(os.environ, ..., clear=True)`: no ambient override
+    (and no real pointer file under the operator's home) can reach the ladder.
+    """
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "TEMP", "TMP") if k in os.environ}
+    for var in ("COORDINATOR_SETTINGS_HOME", "CLAUDE_HOME", "HOME", "USERPROFILE"):
+        env[var] = str(home)
+    env.update(extra)
+    return env
+
+
+def _stub_filesystem_rungs():
+    return (
+        unittest.mock.patch.object(_reg, "_mp_marketplace_cache_rung", return_value=""),
+        unittest.mock.patch.object(_reg, "_mp_flat_layout_probe_rung", return_value=""),
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1-pos — content_root() resolves from the env override
+# ---------------------------------------------------------------------------
+
+
+def test_content_root_returns_env_override(tmp_path):
+    """content_root() trusts the env override as-is (§4b idempotency parity)."""
+    fake_root = "/fake/content-root"
+    with unittest.mock.patch.dict(
+        os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=fake_root), clear=True
+    ):
+        result = _reg.content_root()
+    assert result == fake_root
+
+
+def test_content_root_strips_empty_env(tmp_path):
+    """content_root() ignores an empty override (empty string is not a valid override)."""
+    with (
+        unittest.mock.patch.dict(
+            os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=""), clear=True
+        ),
+        unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value="/ml/root"),
+    ):
+        result = _reg.content_root()
+    assert result == "/ml/root"
+
+
+def test_content_root_raises_when_unresolvable(tmp_path):
+    """content_root() raises _DoeUnresolvable when neither env nor machine-local resolve.
+
+    The pointer-file rung is sandboxed by the empty settings home in
+    _isolated_env, and the marketplace-cache/flat-layout rungs are stubbed to
+    "" — on a box with a real pointer configured, clearing only the env
+    overrides and _registry_machine_local_get leaves those filesystem-probing
+    rungs live, so "unresolvable" was not actually achievable.
+    """
+    p1, p2 = _stub_filesystem_rungs()
+    with (
+        unittest.mock.patch.dict(os.environ, _isolated_env(tmp_path), clear=True),
+        unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value=None),
+        p1,
+        p2,
+    ):
+        try:
+            _reg.content_root()
+        except _reg._DoeUnresolvable:
+            pass
+        else:
+            raise AssertionError("expected _DoeUnresolvable to be raised")
+
+
+def test_outbox_root_under_content_state(tmp_path):
+    """_outbox_root() returns $(content_root)/state/lessons-outbox when the override is set."""
+    fake_content = "/fake/content"
+    with unittest.mock.patch.dict(
+        os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=fake_content), clear=True
+    ):
+        result = _lesson_cli._outbox_root()
+    assert result == os.path.join(fake_content, "state", "lessons-outbox")
+
+
+def test_outbox_root_env_override_wins():
+    """LESSON_PROMOTE_OUTBOX_ROOT takes precedence over content_root() resolution."""
+    override = "/override/outbox"
+    with unittest.mock.patch.dict(os.environ, {"LESSON_PROMOTE_OUTBOX_ROOT": override}, clear=False):
+        result = _lesson_cli._outbox_root()
+    assert result == override
+
+
+def test_outbox_root_raises_content_root_unresolvable(tmp_path):
+    p1, p2 = _stub_filesystem_rungs()
+    with (
+        unittest.mock.patch.dict(os.environ, _isolated_env(tmp_path), clear=True),
+        unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value=None),
+        p1,
+        p2,
+    ):
+        try:
+            _lesson_cli._outbox_root()
+        except _reg._DoeUnresolvable:
+            pass
+        else:
+            raise AssertionError("expected _DoeUnresolvable to be raised")
+
+
+def test_central_improvement_queue_under_claude_klabauter():
+    """Central improvement-queue path lands under $(claude_klabauter_root)/state/improvement-queue.
+
+    Rewired (DR-236, 2026-07-25): this test originally asserted content-root routing per
+    the [coordinator-content-repo] docs/plans/2026-07-06-gate2-w23-state-seam-caller-switch.md
+    proposal — but that plan was never ratified (`status: draft`, AC1/AC2 `pending`,
+    its own C3 HELD with recorded disk proof the flip never took effect). The CLI's
+    OWN current source (`coordinator-queue-append`'s `_output_path`, negative-spec
+    docstring) confirms central-scope improvement-queue writes route to
+    `_claude_klabauter_data_home()` unconditionally, per coordinator-content-repo coordinator/docs/wiki/hook-best-practices/state-placement-law.md § Taxonomy
+    "Central/global state" and `docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md`
+    (state/ is claude-klabauter's own disk-truth custody). Only coordinator-lesson-promote's
+    lessons-outbox central write genuinely routes to the content root (see
+    test_outbox_root_under_content_state above) — the two central-state schemas route to
+    different owners, and this test previously conflated them.
+    """
+    fake_claude_klabauter = "/fake/claude-klabauter"
+    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_data_home", return_value=fake_claude_klabauter):
+        result = _queue_cli._output_path(
+            "improvement-queue", "My improvement", queue_scope="central"
+        )
+    assert result.startswith(os.path.join(fake_claude_klabauter, "state", "improvement-queue")), (
+        f"Expected path under {fake_claude_klabauter}/state/improvement-queue, got: {result}"
+    )
+
+
+def test_central_scope_raises_claude_klabauter_unresolvable():
+    """_output_path() central branch raises _ClaudeKlabauterUnresolvable when claude_klabauter_root() cannot resolve.
+
+    Rewired (DR-236, 2026-07-25): see test_central_improvement_queue_under_claude_klabauter's
+    docstring — central-scope improvement-queue routes to the claude-klabauter data home (via
+    `_claude_klabauter_data_home()`, which returns None rather than raising), not the content root;
+    the CLI raises its own `_ClaudeKlabauterUnresolvable` when `_claude_klabauter_data_home()` returns
+    None, not `_reg._DoeUnresolvable`.
+    """
+    with unittest.mock.patch.object(_queue_cli, "_claude_klabauter_data_home", return_value=None):
+        try:
+            _queue_cli._output_path("improvement-queue", "title", queue_scope="central")
+        except _queue_cli._ClaudeKlabauterUnresolvable:
+            pass
+        else:
+            raise AssertionError("expected _ClaudeKlabauterUnresolvable to be raised")
+
+
+def test_project_scope_unaffected(tmp_path):
+    tmpdir = str(tmp_path)
+    with (
+        unittest.mock.patch.object(_queue_cli, "_current_repo_root", return_value=tmpdir),
+        unittest.mock.patch.object(_queue_cli, "_claude_home", return_value="/fake/home"),
+        unittest.mock.patch.dict(os.environ,
+                                 {k: v for k, v in os.environ.items()
+                                  if k != "QUEUE_APPEND_OUTPUT_ROOT"},
+                                 clear=True),
+    ):
+        result = _queue_cli._output_path(
+            "improvement-queue", "title", queue_scope="project"
+        )
+    assert result.startswith(os.path.join(tmpdir, "state", "improvement-queue")), (
+        f"Project-scope path should be under {tmpdir}/state/improvement-queue, got: {result}"
+    )
+
+
+def _make_cold_env(tmpdir: str) -> dict[str, str]:
+    """Return a minimal env dict that neutralizes EVERY rung of content_root()'s
+    resolution ladder (coordinator_registry.py :: content_root), not just the
+    env overrides and MACHINE_LOCAL_IMPL.
+
+    Verified defect (2026-08-26): the previous version of this helper only
+    neutralized rungs 1a/1b (via patch.dict clear=True) and rung 2 (via the
+    MACHINE_LOCAL_IMPL stub below). Rungs 3-4 (the content-root pointer file
+    in the settings home) and rungs 5-6 (marketplace cache / flat plugin
+    layout, via `_mp_marketplace_cache_rung()` / `_mp_flat_layout_probe_rung()`)
+    all resolve `${CLAUDE_HOME:-$HOME}` (and, for the pointer rung,
+    `${settings-home}` too) directly from the *real* process
+    environment/passwd database — clearing os.environ does not blank HOME on
+    POSIX (os.path.expanduser("~") falls back to the pwd entry), and a real
+    pointer file on the operator's box resolved to a live peer-repo checkout,
+    causing this test suite to write real files into that peer repo's live
+    outbox/queue on every "cold" run.
+
+    Fix: point CLAUDE_HOME, COORDINATOR_SETTINGS_HOME, and
+    MACHINE_LOCAL_REGISTRY_DIR at nonexistent/empty subdirectories of the
+    pytest tmpdir. Every rung above resolves its home/settings-home/registry
+    dir through these exact seams (`machine_local_impl_resolve.claude_home()`
+    / `.settings_home()`, and the pointer reader's settings-home resolution),
+    so redirecting them here sandboxes the pointer file, marketplace-cache,
+    and flat-layout probes, and the in-process registry.toml read, all at
+    once — no per-rung monkeypatch needed for these four.
+
+    The env overrides and CLAUDE_KLABAUTER_ROOT are intentionally absent from the returned dict.
+    Pass this as `os.environ` replacement so no parent-env leakage occurs.
+    MACHINE_LOCAL_IMPL is the test-isolation knob shared by coordinator_registry
+    (_registry_machine_local_get) and both CLIs, so one stub covers all callers
+    that still fall through to the subprocess rung.
+    """
+    ml_impl = os.path.join(tmpdir, "_machine_local_stub.py")
+    with open(ml_impl, "w", encoding="utf-8") as fh:
+        fh.write(
+            "import sys\n"
+            "if len(sys.argv) >= 3 and sys.argv[1] == 'get':\n"
+            "    sys.exit(1)\n"
+            "elif len(sys.argv) >= 2 and sys.argv[1] == 'keys':\n"
+            "    print('')\n"
+            "sys.exit(0)\n"
+        )
+    cold_home = os.path.join(tmpdir, "_cold_claude_home")
+    cold_settings_home = os.path.join(tmpdir, "_cold_settings_home")
+    cold_registry_dir = os.path.join(tmpdir, "_cold_registry_dir")
+    os.makedirs(cold_registry_dir, exist_ok=True)
+    return {
+        "MACHINE_LOCAL_IMPL": ml_impl,
+        "CLAUDE_HOME": cold_home,
+        "COORDINATOR_SETTINGS_HOME": cold_settings_home,
+        "MACHINE_LOCAL_REGISTRY_DIR": cold_registry_dir,
+    }
+
+
+def _assert_cold_env_content_root_unresolvable(cold_env: dict[str, str]) -> None:
+    with unittest.mock.patch.dict(os.environ, cold_env, clear=True):
+        try:
+            resolved = _reg.content_root()
+        except _reg._DoeUnresolvable:
+            return
+    raise AssertionError(
+        f"cold env must not resolve content_root(); got {resolved!r} — a resolver "
+        "rung is leaking through _make_cold_env's neutralization"
+    )
+
+
+def _resolvable_lessons_outbox() -> str | None:
+    try:
+        return os.path.join(_reg.content_root(), "state", "lessons-outbox")
+    except Exception:
+        return None
+
+
+def _resolvable_claude_klabauter_improvement_queue() -> str | None:
+    try:
+        root = _queue_cli._claude_klabauter_root()
+    except Exception:
+        return None
+    return os.path.join(root, "state", "improvement-queue") if root else None
+
+
+def _assert_no_stray_files(before: dict[str, set[str]], after: dict[str, set[str]]) -> None:
+    for _dir, _before_names in before.items():
+        _after_names = after.get(_dir, set())
+        _new = _after_names - _before_names
+        assert not _new, f"cold-path must write NO files; found new entries in {_dir}: {_new}"
+
+
+def _snapshot_dir(path: str | None) -> tuple[str | None, set[str]]:
+    if not path or not os.path.isdir(path):
+        return path, set()
+    try:
+        return path, set(os.listdir(path))
+    except OSError:
+        return path, set()
+
+
+_FAKE_LESSON_SCHEMA = {
+    "enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}
+}
+
+_MINIMAL_LESSON_ARGV = [
+    "--title", "cold-path test lesson",
+    "--body", "body text",
+    "--change-kind", "doctrine-edit",
+    "--target-wiki", "docs/wiki/test.md",
+]
+
+# Which rung fails first on a genuinely cold box is an implementation detail of
+# resolution order, so the WARN contract is "names ONE resolvable-root
+# remediation", not a specific one.
+_COLD_REMEDIATION_TOKENS = (
+    "content root",
+    "content_root",
+    "REPO_CONTENT_ROOT",
+    "claude_klabauter",
+    "claude-klabauter",
+    "engine root",
+)
+
+
+def _names_a_remediation(err: str) -> bool:
+    return any(token in err for token in _COLD_REMEDIATION_TOKENS)
+
+
+def _run_cold_lesson(tmpdir: str) -> tuple[int, str]:
+    """Invoke lesson-promote main() with seam-absent simulation and cold env.
+
+    Mocks _cc_route to call legacy_fn() directly (no CC native path), patches
+    env to have MACHINE_LOCAL_IMPL pointing to stub but no content-root
+    override. Returns (return_code, captured_stderr).
+    """
+    cold_env = _make_cold_env(tmpdir)
+    _assert_cold_env_content_root_unresolvable(cold_env)
+    captured_err = io.StringIO()
+
+    def fake_route(op, params, repo_root, legacy_fn):
+        return legacy_fn()
+
+    with (
+        unittest.mock.patch.dict(os.environ, cold_env, clear=True),
+        unittest.mock.patch.object(
+            _lesson_cli, "_cc_route", side_effect=fake_route
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_describe_schema_node", return_value=_FAKE_LESSON_SCHEMA
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_resolve_from_repo", return_value="test-em"
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_current_repo_root", return_value="/fake/repo"
+        ),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        rc = _lesson_cli.main(_MINIMAL_LESSON_ARGV)
+
+    return rc, captured_err.getvalue()
+
+
+def test_lesson_promote_cold_exits_nonzero(tmp_path):
+    """Cold path: exit _EXIT_DOE_UNRESOLVABLE (3) — WARN+skip is graceful but NOT
+    silent success (A13 fix: pre-A13 this returned 0, which was a defect — a caller
+    checking only returncode==0 must be able to trust that the write happened).
+    """
+    rc, _ = _run_cold_lesson(str(tmp_path))
+    assert rc == _lesson_cli._EXIT_DOE_UNRESOLVABLE, (
+        "cold-path must exit _EXIT_DOE_UNRESOLVABLE (3), not silently claim success"
+    )
+
+
+def test_lesson_promote_cold_warn_to_stderr(tmp_path):
+    """Cold path: WARN message on stderr naming a real remediation.
+
+    Verified defect (2026-08-26): a fully-cold env (neither the content root nor
+    the dispatch engine root resolvable) now hits the engine-root gate
+    (`require_dispatch_engine_on_path()`, called at the top of `main()`)
+    BEFORE `_outbox_root()`'s own content-root check is ever reached, so the
+    WARN this produces may name claude-klabauter's own unresolvable-root
+    remediation rather than the content root. Both are legitimate "cold"
+    causes; this assertion checks the WARN names ONE resolvable-root
+    remediation, not a specific one (AC2-cold contract: WARN + non-zero exit
+    + nothing written).
+    """
+    _, err = _run_cold_lesson(str(tmp_path))
+    assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
+    assert _names_a_remediation(err), (
+        "cold-path WARN must name a real remediation (content root or claude-klabauter root)"
+    )
+
+
+def test_lesson_promote_cold_no_file_written(tmp_path):
+    real_outbox = _resolvable_lessons_outbox()
+    _, before_names = _snapshot_dir(real_outbox)
+    _run_cold_lesson(str(tmp_path))
+    written = list(tmp_path.rglob("*.yaml"))
+    assert written == [], f"cold-path must write NO files; found: {written}"
+    _, after_names = _snapshot_dir(real_outbox)
+    _assert_no_stray_files(
+        {real_outbox: before_names} if real_outbox else {},
+        {real_outbox: after_names} if real_outbox else {},
+    )
+
+
+_CENTRAL_IQ_ARGV = [
+    "coordinator-queue-append",
+    "--schema", "improvement-queue",
+    "--title", "cold-path test improvement",
+    "--body", "body text",
+    "--status", "open",
+    "--surface", "coordinator/bin/test",
+    "--proposed-action", "fix it",
+    "--change-kind", "script-edit",
+    "--queue-scope", "central",
+]
+
+
+def _run_cold_queue(tmpdir: str, *, meta_repo_cwd: bool = False) -> str:
+    cold_env = _make_cold_env(tmpdir)
+    argv = list(_CENTRAL_IQ_ARGV)
+    repo_root = "/fake/repo"
+    if meta_repo_cwd:
+        argv[argv.index("central")] = "project"
+        repo_root = cold_env["CLAUDE_HOME"]
+    _assert_cold_env_content_root_unresolvable(cold_env)
+    captured_err = io.StringIO()
+
+    def fake_route(op, params, repo_root, legacy_fn):
+        return legacy_fn()
+
+    with (
+        unittest.mock.patch.dict(os.environ, cold_env, clear=True),
+        unittest.mock.patch("sys.argv", argv),
+        unittest.mock.patch.object(
+            _queue_cli, "_cc_route", side_effect=fake_route
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_claude_klabauter_data_home",
+            side_effect=(lambda: None) if meta_repo_cwd else _queue_cli._claude_klabauter_data_home,
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_claude_home",
+            side_effect=(lambda: repo_root) if meta_repo_cwd else _queue_cli._claude_home,
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_schema_cli_describe",
+            return_value={
+                "required": ["title", "body", "status", "surface",
+                             "proposed_action", "from_repo", "change_kind"],
+                "optional": ["queue_scope", "tags", "evidence"],
+                "enums": {
+                    "status": ["open", "closed", "deferred"],
+                    "change_kind": ["script-edit", "doctrine-edit", "wiki-append"],
+                },
+            }
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_schema_cli_validate", return_value=(True, [])
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_resolve_from_repo", return_value="test-em"
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_current_repo_root", return_value=repo_root
+        ),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        _queue_cli.main()
+
+    return captured_err.getvalue()
+
+
+def test_queue_append_cold_warn_to_stderr(tmp_path):
+    """Cold central invocation: WARN message on stderr (engine root unresolvable).
+
+    Rewired (DR-236, 2026-07-25): queue-append's central-scope write routes to
+    the engine root, not the content root — see test_central_improvement_queue_under_claude_klabauter's
+    docstring above. The CLI's own WARN text confirms this: "the engine root
+    unresolvable — skipping central write: ...". The prefix said CLAUDE_KLABAUTER_ROOT
+    until the engine-root rename (C16/DR-344) retired that variable name from
+    operator-facing prose (54e4b87c0, 2fd1b988f).
+    """
+    err = _run_cold_queue(str(tmp_path), meta_repo_cwd=True)
+    assert "warn:" in err, "cold-path must emit 'warn:' to stderr"
+    assert "engine root unresolvable" in err, "cold-path WARN must mention the engine root"
+    assert "COORDINATOR_ENGINE_ROOT" in err, "cold-path WARN must name the engine-root env var"
+
+
+def test_queue_append_cold_no_file_written(tmp_path):
+    real_queue = _resolvable_claude_klabauter_improvement_queue()
+    _, before_names = _snapshot_dir(real_queue)
+    _run_cold_queue(str(tmp_path))
+    written = list(tmp_path.rglob("*.yaml"))
+    assert written == [], f"cold-path must write NO files; found: {written}"
+    _, after_names = _snapshot_dir(real_queue)
+    _assert_no_stray_files(
+        {real_queue: before_names} if real_queue else {},
+        {real_queue: after_names} if real_queue else {},
+    )
+
+
+def _cold_env_patch():
+    """`_make_cold_env` as a context manager, over a self-cleaning tmpdir.
+
+    Defense-in-depth for the native-skip helpers below, which isolate purely
+    by MOCK: they patch `_cc_route` to return `skipped: True` and never touch
+    the environment, so the moment that mock's assumption does not hold the
+    CLI falls through to a real write-root resolution. Measured 2026-09-20:
+    running `test_cross_repo_memo_draft.py` before this file is enough — the
+    two `test_lesson_promote_native_skip_*` tests then exit 0 instead of
+    `_EXIT_DOE_UNRESOLVABLE` and write `cold-path test lesson` rows into the
+    LIVE content-root outbox, two per run, in a repo this one does not own.
+
+    A mock is an assertion about one code path; the env is what every other
+    path resolves from. These helpers need both, exactly as `_run_cold_lesson`
+    already has both.
+    """
+    tmpdir = _tempfile.mkdtemp(prefix="content-root-routing-cold-")
+    try:
+        with unittest.mock.patch.dict(os.environ, _make_cold_env(tmpdir), clear=True):
+            yield tmpdir
+    finally:
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+_cold_env_patch = _contextlib.contextmanager(_cold_env_patch)
+
+
+def _run_native_skip_lesson() -> tuple[int, str]:
+    captured_err = io.StringIO()
+
+    def fake_route_skip(op, params, repo_root, legacy_fn):
+        return {"skipped": True, "reason": "content root unresolvable"}
+
+    with (
+        _cold_env_patch(),
+        unittest.mock.patch.object(
+            _lesson_cli, "_cc_route", side_effect=fake_route_skip
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_describe_schema_node", return_value=_FAKE_LESSON_SCHEMA
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_resolve_from_repo", return_value="test-em"
+        ),
+        unittest.mock.patch.object(
+            _lesson_cli, "_current_repo_root", return_value="/fake/repo"
+        ),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        rc = _lesson_cli.main(_MINIMAL_LESSON_ARGV)
+
+    return rc, captured_err.getvalue()
+
+
+def test_lesson_promote_native_skip_exits_nonzero():
+    """Native skipped:true must exit _EXIT_DOE_UNRESOLVABLE (3) — graceful degradation,
+    but not silent success (A13 fix — native-op mirror of the legacy_fn
+    _DoeUnresolvable handler; pre-A13 this returned 0, which was a defect)."""
+    rc, _ = _run_native_skip_lesson()
+    assert rc == _lesson_cli._EXIT_DOE_UNRESOLVABLE, (
+        "native skipped:true must exit _EXIT_DOE_UNRESOLVABLE (3), not silently claim success"
+    )
+
+
+def test_lesson_promote_native_skip_warns_unresolvable_root():
+    """Native skipped:true -> 'warn:' plus a named root remediation on stderr.
+
+    Genuinely cold, the CLI may report the engine root unresolvable and return
+    before the content-root branch (the engine root resolves through the same
+    machine-local registry this env blanks), so the assertion accepts any one
+    root remediation rather than a specific rung.
+    """
+    _, err = _run_native_skip_lesson()
+    assert "warn:" in err, "must emit 'warn:' to stderr"
+    assert _names_a_remediation(err), "WARN must name a root remediation"
+
+
+def _run_native_skip_queue() -> str:
+    captured_err = io.StringIO()
+
+    def fake_route_skip(op, params, repo_root, legacy_fn):
+        return {"skipped": True, "reason": "content root unresolvable"}
+
+    with (
+        _cold_env_patch(),
+        unittest.mock.patch("sys.argv", _CENTRAL_IQ_ARGV),
+        unittest.mock.patch.object(
+            _queue_cli, "_cc_route", side_effect=fake_route_skip
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_schema_cli_describe",
+            return_value={
+                "required": ["title", "body", "status", "surface",
+                             "proposed_action", "from_repo", "change_kind"],
+                "optional": ["queue_scope", "tags", "evidence"],
+                "enums": {
+                    "status": ["open", "closed", "deferred"],
+                    "change_kind": ["script-edit", "doctrine-edit", "wiki-append"],
+                },
+            }
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_schema_cli_validate", return_value=(True, [])
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_resolve_from_repo", return_value="test-em"
+        ),
+        unittest.mock.patch.object(
+            _queue_cli, "_current_repo_root", return_value="/fake/repo"
+        ),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        _queue_cli.main()
+
+    return captured_err.getvalue()
+
+
+def test_queue_append_native_skip_warns_engine_root():
+    """Native skipped:true → 'warn:' + 'the engine root' on stderr.
+
+    Rewired (DR-236, 2026-07-25): see test_queue_append_cold_warn_to_stderr's
+    docstring — queue-append's central-scope WARN prefix names the engine
+    root, not the content root (the fixture's own `reason` string is
+    test-authored filler text passed through verbatim by the native op's skip
+    envelope — it does not shape the CLI's own WARN prefix). The prefix said
+    CLAUDE_KLABAUTER_ROOT until the engine-root rename (C16/DR-344) retired that
+    variable name from operator-facing prose (54e4b87c0, 2fd1b988f).
+    """
+    err = _run_native_skip_queue()
+    assert "warn:" in err, "must emit 'warn:' to stderr"
+    assert "engine root unresolvable" in err, "WARN must mention the engine root"
+    assert "COORDINATOR_ENGINE_ROOT" in err, "WARN must name the engine-root env var"
+
+
+def test_queue_append_native_skip_no_file_written(tmp_path):
+    _run_native_skip_queue()
+    written = list(tmp_path.rglob("*.yaml"))
+    assert written == [], f"native skipped:true must write NO files; found: {written}"
+
+
+def _seed_registry_local_toml(reg_dir: str, value: str) -> None:
+    """Seed the content-root key under both its current and compat name.
+
+    `value` is a TOML-ready string body; json.dumps of a str is a valid TOML
+    basic string, so callers pass json.dumps(path).
+    """
+    os.makedirs(reg_dir, exist_ok=True)
+    body = "".join(f'"{key}" = {value}\n' for key in _ROOT_KEYS)
+    with open(os.path.join(reg_dir, "registry.local.toml"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+
+
+def test_content_root_rung2_in_process_zero_spawn(tmp_path):
+    """AC3: with the env overrides cleared and a seeded scratch registry,
+    content_root() returns the registered root AND spawns nothing — asserted
+    by making subprocess.run raise if called, not by timing."""
+    fake_root = str(tmp_path / "registered-content-root")
+    reg_dir = str(tmp_path / "registry")
+    _seed_registry_local_toml(reg_dir, json.dumps(fake_root))
+
+    def _raise_if_spawned(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be called — rung 2 must resolve in-process")
+
+    with (
+        unittest.mock.patch.dict(
+            os.environ,
+            _isolated_env(tmp_path / "home", MACHINE_LOCAL_REGISTRY_DIR=reg_dir),
+            clear=True,
+        ),
+        unittest.mock.patch.object(_reg.subprocess, "run", _raise_if_spawned),
+    ):
+        result = _reg.content_root()
+    assert result == fake_root
+
+
+def test_content_root_rung2_registry_beats_codename_free_rungs(tmp_path):
+    """A registered root beats a pointer file and the filesystem-probing rungs."""
+    pointed = tmp_path / "pointed-root"
+    pointed.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    for pointer_name in (POINTER_NAME, _LEGACY_POINTER):
+        (home / pointer_name).write_text(str(pointed), encoding="utf-8")
+
+    p1, p2 = _stub_filesystem_rungs()
+    with (
+        unittest.mock.patch.dict(os.environ, _isolated_env(home), clear=True),
+        unittest.mock.patch.object(
+            _reg, "_registry_machine_local_get", lambda key: "A" if key in _ROOT_KEYS else None
+        ),
+        p1,
+        p2,
+    ):
+        result = _reg.content_root()
+    assert result == "A"
+
+
+def test_content_root_rung2_backslash_form_passes_through_unchanged(tmp_path):
+    reg_dir = str(tmp_path / "registry")
+    _seed_registry_local_toml(reg_dir, json.dumps("content-claude\\worktree"))
+
+    def _raise_if_spawned(*args, **kwargs):
+        raise AssertionError("subprocess.run must not be called — rung 2 must resolve in-process")
+
+    with (
+        unittest.mock.patch.dict(
+            os.environ,
+            _isolated_env(tmp_path / "home", MACHINE_LOCAL_REGISTRY_DIR=reg_dir),
+            clear=True,
+        ),
+        unittest.mock.patch.object(_reg.subprocess, "run", _raise_if_spawned),
+    ):
+        expected = _reg._mlir_registry_get(CONTENT_ROOT_KEY)
+        assert expected, f"fixture setup failed to seed a resolvable {CONTENT_ROOT_KEY} value"
+        result = _reg.content_root()
+    assert result == expected
+
+
+def test_content_root_rung2_cli_fallback_fires_on_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(_reg, "_mlir_registry_get", lambda key: None)
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = "/spawned/content/root\n"
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2] == "get" and cmd[-1] in _ROOT_KEYS, cmd
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(_reg.subprocess, "run", _fake_run)
+    p1, p2 = _stub_filesystem_rungs()
+    with unittest.mock.patch.dict(os.environ, _isolated_env(tmp_path), clear=True), p1, p2:
+        result = _reg.content_root()
+    assert result == "/spawned/content/root"
+
+
+_MANIFEST_FIXTURE_BODY = (
+    '{"docTypes": [], "queueTypes": [], '
+    '"identity": {"repoAliases": [], "centralReceiverIds": ["x-em"]}}'
+)
+
+
+def _build_bootstrap_fixture_tree(root: str) -> str:
+    fixture_lib_dir = os.path.join(root, "coordinator", "bin", "lib")
+    os.makedirs(fixture_lib_dir)
+    for _name in ("coordinator_registry.py", "machine_local_impl_resolve.py"):
+        _shutil.copyfile(os.path.join(str(_LIB_DIR), _name), os.path.join(fixture_lib_dir, _name))
+    return os.path.join(fixture_lib_dir, "coordinator_registry.py")
+
+
+def test_content_root_module_bootstrap_zero_spawn():
+    _tmp = _tempfile.mkdtemp(prefix="c2-ac6-bootstrap-fixture-")
+    try:
+        fake_content_root = os.path.join(_tmp, "fake-content-root")
+        manifest_dir = os.path.join(fake_content_root, "coordinator", "schemas")
+        os.makedirs(manifest_dir)
+        with open(
+            os.path.join(manifest_dir, "coordinator-registry.manifest.json"),
+            "w",
+            encoding="utf-8",
+        ) as fh:
+            fh.write(_MANIFEST_FIXTURE_BODY)
+
+        reg_dir = os.path.join(_tmp, "registry")
+        _seed_registry_local_toml(reg_dir, json.dumps(fake_content_root))
+
+        copied_registry_path = _build_bootstrap_fixture_tree(_tmp)
+
+        env = _isolated_env(os.path.join(_tmp, "home"), MACHINE_LOCAL_REGISTRY_DIR=reg_dir)
+
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            def _raise_if_spawned(*args, **kwargs):
+                raise AssertionError(
+                    "subprocess.run must not be called during the module-scope "
+                    "manifest bootstrap — the registry rung must resolve in-process first"
+                )
+
+            with unittest.mock.patch.object(subprocess, "run", _raise_if_spawned):
+                loader = importlib.machinery.SourceFileLoader(
+                    "coordinator_registry_ac6_fixture", copied_registry_path
+                )
+                spec = importlib.util.spec_from_loader(loader.name, loader)
+                mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+                loader.exec_module(mod)
+                # The manifest loads lazily on first attribute read (PEP 562
+                # __getattr__), so the read must happen inside the isolated env
+                # and the no-spawn patch.
+                resolved_manifest_path = mod._MANIFEST_PATH
+
+        assert resolved_manifest_path == os.path.join(
+            fake_content_root, "coordinator", "schemas", "coordinator-registry.manifest.json"
+        )
+    finally:
+        _shutil.rmtree(_tmp, ignore_errors=True)

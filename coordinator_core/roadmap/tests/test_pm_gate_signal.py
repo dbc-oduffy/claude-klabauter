@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.content_root_pointer import read_content_root_pointer
 from coordinator_core.roadmap.pm_gate_signal import detect, detect_stub, load_fragment
+from coordinator_core.testing.content_root import resolve_content_root
 
 _VENDORED_FRAGMENT_PATH = (
     Path(__file__).resolve().parents[1] / "fragments" / "pm-gate-signal-fragment.json"
@@ -27,9 +27,9 @@ def test_load_fragment_reads_the_vendored_copy(fragment: dict) -> None:
 
 
 def test_vendored_fragment_is_byte_identical_to_doe_source() -> None:
-    content_root = read_content_root_pointer()
+    content_root = resolve_content_root()
     if not content_root:
-        pytest.skip("coordinator-content-repo sibling root not resolvable on this machine")
+        pytest.skip("content root not resolvable on this machine")
     doe_path = Path(content_root) / _DOE_FRAGMENT_RELPATH
     if not doe_path.is_file():
         pytest.skip(f"DoE source fragment not found at {doe_path}")

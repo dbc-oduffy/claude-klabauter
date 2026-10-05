@@ -22,7 +22,7 @@ and ``coordinator/bin``, an *executable* sentinel probe (``archive-stamp-cli``),
 and distinct fail-loud messages for the two on-disk failure modes (wrong/
 incomplete checkout vs. stale/partial migration).
 
-Deliberately does NOT carry the ``_cc_trusted``/``.coordinator-content-root`` trust-prefix
+Deliberately does NOT carry the ``_cc_trusted``/content-root-pointer trust-prefix
 dance the prior template never carried either — this seam's trust posture
 differs from ``cc-root-source-guard``: ``registry.local.toml`` is a
 per-machine, gitignored, operator-authored config file under the operator's

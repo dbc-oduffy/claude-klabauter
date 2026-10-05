@@ -22,7 +22,7 @@ _SESSION = "sess-emitter"
 
 @pytest.fixture
 def emitted(monkeypatch, tmp_path) -> Path:
-    monkeypatch.setattr(op_module, "read_content_root_pointer", lambda: "doe")
+    monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: _CONTENT_ROOT)
     out = tmp_path / "pipeline.workflow.mjs"
     (tmp_path / "brief.md").write_text("research the fixture subjects", encoding="utf-8")

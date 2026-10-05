@@ -2,7 +2,7 @@
 baton `gem-14`).
 
 Ported in-plane from `coordinator/skills/group-em/send_pass.py` in the
-sibling coordinator-content-repo repo (resolve via `repos.content_root`, not a hardcoded
+sibling coordinator-content-repo repo (resolve via `content_root`, not a hardcoded
 drive path; plan `docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md`,
 chunk C2).
 Rationale, measurements, the superseded first shape, and the PM ruling that

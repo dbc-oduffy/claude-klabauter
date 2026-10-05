@@ -83,12 +83,11 @@ class _LessonPromoteProseTestBase(unittest.TestCase):
                 _cli_mod, "_current_repo_root", return_value="/fake/repo"
             ),
             unittest.mock.patch("sys.stdout", io.StringIO()),
-            # CONTENT_ROOT / LESSON_PROMOTE_OUTBOX_ROOT make main() skip _cc_route and
-            # write through the legacy path into the real DoE outbox.
+            # LESSON_PROMOTE_OUTBOX_ROOT makes main() skip _cc_route and
+            # write through the legacy path into the real outbox.
             unittest.mock.patch.dict(os.environ),
         ):
-            for _lever in ("CONTENT_ROOT", "LESSON_PROMOTE_OUTBOX_ROOT"):
-                os.environ.pop(_lever, None)
+            os.environ.pop("LESSON_PROMOTE_OUTBOX_ROOT", None)
             rc = _cli_mod.main([*extra, *_BASE_ARGV])
             calls = mock_route.call_args_list
         return rc, calls

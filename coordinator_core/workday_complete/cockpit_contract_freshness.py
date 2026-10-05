@@ -22,8 +22,8 @@ Verdict semantics:
 Cost contract (load-bearing — this runs in every repo's daily ceremony on
 every machine): the DoE clone root is resolved LOCALLY FIRST, with ZERO
 network calls (`_resolve_content_root_local`, reusing
-`coordinator_core.ops.emit.doe_drift.resolve_doe_clone`'s bootstrap-safe
-direct-TOML-read registry ladder — no `machine-local` CLI subprocess, no
+`coordinator_core.content_root.read_content_root`'s bootstrap-safe
+registry-and-pointer ladder — no `machine-local` CLI subprocess, no
 `__file__`/git-toplevel self-location). Only when a DoE clone resolves
 locally does this module ever shell out, and then exactly ONE bounded
 `git ls-remote` with an explicit small timeout
@@ -53,10 +53,8 @@ branch the DoE clone happened to be checked out to):
       unconditional `machine-local` CLI subprocess probe at IMPORT time) and
       calls `sys.exit(2)` on failure, neither of which this read-only,
       never-exiting, zero-network-until-resolved probe may inherit. This
-      module reuses `doe_drift.resolve_doe_clone()` instead — the same
-      three-tier ladder shape (env override -> machine-local registry),
-      already proven bootstrap-safe (no subprocess) by its own module
-      contract.
+      module reuses `read_content_root()` instead — bootstrap-safe (no
+      subprocess) by its own module contract.
     - Does NOT read claude-klabauter's own
       `coordinator_core/contract/cockpit_schema/emit_schema.py` literal for
       any version number — that is what claude-klabauter emits NEXT, not what DoE has
@@ -100,7 +98,9 @@ from coordinator_core.git_scope import (
     git_predicate,
     scoped_git_env,
 )
-from coordinator_core.ops.emit import doe_drift
+from coordinator_core.content_root import read_content_root
+
+_CONTENT_ROOT_ENV = "REPO_CONTENT_ROOT"
 
 _LS_REMOTE_TIMEOUT_SECONDS = 5
 
@@ -177,44 +177,38 @@ def _unknown(checked_at: str, reason: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _resolve_content_root_local() -> Optional[Path]:
-    """CONTENT_ROOT env -> REPO_CONTENT_ROOT env -> machine-local `repos.content_root`
-    (direct TOML read via `doe_drift.resolve_doe_clone`, bootstrap-safe: no
-    subprocess).
+    """REPO_CONTENT_ROOT env -> `content_root.read_content_root()`
+    (registry and pointer reads, bootstrap-safe: no subprocess).
 
     Precedence is strict and NON-FALLTHROUGH: an explicit env override is a
     DIRECTIVE, not a hint.
-        1. CONTENT_ROOT set (non-empty after `.strip()`) -> that is the answer.
-           If it does not resolve to an existing directory, resolution FAILS
-           (raises `_FreshnessProbeError` naming the var and the bad path) —
-           REPO_CONTENT_ROOT and the registry are NEVER consulted.
-        2. Else REPO_CONTENT_ROOT set (non-empty) -> same rule: wins outright,
-           or fails hard without falling through to the registry.
-        3. Else -> the machine-local registry (current behaviour, unchanged).
+        1. REPO_CONTENT_ROOT set (non-empty after `.strip()`) -> that
+           is the answer. If it does not resolve to an existing directory,
+           resolution FAILS (raises `_FreshnessProbeError` naming the var
+           and the bad path) — the registry is NEVER consulted.
+        2. Else -> `read_content_root()`.
     An empty/whitespace-only value is treated as UNSET, not as a directive.
 
-    Returns None — never raises for this case — only when BOTH env vars are
-    unset and the registry itself can't resolve a clone; that is the common,
+    Returns None — never raises for this case — only when the env var is
+    unset and the ladder itself can't resolve a clone; that is the common,
     cheap, expected path on a consumer machine with no DoE clone. Raises
     `_FreshnessProbeError` (caught by the caller, folded into UNKNOWN) when an
     env override is set but bad — never silently substitutes a different
     clone for the one the operator named.
     """
-    for env_name in ("CONTENT_ROOT", "REPO_CONTENT_ROOT"):
-        raw = os.environ.get(env_name, "").strip()
-        if raw:
-            candidate = Path(raw).expanduser()
-            if candidate.is_dir():
-                return candidate
-            raise _FreshnessProbeError(
-                f"{env_name} is set to {raw!r} but that is not an existing "
-                "directory — an explicit env override is a directive, not a "
-                "hint, so resolution fails here rather than falling through "
-                "to REPO_CONTENT_ROOT or the machine-local registry"
-            )
-    try:
-        return doe_drift.resolve_doe_clone()
-    except doe_drift.DoeResolveError:
-        return None
+    raw = os.environ.get(_CONTENT_ROOT_ENV, "").strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_dir():
+            return candidate
+        raise _FreshnessProbeError(
+            f"{_CONTENT_ROOT_ENV} is set to {raw!r} but that is not an existing "
+            "directory — an explicit env override is a directive, not a "
+            "hint, so resolution fails here rather than falling through "
+            "to the machine-local registry"
+        )
+    resolved = read_content_root()
+    return Path(resolved) if resolved else None
 
 
 def _ls_remote_release_tag(content_root: Path) -> str:
@@ -415,8 +409,8 @@ def _compute(checked_at: str) -> dict[str, Any]:
     if content_root is None:
         return _unknown(
             checked_at,
-            "no DoE clone resolvable on this machine (checked CONTENT_ROOT, "
-            "REPO_CONTENT_ROOT, and the machine-local repos.content_root "
+            "no DoE clone resolvable on this machine (checked "
+            "REPO_CONTENT_ROOT and the machine-local repos.content_root "
             "registry) — freshness check skipped; this is the expected, "
             "zero-network path on a consumer machine with no DoE clone",
         )

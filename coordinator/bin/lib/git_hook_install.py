@@ -92,14 +92,23 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.py_probe_sh import baked_python_lines
 from coordinator_core.launchable import resolve_launchable
+from coordinator_core.content_root import POINTER_NAME as _CONTENT_ROOT_POINTER
+from coordinator_core.content_root import _LEGACY_POINTER as _LEGACY_ROOT_POINTER
 from coordinator_core.machine_resolver import merged_flat_registry as _merged_flat_registry
 
 GENERATES = []
 
 _MARKETPLACE_SUFFIX = ".claude/plugins/coordinator-claude/coordinator/bin"
 
-_CONTENT_ROOT_DURABLE_SH = '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/.coordinator-content-root'
-_CONTENT_ROOT_LEGACY_SH = '$HOME/.claude/.coordinator-content-root'
+_SETTINGS_MACHINE_LOCAL_SH = '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/machine-local/'
+# Shell `cat` chain: the content-root pointer first (settings-home, then home), then the
+# pre-rename pointer an un-migrated box still carries.
+_CONTENT_ROOT_READ_SH = (
+    'cat "' + _SETTINGS_MACHINE_LOCAL_SH + _CONTENT_ROOT_POINTER + '" 2>/dev/null || '
+    'cat "$HOME/.claude/' + _CONTENT_ROOT_POINTER + '" 2>/dev/null || '
+    'cat "' + _SETTINGS_MACHINE_LOCAL_SH + _LEGACY_ROOT_POINTER + '" 2>/dev/null || '
+    'cat "$HOME/.claude/' + _LEGACY_ROOT_POINTER + '" 2>/dev/null'
+)
 
 
 def _sh_path(p: str) -> str:
@@ -107,7 +116,7 @@ def _sh_path(p: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# COORD_BIN resolution — machine-local registry → .coordinator-content-root pointer → marketplace.
+# COORD_BIN resolution — machine-local registry → content-root pointer → marketplace.
 # Faithful port of the bash ladder; every rung is best-effort (any failure falls
 # through), so the marketplace default is always a valid backstop.
 # ---------------------------------------------------------------------------
@@ -242,10 +251,10 @@ def _resolve_coord_bin(
 
     Rung 1: `<bin_dir>/machine-local get plugin.mirrors.coordinator-claude.source_path`
             (or `machine-local` on PATH) → `<source_path>/bin/<script_name>`.
-    Rung 2: `.coordinator-content-root` pointer, durable-first — settings-home
+    Rung 2: content-root pointer, durable-first — settings-home
             (`$HOME/.coordinator-claude-settings/machine-local/.coordinator-content-root`, DR-072),
-            falling back to the legacy `$HOME/.claude/.coordinator-content-root` —
-            → `<doe>/coordinator/bin/<script_name>`.
+            falling back to `$HOME/.claude/.coordinator-content-root`, then the
+            pre-rename pointer names — → `<content>/coordinator/bin/<script_name>`.
     Rung 3: `machine-local get repos.claude_klabauter` →
             `<claude_klabauter>/coordinator/bin/<script_name>` — the executable
             surface's actual current home on a migrated machine.
@@ -272,7 +281,7 @@ def _resolve_coord_bin(
     is where the executable surface is *authored*; the published
     `claude-klabauter` mirror is the resolved engine root on every box, and in
     an ephemeral container it is the ONLY one of the four present — there is no
-    doctrine clone, no `.coordinator-content-root`, no `repos.claude_klabauter`, and
+    doctrine clone, no content-root pointer, no `repos.claude_klabauter`, and
     `$HOME/.claude/plugins/` is never populated because the plugin is resolved
     via `--plugin-dir`. Without this rung the ladder exhausts to a rung-5 path
     that does not exist, `_ensure_hook` finds no target and skips fail-open, and
@@ -321,19 +330,21 @@ def _resolve_coord_bin(
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
         home, ".coordinator-claude-settings"
     )
-    for content_root_ptr in (
-        os.path.join(settings_home, "machine-local", ".coordinator-content-root"),
-        os.path.join(home, ".claude", ".coordinator-content-root"),
+    for pointer_path in (
+        os.path.join(settings_home, "machine-local", _CONTENT_ROOT_POINTER),
+        os.path.join(home, ".claude", _CONTENT_ROOT_POINTER),
+        os.path.join(settings_home, "machine-local", _LEGACY_ROOT_POINTER),
+        os.path.join(home, ".claude", _LEGACY_ROOT_POINTER),
     ):
         try:
-            with open(content_root_ptr, encoding="utf-8") as fh:
-                content_root = fh.read().strip()
+            with open(pointer_path, encoding="utf-8") as fh:
+                pointer_root = fh.read().strip()
         except OSError:
             continue
-        if content_root:
+        if pointer_root:
             from coordinator_data_root import content_root_for
 
-            content = content_root_for(content_root)
+            content = content_root_for(pointer_root)
             if content is not None:
                 cand_bin = os.path.join(str(content), "bin")
                 if _helper_present(cand_bin, script_name):
@@ -489,7 +500,10 @@ def _resolve_klabauter_bin_sh(script_name: str) -> Optional[str]:
 #
 # Gen 17: one body carrying both the gen-15 notice and the gen-16 refusal;
 # bodies stamped 15 or 16 lack one of them.
-_HOOK_GEN_STAMP = 17
+#
+# Gen 18: the shell fallback reads the content-root pointer ahead of the
+# pre-rename pointer name; a gen-17 body reads only the latter.
+_HOOK_GEN_STAMP = 18
 
 
 def _hook_gen_stamp_line() -> str:
@@ -598,7 +612,7 @@ def _shim_body(
     flag — that is the hooksPath redirect wearing a disguise.
 
     The shell fallback chain (settings-home forwarder → baked SCRIPT →
-    .coordinator-content-root pointer → engine-repo-bin candidate → published-mirror
+    content-root pointer → engine-repo-bin candidate → published-mirror
     candidate (F4) → marketplace) means
     an already-installed hook can recover a dead baked path WITHOUT waiting
     for the next `_resolve_coord_bin` regeneration — self-healing at
@@ -737,8 +751,7 @@ def _shim_body(
         f'_have_py "$SCRIPT" || SCRIPT="$_cb/{script_name}.py"\n'
         f'_have_py "$SCRIPT" || SCRIPT="{coord_bin_sh}/{script_name}"\n'
         f'_have_py "$SCRIPT" || SCRIPT="{coord_bin_sh}/{script_name}.py"\n'
-        '_have_py "$SCRIPT" || { _dr="$(cat "' + _CONTENT_ROOT_DURABLE_SH + '" 2>/dev/null || '
-        'cat "' + _CONTENT_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
+        '_have_py "$SCRIPT" || { _dr="$(' + _CONTENT_ROOT_READ_SH + ')"; '
         f'[ -n "$_dr" ] && _have_py "$_dr/coordinator/bin/{script_name}" && '
         f'SCRIPT="$_dr/coordinator/bin/{script_name}"; '
         f'[ -n "$_dr" ] && ! _have_py "$SCRIPT" && _have_py "$_dr/coordinator/bin/{script_name}.py" && '
@@ -748,7 +761,7 @@ def _shim_body(
         f'_have_py "$SCRIPT" || SCRIPT="{fallback}.py"\n'
         '_have_py "$SCRIPT" || { echo "[coordinator] WARNING: hook installed but '
         f'{script_name} not found (looked in settings-home forwarder, baked path, '
-        '.coordinator-content-root, machine-local repos.claude_klabauter, and marketplace) — commits '
+        'content-root pointer, machine-local repos.claude_klabauter, and marketplace) — commits '
         'are NOT being auto-pushed / annotated by this hook" 1>&2; exit 0; }\n'
         # A hook that resolved past rung 1 works today and is one rename from
         # silence: the only terminal signal is the not-found WARNING above, after
@@ -849,8 +862,7 @@ def _append_block(
         f'_have_py "$_T" || _T="$_cb/{script_name}.py"; '
         f'_have_py "$_T" || _T="{coord_bin_sh}/{script_name}"; '
         f'_have_py "$_T" || _T="{coord_bin_sh}/{script_name}.py"; '
-        '_have_py "$_T" || { _dr="$(cat "' + _CONTENT_ROOT_DURABLE_SH + '" 2>/dev/null || '
-        'cat "' + _CONTENT_ROOT_LEGACY_SH + '" 2>/dev/null)"; '
+        '_have_py "$_T" || { _dr="$(' + _CONTENT_ROOT_READ_SH + ')"; '
         f'[ -n "$_dr" ] && _have_py "$_dr/coordinator/bin/{script_name}" && '
         f'_T="$_dr/coordinator/bin/{script_name}"; '
         f'[ -n "$_dr" ] && ! _have_py "$_T" && _have_py "$_dr/coordinator/bin/{script_name}.py" && '
@@ -859,7 +871,7 @@ def _append_block(
         f'_have_py "$_T" || _T="{fallback}"; '
         f'_have_py "$_T" || _T="{fallback}.py"; '
         f'_have_py "$_T" || echo "[coordinator] WARNING: hook installed but {script_name} '
-        'not found (looked in settings-home forwarder, baked path, .coordinator-content-root, '
+        'not found (looked in settings-home forwarder, baked path, content-root pointer, '
         'machine-local repos.claude_klabauter, and marketplace) — commits are NOT being '
         'auto-pushed / annotated by this hook" 1>&2; '
         '[ -n "$_PY" ] || echo "[coordinator] WARNING: hook installed but no '

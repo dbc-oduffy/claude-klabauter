@@ -56,23 +56,22 @@ Two things the row settles that this module should not re-litigate:
     by the question a key answers, and no reader wants "all role assignments
     across all concerns". The indirection is a value shape, not a namespace.
 
-Resolution precedence, mirroring content_root_pointer.py's documented tiered
+Resolution precedence, mirroring content_root.py's documented tiered
 shape (see that module's docstring for the general pattern this borrows):
     1. registry `tracker.holder_repo` -> `repos.<value>`   (canonical, only rung)
     2. (no derived-seed rung — deliberately absent, see below)
     3. (no fallback rung — deliberately absent, see below)
 
 Tiers 2 and 3 are deliberately EMPTY, and the emptiness is the point.
-`content_root_pointer` has a file-mirror rung and a legacy-file rung because it
+`content_root` has a file-mirror rung and a legacy-file rung because it
 is read-only oracle fidelity for a value that predates the registry and must
-degrade gracefully across a `~/.claude` reset (see that module's own "Why
-registry-first" section for the reset-survival argument, cited not
-restated). None of that applies here: there is no pre-registry oracle for
+degrade gracefully across a `~/.claude` reset (see DR-071 for the
+reset-survival argument, cited not restated). None of that applies here: there is no pre-registry oracle for
 `tracker.holder_repo` to stay faithful to, and there is no legitimate
 default holder to fall back to — an unset holder is a genuine "the operator
 has not decided this yet" state, not a transient read-path gap. A seed or
-fallback rung must NOT be added "for symmetry" with content_root_pointer's
-four-tier shape: see § The fail-loud fork below for why this resolver raises
+fallback rung must NOT be added "for symmetry" with content_root's
+multi-tier shape: see § The fail-loud fork below for why this resolver raises
 instead of degrading.
 
 No bespoke env rung. `coordinator_core.machine_resolver.registry_get`
@@ -96,8 +95,8 @@ which is the brightline decision itself — the whole reason this key exists
 is that "which repo catches unowned identity" is a decision only a human
 operator makes, not a default this module infers.
 
-The fail-loud fork (why this resolver raises where content_root_pointer returns
-""): `content_root_pointer.read_content_root_pointer()` returns `""` on an
+The fail-loud fork (why this resolver raises where content_root returns
+""): `content_root.read_content_root()` returns `""` on an
 unresolved key and never raises, deliberately mirroring a bash
 `cat ... 2>/dev/null || true` — oracle fidelity to the bash predecessor it
 ports, per DR-071/DR-148, with the caller applying the gate itself. That
@@ -109,7 +108,7 @@ resolver therefore raises on every unresolved/unresolvable rung instead
 (implemented by `holder_repo_root()` and `write_root_for()`, landing in this
 same file after this chunk — see their own docstrings for the exact
 exceptions raised). Do not "harmonize" this resolver's failure contract back
-onto content_root_pointer's `""`-return shape; the divergence is deliberate, not
+onto content_root's `""`-return shape; the divergence is deliberate, not
 drift.
 
 Semantic brightline guard (for C2/C3 to implement, documented here as the

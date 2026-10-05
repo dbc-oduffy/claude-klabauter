@@ -18,7 +18,7 @@ same "read a JSON fragment off disk, parse it verbatim" shape
 ``coordinator_core.ops.review_mint.op.load_fragment`` uses for its supplied
 roster fragment, but WITHOUT that function's live sibling-clone resolution:
 ``review_mint/op.py``'s module docstring names its own
-``read_content_root_pointer()`` call as the ONE sanctioned live cross-repo read
+``read_content_root()`` call as the ONE sanctioned live cross-repo read
 site in that plan's surface, and ``dispatch_emit/emit.py``'s docstring names
 any OTHER live sibling-clone resolution as the defect class it exists to
 avoid. This module neither resolves the sibling root at runtime nor accepts
