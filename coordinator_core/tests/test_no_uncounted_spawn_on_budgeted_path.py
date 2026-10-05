@@ -991,6 +991,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/sizing_record_xl_exit.py",
         ("_handler",),
     ),
+    "sizing.record_pm_resolution": (
+        "coordinator_core/ops/sizing_record_pm_resolution.py",
+        ("_handler",),
+    ),
     "sizing.record_spike_verdict": (
         "coordinator_core/ops/sizing_spike_verdict.py",
         ("_handler",),

@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.block_dev_repo_sentinel_write -- advisory
+"""coordinator_core.write_guards.block_dev_repo_sentinel_write -- hard-deny
 guard closing the file-write leg of the `.coordinator-dev-repo` removal
 guard.
 
@@ -26,49 +26,19 @@ here. The message below is scaled to that lower stakes -- it does not
 repeat the Bash leg's "breaks the discriminant fleet-wide" framing.
 
 Mechanism: delegates entirely to the shared `_sentinel_write_guard` helper
-(`extract_target_path`, `sentinel_write_advisory`), same as every sibling
+(`extract_target_path`, `sentinel_write_denial`), same as every sibling
 sentinel-write guard in this package. No approval-lookup ordering concern
 -- this guard exists solely to protect one path.
 
-CLASS = "advisory" (2026-08-06 write-guard classification pass,
-docs/plans/2026-08-06-apply-guard-class-census.md C12): reclassified from
-hard-deny per DR-277. The sentinel's mere PRESENCE is the discriminant
-(see above), not its content, so even a maximally destructive `Write`
-here cannot remove the discriminant -- the file still satisfies
-`isfile()`/`exists()`. This guard now calls `sentinel_write_advisory()`,
-the additive advisory-shaped sibling of `sentinel_write_denial()` added
-to `_sentinel_write_guard.py` for this flip -- `sentinel_write_denial()`
-itself is untouched, so the OTHER hard-deny callers of that helper
-(`block_disarm_marker_sentinel_write.py`, `block_worktree_sentinel_write.py`,
-`guard_doctrine_surface_edits.py`, `guard_settings_json_write.py`) keep
-their deny envelope unchanged.
-
-Advisory message discipline -- the sentinel's basename is still never
-printed in this guard's own reason text (a separate concern from the
-bypass question below: naming `.coordinator-dev-repo` here would tell an
-agent exactly what this guard protects, for no reader benefit). The
-channel-withholding half of that discipline -- never naming the override at
-all -- IS the rule, per `operator_override_note`'s 2026-08-13 audience-gated
-reshape (docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
-B6, docs/wiki/guard-messaging.md § Register): the reason text below never
-names the env var, the assignment form, or any other override artifact --
-`operator_override_note` returns a doc-pointer-only string for a positively
-resolved EM audience, and the empty string for every other audience
-(dispatched subagent, or unresolved), and this guard splices whichever
-comes back with no special-casing. (The in-session-unlock auto-append at the
-`write_guards.engine` seam,
-docs/plans/2026-08-03-in-session-operator-unlock-for-the-hard-.md § C4,
-applies only to the hard-deny phase -- this guard's advisory no longer
-reaches it, and its reason text does not depend on that append.)
+CLASS = "hard-deny"; the policy point (``machine_profile.apply_guard_level``)
+leaves the deny on an author box and downgrades it to a warning on a consumer
+box. The reason text never names the sentinel's basename or the override
+mechanism (``operator_override_note`` gates that by audience; see
+docs/wiki/guard-messaging.md § Register).
 
 Override: `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (pre-launch, same env var
-as the Bash-leg sibling, so a single override covers both legs of one
-operator intent) -- named here in this docstring for the reader of the code,
-never in the rendered guard message itself (see discipline note above). The
-in-session unlock (per-`(session_id, guard_name)`, one-shot,
-`coordinator_core.session.guard_unlock_sentinel`) is additive, reachable
-from inside the very session that hit this deny, and is never the sole
-channel named here -- the pre-launch key stays supported unchanged.
+as the Bash-leg sibling, so one override covers both legs) -- named here
+for the reader of the code, never in the rendered message.
 
 Removal stays allowed on this leg by construction -- there is no
 file-deletion tool in `MATCHERS`; the Bash-leg sibling is the one that
@@ -82,12 +52,12 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
-    sentinel_write_advisory,
+    sentinel_write_denial,
 )
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 122
 
@@ -95,7 +65,7 @@ _SENTINEL_NAME = ".coordinator-dev-repo"
 
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL"
 
-def _advisory_reason(payload: Optional[Dict[str, Any]]) -> str:
+def _deny_reason(payload: Optional[Dict[str, Any]]) -> str:
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     base = (
         "[dev-repo guard] This file's mere presence is the dev-vs-OSS "
@@ -121,6 +91,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not target:
         return None
 
-    return sentinel_write_advisory(
-        target, _SENTINEL_NAME, _advisory_reason(payload), payload=payload
+    return sentinel_write_denial(
+        target, _SENTINEL_NAME, _deny_reason(payload), payload=payload
     )

@@ -17,7 +17,7 @@ from typing import Any
 ASK_PHASES = ("size", "gate", "plan", "stage", "execute", "review")
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
-RUN_DIR_ROOT = "state/scratch/warp"
+RUN_DIR_ROOT = "scratch/warp"
 ASK_MANIFEST_MARKER = "// coordinator:ask-run-manifest v1 "
 
 

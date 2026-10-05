@@ -155,7 +155,7 @@ def test_block_completion_monolith_write_check_deny():
     }
     result = block_completion_monolith_write.check(payload)
     assert result is not None
-    rendered = result["hookSpecificOutput"]["additionalContext"]
+    rendered = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert_render_carries_reachability_constraint(rendered, context="block_completion_monolith_write.check")
     assert operator_override_note(block_completion_monolith_write._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
@@ -167,7 +167,7 @@ def test_block_priority_ledger_edit_check_deny():
     }
     result = block_priority_ledger_edit.check(payload)
     assert result is not None
-    rendered = result["hookSpecificOutput"]["additionalContext"]
+    rendered = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert_render_carries_reachability_constraint(rendered, context="block_priority_ledger_edit.check")
     assert operator_override_note(block_priority_ledger_edit._OVERRIDE_ENV_VAR, payload=payload) in rendered
 
@@ -201,7 +201,7 @@ def test_nudge_improvement_queue_write_deny_omits_the_override_note():
     }
     result = nudge_improvement_queue_write.check(payload)
     assert result is not None
-    rendered = result["hookSpecificOutput"]["additionalContext"]
+    rendered = result["hookSpecificOutput"]["permissionDecisionReason"]
     env_var = nudge_improvement_queue_write._ESCAPE_HATCH_ENV_VAR
     assert operator_override_note(env_var, payload=payload, reason_placeholder="<one-sentence reason>") == ""
     assert "re-run the write" not in rendered
@@ -252,7 +252,7 @@ def test_nudge_improvement_queue_write_trivial_justification_still_denies():
     }
     result = nudge_improvement_queue_write.check(payload)
     assert result is not None
-    rendered = result["hookSpecificOutput"]["additionalContext"]
+    rendered = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "trivial" in rendered
 
 

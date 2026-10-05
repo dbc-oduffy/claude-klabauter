@@ -1,10 +1,10 @@
-"""coordinator_core.write_guards.block_cutover_phase_hand_edit — advisory guard.
+"""coordinator_core.write_guards.block_cutover_phase_hand_edit — hard-deny guard.
 
 Closes the unsanctioned-hand-edit half of the cutover state machine's D1
 split (D1/D4, `docs/plans/2026-07-25-cutover-state-machine.md`): the
 sanctioned advance is a registered op (`cutover.advance`, gated by
 `cutover.gate`'s engine-derived consumer-coverage check); this guard is the
-complementary advisory on the OTHER path — an agent directly `Write`/`Edit`/
+complementary guard on the OTHER path — an agent directly `Write`/`Edit`/
 `MultiEdit`-ing a cutover record's `phase:` frontmatter field, which skips
 the gate entirely. `phase: dual-write` -> `phase: retiring` is a two-character
 Edit, and per plan decision D3 the frontmatter schema validator does not
@@ -19,7 +19,7 @@ same interface (`write_guards/INTERFACE.md`): path-candidate extraction
 normalization, `..`-traversal rejection, git-root-relative containment
 against the cutover records tree, and a first-frontmatter-block field
 extractor. Unlike that guard there is no scaffold to pre-create — the
-sanctioned route already exists (`cutover-cli advance`) — so the advisory
+sanctioned route already exists (`cutover-cli advance`) — so the deny reason
 leads directly with that route (design-as-offers) rather than writing a
 file.
 
@@ -47,13 +47,14 @@ Negative-spec:
     phase; the guard only fires once a record already exists on disk.
   - Does NOT fail closed on any error — every subprocess/file-read failure
     degrades to ALLOW (fewer candidates matched), matching the sibling
-    guards' fail-open discipline; a guard crash never fabricates an
-    advisory (`write_guards/engine.py`'s own contract: "the engine never
-    fabricates a deny on a guard crash", which applies equally to the
-    advisory phase never fabricating a firing).
+    guards' fail-open discipline; a guard crash never fabricates a
+    deny (`write_guards/engine.py`'s own contract).
   - Does NOT re-implement `cutover.gate`'s coverage logic — this guard has
     no opinion on whether an advance IS correct, only on whether it went
     through the sanctioned op.
+
+CLASS = "hard-deny"; the policy point (``machine_profile.apply_guard_level``)
+leaves the deny on an author box and downgrades it to a warning on a consumer box.
 
 Spec backlink: coordinator-content-repo:pln-cutover-state-machine-a-phase--96db57 (chunk C4d, D1, D3, D4)
 """
@@ -67,10 +68,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core._hook_envelope import deny
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 112
 
@@ -256,11 +258,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return deny("PreToolUse", reason)
     except Exception:
         return None

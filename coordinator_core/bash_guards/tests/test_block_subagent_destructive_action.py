@@ -4202,3 +4202,31 @@ def test_git_archive_to_stdout_and_update_index_chmod(cmd, allowed):
     result = guard.check(_payload(cmd, agent_type="coordinator:executor"))
     denied = result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert denied is not allowed, (cmd, result)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git apply --check scratch/x.patch",
+        "git apply --stat scratch/x.patch",
+        "git apply --numstat --summary scratch/x.patch",
+    ],
+)
+def test_git_apply_report_only_forms_allow(cmd):
+    assert guard.check(_payload(cmd, agent_type="coordinator:executor")) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git apply scratch/x.patch",
+        "git apply --stat --apply scratch/x.patch",
+        "git apply --check --index scratch/x.patch",
+        "git apply --check --3way scratch/x.patch",
+        "git apply --check --unsafe-paths scratch/x.patch",
+    ],
+)
+def test_git_apply_writing_forms_deny(cmd):
+    result = guard.check(_payload(cmd, agent_type="coordinator:executor"))
+    assert result is not None
+    assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]

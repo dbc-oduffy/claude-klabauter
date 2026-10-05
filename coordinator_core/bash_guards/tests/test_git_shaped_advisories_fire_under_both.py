@@ -130,8 +130,8 @@ class TestReapStaleGitLockBothDialects:
         assert not ps_lock.exists(), "PowerShell-dialect call did not reap the aged lock"
 
 
-class TestBlockDevRepoSentinelRemovalAdvisoryBothDialects:
-    NAME = "block-dev-repo-sentinel-removal-advisory"
+class TestBlockDevRepoSentinelRemovalBothDialects:
+    NAME = "block-dev-repo-sentinel-removal"
     SENTINEL = ".coordinator-dev-repo"
 
     def test_matchers_declare_both_dialects(self, tmp_path):
@@ -142,7 +142,7 @@ class TestBlockDevRepoSentinelRemovalAdvisoryBothDialects:
         assert "Bash" in entry.matchers
         assert "PowerShell" in entry.matchers
 
-    def test_git_rm_sentinel_advises_identically_under_both_dialects(self, tmp_path):
+    def test_git_rm_sentinel_denies_identically_under_both_dialects(self, tmp_path):
         cmd = "git rm %s" % self.SENTINEL
         bash_entry = _entry(_chain(cmd, "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain(cmd, "sess-b", str(tmp_path), "PowerShell"), self.NAME)
@@ -150,9 +150,7 @@ class TestBlockDevRepoSentinelRemovalAdvisoryBothDialects:
         bash_out = bash_entry.fn()
         ps_out = ps_entry.fn()
 
-        assert bash_out is not None, "expected an advisory envelope (Bash)"
-        assert ps_out is not None, "expected an advisory envelope (PowerShell)"
-        assert bash_out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert ps_out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert "additionalContext" in bash_out["hookSpecificOutput"]
-        assert "additionalContext" in ps_out["hookSpecificOutput"]
+        assert bash_out is not None, "expected a deny envelope (Bash)"
+        assert ps_out is not None, "expected a deny envelope (PowerShell)"
+        assert bash_out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert ps_out["hookSpecificOutput"]["permissionDecision"] == "deny"

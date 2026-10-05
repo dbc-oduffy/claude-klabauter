@@ -350,9 +350,6 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
 #: yet. Shrink-only: each entry is a guard whose message offers something
 #: that is not a command.
 KNOWN_DEAD_OFFERS: Dict[str, int] = {
-    # "Status stamps use instead:\n  .coordinator-local/subagent-share/<path>.md
-    # (report_sidecar)" -- an annotated path, not an invocable command.
-    "block_subagent_plan_body_bash_write": 1,
 }
 
 #: the Director of Engineering's review (finding 6, "UNVERIFIABLE is an ungated sink"): pin a

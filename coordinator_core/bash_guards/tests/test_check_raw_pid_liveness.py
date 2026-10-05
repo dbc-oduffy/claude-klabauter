@@ -20,10 +20,10 @@ def _payload(command, agent_id=None):
 
 
 def _reason(out):
-    assert out is not None, "expected an advisory envelope, got a bare allow"
+    assert out is not None, "expected a deny envelope, got a bare allow"
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 @pytest.fixture(autouse=True)

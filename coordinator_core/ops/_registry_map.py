@@ -237,6 +237,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "sizing.discharge_surfaced":                "coordinator_core.ops.sizing_discharge_surfaced",
     "sizing.accept_exit_criterion":              "coordinator_core.ops.sizing_accept_exit_criterion",
     "sizing.record_xl_exit":                     "coordinator_core.ops.sizing_record_xl_exit",
+    "sizing.record_pm_resolution":               "coordinator_core.ops.sizing_record_pm_resolution",
     "sizing.resize":                            "coordinator_core.ops.sizing_resize",
     "sizing.record_spike_verdict":              "coordinator_core.ops.sizing_spike_verdict",
     "sizing.read_object_fields":                "coordinator_core.ops.read_sizing_object_fields",

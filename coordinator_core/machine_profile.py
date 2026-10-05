@@ -6,8 +6,10 @@ registry value wins; absent, the box is ``author`` when any registered
 else ``consumer``.
 
 ``coordinator.guard_level`` is ``strict``, ``warn`` or ``off``, with a
-per-guard override ``coordinator.guard_level.<guard-name>``. Absent, it is
-``warn`` on every box, author or consumer, except a ``GUARD_DEFAULT_LEVEL`` guard.
+per-guard override ``coordinator.guard_level.<guard-name>``. Absent, a
+``GUARD_DEFAULT_LEVEL`` guard takes its entry; otherwise it follows the profile:
+``strict`` on an author box, ``warn`` on a consumer box. Warn is a consumer
+courtesy; the box that builds coordinator holds the standard.
 ``FLOOR_GUARDS`` (irreversible-harm guards and the consumed-handoff freeze)
 never consult it.
 
@@ -200,7 +202,8 @@ def guard_level(guard_name: str) -> str:
     """``strict``, ``warn`` or ``off`` for ``guard_name``.
 
     Per-guard key, then the guard's ``GUARD_DEFAULT_LEVEL`` entry, then the
-    global key; absent all three, ``warn`` on every profile.
+    global key; absent all three, ``strict`` on an author box and ``warn`` on a
+    consumer box.
     """
     slot = _slot()
     memo = "level:" + guard_name
@@ -211,7 +214,7 @@ def guard_level(guard_name: str) -> str:
         _explicit(LEVEL_KEY + "." + guard_name, LEVELS)
         or GUARD_DEFAULT_LEVEL.get(guard_name)
         or _explicit(LEVEL_KEY, LEVELS)
-        or "warn"
+        or ("strict" if machine_profile() == "author" else "warn")
     )
     slot[memo] = level
     return level
@@ -241,6 +244,8 @@ FLOOR_GUARDS = frozenset(
         "block-subagent-destructive-action",  # a subagent's destructive act on a shared tree
         "block-stash-destruction",  # drop/clear of a stash loses the only copy
         "block-topic-branch",  # fleet rule: commit only to the day branch; a level must not lower it
+        "block-perforce-submit",  # PM box policy: nothing is submitted or shelved to Perforce
+        "block-unreal-engine-resave",  # an engine-content rewrite needs a launcher Verify to undo
         # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
         # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
         "block-consumed-handoff-edit",

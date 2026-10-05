@@ -8,10 +8,10 @@ from coordinator_core.ops.dispatch_emit import commit_request
 
 def _manifest():
     rows = (
-        c.ManifestRow("C1", "executor", "sonnet", "state/scratch/warp/r/C1.md", ("a.py", "b.py"), 0),
-        c.ManifestRow("C2", "executor", "opus", "state/scratch/warp/r/C2.md", (), 1),
+        c.ManifestRow("C1", "executor", "sonnet", "scratch/warp/r/C1.md", ("a.py", "b.py"), 0),
+        c.ManifestRow("C2", "executor", "opus", "scratch/warp/r/C2.md", (), 1),
     )
-    return c.StageManifest("state/scratch/warp/r", rows, ("a.py",), "state/scratch/warp/r/req.json")
+    return c.StageManifest("scratch/warp/r", rows, ("a.py",), "scratch/warp/r/req.json")
 
 
 def test_manifest_round_trip():

@@ -9,7 +9,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 
 def _manifest(**kw):
     return StageManifest(
-        run_dir="state/scratch/warp/r",
+        run_dir="scratch/warp/r",
         rows=(ManifestRow("A", "executor", "m", "b.md", ("a.py",), 0),),
         review_declared_paths=("a.py",),
         marker_path="m.json",

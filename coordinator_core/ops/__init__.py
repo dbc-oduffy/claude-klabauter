@@ -235,6 +235,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'and verbatim quote on a sizing)',
     ),
     (
+        "coordinator_core.ops.sizing_record_pm_resolution",
+        'registers "sizing.record_pm_resolution" (2026-10-05, records a PM ruling\'s '
+        'verbatim quote under an arbitrary `pm_resolution` key on a sizing)',
+    ),
+    (
         "coordinator_core.ops.sizing_resize",
         'registers "sizing.resize" (2026-10-01, writes `estimate.tshirt` and the '
         'engine-resolved `route` back to a sizing)',

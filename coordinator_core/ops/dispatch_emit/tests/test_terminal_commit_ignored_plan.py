@@ -57,7 +57,7 @@ def root(tmp_path):
 
 
 def test_ignored_untracked_plan_is_not_staged(root):
-    rel = "state/scratch/warp/run/p.spine.md"
+    rel = "scratch/warp/run/p.spine.md"
     (root / rel).parent.mkdir(parents=True)
     (root / rel).write_text(_PLAN, encoding="utf-8")
     assert _stamp(root, rel) == []

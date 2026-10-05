@@ -11,29 +11,29 @@ def _payload(tool_name, file_path):
     return {"tool_name": tool_name, "tool_input": {"file_path": file_path}}
 
 
-def _advisory_reason(out):
-    assert out is not None, "expected an advisory envelope, got allow"
+def _deny_reason(out):
+    assert out is not None, "expected a deny envelope, got allow"
     hso = out["hookSpecificOutput"]
-    assert "permissionDecision" not in hso
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 class TestAdvisesEachMatcher:
     def test_write_advises(self):
-        _advisory_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
+        _deny_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
 
     def test_edit_advises(self):
-        _advisory_reason(guard.check(_payload("Edit", "/repo/%s" % SENTINEL)))
+        _deny_reason(guard.check(_payload("Edit", "/repo/%s" % SENTINEL)))
 
     def test_multiedit_advises(self):
-        _advisory_reason(guard.check(_payload("MultiEdit", "/repo/%s" % SENTINEL)))
+        _deny_reason(guard.check(_payload("MultiEdit", "/repo/%s" % SENTINEL)))
 
     def test_notebookedit_advises(self):
         payload = {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/repo/%s" % SENTINEL}}
-        _advisory_reason(guard.check(payload))
+        _deny_reason(guard.check(payload))
 
     def test_case_varied_basename_advises(self):
-        _advisory_reason(guard.check(_payload("Write", "/repo/.COORDINATOR-DEV-REPO")))
+        _deny_reason(guard.check(_payload("Write", "/repo/.COORDINATOR-DEV-REPO")))
 
 
 class TestPassSet:
@@ -59,12 +59,12 @@ class TestOverrideEnvVar:
         assert guard.check(_payload("Write", "/repo/%s" % SENTINEL)) is None
 
 
-class TestAdvisoryMessageDiscipline:
-    def test_advisory_reason_never_names_the_sentinel(self):
-        reason = _advisory_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
+class TestDenyMessageDiscipline:
+    def test_deny_reason_never_names_the_sentinel(self):
+        reason = _deny_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
         assert SENTINEL not in reason
 
-    def test_advisory_reason_never_names_override_assignment_form(self):
+    def test_deny_reason_never_names_override_assignment_form(self):
         """`operator_override_note`'s 2026-08-11 NEGATIVE SPEC 4 (and the
         same-day second reshape, docs/plans/2026-08-11-guard-messages-point-
         to-docs-never-name.md) forbid a pasteable `KEY=1`/`KEY="..."` literal
@@ -76,6 +76,6 @@ class TestAdvisoryMessageDiscipline:
         `session_id`/`agent_id`, as `_payload()` builds here) degrades to no
         note at all, so this assertion holds vacuously for the resolvable
         case and by construction for the unresolved one."""
-        reason = _advisory_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
+        reason = _deny_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
         assert "COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1" not in reason
         assert 'COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL="' not in reason

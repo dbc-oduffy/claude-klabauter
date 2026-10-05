@@ -74,9 +74,9 @@ def test_sequential_subjects_get_their_own_scratch_dir(monkeypatch, tmp_path):
     script = _structured(monkeypatch, tmp_path, subjects=[
         {"subject": "Subject One", "verifiers": _VERIFIERS},
         {"subject": "Subject Two", "verifiers": _VERIFIERS},
-    ], scratch_dir="state/scratch/warp/run")
-    assert "state/scratch/warp/run/subject-one/scout-index.md" in script
-    assert "state/scratch/warp/run/subject-two/synthesis-annotations.md" in script
+    ], scratch_dir="scratch/warp/run")
+    assert "scratch/warp/run/subject-one/scout-index.md" in script
+    assert "scratch/warp/run/subject-two/synthesis-annotations.md" in script
 
 
 def _copy_with(tmp_path: Path, old: str, new: str) -> Path:

@@ -82,7 +82,7 @@ Wire params:
                                      every other route selector
                                      (``PipelineParamConflictError``). Output
                                      defaults to
-                                     ``state/scratch/warp/<run-id>.workflow.mjs``;
+                                     ``scratch/warp/<run-id>.workflow.mjs``;
                                      receipt extras add pipeline/run_id/
                                      manifest_sha256/subjects. Emit-only.
     cloud_spawn (dict, optional)  — the CLOUD-SPAWN route: ``{kind: probe|worker,
@@ -109,7 +109,7 @@ Wire params:
                                      in-session script via
                                      ``ask_compose.compose_ask_script``; output
                                      defaults to
-                                     ``state/scratch/warp/<run-id>.workflow.mjs``.
+                                     ``scratch/warp/<run-id>.workflow.mjs``.
                                      The reply adds ``run_id``.
     writes (list[str], optional)  — the ask's file footprint (XS); refused at
                                      emit when any path is outside repo root.
@@ -1068,6 +1068,8 @@ def _dispatch_emit(
             default_out.parent.mkdir(parents=True, exist_ok=True)
             params = {**params, "output_path": str(default_out)}
         repo_root = repo_root or ask_root
+        if sizing_path:
+            _repoint_fire_holds(ask_root, ask_sizing["batons"], Path(params["output_path"]))
 
     cloud_spawn = params.get("cloud_spawn")
     if cloud_spawn is not None:
@@ -1860,6 +1862,22 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
             out["batons"] = [baton_path]
             out["uncommitted"] = [] if had_baton else [baton_path, sizing_rel]
     return out
+
+
+def _repoint_fire_holds(root: Path, batons: "list[str]", script: Path) -> None:
+    """Point each reused baton's fire hold at this emission's receipt, the canonical one.
+
+    The lobby's earlier emit stamped the hold citing a script that will now never fire.
+    """
+    from coordinator_core.roadmap.blitz_land import repoint_fire_hold
+
+    receipt = script.with_name(script.name + ".emitted.json")
+    try:
+        cite = receipt.resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        return
+    for baton in batons:
+        repoint_fire_hold(Path(root), baton, cite)
 
 
 def _sizing_root(params: dict, repo_root: Optional[Path], sizing_path: str) -> Path:

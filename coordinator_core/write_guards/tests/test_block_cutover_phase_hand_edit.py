@@ -1,11 +1,11 @@
 """Behavioral tests for coordinator_core.write_guards.block_cutover_phase_hand_edit
--- the cutover-record phase advisory guard (see the module's own docstring
+-- the cutover-record phase hard-deny guard (see the module's own docstring
 for the design decision this is the discharge of).
 
 Mirrors the structure of test_block_consumed_handoff_edit.py: builds a
 tmp_path repo layout, monkeypatches `_resolve_git_root` rather than
-exercising a real `git init`, and asserts advisory/allow shape plus
-advisory-text content (route-first, design-as-offers).
+exercising a real `git init`, and asserts deny/allow shape plus
+reason-text content (route-first, design-as-offers).
 
 Spec backlink: coordinator-content-repo:pln-cutover-state-machine-a-phase--96db57 (chunk C4d);
 CLASS/PRIORITY flip: docs/plans/2026-08-06-apply-guard-class-census.md (C3)
@@ -78,11 +78,11 @@ class TestFlagsPhaseHandEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "cutover-cli advance" in reason
 
-    def test_advisory_reason_leads_with_route_and_names_no_override(self, tmp_path, monkeypatch):
+    def test_deny_reason_leads_with_route_and_names_no_override(self, tmp_path, monkeypatch):
         repo_root, record_path = _make_repo(tmp_path)
         monkeypatch.setattr(guard, "_resolve_git_root", _resolve_root_for(repo_root))
         payload = {
@@ -96,7 +96,7 @@ class TestFlagsPhaseHandEdit:
         }
 
         result = guard.check(payload)
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert "cutover-cli advance" in reason
         assert "Use instead" in reason
@@ -123,7 +123,7 @@ class TestFlagsPhaseHandEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_write_full_rewrite_touching_phase_flagged(self, tmp_path, monkeypatch):
         repo_root, record_path = _make_repo(tmp_path)
@@ -141,7 +141,7 @@ class TestFlagsPhaseHandEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_write_omitting_phase_line_entirely_flagged(self, tmp_path, monkeypatch):
         repo_root, record_path = _make_repo(tmp_path)
@@ -162,8 +162,8 @@ class TestFlagsPhaseHandEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "cutover-cli advance" in reason
 
 

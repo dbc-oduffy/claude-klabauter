@@ -1368,10 +1368,10 @@ def _no_live_inbox_writes_from_suite():
 # ---------------------------------------------------------------------------
 # Guard level — suite-wide pin to `strict`.
 #
-# The product default is `warn` (machine_profile.guard_level), so an unpinned
-# test sees a guard's deny demoted to an `allow` advisory: `permissionDecision`
-# reads "allow" or is absent. Tests that assert a guard's deny envelope
-# therefore need the level stated, not inherited from the ambient registry.
+# The product default follows the machine profile (machine_profile.guard_level:
+# strict on an author box, warn on a consumer box), so an unpinned test would
+# read the ambient registry and see a deny or an `allow` advisory depending on
+# the box. Tests that assert a guard's deny envelope state the level instead.
 # The per-package conftests (bash_guards, hooks, write_guards) pin the same
 # value; this covers every other test directory. A test exercising the warn or
 # off leg sets MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL itself.

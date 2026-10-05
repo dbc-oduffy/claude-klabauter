@@ -43,7 +43,7 @@ def _build(tmp_path, stages, *, doc=None, template="hello {{brief}}", flags=None
 
 
 def _inputs(**kw):
-    base = {"brief": "b", "subjects": ("a",), "scratch_dir": "state/scratch/warp/r", "flags": {}}
+    base = {"brief": "b", "subjects": ("a",), "scratch_dir": "scratch/warp/r", "flags": {}}
     base.update(kw)
     return PipelineInputs(**base)
 

@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.nudge_prose_queue_creation — advisory guard.
+"""coordinator_core.write_guards.nudge_prose_queue_creation — hard-deny guard.
 
 Spec: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 part 3 ("Row 4's guard: creation-deny, append-silent") — the deny half of
@@ -22,20 +22,11 @@ under PM direction); a genuinely NEW prose queue file has no legitimate
 justification anywhere in the fleet, which is what makes this the one
 half of the pair that stays a hard deny rather than an advisory.
 
-CLASS is "advisory" per DR-277 (2026-08-06 guard-class census;
-``docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md``) — was
-"hard-deny" at PRIORITY 119. This is a class flip, not a rename: DR-115's
-detection reasoning below (existence check makes the false-positive rate
-structurally zero) is unchanged and still sound, but DR-277 supersedes
-DR-115 part 3's "Deny, not advisory" call as the fleet-wide default. PRIORITY
-stays 119 — the slot survives unchanged because 119/120 already described
-themselves as advisory-band positions, not hard-deny-specific
-(``docs/wiki/write-guard-priority-bands.md``). On a positive match this now
-returns the ``additionalContext`` advisory envelope, never
-``permissionDecision: deny`` — the write proceeds, with the redirect-to-CLI
-offer surfaced alongside it. On any internal error (a failed existence
-check, an unresolvable path, an unexpected payload shape) it fails OPEN, as
-before.
+CLASS is "hard-deny", leveled at the policy point
+(``machine_profile.apply_guard_level``): strict on an author box, a warn on a
+consumer box. A positive match returns a deny carrying the redirect-to-CLI
+offer; any internal error (failed existence check, unresolvable path,
+unexpected payload shape) fails OPEN.
 
 DETECTION — three gates, all required:
   1. ``MATCHERS = ["Write"]`` only, never ``Edit``/``MultiEdit`` — DR-115:
@@ -64,8 +55,8 @@ DETECTION — three gates, all required:
      a queue-ish path that is a README or a tombstone note is not a queue
      and must pass silently.
 
-PRIORITY = 119, one slot BELOW ``nudge_improvement_queue_write`` (120) and
-now within the advisory phase (``docs/wiki/write-guard-priority-bands.md``).
+PRIORITY = 119, one slot BELOW ``nudge_improvement_queue_write`` (120), in
+the hard-deny phase (``docs/wiki/write-guard-priority-bands.md``).
 This is a deliberate ordering choice, not an arbitrary adjacent slot: both
 guards can match the SAME event — a ``Write`` creating a brand-new
 ``improvement-queue.md`` with dated rows and no ``justification:`` line
@@ -74,8 +65,7 @@ path glob. That guard offers a content-based escape (a ``justification:``
 line lets the write through); this guard offers no such escape, because
 DR-115 is unconditional about creation — there is no legitimate reason to
 create a new line-per-row queue anywhere in the fleet now, escape hatch or
-not. The advisory phase shows at most one message and the first non-None
-return wins, so this guard MUST still run first, or the creation-specific
+not. The first non-None hard-deny wins, so this guard MUST run first, or the creation-specific
 offer would never surface ahead of the append guard's own message on the
 same event. Running this guard first preserves that; the two guards
 otherwise target disjoint events (this one only fires on
@@ -102,8 +92,6 @@ Negative-spec:
     single ``os.path.exists`` check, Windows-safe via ``pathlib``.
   - Never raises: any unexpected input shape, or a failed existence check,
     returns ``None`` (ALLOW/no-op).
-  - Does NOT return ``permissionDecision: "deny"`` — ``CLASS = "advisory"``
-    per DR-277; the write always proceeds, even on a positive match.
 
 Spec backlink: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
 """
@@ -115,11 +103,12 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.write_guards._slash_normalize import collapse_slashes
 from coordinator_core.write_guards.nudge_improvement_queue_write import _ENTRY_LINE_RE
 
-CLASS = "advisory"  # DR-277 -- was "hard-deny" at PRIORITY 119; slot unchanged, not re-slotted.
+CLASS = "hard-deny"
 MATCHERS = ["Write"]
 PRIORITY = 119
 
@@ -212,11 +201,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             override_block=("\n\n" + _note if _note else ""),
         )
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return _deny("PreToolUse", reason)
     except Exception:
         return None

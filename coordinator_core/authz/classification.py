@@ -2137,7 +2137,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec: docs/plans/2026-10-01-warp-ask.md § C2, C10
     "dispatch.ask_gate": OpClass.MUTATING,
     # dispatch.ask_stage — MUTATING: writes briefs, commit-request.txt and manifest.json under
-    # the run dir state/scratch/warp/<run_id>/ (ops/dispatch_emit/ask_stage.py); nothing else.
+    # the run dir scratch/warp/<run_id>/ (ops/dispatch_emit/ask_stage.py); nothing else.
     # DR-208 five-question affirmation (citing dispatch.ask_stage handler):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
     #      Files under the run dir only; no git object, no queue.
@@ -3391,6 +3391,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "sizing.accept_exit_criterion": OpClass.MUTATING,
     # sizing.record_xl_exit — MUTATING: writes `xl_exit` and `pm_resolution.xl_exit` on a sizing.
     "sizing.record_xl_exit": OpClass.MUTATING,
+    # sizing.record_pm_resolution — MUTATING: writes `pm_resolution.<key>` and `pm_resolution.decided_on` on a sizing.
+    "sizing.record_pm_resolution": OpClass.MUTATING,
     # sizing.resize — MUTATING: writes `estimate.tshirt` and the engine-resolved `route`
     # under locked_rmw (see coordinator_core/ops/sizing_resize.py docstring).
     "sizing.resize": OpClass.MUTATING,

@@ -61,7 +61,7 @@ def test_same_case_dev_wiki_write_denied(_wiki_fixture):
     home = _wiki_fixture
     result = guard.check(_payload(str(home / ".claude" / "docs" / "wiki" / "example.md")))
     assert result is not None
-    assert "additionalContext" in result["hookSpecificOutput"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
@@ -70,9 +70,9 @@ def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
     result = guard.check(_payload(differently_cased))
     assert result is not None, (
         "casefold bypass reopened: a differently-cased dev-wiki path slipped "
-        "past the mirror-write advisory"
+        "past the mirror-write deny"
     )
-    assert "example.md" in result["hookSpecificOutput"]["additionalContext"]
+    assert "example.md" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_unrelated_path_outside_dev_wiki_still_allowed(_wiki_fixture):

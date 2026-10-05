@@ -14,8 +14,8 @@ def _clear_override_env(monkeypatch):
     monkeypatch.delenv(_OVERRIDE_ENV, raising=False)
 
 
-class TestAdvisesLedgerEdit:
-    def test_write_to_ledger_entry_advised(self):
+class TestDeniesLedgerEdit:
+    def test_write_to_ledger_entry_denied(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -27,12 +27,12 @@ class TestAdvisesLedgerEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "priority-set" in reason
         assert "priority.set" in reason
 
-    def test_advisory_reason_leads_with_route_and_names_no_override(self):
+    def test_deny_reason_leads_with_route_and_names_no_override(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -42,13 +42,13 @@ class TestAdvisesLedgerEdit:
         }
 
         result = guard.check(payload)
-        reason = result["hookSpecificOutput"]["additionalContext"]
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert reason.index("priority-set") < reason.index("hand-editing")
         assert "Use instead" in reason
         assert "override" not in reason.lower()
 
-    def test_edit_to_ledger_entry_advised(self):
+    def test_edit_to_ledger_entry_denied(self):
         payload = {
             "tool_name": "Edit",
             "tool_input": {
@@ -61,9 +61,9 @@ class TestAdvisesLedgerEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_multiedit_to_ledger_entry_advised(self):
+    def test_multiedit_to_ledger_entry_denied(self):
         payload = {
             "tool_name": "MultiEdit",
             "tool_input": {
@@ -77,9 +77,9 @@ class TestAdvisesLedgerEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_absolute_path_under_resolved_root_advised(self):
+    def test_absolute_path_under_resolved_root_denied(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -91,9 +91,9 @@ class TestAdvisesLedgerEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_backslash_path_advised(self):
+    def test_backslash_path_denied(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -105,7 +105,7 @@ class TestAdvisesLedgerEdit:
         result = guard.check(payload)
 
         assert result is not None
-        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 class TestPassThrough:

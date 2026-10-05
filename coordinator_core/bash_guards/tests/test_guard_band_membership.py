@@ -51,11 +51,16 @@ CONFINEMENT_DENY_NAMES = [
     "block-stash-destruction",
     "block-subagent-stash-creation",
     "block-topic-branch",
+    "block-perforce-submit",
+    "block-unreal-engine-resave",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
     "block-fleet-delegation-creation",
     "block-disarm-marker-sentinel-creation",
+    "block-dev-repo-sentinel-removal",
+    "block-noncanonical-branch-creation",
+    "block-subagent-plan-body-bash-write",
     "block-reviewer-bash-outside-allowlist",
     "block-subagent-destructive-action",
     "block-subagent-commit",
@@ -157,15 +162,7 @@ ADVISORY_REWRITE_NAMES = [
     # rather than a DIFFERENT one). Same `ADVISORY_REWRITE` rationale,
     # registered immediately after C4's entry in `dispatch.py` (AC19).
     "bump-outside-repo-write",
-    # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four guard-
-    # class-census band flips (CONFINEMENT_DENY -> ADVISORY_REWRITE),
-    # registered at the tail of this band, ahead of the two remaining
-    # PLATFORM_CONDITIONED_DENY guards below -- see dispatch.py's own
-    # registration comment for the flip's full rationale, including why
-    # `block-worktree-creation` (also named in the census) is deliberately
-    # NOT here.
-    "block-noncanonical-branch-creation",
-    "block-subagent-plan-body-bash-write",
+    # Deny-returning, but no confinement: band tail, behind the rewrites.
     "check-raw-pid-liveness",
     "headless-claude-plugin-dir",
     "piped-pytest-exit-advisory",

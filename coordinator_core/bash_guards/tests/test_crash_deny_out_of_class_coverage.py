@@ -29,6 +29,8 @@ from coordinator_core.bash_guards import (
     block_fleet_delegation_creation,
     block_stash_destruction,
     block_topic_branch,
+    block_perforce_submit,
+    block_unreal_engine_resave,
     block_subagent_findings_reject,
     block_subagent_grant_acquisition,
     block_subagent_guard_grant,
@@ -119,6 +121,13 @@ def _check_module(module: Any, make_payload: Callable[[str], Dict[str, Any]], en
     return run
 
 
+def _perforce_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    from unittest import mock
+
+    with mock.patch.object(block_perforce_submit, "_armed", lambda: True):
+        return block_perforce_submit.check(_bash(cmd))
+
+
 def _git_revert(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
     return dc._check_destructive_git_revert_full(cmd, "sess", hook_payload=_bash(cmd))[0]
 
@@ -198,6 +207,12 @@ _DENIED: List[Tuple[str, str, Runner]] = [
     ("block-stash-destruction", "sh -c 'git stash clear'", _check_module(block_stash_destruction, _bash)),
     ("block-topic-branch", "git checkout -b topic/x", _check_module(block_topic_branch, _bash)),
     ("block-topic-branch", "git push origin topic/x", _check_module(block_topic_branch, _bash)),
+    ("block-perforce-submit", "p4 submit -d x", _perforce_armed),
+    (
+        "block-unreal-engine-resave",
+        "UnrealEditor-Cmd G.uproject -run=ResavePackages",
+        _check_module(block_unreal_engine_resave, _bash),
+    ),
     ("block-subagent-stash-creation", "git stash", _check_module(block_subagent_stash_creation, _subagent)),
     ("block-subagent-stash-creation", "git stash push -u", _check_module(block_subagent_stash_creation, _subagent)),
     (

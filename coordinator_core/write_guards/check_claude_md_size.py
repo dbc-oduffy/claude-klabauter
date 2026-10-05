@@ -97,21 +97,15 @@ says nothing about the edit in hand. This mirrors ``_simulate``'s own
 already-documented fail-open choice on parse/reconstruction failure above,
 making the two failure paths on this module consistent.
 
-CLASS/PRIORITY history: flipped from `hard-deny` @ 15 to `advisory` @ 106 by
-plan chunk C2 of `docs/plans/2026-08-06-apply-guard-class-census.md`, per
-DR-277 (guards are advisory by default). Both deny returns (the ratchet-
-breach leg and the flat `HARD_LIMIT_BYTES` leg) became advisory
-`additionalContext` envelopes -- neither carries `permissionDecision`.
-106 sits below `guard_concrete_path_citations` (advisory, PRIORITY 111,
-matches root `CLAUDE.md` by exact filename via `_LOUD_EXACT_FILES`), which
-would otherwise win the single advisory slot on every root-CLAUDE.md write
-and silently drop this guard's message. This module still carries no
-`COORDINATOR_OVERRIDE_*` key -- unchanged by the flip, per
-docs/wiki/write-guard-priority-bands.md.
+CLASS is "hard-deny", leveled at the policy point
+(``machine_profile.apply_guard_level``): strict on an author box, a warn on a
+consumer box. Both the ratchet-breach leg and the flat ``HARD_LIMIT_BYTES``
+leg return a deny. A within-budget governed write returns the doctrine-surface
+advisory, which the engine passes through. This module carries no
+``COORDINATOR_OVERRIDE_*`` key.
 
 Spec backlink: coordinator-content-repo:pln-hook-fan-in-fold-the-pretoolus-27c1e9 § C8;
   docs/plans/2026-08-06-apply-guard-class-census.md (chunk C2);
-  docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md;
   CLASS/MATCHERS/PRIORITY convention per
   docs/wiki/write-guard-priority-bands.md (the real SSOT -- the prior
   citation, state/plan-sidecars/2026-07-29-hook-fan-in-write-path.priority-
@@ -130,6 +124,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.claude_md_budget import (
     HARD_LIMIT_BYTES,
     RatchetWatermarkError,
@@ -152,7 +147,7 @@ def _find_repo_root(start: str) -> Optional[str]:
             return str(candidate)
     return None
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 106
 
@@ -261,12 +256,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             watermark = None
         ratchet_ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
         if not ratchet_ok:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "additionalContext": f"Advisory: {ratchet_msg}",
-                }
-            }
+            return _deny("PreToolUse", ratchet_msg)
 
     if size <= HARD_LIMIT_BYTES:
         return doctrine_surface_advisory()
@@ -275,9 +265,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         f"{file_path}: {size}b{_token_note(new_content)}, over "
         f"{HARD_LIMIT_BYTES}b cap.\nUse instead:\n  trim content or split the edit"
     )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": reason,
-        }
-    }
+    return _deny("PreToolUse", reason)

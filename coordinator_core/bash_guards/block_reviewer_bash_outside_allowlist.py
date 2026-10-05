@@ -580,17 +580,12 @@ see the dialect-gap leg in `check()`, currently unreachable given the
 top-gate accepts only "Bash"/"PowerShell", kept explicit for a future third
 dialect.
 
-**Cite ratified `docs/decisions/DR-277-guards-are-advisory-by-default-two-
-named.md` (carve-out 2):** the census flipped this guard to advisory on a
-"not a security boundary" reading; DR-277 promotes it back to keep-hard as
-the backstop for `block_subagent_commit`'s own miss (`183176e7`/`edd72e36`
--- an executor wrapping the commit API in `python3 -c` to evade three prose
-instructions), reasoning that an advisory backstop is no backstop against a
-model that already ignored prose.
+**Hard-deny (DR-277 carve-out 2):** the backstop for `block_subagent_commit`'s
+own miss -- an advisory is no backstop against a model that ignored prose.
 
 **Negative spec, binding and non-optional:** SILENT for a dialect this guard
 has no allowlist for is NOT a class flip and must NEVER be read as fail-open
-drift away from DR-277. This guard stays fail-closed (hard-deny) for EVERY
+drift from the hard-deny posture. This guard stays fail-closed (hard-deny) for EVERY
 dialect it DOES recognize -- `Dialect.BASH` and, as of this divergence,
 `Dialect.POWERSHELL` both still deny-by-omission anything outside their own
 Tier A/B allowlist, exactly as the pre-C6 Bash-only guard always did. SILENT

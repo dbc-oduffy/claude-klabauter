@@ -658,7 +658,9 @@ def compose_criterion_judge(
     prompt = (
         f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
         f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
-        f"run_base_sha: {run_base_sha}"
+        f"run_base_sha: {run_base_sha}\n"
+        f"verification_record: {plan_path} § Verification (EM-run legs, committed; "
+        f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
     ).strip()

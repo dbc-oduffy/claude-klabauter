@@ -743,6 +743,17 @@ def _rehomed_subagent_spawn_shapes_setup(
     return dict(_EXECUTOR_IDENTITY)
 
 
+def _noncanonical_branch_creation_hazard_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
+
+    root = str(scratch_dir)
+    mp.setattr(guard, "resolve_git_root", lambda cwd=None: root)
+    mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
+    return {_CWD_OVERRIDE_KEY: root}
+
+
 CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "no-verify",
@@ -976,6 +987,55 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-subagent-plan-body-bash-write",
+        "block-subagent-plan-body-bash-write-fire",
+        "echo x >> docs/plans/foo.md",
+        True,
+        _DENY,
+        False,
+        setup=_from_factory_with_identity(
+            "block-subagent-plan-body-bash-write", _EXECUTOR_IDENTITY
+        ),
+    ),
+    CorpusRow(
+        "block-dev-repo-sentinel-removal",
+        "block-dev-repo-sentinel-removal-fire",
+        "rm .coordinator-dev-repo",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-subagent-plan-body-bash-write",
+        "block-subagent-plan-body-bash-write-control",
+        "cat docs/plans/foo.md",
+        False,
+        _DENY,
+        False,
+        setup=_control_from_factory(
+            "block-subagent-plan-body-bash-write",
+            "cat docs/plans/foo.md",
+            identity=_EXECUTOR_IDENTITY,
+        ),
+    ),
+    CorpusRow(
+        "block-noncanonical-branch-creation",
+        "block-noncanonical-branch-creation-fire",
+        "git checkout -b fix/foo",
+        True,
+        _DENY,
+        False,
+        setup=_noncanonical_branch_creation_hazard_setup,
+    ),
+    CorpusRow(
+        "block-noncanonical-branch-creation",
+        "block-noncanonical-branch-creation-control",
+        "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-reviewer-bash-outside-allowlist",
         "block-reviewer-bash-outside-allowlist-fire",
         "curl https://example.com",
@@ -1072,16 +1132,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     # per-guard trigger fixture for each is a job for whichever chunk owns
     # `CONFINEMENT_GUARDS`'s next regeneration, not a silent scope-creep here.
     #
-    # `block-dev-repo-sentinel-removal` (bare `check()`) is deliberately
-    # ABSENT here (X2, 2026-08-06, apply-guard-class-census): C13 deleted its
-    # CONFINEMENT_DENY `dispatch.py` registration entirely -- `check()` is no
-    # longer reachable through the live chain at all, only directly callable
-    # (unit-tested elsewhere). Its sole registered leg,
-    # `block-dev-repo-sentinel-removal-advisory`, already has its own
-    # fire+control pair in `ADVISORY_REWRITE_ROWS` below; a row here naming
-    # the unregistered `check()` would fail
-    # `test_corpus_imports_cleanly_and_every_row_guard_resolves` ("names an
-    # unregistered guard").
     CorpusRow(
         "block-disarm-marker-sentinel-creation",
         "block-disarm-marker-sentinel-creation-control",
@@ -1110,6 +1160,22 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "block-topic-branch",
         "block-topic-branch-control",
         "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-perforce-submit",
+        "block-perforce-submit-control",
+        "p4 edit a.cpp",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-unreal-engine-resave",
+        "block-unreal-engine-resave-control",
+        "UnrealEditor-Cmd G.uproject -run=ResavePackages -projectonly",
         False,
         _DENY,
         False,
@@ -1323,16 +1389,9 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
 #: CONFINEMENT_DENY registrations `CONFINEMENT_GUARDS`/`GUARD_NAMES` do not
 #: yet know about -- the AC2 closer test (bottom of this module) is the one
 #: that must hold by equality against the LIVE chain, not this static bank.
-#: Band-flip reconciliation (X2, 2026-08-06, apply-guard-class-census):
-#: `test_confinement_attack_corpus.py`'s own `CONFINEMENT_GUARDS` bank is a
-#: static list this chunk's write scope does not cover -- it still names
-#: these two guards, but C13/C14 moved BOTH off `CONFINEMENT_DENY` onto
-#: `ADVISORY_REWRITE` in the live `dispatch.py` chain (see this module's own
-#: `ADVISORY_REWRITE_ROWS` for their real, band-correct rows now). Excluded
-#: here, not silently dropped, so the subset check below still catches a
-#: genuine future drift for every OTHER guard in the static bank.
+#: Guards in the static `CONFINEMENT_GUARDS` bank that are registered in
+#: ADVISORY_REWRITE; excluded so the subset check still catches drift for the rest.
 _FLIPPED_TO_ADVISORY_REWRITE = {
-    "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
 }
 #: Moved out of module scope into
@@ -1414,17 +1473,6 @@ def _heredoc_repo_write_advise_setup(
     # scratch_dir lives under $TEMP, which heredoc-repo-write-advise treats as scratch.
     mp.setattr(dispatch_checks, "_heredoc_write_target_is_scratch", lambda abs_path: False)
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
-
-
-def _noncanonical_branch_creation_hazard_setup(
-    scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, str]:
-    from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
-
-    root = str(scratch_dir)
-    mp.setattr(guard, "resolve_git_root", lambda cwd=None: root)
-    mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-    return {_CWD_OVERRIDE_KEY: root}
 
 
 def _headless_plugin_dir_dev_install_setup(
@@ -1524,15 +1572,8 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        # Two-leg split (2026-08-05, mirrors `destructive-git-revert-
-        # advisory` immediately above -- same CONFINEMENT_DENY shadowing
-        # hazard, `state/audits/2026-08-05-confinement-deny-band-return-
-        # shapes.md`): registered in ADVISORY_REWRITE, after every
-        # CONFINEMENT_DENY hard-deny guard. The paired non-firing
-        # `block-dev-repo-sentinel-removal` row in `CONFINEMENT_ROWS`
-        # (`test_confinement_deny_band_shape.py`'s own `_EXTRA_FIRING_
-        # ROWS`) proves the hard-deny leg (`check()`) stays silent
-        # (`None`) for this exact input.
+        # Advisory leg (indirection) of `block-dev-repo-sentinel-removal`; the
+        # deny leg's row is in `CONFINEMENT_ROWS`.
         "block-dev-repo-sentinel-removal-advisory",
         "block-dev-repo-sentinel-removal-advisory-fire",
         "echo .coordinator-dev-repo | xargs rm",
@@ -1851,12 +1892,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     # Band-flip reconciliation (X2, 2026-08-06, apply-guard-class-census):
-    # C13/C14 moved these three guards CONFINEMENT_DENY -> ADVISORY_REWRITE
-    # and their `check()` bodies to the allow+`additionalContext` envelope
-    # shape -- moved here from `CONFINEMENT_ROWS` (same `guard`/`row_id`
-    # naming, same underlying `check()` logic, only the band and expected
-    # envelope shape changed) rather than re-derived, per the corpus's own
-    # "pull base_cmd from the factory" contract.
     CorpusRow(
         "check-raw-pid-liveness",
         "check-raw-pid-liveness-fire",
@@ -1870,54 +1905,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "check-raw-pid-liveness",
         "check-raw-pid-liveness-control",
         "echo hi",
-        False,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "block-subagent-plan-body-bash-write",
-        "block-subagent-plan-body-bash-write-fire",
-        "echo x >> docs/plans/foo.md",
-        True,
-        _REWRITE,
-        False,
-        setup=_from_factory_with_identity(
-            "block-subagent-plan-body-bash-write", _EXECUTOR_IDENTITY
-        ),
-    ),
-    CorpusRow(
-        "block-subagent-plan-body-bash-write",
-        "block-subagent-plan-body-bash-write-control",
-        "cat docs/plans/foo.md",
-        False,
-        _REWRITE,
-        False,
-        setup=_control_from_factory(
-            "block-subagent-plan-body-bash-write",
-            "cat docs/plans/foo.md",
-            identity=_EXECUTOR_IDENTITY,
-        ),
-    ),
-    # `block-noncanonical-branch-creation` previously carried only a
-    # non-firing control row (drift-fix precedent, `CONFINEMENT_ROWS`'s own
-    # "real per-guard trigger fixture ... not a silent scope-creep here"
-    # note) -- the band move is the natural point to add a real firing row,
-    # since it needs a hazard-repo fixture this guard's message-shape
-    # reconciliation already requires exercising the live `check()` path
-    # for.
-    CorpusRow(
-        "block-noncanonical-branch-creation",
-        "block-noncanonical-branch-creation-fire",
-        "git checkout -b fix/foo",
-        True,
-        _REWRITE,
-        False,
-        setup=_noncanonical_branch_creation_hazard_setup,
-    ),
-    CorpusRow(
-        "block-noncanonical-branch-creation",
-        "block-noncanonical-branch-creation-control",
-        "git status",
         False,
         _REWRITE,
         False,

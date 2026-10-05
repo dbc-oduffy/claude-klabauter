@@ -143,38 +143,3 @@ class TestSentinelWriteDenial:
                 ".coordinator-override-worktree-guard",
                 "denied for reasons",
             )
-
-
-class TestSentinelWriteAdvisory:
-    def test_returns_none_for_non_sentinel_path(self):
-        result = helper.sentinel_write_advisory(
-            "/repo/README.md",
-            ".coordinator-dev-repo",
-            "advisory text",
-            payload=None,
-        )
-        assert result is None
-
-    def test_returns_nested_advisory_envelope_for_sentinel_path(self):
-        result = helper.sentinel_write_advisory(
-            "/repo/.coordinator-dev-repo",
-            ".coordinator-dev-repo",
-            "advisory text",
-            payload=None,
-        )
-        assert result == {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": "advisory text",
-            }
-        }
-
-    def test_missing_payload_keyword_raises_type_error(self):
-        import pytest
-
-        with pytest.raises(TypeError):
-            helper.sentinel_write_advisory(  # type: ignore[call-arg]
-                "/repo/.coordinator-dev-repo",
-                ".coordinator-dev-repo",
-                "advisory text",
-            )

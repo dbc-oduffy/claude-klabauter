@@ -1,24 +1,11 @@
-"""AC5 runtime probes for the four bash-side CONFINEMENT_DENY -> ADVISORY_REWRITE
-flips (docs/plans/2026-08-06-apply-guard-class-census.md, C13):
-`block_noncanonical_branch_creation`, `block_subagent_plan_body_bash_write`,
-`check_raw_pid_liveness`, `block_dev_repo_sentinel_removal`.
+"""AC5 runtime probes for the bash guards DR-277 demoted and the 2026-10-04 amendment
+restored: declared class and RUNTIME behaviour must agree, probed through the real
+entrypoint `dispatch.evaluate_payload_json` (not `module.check`), so an earlier entry
+swallowing the slot is caught.
 
-Every probe goes through the REAL entrypoint,
-`coordinator_core.bash_guards.dispatch.evaluate_payload_json`, never
-`module.check(payload)` directly -- bypassing the dispatcher's registration
-order (a hand-built literal list, see `dispatch.py`'s own docstring) would
-miss a swallowed slot (an earlier CONFINEMENT_DENY or ADVISORY_REWRITE
-entry shadowing this guard's own envelope).
-
-Each of the four gets TWO probes:
-  (a) the FORMER deny input now yields an advisory envelope (no
-      `permissionDecision: "deny"`), carrying THIS guard's own text.
-  (b) a CRASH-PATH probe -- `fail_closed=False` (this flip's second,
-      distinct semantics change per `dispatch.py`'s own registration
-      comment) means a `check()` that raises now routes to a silently
-      swallowed ALLOW instead of a deny. Confirmed by monkeypatching the
-      registered check function to raise and observing
-      `evaluate_payload_json` return None (ALLOW), not a deny.
+At guard level strict (the author default, pinned suite-wide) each guard denies with
+its own text; at warn (the consumer default) the policy point turns the deny into an
+advisory.
 
 Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC5.
 """
@@ -27,6 +14,8 @@ from __future__ import annotations
 import json
 
 import pytest
+
+from coordinator_core import machine_profile
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
@@ -50,19 +39,22 @@ def _evaluate(payload_dict, **kwargs):
     return dispatch.evaluate_payload_json(json.dumps(payload_dict), **kwargs)
 
 
-def _assert_advisory_not_deny(out, *, must_contain: str):
-    assert out is not None, "flip regression: dispatch returned ALLOW, expected advisory"
+def _assert_deny(out, *, must_contain: str):
+    assert out is not None, "dispatch returned ALLOW, expected deny"
     hso = out["hookSpecificOutput"]
-    assert hso.get("permissionDecision") != "deny", (
-        "flip did NOT take effect: dispatch still returned a deny "
-        "envelope: %r" % out
+    assert hso.get("permissionDecision") == "deny", "expected a deny envelope: %r" % out
+    assert must_contain in json.dumps(out), (
+        "deny envelope lacks this guard's own text -- possibly an incumbent "
+        "guard's envelope: %r" % out
     )
-    rendered = json.dumps(out)
-    assert must_contain in rendered, (
-        "advisory envelope came back but without this guard's own "
-        "distinguishing text -- possibly an INCUMBENT guard's envelope "
-        "swallowed the slot instead: %r" % out
-    )
+
+
+def _assert_advisory_not_deny(out, *, must_contain: str):
+    assert out is not None, "dispatch returned ALLOW, expected advisory"
+    hso = out["hookSpecificOutput"]
+    assert hso.get("permissionDecision") != "deny", "still a deny: %r" % out
+    assert hso["additionalContext"].startswith(machine_profile.ADVISORY_PREFIX), out
+    assert must_contain in json.dumps(out), out
 
 
 class TestBlockNoncanonicalBranchCreation:
@@ -75,19 +67,15 @@ class TestBlockNoncanonicalBranchCreation:
             block_noncanonical_branch_creation, "_is_hazard_repo", lambda git_root: True
         )
 
-    def test_former_deny_now_advises_through_dispatch(self):
+    def test_denies_through_dispatch(self):
+        out = _evaluate(_payload_dict("git branch bad-name"))
+        _assert_deny(out, must_contain="branch")
+
+    def test_consumer_warn_level_turns_the_deny_into_an_advisory(self, monkeypatch):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
+        machine_profile.reset_cache()
         out = _evaluate(_payload_dict("git branch bad-name"))
         _assert_advisory_not_deny(out, must_contain="branch")
-
-    def test_crash_path_now_silently_allows(self, monkeypatch):
-        def _boom(payload):
-            raise RuntimeError("simulated crash inside block_noncanonical_branch_creation")
-
-        monkeypatch.setattr(block_noncanonical_branch_creation, "check", _boom)
-        out = _evaluate(_payload_dict("git branch bad-name"))
-        assert out is None, (
-            "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
-        )
 
 
 class TestBlockSubagentPlanBodyBashWrite:
@@ -111,56 +99,22 @@ class TestBlockSubagentPlanBodyBashWrite:
             block_subagent_plan_body_bash_write, "_write_block_log", lambda *a, **kw: None
         )
 
-    def test_former_deny_now_advises_through_dispatch(self, monkeypatch):
+    def test_fires_deny_through_dispatch(self, monkeypatch):
         self._stub(monkeypatch)
         out = _evaluate(_payload_dict(self._WRITE_CMD, agent_id="deadbeef0123"))
-        _assert_advisory_not_deny(out, must_contain="coordinator:executor")
-
-    def test_crash_path_now_silently_allows(self, monkeypatch):
-        self._stub(monkeypatch)
-
-        def _boom(payload):
-            raise RuntimeError("simulated crash inside block_subagent_plan_body_bash_write")
-
-        monkeypatch.setattr(block_subagent_plan_body_bash_write, "check", _boom)
-        out = _evaluate(_payload_dict(self._WRITE_CMD, agent_id="deadbeef0123"))
-        assert out is None, (
-            "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
-        )
+        _assert_deny(out, must_contain="coordinator:executor")
 
 
 class TestCheckRawPidLiveness:
-    def test_former_deny_now_advises_through_dispatch(self, monkeypatch):
+    def test_fires_deny_through_dispatch(self, monkeypatch):
         monkeypatch.delenv(check_raw_pid_liveness._OVERRIDE_ENV, raising=False)
         out = _evaluate(_payload_dict("ps -p 12345"))
-        _assert_advisory_not_deny(out, must_contain="session-liveness-cli")
-
-    def test_crash_path_now_silently_allows(self, monkeypatch):
-        monkeypatch.delenv(check_raw_pid_liveness._OVERRIDE_ENV, raising=False)
-
-        def _boom(payload):
-            raise RuntimeError("simulated crash inside check_raw_pid_liveness")
-
-        monkeypatch.setattr(check_raw_pid_liveness, "check", _boom)
-        out = _evaluate(_payload_dict("ps -p 12345"))
-        assert out is None, (
-            "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
-        )
+        _assert_deny(out, must_contain="session-liveness-cli")
 
 
 class TestBlockDevRepoSentinelRemoval:
     SENTINEL = ".coordinator-dev-repo"
 
-    def test_former_deny_now_advises_through_dispatch(self):
+    def test_fires_deny_through_dispatch(self):
         out = _evaluate(_payload_dict("rm %s" % self.SENTINEL))
-        _assert_advisory_not_deny(out, must_contain="dev-repo guard")
-
-    def test_crash_path_now_silently_allows(self, monkeypatch):
-        def _boom(payload):
-            raise RuntimeError("simulated crash inside block_dev_repo_sentinel_removal")
-
-        monkeypatch.setattr(block_dev_repo_sentinel_removal, "check_advisory", _boom)
-        out = _evaluate(_payload_dict("rm %s" % self.SENTINEL))
-        assert out is None, (
-            "fail_closed=False expected a silent ALLOW on crash; got %r instead" % out
-        )
+        _assert_deny(out, must_contain="dev-repo guard")

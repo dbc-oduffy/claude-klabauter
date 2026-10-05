@@ -34,12 +34,11 @@ def _payload(tool_name, tool_input):
     return {"tool_name": tool_name, "tool_input": tool_input}
 
 
-def _advisory_context(result: dict) -> str:
+def _deny_reason(result: dict) -> str:
     hso = result["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in hso
-    assert "additionalContext" in hso
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +78,7 @@ class TestQueueWriteDenied:
                 },
             )
         )
-        reason = _advisory_context(result)
+        reason = _deny_reason(result)
         assert "queue-admission-five-questions.md" in reason
         assert "justification:" in reason
         assert "improvement queue entry" in reason
@@ -91,7 +90,7 @@ class TestQueueWriteDenied:
                 {"file_path": "state/improvement-queue/batch-edit.yaml"},
             )
         )
-        _advisory_context(result)
+        _deny_reason(result)
 
     def test_legacy_md_path_write_deny(self):
         result = guard.check(
@@ -103,7 +102,7 @@ class TestQueueWriteDenied:
                 },
             )
         )
-        _advisory_context(result)
+        _deny_reason(result)
 
 
 class TestYamlEditIsLowerFriction:
@@ -163,12 +162,12 @@ class TestPuntEscapeHatch:
         )
         assert result is None
 
-    def test_trivial_reason_advises_with_hint(self):
+    def test_trivial_reason_denies_with_hint(self):
         os.environ[guard._ESCAPE_HATCH_ENV_VAR] = "ok"
         result = guard.check(
             _payload("Write", {"file_path": "state/improvement-queue/item.yaml"})
         )
-        reason = _advisory_context(result)
+        reason = _deny_reason(result)
         assert "trivial" in reason.lower() or guard._ESCAPE_HATCH_ENV_VAR in reason
 
 
@@ -222,7 +221,7 @@ class TestFiveQuestionsDocCitationResolvesInConsumerRepos:
                 },
             )
         )
-        reason = _advisory_context(result)
+        reason = _deny_reason(result)
         assert "queue-admission-five-questions.md" in reason
         assert "claude-klabauter engine repo" in reason
 
@@ -273,7 +272,7 @@ class TestBlockScalarJustificationIsNotTrivial:
                 },
             )
         )
-        _advisory_context(result)
+        _deny_reason(result)
 
 
 class TestModuleContract:
@@ -281,8 +280,8 @@ class TestModuleContract:
     parity with test_nudge_windows_subprocess_popup.py's
     TestClassAndAllowlistStillWork.test_class_is_advisory."""
 
-    def test_class_is_advisory(self):
-        assert guard.CLASS == "advisory"
+    def test_class_is_hard_deny(self):
+        assert guard.CLASS == "hard-deny"
 
     def test_priority_and_matchers(self):
         assert guard.PRIORITY == 120

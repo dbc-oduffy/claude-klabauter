@@ -1,42 +1,9 @@
-"""AC5 runtime probes (docs/plans/2026-08-06-apply-guard-class-census.md) --
-the acceptance criterion the whole plan hangs on: declared class and actual
-RUNTIME behaviour must agree. A probe that calls `module.check(payload)`
-directly bypasses the engine's two-phase ordering and cannot detect a
-swallowed slot (an incumbent hard-deny/advisory shadowing the flipped
-guard's own envelope) -- every probe here goes through the REAL entrypoint,
-`coordinator_core.write_guards.engine.evaluate`, exactly as the DoE
-PreToolUse dispatcher calls it.
+"""AC5 runtime probes for the write-side guards DR-277 demoted and the 2026-10-04 amendment
+restored: declared class and RUNTIME behaviour must agree, probed through the real entrypoint
+`engine.evaluate` (not `module.check`), so an incumbent guard swallowing the slot is caught.
 
-Covers the write-side wave's hard-deny -> advisory flips (DR-277,
-docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md):
-block_cutover_phase_hand_edit, block_dev_repo_sentinel_write,
-block_priority_ledger_edit, check_claude_md_size,
-nudge_improvement_queue_write, nudge_prose_queue_creation.
-
-`guard_memory_store_cap` was one of the original nine C2-C12 flips covered
-here; it moved back to hard-deny 2026-08-21
-(`docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md`)
-and its probe was removed from this cohort -- see
-`coordinator_core/write_guards/tests/test_guard_memory_store_cap.py` for
-its (now deny-shaped) runtime coverage instead.
-
-Bash-side flips (see `test_ac5_bash_flip_runtime_probes.py` in
-`coordinator_core/bash_guards/tests/`) are covered separately, through
-`bash_guards.dispatch.evaluate_payload_json`, because they run through a
-different real entrypoint on a different two-band ordering.
-
-Each probe:
-  1. Reconstructs a payload that DENIED under the guard's PRE-flip
-     behaviour (drawn from that guard's own pre-existing test corpus).
-  2. Drives it through `engine.evaluate`, not `module.check`.
-  3. Confirms the envelope now carries no `permissionDecision` (an
-     advisory-shaped envelope, `additionalContext` only) -- the write-side
-     advisory contract (`engine.py`'s advisory phase never emits
-     `permissionDecision`).
-  4. Confirms the envelope's `additionalContext` carries THIS guard's own
-     distinguishing text (not a swallowed/incumbent advisory's) -- the
-     "is it CONFIRMED it's this guard's envelope, not an incumbent's" half
-     of AC5.
+At guard level strict (the author default, pinned suite-wide) each guard denies with its own
+text; at warn (the consumer default) the policy point turns the same deny into an advisory.
 
 Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC5.
 """
@@ -56,18 +23,13 @@ from coordinator_core.write_guards import nudge_prose_queue_creation
 from coordinator_core.claude_md_budget import DEV_REPO_SENTINEL, HARD_LIMIT_BYTES
 
 
-def _assert_advisory_not_deny(out, *, must_contain: str):
-    assert out is not None, "flip regression: engine.evaluate returned ALLOW, expected advisory"
+def _assert_deny(out, *, must_contain: str = ""):
+    assert out is not None, "engine.evaluate returned ALLOW, expected deny"
     hso = out["hookSpecificOutput"]
-    assert "permissionDecision" not in hso, (
-        "flip did NOT take effect: engine.evaluate still returned a "
-        "permissionDecision (deny-shaped) envelope: %r" % out
-    )
-    assert "additionalContext" in hso
-    assert must_contain in hso["additionalContext"], (
-        "advisory envelope came back but without this guard's own "
-        "distinguishing text -- possibly an INCUMBENT guard's advisory "
-        "swallowed the slot instead: %r" % out
+    assert hso.get("permissionDecision") == "deny", out
+    assert must_contain in hso["permissionDecisionReason"], (
+        "deny came back without this guard's own text -- an incumbent guard "
+        "may have swallowed the slot: %r" % out
     )
 
 
@@ -83,7 +45,7 @@ class TestBlockCutoverPhaseHandEdit:
         )
         return tmp_path, record_path
 
-    def test_former_deny_now_advises_through_engine(self, tmp_path, monkeypatch):
+    def test_denies_through_engine(self, tmp_path, monkeypatch):
         repo_root, record_path = self._make_repo(tmp_path)
         monkeypatch.setattr(
             block_cutover_phase_hand_edit, "_resolve_git_root", lambda cwd: str(repo_root)
@@ -98,35 +60,22 @@ class TestBlockCutoverPhaseHandEdit:
             "cwd": str(repo_root),
         }
         out = engine.evaluate(payload)
-        _assert_advisory_not_deny(out, must_contain="cutover-cli advance")
+        _assert_deny(out, must_contain="cutover-cli advance")
 
 
 class TestBlockDevRepoSentinelWrite:
-    def test_former_deny_now_advises_through_engine(self):
+    def test_denies_through_engine(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {"file_path": "/repo/.coordinator-dev-repo"},
         }
         out = engine.evaluate(payload)
-        assert out is not None
-        hso = out["hookSpecificOutput"]
-        assert "permissionDecision" not in hso
-        assert hso["additionalContext"]
+        _assert_deny(out)
 
 
 class TestBlockPriorityLedgerEdit:
-    def test_former_deny_now_advises_through_engine(self, monkeypatch):
+    def test_denies_through_engine(self, monkeypatch):
         monkeypatch.delenv(block_priority_ledger_edit._OVERRIDE_ENV_VAR, raising=False)
-        # A bare "priority: urgent\n" body -- the real trigger shape, no
-        # padding. `validate_frontmatter_schema_advisory` (PRIORITY 100, an
-        # EARLIER advisory slot) also matches this path, wins the "first
-        # non-None advisory wins" race, and swallows this guard's own
-        # envelope entirely -- so a real priority-ledger write gets a schema
-        # warning instead of the "hand-editing disk truth" advisory that
-        # exists for it. The fix belongs in the swallowing guard (stand down
-        # for `state/priority-ledger/*`), whose module is held by another
-        # live session; this probe stays un-padded so it goes green the
-        # moment that lands.
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -135,11 +84,11 @@ class TestBlockPriorityLedgerEdit:
             },
         }
         out = engine.evaluate(payload)
-        _assert_advisory_not_deny(out, must_contain="priority-set")
+        _assert_deny(out, must_contain="priority-set")
 
 
 class TestCheckClaudeMdSize:
-    def test_former_deny_now_advises_through_engine(self, tmp_path):
+    def test_denies_through_engine(self, tmp_path):
         (tmp_path / ".git").mkdir(parents=True, exist_ok=True)
         (tmp_path / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
         coord_dir = tmp_path / "coordinator"
@@ -153,14 +102,11 @@ class TestCheckClaudeMdSize:
             },
         }
         out = engine.evaluate(payload)
-        assert out is not None
-        hso = out["hookSpecificOutput"]
-        assert "permissionDecision" not in hso
-        assert hso["additionalContext"]
+        _assert_deny(out)
 
 
 class TestNudgeImprovementQueueWrite:
-    def test_former_deny_now_advises_through_engine(self):
+    def test_denies_through_engine(self):
         payload = {
             "tool_name": "Write",
             "tool_input": {
@@ -169,14 +115,11 @@ class TestNudgeImprovementQueueWrite:
             },
         }
         out = engine.evaluate(payload)
-        assert out is not None
-        hso = out["hookSpecificOutput"]
-        assert "permissionDecision" not in hso
-        assert hso["additionalContext"]
+        _assert_deny(out)
 
 
 class TestNudgeProseQueueCreation:
-    def test_former_deny_now_advises_through_engine(self, tmp_path, monkeypatch):
+    def test_denies_through_engine(self, tmp_path, monkeypatch):
         monkeypatch.delenv(nudge_prose_queue_creation._OVERRIDE_ENV_VAR, raising=False)
         target = tmp_path / "state" / "improvement-queue.md"
         payload = {
@@ -185,10 +128,7 @@ class TestNudgeProseQueueCreation:
             "cwd": str(tmp_path),
         }
         out = engine.evaluate(payload)
-        assert out is not None
-        hso = out["hookSpecificOutput"]
-        assert "permissionDecision" not in hso
-        assert hso["additionalContext"]
+        _assert_deny(out)
 
 
 @pytest.mark.parametrize(
@@ -202,6 +142,25 @@ class TestNudgeProseQueueCreation:
         (nudge_prose_queue_creation, 119),
     ],
 )
-def test_flipped_module_is_registered_advisory_at_expected_slot(module, priority):
-    assert module.CLASS == "advisory"
+def test_restored_module_is_registered_hard_deny_at_expected_slot(module, priority):
+    assert module.CLASS == "hard-deny"
     assert module.PRIORITY == priority
+
+
+def test_consumer_warn_level_turns_the_deny_into_an_advisory(monkeypatch):
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
+    machine_profile.reset_cache()
+    out = engine.evaluate(
+        {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "state/improvement-queue/new-item.yaml",
+                "content": "title: test\ndescription: a thing",
+            },
+        }
+    )
+    hso = out["hookSpecificOutput"]
+    assert hso.get("permissionDecision") != "deny"
+    assert hso["additionalContext"].startswith(machine_profile.ADVISORY_PREFIX)

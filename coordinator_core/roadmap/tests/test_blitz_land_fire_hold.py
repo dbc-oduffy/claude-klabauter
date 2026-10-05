@@ -123,3 +123,23 @@ def test_lanes_that_link_no_plan_clear_the_fire_hold_but_not_a_human_one(tmp_pat
     assert "plan_blitz_hold" not in _text(root, surfaced)
     assert "plan_blitz_hold" not in _text(root, pulled)
     assert _text(root, human) == human_before
+
+
+def test_repoint_fire_hold_cites_the_canonical_emission(tmp_path):
+    root = _repo(tmp_path)
+    rel = _baton(root, "s1", *_fire_hold())
+    assert bl.repoint_fire_hold(root, rel, "scratch/warp/ask-1.workflow.mjs.emitted.json")
+    text = (root / rel).read_text(encoding="utf-8")
+    assert 'plan_blitz_hold_cite: "scratch/warp/ask-1.workflow.mjs.emitted.json"' in text
+    assert f'plan_blitz_hold_reason: "{FIRE}"' in text
+    assert not bl.repoint_fire_hold(root, rel, "scratch/warp/ask-1.workflow.mjs.emitted.json")
+
+
+def test_repoint_fire_hold_leaves_a_human_hold_and_no_hold_alone(tmp_path):
+    root = _repo(tmp_path)
+    human = _baton(root, "s2", HUMAN)
+    bare = _baton(root, "s3")
+    before = (root / human).read_text(encoding="utf-8"), (root / bare).read_text(encoding="utf-8")
+    assert not bl.repoint_fire_hold(root, human, "x.json")
+    assert not bl.repoint_fire_hold(root, bare, "x.json")
+    assert ((root / human).read_text(encoding="utf-8"), (root / bare).read_text(encoding="utf-8")) == before

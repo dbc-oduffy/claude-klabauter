@@ -102,6 +102,11 @@ def _branch_create_target(args: List[str]) -> Optional[str]:
     return positional[0] if positional else None
 
 
+_COMMAND_ENDS = frozenset({"|", "||", "&&", ";", "&"})
+# A shell redirection token: `2>&1`, `>file`, `2>/dev/null`, `&>log`, `<in`, or a bare `>`.
+_REDIRECT_RE = re.compile(r"^(?:\d*|&)(?:>>?|<)&?")
+
+
 def _push_targets(args: List[str]) -> List[str]:
     """Destination refs of a `git push`; empty when nothing is judgeable."""
     if any(t in _PUSH_DELETE_FLAGS for t in args):
@@ -110,6 +115,13 @@ def _push_targets(args: List[str]) -> List[str]:
     i = 0
     while i < len(args):
         tok = args[i]
+        if tok in _COMMAND_ENDS:
+            break
+        redirect = _REDIRECT_RE.match(tok)
+        if redirect is not None:
+            # A bare operator (`>`, `2>`) takes the next token as its target.
+            i += 2 if redirect.end() == len(tok) else 1
+            continue
         if tok in _PUSH_OPT_WITH_ARG:
             i += 2
             continue

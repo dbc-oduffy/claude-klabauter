@@ -218,6 +218,86 @@ class CliTypeScopingTest(unittest.TestCase):
         self.assertIn("--type goal", stderr)
 
 
+class SeedSummaryTest(unittest.TestCase):
+    _SEEDS = (
+        ("goal-seed", "_scaffold_goal_seed"),
+        ("roadmap-seed", "_scaffold_roadmap_seed"),
+    )
+
+    def _run(self, *extra_args: str) -> tuple[int, str]:
+        return CliTypeScopingTest._run(self, *extra_args)
+
+    def test_seed_summary_replaces_placeholder_and_validates(self):
+        for kind, fn in self._SEEDS:
+            with self.subTest(kind=kind):
+                content = getattr(_cli, fn)(title="t", branch="b", summary="real one-liner")
+                fields = _frontmatter(content)
+                self.assertEqual(fields["summary"], "real one-liner")
+                self.assertNotIn("PLACEHOLDER", fields["summary"])
+                result = schema_validate.validate("handoff", fields)
+                self.assertTrue(result["ok"], result.get("errors"))
+
+    def test_seed_summary_omitted_keeps_placeholder(self):
+        for kind, fn in self._SEEDS:
+            with self.subTest(kind=kind):
+                fields = _frontmatter(getattr(_cli, fn)(title="t", branch="b"))
+                self.assertTrue(fields["summary"].startswith("PLACEHOLDER"))
+
+    def test_seed_blank_or_over_140_summary_is_refused(self):
+        for kind, fn in self._SEEDS:
+            for bad in ("   ", "x" * 141):
+                with self.subTest(kind=kind, n=len(bad)):
+                    with self.assertRaises(SystemExit):
+                        getattr(_cli, fn)(title="t", branch="b", summary=bad)
+
+    def test_seed_gate_note_and_gated_predicate_still_refused(self):
+        for kind, _ in self._SEEDS:
+            for flag in ("--gate-note", "--gated-predicate"):
+                with self.subTest(kind=kind, flag=flag):
+                    code, stderr = self._run("--type", kind, "--title", "t", flag, "x")
+                    self.assertNotEqual(code, 0)
+                    self.assertIn(flag, stderr)
+                    self.assertIn(f"--type {kind}", stderr)
+
+    def test_summary_still_refused_for_other_non_handoff_type_and_names_accepting_types(self):
+        code, stderr = self._run("--type", "goal", "--title", "t", "--summary", "x")
+        self.assertNotEqual(code, 0)
+        self.assertIn("goal-seed", stderr)
+        self.assertIn("roadmap-seed", stderr)
+
+    def test_land_one_argv_shapes_succeed_and_carry_summary(self):
+        import tempfile
+
+        shapes = (
+            ("roadmap-seed", ["--goals", "goal-one"]),
+            ("goal-seed", []),
+        )
+        for kind, extra in shapes:
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as td:
+                    out = Path(td) / f"{kind}.md"
+                    code, stderr = self._run(
+                        "--type", kind, *extra, "--title", "t",
+                        "--summary", "landed summary", "--out", str(out),
+                    )
+                    self.assertEqual(code, 0, stderr)
+                    self.assertEqual(_frontmatter(out.read_text())["summary"], "landed summary")
+
+    def test_summary_file_form_works_for_seeds(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            sf = Path(td) / "s.txt"
+            sf.write_text("from file\n")
+            out = Path(td) / "o.md"
+            code, stderr = self._run(
+                "--type", "goal-seed", "--title", "t",
+                "--summary-file", str(sf), "--out", str(out),
+            )
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(_frontmatter(out.read_text())["summary"].strip(), "from file")
+
+
 # ---------------------------------------------------------------------------
 # Asymmetry regression (C3 dispatch brief) -- the goal-seed/roadmap-seed/
 # roadmap-baton `blocking_notes: PLACEHOLDER` line is a gate NOTE under the

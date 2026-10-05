@@ -214,12 +214,24 @@ def _parent_is_interactive(ppid: Optional[int]) -> Optional[bool]:
         return None
 
 
+def _lazy_attr(proc, attr: str):
+    """`proc.<attr>()`, or None when the process is gone or denied (process_iter's ad_value)."""
+    import psutil
+
+    try:
+        return getattr(proc, attr)()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
 def _run_process_probe() -> List[ProcessObservation]:
     import psutil
 
     observations: List[ProcessObservation] = []
     now = time.time()
-    for proc in psutil.process_iter(["pid", "name", "create_time", "ppid"]):
+    # Only `name` up front: on Windows each ppid()/create_time() rebuilds a whole
+    # process snapshot, so asking for them over every process costs tens of seconds.
+    for proc in psutil.process_iter(["name"]):
         name = (proc.info.get("name") or "").lower()
         if name != "claude.exe":
             continue
@@ -230,7 +242,7 @@ def _run_process_probe() -> List[ProcessObservation]:
         except psutil.NoSuchProcess:
             continue
         command_line = " ".join(cmdline_list)
-        create_time = proc.info.get("create_time")
+        create_time = _lazy_attr(proc, "create_time")
         age_seconds = (
             now - create_time if isinstance(create_time, (int, float)) else None
         )
@@ -240,7 +252,7 @@ def _run_process_probe() -> List[ProcessObservation]:
                 command_line=command_line,
                 guarded=_is_guarded(command_line),
                 age_seconds=age_seconds,
-                has_interactive_parent=_parent_is_interactive(proc.info.get("ppid")),
+                has_interactive_parent=_parent_is_interactive(_lazy_attr(proc, "ppid")),
             )
         )
     return observations

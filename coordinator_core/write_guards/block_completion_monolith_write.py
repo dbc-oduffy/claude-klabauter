@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.block_completion_monolith_write — advisory guard.
+"""coordinator_core.write_guards.block_completion_monolith_write — hard-deny guard.
 
 Originally a Python engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-completion-monolith-write.sh`` PreToolUse
@@ -16,22 +16,14 @@ review at commit time catches a stray monolith write before it lands —
 neither the tripwire nor review depend on this guard having denied the write
 outright.
 
-CLASS = "advisory" (2026-08-06 write-guard classification pass,
-docs/plans/2026-08-06-... B5): reclassified from hard-deny. The harm this
-guard flags is a MISROUTED write, not a silent or total loss — the target
-path is a plain file the writer fully controls, nothing downstream treats it
-as authoritative before a human or the static-grep tripwire can catch it, and
-the correction is a second write to the right path, not a recovery from lost
-work. That is the "irreversible harm" bar this family's hard-deny band is
-reserved for (see this package's classification test), and this guard does
-not clear it — the discharge test/tripwire.
+CLASS = "hard-deny"; the policy point (``machine_profile.apply_guard_level``)
+leaves the deny on an author box and downgrades it to a warning on a consumer box.
 
 This is otherwise a faithful port: it preserves the reference hook's escape
 hatch, the tool_name pre-filter, the backslash/slash-run normalization (F5
 fix), the ``archive/completed/<YYYY-MM>.md`` tail match (never matching
 ``legacy/`` or per-entry-subdir forms, by construction of the regex), and the
-reason text verbatim — only the envelope shape (advisory, not deny) and the
-lead-in sentence changed.
+reason text.
 
 Ported from the retired DoE bash guard ``block-completion-monolith-write.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).
@@ -44,8 +36,8 @@ Negative-spec:
     correct Phase 1 per-entry subdir form) — the extra path segment after
     ``YYYY-MM`` means the trailing-tail regex never matches.
   - Does NOT read stdin — the engine passes ``payload`` directly.
-  - Does NOT deny — advisory only; the write always lands, with the
-    alternative path surfaced via ``additionalContext``.
+  - Does NOT name the alternative path in an allow: a match is always a deny
+    whose reason surfaces the per-entry path.
   - Never raises: any unexpected input shape or internal error is treated as
     ALLOW/no-op (fail-open on error), matching the reference hook's
     ``set -uo pipefail`` fail-open discipline.
@@ -58,8 +50,9 @@ import re
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core._hook_envelope import deny
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 171
 
@@ -114,11 +107,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return deny("PreToolUse", reason)
     except Exception:
         return None

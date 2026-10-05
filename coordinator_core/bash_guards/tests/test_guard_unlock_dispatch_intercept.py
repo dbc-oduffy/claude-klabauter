@@ -6,27 +6,10 @@ Exercises the real registered guard chain end-to-end (not a mocked guard),
 using `block-dev-repo-sentinel-removal` as the live target for AC8's
 general bash-leg slice: absent-sentinel deny, present-sentinel one-shot
 grant, per-guard isolation, per-session isolation, and fail-closed on an
-unresolvable session id. AC4 (the sentinel-REMOVAL guards get the unlock
-exactly like the content-edit guards, no exemption list) is covered
-separately, against a different guard -- see
-`TestRemovalLegGuardGrantsUnderTheSameMechanism` below.
+unresolvable session id.
 
-CLASS-CENSUS NOTE (2026-08-06, `docs/plans/2026-08-06-apply-guard-class-
-census.md`, C13/C14e): `block-dev-repo-sentinel-removal`'s CONFINEMENT_DENY
-registration was retired -- its sole registered leg
-(`block-dev-repo-sentinel-removal-advisory`) now returns an ALLOW+
-additionalContext advisory for every input that used to trip the deny leg,
-never `permissionDecision == "deny"`. The unlock-consumption/annotation
-path in `dispatch.py` gates strictly on `_is_hard_deny_envelope`, so for
-THIS guard it is now permanently unreachable: no sentinel is ever
-consumed, no annotation is ever appended, because there is no longer a
-hard deny to grant past. The classes below are updated to assert that
-(structurally correct, not a relaxation) -- AC4's own claim is retargeted
-to `block-stash-destruction` (`git stash drop`/`clear`) instead: still
-CONFINEMENT_DENY, never identity-gated, and registered ahead of every
-subagent-identity-gated guard in the chain (`dispatch.py`'s own ordering
-comment above that entry), so nothing upstream intercepts the command
-first.
+AC4 (the sentinel-REMOVAL guards get the unlock exactly like the content-edit
+guards, no exemption list) is also exercised against `block-stash-destruction`.
 
 A hook envelope that is merely non-`None` is NOT necessarily a deny —
 `block-dev-repo-sentinel-removal` itself can return an ALLOW+
@@ -83,7 +66,7 @@ def _decision(payload):
 class TestAbsentSentinelDenies:
 
     def test_no_sentinel_denies(self):
-        assert _decision(_payload("sess-1")) == "allow"
+        assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestPresentSentinelGrantsOnce:
@@ -95,54 +78,44 @@ class TestPresentSentinelGrantsOnce:
     def test_one_shot_re_denies_on_immediate_retry(self):
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1")) == "allow"
-        assert _decision(_payload("sess-1")) == "allow"
+        assert _decision(_payload("sess-1")) == "deny"
 
     def test_sentinel_file_is_consumed_from_disk(self):
         p = gus.sentinel_path("sess-1", GUARD_NAME)
         p.write_text("", encoding="utf-8")
         dispatch.evaluate_payload_json(json.dumps(_payload("sess-1")))
-        assert p.exists()
+        assert not p.exists()
 
 
 class TestPerGuardIsolation:
     def test_sentinel_for_a_different_guard_does_not_clear_this_one(self):
         gus.sentinel_path("sess-1", "no-verify").write_text("", encoding="utf-8")
-        assert _decision(_payload("sess-1")) == "allow"
+        assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestPerSessionIsolation:
     def test_peer_session_sentinel_does_not_clear_ours(self):
         gus.sentinel_path("peer-session", GUARD_NAME).write_text("", encoding="utf-8")
-        assert _decision(_payload("sess-1")) == "allow"
+        assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestUnresolvableSessionIdFailsClosed:
     def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self):
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
-        assert _decision(_payload(None)) == "allow"
+        assert _decision(_payload(None)) == "deny"
 
     def test_empty_string_session_id_denies(self):
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
-        assert _decision(_payload("")) == "allow"
+        assert _decision(_payload("")) == "deny"
 
 
-#: Still CONFINEMENT_DENY and never identity-gated (module docstring
-#: "CLASS-CENSUS NOTE") -- `git stash drop`/`clear` is the AC4 exemplar
-#: `block-dev-repo-sentinel-removal` can no longer serve now that its own
-#: registration is ADVISORY_REWRITE. `block_stash_destruction.py`'s own
-#: "DELIBERATE ALLOW-LIST" restricts the deny to `drop`/`clear` only.
+#: `git stash drop`/`clear` is a second CONFINEMENT_DENY exemplar, never identity-gated.
 STASH_GUARD_NAME = "block-stash-destruction"
 STASH_DROP_CMD = "git stash drop"
 
 
 class TestRemovalLegGuardGrantsUnderTheSameMechanism:
-    """AC4 — the removal-leg cohort is not exempt from the unlock, in
-    principle; `block-dev-repo-sentinel-removal` can no longer exercise
-    that claim itself post-conversion (see this module's own "CLASS-CENSUS
-    NOTE"). `block-stash-destruction` is used here instead -- still
-    CONFINEMENT_DENY, never identity-gated, and registered ahead of every
-    subagent-identity-gated guard in the chain, so `git stash drop` reaches
-    it undisturbed."""
+    """AC4 -- the removal-leg cohort is not exempt from the unlock."""
 
     def test_denies_without_sentinel(self):
         assert _decision(_payload("sess-1", command=STASH_DROP_CMD)) == "deny"

@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.nudge_improvement_queue_write — advisory guard.
+"""coordinator_core.write_guards.nudge_improvement_queue_write — hard-deny guard.
 
 Originally an engine-ification of DoE's retired
 ``coordinator/hooks/scripts/nudge-improvement-queue-write.sh`` PreToolUse
@@ -50,20 +50,12 @@ the guard cohort got on 2026-07-30: the deny text keeps only what a reader
 needs AT DECISION TIME — the one concrete action they can take next — behind
 a pointer to the full detail).
 
-CLASS is "advisory" (2026-08-06 guard-class-census flip, DR-277): on a
-positive match (queue write with no non-trivial justification anywhere in
-the payload) it returns the ``additionalContext`` envelope instead of
-denying; on any internal error it fails OPEN (returns None) — it never
-blocks the write either way now. PRIORITY stays 120 unchanged (class flip
-only, no re-slot — no lower-numbered advisory co-matches this guard's
-``*improvement-queue.md`` / ``*state/improvement-queue/*.yaml`` surface).
-The ``COORDINATOR_QUEUE_PUNT`` reason-shaped escape hatch described above is
-PRESERVED as-is: it still allows silently when non-trivial and still falls
-through to the advisory (now, not a deny) when trivial or absent. This is
-the door in the "hard wall with a painted-on door" becoming real: the same
-content-based ``justification:`` escape is now paired with an advisory that
-can actually be acted on by the agent it is nudging, instead of a deny that
-agent could never reach.
+CLASS is "hard-deny", leveled at the policy point
+(``machine_profile.apply_guard_level``): strict on an author box, a warn on a
+consumer box. A queue write with no non-trivial ``justification:`` anywhere in
+the payload returns a deny; any internal error fails OPEN (returns None).
+``COORDINATOR_QUEUE_PUNT`` allows silently when non-trivial and falls through
+to the deny when trivial or absent.
 
 Negative-spec:
   - Does NOT replicate the retired reference hook's claude-klabauter fast-path
@@ -107,12 +99,13 @@ import re
 from collections import deque
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._helpers import (
     is_trivial_reason as _is_trivial_reason,
     operator_override_note,
 )
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 120
 
@@ -333,11 +326,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             override_block=("\n" + _note if _note else ""),
         )
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return _deny("PreToolUse", reason)
     except Exception:
         return None

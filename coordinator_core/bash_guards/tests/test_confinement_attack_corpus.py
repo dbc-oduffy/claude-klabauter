@@ -450,18 +450,14 @@ def test_confinement_attack_corpus(guard_name, shape_name, tmp_path, monkeypatch
 
 @pytest.mark.parametrize("guard_name,shape_name", _advisory_cells())
 def test_advisory_rewrite_attack_corpus(guard_name, shape_name, tmp_path, monkeypatch):
-    """`ADVISORY_GUARDS`'s own SHAPES cross-product -- `block-subagent-plan-
-    body-bash-write` and `check-raw-pid-liveness`, moved here from
-    `CONFINEMENT_GUARDS` when C13/C14 flipped both CONFINEMENT_DENY ->
-    ADVISORY_REWRITE. Asserts `"advisory"`, not `"deny"` -- these guards no
-    longer hard-deny anything by design; a plain silent `"allow"` (no
-    envelope) on any evasion shape is the regression this proves against.
-    coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
+    """`ADVISORY_GUARDS`'s own SHAPES cross-product -- guards registered in
+    the ADVISORY_REWRITE band that still deny. A silent `"allow"` or an
+    advisory on any evasion shape is the regression this proves against.
     """
     decide, base_cmd = _ADVISORY_GUARD_SETUP[guard_name](tmp_path, monkeypatch)
     variant = _SHAPE_FN[shape_name](base_cmd)
     got = decide(variant)
-    assert got == "advisory", "%s / %s: %r -> %s (expected advisory)" % (
+    assert got == "deny", "%s / %s: %r -> %s (expected deny)" % (
         guard_name,
         shape_name,
         variant,

@@ -1,13 +1,13 @@
 """coordinator_core.bash_guards.block_noncanonical_branch_creation --
-PreToolUse(Bash) advisory guard closing the branch-creation-seam gap: a
+PreToolUse(Bash) guard closing the branch-creation-seam gap: a
 Bash-typed `git checkout -b`/`git checkout -B`/`git switch -c`/`git switch
 -C`/`git branch <name>` invocation whose target name is neither the
 canonical daily-branch shape (`work/{machine}/{today}` or a same-shape
 lowercase span, per `coordinator_core.daily_branch.is_canonical_branch`) nor
-one of a small sanctioned set of longlived prefixes is flagged via an
-advisory `additionalContext` (never denied -- see
-`docs/plans/2026-08-06-apply-guard-class-census.md`, chunk C13/C14: this
-guard moved CONFINEMENT_DENY -> ADVISORY_REWRITE, `fail_closed=False`).
+one of a small sanctioned set of longlived prefixes is denied; the
+policy point (`machine_profile.apply_guard_level`) keeps it a deny on an
+author box and turns it into an advisory on a consumer box.
+Registered CONFINEMENT_DENY, `fail_closed=True`.
 
 Why this exists: `daily_branch.py`'s oracles are pure predicates with no
 enforcement seam of their own -- something has to call `is_canonical_branch`
@@ -156,13 +156,10 @@ NEGATIVE SPEC 4 -- no try/except in `check()`. Exception-routing policy
 (crash-deny vs crash-swallow-as-allow) is the dispatcher's job, driven by
 the registration's `fail_closed` flag, not this module's; catching and
 silently allowing here would duplicate that contract instead of deferring
-to it. Since chunk C13/C14 (see summary above) this guard's registration
-carries `fail_closed=False`, so a `check()` crash now routes to a swallowed
-allow rather than a deny -- a deliberate consequence of the advisory flip,
-not a reason to add a try/except here.
+to it. This guard's registration carries `fail_closed=True`, so a `check()`
+crash routes to a deny -- not a reason to add a try/except here.
 
 Spec: docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C1.
-Advisory flip: docs/plans/2026-08-06-apply-guard-class-census.md, C13/C14.
 """
 
 from __future__ import annotations
@@ -182,6 +179,7 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
+from coordinator_core._hook_envelope import deny
 from coordinator_core.daily_branch import is_canonical_branch
 from coordinator_core.daily_day import local_day
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -190,7 +188,7 @@ from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
 # docs/reference/guard-tool-name-membership.md): this guard is registered
-# ADVISORY_REWRITE/fail_closed=False (see module docstring) and fails OPEN
+# CONFINEMENT_DENY/fail_closed=True (see module docstring) but fails OPEN
 # on any name shape it cannot evaluate ("FAIL OPEN ON A NAME THIS GUARD
 # NEVER ACTUALLY SAW" above) -- no spurious-deny risk from unparseable
 # PowerShell input.
@@ -346,7 +344,7 @@ def _advisory_reason(cmd: str, name: str) -> str:
     today = local_day()
     canonical = _canonical_example(today)
     return (
-        "Advisory: `%s` is not canonical -- daily-branch discipline "
+        "`%s` is not canonical -- daily-branch discipline "
         "requires `work/{machine}/{date}` (or a longlived prefix: "
         "`migration/`, `release/`, `feature/`).\n\n"
         "Use instead:\n"
@@ -398,7 +396,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # `git`, and `_classify_segment` below never even reaches the name
     # predicate -- even though the base `git checkout -b` argv is
     # byte-identical across dialects. Fails OPEN by construction (see
-    # `MATCHERS` comment above), so this is a missed advisory, never a
+    # `MATCHERS` comment above), so this is a missed deny, never a
     # spurious one. Same narrow fix as the sibling deny-capable entries:
     # for a PowerShell payload only, tokenize via `_dialect.tokenize_
     # command` and run the SAME `expand_start_process_invocations` pass,
@@ -421,12 +419,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for resolved in resolve_command_positions(cmd):
         name = _classify_segment(resolved.tokens, configured_day_branch)
         if name is not None:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "additionalContext": _advisory_reason(cmd, name),
-                }
-            }
+            return deny("PreToolUse", _advisory_reason(cmd, name))
 
     return None

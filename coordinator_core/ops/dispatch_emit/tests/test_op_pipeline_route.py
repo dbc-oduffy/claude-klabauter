@@ -87,8 +87,8 @@ def test_defaults_are_unique_per_run_and_under_the_warp_dir(stubs, tmp_path):
 
     assert first["run_id"] != second["run_id"]
     assert first["run_id"].startswith("pipeline-structured-")
-    assert Path(first["path"]) == (tmp_path / "state/scratch/warp" / f"{first['run_id']}.workflow.mjs").resolve()
-    assert first["scratch_dir"] == f"state/scratch/warp/{first['run_id']}"
+    assert Path(first["path"]) == (tmp_path / "scratch/warp" / f"{first['run_id']}.workflow.mjs").resolve()
+    assert first["scratch_dir"] == f"scratch/warp/{first['run_id']}"
     assert first["fire_args"] == {"repoRoot": tmp_path.as_posix()}
 
 

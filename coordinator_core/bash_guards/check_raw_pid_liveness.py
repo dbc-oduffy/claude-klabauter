@@ -82,6 +82,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -91,22 +92,9 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 )
 
 CLASS = "hard-deny"
-#: WIDENED 2026-08-07 (C4, docs/plans/2026-08-07-command-guards-fire-under-
-#: both-tool-names.md) -- unlike its two former cohort-mates
-#: (`guard_plumbing_and_loops.py`, `guard_multiprobe_banner.py`, still
-#: held), this guard is deny-incapable at the chain level: its
-#: `GuardEntry` registration in `dispatch.py`'s `guard_chain` (the
-#: "check-raw-pid-liveness" entry) declares `GuardBand.ADVISORY_REWRITE`
-#: with `fail_closed=False`, and `check()` below never constructs a deny
-#: envelope in any branch. `CLASS = "hard-deny"` immediately above is a
-#: DEAD attribute (DR-277) -- C1 deliberately did not revive it as a live
-#: signal, and reading it as evidence this guard can deny is exactly the
-#: misreading that put this file in the held cohort in the first place.
-#: It also already dialect-branches to SILENT for `Dialect.POWERSHELL`
-#: rather than guessing (its three POSIX-only idioms have no recognized
-#: PowerShell analogue) -- a declined verdict, never a scan of unreadable
-#: text. `MATCHERS` therefore references the shared tool-name universe
-#: directly, not a guard-local subset.
+#: Fires under both Bash and PowerShell tool names; a PowerShell command is
+#: recorded SILENT (its three idioms are POSIX-only). Denies via the dispatch
+#: policy point, which downgrades to an advisory on a consumer box.
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 46
 
@@ -137,7 +125,7 @@ def _segment_has_raw_pid_liveness_idiom(segment: str) -> Optional[str]:
     return None
 
 
-def _advisory_reason(idiom: str, payload: Optional[Dict[str, Any]] = None) -> str:
+def _deny_reason(idiom: str, payload: Optional[Dict[str, Any]] = None) -> str:
     return (
         "%s: dead pid, not a live session. Use instead: "
         "`session-liveness-cli session-live SID` or "
@@ -190,12 +178,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             continue
         idiom = _segment_has_raw_pid_liveness_idiom(segment)
         if idiom is not None:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "additionalContext": _advisory_reason(idiom, payload=payload),
-                }
-            }
+            return deny("PreToolUse", _deny_reason(idiom, payload=payload))
 
     return None

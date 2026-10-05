@@ -46,8 +46,8 @@ class TestFlatHardLimitStillApplies:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "permissionDecision" not in out
-        assert "additionalContext" in out
+        assert out["permissionDecision"] == "deny"
+        assert out["permissionDecisionReason"]
 
     def test_dev_repo_coordinator_claude_md_under_hard_limit_allowed(self, tmp_path):
         _init_git_dir(tmp_path)
@@ -79,8 +79,8 @@ class TestAudienceManifestWidensGovernance:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "permissionDecision" not in out
-        assert "additionalContext" in out
+        assert out["permissionDecision"] == "deny"
+        assert out["permissionDecisionReason"]
 
     def test_surface_absent_from_manifest_stays_ungoverned(self, tmp_path):
         _init_git_dir(tmp_path)
@@ -139,9 +139,9 @@ class TestRatchetWatermarkEnforced:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "permissionDecision" not in out
-        assert "6000" in out["additionalContext"]
-        assert "post-cut arming, C7b" in out["additionalContext"]
+        assert out["permissionDecision"] == "deny"
+        assert "6000" in out["permissionDecisionReason"]
+        assert "post-cut arming, C7b" in out["permissionDecisionReason"]
 
     def test_holding_at_armed_watermark_allowed(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -194,8 +194,8 @@ class TestRatchetWatermarkEnforced:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "permissionDecision" not in out
-        assert "additionalContext" in out
+        assert out["permissionDecision"] == "deny"
+        assert out["permissionDecisionReason"]
 
     def test_over_watermark_shrink_is_admitted(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -215,7 +215,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "6000" in out["additionalContext"]
+        assert "6000" in out["permissionDecisionReason"]
 
     def test_over_watermark_same_size_is_still_denied(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -226,7 +226,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "6000" in out["additionalContext"]
+        assert "6000" in out["permissionDecisionReason"]
 
     def test_over_watermark_shrink_via_edit_is_admitted(self, tmp_path):
         target = self._governed_target(tmp_path)
@@ -252,8 +252,8 @@ class TestRatchetWatermarkEnforced:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert "permissionDecision" not in out
-        assert "6000" in out["additionalContext"]
+        assert out["permissionDecision"] == "deny"
+        assert "6000" in out["permissionDecisionReason"]
 
 
 class TestDoctrineSurfaceAdvisoryParity:

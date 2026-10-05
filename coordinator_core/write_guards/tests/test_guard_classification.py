@@ -46,21 +46,14 @@ no "PM-ratified exceptions" carve-out at all):
 - Carve-out 3 -- the machine itself: "resource exhaustion that takes the
   session or the box down" (the `check_test_suite_invocation` carve-out).
 
-Everything that does not clear one of those three carve-outs is advisory,
-including guards this file previously pinned hard-deny under the
-superseded B5 bar (the nine C2-C12 flips: `check_claude_md_size`,
-`block_cutover_phase_hand_edit`, `block_tracker_edit`,
-`block_priority_ledger_edit`,
-`block_em_hand_edit_pending_review_integration`,
-`nudge_prose_queue_creation`, `nudge_improvement_queue_write`,
-`block_dev_repo_sentinel_write` -- disk-truth
-wires and dev-side mirrors whose harm is reversible and
-individually-correctable, not the broken-control-plane, Windows-cost, or
-machine-exhaustion shape DR-277's three carve-outs reserve (Review:
-coordinator:code-reviewer, 36bfdde30 follow-up -- "silent-and-total" was
-this same wrong paraphrase's own language, not DR-277's; see the corrected
-enumeration above). The guards remaining hard-deny below are the
-carve-out set DR-277 names, not a residual of the old bar.
+The 2026-10-04 amendment to DR-277 restored the census's FLIP-ADVISORY write
+guards to hard-deny: `block_completion_monolith_write`,
+`block_cutover_phase_hand_edit`, `block_dev_repo_sentinel_write`,
+`block_dev_side_mirror_wiki`, `block_priority_ledger_edit`,
+`check_claude_md_size`, `nudge_improvement_queue_write` and
+`nudge_prose_queue_creation`. A consumer box still sees them as advisories,
+because the policy point (`machine_profile.apply_guard_level`) turns the deny
+into a warn there; an author box keeps the deny.
 
 `guard_memory_store_cap` moved BACK to hard-deny 2026-08-21
 (`docs/decisions/DR-345-memory-cap-is-hard-deny-with-a-file-count-cap.md`,
@@ -158,9 +151,13 @@ from coordinator_core.write_guards import engine
 # review cannot hold down, or a disk-truth wire whose corruption an
 # automated downstream consumer trusts before any human reviews it.
 HARD_DENY_NAMES = [
+    "block_completion_monolith_write",
     "block_confined_agent_write",
     "block_consumed_handoff_edit",
+    "block_cutover_phase_hand_edit",
     "block_derived_global_doctrine_write",
+    "block_dev_repo_sentinel_write",
+    "block_dev_side_mirror_wiki",
     "block_disarm_marker_sentinel_write",
     "block_duplicate_decision_record_id",
     "block_em_strict_dispatch_code_write",
@@ -172,6 +169,7 @@ HARD_DENY_NAMES = [
     "block_illegal_filename",
     "block_memo_status_hand_edit",
     "block_oss_mirror_memo_delivery",
+    "block_priority_ledger_edit",
     "block_sizing_object_schema_violation",
     "block_subagent_archive_write",
     "block_subagent_grant_record_write",
@@ -180,25 +178,18 @@ HARD_DENY_NAMES = [
     "block_unauthorized_claude_md_write",
     "block_worktree_sentinel_write",
     "bump_out_of_repo_tool_write",
+    "check_claude_md_size",
     "guard_doctrine_surface_edits",
     "guard_memory_store_cap",
     "guard_settings_json_write",
+    "nudge_improvement_queue_write",
+    "nudge_prose_queue_creation",
     "p4_checkout_before_edit",
     "validate_frontmatter_schema_deny",
 ]
 
-# Every advisory guard, alphabetical. Includes the two 2026-08-06 B5
-# conversions from hard-deny (`block_completion_monolith_write`,
-# `block_dev_side_mirror_wiki`) -- the harm each flags is a plainly
-# reversible, individually-correctable mistake, not the irreversible-harm
-# shape the hard-deny band is reserved for; see their own module docstrings.
+# Every advisory guard, alphabetical.
 ADVISORY_NAMES = [
-    "block_completion_monolith_write",
-    "block_cutover_phase_hand_edit",
-    "block_dev_repo_sentinel_write",
-    "block_dev_side_mirror_wiki",
-    "block_priority_ledger_edit",
-    "check_claude_md_size",
     "guard_concrete_path_citations",
     "nudge_authoring_leak",
     "nudge_baton_body_bar",
@@ -206,14 +197,12 @@ ADVISORY_NAMES = [
     "nudge_em_code_dispatch",
     "nudge_handoff_ac_shape",
     "nudge_handoff_author_lint",
-    "nudge_improvement_queue_write",
     "nudge_new_sh_file_naked_python",
     "nudge_peer_notice_unread",
     "nudge_outbox_draft_frontmatter_shape",
     "nudge_plan_sidecar_family_split",
     "nudge_private_git_fact_resolver",
     "nudge_prose_queue_append",
-    "nudge_prose_queue_creation",
     "nudge_sentinel_retained_review_sidecar",
     "nudge_session_display_name_as_identifier",
     "nudge_shell_shaped_spawn",

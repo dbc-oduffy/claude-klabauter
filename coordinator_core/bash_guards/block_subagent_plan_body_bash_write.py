@@ -57,19 +57,11 @@ recipe-vs-disk discrepancy this reveals. The back-pointer
 direct comparison), so those two legs ARE reused from
 ``coordinator_core.bash_guards._helpers`` per the recipe instruction.
 
-ADVISORY_REWRITE note (2026-08-06): `check()` no longer returns a deny
-envelope. C13 moved this guard's `dispatch.py` registration to
-`GuardBand.ADVISORY_REWRITE` with `fail_closed=False`; this module (C14c)
-follows on the return-vocabulary side -- an unambiguous-write match now
-returns `permissionDecision: "allow"` with the same reason text surfaced via
-`additionalContext` instead of `permissionDecisionReason`. `CLASS =
-"hard-deny"` above is dead metadata on the bash-guard side (nothing reads
-it) and is left as historical record, not the load-bearing signal.
+An unambiguous-write match returns a deny envelope; the dispatch policy point
+(`_apply_guard_level`) downgrades it to an advisory on a consumer box.
 
 Spec backlink: coordinator-content-repo:pln-dispatch-sidecar-contract-exec-5e045c
   section D-BASH, AC4, chunk C-BASH.
-Spec backlink (ADVISORY_REWRITE conversion):
-  docs/plans/2026-08-06-apply-guard-class-census.md, chunk C14.
 Ported from the retired DoE bash guard ``block-subagent-plan-body-bash-write.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).
 Recipe: scratch/subagent-sandbox/bash-to-python-migration/W3a-preuse-bash-recipe.md
@@ -85,6 +77,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
@@ -227,16 +220,14 @@ def _deny_reason_executor(
         return (
             f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's\n"
             "enumerated agent roster, so it can't write docs/plans/*.md via Bash.\n\n"
-            "Status stamps use instead:\n"
-            "  .coordinator-local/subagent-share/<path>.md (report_sidecar)\n\n"
+            "Status stamps go in your run-report sidecar (report_sidecar).\n\n"
             "Type is legitimate? It belongs on the roster. Body edit was your\n"
             "deliverable? Ask the EM to dispatch an enumerated kind."
             + ("\n\n" + _note if _note else "")
         )
     return (
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
-        "Status stamps use instead:\n"
-        "  .coordinator-local/subagent-share/<path>.md (report_sidecar)\n\n"
+        "Status stamps go in your run-report sidecar (report_sidecar).\n\n"
         "Body edit was your deliverable? Wrong agent — ask the EM to route to\n"
         "enricher/review-integrator."
         + ("\n\n" + _note if _note else "")
@@ -376,10 +367,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     # Match confirmed. Per-session log (best-effort) (reference hook 252-262).
-    # Retained under its historical name -- this is now an advisory-fire log,
-    # not a deny log (ADVISORY_REWRITE band, C13 registration); the on-disk
-    # audit trail semantics (best-effort, never flips the verdict) are
-    # unchanged.
+    # Best-effort fire log; never flips the verdict.
     _write_block_log(git_root, session_id, agent_id or raw_agent_id)
 
     cmd_safe = _sanitize_cmd_for_reason(cmd)
@@ -391,18 +379,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             agent_id or raw_agent_id, cmd_safe, subagent_type, payload=payload, git_root=git_root
         )
 
-    # ADVISORY_REWRITE (C14c) -- allow the command through and surface the
-    # advisory in `additionalContext` rather than denying via
-    # `permissionDecisionReason`. The message text itself is unchanged: it
-    # already names a concrete, applicable alternative (the
-    # `state/subagent-share/<path>.md` sidecar surface) or, for the
-    # AMBIGUOUS branch, reports collision state the agent could not already
-    # know -- both satisfy the Axis-A firing-shape gate as advisory prose,
-    # not just as a deny reason.
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": reason,
-        }
-    }
+    return deny("PreToolUse", reason)

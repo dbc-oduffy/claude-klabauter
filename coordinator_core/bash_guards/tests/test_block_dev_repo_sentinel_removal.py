@@ -154,18 +154,14 @@ class TestPassSet:
 
 
 class TestAdvisoryOnUnexaminableIndirection:
-    """Two-leg split (2026-08-05): the advisory envelope is now produced by
-    `check_advisory()` only -- `check()` (the CONFINEMENT_DENY-registered
-    leg) never returns it. See the module's own "TWO-LEG SPLIT" docstring
-    section."""
+    """Unexaminable indirection advises via `check_advisory()`; `check()`
+    (deny-only) returns None for it."""
 
     def test_xargs_advisory_not_deny(self):
         out = guard.check_advisory(_payload("echo %s | xargs rm" % SENTINEL))
         _advisory_text(out)
 
     def test_xargs_check_leg_allows_with_no_content(self):
-        # The CONFINEMENT_DENY leg must not shadow anything for this input
-        # -- it returns bare `None`, not the advisory envelope.
         assert guard.check(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
     def test_bare_file_interpreter_unrelated_allows(self):
@@ -255,30 +251,26 @@ class TestReachableThroughTheDispatchChain:
         return "allow"
 
     def test_bare_rm_denied_end_to_end(self):
-        # Deny leg retired (C13); the sole registered leg now advises
-        # instead of denying -- see module's own "CLASS-CENSUS CONVERSION".
-        assert self._decision("rm %s" % SENTINEL) == "advisory"
+        assert self._decision("rm %s" % SENTINEL) == "deny"
 
     def test_cd_prefixed_rm_denied_end_to_end(self):
-        assert self._decision("cd /repo && rm %s" % SENTINEL) == "advisory"
+        assert self._decision("cd /repo && rm %s" % SENTINEL) == "deny"
 
     def test_git_dash_c_prefixed_rm_denied_end_to_end(self):
-        assert self._decision("git -C /repo status; git rm %s" % SENTINEL) == "advisory"
+        assert self._decision("git -C /repo status; git rm %s" % SENTINEL) == "deny"
 
     def test_unrelated_rm_allowed_end_to_end(self):
         assert self._decision("rm somefile.txt") == "allow"
 
     def test_registered_ahead_of_offer_git_c(self):
-        assert self._decision("cd /repo && rm %s" % SENTINEL) == "advisory"
+        assert self._decision("cd /repo && rm %s" % SENTINEL) == "deny"
 
 
 class TestAdvisoryLegAtItsNewChainPosition:
-    """The deny leg (`block-dev-repo-sentinel-removal`, a CONFINEMENT_DENY
-    entry) was RETIRED by C13 (`docs/plans/2026-08-06-apply-guard-class-
-    census.md`) -- `block-dev-repo-sentinel-removal-advisory` is now the
-    guard's SOLE registered entry, still its OWN ADVISORY_REWRITE entry,
-    registered after every CONFINEMENT_DENY hard deny and ahead of
-    `offer-git-c`. Covers the gap named in `state/audits/2026-08-05-
+    """The guard registers two legs: `block-dev-repo-sentinel-removal`
+    (CONFINEMENT_DENY) and `block-dev-repo-sentinel-removal-advisory`
+    (ADVISORY_REWRITE, after every CONFINEMENT_DENY entry, ahead of
+    `offer-git-c`). Covers the gap named in `state/audits/2026-08-05-
     confinement-deny-band-return-shapes.md`: the three trigger shapes
     proven live-reachable there, plus the non-shadowing property the audit
     calls out as undefended."""
@@ -289,7 +281,7 @@ class TestAdvisoryLegAtItsNewChainPosition:
         "find . -name '%s' | xargs rm" % SENTINEL,
     ]
 
-    def test_advisory_leg_sits_after_every_confinement_deny_entry(self):
+    def test_both_legs_sit_ahead_of_offer_git_c_in_their_bands(self):
         chain = dispatch._build_guard_chain(
             cmd="echo x",
             session_id="chain-position-probe",
@@ -299,15 +291,18 @@ class TestAdvisoryLegAtItsNewChainPosition:
             host_is_windows=None,
         )
         names = [e.name for e in chain]
-        assert "block-dev-repo-sentinel-removal" not in names
+        deny_idx = names.index("block-dev-repo-sentinel-removal")
         advisory_idx = names.index("block-dev-repo-sentinel-removal-advisory")
         offer_git_c_idx = names.index("offer-git-c")
 
+        assert chain[deny_idx].band == dispatch.GuardBand.CONFINEMENT_DENY
+        assert chain[deny_idx].fail_closed
         assert chain[advisory_idx].band == dispatch.GuardBand.ADVISORY_REWRITE
 
         last_confinement_deny_idx = max(
             i for i, e in enumerate(chain) if e.band == dispatch.GuardBand.CONFINEMENT_DENY
         )
+        assert deny_idx < offer_git_c_idx
         assert advisory_idx > last_confinement_deny_idx
         assert advisory_idx < offer_git_c_idx
 
@@ -328,8 +323,7 @@ class TestAdvisoryLegAtItsNewChainPosition:
         """An input that trips this guard's advisory AND is denied by a
         LATER hard-deny guard in the chain (here, `block-disarm-marker-
         sentinel-creation`, a CONFINEMENT_DENY entry sitting well before
-        this guard's own advisory leg, which is now the guard's SOLE
-        registered entry since C13 retired the deny leg) must still
+        this guard's own advisory leg) must still
         return that deny end-to-end. If this guard's ADVISORY_REWRITE
         entry ever regressed into shadowing (an `allow`+`additionalContext`
         return that `evaluate_payload_json` treated as terminal), it would
@@ -337,7 +331,7 @@ class TestAdvisoryLegAtItsNewChainPosition:
         band-contract violation `state/audits/2026-08-05-confinement-deny-
         band-return-shapes.md` found. Directly probes this guard's own
         `check()` first (proving IT specifically returns `None`, not
-        content -- it is unregistered but still directly callable) before
+        content) before
         checking the overall end-to-end decision -- `block-approval-
         sentinel-creation` (an unrelated, earlier guard) also denies
         indirection shapes by construction and would mask this property if
@@ -395,56 +389,56 @@ class TestPowerShellDialect:
 
     @requires_powershell_grammar
     def test_remove_item_denies(self):
-        out = guard.check_advisory(
+        out = guard.check(
             _payload("Remove-Item %s" % SENTINEL, tool_name="PowerShell")
         )
-        _advisory_text(out)
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_ri_alias_denies(self):
-        out = guard.check_advisory(_payload("ri %s" % SENTINEL, tool_name="PowerShell"))
-        _advisory_text(out)
+        out = guard.check(_payload("ri %s" % SENTINEL, tool_name="PowerShell"))
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_rd_alias_denies(self):
-        out = guard.check_advisory(_payload("rd %s" % SENTINEL, tool_name="PowerShell"))
-        _advisory_text(out)
+        out = guard.check(_payload("rd %s" % SENTINEL, tool_name="PowerShell"))
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_del_alias_denies(self):
-        out = guard.check_advisory(_payload("del %s" % SENTINEL, tool_name="PowerShell"))
-        _advisory_text(out)
+        out = guard.check(_payload("del %s" % SENTINEL, tool_name="PowerShell"))
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_rm_alias_still_denies_under_powershell(self):
-        out = guard.check_advisory(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
-        _advisory_text(out)
+        out = guard.check(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_remove_item_with_recurse_force_flags_denies(self):
-        out = guard.check_advisory(
+        out = guard.check(
             _payload(
                 "Remove-Item -Recurse -Force %s" % SENTINEL, tool_name="PowerShell"
             )
         )
-        _advisory_text(out)
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_remove_item_unrelated_target_allows(self):
         assert (
-            guard.check_advisory(_payload("Remove-Item somefile.txt", tool_name="PowerShell"))
+            guard.check(_payload("Remove-Item somefile.txt", tool_name="PowerShell"))
             is None
         )
 
     @requires_powershell_grammar
     def test_git_rm_denies_under_powershell(self):
-        out = guard.check_advisory(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
-        _advisory_text(out)
+        out = guard.check(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
+        _deny_reason(out)
 
     @requires_powershell_grammar
     def test_unlink_alias_has_no_powershell_equivalent_and_allows(self):
         assert (
-            guard.check_advisory(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
+            guard.check(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
             is None
         )
 
@@ -498,10 +492,10 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
         # over-classify an env-prefixed but otherwise plain command as
         # unresolved indirection.
         with _verdict.collecting() as silences:
-            out = guard.check_advisory(
+            out = guard.check(
                 _payload("env FOO=bar rm %s" % SENTINEL, tool_name="PowerShell")
             )
-        _advisory_text(out)
+        _deny_reason(out)
         assert not _verdict.was_silent(guard._GUARD_NAME, silences)
 
     @requires_powershell_grammar

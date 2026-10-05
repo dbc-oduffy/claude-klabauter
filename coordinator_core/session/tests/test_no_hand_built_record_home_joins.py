@@ -579,6 +579,7 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/tests/test_sizing_citation_archive_fallback.py",
     "ops/tests/test_sizing_decline.py",
     "ops/tests/test_sizing_discharge_surfaced.py",
+    "ops/tests/test_sizing_record_pm_resolution.py",
     "ops/tests/test_sizing_record_xl_exit.py",
     "ops/tests/test_sizing_resize.py",
     "ops/tests/test_sizing_ship.py",

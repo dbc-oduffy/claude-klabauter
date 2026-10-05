@@ -144,17 +144,9 @@ pytestmark = [
 
 
 def _decision(command: str, **payload_extra) -> str:
-    """Returns one of `"deny"` / `"advisory"` / `"allow"` -- a genuine
-    three-way read of the real envelope, not a binary None-check. C13/C14
-    flipped `block-subagent-plan-body-bash-write` and `check-raw-pid-
-    liveness` from hard CONFINEMENT_DENY to ADVISORY_REWRITE (still returns
-    a non-``None`` envelope, but `permissionDecision: "allow"` +
-    `additionalContext`, not `"deny"`). The prior `"deny" if out is not
-    None else "allow"` collapsed advisory into "deny", so every caller
-    asserting `== "deny"` against these two guards was passing on advisory,
-    not on an actual hard deny -- silently blind to a future accidental
-    flip of any of the OTHER confinement guards. Review: coordinator:
-    code-reviewer sidecar coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
+    """Returns one of `"deny"` / `"advisory"` / `"allow"` -- a three-way read
+    of the real envelope, so a guard that advises where it should deny is not
+    mistaken for a deny.
     """
     payload = {
         "tool_name": "Bash",
@@ -283,48 +275,6 @@ def _assert_bypass_resistant(
             )
             continue
         assert got == "deny", "BYPASS via %s: %r -> %s (expected deny)" % (name, variant, got)
-
-
-def _assert_advisory_resistant(
-    decision_fn: Callable[[str], str],
-    base_cmd: str,
-    extra_shapes: Optional[Dict[str, str]] = None,
-    known_bypasses: Optional[Dict[str, str]] = None,
-) -> None:
-    """`_assert_bypass_resistant`'s ADVISORY_REWRITE-band counterpart --
-    for guards C13/C14 flipped from hard CONFINEMENT_DENY to advisory
-    (`block-subagent-plan-body-bash-write`, `check-raw-pid-liveness`).
-    Same evasion-shape matrix, same known-bypasses escape hatch, but the
-    expected outcome is `"advisory"` (a real, non-suppressed `allow` +
-    `additionalContext` envelope) rather than `"deny"` -- an advisory guard
-    reverting silently to a SILENT allow (no envelope at all) on a wrapped
-    shape is the coverage gap this helper exists to catch, same discipline
-    `guard_message_corpus.py`'s `ADVISORY_REWRITE_ROWS` applies to its own
-    band. Review: coordinator:code-reviewer sidecar
-    coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
-    """
-    assert decision_fn(base_cmd) == "advisory", (
-        "baseline command must fire advisory: %r" % base_cmd
-    )
-    shapes = _wrap_variants(base_cmd)
-    if extra_shapes:
-        shapes.update(extra_shapes)
-    known_bypasses = known_bypasses or {}
-    for name, variant in shapes.items():
-        got = decision_fn(variant)
-        if name in known_bypasses:
-            assert got == "allow", (
-                "%s (%r) no longer bypasses via %s -- this is GOOD NEWS but "
-                "means the fix landed without this known_bypasses entry "
-                "being removed: %s. Delete the entry so this shape asserts "
-                "a normal advisory." % (name, variant, name, known_bypasses[name])
-            )
-            continue
-        assert got == "advisory", "BYPASS via %s: %r -> %s (expected advisory)" % (
-            name,
-            variant,
-            got,
-        )
 
 
 class TestNoVerify:
@@ -534,36 +484,24 @@ class TestBlockWorktreeSentinelCreation:
 
 
 class TestCheckRawPidLiveness:
-    """Not identity-gated (fires with or without `agent_id`). C13/C14 flipped
-    this guard CONFINEMENT_DENY -> ADVISORY_REWRITE (still fires a real
-    envelope -- `permissionDecision: allow` + `additionalContext` -- just
-    not a hard deny), so the matrix now asserts advisory-resistance, not
-    bypass-to-deny. Review: coordinator:code-reviewer sidecar
-    coordinatorcode-reviewer-caf5fbe1.md, P1 finding.
-    """
+    """Not identity-gated (fires with or without `agent_id`)."""
 
     def test_bypass_matrix_ps(self):
         flag = "-" + "p"
-        _assert_advisory_resistant(_decision, "ps %s 1234" % flag)
+        _assert_bypass_resistant(_decision, "ps %s 1234" % flag)
 
     def test_bypass_matrix_kill(self):
-        _assert_advisory_resistant(_decision, "kill -0 1234")
+        _assert_bypass_resistant(_decision, "kill -0 1234")
 
 
 class TestBlockSubagentPlanBodyBashWrite:
-    """C13/C14 flipped this guard CONFINEMENT_DENY -> ADVISORY_REWRITE (see
-    `TestCheckRawPidLiveness`'s docstring for the shared rationale). Review:
-    coordinator:code-reviewer sidecar coordinatorcode-reviewer-caf5fbe1.md,
-    P1 finding.
-    """
-
     def test_bypass_matrix(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, planbody_guard, "coordinator:executor")
 
         def decide(cmd):
             return _decision(cmd, **_SUBAGENT_IDENTITY)
 
-        _assert_advisory_resistant(decide, "echo x >> docs/plans/foo.md")
+        _assert_bypass_resistant(decide, "echo x >> docs/plans/foo.md")
 
 
 class TestBlockReviewerBashOutsideAllowlist:

@@ -441,6 +441,8 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
+    "block-perforce-submit": ("p4", "submit", "shelve"),
+    "block-unreal-engine-resave": ("-run=",),
     "block-subagent-stash-creation": ("stash",),
     "block-subagent-grant-acquisition": ("claude_md_grant",),
     "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
@@ -506,6 +508,18 @@ basename``, ``SentinelCreationDetector._is_target``).
 
 
 _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
+    (
+        "block-noncanonical-branch-creation",
+        "denies only inside a hazard repo resolved at call time, so no command text alone proves a crash-path deny",
+    ),
+    (
+        "block-dev-repo-sentinel-removal",
+        "its deny leg depends on the resolved repo carrying the dev-repo sentinel, not on command text alone",
+    ),
+    (
+        "block-subagent-plan-body-bash-write",
+        "denies only for a subagent caller, which a command-text trigger cannot carry",
+    ),
     (
         "block-reviewer-bash-outside-allowlist",
         "denies every command a confined reviewer runs that is not on its allowlist, so any text can deny",
@@ -1268,6 +1282,12 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_topic_branch import (
             MATCHERS as _matchers_topic_branch,
         )
+        from coordinator_core.bash_guards.block_perforce_submit import (
+            MATCHERS as _matchers_perforce_submit,
+        )
+        from coordinator_core.bash_guards.block_unreal_engine_resave import (
+            MATCHERS as _matchers_unreal_engine_resave,
+        )
         from coordinator_core.bash_guards.guard_inprocess_search import (
             MATCHERS as _matchers_inprocess_search,
         )
@@ -1299,6 +1319,8 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_subagent_stash_creation,
             _matchers_noncanonical_branch_creation,
             _matchers_topic_branch,
+            _matchers_perforce_submit,
+            _matchers_unreal_engine_resave,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -2266,6 +2288,14 @@ def _build_guard_chain(
         check as _check_topic_branch,
         MATCHERS as _matchers_topic_branch,
     )
+    from coordinator_core.bash_guards.block_perforce_submit import (
+        check as _check_perforce_submit,
+        MATCHERS as _matchers_perforce_submit,
+    )
+    from coordinator_core.bash_guards.block_unreal_engine_resave import (
+        check as _check_unreal_engine_resave,
+        MATCHERS as _matchers_unreal_engine_resave,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2520,23 +2550,17 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_fleet_delegation_creation),
         ),
-        # `block-dev-repo-sentinel-removal`'s hard-deny leg was RETIRED here
-        # (C13, docs/plans/2026-08-06-apply-guard-class-census.md), collapsing
-        # its former TWO-LEG SPLIT into the single already-registered
-        # `block-dev-repo-sentinel-removal-advisory` entry below in
-        # ADVISORY_REWRITE. `check()`'s own detector only ever returned
-        # VERDICT_DENY or VERDICT_ADVISORY, mutually exclusively, from the
-        # same `_evaluate(cmd)` call the advisory leg also makes -- so no
-        # command shape is orphaned by this deletion PROVIDED `check_advisory`
-        # is widened to also render an advisory on a VERDICT_DENY result;
-        # today `check_advisory` returns `None` (silent allow, no comment) for
-        # VERDICT_DENY, since it only matches `verdict != VERDICT_ADVISORY`.
-        # That widening is a `check()`-BODY change, out of this chunk's
-        # registration-seam-only scope (see this module's own "TWO-LEG SPLIT"
-        # docstring section) -- flagged for the peer chunk that owns module
-        # bodies; until it lands, the direct high-confidence
-        # `rm`/`mv`/`git rm`/`git mv .coordinator-dev-repo` shape that used to
-        # hard-deny now silently allows with NO advisory context at all.
+        # Deny leg of `block-dev-repo-sentinel-removal` (direct match); its
+        # advisory leg (indirection) is registered in ADVISORY_REWRITE below.
+        # Same ahead-of-`offer-git-c` ordering as the sentinel guards above.
+        GuardEntry(
+            "block-dev-repo-sentinel-removal",
+            lambda: _check_dev_repo_sentinel_removal(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=COMMAND_TOOL_NAMES,
+        ),
         # Same ordering requirement as the three sentinel/worktree guards
         # immediately above, for the identical reason -- and this one is
         # additionally the guard that closes the disarm marker's own
@@ -2581,10 +2605,42 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_topic_branch),
         ),
-        # `block-noncanonical-branch-creation` RETIRED from this CONFINEMENT_
-        # DENY slot (C13, docs/plans/2026-08-06-apply-guard-class-census.md):
-        # moved to ADVISORY_REWRITE, at the tail of that band -- see its new
-        # registration, below, for the flip's rationale.
+        # Box policy: no changelist reaches this box's Perforce server.
+        GuardEntry(
+            "block-perforce-submit",
+            lambda: _check_perforce_submit(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_perforce_submit),
+        ),
+        # No commandlet rewrites the installed engine.
+        GuardEntry(
+            "block-unreal-engine-resave",
+            lambda: _check_unreal_engine_resave(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_unreal_engine_resave),
+        ),
+        # Branch-name and plan-body confinement: deny-or-None guards, ahead of
+        # `offer-git-c` so a `cd <dir> && git ...` prefix cannot route around them.
+        GuardEntry(
+            "block-noncanonical-branch-creation",
+            lambda: _check_block_noncanonical_branch_creation(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_noncanonical_branch_creation),
+        ),
+        GuardEntry(
+            "block-subagent-plan-body-bash-write",
+            lambda: _check_plan_body_bash_write(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_plan_body_bash_write),
+        ),
         #
         # The three identity/confinement hard-denies below sit AHEAD of
         # `offer-git-c` for the same reason as the three sentinel/worktree
@@ -2597,11 +2653,7 @@ def _build_guard_chain(
         # destructive-git ban were both evadable the same way. The guards
         # were reachable only for commands `offer-git-c` happened not to
         # rewrite, which is the opposite of a confinement. Anything that
-        # returns a rewrite must come after every hard-deny. (`block-
-        # subagent-plan-body-bash-write`, formerly the fourth guard in this
-        # group, RETIRED from here in the same C13 move as `block-
-        # noncanonical-branch-creation` above -- see its own new
-        # ADVISORY_REWRITE registration below.)
+        # returns a rewrite must come after every hard-deny.
         GuardEntry(
             "block-reviewer-bash-outside-allowlist",
             lambda: _check_reviewer_bash_outside_allowlist(payload, policy_path=policy_file),
@@ -3163,68 +3215,8 @@ def _build_guard_chain(
         # PowerShell tool matches nothing it exists to catch. Reason:
         # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("powershell-via-bash-guard", lambda: _check_powershell_via_bash(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_powershell_via_bash)),
-        # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four
-        # guard-class-census band flips, moved from CONFINEMENT_DENY to
-        # ADVISORY_REWRITE (`fail_closed=True` -> `False`, `band=
-        # CONFINEMENT_DENY` -> `ADVISORY_REWRITE`). Appended here, at the
-        # tail of the ADVISORY_REWRITE band (lowest precedence in this band,
-        # first non-`None` still wins) ahead of the two PLATFORM_CONDITIONED_
-        # DENY guards below, per the band model's own contiguity invariant
-        # (`test_bands_are_contiguous_and_in_fixed_sequence`). Band-move-
-        # first is chain-SAFE regardless of tail position: an entry whose
-        # own `check()` body still returns a deny envelope is merely
-        # late-precedence in its new band, never a shadowed hard-deny --
-        # `evaluate_payload_json` still returns on the first non-`None`
-        # result, and nothing above these four in the chain is itself an
-        # ADVISORY_REWRITE/rewrite entry these four could now shadow FROM
-        # BEHIND (the four sit at the very end of the band). Whether tail
-        # position is the BEST slot for each guard's OWN signal (as opposed
-        # to merely chain-safe) is a separate question this move does not
-        # resolve -- `offer-git-c`, `validate-commit`, and `git-commit-
-        # safe-commit-advise` are earlier ADVISORY_REWRITE entries that
-        # co-match plausible compound commands and could shadow one of
-        # these four's advisory on overlap; flagged, not resolved, in C13's
-        # own run report.
-        #
-        # SECOND, deliberate change riding inside the same flag on all four:
-        # `fail_closed` is CRASH-PATH routing policy (module docstring F1),
-        # orthogonal to band -- today a crash in any of these four guards
-        # DENIES (`fail_closed=True`); after this flip a crash in any of
-        # them silently ALLOWS instead (`fail_closed=False`, swallowed by
-        # `_crash_deny`'s own fail-open contract). Not merely a side effect
-        # of the band move: an explicit, separate semantics change.
-        #
-        # `block-worktree-creation` (also named in C13's own guard-class
-        # census row) is DELIBERATELY NOT included in this move -- it is
-        # coupled to `block-worktree-sentinel-creation`, a KEEP-HARD guard
-        # (AC7) that exists solely to protect THIS guard's own override
-        # sentinel from Bash-level creation. Flipping `block-worktree-
-        # creation` to advisory while its sentinel-creation guard stays a
-        # hard deny would leave that hard deny protecting the off-switch of
-        # a guard that no longer blocks anything -- an incoherent pairing.
-        # Retiring `block-worktree-sentinel-creation`'s keep-hard status (or
-        # deciding this pairing is fine as-is) is a real product decision,
-        # not a mechanical consequence of this band-flip wave, so C13 holds
-        # `block-worktree-creation` back rather than deciding it inline; see
-        # C13's own run report for the surfaced question. `block-worktree-
-        # creation` therefore remains registered above, unchanged, in
-        # CONFINEMENT_DENY.
-        GuardEntry(
-            "block-noncanonical-branch-creation",
-            lambda: _check_block_noncanonical_branch_creation(payload),
-            False,
-            GuardBand.ADVISORY_REWRITE,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_noncanonical_branch_creation),
-        ),
-        GuardEntry(
-            "block-subagent-plan-body-bash-write",
-            lambda: _check_plan_body_bash_write(payload),
-            False,
-            GuardBand.ADVISORY_REWRITE,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_plan_body_bash_write),
-        ),
+        # check-raw-pid-liveness returns a deny that the policy point levels;
+        # it is no confinement, so it sits at the band tail, behind the rewrites.
         GuardEntry(
             "check-raw-pid-liveness",
             lambda: _check_raw_pid_liveness(payload),

@@ -79,8 +79,8 @@ def test_underscore_name_resolves_kebab_key(reg):
     assert "a-c" in text and "a_c" not in text
 
 
-def test_floor_guards_has_the_nine_names():
-    assert len(mp.FLOOR_GUARDS) == 9
+def test_floor_guards_has_the_eleven_names():
+    assert len(mp.FLOOR_GUARDS) == 11
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
 
@@ -99,12 +99,17 @@ def test_empty_registry_is_consumer_warn(reg):
     assert mp.guard_level("any-guard") == "warn"
 
 
-def test_registered_dev_repo_sentinel_is_author_warn(reg, tmp_path):
+def test_registered_dev_repo_sentinel_is_author_strict(reg, tmp_path):
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
     _write(reg, '"repos.content" = "%s"\n' % repo.as_posix())
     assert mp.machine_profile() == "author"
+    assert mp.guard_level("g") == "strict"
+    _write(
+        reg,
+        '"repos.content" = "%s"\n"coordinator.guard_level" = "warn"\n' % repo.as_posix(),
+    )
     assert mp.guard_level("g") == "warn"
 
 

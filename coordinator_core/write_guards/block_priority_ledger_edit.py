@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.block_priority_ledger_edit — advisory guard.
+"""coordinator_core.write_guards.block_priority_ledger_edit — hard-deny guard.
 
 Path-matched deny on hand-edits to the resolved central `priority-ledger/`
 directory (`docs/plans/2026-07-26-priority-ledger.md` § Storage location,
@@ -45,24 +45,12 @@ Negative-spec:
     a path-tail match on the constant directory segment only.
   - Does NOT read stdin — the engine passes `payload` directly.
   - Never raises: any unexpected input shape or internal error is treated as
-    ALLOW (fail-open on error), matching every sibling advisory guard's
+    ALLOW (fail-open on error), matching every sibling guard's
     `set -uo pipefail` (`-e` omitted)-equivalent fail-open discipline.
-  - Does NOT return `permissionDecision: "deny"` — advisory envelope only
-    (`additionalContext`), per DR-277 (guards are advisory by default) and
-    the write-guard PRIORITY-band re-slot in
-    `docs/wiki/write-guard-priority-bands.md`.
+CLASS = "hard-deny"; the policy point (`machine_profile.apply_guard_level`)
+leaves the deny on an author box and downgrades it to a warning on a consumer box.
 
-CLASS/PRIORITY history: flipped from `hard-deny` @ 65 to `advisory` @ 114 by
-plan chunk C5 of `docs/plans/2026-08-06-apply-guard-class-census.md`, per
-DR-277. This incidentally resolves the pre-existing hard-deny-phase 65/65
-PRIORITY collision with `block_goals_log_hand_write` (which stays hard-deny,
-AC6) by vacating slot 65. 114 is a fresh advisory-phase slot chosen against
-that phase's own occupancy (`write-guard-priority-bands.md`'s nine-guard
-slot map) — the old 65 carried no meaning across the phase boundary.
-
-Spec backlink: coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a);
-docs/plans/2026-08-06-apply-guard-class-census.md (chunk C5);
-docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md
+Spec backlink: coordinator-content-repo:pln-priority-ledger-durable-pm-pri-817d40 (chunk C9a)
 """
 
 from __future__ import annotations
@@ -72,8 +60,9 @@ import re
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core._hook_envelope import deny
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 114
 
@@ -126,13 +115,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
-        # Advisory envelope (DR-277) — additionalContext only, NEVER
-        # permissionDecision:"deny". See INTERFACE.md § Envelope — advisory.
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return deny("PreToolUse", reason)
     except Exception:
         return None

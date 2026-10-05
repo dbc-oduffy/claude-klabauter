@@ -1556,6 +1556,10 @@ _NEXT_WORD_AFTER_RE = re.compile(r"\s+(\S+)")
 _LEGACY_WORKTREE_READONLY = frozenset({"list"})
 _LEGACY_REMOTE_READONLY = frozenset({"-v", "show", "get-url"})
 
+#: `git apply` flags that only report on a patch, and those that make it write.
+_APPLY_REPORT_FLAGS = frozenset({"--check", "--stat", "--numstat", "--summary"})
+_APPLY_WRITE_FLAGS = frozenset({"--apply", "--index", "--cached", "--3way", "-3", "--reject", "--intent-to-add", "-N", "--unsafe-paths"})
+
 _SAFE_VERB_RE = re.compile(
     r"\b(?:add|commit|status|log|diff|show|fetch|cherry-pick|cherry(?![-\w])|rev-parse|rev-list|"
     r"ls-files|describe)\b"
@@ -2112,6 +2116,15 @@ def _evaluate_git_segment_anchored(
     """
     remaining = remaining or []
     remaining_text = " ".join(remaining)
+
+    if subcmd == "apply":
+        # Report-only forms write nothing. A worktree apply needs the dispatch's
+        # declared write set to scope it, which no hook can read yet.
+        if any(t in _APPLY_REPORT_FLAGS for t in remaining) and not any(
+            t in _APPLY_WRITE_FLAGS or t.startswith("--directory") for t in remaining
+        ):
+            return None
+        return "git apply (writes the shared worktree)"
 
     if subcmd == "worktree":
         second = remaining[0] if remaining else None

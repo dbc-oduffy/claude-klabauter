@@ -574,8 +574,14 @@ _LOBBY_CHAINS = {
 
 _ROOM_ENTRY = {
     "shape": "enter coordinator:shape",
-    "roadmap": "enter coordinator:roadmap-planning",
-    "goal-setting": "enter coordinator:goal-setting (PM-gated)",
+    "roadmap": (
+        "fire coordinator:roadmap-blitz on this sizing; enter coordinator:roadmap-planning "
+        "only when the PM clearly asks to work it hands-on"
+    ),
+    "goal-setting": (
+        "fire coordinator:goal-blitz on this sizing (PM-gated); enter coordinator:goal-setting "
+        "only when the PM clearly asks to work it hands-on"
+    ),
     "pm-decision": "surface the XL exits to the PM; record the pick in xl_exit",
 }
 
@@ -1058,7 +1064,8 @@ def route(
     elif resolved_route == "goal-setting":
         next_move = (
             "XXL resolves to goal-setting, not a plan. This ask is OKR-programme scale — "
-            "route to coordinator:goal-setting, which is PM-gated."
+            "fire coordinator:goal-blitz on this sizing (PM-gated). Enter coordinator:goal-setting "
+            "only when the PM clearly asks to work it hands-on; in doubt, fire the workflow."
         )
     elif resolved_route == "shape":
         next_move = "Route to /shape for PM problem-alignment before plan/roadmap."
@@ -1074,8 +1081,8 @@ def route(
 
     if "goal_setting_pm_gated" in detents and "appetite_exceeded" in detents:
         next_move += (
-            " This also resolves to goal-setting (XXL, OKR-programme scale) — route to "
-            "coordinator:goal-setting, which is PM-gated, in addition to the appetite "
+            " This also resolves to goal-setting (XXL, OKR-programme scale) — fire "
+            "coordinator:goal-blitz on this sizing (PM-gated), in addition to the appetite "
             "fork above."
         )
 
@@ -1465,7 +1472,9 @@ def _usage(prog: str, stream=None) -> int:
         "[--interaction-mode hands-on|pm|ceo] "
         "[--write <state/sizings/x.yaml>] "
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
-        "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>",
+        "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
+        "| --pm-resolution <key> --pm-quote <str> "
+        "[--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml>",
         file=stream,
     )
     return EXIT_USAGE
@@ -1521,6 +1530,8 @@ def main(argv: list[str]) -> int:
     premise_evidence = None
     write_path = None
     xl_exit_pick = None
+    pm_resolution_key = None
+    supersede = False
     pm_quote = None
     decided_on = None
 
@@ -1590,6 +1601,12 @@ def main(argv: list[str]) -> int:
         elif tok == "--xl-exit" and i + 1 < len(argv):
             xl_exit_pick = argv[i + 1]
             i += 2
+        elif tok == "--pm-resolution" and i + 1 < len(argv):
+            pm_resolution_key = argv[i + 1]
+            i += 2
+        elif tok == "--supersede":
+            supersede = True
+            i += 1
         elif tok == "--pm-quote" and i + 1 < len(argv):
             pm_quote = argv[i + 1]
             i += 2
@@ -1601,6 +1618,33 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
+
+    if pm_resolution_key is not None:
+        if xl_exit_pick is not None:
+            print(f"{prog}: --pm-resolution and --xl-exit are separate verbs", file=sys.stderr)
+            return EXIT_USAGE
+        if write_path is None:
+            print(
+                f"{prog}: --pm-resolution requires --write <state/sizings/x.yaml>",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.sizing_record_pm_resolution import (
+            _handler as record_pm_resolution,
+        )
+
+        result = record_pm_resolution(
+            {
+                "sizing": write_path,
+                "key": pm_resolution_key,
+                "pm_quote": pm_quote,
+                "decided_on": decided_on,
+                "supersede": supersede,
+            },
+            repo_root=Path.cwd(),
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
 
     if xl_exit_pick is not None:
         if write_path is None:

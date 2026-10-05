@@ -204,6 +204,12 @@ def test_run_process_probe_filters_by_name_and_joins_cmdline(monkeypatch):
         def cmdline(self):
             return self._cmdline
 
+        def create_time(self):
+            return None
+
+        def ppid(self):
+            return None
+
     fake_procs = [
         _FakeProc(1, "claude.exe", ["claude.exe", "--plugin-dir", "P:\\fixture-repo\\coordinator"]),
         _FakeProc(2, "notepad.exe", ["notepad.exe"]),
@@ -234,6 +240,12 @@ def test_run_process_probe_skips_process_that_exits_before_cmdline_read(monkeypa
             if isinstance(self._cmdline_effect, Exception):
                 raise self._cmdline_effect
             return self._cmdline_effect
+
+        def create_time(self):
+            return None
+
+        def ppid(self):
+            return None
 
     fake_procs = [
         _FakeProc(1, "claude.exe", psutil.NoSuchProcess(1)),
@@ -381,6 +393,12 @@ def test_run_process_probe_computes_age_and_interactive_parent(monkeypatch):
         def cmdline(self):
             return self._cmdline
 
+        def create_time(self):
+            return self.info["create_time"]
+
+        def ppid(self):
+            return self.info["ppid"]
+
     import time as _time
 
     fake_procs = [
@@ -426,3 +444,14 @@ def test_main_returns_2_when_cannot_determine(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert rc == 2
     assert payload["cannot_determine"] is True
+
+
+def test_run_process_probe_asks_process_iter_for_name_only(monkeypatch):
+    """ppid/create_time over every process rebuilds a Windows snapshot per call (~40s per boot)."""
+    asked = []
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs: asked.append(attrs) or iter(()))
+
+    from coordinator_core.ops.detect_guardless_sessions import _run_process_probe
+
+    assert _run_process_probe() == []
+    assert asked == [["name"]]

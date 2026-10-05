@@ -71,20 +71,13 @@ the one both the C12 spec's own worked example (the boot-payload plan's C8
 survivor rewrite landing before this guard arms) and its own body ask for
 by name ("a shrinking edit to an over-cap file is PERMITTED").
 
-Hard-deny amendment (DR-345, amending DR-277): this guard was advisory from
-C12 through DR-277's 2026-08-06 census. Advisory was read and ignored —
-Claude-klabauter's own store reached 213 body files against the 20-file cap
-this module now enforces, and a 26,718 B ``MEMORY.md`` against the 2,000 B
-cap, 13x over, silently truncated at load. That is DR-277's own **fourth
-structural rule** (a per-invocation gate whose harm scales with invocation
-count is not weakened by an advisory, it is erased by one) plus **carve-out
-1** (``MEMORY.md`` is doctrine loaded before review is possible — it
-auto-loads into every session's boot context). The deny envelope
-(``permissionDecision: "deny"`` / ``permissionDecisionReason``) is copied
-verbatim in shape from ``block_home_dir_memo_delivery.py`` — no new envelope
-shape invented.
+CLASS is "hard-deny", leveled at the policy point
+(``machine_profile.apply_guard_level``): strict on an author box, a warn on a
+consumer box. ``MEMORY.md`` auto-loads into every session's boot context, so a
+cap breach denies rather than advises. The deny envelope is
+``permissionDecision: "deny"`` / ``permissionDecisionReason``.
 
-Fifth limit, added with the hard-deny flip: ``MAX_MEMORY_FILES = 5`` body
+Fifth limit (DR-345): ``MAX_MEMORY_FILES = 5`` body
 files (excluding ``MEMORY.md`` itself) per project ``memory/`` dir, 1:1 with
 ``MAX_MEMORY_MD_ROWS`` so the index and the store cannot disagree about how
 many memories exist. It fires ONLY on creation of a NEW body file (the

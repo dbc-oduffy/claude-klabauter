@@ -20,36 +20,11 @@ image, built on the mirror-image detector, `_sentinel_removal_guard.
 SentinelRemovalDetector` (see that module's own docstring for the full rule
 set and, importantly, its POSTURE section).
 
-CLASS-CENSUS CONVERSION (2026-08-06, `docs/plans/2026-08-06-apply-guard-
-class-census.md`, chunks C13/C14e) -- SUPERSEDES the former TWO-LEG SPLIT
-(2026-08-05, mirrors `check_destructive_git_revert` /
-`check_destructive_git_revert_advisory` in `dispatch_checks.py`, commit
-`e63c42e39`). `check()` below is STILL the same pure deny-or-None function,
-still directly callable and unit-tested, but C13 retired its `dispatch.py`
-CONFINEMENT_DENY registration: it is no longer reachable through the
-registered chain. `check_advisory()` is now the guard's SOLE registered
-leg (ADVISORY_REWRITE band, ahead of `offer-git-c`'s rewrite), widened to
-render on BOTH the detector's `VERDICT_ADVISORY` and its former-deny
-`VERDICT_DENY` outcome -- so every shape that used to hard-deny now
-produces an advisory instead of a silent, contentless allow. `_detector.
-evaluate(cmd)` is pure string analysis (no subprocess oracle), so `check`
-and `check_advisory` simply call it independently.
-
-POSTURE -- ADVISORY, NOT DENY (the guard's ENTIRE posture as of the
-conversion above, not merely its ambiguous cases). This guard defends
-against ordinary eagerness in a busy shared repo: `rm`, `mv`, and `git mv`
-are extremely common commands, this sentinel is one specific dotfile among
-thousands of ordinary targets, and a removal that slips through remains
-recoverable by hand -- the rationale the class census flipped this guard
-on. A DIRECT match against the sentinel's own basename (as a plain
-argument to `rm`/`unlink`/`mv` (source)/`git rm`/`git mv` (source)/`find
--delete`/`find -exec rm`, or a `python -c` payload that both mentions the
-basename and calls a removal/move verb) and genuinely unexaminable
-indirection (`xargs`, a bare-interpreter-invoked script file, a
-stdin-piped interpreter, the indirection depth cap, or an unparseable
-command that only TEXTUALLY mentions the sentinel) both now surface the
-SAME advisory -- it never blocks, it surfaces the concern and names how to
-recover.
+LEGS. `check` (CONFINEMENT_DENY, `fail_closed=True`) denies on the detector's
+`VERDICT_DENY`, a direct match; the policy point downgrades that deny to an
+advisory on a consumer box. `check_advisory` (ADVISORY_REWRITE) advises on
+`VERDICT_ADVISORY`: unexaminable indirection, or an unparseable command that
+only textually mentions the sentinel.
 
 OVERRIDE. `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL=1` allows unconditionally
 (both `check` and `check_advisory`) -- advertised in the advisory text
@@ -60,16 +35,14 @@ the sibling sentinel guards in this package: the anti-pattern (an agent
 quietly destroying the dev/OSS discriminant) is wrong regardless of who
 types it.
 
-REGISTRATION ORDERING. `check_advisory` is registered in `dispatch.py`'s
-ADVISORY_REWRITE band ahead of `offer-git-c`, same reasoning as every
-sibling sentinel guard: that check rewrites `cd <dir> && git <sub>` into
+REGISTRATION ORDERING. Both legs sit ahead of `offer-git-c`, same
+reasoning as every sibling sentinel guard: that check rewrites `cd <dir> && git <sub>` into
 `git -C <dir> <sub>` and returns allow+updatedInput, which SHORT-CIRCUITS
 every later guard in the chain, so an entry surfacing `cd <dir> && rm
 .coordinator-dev-repo` (or `cd <dir> && git rm .coordinator-dev-repo`)
 must sit ahead of it too.
 
-Spec: `.coordinator-dev-repo` removal guard (coordinator-content-repo dispatch,
-2026-07-31; deny-to-advisory conversion 2026-08-06).
+Spec: `.coordinator-dev-repo` removal guard (coordinator-content-repo dispatch, 2026-07-31).
 """
 
 from __future__ import annotations
@@ -77,25 +50,20 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from coordinator_core._hook_envelope import deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._sentinel_creation_guard import indirection_deny_reason
 from coordinator_core.bash_guards._sentinel_removal_guard import (
     REASON_INDIRECTION,
     VERDICT_ADVISORY,
-    VERDICT_ALLOW,
     VERDICT_DENY,
     SentinelRemovalDetector,
 )
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
-# `_evaluate()` never returns VERDICT_ALLOW alongside content, so anything
-# other than VERDICT_ALLOW is advisory-worthy on the now-single (advisory)
-# leg -- see this module's own updated "TWO-LEG SPLIT" docstring section.
-_ADVISORY_VERDICTS = (VERDICT_ADVISORY, VERDICT_DENY)
-
-CLASS = "advisory"
+CLASS = "hard-deny"
 #: Widened 2026-08-07 (C4f, `docs/plans/2026-08-07-guards-reach-a-verdict-
 #: on-powershell-or-stay-silent.md`) -- this guard's own dialect-carry
 #: (`dialect_from_tool_name(payload["tool_name"])` in `check`/
@@ -171,14 +139,8 @@ def _cmd_from_payload(payload: Dict[str, Any]) -> str:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Pure deny-or-None function, UNCHANGED, but no longer registered in
-    `dispatch.py` as of C13 (see this module's own "CLASS-CENSUS
-    CONVERSION" docstring section) -- not reachable through the live
-    dispatch chain, only directly callable (unit-tested). `check_advisory`
-    is the guard's sole registered leg.
-
-    Returns `None` (allow) or the nested hard-deny envelope. Never
-    identity-gated -- fires for every caller including the main-loop EM.
+    """Deny-or-None leg. Never identity-gated -- fires for every caller
+    including the main-loop EM.
     """
     cmd = _cmd_from_payload(payload)
     if not cmd:
@@ -200,31 +162,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if verdict != VERDICT_DENY:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(reason_kind, reason_class, payload=payload),
-        }
-    }
+    return deny("PreToolUse", _deny_reason(reason_kind, reason_class, payload=payload))
 
 
 def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The guard's sole registered leg (ADVISORY_REWRITE band, ahead of
-    `offer-git-c`'s rewrite) since C13 (`docs/plans/2026-08-06-apply-guard-
-    class-census.md`) retired `check`'s CONFINEMENT_DENY registration --
-    see that removal's comment at its old `dispatch.py` call site, and this
-    module's own "TWO-LEG SPLIT" docstring section (now a MISNOMER kept for
-    history; there is one leg).
-
-    Renders on BOTH `VERDICT_ADVISORY` and `VERDICT_DENY` -- widened here so
-    every shape the deleted deny leg used to cover still produces an
-    advisory instead of a silent, contentless allow. `check` above is
-    unchanged and still callable directly (exercised by unit tests), but is
-    no longer reachable through the registered dispatch chain.
-
-    Returns `None` (allow, no comment) or the nested allow+additionalContext
-    advisory envelope. Never identity-gated, same posture as `check`.
+    """Advisory leg: advisory on `VERDICT_ADVISORY`, `None` otherwise (the
+    deny leg, `check`, owns `VERDICT_DENY`). Never identity-gated.
     """
     cmd = _cmd_from_payload(payload)
     if not cmd:
@@ -243,7 +186,7 @@ def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     verdict, _reason_kind, _reason_class = _evaluate(cmd, dialect)
-    if verdict not in _ADVISORY_VERDICTS:
+    if verdict != VERDICT_ADVISORY:
         return None
 
     return {

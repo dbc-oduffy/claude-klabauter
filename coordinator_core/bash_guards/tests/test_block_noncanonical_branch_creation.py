@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
 
 
@@ -33,10 +34,10 @@ def _payload(command, cwd="/repo"):
 
 
 def _reason(out):
-    assert out is not None, "expected an advisory envelope, got a bare allow"
+    assert out is not None, "expected a deny envelope, got a bare allow"
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 @pytest.fixture(autouse=True)
@@ -270,3 +271,14 @@ class TestDesignatedDayBranch:
         )
         out = guard.check(_payload("git checkout -b fix/some-bug"))
         assert "not canonical" in _reason(out)
+
+
+class TestDenies:
+    def test_letter_suffixed_day_branch_is_denied(self):
+        out = guard.check(_payload("git checkout -b work/machine-b/2026-10-02k"))
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "deny"
+        assert "work/machine-b/2026-10-02k" in hso["permissionDecisionReason"]
+
+    def test_canonical_day_branch_is_not_denied(self):
+        assert guard.check(_payload("git branch feature/thing")) is None

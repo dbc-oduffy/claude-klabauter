@@ -1,6 +1,6 @@
 """Behavioral tests for coordinator_core.write_guards.nudge_prose_queue_creation
--- the DR-115 part 3 creation-advisory guard (CLASS flipped from hard-deny
-to advisory by DR-277; detection and PRIORITY unchanged).
+-- the DR-115 part 3 creation-deny guard (CLASS hard-deny, leveled at the
+policy point).
 
 Covers: fires on a genuinely new prose queue file across all three families,
 Windows-separator and case-variation robustness, silence when the target
@@ -8,7 +8,6 @@ already exists, silence under archive/, silence on non-queue-shaped and
 content-free writes, and the operator override.
 
 Spec: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-collision-not-a-staleness.md
-Spec: docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md
 """
 
 from __future__ import annotations
@@ -30,9 +29,8 @@ def _payload(tool_name, tool_input, cwd=None):
 def _deny_reason(result: dict) -> str:
     hso = result["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
-    assert "permissionDecision" not in hso
-    assert "additionalContext" in hso
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 @pytest.fixture(autouse=True)

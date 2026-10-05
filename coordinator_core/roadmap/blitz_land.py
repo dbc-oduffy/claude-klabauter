@@ -52,6 +52,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -63,7 +64,11 @@ from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.session.claimed_write import create_exclusive
 from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, remove_fm_field
+from coordinator_core.frontmatter.primitives import (
+    insert_fm_field_raw,
+    read_fm_field_unquoted,
+    remove_fm_field,
+)
 from coordinator_core.roadmap.plan_gate import (
     effective_sizing_route,
     BATON_CODED_STATES,
@@ -290,6 +295,34 @@ def _clear_fire_hold(worktree_root: Path, baton_path: str) -> bool:
 
     try:
         locked_rmw(worktree_root / baton_path, _clear, repo_root=worktree_root)
+    except MutateAbort:
+        return False
+    return True
+
+
+def repoint_fire_hold(worktree_root: Path, baton_path: str, cite: str) -> bool:
+    """Re-cite an existing fire hold at `cite`, the emission that is now canonical. True iff it wrote.
+
+    A later emission over the same baton supersedes the one the hold cites; without this
+    the hold names a script nothing will fire. A human's hold, or no hold, is left alone.
+    """
+
+    def _repoint(old: str) -> str:
+        span = _frontmatter_span(old)
+        if span is None:
+            raise MutateAbort("no frontmatter")
+        fm = old[span[0] : span[1]]
+        if read_fm_field_unquoted(fm, "plan_blitz_hold_reason") != FIRE_IN_FLIGHT_HOLD_REASON:
+            raise MutateAbort("no fire hold")
+        cited = json.dumps(cite)
+        if read_fm_field_unquoted(fm, "plan_blitz_hold_cite") == cite:
+            raise MutateAbort("already canonical")
+        fm = remove_fm_field(fm, "plan_blitz_hold_cite")
+        fm = insert_fm_field_raw(fm, "plan_blitz_hold_cite", cited, "plan_blitz_hold_reason")
+        return old[: span[0]] + fm + old[span[1] :]
+
+    try:
+        locked_rmw(worktree_root / baton_path, _repoint, repo_root=worktree_root)
     except MutateAbort:
         return False
     return True

@@ -26,7 +26,7 @@ def _init_repo(path: Path) -> None:
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
-def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None):
+def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None, to: str = "no-such-receiver-em"):
     sender = tmp_path / "sender_repo"
     _init_repo(sender)
     home = tmp_path / "home"
@@ -43,7 +43,7 @@ def _draft(tmp_path: Path, warm: str, extra: list[str] | None = None):
     }
     return subprocess.run(
         [sys.executable, str(_BIN / "cross-repo-memo.py"), "draft", "refusal-reason",
-         "--to", "no-such-receiver-em", "--title", "T", "--kind", "ask",
+         "--to", to, "--title", "T", "--kind", "ask",
          "--summary", "S", *(extra or [])],
         cwd=sender, env=env, capture_output=True, text=True, timeout=120,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -55,6 +55,13 @@ def test_refused_draft_prints_the_engine_reason(tmp_path, warm):
     proc = _draft(tmp_path, warm)
     assert proc.returncode != 0
     assert "fleet op setup error" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("warm", ["0", "1"])
+def test_refused_partial_scoped_to_prints_its_reason(tmp_path, warm):
+    proc = _draft(tmp_path, warm, ["--scoped-to-artifact", "docs/x.md"], to="sender_repo-em")
+    assert proc.returncode != 0
+    assert "scoped_to.seam is required" in proc.stderr, proc.stderr
 
 
 @pytest.fixture

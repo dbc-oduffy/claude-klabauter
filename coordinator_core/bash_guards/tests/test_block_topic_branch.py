@@ -60,6 +60,9 @@ def _denied(out):
         "cd x && git checkout -b fix/foo",
         "git checkout -b work/otherbox/2026-10-05",
         "git push origin work/machine-a/2026-10-05-closeout",
+        "git push -q origin fix/foo 2>&1",
+        "git push origin fix/foo > out.txt",
+        "git push origin fix/foo 2>/dev/null | tail -1",
     ],
 )
 def test_denies(repo, cmd):
@@ -98,6 +101,12 @@ def test_denies(repo, cmd):
         "git switch main",
         "git checkout -b \"$BRANCH\"",
         "git status",
+        "git push -q origin work/machine-a/2026-10-05 2>&1",
+        "git push origin work/machine-a/2026-10-05 > out.txt 2>&1",
+        "git push origin work/machine-a/2026-10-05 2> err.txt",
+        "git push origin work/machine-a/2026-10-05 &>log",
+        "git push origin main 2>/dev/null | tail -1",
+        "git push origin main && echo done",
     ],
 )
 def test_allows(repo, cmd):

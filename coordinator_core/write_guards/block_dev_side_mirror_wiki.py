@@ -1,4 +1,4 @@
-"""coordinator_core.write_guards.block_dev_side_mirror_wiki — advisory guard.
+"""coordinator_core.write_guards.block_dev_side_mirror_wiki — hard-deny guard.
 
 Originally a Python engine-ification of DoE's retired
 ``coordinator/hooks/scripts/block-dev-side-mirror-wiki.sh`` PreToolUse
@@ -11,17 +11,11 @@ the bundled plugin tree. A write to the dev-side path
 (``~/.claude/docs/wiki/<name>.md``) re-introduces the write-direction trap —
 two copies, drift is the default. This hook intercepts a write to the
 dev-side path and, if a bundled copy of the same filename already exists at
-the plugin's ``docs/wiki/<name>.md``, flags the write with a message naming
+the plugin's ``docs/wiki/<name>.md``, denies the write with a message naming
 the bundled path.
 
-CLASS = "advisory" (2026-08-06 write-guard classification pass,
-docs/plans/2026-08-06-... B5): reclassified from hard-deny. A dev-side wiki
-mirror is a plain extra file, not a silent or total loss — the drift it
-risks is caught the moment anyone diffs or reads the dev-side copy against
-the bundled one, and the write that created it remains fully correctable
-(delete the mirror, or edit the bundled copy instead). That is well short of
-the irreversible-harm bar this family's hard-deny band is reserved for (see
-this package's classification test).
+CLASS = "hard-deny"; the policy point (``machine_profile.apply_guard_level``)
+leaves the deny on an author box and downgrades it to a warning on a consumer box.
 
 This is otherwise a faithful port: it preserves the reference hook's
 PLUGIN_ROOT resolution (``CLAUDE_PLUGIN_ROOT`` env var, else
@@ -30,8 +24,7 @@ via the canonical ``coordinator_core.trusted_root_guard.is_trusted`` (fail-open
 call-site shape — see that module for the full anchor list), the
 escape hatch, the ``~`` expansion and backslash normalization, the dev-wiki
 prefix match (against plain ``$HOME``, deliberately NOT ``CLAUDE_HOME`` — see
-negative-spec), and the reason text verbatim — only the envelope shape
-(advisory, not deny) and the lead-in sentence changed.
+negative-spec), and the reason text.
 
 Ported from the retired DoE bash guard ``block-dev-side-mirror-wiki.sh``
   (deleted 2026-07-16, DoE ``2f8b8450``).
@@ -42,7 +35,7 @@ Negative-spec:
     ``${CLAUDE_HOME:-$HOME}`` used for PLUGIN_ROOT/trust-core resolution; this
     module preserves that exact asymmetry rather than "fixing" it to be
     consistent.
-  - Does NOT add an explicit ``additionalContext`` advisory when no bundled
+  - Does NOT add an explicit warning when no bundled
     copy exists — the reference hook's "Allow but warn" comment at that
     branch is a code comment only; the actual behavior is a silent
     ``exit 0`` with no output, ported here as returning ``None``.
@@ -51,8 +44,8 @@ Negative-spec:
     guards); MATCHERS-based filtering in the engine is the only tool-name
     gate, matching the reference exactly.
   - Does NOT read stdin — the engine passes ``payload`` directly.
-  - Does NOT deny — advisory only; the write always lands, with the bundled
-    path surfaced via ``additionalContext``.
+  - Does NOT deny when no bundled copy exists; a match with one denies and
+    names the bundled path.
   - Never raises: any unexpected input shape or internal error is treated as
     ALLOW/no-op (fail-open on error), matching the reference hook's
     ``set -uo pipefail`` fail-open discipline (including the reference's own
@@ -67,12 +60,13 @@ from typing import Any, Dict, Optional
 
 from coordinator_core._settings_home import machine_local_dir
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core._hook_envelope import deny
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
-CLASS = "advisory"
+CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "NotebookEdit"]
-PRIORITY = 172  # advisory band; next slot after block_completion_monolith_write (171)
+PRIORITY = 172
 
 #: Escape hatch.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_WIKI_MIRROR"
@@ -219,12 +213,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             + ("\n\n" + _note if _note else "")
         )
 
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
+        return deny("PreToolUse", reason)
     except Exception:
         # Fail-open on any unexpected error — mirrors the reference hook's
         # fail-open-on-error discipline (never fail-closed on a hard guard's

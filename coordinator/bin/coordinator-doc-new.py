@@ -2372,6 +2372,34 @@ def _require_session_ledger_block() -> list[str]:
     return _SESSION_LEDGER_BLOCK
 
 
+_SUMMARY_TYPES = frozenset({"handoff", "goal-seed", "roadmap-seed"})
+
+
+def _refuse_unschematic_summary(summary: str | None) -> None:
+    """Exit 1 on a --summary the handoff schema's cross-field rules reject.
+
+    Blank (_cf_summary_required_post_cutoff) or over 140 chars
+    (_cf_summary_length_cap) is refused fail-loud, never truncated; None
+    (flag absent) passes.
+    """
+    if summary is not None and not summary.strip():
+        print(
+            "coordinator-doc-new: --summary was supplied an empty or whitespace-only "
+            "value. Omit --summary entirely to keep the placeholder summary, or pass "
+            "real summary text.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if summary is not None and len(summary) > 140:
+        print(
+            f"coordinator-doc-new: --summary exceeds 140 characters (got {len(summary)}). "
+            "The handoff schema's _cf_summary_length_cap rejects it outright; shorten "
+            "it before scaffolding.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def _scaffold_handoff(
     title: str,
     branch: str,
@@ -2600,27 +2628,7 @@ def _scaffold_handoff(
             file=sys.stderr,
         )
         sys.exit(1)
-    # --summary is refused fail-loud (not silently truncated/emitted) when it
-    # would author frontmatter the handoff schema's own cross-field rules
-    # reject outright — blank (_cf_summary_required_post_cutoff) or over 140
-    # chars (_cf_summary_length_cap). The caller fixes it here rather than
-    # discovering the rejection downstream.
-    if summary is not None and not summary.strip():
-        print(
-            "coordinator-doc-new: --summary was supplied an empty or whitespace-only "
-            "value. Omit --summary entirely to keep the placeholder summary, or pass "
-            "real summary text.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if summary is not None and len(summary) > 140:
-        print(
-            f"coordinator-doc-new: --summary exceeds 140 characters (got {len(summary)}). "
-            "The handoff schema's _cf_summary_length_cap rejects it outright; shorten "
-            "it before scaffolding.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    _refuse_unschematic_summary(summary)
     # --gated-open declares the blocker (blocked_by), not the readiness (see
     # docstring) — blank is refused for the same reason as --summary above:
     # blocked_by must be a non-empty id naming what this baton is blocked by.
@@ -3586,6 +3594,7 @@ def _scaffold_goal_seed(
     origin_handoff_id: str | None = None,
     predecessor_id: str | None = None,
     category: str | None = None,
+    summary: str | None = None,
 ) -> str:
     """Generate validator-clean goal-seed frontmatter + canonical section skeleton.
 
@@ -3648,6 +3657,7 @@ def _scaffold_goal_seed(
     _bootstrap_engine()
     today = _today()
     placeholder_summary = "PLACEHOLDER — replace with one-line vision-slice summary (≤140 chars)"
+    _refuse_unschematic_summary(summary)
     _category = category if category else "infra"
     _validate_category(_category)
     lines = [
@@ -3660,7 +3670,7 @@ def _scaffold_goal_seed(
         "kind: goal-seed",
         "deployment_state: awaiting_gate",
         f"category: {_category}",
-        f"summary: {_yaml_quote(placeholder_summary)}",
+        f"summary: {_yaml_quote(summary if summary else placeholder_summary)}",
     ]
     # 2026-08-21 extension (same baton as _scaffold_spinoff's authoring_session
     # fix): resolved off `_resolve_session_id()` when the engine can supply it,
@@ -3747,6 +3757,7 @@ def _scaffold_roadmap_seed(
     origin_handoff_id: str | None = None,
     predecessor_id: str | None = None,
     category: str | None = None,
+    summary: str | None = None,
 ) -> str:
     """Generate validator-clean roadmap-seed frontmatter + section skeleton.
 
@@ -3813,6 +3824,7 @@ def _scaffold_roadmap_seed(
     _bootstrap_engine()
     today = _today()
     placeholder_summary = "PLACEHOLDER — replace with one-line capability-arc summary (≤140 chars)"
+    _refuse_unschematic_summary(summary)
     _dlv = _yaml_quote(deliverable_id) if deliverable_id else "null"
     _ini = _yaml_quote(initiative) if initiative else "null"
     _category = category if category else "roadmap"
@@ -3827,7 +3839,7 @@ def _scaffold_roadmap_seed(
         "kind: roadmap-seed",
         "deployment_state: awaiting_gate",
         f"category: {_category}",
-        f"summary: {_yaml_quote(placeholder_summary)}",
+        f"summary: {_yaml_quote(summary if summary else placeholder_summary)}",
     ]
     # 2026-08-21 extension (same baton as _scaffold_spinoff's authoring_session
     # fix): resolved off `_resolve_session_id()` when the engine can supply it.
@@ -8434,9 +8446,11 @@ def main(argv: "list[str] | None" = None) -> int:
     # and is the field ordered spinoff chains (architecture-audit Step 4) now
     # declare their predecessor leg on.
     if (
-        args.summary or args.gate_note or args.gated_predicate
+        (args.summary and doc_type not in _SUMMARY_TYPES)
+        or args.gate_note
+        or args.gated_predicate
     ) and doc_type != "handoff":
-        if args.summary:
+        if args.summary and doc_type not in _SUMMARY_TYPES:
             _bad_flag = "--summary"
         elif args.gate_note:
             _bad_flag = "--gate-note"
@@ -8444,7 +8458,8 @@ def main(argv: "list[str] | None" = None) -> int:
             _bad_flag = "--gated-predicate"
         print(
             f"coordinator-doc-new: {_bad_flag} is not accepted for --type {doc_type}. "
-            "--summary, --gate-note, and --gated-predicate are handoff-only fields.",
+            "--gate-note and --gated-predicate are handoff-only fields; --summary is "
+            "accepted for --type handoff, goal-seed, and roadmap-seed only.",
             file=sys.stderr,
         )
         return 1
@@ -8639,6 +8654,7 @@ def main(argv: "list[str] | None" = None) -> int:
             origin_handoff_id=args.origin_handoff_id,
             predecessor_id=args.predecessor_id,
             category=args.category,
+            summary=args.summary,
         )
     elif doc_type == "roadmap-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None
@@ -8653,6 +8669,7 @@ def main(argv: "list[str] | None" = None) -> int:
             origin_handoff_id=args.origin_handoff_id,
             predecessor_id=args.predecessor_id,
             category=args.category,
+            summary=args.summary,
         )
     elif doc_type == "memo":
         content = _scaffold_memo(

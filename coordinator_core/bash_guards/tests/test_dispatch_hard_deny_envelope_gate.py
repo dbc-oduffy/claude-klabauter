@@ -115,16 +115,6 @@ class TestNoOtherGuardChangesBehaviourUnderTheNewGate:
     for a guard that both is `fail_closed=False` AND returns a real deny,
     which the dispatch.py audit found to be exactly the two bump guards."""
 
-    def test_block_dev_repo_sentinel_removal_advisory_stays_allow_only(self, tmp_path):
-        payload = {
-            "tool_name": "Bash",
-            "session_id": "sess-advisory-1",
-            "cwd": str(tmp_path),
-            "tool_input": {"command": "rm .coordinator-dev-repo"},
-        }
-        decision, _out = _decision(payload)
-        assert decision != "deny"
-
     def test_offer_git_c_rewrite_is_unaffected(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-advisory-2")
         cmd = f"cd {_posix(repos['anchor'])} && git status"

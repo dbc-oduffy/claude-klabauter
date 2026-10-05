@@ -93,30 +93,29 @@ def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_resolvable_executor_kind_still_fires_now_advisory(monkeypatch):
-    """A resolved coordinator:executor kind still fires the guard, but as
-    ADVISORY_REWRITE (C14c): allow + additionalContext, not deny.
+def test_resolvable_executor_kind_still_fires(monkeypatch):
+    """A resolved coordinator:executor kind still fires the guard, as
+    a deny.
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _payload(_WRITE_CMD)
     result = guard.check(payload)
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-    reason = result["hookSpecificOutput"]["additionalContext"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "coordinator:executor" in reason
-    assert ".coordinator-local/subagent-share/<path>.md" in reason
+    assert "run-report sidecar" in reason
 
 
 def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch):
     """AMBIGUOUS collision sentinel keeps its own unconditional fire branch,
-    independent of the lookup-fail-is-allow default -- now advisory-allow
-    rather than deny (C14c).
+    independent of the lookup-fail-is-allow default.
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="AMBIGUOUS")
     payload = _payload("cat docs/plans/2026-07-30-x.md")
     result = guard.check(payload)
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_non_write_command_allows_even_with_unresolved_kind(monkeypatch):
@@ -144,7 +143,7 @@ def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
     payload = _ps_payload('"in progress" >> docs/plans/2026-07-30-x.md')
     result = guard.check(payload)
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
@@ -156,11 +155,11 @@ def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
     assert _verdict.was_silent("block_subagent_plan_body_bash_write", silences)
 
 
-def test_unenumerated_type_falls_through_to_advisory(monkeypatch):
+def test_unenumerated_type_falls_through_to_deny(monkeypatch):
     """AC6/C3 -- the SAME identity gate's Case 2 (kind resolves CLEANLY to
     something absent from C1's roster) no longer exits as allow; it falls
     through to the SAME target-detection axis coordinator:executor reaches,
-    landing on the same ADVISORY_REWRITE allow+additionalContext shape --
+    landing on the same deny --
     no more trust than coordinator:executor for this guard's purposes.
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
@@ -170,8 +169,8 @@ def test_unenumerated_type_falls_through_to_advisory(monkeypatch):
     payload = _payload(_WRITE_CMD)
     result = guard.check(payload)
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "additionalContext" in result["hookSpecificOutput"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
 def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):

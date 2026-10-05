@@ -100,6 +100,14 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
 _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS: frozenset = frozenset()
 
 
+def _perforce_armed_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+    """`block-perforce-submit` arms from machine-local policy; arm it for the row."""
+    from coordinator_core.bash_guards import block_perforce_submit as guard
+
+    mp.setattr(guard, "_armed", lambda: True)
+    return {}
+
+
 def _noncanonical_branch_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -140,44 +148,6 @@ def _subagent_grant_acquisition_identity_setup(
 #: run directly against the guard's own `check()` and confirmed to deny/
 #: advise, not guessed from reading the source alone).
 _EXTRA_FIRING_ROWS: List[CorpusRow] = [
-    # `block-dev-repo-sentinel-removal`'s own CONFINEMENT_DENY firing row
-    # (previously here, direct `rm .coordinator-dev-repo`) was REMOVED --
-    # not stale-and-forgotten, but stale-and-VERIFIED: commit `d1113d2b8`
-    # ("C13: move 4 GuardEntry registrations to ADVISORY_REWRITE, correct
-    # two stale self-counts") retired this guard's hard-deny leg entirely,
-    # per `dispatch.py`'s own inline comment at the
-    # `block-worktree-sentinel-creation` registration site ("`block-dev-
-    # repo-sentinel-removal`'s hard-deny leg was RETIRED here (C13,
-    # docs/plans/2026-08-06-apply-guard-class-census.md), collapsing its
-    # former TWO-LEG SPLIT into the single already-registered
-    # `block-dev-repo-sentinel-removal-advisory` entry ... in
-    # ADVISORY_REWRITE"). The live chain no longer registers ANY entry
-    # named `block-dev-repo-sentinel-removal` in ANY band -- only
-    # `block-dev-repo-sentinel-removal-advisory` (ADVISORY_REWRITE), which
-    # is out of this file's CONFINEMENT_DENY-only scope (module docstring
-    # point 2). That same dispatch.py comment flags a known, ALREADY-
-    # TRACKED product gap this file does not re-report: `check_advisory`
-    # still returns `None` (silent allow, no comment) for the direct
-    # `rm`/`mv`/`git rm`/`git mv .coordinator-dev-repo` shape today, pending
-    # a peer chunk widening it -- that is dispatch.py's own module-body
-    # scope, not this test module's.
-    #
-    # The former known exception's own trigger (module docstring point 4,
-    # RESOLVED 2026-08-05): a DIRECT match used to still deny via the row
-    # removed above. This xargs-indirection shape used to resolve to this
-    # guard's own ADVISORY posture returned DIRECTLY from `check()` -- allow+
-    # additionalContext, a CONFINEMENT_DENY-band shape violation. Since the
-    # two-leg split, `check()` (the entry this file's `_classify_chain`
-    # exercises) returns bare `None` for this input -- the advisory now
-    # lives in `check_advisory()`'s own separate ADVISORY_REWRITE entry,
-    # which this file's `_classify_chain` deliberately does not walk (module
-    # docstring point 2 -- only CONFINEMENT_DENY entries). No corpus row is
-    # needed here any more: this shape is now an ordinary control input for
-    # this guard's CONFINEMENT_DENY entry, covered implicitly by every row
-    # above that is NOT this guard's own direct-fire row. Guard-level proof
-    # of the split (both legs, both the three audit trigger shapes, and the
-    # non-shadowing property) lives in `test_block_dev_repo_sentinel_
-    # removal.py::TestAdvisoryLegAtItsNewChainPosition`, not here.
     CorpusRow(
         "block-disarm-marker-sentinel-creation",
         "block-disarm-marker-sentinel-creation-fire",
@@ -194,6 +164,23 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         GuardBand.CONFINEMENT_DENY,
         False,
         setup=_noncanonical_branch_hazard_setup,
+    ),
+    CorpusRow(
+        "block-perforce-submit",
+        "block-perforce-submit-fire",
+        "p4 submit -d shape-probe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_perforce_armed_setup,
+    ),
+    CorpusRow(
+        "block-unreal-engine-resave",
+        "block-unreal-engine-resave-fire",
+        "UnrealEditor-Cmd G.uproject -run=ResavePackages",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
     ),
     CorpusRow(
         "block-topic-branch",
