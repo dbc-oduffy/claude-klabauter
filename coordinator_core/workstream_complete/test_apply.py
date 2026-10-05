@@ -2818,7 +2818,7 @@ def test_dispatch_table_values_are_path_objects_under_coordinator_bin_both_fixtu
             assert isinstance(path, Path)
             assert path.parent.name == "bin"
         for name in ws_apply._PLUGIN_LOCAL_CLIS:
-            assert table[name].parent == plugin_root or table[name].parent.parent == plugin_root.parent
+            assert table[name].parent in (plugin_root, ws_apply._CLI_SCRIPT_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -3122,8 +3122,13 @@ class TestAC8bThreeNamedDoeScripts:
 
         print(f"AC9: ran against DoE ref {_live_doe_ref()}")
         for name in _DOE_SCRIPT_NAMES:
-            script_path = _LIVE_PLUGIN_ROOT / f"{name}.py"
-            assert script_path.is_file(), f"{name}: not found under {_LIVE_PLUGIN_ROOT}"
+            script_path = (
+                ws_apply._CLI_DISPATCH[name]
+                if name in ws_apply._PLUGIN_LOCAL_CLIS
+                # DoE's copy is a forwarder shim with no in-process main; the engine copy is the one to load.
+                else Path(__file__).resolve().parents[2] / "coordinator" / "bin" / f"{name}.py"
+            )
+            assert script_path.is_file(), f"{name}: not found at {script_path}"
             module_name = f"_ac8b_{name.replace('-', '_')}"
             if name == "uhura-mode":
                 # census: this load leaks <DoE>/coordinator/bin/lib onto
@@ -3144,7 +3149,7 @@ class TestAC8bThreeNamedDoeScripts:
 
         for name in sorted(ws_apply._PLUGIN_LOCAL_CLIS):
             before = list(sys.path)
-            load_cli_module(f"_ac8b_syspath_{name.replace('-', '_')}", _LIVE_PLUGIN_ROOT / f"{name}.py")
+            load_cli_module(f"_ac8b_syspath_{name.replace('-', '_')}", ws_apply._CLI_DISPATCH[name])
             assert sys.path == before, f"{name} mutated sys.path at import — hazard AC8 excludes"
 
 
@@ -3156,3 +3161,62 @@ def test_consumed_handoff_ship_directive_threads_sha_flag() -> None:
     assert with_sha["args"] == ["ship-handoff", "state/handoffs/h.md", "--sha", sha]
     (without,) = dml.build_consumed_handoff_ship_directives(["state/handoffs/h.md"])
     assert without["args"] == ["ship-handoff", "state/handoffs/h.md"]
+
+
+# ---------------------------------------------------------------------------
+# baton-chain-closure regressions: forwarder shim at import, empty handoff
+# arg, best_effort failure that exits the process.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_local_cli_resolves_to_the_engine_script_not_the_forwarder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    doe_bin = tmp_path / "doe" / "coordinator" / "bin"
+    doe_bin.mkdir(parents=True)
+    (doe_bin / "baton-chain-closure.py").write_text("import sys\nsys.exit(2)\n")
+    monkeypatch.setattr(ws_apply, "_PLUGIN_CLI_SCRIPT_ROOT", doe_bin)
+
+    assert ws_apply._resolve_script_path("baton-chain-closure").parent == ws_apply._CLI_SCRIPT_ROOT
+
+
+def test_empty_handoff_path_emits_no_baton_chain_closure_directive(tmp_path: Path) -> None:
+    from coordinator_core.workstream_complete import directives_completion as dc
+
+    assert dc.build_baton_chain_closure_directive(repo_root=tmp_path, handoff_path="") is None
+    built = dc.build_baton_chain_closure_directive(repo_root=tmp_path, handoff_path="h.md")
+    assert built["args"] == ["--repo", str(tmp_path), "signal", "h.md"]
+
+
+def test_best_effort_directive_exiting_at_load_is_degraded_and_run_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def exiting_load(cli_name: str) -> ModuleType:
+        if cli_name == "baton-chain-closure":
+            raise SystemExit(2)
+        return _fake_module(lambda argv: 0, "fake_sibling")
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", exiting_load)
+    directives = [
+        _directive("d_plugin", "baton-chain-closure"),
+        _directive("d_sibling", "wsc-coverage-gate-runner"),
+    ]
+    directives[0]["best_effort"] = True
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert [e["id"] for e in report["degraded"]] == ["d_plugin"]
+    assert report["failed"] == []
+    assert report["landed"] == ["d_sibling"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+def test_best_effort_directive_with_empty_stdout_failure_is_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ws_apply, "_load_cli_module", lambda name: _fake_module(lambda argv: 2))
+    directives = [_directive("d_plugin", "baton-chain-closure")]
+    directives[0]["best_effort"] = True
+    exit_code, report = ws_apply._execute_directives(directives, [], {})
+
+    assert [e["id"] for e in report["degraded"]] == ["d_plugin"]
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)

@@ -419,14 +419,20 @@ _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 
 
 def _claim_held(path: str, cwd: str) -> bool:
-    """True when a live session claims `path`, or the ledger cannot answer."""
-    from coordinator_core.session import claim_index, liveness
+    """True when a live session holds a blocking (write or unknown-kind) claim on `path`, or the
+    ledger cannot answer. A read-kind touch never holds."""
+    from coordinator_core.session import claim_index, liveness, touch_record
 
     try:
-        claimants = claim_index.lookup([path], cwd=cwd).get(path, [])
+        found = claim_index.lookup([path], cwd=cwd)
+        claimants = found.get(path, [])
         if claim_index.UNANSWERABLE in claimants:
             return True
-        return any(liveness.session_live(sid, cwd) for sid in claimants)
+        kinds = (found.recorded_kind or {}).get(path, {})
+        return any(
+            touch_record.kind_blocks_a_peer_commit(kinds.get(sid)) and liveness.session_live(sid, cwd)
+            for sid in claimants
+        )
     except Exception:  # noqa: BLE001 - an unanswerable ledger must keep the claim blocking
         return True
 

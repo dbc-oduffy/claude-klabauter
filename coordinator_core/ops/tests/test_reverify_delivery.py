@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.ops import review_stamp as m
@@ -370,3 +372,41 @@ def test_record_without_repo_root_writes_into_the_run_records_repo(tmp_path, mon
     assert rd.main(["record", "--run-record", str(record), "--result-json", _result_json(head)]) == 0
     assert rd.latest_foreign_claims_supersession(repo, rel) == []
     assert not (elsewhere / rd.VERDICT_DIR).exists()
+
+
+def _peer_touch(root, sid, path, kind, monkeypatch):
+    import os
+
+    from coordinator_core.session import touch_record
+
+    sid_dir = os.path.join(root, ".git", "coordinator-sessions", sid)
+    os.makedirs(sid_dir, exist_ok=True)
+    touch_record.append_event(
+        touch_record.sink_path(sid_dir), session_id=sid, agent_id=None,
+        verb=touch_record.VERB_TOUCH, path=path, kind=kind,
+    )
+    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda *a, **k: True)
+
+
+def test_a_live_read_only_claimant_is_not_a_foreign_claim(tmp_path, monkeypatch):
+    import os
+
+    from coordinator_core.session import touch_record
+
+    root = os.path.realpath(str(tmp_path))
+    _peer_touch(root, "peer-reader", "pkg/mod.py", touch_record.KIND_READ, monkeypatch)
+    monkeypatch.setattr(rd, "run_git", lambda *a, **k: pytest.fail("no sha in claim"))
+    assert rd.live_foreign_claims(Path(root), ["pkg/mod.py peer"], "HEAD") == []
+
+
+@pytest.mark.parametrize("kind_name", ["KIND_WRITE", None])
+def test_a_live_write_or_unknown_claimant_still_blocks(tmp_path, monkeypatch, kind_name):
+    import os
+
+    from coordinator_core.session import touch_record
+
+    root = os.path.realpath(str(tmp_path))
+    kind = getattr(touch_record, kind_name) if kind_name else None
+    _peer_touch(root, "peer-writer", "pkg/mod.py", kind, monkeypatch)
+    _peer_touch(root, "peer-reader", "pkg/mod.py", touch_record.KIND_READ, monkeypatch)
+    assert rd.live_foreign_claims(Path(root), ["pkg/mod.py peer"], "HEAD") == ["pkg/mod.py peer"]

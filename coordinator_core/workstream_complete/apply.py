@@ -378,6 +378,10 @@ def _resolve_script_path(name: str) -> Path:
     exactly as before. Membership alone picks the prefix — no glob, no
     listing, no runtime mutation."""
     script_root = _PLUGIN_CLI_SCRIPT_ROOT if name in _PLUGIN_LOCAL_CLIS else _CLI_SCRIPT_ROOT
+    if name in _PLUGIN_LOCAL_CLIS and (_CLI_SCRIPT_ROOT / f"{name}.py").exists():
+        # The DoE copy is a forwarder with no `main`: loading it runs
+        # `sys.exit(forward(...))` against this process's own argv.
+        script_root = _CLI_SCRIPT_ROOT
     py_path = script_root / f"{name}.py"
     if py_path.exists():
         return py_path
@@ -1112,9 +1116,9 @@ def _execute_directives(
         started = time.monotonic()
         try:
             result = _dispatch_directive(directive, args=resolved_args)
-        except Exception as exc:  # noqa: BLE001 - closed-table dispatch failure
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - closed-table dispatch failure; a script exiting at import is still one directive's failure
             _emit_progress(f"{directive['id']} raised after {time.monotonic() - started:.1f}s")
-            entry = {"id": directive["id"], "error": str(exc)}
+            entry = {"id": directive["id"], "error": str(exc) or type(exc).__name__}
             if directive.get("best_effort"):
                 degraded.append(entry)
             else:

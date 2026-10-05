@@ -413,7 +413,9 @@ def build_fold_execution_observations_directive(
 # ---------------------------------------------------------------------------
 
 
-def build_baton_chain_closure_directive(*, repo_root: Path, handoff_path: str) -> dict[str, Any]:
+def build_baton_chain_closure_directive(
+    *, repo_root: Path, handoff_path: str
+) -> Optional[dict[str, Any]]:
     """B11: the baton-chain closure signal doctrine mandates at workstream
     close. Verb is `signal`, never `check` — `check` returns `1` for an
     ordinary open chain, which would route a healthy close to `degraded`
@@ -421,7 +423,10 @@ def build_baton_chain_closure_directive(*, repo_root: Path, handoff_path: str) -
     producer lives in a sibling DoE clone that may be unreachable; per the §
     Approach table this leg carries no build-time admission gate of its own
     (contrast `build_plan_reversibility_eligibility_directive` below) — the
-    reachability filter is applied by the caller, not here."""
+    reachability filter is applied by the caller, not here. Returns `None`
+    when `handoff_path` is empty: `signal` requires the positional."""
+    if not handoff_path:
+        return None
     args = ["--repo", str(repo_root), "signal", handoff_path]
     directive = _directive("d-baton-chain-closure", _BATON_CHAIN_CLOSURE_CLI, args)
     directive["best_effort"] = True
@@ -509,9 +514,11 @@ def build_directives(
     # table: B11 "no gate", B10 "gated on a resolved governing plan" only).
     # `__init__.py`'s own reachability filter, keyed on `cli` name, decides
     # whether either actually reaches `directives[]` on an unresolvable box.
-    directives.append(
-        build_baton_chain_closure_directive(repo_root=repo_root, handoff_path=consumed_handoff)
+    baton_closure_directive = build_baton_chain_closure_directive(
+        repo_root=repo_root, handoff_path=consumed_handoff
     )
+    if baton_closure_directive is not None:
+        directives.append(baton_closure_directive)
     reversibility_directive = build_plan_reversibility_eligibility_directive(
         plan_path=str(decisions.get(_KEY_GOVERNING_PLAN_PATH) or ""),
         repo_root=repo_root,

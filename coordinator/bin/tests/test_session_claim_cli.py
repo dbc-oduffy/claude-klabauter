@@ -1615,3 +1615,20 @@ def test_stale_mirror_not_in_source_either_never_says_publish(monkeypatch, tmp_p
     err = capsys.readouterr().err
     assert "not in source either" in err
     assert "publish" not in err.lower()
+
+
+def test_who_claims_path_live_read_holder_does_not_block(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    def _lookup(paths, cwd=None):
+        res = _LookupResultStub({p: ["sess-r", "sess-w"] for p in paths}, None)
+        res.recorded_kind = {p: {"sess-r": "r", "sess-w": "w"} for p in paths}
+        return res
+
+    stub_import_claim_index_module(_StubClaimIndex(lookup=_lookup))
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+    stub_import_harness_registry_module(_StubHarnessRegistry())
+    assert _cli.main(["who-claims-path", "some/path.txt"]) == 0
+    cols = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+    assert [(c[0], c[-1]) for c in cols] == [("sess-r", "no"), ("sess-w", "yes")]
