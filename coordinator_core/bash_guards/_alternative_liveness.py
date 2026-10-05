@@ -143,6 +143,7 @@ from coordinator_core.bash_guards import block_subagent_stash_creation
 from coordinator_core.bash_guards import block_venv_creation
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
+from coordinator_core.bash_guards import block_topic_branch
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
 from coordinator_core.bash_guards import block_subagent_grant_acquisition
@@ -675,6 +676,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_stash_destruction": lambda: block_stash_destruction.check(
         _payload("git stash drop", agent_id=None)
     ),
+    "block_topic_branch": lambda: block_topic_branch.check(
+        _payload("git checkout -b topic/altlive-probe", agent_id=None)
+    ),
     "block_subagent_stash_creation": lambda: block_subagent_stash_creation.check(
         _payload(" ".join(["git", "stash", "push"]), agent_type="coordinator:executor")
     ),
@@ -840,6 +844,16 @@ KEY_SPECIFIC_TRIGGERS: Dict[Tuple[str, str], Callable[[], Optional[Dict[str, Any
         "check_git_commit_safe_commit_advise",
         "COORDINATOR_ALLOW_GIT_COMMIT_AMEND",
     ): _trigger_check_git_commit_safe_commit_advise_amend,
+}
+
+#: Overrides read ONLY as an inline per-command prefix (`KEY=reason git ...`),
+#: never from the environment: `probe_override` re-fires these with the
+#: prefix prepended instead of patching `os.environ`, which such a guard
+#: deliberately ignores. Each callable takes the prefix (`"KEY=reason "`).
+INLINE_PREFIX_TRIGGERS: Dict[Tuple[str, str], Callable[[str], Optional[Dict[str, Any]]]] = {
+    ("block_topic_branch", "COORDINATOR_OVERRIDE_TOPIC_BRANCH"): lambda prefix: block_topic_branch.check(
+        _payload(prefix + "git checkout -b topic/altlive-probe", agent_id=None)
+    ),
 }
 
 
@@ -1986,6 +2000,9 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
     unchanged when no key-specific row exists -- the pre-existing behavior
     for every guard with a single override key."""
     env_var: str = alt.detail
+    inline_trigger = INLINE_PREFIX_TRIGGERS.get((guard, env_var))
+    if inline_trigger is not None:
+        return _probe_inline_prefix_override(env_var, inline_trigger, baseline)
     had_prior = env_var in os.environ
     prior_value = os.environ.get(env_var)
 
@@ -2045,6 +2062,27 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
         "%r=1 set and the guard re-fired with an IDENTICAL verdict (%r both times) -- "
         "the guard never reads what its own message advertises, or the read is not on "
         "the path that gates this verdict" % (env_var, baseline_decision),
+    )
+
+
+def _probe_inline_prefix_override(
+    env_var: str, trigger: Callable[[str], Optional[Dict[str, Any]]], baseline: GuardFireResult
+) -> Verdict:
+    baseline_decision = None
+    if baseline.envelope:
+        baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    try:
+        patched_envelope = _call_trigger_isolated(lambda: trigger("%s=altlive-probe " % env_var))
+    except Exception as exc:  # noqa: BLE001 -- a crash under the override is evidence, not a probe failure
+        return Verdict(VerdictStatus.DEAD, "guard crashed with inline %s=... (%s: %s)" % (env_var, type(exc).__name__, exc))
+    patched_decision = None
+    if patched_envelope:
+        patched_decision = patched_envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    if patched_envelope is None or patched_decision != baseline_decision:
+        return Verdict(VerdictStatus.LIVE, "inline %s=... changes the verdict (%r -> %r)" % (env_var, baseline_decision, patched_decision))
+    return Verdict(
+        VerdictStatus.DEAD,
+        "inline %s=... prefixed and the guard re-fired with an IDENTICAL verdict (%r)" % (env_var, baseline_decision),
     )
 
 

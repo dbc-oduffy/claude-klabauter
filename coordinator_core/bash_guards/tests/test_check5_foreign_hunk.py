@@ -281,3 +281,76 @@ class TestCheckFiveForeignHunk:
         ]
         em_reason = em_result["hookSpecificOutput"]["permissionDecisionReason"]
         assert len(subagent_reason) < len(em_reason)
+
+
+class TestExecutorSidecarStopAppend:
+    """The SubagentStop final-report append is a write no PostToolUse hook
+    fingerprints; it must not turn the agent's own earlier fingerprint stale."""
+
+    _REL = ".coordinator-local/subagent-share/my-sess/coordinator-executor.a1.md"
+
+    def _setup(self, tmp_path, fingerprinted: bool):
+        from coordinator_core.session.touch_record import compute_content_hash
+        from coordinator_core.subagent_sandbox.provision_report import (
+            _write_sidecar_pointer,
+        )
+
+        root = _init_repo(tmp_path)
+        sid = "my-sess"
+        assert core.init(sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+        sidecar = Path(root) / self._REL
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("---\nstatus: in_flight\n---\n", encoding="utf-8")
+        _write_sidecar_pointer(root, "a1", self._REL)
+        if fingerprinted:
+            _claim(root, sid, self._REL, content_hash=compute_content_hash(sidecar))
+        else:
+            _claim(root, sid, self._REL)
+        return root, sid
+
+    def _commit(self, root, sid):
+        _git(root, "add", "-f", self._REL)
+        return dispatch_checks.check_validate_commit(
+            'git commit -m "sidecar"', sid, cwd=root
+        )
+
+    def test_stop_append_refreshes_the_fingerprint(self, tmp_path):
+        from coordinator_core.hooks import subagent_zero_tool_use as hook
+
+        root, sid = self._setup(tmp_path, fingerprinted=True)
+        hook._persist_final_report_sync(root, "a1", "final report", sid)
+        assert "final report" in (Path(root) / self._REL).read_text(encoding="utf-8")
+        assert self._commit(root, sid) is None
+
+    def test_without_the_refresh_the_append_reads_as_foreign(self, tmp_path):
+        from coordinator_core.hooks import subagent_zero_tool_use as hook
+
+        root, sid = self._setup(tmp_path, fingerprinted=True)
+        hook._persist_final_report_sync(root, "a1", "final report")
+        result = self._commit(root, sid)
+        assert result is not None
+        assert "foreign hunk" in result["hookSpecificOutput"][
+            "permissionDecisionReason"
+        ].lower()
+
+    def test_a_genuine_foreign_edit_after_the_append_still_denies(self, tmp_path):
+        from coordinator_core.hooks import subagent_zero_tool_use as hook
+
+        root, sid = self._setup(tmp_path, fingerprinted=True)
+        hook._persist_final_report_sync(root, "a1", "final report", sid)
+        with open(Path(root) / self._REL, "a", encoding="utf-8") as fh:
+            fh.write("foreign line\n")
+        result = self._commit(root, sid)
+        assert result is not None
+        assert "foreign hunk" in result["hookSpecificOutput"][
+            "permissionDecisionReason"
+        ].lower()
+
+    def test_unfingerprinted_sidecar_stays_unfingerprinted(self, tmp_path):
+        from coordinator_core.hooks import subagent_zero_tool_use as hook
+        from coordinator_core.session.touch_record import last_seen_hash
+
+        root, sid = self._setup(tmp_path, fingerprinted=False)
+        hook._persist_final_report_sync(root, "a1", "final report", sid)
+        assert last_seen_hash(sid, self._REL, root) is None

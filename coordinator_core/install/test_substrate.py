@@ -968,10 +968,9 @@ def test_c10a_steps_enabled_removes_legacy_venv(monkeypatch, tmp_path):
     for d in (install_base, settings_home_path, plugin_root, bin_dst):
         d.mkdir(parents=True)
 
-    dst_whoami = settings_home_path / "coordinator-whoami"
-    dst_whoami.mkdir(parents=True)
-    (dst_whoami / "marker").write_text("already relocated", encoding="utf-8")
-    (dst_whoami / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    whoami_src = plugin_root / "whoami"
+    whoami_src.mkdir(parents=True)
+    (whoami_src / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
 
     legacy_venv = install_base / ".claude" / ".coordinator-venv"
     legacy_venv.mkdir(parents=True)

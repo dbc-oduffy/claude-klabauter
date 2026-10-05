@@ -4680,8 +4680,7 @@ def _c10a_steps(
     venv_py = venv_python_path(settings_home_path / _LEGACY_VENV_DIRNAME)
 
     has_viable_whoami = (
-        (dst_whoami / "pyproject.toml").is_file() or (dst_whoami / "setup.py").is_file()
-        or (plugin_root / "whoami" / "pyproject.toml").is_file()
+        (plugin_root / "whoami" / "pyproject.toml").is_file()
         or (plugin_root / "whoami" / "setup.py").is_file()
     )
     has_fallback_venv = (settings_home_path / ".coordinator-venv").is_dir() or legacy_venv.is_dir()
@@ -4745,7 +4744,7 @@ def _c10a_steps(
     else:
         print(
             f"[install-substrate] WARNING: no valid coordinator_whoami package source found "
-            f"(neither {dst_whoami} nor {plugin_root}/whoami has pyproject.toml/setup.py); "
+            f"({plugin_root}/whoami has no pyproject.toml/setup.py); "
             "skipping venv rebuild — venv builds automatically once whoami source is in place (re-run install)",
             file=sys.stderr,
         )

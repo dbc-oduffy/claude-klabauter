@@ -1107,6 +1107,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-topic-branch",
+        "block-topic-branch-control",
+        "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-subagent-stash-creation",
         "block-subagent-stash-creation-control",
         "git status",

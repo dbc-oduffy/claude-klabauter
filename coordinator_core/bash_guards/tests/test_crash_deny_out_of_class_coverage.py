@@ -28,6 +28,7 @@ from coordinator_core.bash_guards import (
     block_disarm_marker_sentinel_creation,
     block_fleet_delegation_creation,
     block_stash_destruction,
+    block_topic_branch,
     block_subagent_findings_reject,
     block_subagent_grant_acquisition,
     block_subagent_guard_grant,
@@ -195,6 +196,8 @@ _DENIED: List[Tuple[str, str, Runner]] = [
     ("p4-verb-fence", "P4ALIASES=x ls", _p4),
     ("block-stash-destruction", "git stash drop", _check_module(block_stash_destruction, _bash)),
     ("block-stash-destruction", "sh -c 'git stash clear'", _check_module(block_stash_destruction, _bash)),
+    ("block-topic-branch", "git checkout -b topic/x", _check_module(block_topic_branch, _bash)),
+    ("block-topic-branch", "git push origin topic/x", _check_module(block_topic_branch, _bash)),
     ("block-subagent-stash-creation", "git stash", _check_module(block_subagent_stash_creation, _subagent)),
     ("block-subagent-stash-creation", "git stash push -u", _check_module(block_subagent_stash_creation, _subagent)),
     (

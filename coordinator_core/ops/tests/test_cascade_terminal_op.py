@@ -316,3 +316,25 @@ def test_leg_b_prefilter_agrees_with_the_unprefiltered_scan_on_the_real_corpus()
     assert candidates
     for candidate in candidates:
         assert _prefiltered_leg_b_children(repo, candidate) == _full_leg_b_children(repo, candidate), candidate
+
+
+def test_plan_source_advances_a_sizing_joined_only_by_its_plan_fk(tmp_path):
+    """A sizing routed before its plan minted a deliverable id carries
+    `deliverable_id: null`; the plan source still reaches it through `plan`."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(
+        repo, "20260102-fk.yaml", status="routed", deliverable_id="null",
+        plan="docs/plans/dummy.md",
+    )
+    stranger = _seed_sizing(
+        repo, "20260102-other.yaml", status="routed", deliverable_id="null",
+        plan="docs/plans/other.md",
+    )
+    base = _commit_all(repo, "seed corpus")
+
+    result = _run(_params(base), repo)
+
+    assert result["exit_code"] == 0, result
+    assert [Path(a["path"]).name for a in result["by_kind"]["sizing"]["advanced"]] == [sizing.name]
+    assert yaml.safe_load(stranger.read_text(encoding="utf-8"))["status"] == "routed"

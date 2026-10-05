@@ -590,6 +590,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     os.path.join(agent_dir, "em-session-id.txt"),
                     _em_session_id,
                 )
+                await asyncio.to_thread(
+                    _write_backpointer_sync,
+                    os.path.join(session_dir, "em-session-id.txt"),
+                    _em_session_id,
+                )
 
             if not _piece2_fired:
                 await asyncio.to_thread(

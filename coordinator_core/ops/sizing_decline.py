@@ -47,17 +47,13 @@ migration" — no general sizing-lifecycle refactor):
     states "Always paired with a decision-record backlink recording why," and this op
     is what makes that true rather than an aspiration: it must resolve to a real file
     on disk under `docs/decisions/` before any write happens (fail loud, no write, on
-    a missing/unresolvable pointer). The op does NOT write this pointer into the
-    sizing-object itself (the schema has no dedicated field for it, and `pm_resolution`
-    is free-text EM-authored prose per its own schema description, not a field this op
-    should compose on the EM's behalf) — the requirement is a live-evidence gate, not a
-    persisted field, mirroring `premise.evidence`'s own house pattern of demanding an
-    executed check without any promise the check's *output* is retained verbatim.
+    a missing/unresolvable pointer). The op writes it into `declined_note`, the
+    schema's machine-joinable home for the backlink, after the caller's optional
+    `note` (the grounds). It never writes `pm_resolution`.
 
 Negative-spec:
-  - Does NOT resolve or guess a decline reason, a DR id, or a `pm_resolution` write —
-    the caller supplies `decision_record` and (if it wants one recorded) writes
-    `pm_resolution` itself, separately.
+  - Does NOT resolve or guess a decline reason or a DR id — the caller supplies
+    `decision_record` and, optionally, `note`.
   - Does NOT touch `surfaced_to_pm` — that field's own negative spec already governs
     its resolution; this op is not a second writer for it.
   - Does NOT cascade, does NOT fan out to any other artifact, does NOT git-commit.
@@ -74,9 +70,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import json
+
 import yaml
 
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, replace_fm_field
+from coordinator_core.frontmatter.primitives import (
+    read_fm_field_unquoted,
+    replace_fm_field,
+    replace_fm_field_raw,
+)
 from coordinator_core.frontmatter.schema_validate import (
     format_validation_errors,
     validate_frontmatter,
@@ -125,6 +127,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                   (`docs/decisions/*.md`) that resolves this decline.
                                   Required, and must resolve to a real file on disk —
                                   see module docstring's `decision_record` note.
+        note              (str) — the decline's grounds. Optional; written ahead of
+                                  the backlink in `declined_note`.
 
     Returns a dict with keys:
         exit_code  (int)  — 0 ok (write or idempotent no-op) / 1 error.
@@ -144,6 +148,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     sizing_path_raw: str = (params.get("sizing_path") or "").strip()
     decision_record_raw: str = (params.get("decision_record") or "").strip()
+    note: str = (params.get("note") or "").strip()
 
     if not sizing_path_raw:
         return _err("missing required param: sizing_path")
@@ -188,6 +193,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "caller's assertion that it will be"
         )
 
+    backlink = f"decision record: {dr.relative_to(worktree).as_posix()}"
+    declined_note = f"{note} ({backlink})" if note else backlink
+
     _state = {"applied": False, "prior_status": None}
 
     def mutate(old_text: str) -> str:
@@ -207,6 +215,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
 
         new_text = replace_fm_field(old_text, "status", "declined")
+        # JSON string form is a valid YAML double-quoted scalar for any note text.
+        quoted = json.dumps(declined_note, ensure_ascii=False)
+        if read_fm_field_unquoted(new_text, "declined_note") is None:
+            sep = "" if new_text.endswith("\n") else "\n"
+            new_text = f"{new_text}{sep}declined_note: {quoted}\n"
+        else:
+            new_text = replace_fm_field_raw(new_text, "declined_note", quoted)
         errors = _validate_sizing_fm(new_text)
         if errors:
             details = format_validation_errors(errors)

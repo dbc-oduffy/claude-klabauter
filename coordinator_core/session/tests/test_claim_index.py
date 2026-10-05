@@ -425,6 +425,31 @@ def test_session_dir_and_agent_dir_claims_both_read_in_one_rebuild(tmp_path):
     }
 
 
+def test_workflow_agent_session_dir_folds_to_dispatching_session(tmp_path):
+    base = str(tmp_path)
+    _session_touched(base, "agent-sess", [_touch_line("T", "wf.py")])
+    _write(os.path.join(base, "agent-sess", "em-session-id.txt"), "sess-em\n")
+
+    state = claim_index.rebuild(sessions_dir=base)
+    own = claim_index.classify_paths("sess-em", ["wf.py"], sessions_dir=base)
+    other = claim_index.classify_paths("sess-x", ["wf.py"], sessions_dir=base)
+
+    assert state.claims == {"wf.py": ["sess-em"]}
+    assert own.by_path["wf.py"].verdict == claim_index.OWNERSHIP_MINE
+    assert other.by_path["wf.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert other.by_path["wf.py"].peers == ["sess-em"]
+
+
+def test_session_dir_without_backpointer_is_still_a_peer(tmp_path):
+    base = str(tmp_path)
+    _session_touched(base, "peer-sess", [_touch_line("T", "p.py")])
+
+    answer = claim_index.classify_paths("sess-em", ["p.py"], sessions_dir=base)
+
+    assert answer.by_path["p.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert answer.by_path["p.py"].peers == ["peer-sess"]
+
+
 def test_agent_dir_with_no_backpointer_contributes_no_claims(tmp_path):
     base = str(tmp_path)
     agent_dir = os.path.join(base, ".agents", "orphan-agent")

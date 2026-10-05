@@ -240,6 +240,7 @@ FLOOR_GUARDS = frozenset(
         "destructive-git-revert",  # discards working-tree changes git never committed
         "block-subagent-destructive-action",  # a subagent's destructive act on a shared tree
         "block-stash-destruction",  # drop/clear of a stash loses the only copy
+        "block-topic-branch",  # fleet rule: commit only to the day branch; a level must not lower it
         # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
         # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
         "block-consumed-handoff-edit",

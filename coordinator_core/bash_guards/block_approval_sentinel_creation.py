@@ -239,8 +239,10 @@ _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 #: PreToolUse hot path (fires for every Bash call), so the cap bounds that
 #: read's cost independent of whatever the caller's script actually
 #: contains -- an unbounded read here would let an oversized file turn a
-#: cheap classifier into an expensive one.
-_MAX_SCRIPT_READ_BYTES = 256 * 1024
+#: cheap classifier into an expensive one. Measured: the mention scan of a
+#: 740 KB script costs ~0.8 ms, so 4 MiB stays a few ms; 256 KB denied real
+#: read-only probes (example-game-repo doctor_probes.py) as unexamined.
+_MAX_SCRIPT_READ_BYTES = 4 * 1024 * 1024
 
 #: Item 33: the narrow subclass of `_C_FLAG_INTERPRETERS` this override
 #: reads a bare `<interp> <path>` invocation's script for, instead of

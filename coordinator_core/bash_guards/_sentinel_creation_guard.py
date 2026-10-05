@@ -315,11 +315,13 @@ class SentinelCreationDetector:
     #: Widened (2026-07-29, code-reviewer Finding 3) -- see
     #: `block_subagent_destructive_action.py`'s sibling copy for the full
     #: rationale: `setsid`/`strace`/`doas`/`busybox` were unrecognized
-    #: passthrough wrappers.
+    #: passthrough wrappers. `which`/`type` are NOT members: they look names
+    #: up and never run their argv, so `which python3 python` was read as
+    #: `python3 python` -- an interpreter-invoked script -- and denied.
     _PASSTHROUGH_WRAPPERS = frozenset(
         {
             "sudo", "command", "time", "exec", "nice", "nohup", "ionice", "timeout",
-            "stdbuf", "which", "type", "setsid", "strace", "doas", "busybox",
+            "stdbuf", "setsid", "strace", "doas", "busybox",
         }
     )
 

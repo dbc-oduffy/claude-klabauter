@@ -486,7 +486,16 @@ def _enumerate_claim_sinks(base: str) -> tuple:
             continue
         touched_path = os.path.join(entry.path, _TOUCHED_FILENAME)
         if _has_claim_surface(touched_path):
-            pairs.append((touched_path, entry.name, None))
+            # A Workflow-spawned agent's own session dir carries the
+            # dispatching session's back-pointer: its claims are that
+            # session's, attributed as an agent source.
+            owner_sid, owner_complete = _agent_owner_sid(entry.path)
+            if not owner_complete:
+                complete = False
+            if owner_sid and owner_sid != entry.name:
+                pairs.append((touched_path, owner_sid, entry.name))
+            else:
+                pairs.append((touched_path, entry.name, None))
 
     agents_base = os.path.join(base, _AGENTS_SUBDIR)
     for agent_entry in _scandir_sorted(agents_base):

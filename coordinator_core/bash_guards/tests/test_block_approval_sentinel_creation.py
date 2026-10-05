@@ -1063,3 +1063,27 @@ class TestNamedScriptFileIsReadNotRefused:
         (tmp_path / "gen.py").write_text("print('ok')\n")
         cmd = "cd $W1A_UNSET_DIR && python3 gen.py"
         assert guard.check(_payload(cmd, cwd=str(tmp_path))) is not None
+
+
+class TestReadOnlyProbeFalsePositives:
+    """example-game-repo wf_cd02d380-9d5: an exit-criterion judge's read-only probe
+    runs were denied as unexamined indirection."""
+
+    def test_which_names_an_interpreter_without_running_it(self):
+        assert guard.check(_payload("which python3 python")) is None
+        assert guard.check(_payload("type python3 foo")) is None
+
+    def test_clean_script_over_256kb_is_read_not_denied(self, tmp_path):
+        (tmp_path / "probe.py").write_text("x = 1\n" * 100_000, encoding="utf-8")
+        cmd = 'python3 probe.py --focus k; echo "exit=$?"'
+        assert guard.check(_payload(cmd, cwd=str(tmp_path))) is None
+
+    def test_large_script_that_writes_the_sentinel_still_denies(self, tmp_path):
+        body = "x = 1\n" * 100_000 + "open(%r, 'w')\n" % SENTINEL
+        (tmp_path / "probe.py").write_text(body, encoding="utf-8")
+        assert guard.check(_payload("python3 probe.py", cwd=str(tmp_path))) is not None
+
+    def test_script_over_the_read_cap_still_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "_MAX_SCRIPT_READ_BYTES", 1024)
+        (tmp_path / "probe.py").write_text("x = 1\n" * 1000, encoding="utf-8")
+        assert guard.check(_payload("python3 probe.py", cwd=str(tmp_path))) is not None

@@ -440,6 +440,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
     "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
+    "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-subagent-stash-creation": ("stash",),
     "block-subagent-grant-acquisition": ("claude_md_grant",),
     "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
@@ -1264,6 +1265,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
             MATCHERS as _matchers_noncanonical_branch_creation,
         )
+        from coordinator_core.bash_guards.block_topic_branch import (
+            MATCHERS as _matchers_topic_branch,
+        )
         from coordinator_core.bash_guards.guard_inprocess_search import (
             MATCHERS as _matchers_inprocess_search,
         )
@@ -1294,6 +1298,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_stash_destruction,
             _matchers_subagent_stash_creation,
             _matchers_noncanonical_branch_creation,
+            _matchers_topic_branch,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -2257,6 +2262,10 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.block_venv_creation import (
         check as _check_venv_creation,
     )
+    from coordinator_core.bash_guards.block_topic_branch import (
+        check as _check_topic_branch,
+        MATCHERS as _matchers_topic_branch,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2563,6 +2572,14 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_subagent_stash_creation),
+        ),
+        GuardEntry(
+            "block-topic-branch",
+            lambda: _check_topic_branch(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_topic_branch),
         ),
         # `block-noncanonical-branch-creation` RETIRED from this CONFINEMENT_
         # DENY slot (C13, docs/plans/2026-08-06-apply-guard-class-census.md):

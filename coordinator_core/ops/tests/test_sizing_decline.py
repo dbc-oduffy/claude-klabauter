@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 import coordinator_core.ops.sizing_decline as decline_mod
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
@@ -111,6 +112,31 @@ def test_declines_a_routed_sizing(tmp_path):
     assert result["applied"] is True
     text = sizing.read_text(encoding="utf-8")
     assert read_fm_field_unquoted(text, "status") == "declined"
+    assert yaml.safe_load(text)["declined_note"] == (
+        "decision record: docs/decisions/DR-999-test-decline.md"
+    )
+
+
+def test_note_is_recorded_ahead_of_the_backlink(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, "20260101-a.yaml", status="routed")
+    _seed_dr(repo)
+
+    result = _run(
+        {
+            "sizing_path": "state/sizings/20260101-a.yaml",
+            "decision_record": "docs/decisions/DR-999-test-decline.md",
+            "note": 'direction-class: cut at the APM scope ruling: "not now"',
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0
+    assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["declined_note"] == (
+        'direction-class: cut at the APM scope ruling: "not now" '
+        "(decision record: docs/decisions/DR-999-test-decline.md)"
+    )
 
 
 def test_absolute_sizing_path_accepted(tmp_path):

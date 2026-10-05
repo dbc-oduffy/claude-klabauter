@@ -68,6 +68,7 @@ from coordinator_core.ops.deliverable_cascade import (
     _ALREADY_ADVANCED_MARKER,
     _HANDOFF_KIND,
     _SIZING_KIND,
+    _plan_fk_matches,
     _advance_one_sizing,
     _compose_cascade_commit_message,
     _iso_now,
@@ -128,14 +129,16 @@ def _collect_handoffs(
 
 
 def _collect_sizings(
-    texts: Dict[str, str], deliverable_id: str
+    texts: Dict[str, str], deliverable_id: str, plan_fk: str = ""
 ) -> tuple[List[dict], List[dict]]:
-    """Live sizings whose `deliverable_id` exact-matches, plus the matches that failed to
-    parse (AC6a: surfaced as unreadable, never a silent zero)."""
+    """Live sizings whose `deliverable_id` exact-matches or, for a plan source, whose
+    `plan` field names `plan_fk` (a sizing routed before its plan minted a deliverable
+    id carries `deliverable_id: null`), plus the matches that failed to parse (AC6a:
+    surfaced as unreadable, never a silent zero)."""
     matches: List[dict] = []
     unreadable: List[dict] = []
     for path_str, text in texts.items():
-        if deliverable_id not in text:
+        if deliverable_id not in text and not (plan_fk and plan_fk in text):
             continue
         try:
             fm = _read_sizing_meta(path_str)
@@ -143,7 +146,8 @@ def _collect_sizings(
             unreadable.append({"path": path_str, "reason": str(exc)})
             continue
         did = fm.get("deliverable_id")
-        if not isinstance(did, str) or did.strip() != deliverable_id:
+        did_match = isinstance(did, str) and did.strip() == deliverable_id
+        if not did_match and not (plan_fk and _plan_fk_matches(fm.get("plan"), plan_fk)):
             continue
         if fm.get(_SIZING_KIND.lifecycle_field) in _SIZING_KIND.terminal_values:
             continue
@@ -318,8 +322,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         resolved_source = contained_path(absolute, [Path(record_homes.home_dir(str(worktree), "handoffs"))])
         if resolved_source is not None:
             handoffs = [c for c in handoffs if c["path"].resolve() != resolved_source]
-    sizings, sizing_unreadable = _collect_sizings(sizing_texts, deliverable_id)
-
     plan_fk = ""
     plan_fk_unresolved = False
     if source_kind == "plan":
@@ -329,6 +331,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             plan_fk = absolute.resolve().relative_to(worktree.resolve()).as_posix()
         except (OSError, ValueError):
             plan_fk_unresolved = True
+
+    sizings, sizing_unreadable = _collect_sizings(sizing_texts, deliverable_id, plan_fk)
 
     handoff_result = _kind_result(
         len(handoffs), handoff_incomplete, []

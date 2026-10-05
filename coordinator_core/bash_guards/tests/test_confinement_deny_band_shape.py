@@ -196,6 +196,14 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         setup=_noncanonical_branch_hazard_setup,
     ),
     CorpusRow(
+        "block-topic-branch",
+        "block-topic-branch-fire",
+        "git checkout -b topic/shape-probe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+    ),
+    CorpusRow(
         "block-stash-destruction",
         "block-stash-destruction-fire",
         "git stash drop",

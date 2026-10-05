@@ -142,7 +142,9 @@ def _last_assistant_text(transcript_path: str) -> str:
 _PERSISTED_REPORT_HEADING = "## Persisted final report (SubagentStop)\n\n"
 
 
-def _persist_final_report_sync(worktree_root: str, agent_id: str, text: str) -> None:
+def _persist_final_report_sync(
+    worktree_root: str, agent_id: str, text: str, session_id: str = ""
+) -> None:
     """Best-effort: append `text` to this agent's already-provisioned report
     sidecar, so a lost final-report message is still visible where the
     parent reads before it would otherwise default.
@@ -159,6 +161,12 @@ def _persist_final_report_sync(worktree_root: str, agent_id: str, text: str) -> 
     import failure reaching the pointer index. Idempotent per sidecar via
     `_PERSISTED_REPORT_HEADING`'s presence check, so a duplicate SubagentStop
     delivery for the same agent never double-appends.
+
+    The append is a write no PostToolUse hook sees. When ``session_id``
+    already holds a fingerprint for the sidecar (the agent wrote it through
+    Write/Edit), the fingerprint is re-recorded against the new bytes so the
+    commit-time foreign-hunk check does not read this append as a foreign
+    edit. A sidecar with no prior fingerprint stays unfingerprinted.
     """
     if not text or not agent_id:
         return
@@ -183,6 +191,30 @@ def _persist_final_report_sync(worktree_root: str, agent_id: str, text: str) -> 
         with open(sidecar_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write("\n" + _PERSISTED_REPORT_HEADING + text.strip() + "\n")
     except OSError:
+        return
+    if session_id:
+        _refresh_fingerprint(worktree_root, session_id, rel, sidecar_path)
+
+
+def _refresh_fingerprint(
+    worktree_root: str, session_id: str, rel: str, sidecar_path: Path
+) -> None:
+    try:
+        from coordinator_core.session import touch_record
+
+        rel_posix = rel.replace("\\", "/")
+        if touch_record.last_seen_hash(session_id, rel_posix, worktree_root) is None:
+            return
+        new_hash = touch_record.compute_content_hash(sidecar_path)
+        if new_hash is None:
+            return
+        touch_record.append_touch_claims(
+            [rel_posix],
+            session_id,
+            worktree_root,
+            content_hashes={rel_posix: new_hash},
+        )
+    except Exception:  # noqa: BLE001 -- Stop path must never brick
         return
 
 
@@ -318,7 +350,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
         _final_text = await asyncio.to_thread(_last_assistant_text, transcript_path)
         if _final_text:
             await asyncio.to_thread(
-                _persist_final_report_sync, _worktree_root, agent_id, _final_text
+                _persist_final_report_sync,
+                _worktree_root,
+                agent_id,
+                _final_text,
+                session_id,
             )
 
     recorded_at = (

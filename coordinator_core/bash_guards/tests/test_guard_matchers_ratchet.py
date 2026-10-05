@@ -181,6 +181,7 @@ EXPECTED: Dict[str, _Expected] = {
     # PM directive 2026-09-29 -- per-repo/shared venv creation is watched
     # on both dialects, not Bash-only.
     "block-venv-creation": _Expected(("Bash", "PowerShell")),
+    "block-topic-branch": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-ban": _Expected(
         ("Bash",),
         BASH_ONLY_BY_CONSTRUCTION,
@@ -458,7 +459,7 @@ def test_discovery_found_the_expected_scope():
     declaring, PM directive 2026-09-29), and 29 -> 30 with
     `guard_headless_claude_plugin_dir`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 31, sorted(stems)
+    assert len(stems) == 32, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -481,7 +482,7 @@ def test_every_registered_guard_is_classified():
     54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
     with `background-publish`."""
     actual = _actual_matchers()
-    assert len(actual) == 58, sorted(actual)
+    assert len(actual) == 59, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -522,7 +523,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 58
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 59
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
