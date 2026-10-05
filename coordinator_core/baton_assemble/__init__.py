@@ -5849,7 +5849,6 @@ _USAGE_LINES = (
     "       {prog} apply <kind> [artifact-path] [--session-id <id>] [--decisions <json> | --decisions-file <path>] [--title <text>]",
     "       (artifact-path is optional for kind=handoff on BOTH verbs -- self-resolves",
     "        the predecessor from the current session's own claim ledger)",
-    "       --title is REQUIRED on `apply handoff`: it names the file and its title.",
     "       --decisions is a JSON object: {{\"<jp-id>\": {{\"disposition\": \"<value>\", ...}}}}",
     "       (\"value\" is accepted as an exact equivalent of \"disposition\" -- brief's own",
     "        output uses that key). Legal <value>s for a given jp-id are that judgment",

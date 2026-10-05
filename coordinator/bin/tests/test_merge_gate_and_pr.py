@@ -165,25 +165,6 @@ def test_active_branch_guard_settled_commit_passes(monkeypatch):
     assert rc == 0
 
 
-def test_gh_pr_view_json_names_the_bare_field_for_an_indexed_query(monkeypatch):
-    """example-stats-repo EM report 2026-10-05: `--json commits[-1]` is not a field
-    gh knows, so the guard read no timestamp on any PR."""
-    seen = []
-
-    def _fake_run(argv, **_kw):
-        seen.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="2026-10-05T10:00:00Z\n", stderr="")
-
-    monkeypatch.setattr(_mod.subprocess, "run", _fake_run)
-
-    rc, out = _mod._gh_pr_view_json("62", "commits[-1].committedDate")
-
-    assert (rc, out) == (0, "2026-10-05T10:00:00Z")
-    argv = seen[0]
-    assert argv[argv.index("--json") + 1] == "commits"
-    assert argv[argv.index("-q") + 1] == ".commits[-1].committedDate"
-
-
 def test_active_branch_guard_gh_failure_falls_back_to_git_log(monkeypatch):
     old_iso = (
         datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=900)

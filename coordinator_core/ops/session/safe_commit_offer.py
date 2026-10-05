@@ -166,7 +166,7 @@ figures via `benchmarks/process_time.batched_process_time_ms` k=8, real
 figures read off this repo's `op-latency.jsonl` `kind: "process_time"` rows).
 Stated here because an unstated cost is the one nobody defends when it grows.
 
-  - SPAWN BUDGET: **1 baseline, 3 worst case**, and CONSTANT in the number
+  - SPAWN BUDGET: **1 baseline, 2 worst case**, and CONSTANT in the number
     of paths and the number of commit groups either way. Verified by
     tallying `subprocess.Popen` across a full `commit_session_offer` at
     4 paths/4 groups, 12/3 and 40/8. The live census agrees and is the
@@ -199,12 +199,6 @@ Stated here because an unstated cost is the one nobody defends when it grows.
     and a budget measured on one reports 1 and means it. The first pass of
     this budget did exactly that and had to be corrected against the census.
     Any re-measurement here must include a pinned path.
-  - SPAWN 3, CONDITIONAL, COMMIT PATH ONLY -- `_gitignored_untracked`'s
-    `git check-ignore -z --stdin`. It fires when the offer carries a path on
-    disk that HEAD does not hold, i.e. a new file. Irreducible in-process
-    (nested `.gitignore`, `info/exclude`, `core.excludesFile`, negation) and
-    batched over every such path at once. `dry_run` answers the same
-    question from the `git status` it already paid for and spawns nothing.
   - TIME BUDGET: **the read-only path holds 500ms; the full commit path
     reaches 656ms.** The real `per_op_handler` rows in this repo's
     `op-latency.jsonl` separate on WHICH PATH RAN, not on spawn count:
@@ -317,7 +311,6 @@ from coordinator_core.git.commit import (
 )
 from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.git.commit_trailers import apply_missing_trailers
-from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.push import PUSH_STATUS_NOT_ATTEMPTED
 from coordinator_core.session import core
@@ -1536,7 +1529,7 @@ def _reconcile_offer(
     session_id: str,
     offer: SafeCommitOffer,
     worktree_root: Optional[str],
-) -> "Tuple[Reconciliation, List[str], List[str]]":
+) -> "Tuple[Reconciliation, List[str]]":
     """`Reconciliation` for an offer that has NOT committed anything -- the
     `dry_run` seam.
 
@@ -1580,9 +1573,6 @@ def _reconcile_offer(
     junk-path split above reuses that same one `git status` read; it adds no
     spawn of its own.
 
-    The third return value is `_gitignored_untracked` over `safe_paths`, fed
-    that same dirty read so it normally spawns nothing either.
-
     Deliberately a SEPARATE function taking the offer as an argument, rather
     than a dirty read added inside `compute_offer`: that read is exactly what
     `compute_offer`'s `orphans` negative spec forbids, on the grounds that
@@ -1596,7 +1586,7 @@ def _reconcile_offer(
         "unclaimed": [],
     }
     if not worktree_root:
-        return unchecked, [], []
+        return unchecked, []
     owned_paths = {
         e["path"]
         for e in offer.get("excluded") or []
@@ -1616,10 +1606,7 @@ def _reconcile_offer(
     junk_claimed_absent = sorted(
         p for p in reconciliation["claimed_absent"] if p not in dirty_set
     )
-    gitignored = _gitignored_untracked(
-        worktree_root, offer.get("safe_paths") or [], dirty
-    )
-    return reconciliation, junk_claimed_absent, gitignored
+    return reconciliation, junk_claimed_absent
 
 
 def _drop_junk_from_offer(
@@ -1644,59 +1631,6 @@ def _drop_junk_from_offer(
     narrowed: SafeCommitOffer = dict(offer)  # type: ignore[assignment]
     narrowed["safe_paths"] = safe_paths
     narrowed["ownership"] = ownership  # type: ignore[assignment]
-    return narrowed
-
-
-_GITIGNORED_REASON = "gitignored and untracked"
-
-
-def _gitignored_untracked(
-    worktree_root: str, paths: Sequence[str], dirty: Sequence[str] = ()
-) -> List[str]:
-    """The subset of `paths` on disk that git ignores -- what `git add` would
-    refuse. `commit_paths` stages in-process and reads no ignore rule, so
-    without this a claimed box-local file (a ledger, a `.env`) is committed.
-
-    Zero spawns when every present path is already at HEAD, or when the
-    caller holds a non-empty `dirty` read (`_current_dirty_paths`): a path on
-    disk, absent from HEAD and missing from `git status` is ignored. An
-    empty `dirty` is not trusted for that -- it is also what a degraded read
-    returns. Otherwise ONE batched `check-ignore -z --stdin`, which consults
-    the index, so a force-added path is never reported. Fails open (empty
-    list) when git cannot answer.
-    """
-    present = [p for p in paths if (Path(worktree_root) / p).exists()]
-    partition = partition_declared_deletions(worktree_root, present)
-    candidates = present if partition is None else partition[1]
-    if not candidates:
-        return []
-    if dirty:
-        dirty_set = set(dirty)
-        return [p for p in candidates if p not in dirty_set]
-    result = run_git(
-        ["-C", worktree_root, "--no-optional-locks", "check-ignore", "-z", "--stdin"],
-        input=b"\0".join(p.encode("utf-8") for p in candidates),
-        binary=True,
-    )
-    if result.timed_out or result.returncode not in (0, 1):
-        return []
-    ignored = {
-        seg.decode("utf-8", "surrogateescape")
-        for seg in result.stdout_bytes.split(b"\0")
-        if seg
-    }
-    return [p for p in candidates if p in ignored]
-
-
-def _withhold_gitignored(offer: SafeCommitOffer, ignored: List[str]) -> SafeCommitOffer:
-    """`offer` with `ignored` (`_gitignored_untracked`) moved from
-    `safe_paths` to `excluded`. Returns `offer` itself when there is none."""
-    if not ignored:
-        return offer
-    narrowed = _drop_junk_from_offer(offer, ignored)
-    narrowed["excluded"] = list(offer["excluded"]) + [
-        {"path": p, "reason": _GITIGNORED_REASON} for p in ignored
-    ]
     return narrowed
 
 
@@ -1947,13 +1881,6 @@ async def commit_session_offer_async(
             },
         }
 
-    resolved_root = core.git_root(cwd)
-    if resolved_root:
-        offer = _withhold_gitignored(
-            offer, _gitignored_untracked(resolved_root, offer["safe_paths"])
-        )
-        safe_set = set(offer["safe_paths"])
-
     peer_paths = {p["path"] for p in offer["ownership"]["peer"]}
     conflicted_paths = sorted(safe_set & peer_paths)
     conflict_set = set(conflicted_paths)
@@ -1991,6 +1918,7 @@ async def commit_session_offer_async(
         resolved_groups = filtered_groups
 
     # FAIL CLOSED ON AN UNRESOLVED ROOT (committer-P0, 2026-08-31).
+    resolved_root = core.git_root(cwd)
     if not resolved_root:
         detail = (
             "git root did not resolve from %s: refusing to auto-commit. Every "
@@ -2668,12 +2596,11 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     if params.get("dry_run"):
         offer = compute_offer(session_id, cwd)
-        reconciliation, junk_claimed_absent, gitignored = _reconcile_offer(
+        reconciliation, junk_claimed_absent = _reconcile_offer(
             session_id, offer, core.git_root(cwd) or cwd or "."
         )
         if junk_claimed_absent:
             offer = _drop_junk_from_offer(offer, junk_claimed_absent)
-        offer = _withhold_gitignored(offer, gitignored)
         offer["mtime_orphans"] = _mtime_orphans(
             session_id,
             reconciliation["unclaimed"],

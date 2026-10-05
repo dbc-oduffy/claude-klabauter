@@ -854,10 +854,10 @@ def _terminal_commit(
                 request = parse_marker(request_abs.read_text(encoding="utf-8"))
             except OSError as exc:
                 return _error(f"cannot read manifest marker_path {manifest.marker_path!r}: {exc}")
-        else:
-            request = parse_marker(script_text)
     except MalformedCommitRequestError as exc:
         return _error(f"malformed commit request: {exc}", refused="malformed-request")
+    if manifest_rel is None:
+        request = parse_marker(script_text)
     if request is None:
         request = _anchor_request(worktree_root, params, inline_review)
     if request is None:

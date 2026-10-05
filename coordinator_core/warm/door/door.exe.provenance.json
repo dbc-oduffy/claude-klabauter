@@ -1,6 +1,6 @@
 {
   "builder": "e52d7bca-31d9-4e44-8d09-89846d112b6e",
-  "built_at": "2026-10-05T13:22:16+00:00",
+  "built_at": "2026-10-05T17:25:18+00:00",
   "command": [
     "python.exe",
     "-m",
@@ -10,7 +10,7 @@
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
   "door_c_sha256": "f9ae4fcfe3b4bf16ef7c7d59a84e061a4fdb5e6c94c37316bea024ada8c7e680",
-  "engine_root": "C:\\claude-klabauter",
+  "engine_root": "X:\\claude-klabauter",
   "image_sha256": "e39c1add6ac0188e06fa54ba33a62cd354407d79b9af5815189f8edef4d0ad42",
   "sources": {
     "door.c": "f9ae4fcfe3b4bf16ef7c7d59a84e061a4fdb5e6c94c37316bea024ada8c7e680",

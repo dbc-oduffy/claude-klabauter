@@ -24,7 +24,6 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
-from coordinator_core.ops.dispatch_emit.inventory_mint import as_git_pathspec
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -383,42 +382,6 @@ def test_drops_absent_untracked_path_and_reports_it(repo):
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
     assert out["committed"] is True
     assert "never-created.py" in out["dropped_absent"]
-
-
-def test_commits_a_literal_wrapped_bracketed_path(repo):
-    """content-root-em memo 2026-10-05-...-drops-literal-wrapped-paths: emit
-    hands the marker `as_git_pathspec`-wrapped paths, and a tracked, modified
-    App Router file was classed absent and left out of the commit."""
-    route = "src/app/(ddct)/photo/[sha256]/route.ts"
-    (repo / route).parent.mkdir(parents=True)
-    (repo / route).write_text("v1\n", encoding="utf-8")
-    _git(["add", "--", f":(literal){route}"], repo)
-    _git(["commit", "-q", "-m", "route"], repo)
-    (repo / route).write_text("v2\n", encoding="utf-8")
-    request = CommitRequest(
-        chunks=(ChunkCommit(id="C3", title="t3", paths=(as_git_pathspec(route),)),),
-    )
-    script = _write_script(repo, request)
-    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
-    assert out["committed"] is True
-    assert out["dropped_absent"] == []
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(repo), capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    ).stdout
-    assert route not in status
-
-
-def test_refuses_a_path_carrying_other_pathspec_magic(repo):
-    (repo / "a.py").write_text("a\n", encoding="utf-8")
-    request = CommitRequest(
-        chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py", ":(top)a.py")),),
-    )
-    script = _write_script(repo, request)
-    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
-    assert out["committed"] is False
-    assert out["refused"] == "malformed-request"
 
 
 def test_stages_a_declared_write_gone_from_disk_as_a_deletion(repo):

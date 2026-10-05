@@ -325,9 +325,11 @@ def compose_execute_review(
             # A clean prep over a run whose rows changed nothing froze an empty
             # diff: there is nothing to review or commit, which is an outcome,
             # not a failed prep.
-            # A count of 0 that disagrees with the slices (one lists files) is not
-            # trusted: the run falls through to the slices guard instead of halting.
+            # A count of 0 that disagrees with the slices (one lists files), or with
+            # a row this run landed, is not trusted: the run falls through to the
+            # slices guard instead of halting, so landed rows never skip review.
             f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+            f"(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
             f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
             f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) {{ "
             f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "

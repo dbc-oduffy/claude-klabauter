@@ -964,3 +964,25 @@ def test_one_request_freeze_commit_leg_stays_under_the_500ms_brightline(tmp_path
 
     assert result["committed"] is True
     assert elapsed_ms < 500.0, f"freeze_diff process time {elapsed_ms:.1f}ms exceeds the 500ms brightline"
+
+
+def test_cli_splits_a_shell_joined_paths_argument(tmp_path: Path) -> None:
+    """PowerShell `$paths -join " "` hands the CLI one argument; it once
+    froze an empty diff and let an execute run skip review."""
+    import sys
+
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "a.txt", "one\n", "add a")
+    _commit(tmp_path, "b.txt", "one\n", "add b")
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    cli = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "freeze-review-diff.py"
+
+    cp = subprocess.run(
+        [sys.executable, str(cli), "--worktree", "--range", base, "--slice-id", "joined",
+         "--repo-root", str(tmp_path), "--paths", "a.txt b.txt"],
+        capture_output=True, text=True, timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    assert cp.returncode == 0, cp.stderr
+    assert "product_files: 2" in cp.stderr

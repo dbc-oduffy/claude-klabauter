@@ -99,6 +99,7 @@ from coordinator_core.session import claim_index as session_claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session import touch_record
 from coordinator_core.write_guards.guard_class_relay import (
     detect_class_transition,
     stage_class_transition_memo,
@@ -335,8 +336,9 @@ def _peer_claim_warnings(
         if session_claim_index.UNANSWERABLE in claimants:
             warnings.append(f"claim state indeterminate for {path!r}")
             continue
+        kinds = (lookup_result.recorded_kind or {}).get(path, {})
         for sid in claimants:
-            if sid == own_sid:
+            if sid == own_sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
                 continue
             try:
                 live = session_liveness.session_live(sid, str(worktree_root))

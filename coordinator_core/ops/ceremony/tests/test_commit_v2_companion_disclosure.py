@@ -141,6 +141,18 @@ def test_read_kind_companion_not_named(repo):
     assert _companion_warnings(result) == []
 
 
+def test_read_kind_hold_on_the_committed_path_is_not_a_peer_hold(repo):
+    (repo / "test_a.py").write_text("t\n", encoding="utf-8")
+    session_core.init(PEER, cwd=str(repo))
+    session_scope.touch(PEER, "a.py", cwd=str(repo), kind=touch_record.KIND_READ)
+    session_scope.touch(PEER, "test_a.py", cwd=str(repo))
+
+    result = _call(repo, {"paths": ["a.py"], "message": "m"})
+
+    assert result["committed"] is True
+    assert result["warnings"] == []
+
+
 def test_index_failure_degrades_to_indeterminate(repo, monkeypatch):
     (repo / "test_a.py").write_text("t\n", encoding="utf-8")
     session_core.init(PEER, cwd=str(repo))

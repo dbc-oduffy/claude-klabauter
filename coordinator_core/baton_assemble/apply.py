@@ -3112,19 +3112,6 @@ def main_apply(argv: list[str]) -> int:
             print(f"baton-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return APPLY_EXIT_TRANSPORT_FAIL
 
-    # CLI door only: `apply()`'s in-process callers mint a successor before
-    # any operator exists to title it. Here one does, and an untitled mint is
-    # committed under an `untitled-<id>` filename no later edit renames.
-    if kind == "handoff" and (
-        not (title or "").strip() or title.strip().startswith("PLACEHOLDER")
-    ):
-        print(
-            "baton-assemble apply: a handoff needs a title. "
-            'Re-run with --title "<one line naming the work>".',
-            file=sys.stderr,
-        )
-        return APPLY_EXIT_TRANSPORT_FAIL
-
     exit_code, report = apply(
         kind,
         artifact_path,

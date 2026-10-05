@@ -623,6 +623,15 @@ def test_completion_return_is_last_so_no_phase_follows_it():
     assert "await agent(" not in script[completion:]
 
 
+def test_a_landed_row_vetoes_the_no_op_halt():
+    """A checkpointed run once halted no-op on prep's count of 0 and shipped
+    its rows unreviewed: the halt must also require that no row landed."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
+    guard = script[: script.index("return { halted: 'no-op'")].rsplit("if (", 1)[1]
+    assert "!Object.keys(_landed).length" in guard
+    assert "const _landed = {};" in script
+
+
 def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     """Defect: a workflow reported `completed: true` while a chunk's own
     agent report carried `Status: PARTIAL`. Runtime behaviour is not

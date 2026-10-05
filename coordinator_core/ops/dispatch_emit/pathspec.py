@@ -279,10 +279,7 @@ import logging
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from coordinator_core.ops.dispatch_emit.inventory_mint import (
-    as_git_pathspec,
-    strip_literal_pathspec,
-)
+from coordinator_core.ops.dispatch_emit.inventory_mint import as_git_pathspec
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.doc_registry import resolve_test_locator_config
@@ -607,12 +604,22 @@ def candidate_test_additions(pathspec: list[str]) -> list[str]:
     """
     candidates: list[str] = []
     for path in pathspec:
-        candidate = PurePosixPath(strip_literal_pathspec(path))
+        candidate = PurePosixPath(_strip_literal_pathspec_prefix(path))
         if candidate.suffix != ".py" or _is_test_file(candidate):
             continue
         nearest = _candidate_test_targets(candidate)[0]
         candidates.append(as_git_pathspec(nearest.as_posix()))
     return _dedupe(candidates)
+
+
+def _strip_literal_pathspec_prefix(path: str) -> str:
+    """Undo ``as_git_pathspec``'s ``:(literal)`` wrap, for a caller that
+    needs to re-derive a candidate FROM a path that may already carry it
+    (``candidate_test_additions`` is applied to ``commit_pathspec``'s own,
+    now-literalized, return by ``emit._widen_with_test_candidates``).
+    A path with no such prefix is returned unchanged."""
+    prefix = ":(literal)"
+    return path[len(prefix):] if path.startswith(prefix) else path
 
 
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
