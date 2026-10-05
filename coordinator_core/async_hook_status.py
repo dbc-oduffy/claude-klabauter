@@ -44,7 +44,7 @@ from typing import List, Optional
 
 from coordinator_core._settings_home import claude_config_dir
 
-# Generator-provenance declaration (generator_provenance.py). record_failure
+# Generator-provenance declaration (coordinator_core/ops/generator_census). record_failure
 # writes a JSON marker under claude_config_dir()/.cache/async-hook-status/ --
 # a settings-home cache directory, never a tracked claude-klabauter repo artifact.
 GENERATES = []

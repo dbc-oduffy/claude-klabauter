@@ -11,6 +11,8 @@ from coordinator_core.ops import baton_carry_forward as CF
 from coordinator_core.session_baton import store
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _make_repo(tmp_path):
     for cmd in (["git", "init", "-q"],

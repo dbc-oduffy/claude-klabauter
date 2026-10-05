@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 GENERATED = [

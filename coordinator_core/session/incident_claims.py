@@ -38,6 +38,9 @@ from typing import List, Optional
 
 from coordinator_core.session import core, liveness, reachability
 
+# Writes per-holder claim field files under the session state dir, not tracked.
+GENERATES = []
+
 INCIDENT_CLAIMS_DIRNAME = "incident-claims"
 NOTE_MAX_CHARS = 200
 

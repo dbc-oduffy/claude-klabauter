@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _CLI_PATH = Path(__file__).resolve().parent.parent / "coordinator-doc-new.py"
 

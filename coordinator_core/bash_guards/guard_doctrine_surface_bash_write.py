@@ -171,9 +171,9 @@ leg. Filed with its own measurement and a perf constraint at
 identifier-prefilter.yaml``; pinned by a test that asserts the current
 wrong behaviour so the fix cannot land silently.
 
-OPT-IN. The doctrine-edit approval gate is off on every profile: ``check``
-allows first, before any parsing, unless ``machine-local set
-coordinator.feature.doctrine_edit_gate on`` has been run.
+DEFAULT-ON. The doctrine-edit approval gate is on every profile: ``check``
+allows first, before any parsing, only after ``machine-local set
+coordinator.feature.doctrine_edit_gate off`` has been run.
 
 Contract: ``check(payload, governed_surfaces) -> Optional[Dict[str, Any]]``
 (this package's own convention, replacing DoE's stdin/exit-code ``main()``).

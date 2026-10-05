@@ -21,6 +21,8 @@ test kept as the pin"), no production change was made; this test pins the
 already-correct behavior so a future regression is caught.
 """
 
+import pytest
+
 from coordinator_core.bash_guards.dispatch_checks import (
     check_git_commit_safe_commit_advise,
 )
@@ -33,6 +35,8 @@ def _is_deny(result):
     return decision == "deny"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_commit_dash_f_dash_piped_is_scoped_to_its_add():
     cmd = 'git add a.py && echo msg | git commit -F -'
     result = check_git_commit_safe_commit_advise(cmd)
@@ -40,12 +44,16 @@ def test_compound_add_then_commit_dash_f_dash_piped_is_scoped_to_its_add():
     assert result["hookSpecificOutput"]["updatedInput"]["command"] == cmd + " -- a.py"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_commit_dash_f_dash_heredoc_fed_denies():
     cmd = "git add a.py && git commit -F - <<'EOF'\nfoo\nEOF"
     result = check_git_commit_safe_commit_advise(cmd)
     assert _is_deny(result), result
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_commit_dash_m_command_substitution_heredoc_denies():
     cmd = (
         'git add a.py && git commit -m "$(cat <<\'EOF\'\n'

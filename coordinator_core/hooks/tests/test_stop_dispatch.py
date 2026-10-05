@@ -37,6 +37,8 @@ from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 from coordinator_core.session import machinery_paths
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _MODULE = "coordinator_core.hooks.stop_dispatch"
 
 _OP_NAMES = (

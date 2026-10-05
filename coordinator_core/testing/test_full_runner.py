@@ -193,3 +193,30 @@ def test_contended_run_proceeds_unserialized_rather_than_failing(fixture_tree, m
     monkeypatch.setattr(full_runner.suite_mutex, "MUTEX_WAIT_SECS", 0.0)
     monkeypatch.setattr(full_runner.suite_mutex, "acquire", lambda *a, **k: False)
     assert full_runner.main(["--repo", str(tree.repo_root), "--jobs", "1"]) == 0
+
+
+def test_timeout_ends_a_gil_holding_test(tmp_path: Path) -> None:
+    import time  # noqa: PLC0415
+
+    (tmp_path / "test_stuck.py").write_text(
+        "import re\n"
+        "def test_stuck():\n"
+        "    re.match(r'(a+)+$', 'a' * 60 + 'b')\n"
+    )
+    start = time.monotonic()
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "test_stuck.py",
+            "-p", "coordinator_core.testing.gil_watchdog",
+            "-p", "no:cacheprovider", "-p", "no:randomly", "--timeout=2",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+        **no_console_creationflags(),
+        cwd=tmp_path,
+        env={**__import__("os").environ, "PYTHONPATH": str(_REPO_ROOT)},
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert time.monotonic() - start < 20, proc.stdout

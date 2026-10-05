@@ -17,6 +17,8 @@ import pytest
 
 from coordinator_core.merge_assemble import ops as ma_ops
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

@@ -597,7 +597,7 @@ def _run_pytest_child(target: str, mode: str) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         plugin_path = tmp_path / f"{_CHILD_PLUGIN_MODULE_NAME}.py"
-        plugin_path.write_text(_CHILD_PLUGIN_SOURCE, encoding="utf-8")
+        plugin_path.write_text(_CHILD_PLUGIN_SOURCE, encoding="utf-8", newline="\n")
         output_path = tmp_path / "output.json"
 
         env = dict(os.environ)

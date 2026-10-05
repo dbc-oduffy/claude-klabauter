@@ -43,6 +43,8 @@ import coordinator_core.workstream_complete as wsc
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, SINGLE_SESSION
 from coordinator_core.workstream_complete import directives_commit_tail
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _gate(
     disposition: str,

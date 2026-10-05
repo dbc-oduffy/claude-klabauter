@@ -258,6 +258,7 @@ def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_t
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path):
     import subprocess as _subprocess
 

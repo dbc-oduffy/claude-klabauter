@@ -6,6 +6,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.install import setup_check
 from coordinator_core.install.setup_check import CheckItem
 from coordinator_core.win_portability import no_console_creationflags
@@ -63,6 +65,8 @@ def test_door_fails_when_not_installed(tmp_path):
     assert not setup_check.check_door(tmp_path).ok
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_setup_check_cli_fails_on_a_bare_settings_home(tmp_path):
     env = {
         "PATH": __import__("os").environ["PATH"],

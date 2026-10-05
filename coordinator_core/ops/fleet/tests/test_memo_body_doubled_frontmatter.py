@@ -113,6 +113,8 @@ class TestRegressionBodiesDoNotOpenFrontmatter:
             pytest.param("", id="empty_body"),
         ],
     )
+    @pytest.mark.cadence
+    @pytest.mark.spawns_process
     def test_composes_cleanly_through_memo_compose(self, tmp_path, monkeypatch, body):
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
@@ -136,12 +138,9 @@ class TestRegressionBodiesDoNotOpenFrontmatter:
 # (f) Op-level refusal — memo.compose and memo.send
 # ---------------------------------------------------------------------------
 
-pytestmark_op_level = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 class TestMemoComposeRefusesDoubledFrontmatterBody:
-    pytestmark = pytestmark_op_level
-
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
     def test_compose_refuses_and_draft_unchanged(self, tmp_path, monkeypatch, name):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -163,9 +162,9 @@ class TestMemoComposeRefusesDoubledFrontmatterBody:
         assert draft_path.read_text(encoding="utf-8") == before
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 class TestMemoSendRefusesDoubledFrontmatterBody:
-    pytestmark = pytestmark_op_level
-
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
     def test_send_refuses_and_no_receiver_file(self, tmp_path, monkeypatch, name):
         sender_repo = _make_sender_git_repo(tmp_path)

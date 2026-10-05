@@ -363,7 +363,7 @@ def test_assert_em_role_repo_slot_is_silent_when_absent(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch):
+def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
     monkeypatch.setattr(
         sessionstart_dispatch,
@@ -375,7 +375,7 @@ def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch):
         "_guard_hook_generation_self_probe_handler",
         lambda params: _identity_no_advisory(),
     )
-    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1"}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1", "cwd": str(tmp_path)}}))
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "cron" in context
 
@@ -401,7 +401,7 @@ def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch)
 # a mismatched sync/async wrapping on any of them would silently no-op
 # through _handler's broad except-continue. Cover all six legs landing in
 # the concatenated output, including these three.
-def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch):
+def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch, tmp_path):
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
 
     def _sync_text(text):
@@ -435,7 +435,7 @@ def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch):
         "_guard_hooks_kill_switch_detail_handler",
         lambda payload: {"text": "leg-kill-switch"},
     )
-    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1"}}))
+    result = _run(sessionstart_dispatch._handler({"payload": {"source": "startup", "session_id": "s1", "cwd": str(tmp_path)}}))
     context = result["hookSpecificOutput"]["additionalContext"]
     assert "cron" in context
     assert "leg-project-orientation" in context

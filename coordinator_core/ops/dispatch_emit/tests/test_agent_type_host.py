@@ -152,9 +152,11 @@ def test_compose_script_degrades_every_emitted_agent_type_on_host():
         waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
     )
 
-    agent_types = set(_AGENT_TYPE_LITERAL_RE.findall(execute_section(script)))
+    agent_types = set(_AGENT_TYPE_LITERAL_RE.findall(script))
     assert agent_types == {"general-purpose"}
+    assert "coordinator:" not in "".join(_AGENT_TYPE_LITERAL_RE.findall(script))
     assert _EXECUTOR_AGENT_TYPE not in script
+    assert "Review wave" in script and "acting as the" in script
 
 
 def test_compose_script_degraded_narrates_the_loss():

@@ -17,6 +17,8 @@ from coordinator_core.hooks import (
 from coordinator_core.hooks._envelope import deny
 from coordinator_core.hooks.stop_dispatch import _handler
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.fixture()
 def reg(tmp_path, monkeypatch):

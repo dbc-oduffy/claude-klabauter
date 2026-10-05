@@ -13,6 +13,8 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import tier_u_gate
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _FAST = "pytest coordinator_core/sub/test_x.py"
 
 

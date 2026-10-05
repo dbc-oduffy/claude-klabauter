@@ -994,32 +994,35 @@ class TestGuardLevel:
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
         machine_profile.reset_cache()
 
-    def test_consumer_default_warns_instead_of_denying(self, monkeypatch):
+    def test_consumer_default_still_denies_floor_guard(self, monkeypatch):
+        """FLOOR_GUARDS member (PM ruling 2026-10-05): deny at every level."""
         self._consumer(monkeypatch)
-        out = guard.check(_payload("touch %s" % SENTINEL))
-        hso = out["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "allow"
-        assert "PM-approval sentinel" in hso["additionalContext"]
-        assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
-        assert SENTINEL not in hso["additionalContext"]
+        hso = guard.check(_payload("touch %s" % SENTINEL))["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "deny"
+        assert "guard_level" not in hso["permissionDecisionReason"]
+        assert SENTINEL not in hso["permissionDecisionReason"]
 
-    def test_warn_text_is_constant_per_reason_class_for_once_per_session_dedupe(self, monkeypatch):
+    def test_deny_text_is_constant_per_reason_class(self, monkeypatch):
         self._consumer(monkeypatch)
         a = guard.check(_payload("touch %s" % SENTINEL))
         b = guard.check(_payload("cp x %s" % SENTINEL))
         assert a == b
 
-    def test_indirection_warn_names_the_unreadable_payload(self, monkeypatch):
+    def test_indirection_deny_names_the_unreadable_payload_at_warn(self, monkeypatch):
+        """Floor ruling: the indirection deny survives guard_level warn."""
         self._consumer(monkeypatch)
-        out = guard.check(_payload("bash bin/install-git-hooks.sh"))
-        assert "could not read" in out["hookSpecificOutput"]["additionalContext"]
+        out = guard.check(_payload("bash bin/install-git-hooks.sh"))["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "unreadable payload" in out["permissionDecisionReason"]
 
-    def test_per_guard_off_is_silent(self, monkeypatch):
+    def test_per_guard_off_does_not_silence_floor_guard(self, monkeypatch):
+        """Floor ruling: a per-guard `off` cannot demote this guard."""
         self._consumer(monkeypatch)
         monkeypatch.setenv(
             "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_BLOCK-APPROVAL-SENTINEL-CREATION", "off"
         )
-        assert guard.check(_payload("touch %s" % SENTINEL)) is None
+        out = guard.check(_payload("touch %s" % SENTINEL))
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_strict_override_on_a_consumer_box_still_denies(self, monkeypatch):
         self._consumer(monkeypatch)

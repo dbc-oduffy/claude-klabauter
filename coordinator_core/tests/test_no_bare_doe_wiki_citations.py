@@ -14,6 +14,10 @@ from pathlib import Path
 
 from coordinator_core.win_portability import no_console_creationflags
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _THIS = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
 _WIKI = "docs" + "/wiki/"

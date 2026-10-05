@@ -1377,17 +1377,16 @@ one useful thing to say."""
 
 
 _GOAL_REFUSAL_NEXT_MOVE = (
-    "Run the close-out skill, which re-runs the observation and records a fresh "
-    "exit_criterion_met verdict -- this engine only ever reads what a prior run "
-    "already recorded and never re-runs a plan's falsifier itself."
+    "Record the verdict: plan-status-transition stamp-implemented --plan <p> "
+    "--falsifier-verdict pass --falsifier-output <raw> --prose <line>. "
+    "This engine reads exit_criterion_met and never re-runs the falsifier."
 )
 """Shared tail for the goal-gate's refusal message, in `_FIDELITY_NEXT_MOVE`'s
 own register (AC18): lead with the ONE useful next move, not a generic
 refusal. A separate constant, not a reuse of `_FIDELITY_NEXT_MOVE` itself --
 that constant answers a different problem (a stamp-fidelity write-diff
 defect); this one answers "the observation this refusal is about was never
-re-run", which the close-out skill (not this engine) is the thing that
-re-runs."""
+recorded", which `plan-status-transition stamp-implemented` records."""
 
 
 def _goal_refusal_next_move(reason: Optional[str]) -> str:

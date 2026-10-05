@@ -28,7 +28,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.tests.test_plan_status_transition import _write
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def test_empty_cascade_for_every_kind_exits_0_with_note(tmp_path, monkeypatch, capsys) -> None:
@@ -105,3 +109,9 @@ def test_matched_but_all_refused_still_exits_2(tmp_path, monkeypatch, capsys) ->
     assert rc == 2
     assert "cascade resolved no downstream artifact for" in err
     assert "legitimately has none" not in err
+    # Only the refused kind gets a retry line; the empty sizing kind does not.
+    retries = [line for line in err.splitlines() if "retry once the refusal clears" in line]
+    assert len(retries) == 1
+    assert "deliverable.cascade_terminal" in retries[0]
+    assert '"target_kind": "handoff"' in retries[0]
+    assert '"deliverable_id": "dlv-refused-cascade-000"' in retries[0]

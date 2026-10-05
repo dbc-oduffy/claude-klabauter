@@ -181,7 +181,7 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 5
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: Generator-provenance declaration (coordinator_core/ops/generator_census).
 #: This module's only write is _capture_write_guard_forensics()'s dump to
 #: state/scratch/write-guard-forensics/*.json -- state/scratch/ is gitignored
 #: at any depth (.gitignore's scratch/ entry), never a tracked repo artifact.

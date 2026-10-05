@@ -104,7 +104,7 @@ from coordinator_core.text.normalize_snippet import normalize_snippet
 
 logger = logging.getLogger(__name__)
 
-# Generator-provenance declaration (generator_provenance.py). run()/--fix rewrites
+# Generator-provenance declaration (coordinator_core/ops/generator_census). run()/--fix rewrites
 # whichever tracked markdown/text files resolve as a snippet's registered or
 # scan-discovered consumers (registry.toml-driven, data-dependent per snippet/run)
 # -- a corpus mutator over the tracked doc/prompt corpus, not a fixed artifact set.

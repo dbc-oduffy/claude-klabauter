@@ -751,15 +751,21 @@ class _SiteCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def sites_in_source(text: str, path: str) -> list[SpawnSite]:
+def sites_in_source(
+    text: str, path: str, tree: ast.Module | None = None
+) -> list[SpawnSite]:
     """Core API. Pure — text in, sites out. No disk access.
+
+    `tree`, when given, must be `ast.parse(text)`; it is read-only here and is reused so a
+    caller that already parsed `text` does not pay for a second parse.
 
     Raises SpawnParseError if `text` will not parse.
     """
-    try:
-        tree = ast.parse(text)
-    except SyntaxError as exc:
-        raise SpawnParseError(path, str(exc)) from exc
+    if tree is None:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            raise SpawnParseError(path, str(exc)) from exc
 
     resolver = _ImportResolver(tree)
     module_consts = _module_level_constants(tree)

@@ -455,7 +455,7 @@ def _report_retired_plugins(settings_path: Path, data: dict, args: argparse.Name
         del enabled[k]
     tmp = settings_path.with_name(f".{settings_path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
         os.replace(tmp, settings_path)
     except OSError as exc:
         tmp.unlink(missing_ok=True)

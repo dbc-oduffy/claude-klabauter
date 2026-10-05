@@ -83,7 +83,7 @@ from coordinator_core.win_portability import no_console_creationflags
 #: ``claimed_at`` recency gate. Overridable per-call via the
 #: ``_CS_SHAPE_LOCK_STALE_SEC`` environment variable (matching the bash
 #: ``${_CS_SHAPE_LOCK_STALE_SEC:-30}`` read).
-# Generator-provenance declaration (generator_provenance.py). session_shape_set/
+# Generator-provenance declaration (coordinator_core/ops/generator_census). session_shape_set/
 # producer_set write only `.git/coordinator-sessions/<sid>/session-shape.json` --
 # git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []

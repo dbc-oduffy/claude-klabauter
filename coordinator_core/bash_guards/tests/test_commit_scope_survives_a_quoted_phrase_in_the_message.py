@@ -47,6 +47,9 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_git_commit_safe_commit_advise,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 _MESSAGE_WITH_QUOTED_PHRASE = (
     "the attribution data exists; the access path does not\n"
     "\n"

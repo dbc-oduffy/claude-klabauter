@@ -44,6 +44,32 @@ def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_pat
     assert record["image_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
 
 
+
+def test_provenance_names_the_builder_session_and_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-123")
+    output_exe = tmp_path / "door.exe"
+    output_exe.write_bytes(b"x")
+    record = json.loads(
+        door_build.write_provenance(output_exe, "clang", "clang", tmp_path).read_text(encoding="utf-8")
+    )
+    assert record["builder"] == "sess-123"
+    assert isinstance(record["command"], list) and record["command"]
+
+    output = tmp_path / "door"
+    output.write_bytes(b"y")
+    posix = json.loads(door_build_posix.write_provenance(output, "clang", tmp_path).read_text(encoding="utf-8"))
+    assert posix["builder"] == "sess-123"
+
+
+def test_provenance_records_an_unattributed_build_as_none(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    output_exe = tmp_path / "door.exe"
+    output_exe.write_bytes(b"x")
+    record = json.loads(
+        door_build.write_provenance(output_exe, "clang", "clang", tmp_path).read_text(encoding="utf-8")
+    )
+    assert record["builder"] is None
+
 def test_source_sha256_is_line_ending_blind(tmp_path):
     lf = tmp_path / "lf.c"
     crlf = tmp_path / "crlf.c"

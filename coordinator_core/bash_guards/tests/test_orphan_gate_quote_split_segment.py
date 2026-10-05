@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards.dispatch_checks import check_destructive_git_orphan
+import pytest
+
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _Q = chr(39)
 _PLAIN = "git push --force origin main"

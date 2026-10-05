@@ -9,21 +9,8 @@ by ONE JSON file per repo under `<settings-home>/state/group-em/
 <repo-key>.json`. This CLI is the human/hook-facing surface over that
 record: `nominate`, `stand-down`, `who`, `standing`.
 
-WHY `nominate` REFUSES A LIVE INCUMBENT HERE, UNLIKE THE ARCHIVED DoE
-REFERENCE. The DoE-plane script this replaces documented last-writer-wins
-("entry never refuses") as current policy. That policy is the exact
-2026-08-30 failure `coordinator_core.group_em.nomination`'s own module
-docstring exists to not repeat: a session claiming over a live incumbent
-with no evidence the incumbent has exited. The engine's `claim()` — the
-same function `groupem.enter` (W2-C7's sibling CLI `group-em-enter.py`)
-already calls — auto-replaces ONLY a holder with POSITIVE evidence of
-death (`live_reason: "pid_not_running"`), and refuses (never claims) over a
-LIVE holder or one merely unaccounted for (`live_reason:
-"no_registry_record"`, ambiguous on a multi-machine fleet). This CLI's
-`nominate` verb calls that same `claim()` rather than reimplementing the
-DoE reference's separate, more permissive policy — one nomination policy,
-not two that drift. Recorded in the chunk's arrival record
-(`state/audits/doe-script-arrivals/W2-C7.yaml`).
+`nominate` calls the engine's `claim()`, which never refuses: standing is taken, not
+requested, and the displaced holder is reported (a still-running one is owed a message).
 
 `who` and `standing` are engine-side (`nomination.who`/`nomination.standing`,
 op `groupem.standing`); this CLI only renders them. `stand-down` still is not:
@@ -36,9 +23,8 @@ Cold path — one process, one call. Direct in-process import
 
 Exit codes: 0 success | 2 usage error | 3 no nomination on record
 (`stand-down`/`who`) | 4 stand-down's own record unlink failed (record may
-still be on disk; never reported as success) | 5 refused — `nominate`
-refuses a live/unaccounted-for incumbent; `stand-down` refuses when the
-given session id is not the current holder.
+still be on disk; never reported as success) | 5 refused — `stand-down`
+refuses when the given session id is not the current holder.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C7.
 """
@@ -76,15 +62,6 @@ def _nominate(nomination, repo_root: str, session_id: str, *, note: Optional[str
     verdict = nomination.claim(
         repo_root, session_id, peer_name=peer_name, nominated_by=operator, note=note
     )
-    if not verdict.get("claimed"):
-        incumbent = verdict.get("superseded_incumbent") or {}
-        return NominationResult(
-            False,
-            f"refused: incumbent {incumbent.get('session_id', 'unknown')} "
-            f"[{incumbent.get('live_reason', 'unknown')}] holds this repo's nomination",
-            5,
-            verdict,
-        )
     displaced = verdict.get("displaced_holder")
     if verdict.get("already_held"):
         message = f"{session_id} already holds Group EM for {repo_root} (refreshed)"

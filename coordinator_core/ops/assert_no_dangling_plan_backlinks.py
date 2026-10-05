@@ -177,7 +177,7 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id, resolve_plan_pointer
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
-# Generator-provenance declaration (generator_provenance.py). The --fix path
+# Generator-provenance declaration (coordinator_core/ops/generator_census). The --fix path
 # rewrites whichever tracked .md file anywhere in the repo still carries a
 # dangling spec_backlink citation after a plan archival move (repo-wide .md
 # scan, see `_iter_all_md_files`/git-ls-files-scoped candidate gathering

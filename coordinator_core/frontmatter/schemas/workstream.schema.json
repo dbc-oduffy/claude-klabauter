@@ -23,7 +23,7 @@
     },
     "coordinator_root_path": {
       "type": "string",
-      "description": "Dual-tenant discriminator — the git root path of the repo this workstream belongs to. Folded from the engine repo's EM constraints memo: the physical directory <the engine>/state/workstreams/ is dual-tenant when the git root is the meta-repo (co-mingles the meta-repo's routed workstreams with the engine's own). The generator (C3) filters by this field so each repo's render includes ONLY its own entries — never the co-tenant's. Same discriminator vocabulary the engine's trackers.py already uses (composite-natural-key component)."
+      "description": "Dual-tenant discriminator, repo-root-relative: \".\" is the auto-resolve value (the coordinator root is the repo root); a monorepo sub-root is its relative path (for example \"subdir\"). Never absolute and never a repo basename: either mints a machine-specific repo identity and fragments the join key. No value of this field alone expresses a routed write (a record whose owning repo is not the repo hosting the store): an independent git root is not a path under the hosting root, and a relative escape resolves against the reader's cwd. A routed write needs a companion owner-qualified `repo` field ('<owner>/<repo>'), which this schema does not carry; until it exists a routed value is unspecified and a writer must not invent one. The generator filters by this field so each repo's render includes only its own entries. Same composite-natural-key component as the engine's trackers.py."
     },
     "deliverables": {
       "type": "array",

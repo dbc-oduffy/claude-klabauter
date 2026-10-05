@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SCRIPT = Path(__file__).resolve().parent.parent / "check-mcp-namespace-registration.py"
 _COORD = SCRIPT.parent.parent

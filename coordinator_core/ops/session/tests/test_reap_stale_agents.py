@@ -49,7 +49,7 @@ from coordinator_core.ops.session import reap
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-pytestmark = [pytest.mark.cadence]
+pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _make_repo(repo: Path) -> Path:

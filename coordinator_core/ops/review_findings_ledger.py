@@ -53,7 +53,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.claimed_write import replace_text
 
-# Generator-provenance declaration (generator_provenance.py). `verify`/`reject`
+# Generator-provenance declaration (coordinator_core/ops/generator_census). `verify`/`reject`
 # mutate whichever sidecar and reviewed-artifact file the caller names; the
 # set is data-dependent, never a fixed artifact.
 MUTATES = [".coordinator-local/subagent-share/**/*.md", "**/*"]

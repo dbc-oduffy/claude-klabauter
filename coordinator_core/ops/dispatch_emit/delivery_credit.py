@@ -48,17 +48,15 @@ def ancestor_refs(repo_root: Path, refs: List[str], base: str) -> set:
     return {ref for ref, oid in oid_of.items() if oid not in not_ancestors}
 
 
-def rows_backed_before_base(repo_root: Path, plan_path: str, run_base_sha: Optional[str]) -> List[str]:
-    """Ids of the plan's `coded` rows whose `disposition_ref` commit is an ancestor of
-    `run_base_sha`; `[]` when the spine is unreadable or `run_base_sha` is empty."""
-    if not run_base_sha:
-        return []
+def coded_row_refs(plan_path: str) -> dict:
+    """`{sha: [row ids]}` for the plan's `coded` rows, a `repo_key:` prefix stripped from each
+    `disposition_ref`; `{}` when the spine is unreadable."""
     try:
         result = load_rows(Path(plan_path).read_text(encoding="utf-8"))
     except OSError:
-        return []
+        return {}
     if result.status is not LocateStatus.LOCATED:
-        return []
+        return {}
     by_ref: dict = {}
     for row in result.rows:
         if not isinstance(row, dict) or row.get("disposition") != "coded":
@@ -67,6 +65,15 @@ def rows_backed_before_base(repo_root: Path, plan_path: str, run_base_sha: Optio
         match = _SHA.fullmatch(ref)
         if match and row.get("id"):
             by_ref.setdefault(ref, []).append(str(row["id"]))
+    return by_ref
+
+
+def rows_backed_before_base(repo_root: Path, plan_path: str, run_base_sha: Optional[str]) -> List[str]:
+    """Ids of the plan's `coded` rows whose `disposition_ref` commit is an ancestor of
+    `run_base_sha`; `[]` when the spine is unreadable or `run_base_sha` is empty."""
+    if not run_base_sha:
+        return []
+    by_ref = coded_row_refs(plan_path)
     if not by_ref:
         return []
     ok = ancestor_refs(repo_root, list(by_ref), run_base_sha)

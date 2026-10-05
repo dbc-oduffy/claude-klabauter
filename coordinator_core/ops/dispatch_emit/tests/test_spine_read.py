@@ -984,3 +984,60 @@ def test_operator_rows_are_called_out_separately_from_other_exclusions():
     ])
     assert "C3" in out
     assert "OWED WORK" not in out
+
+
+def test_dependent_of_a_deferred_row_is_withheld_and_reported(tmp_path):
+    body = """\
+- id: C9
+  title: deferred predecessor
+  surface: some/surface
+  deferred: true
+- id: C9f
+  title: depends on the deferred row
+  surface: some/surface
+  depends_on:
+    - chunk: C9
+- id: C9h
+  title: two hops from the deferred row
+  surface: some/surface
+  depends_on:
+    - chunk: C9f
+- id: C1
+  title: independent
+  surface: some/surface
+"""
+    exclusions: list = []
+    rows = read_spine(_write_plan(tmp_path, body), exclusions=exclusions)
+
+    assert [r.id for r in rows] == ["C1"]
+    by_id = {e["id"]: e for e in exclusions}
+    assert by_id["C9"]["reason"] == "deferred"
+    assert by_id["C9f"]["reason"] == "withheld_by_deferred_dependency"
+    assert by_id["C9h"]["reason"] == "withheld_by_deferred_dependency"
+    assert "C9" in by_id["C9h"]["detail"]
+
+
+def test_deferred_until_row_is_withheld_like_deferred_true(tmp_path):
+    body = """\
+- id: C9
+  title: held row
+  surface: some/surface
+  deferred_until:
+    reason: waits on X
+    revisit_trigger: X lands
+- id: C9f
+  title: depends on the held row
+  surface: some/surface
+  depends_on:
+    - chunk: C9
+- id: C1
+  title: independent
+  surface: some/surface
+"""
+    exclusions: list = []
+    rows = read_spine(_write_plan(tmp_path, body), exclusions=exclusions)
+
+    assert [r.id for r in rows] == ["C1"]
+    by_id = {e["id"]: e for e in exclusions}
+    assert by_id["C9"]["reason"] == "deferred"
+    assert by_id["C9f"]["reason"] == "withheld_by_deferred_dependency"

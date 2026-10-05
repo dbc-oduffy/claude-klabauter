@@ -2533,7 +2533,7 @@ def _run_probe_generator_output_staleness(claude_klabauter_root: Path | None) ->
     Cadence surface for "did a generator move after the artifact it emits was last
     stamped?" (AC7). Delegates the whole comparison to
     coordinator_core.ops.check_generator_output_staleness.compute_all_staleness, which
-    merges the local leg (C3, generator_provenance-declared pairs) and the vendored leg
+    merges the local leg (C3, generator_census-declared pairs) and the vendored leg
     (C6, DoE's emission-stamped artifacts) into one verdict dict keyed by artifact path,
     each entry carrying `{"artifact", "verdict", "detail"}`. This probe carries that dict
     into `data` verbatim, per the shipped `_run_probe_vendored_schema_drift` pattern

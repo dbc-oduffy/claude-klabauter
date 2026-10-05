@@ -121,7 +121,7 @@ from coordinator_core.session import touch_record
 # a plain ``import`` — it must be loaded by file path via ``importlib``.
 # ---------------------------------------------------------------------------
 
-# Generator-provenance declaration (generator_provenance.py). Every write in this
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Every write in this
 # module (claim-dir pid/session_id/claimed_at/stage files, touched.txt appends,
 # stamped markers) targets `.git/coordinator-sessions/<sid>/...` -- git-internal
 # session-hub state, never a tracked repo artifact.

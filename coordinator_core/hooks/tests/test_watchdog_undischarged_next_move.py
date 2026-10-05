@@ -16,6 +16,8 @@ import importlib
 import json
 import os
 
+import pytest
+
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 from coordinator_core.session import machinery_paths
@@ -279,7 +281,19 @@ def test_sizing_route_dispatch_opens_sizing_routed_obligation(tmp_path) -> None:
 
 def test_sizing_route_spec_dispatch_opens_sizing_routed_obligation(tmp_path) -> None:
     records = _sizing_open_ledger_action(tmp_path, "spec-dispatch", "coordinator:sizing")
-    assert records and records[0]["next_action"] == "Agent(coordinator:executor)"
+    assert records and records[0]["next_action"] == (
+        "Skill(coordinator:plan|coordinator:execute-plan)"
+    )
+
+
+@pytest.mark.parametrize("skill", ["coordinator:plan", "coordinator:execute-plan"])
+def test_spec_dispatch_terminal_is_discharged_by_either_piped_skill(skill) -> None:
+    from coordinator_core.hooks.watchdog_undischarged_next_move import _matches_next_action
+
+    action = "Skill(coordinator:plan|coordinator:execute-plan)"
+    assert _matches_next_action(action, "Skill", {"skill": skill})
+    assert not _matches_next_action(action, "Skill", {"skill": "coordinator:review"})
+    assert not _matches_next_action(action, "Agent", {})
 
 
 def test_sizing_route_plan_opens_sizing_routed_obligation(tmp_path) -> None:

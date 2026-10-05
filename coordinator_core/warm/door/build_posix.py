@@ -41,7 +41,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .build import source_sha256, write_sidecar
+from .build import build_attribution, source_sha256, write_sidecar
 
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
@@ -121,6 +121,7 @@ def write_provenance(
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "engine_root": str(Path(engine_root).resolve()),
         "platform": sys.platform,
+        **build_attribution("coordinator_core.warm.door.build_posix"),
         # Describes THIS ARTIFACT, not the source. It stays False on a fresh
         # build by design: a successful compile is not a successful
         # invocation, and this builder does not invoke what it produces. The

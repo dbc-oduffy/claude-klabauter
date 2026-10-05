@@ -246,7 +246,7 @@ def _require_python_311() -> None:
     )
     print(
         "  Remediation: re-run under a Python 3.11+ interpreter, e.g. "
-        "`python3.12 scripts/setup.py` (or the full path to one); install one from "
+        "python3 scripts/setup.py (python3 = a 3.11+ interpreter, or its full path); install one from "
         "https://www.python.org/downloads/ if none exists.",
         file=sys.stderr,
     )
@@ -4730,7 +4730,7 @@ def main(argv: list[str]) -> int:
 
 
 CLOSING_CHAIN_WALK_LINE = (
-    "  For the full agentic chain-walk: start a Claude Code session and run /coordinator:setup"
+    "  For the full chain-walk: python3 coordinator/scripts/chain-walk.py"
 )
 
 

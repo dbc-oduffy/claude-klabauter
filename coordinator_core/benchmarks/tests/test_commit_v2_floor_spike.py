@@ -60,6 +60,8 @@ from typing import Iterator, List, Optional
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 from coordinator_core.benchmarks.process_time import IS_WINDOWS, LiveTreeAccountant
 from coordinator_core.benchmarks.isolated_clone import (
     mkdtemp_for_clone,

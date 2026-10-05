@@ -17,6 +17,8 @@ import subprocess
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 

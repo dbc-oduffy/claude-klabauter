@@ -180,7 +180,7 @@ def test_resolve_doe_clone_migrates_an_upgrade_box_that_carries_only_the_legacy_
     clone, resolved = resolve_doe_clone()
 
     assert resolved is True
-    assert Path(clone).as_posix().endswith("/legacy/clone")
+    assert Path(clone).parts[-2:] == ("legacy", "clone")
     assert (machine_local / POINTER_NAME).read_text(encoding="utf-8").strip() == "/legacy/clone"
 
 

@@ -7,7 +7,7 @@ from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.tests.fixtures.push_repo import init_push_repo
 from coordinator_core.ops.ceremony.git_native import GitResult
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 _REF_LOCK_STDERR = (

@@ -1,6 +1,6 @@
 """coordinator_core.bash_guards.guard_headless_claude_plugin_dir --
-``check_headless_claude_plugin_dir``: a headless ``claude -p`` / ``--print``
-launch that carries no ``--plugin-dir`` is rewritten to carry the resolved
+``check_headless_claude_plugin_dir``: a headless ``claude -p`` / ``--print`` /
+``--bg`` launch that carries no ``--plugin-dir`` is rewritten to carry the resolved
 coordinator plugin root; an unresolvable root allows with an advisory. Dev
 install only: without the sentinel the guard is a no-op.
 
@@ -28,6 +28,7 @@ MATCHERS = COMMAND_TOOL_NAMES
 
 _SEPARATORS = ";&|\n"
 _Word = Tuple[int, int, str]
+_HEADLESS_FLAGS = ("-p", "--print", "--bg")
 
 
 def _scan_segments(cmd: str) -> List[List[_Word]]:
@@ -130,7 +131,7 @@ def check_headless_claude_plugin_dir(
         if idx is None:
             continue
         args = [_plain(w[2]) for w in words[idx + 1:]]
-        if not any(a in ("-p", "--print") for a in args):
+        if not any(a in _HEADLESS_FLAGS for a in args):
             continue
         if any(a == "--plugin-dir" or a.startswith("--plugin-dir=") for a in args):
             continue
@@ -142,7 +143,7 @@ def check_headless_claude_plugin_dir(
     root = _plugin_root()
     if not root:
         return _advisory(
-            "Coordinator plugin not found; this headless `claude -p` runs with "
+            "Coordinator plugin not found; this headless `claude` launch runs with "
             "no coordinator skills or agents. Launch via `claude-author`."
         )
     flag = " --plugin-dir " + shlex.quote(root.replace("\\", "/"))
@@ -151,5 +152,5 @@ def check_headless_claude_plugin_dir(
         new_cmd = new_cmd[:pos] + flag + new_cmd[pos:]
     return _allow_rewrite(
         new_cmd,
-        "Headless `claude -p` rewritten to add --plugin-dir %s." % root.replace("\\", "/"),
+        "Headless `claude` launch rewritten to add --plugin-dir %s." % root.replace("\\", "/"),
     )

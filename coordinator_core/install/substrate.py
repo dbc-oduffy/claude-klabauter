@@ -118,7 +118,7 @@ from coordinator_core.install.setup_template_manifest import (
     _load_setup_template_manifest,
 )
 
-# Generator-provenance declaration (generator_provenance.py). Every write
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
 # <settings-home>/machine-local/ and its bin/ directory per this module's own
 # docstring ("Lays down <settings-home>/machine-local/ substrate") --

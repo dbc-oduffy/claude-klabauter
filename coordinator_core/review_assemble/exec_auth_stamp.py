@@ -191,6 +191,24 @@ def _append_note(current: Optional[str], addition: str) -> str:
     return current + NOTE_APPEND_SEPARATOR + addition
 
 
+#: Header line `--supersede-note` writes between the correction and the
+#: preserved old note.
+SUPERSEDED_MARKER = "Superseded (inaccurate):"
+
+
+def _supersede_note(current: Optional[str], text: str) -> str:
+    """New `execution_authorized_note` for `--supersede-note`: *text* first,
+    then *current* preserved verbatim below `SUPERSEDED_MARKER`. Already
+    superseded by *text* (current equals it or starts with the header-joined
+    form) returns *current* unchanged, so a repeat cannot nest."""
+    if not current:
+        return text
+    head = text + NOTE_APPEND_SEPARATOR + SUPERSEDED_MARKER
+    if current == text or current.startswith(head + NOTE_APPEND_SEPARATOR):
+        return current
+    return head + NOTE_APPEND_SEPARATOR + current
+
+
 def _is_unterminated_quoted_scalar(raw: Optional[str]) -> bool:
     """True when *raw* -- a single physical line read by `read_fm_field` --
     opens a single- or double-quoted YAML scalar that never closes on that
@@ -286,6 +304,7 @@ def stamp_execution_authorization(
     repo_root: Optional[Path] = None,
     append_note: bool = False,
     fresh_authorization: bool = False,
+    supersede_note: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Compute the plan-body hash and write all four
     `execution_authorized_*` fields onto *plan_path*'s own frontmatter,
@@ -298,6 +317,11 @@ def stamp_execution_authorization(
     `execution_authorized_note` already holds (see `_append_note`) instead
     of replacing it outright -- for the `/execute-plan` stale-bookkeeping
     re-stamp path, which must not clobber the PM's verbatim utterance.
+
+    `supersede_note=True` (mutually exclusive with `append_note`) writes
+    *note* as the new note with the old one preserved below
+    `SUPERSEDED_MARKER` (see `_supersede_note`); it carries the same
+    changed-body refusal as `append_note`, and refuses a block-scalar note.
 
     `fresh_authorization` (default `False`) marks this call as a genuine new
     PM witness of the CURRENT body, rather than an EM correction collapsing
@@ -384,12 +408,26 @@ def stamp_execution_authorization(
         # this text?" (see _append_note), never exact equality -- an exact-
         # equality test would make every repeat append non-convergent and
         # grow the field without bound.
+        if supersede_note and note_block is not None:
+            raise MutateAbort(
+                f"{plan_path}: execution_authorized_note is a block scalar "
+                f"holding multi-line verbatim text; --supersede-note would "
+                f"collapse it to one line."
+            )
+        if supersede_note and read_fm_field_unquoted(
+            fm, "execution_authorized_sha"
+        ) == sha and _supersede_note(current_note, note) == current_note:
+            # Convergence ignores `at`: a repeat on a later day must not nest.
+            state["applied"] = False
+            return old_text
         already_converged = all(
             read_fm_field_unquoted(fm, field) == value
             for field, value in intended_exact.items()
         )
         if already_converged:
-            if append_note:
+            if supersede_note:
+                already_converged = False
+            elif append_note:
                 already_converged = (current_note or "").endswith(note)
             else:
                 already_converged = current_note == note
@@ -408,10 +446,11 @@ def stamp_execution_authorization(
             existing_sha_field is not None and existing_sha_field != sha
         )
         if not fresh_authorization and body_changed_since_stamp:
-            if append_note:
+            if append_note or supersede_note:
                 raise MutateAbort(
                     f"{plan_path}: execution_authorized_sha no longer matches the live "
-                    f"body; --append-note cannot land over a changed body. Use "
+                    f"body; --{'supersede' if supersede_note else 'append'}-note "
+                    f"cannot land over a changed body. Use "
                     f"`restamp --by <witness> --reason <text>` instead."
                 )
             if current_note == note:
@@ -451,7 +490,10 @@ def stamp_execution_authorization(
             fields.remove("execution_authorized_note")
             final_note = note
         else:
-            final_note = _append_note(current_note, note) if append_note else note
+            if supersede_note:
+                final_note = _supersede_note(current_note, note)
+            else:
+                final_note = _append_note(current_note, note) if append_note else note
         final_values = {**intended_exact, "execution_authorized_note": final_note}
 
         # Append-only insert (no `after_key`): a first-time stamp has no
@@ -971,6 +1013,101 @@ def stamp_sizing_authorization(
     return exit_code, result
 
 
+def _compose_delegation_note(
+    authority: str, source: str, standing_quote: Optional[str]
+) -> str:
+    """The note for a delegation-authorized mint. A standing-direction quote
+    is labelled as applying to all plans so a reader never takes it for a
+    plan-specific utterance."""
+    if standing_quote:
+        return (
+            f"PM standing direction (applies to all plans, not this plan "
+            f'specifically): "{standing_quote}" (source: {source}); '
+            f"authorized by delegation: {authority}"
+        )
+    return f"authorized by delegation: {authority} (source: {source})"
+
+
+def stamp_delegation_authorization(
+    plan_path: str,
+    authority: str,
+    source: str,
+    *,
+    standing_quote: Optional[str] = None,
+    at: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> tuple[int, dict[str, Any]]:
+    """Mint execution authorization recorded as a PM standing direction or a
+    Group EM delegation, where no typed command or plan-specific utterance
+    exists to record.
+
+    Records the sizing arm's fields and body-sha/approved semantics: `by` is
+    `PM`, the note is appended, and the quote (if any) lives only inside the
+    note, never as an utterance or pm_quote. Refuses (EXIT_USAGE) an empty or
+    whitespace *authority* or *source*, an empty/whitespace *standing_quote*,
+    and any value carrying a real line break.
+    """
+    for label, value in (("--authorized-by-delegation", authority), ("--delegation-source", source)):
+        if not value or not value.strip():
+            return EXIT_USAGE, {"error": f"refusing to mint: {label} must not be empty"}
+    if standing_quote is not None and not standing_quote.strip():
+        return EXIT_USAGE, {"error": "refusing to mint: --standing-direction-quote must not be empty"}
+    for value in (authority, source, standing_quote or ""):
+        if any(ch in value for ch in (chr(10), chr(13))):
+            return EXIT_USAGE, {
+                "error": "refusing to mint: a real line break cannot be held by a "
+                "single-line frontmatter field -- pass each value as one line"
+            }
+
+    root = repo_root or resolve_repo_root()
+    if root is None:
+        return EXIT_BUSINESS_FAIL, {"error": "could not resolve a git worktree root"}
+
+    live_path = Path(plan_path) if Path(plan_path).is_absolute() else root / plan_path
+    if not live_path.is_file():
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: not found"}
+    text = live_path.read_text(encoding="utf-8", errors="replace")
+    split = split_frontmatter(text)
+    if split is None:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: no parseable frontmatter"}
+
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_CHANGED, check_approved_body
+
+    approved_state, approved_msg = check_approved_body(text)
+    if approved_state == APPROVED_BODY_CHANGED:
+        return EXIT_BUSINESS_FAIL, {"error": f"refusing to mint: {plan_path}: {approved_msg}"}
+
+    note = _compose_delegation_note(authority.strip(), source.strip(), standing_quote)
+    fm = split.fm_text
+    sha = _canonical_body_sha(text, root)
+    unchanged = read_fm_field_unquoted(fm, "execution_authorized_sha") == sha
+    existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")
+    existing_note = _current_note_text(
+        fm, read_fm_block_scalar(fm, "execution_authorized_note")
+    ) or ""
+    if unchanged and existing_note.endswith(note):
+        return EXIT_OK, {
+            "applied": False,
+            "sha": sha,
+            "note": note,
+            "message": f"{plan_path} is already authorized by this delegation against unchanged plan content -- no-op",
+        }
+
+    # `by` names the delegate, never "PM": the PM did not act on this plan.
+    exit_code, result = stamp_execution_authorization(
+        plan_path,
+        authority.strip(),
+        note,
+        at=at or (existing_at if unchanged and existing_at else None),
+        repo_root=root,
+        append_note=True,
+        fresh_authorization=True,
+    )
+    if exit_code == EXIT_OK:
+        result["note"] = note
+    return exit_code, result
+
+
 def _fire_stamp_reviewed(plan_path: str) -> None:
     """Fire ``stamp-reviewed`` (``coordinator_core.ops.plan_status_transition``)
     as a SEPARATE lock and commit, after this module's own exec-auth stamp
@@ -1056,10 +1193,12 @@ def _fire_stamp_approved(plan_path: str) -> None:
 
 USAGE = (
     "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
-    "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
+    "(--note <note> | --append-note <text> | --supersede-note <text>) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp authorize-invocation <plan-path> "
     "(--typed-command </command> [--utterance <PM's verbatim words>] | "
-    "--authorized-by-sizing <repo-relative sizing path>) [--at <YYYY-MM-DD>]\n"
+    "--authorized-by-sizing <repo-relative sizing path> | "
+    "--authorized-by-delegation <authority> --delegation-source <ref> "
+    "[--standing-direction-quote <PM's verbatim words>]) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp mark-reviewed <plan-path>\n"
     "       review-exec-auth-stamp restamp <plan-path> --by <witness> "
     "--reason <one line> [--at <YYYY-MM-DD>]"
@@ -1180,6 +1319,9 @@ def _main_authorize_invocation(rest: list[str]) -> int:
     utterance: Optional[str] = None
     typed_command: Optional[str] = None
     sizing_path: Optional[str] = None
+    delegation: Optional[str] = None
+    delegation_source: Optional[str] = None
+    standing_quote: Optional[str] = None
     at: Optional[str] = None
     i = 1
     while i < len(rest):
@@ -1193,12 +1335,44 @@ def _main_authorize_invocation(rest: list[str]) -> int:
         elif arg == "--authorized-by-sizing" and i + 1 < len(rest):
             sizing_path = rest[i + 1]
             i += 2
+        elif arg == "--authorized-by-delegation" and i + 1 < len(rest):
+            delegation = rest[i + 1]
+            i += 2
+        elif arg == "--delegation-source" and i + 1 < len(rest):
+            delegation_source = rest[i + 1]
+            i += 2
+        elif arg == "--standing-direction-quote" and i + 1 < len(rest):
+            standing_quote = rest[i + 1]
+            i += 2
         elif arg == "--at" and i + 1 < len(rest):
             at = rest[i + 1]
             i += 2
         else:
             print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
             return EXIT_USAGE
+
+    if delegation is not None or delegation_source is not None or standing_quote is not None:
+        if delegation is None or delegation_source is None:
+            print(
+                "review-exec-auth-stamp: --authorized-by-delegation and --delegation-source "
+                "are required together (--standing-direction-quote needs both)",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if typed_command is not None or utterance is not None or sizing_path is not None:
+            print(
+                "review-exec-auth-stamp: --authorized-by-delegation is mutually exclusive "
+                "with --typed-command, --utterance and --authorized-by-sizing",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        exit_code, result = stamp_delegation_authorization(
+            plan_path, delegation, delegation_source, standing_quote=standing_quote, at=at
+        )
+        if exit_code == EXIT_OK:
+            _fire_stamp_approved(plan_path)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return exit_code
 
     if sizing_path is not None:
         if typed_command is not None or utterance is not None:
@@ -1277,6 +1451,7 @@ def main(argv: list[str]) -> int:
     by: Optional[str] = None
     note: Optional[str] = None
     append_note_text: Optional[str] = None
+    supersede_text: Optional[str] = None
     at: Optional[str] = None
     i = 1
     while i < len(rest):
@@ -1290,6 +1465,9 @@ def main(argv: list[str]) -> int:
         elif arg == "--append-note" and i + 1 < len(rest):
             append_note_text = rest[i + 1]
             i += 2
+        elif arg == "--supersede-note" and i + 1 < len(rest):
+            supersede_text = rest[i + 1]
+            i += 2
         elif arg == "--at" and i + 1 < len(rest):
             at = rest[i + 1]
             i += 2
@@ -1297,11 +1475,19 @@ def main(argv: list[str]) -> int:
             print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
             return EXIT_USAGE
 
-    if note is not None and append_note_text is not None:
-        print("review-exec-auth-stamp: --note and --append-note are mutually exclusive", file=sys.stderr)
+    if sum(v is not None for v in (note, append_note_text, supersede_text)) > 1:
+        print(
+            "review-exec-auth-stamp: --note, --append-note and --supersede-note are mutually exclusive",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
 
     try:
+        refuse_newline_argv(
+            supersede_text,
+            flag_name="--supersede-note",
+            remedy="express the superseding text as a single line.",
+        )
         refuse_newline_argv(
             note,
             flag_name="--note",
@@ -1327,19 +1513,27 @@ def main(argv: list[str]) -> int:
         print(f"review-exec-auth-stamp: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    if by is None or (note is None and append_note_text is None):
+    if by is None or (note is None and append_note_text is None and supersede_text is None):
         print(
-            "review-exec-auth-stamp: --by and one of --note/--append-note are required",
+            "review-exec-auth-stamp: --by and one of --note/--append-note/--supersede-note are required",
             file=sys.stderr,
         )
         return EXIT_USAGE
 
+    if supersede_text is not None and not supersede_text.strip():
+        print("review-exec-auth-stamp: --supersede-note must not be empty", file=sys.stderr)
+        return EXIT_USAGE
+
     append_note = append_note_text is not None
-    note_value = append_note_text if append_note else note
-    assert note_value is not None  # narrowed by the checks above
+    note_value = next(v for v in (append_note_text, supersede_text, note) if v is not None)
 
     exit_code, result = stamp_execution_authorization(
-        plan_path, by, note_value, at=at, append_note=append_note
+        plan_path,
+        by,
+        note_value,
+        at=at,
+        append_note=append_note,
+        supersede_note=supersede_text is not None,
     )
     if exit_code == EXIT_OK:
         _fire_stamp_reviewed(plan_path)

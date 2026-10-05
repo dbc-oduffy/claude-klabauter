@@ -44,6 +44,10 @@ import subprocess
 
 from coordinator_core.win_portability import no_console_creationflags
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 #: Directories that never hold production writes we own.

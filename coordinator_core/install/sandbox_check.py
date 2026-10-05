@@ -129,7 +129,7 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 #: Named so `_sep_norm` reads without an escape-in-an-escape.
 BACKSLASH = chr(92)
 
-# Generator-provenance declaration (generator_provenance.py). Every write in
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Every write in
 # this module targets an isolated sandbox CLAUDE_HOME created for the test
 # run (docstring: "exercises...against an isolated sandbox CLAUDE_HOME") --
 # tmp/test fixtures, never tracked claude-klabauter paths.

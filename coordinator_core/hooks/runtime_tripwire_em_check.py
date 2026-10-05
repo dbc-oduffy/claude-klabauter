@@ -120,7 +120,7 @@ from coordinator_core.hooks.postuse_advisory_dispatch import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
-#: Generator-provenance declaration (generator_provenance.py's AST sweep):
+#: Generator-provenance declaration (coordinator_core/ops/generator_census reader):
 #: this module's only writes are `_check_push_failures`'s
 #: `push-failures-cursor.txt` and `_check_hooks_json_staleness`'s
 #: `hooks-json-boot-hash.txt`, both under

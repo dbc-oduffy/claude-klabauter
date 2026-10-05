@@ -185,6 +185,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -934,7 +935,12 @@ def _poll_command_for(dispatch_key: str) -> str:
     return f"python3 -m coordinator_core.invoke {_RECONCILE_POLL_METHOD} '{params}' --bare"
 
 
-def _indeterminate_envelope(msg: dict, detail: str, dispatch_key: Optional[str] = None) -> dict:
+def _indeterminate_envelope(
+    msg: dict,
+    detail: str,
+    dispatch_key: Optional[str] = None,
+    waited_secs: Optional[float] = None,
+) -> dict:
     """A JSON-RPC error envelope for a written-but-unanswered mutation.
 
     Returned rather than raised, and returned rather than `None`, because both
@@ -950,19 +956,32 @@ def _indeterminate_envelope(msg: dict, detail: str, dispatch_key: Optional[str] 
     invocation is appended to the message text. This does NOT restore the
     delivery claim the message deliberately withholds -- the poll, not this
     message, is what now knows whether the op ran.
+
+    `waited_secs`, when given, adds `error.data.diagnosis` naming the
+    `no_reply` case (vs the server's `worker_died`): op, how long the client
+    waited after delivery, and the stage that ended the wait.
     """
     text = _indeterminate_text_for(msg.get("method"))
     message = f"{text} ({detail})"
+    data: dict = {}
+    if waited_secs is not None:
+        data["diagnosis"] = {
+            "case": "no_reply",
+            "op": msg.get("method"),
+            "waited_secs": round(waited_secs, 3),
+            "stage": detail,
+        }
+        message = f"{message} [no_reply: op={msg.get('method')!r} waited {waited_secs:.1f}s]"
     error: dict = {
         "code": WARM_DISPATCH_INDETERMINATE,
         "message": message,
     }
     if dispatch_key is not None:
         error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key)}"
-        error["data"] = {
-            "dispatch_key": dispatch_key,
-            "reconcile": _RECONCILE_POLL_METHOD,
-        }
+        data["dispatch_key"] = dispatch_key
+        data["reconcile"] = _RECONCILE_POLL_METHOD
+    if data:
+        error["data"] = data
     return {
         "jsonrpc": "2.0",
         "id": msg.get("id"),
@@ -1286,6 +1305,7 @@ def _try_warm_dispatch_inner(
             fh.write(payload)
             fh.flush()
             delivered = True
+            delivered_at = time.monotonic()
             pending = _PendingRead(fh)
             liveness_secs = READ_DEADLINE_SECS
             if read_deadline_secs is not None:
@@ -1304,17 +1324,28 @@ def _try_warm_dispatch_inner(
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
                     return _indeterminate_envelope(
-                        msg, f"no response within {mutation_deadline}s", dispatch_key
+                        msg,
+                        f"no response within {mutation_deadline}s",
+                        dispatch_key,
+                        waited_secs=time.monotonic() - delivered_at,
                     )
                 if not line or not line.strip():
                     # Held past the probe, then closed silently: engaged, not
                     # unserviced -- see the zero-byte branch below. -> warm-pool P0 (e).
                     return _indeterminate_envelope(
-                        msg, "closed without a response after delivery", dispatch_key
+                        msg,
+                        "closed without a response after delivery",
+                        dispatch_key,
+                        waited_secs=time.monotonic() - delivered_at,
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(msg.get("method")):
-                return _indeterminate_envelope(msg, "pipe broke after delivery", dispatch_key)
+                return _indeterminate_envelope(
+                    msg,
+                    "pipe broke after delivery",
+                    dispatch_key,
+                    waited_secs=time.monotonic() - delivered_at,
+                )
             if attempt == 0:
                 continue  # the table's one re-open
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE

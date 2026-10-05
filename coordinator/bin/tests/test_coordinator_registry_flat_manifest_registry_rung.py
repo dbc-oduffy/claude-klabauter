@@ -28,6 +28,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
 _LIB_DIR = os.path.join(_BIN_DIR, "lib")
@@ -69,6 +71,8 @@ class TestFlatManifestViaRegistryRung(unittest.TestCase):
 
         shutil.rmtree(self._tmp, ignore_errors=True)
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_registry_rung_finds_a_flat_mirrors_manifest(self) -> None:
         probe = (
             "import json, sys\n"

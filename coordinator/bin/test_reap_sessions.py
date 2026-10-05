@@ -358,3 +358,30 @@ def test_unrecognised_flag_returns_zero_without_raising():
     else:
         _fail("unrecognised flag: main() returns 0 without raising", f"got rc={rc}")
 
+
+
+def test_cadence_gated_run_reports_skip_on_stderr(tmp_path):
+    mod = _load_module()
+
+    def fake_route(op, params, repo_root, legacy_fn):
+        return {"exit_code": 0, "cadence_gated": True}
+
+    rc, out, err = _run_main_capturing(mod, argv=[str(tmp_path)], fake_route=fake_route)
+    assert rc == 0 and out == ""
+    assert "cadence gate" in err and "--force" in err
+
+
+def test_force_flag_passes_force_param_and_keeps_repo_resolution(tmp_path):
+    mod = _load_module()
+    seen = {}
+
+    def fake_route(op, params, repo_root, legacy_fn):
+        seen.update(params=params, repo_root=repo_root)
+        return {"exit_code": 0}
+
+    rc, _out, _err = _run_main_capturing(
+        mod, argv=["--force", "--repo", str(tmp_path)], fake_route=fake_route
+    )
+    assert rc == 0
+    assert seen["params"] == {"force": True}
+    assert seen["repo_root"] == str(tmp_path)

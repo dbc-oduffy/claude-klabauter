@@ -57,13 +57,11 @@ Negative spec — do NOT "split" this guard by gating coordinator.local.md's
 prose body while ungating its frontmatter keys. That is the intuitive split
 and it is exactly inverted: the frontmatter is the executed/authority half.
 
-Opt-in gate
------------
-The gate is off on every profile, author boxes included. `check()` returns
-None (allow) as its first step unless
-`machine-local set coordinator.feature.doctrine_edit_gate on` has been run
-(`machine_profile.feature_enabled("doctrine_edit_gate")`). Everything below
-describes the enabled gate.
+Default-on gate
+---------------
+The gate is on every profile. `check()` returns None (allow) as its first
+step only after `machine-local set coordinator.feature.doctrine_edit_gate off`
+has been run (`machine_profile.feature_enabled("doctrine_edit_gate")`).
 
 Approval mechanism
 -------------------
@@ -159,6 +157,7 @@ Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -167,6 +166,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
+from coordinator_core import machine_profile, machine_resolver
 from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
@@ -667,6 +667,152 @@ def _sentinel_write_deny_reason() -> str:
     )
 
 
+def pm_approval_fresh(cwd: "str | None" = None) -> bool:
+    """True when the PM's approval sentinel exists at the repo root and is
+    unexpired; the session repo is resolved from `cwd` when given."""
+    try:
+        root = resolve_repo_root(cwd=cwd) if cwd else _git_root()
+    except Exception:
+        return False
+    return _sentinel_state(root or None) == "allow"
+
+
+_GATE_KEY = "coordinator.feature." + _GATE_FEATURE
+
+
+def _gate_value(text: str) -> "str | None":
+    parsed = machine_resolver._parse_toml_text(text)
+    value = machine_resolver._flatten(parsed).get(_GATE_KEY)
+    if value is None:
+        return None
+    return str(value).strip().lower()
+
+
+def _registry_text_after(tool_name: str, tool_input: Dict[str, Any], before: str) -> str:
+    if tool_name == "Write":
+        content = tool_input.get("content")
+        return content if isinstance(content, str) else before
+    edits = [tool_input] if tool_name == "Edit" else (tool_input.get("edits") or [])
+    text = before
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        old, new = edit.get("old_string"), edit.get("new_string")
+        if not isinstance(old, str) or not isinstance(new, str) or old not in text:
+            continue
+        text = text.replace(old, new) if edit.get("replace_all") else text.replace(old, new, 1)
+    return text
+
+
+_OFF_WORDS = frozenset({"off", "false", "0", "no"})
+_LEVEL_RANK = {name: len(machine_profile.LEVELS) - i for i, name in enumerate(machine_profile.LEVELS)}
+_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
+_ENV_FEATURE_PREFIX = "MACHINE_LOCAL_COORDINATOR_FEATURE_"
+_ENV_LEVEL_PREFIX = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL"
+
+
+def _level_of(flat: Dict[str, Any], name: str) -> str:
+    """Effective level of guard `name` ('' = global) in a flattened registry."""
+    def valid(key: str) -> "str | None":
+        value = str(flat.get(key, "")).strip().lower()
+        return value if value in _LEVEL_RANK else None
+
+    glob = valid(machine_profile.LEVEL_KEY) or "warn"
+    if not name:
+        return glob
+    return (
+        valid(machine_profile.LEVEL_KEY + "." + name)
+        or machine_profile.GUARD_DEFAULT_LEVEL.get(name)
+        or glob
+    )
+
+
+def _registry_weakening(before: str, after: str) -> "str | None":
+    flat_b = machine_resolver._flatten(machine_resolver._parse_toml_text(before))
+    flat_a = machine_resolver._flatten(machine_resolver._parse_toml_text(after))
+    if _gate_value(after) == "off" and _gate_value(before) != "off":
+        return "turns off the doctrine-edit approval gate"
+    prefix = machine_profile.LEVEL_KEY + "."
+    names = {""} | {
+        k[len(prefix):] for k in (*flat_a, *flat_b) if k.startswith(prefix)
+    }
+    for name in names:
+        if _LEVEL_RANK[_level_of(flat_a, name)] < _LEVEL_RANK[_level_of(flat_b, name)]:
+            return "lowers the guard level"
+    return None
+
+
+def _settings_dirs() -> "set[str]":
+    home = os.path.expanduser("~")
+    dirs = {os.path.join(home, ".claude"), os.path.join(home, ".coordinator-claude-settings")}
+    for var in ("COORDINATOR_SETTINGS_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR"):
+        if os.environ.get(var):
+            dirs.add(os.environ[var])
+    return {_norm(d) for d in dirs}
+
+
+def _is_settings_file(target: str) -> bool:
+    if os.path.basename(target).lower() not in _SETTINGS_NAMES:
+        return False
+    parent = os.path.dirname(target)
+    return os.path.basename(parent).lower() == ".claude" or parent in _settings_dirs()
+
+
+def _env_block(text: str) -> Dict[str, Any]:
+    try:
+        env = json.loads(text).get("env")
+    except (ValueError, AttributeError):
+        return {}
+    return env if isinstance(env, dict) else {}
+
+
+def _settings_weakening(before: str, after: str) -> "str | None":
+    env_b, env_a = _env_block(before), _env_block(after)
+    for key, value in env_a.items():
+        key_u = str(key).upper()
+        new = str(value).strip().lower()
+        old = str(env_b.get(key, "")).strip().lower()
+        if key_u.startswith(_ENV_FEATURE_PREFIX) and new in _OFF_WORDS and old not in _OFF_WORDS:
+            return "turns off a coordinator feature"
+        if key_u.startswith(_ENV_LEVEL_PREFIX) and new in _LEVEL_RANK:
+            suffix = str(key)[len(_ENV_LEVEL_PREFIX):].lstrip("_").lower().replace("_", "-")
+            base = old if old in _LEVEL_RANK else machine_profile.guard_level(suffix) if suffix else (
+                machine_profile._explicit(machine_profile.LEVEL_KEY, machine_profile.LEVELS) or "warn"
+            )
+            if _LEVEL_RANK[new] < _LEVEL_RANK[base]:
+                return "lowers the guard level"
+    return None
+
+
+def _weakening_write(tool_name: str, tool_input: Dict[str, Any], target: str) -> "str | None":
+    """What a Write/Edit/MultiEdit to a machine-local registry file or a Claude
+    settings file newly weakens (gate off, guard level lowered, feature env
+    off), else None. Judged on the simulated result against the file as it is."""
+    try:
+        reg_dir = machine_resolver.registry_dir()
+        is_registry = target in {_norm(str(reg_dir / n)) for n in ("registry.local.toml", "registry.toml")}
+    except Exception:
+        is_registry = False
+    if not is_registry and not _is_settings_file(target):
+        return None
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            before = fh.read()
+    except OSError:
+        before = ""
+    after = _registry_text_after(tool_name, tool_input, before)
+    try:
+        if is_registry:
+            return _registry_weakening(before, after)
+        return _settings_weakening(before, after)
+    except Exception:
+        return None
+
+
+def _weakening_deny_reason(what: str) -> str:
+    return f"[doctrine-surface guard] BLOCKED: this edit {what}. Ask the PM to change it."
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not feature_enabled(_GATE_FEATURE):
         return None
@@ -705,6 +851,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
     if denial is not None:
         return denial
+
+    weakened = _weakening_write(payload.get("tool_name", ""), tool_input, target)
+    if weakened and not pm_approval_fresh(
+        payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+    ):
+        return apply_guard_level(
+            _GUARD_NAME,
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": _weakening_deny_reason(weakened),
+                }
+            },
+            risk=doctrine_surface_risk(f"This edit {weakened}."),
+        )
 
     owning_root: "str | None" = None
     matched = False

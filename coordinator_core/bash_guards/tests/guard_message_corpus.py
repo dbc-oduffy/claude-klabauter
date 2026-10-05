@@ -660,12 +660,8 @@ def _approval_gate_on_setup(
 def _rehomed_doctrine_surface_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
-    # PR #103 made the doctrine-edit gate opt-in
-    # (`coordinator.feature.doctrine_edit_gate`, off by default) -- this
-    # guard is a no-op unless the gate is on, so the corpus row must turn
-    # it on itself rather than rely on the ambient machine profile (see
-    # `coordinator_core/tests/test_doctrine_edit_gate_opt_in.py`'s own
-    # `_set_gate`).
+    # The gate (`coordinator.feature.doctrine_edit_gate`) is on by default;
+    # pin it so an ambient `off` cannot silence the row.
     from coordinator_core import machine_profile as _machine_profile
 
     mp.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
@@ -1407,6 +1403,8 @@ def _heredoc_repo_write_advise_setup(
     from coordinator_core.bash_guards import dispatch_checks
 
     mp.setattr(dispatch_checks, "_heredoc_target_outside_any_session_repo", lambda target, payload: False)
+    # scratch_dir lives under $TEMP, which heredoc-repo-write-advise treats as scratch.
+    mp.setattr(dispatch_checks, "_heredoc_write_target_is_scratch", lambda abs_path: False)
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
@@ -1633,9 +1631,9 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     ),
     CorpusRow(
         "block-illegal-filename",
-        "block-illegal-filename-powershell-silent",
+        "block-illegal-filename-powershell-fire",
         "echo x > bad?name.txt",
-        False,
+        True,
         _REWRITE,
         False,
         setup=lambda scratch_dir, mp: {"tool_name": "PowerShell"},
@@ -1695,6 +1693,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         True,
         _REWRITE,
         False,
+        setup=_heredoc_repo_write_advise_setup,
     ),
     CorpusRow(
         "cat-heredoc-write-advise",
@@ -1773,6 +1772,22 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "headless-claude-plugin-dir",
         "headless-claude-plugin-dir-control",
         "echo hi",
+        False,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "piped-pytest-exit-advisory",
+        "piped-pytest-exit-advisory-fire",
+        "python -m pytest tests/test_x.py | tail -3",
+        True,
+        _REWRITE,
+        False,
+    ),
+    CorpusRow(
+        "piped-pytest-exit-advisory",
+        "piped-pytest-exit-advisory-control",
+        "git log | head",
         False,
         _REWRITE,
         False,
@@ -3467,6 +3482,7 @@ from coordinator_core.hooks import postusefailure_cross_repo_memo_remediate as _
 from coordinator_core.hooks import postuse_subagent_compaction_warning as _hook_postuse_subagent_compaction_warning
 from coordinator_core.hooks import preuse_agent_dispatch as _hook_preuse_agent_dispatch
 from coordinator_core.hooks import preuse_bash_dispatch as _hook_preuse_bash_dispatch
+from coordinator_core.hooks import preuse_sendmessage_dispatch as _hook_preuse_sendmessage_dispatch
 from coordinator_core.hooks import preuse_skill_dispatch as _hook_preuse_skill_dispatch
 from coordinator_core.hooks import preuse_write_dispatch as _hook_preuse_write_dispatch
 from coordinator_core.hooks import project_orientation as _hook_project_orientation
@@ -4854,6 +4870,22 @@ def _fire_preuse_skill_dispatch_control() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(_run_maybe_async(_hook_preuse_skill_dispatch._handler(payload)))
 
 
+def _fire_preuse_sendmessage_dispatch() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-psmd-", dir=_neutral_scratch_parent()) as scratch:
+        transcript = Path(scratch) / "parent.jsonl"
+        run_dir = Path(scratch) / "parent" / "subagents" / "workflows" / "run1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "agent-deadbeef0123.jsonl").write_text("", encoding="utf-8")
+        (run_dir / "roster.json").write_text('{"members": [{"agent_id": "deadbeef0123"}]}', encoding="utf-8")
+        payload = {"tool_name": "SendMessage", "agent_id": "deadbeef0123", "transcript_path": str(transcript)}
+        return _to_envelope_or_none(_run_maybe_async(_hook_preuse_sendmessage_dispatch._handler(payload)))
+
+
+def _fire_preuse_sendmessage_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Read", "agent_id": "deadbeef0123"}
+    return _to_envelope_or_none(_run_maybe_async(_hook_preuse_sendmessage_dispatch._handler(payload)))
+
+
 def _fire_preuse_write_dispatch() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-pwd-", dir=_neutral_scratch_parent()) as scratch:
         payload = {
@@ -4974,8 +5006,7 @@ def _fire_session_start_guard_plane_check_control() -> Optional[Dict[str, Any]]:
 
 def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
-        mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
+        _isolate_forwarder_seams(mp, probe=None)
         # The handler is source-gated (no source runs no leg) and its other legs
         # write registry/breadcrumb/hook state, so run only the forwarder leg.
         mp.setattr(
@@ -4995,9 +5026,11 @@ def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
 
 
 def _fire_sessionstart_async_dispatch_control() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_sessionstart_async_dispatch._handler({}))
-    )
+    with pytest.MonkeyPatch.context() as mp:
+        _isolate_forwarder_seams(mp, probe=None)
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_sessionstart_async_dispatch._handler({}))
+        )
 
 
 def _fire_sessionstart_bin_drift_refresh() -> Optional[Dict[str, Any]]:
@@ -5047,19 +5080,65 @@ def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
             )
 
 
+def _isolate_forwarder_seams(
+    mp: pytest.MonkeyPatch,
+    *,
+    probe: Optional[bool],
+    running_fp: Optional[str] = None,
+    on_disk_fp: Optional[str] = None,
+    is_forwarder: Optional[bool] = None,
+    retire_ok: bool = True,
+    spawn_ok: bool = True,
+    bind_ok: bool = True,
+) -> None:
+    """Replace every probe/identity/retire/spawn seam of the forwarder hook so
+    a row drives one fixed arm and never signals, spawns or dials a real process."""
+    m = _hook_sessionstart_ensure_http_forwarder
+    mp.setattr(m, "_forwarder_module_path", lambda: Path(__file__))
+    mp.setattr(m, "_probe_bind_wins", lambda *a, **kw: probe)
+    mp.setattr(m, "_module_fingerprint_on_disk", lambda p: on_disk_fp)
+    mp.setattr(
+        m,
+        "_running_forwarder_record",
+        lambda: None if running_fp is None else {"pid": 424242, "module_fingerprint": running_fp},
+    )
+    mp.setattr(m, "_pid_is_a_forwarder", lambda pid: is_forwarder)
+    mp.setattr(m, "_retire_stale_forwarder", lambda pid: retire_ok)
+    mp.setattr(m, "_spawn_forwarder_detached", lambda p: spawn_ok)
+    mp.setattr(m, "_await_successor_bind", lambda: bind_ok)
+
+
 def _fire_sessionstart_ensure_http_forwarder() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
-        mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
+        _isolate_forwarder_seams(mp, probe=None)
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
+        )
+
+
+def _fire_sessionstart_ensure_http_forwarder_successor_unbound() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        _isolate_forwarder_seams(
+            mp,
+            probe=False,
+            running_fp="0123456789abcdef",
+            on_disk_fp="fedcba9876543210",
+            is_forwarder=True,
+            bind_ok=False,
+        )
         return _to_envelope_or_none(
             _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
         )
 
 
 def _fire_sessionstart_ensure_http_forwarder_control() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
-    )
+    with pytest.MonkeyPatch.context() as mp:
+        _isolate_forwarder_seams(
+            mp, probe=False, running_fp="0123456789abcdef", on_disk_fp="0123456789abcdef"
+        )
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_sessionstart_ensure_http_forwarder._handler({}))
+        )
 
 
 def _fire_stop_dispatch() -> Optional[Dict[str, Any]]:
@@ -5759,6 +5838,8 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("preuse_agent_dispatch", "control-empty-input", False, _fire_preuse_agent_dispatch_control),
     HookRow("preuse_bash_dispatch", "fire-host-ban", True, _fire_preuse_bash_dispatch),
     HookRow("preuse_bash_dispatch", "control-no-chain-hit", False, _fire_preuse_bash_dispatch_control),
+    HookRow("preuse_sendmessage_dispatch", "fire-chatty-run-first-send", True, _fire_preuse_sendmessage_dispatch),
+    HookRow("preuse_sendmessage_dispatch", "control-not-sendmessage", False, _fire_preuse_sendmessage_dispatch_control),
     HookRow("preuse_skill_dispatch", "fire-trampoline-leg", True, _fire_preuse_skill_dispatch),
     HookRow("preuse_skill_dispatch", "control-unmatched-verb", False, _fire_preuse_skill_dispatch_control),
     HookRow("preuse_write_dispatch", "fire-claude-md-grant", True, _fire_preuse_write_dispatch),
@@ -5795,6 +5876,12 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("sessionstart_dispatch", "fire-composed-legs", True, _fire_sessionstart_dispatch),
     HookRow(
         "sessionstart_ensure_http_forwarder", "fire-probe-undetermined", True, _fire_sessionstart_ensure_http_forwarder
+    ),
+    HookRow(
+        "sessionstart_ensure_http_forwarder",
+        "fire-successor-unbound",
+        True,
+        _fire_sessionstart_ensure_http_forwarder_successor_unbound,
     ),
     HookRow(
         "sessionstart_ensure_http_forwarder",

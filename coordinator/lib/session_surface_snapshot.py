@@ -123,7 +123,7 @@ def write_snapshot(session_id: str, source: str = "", cwd: Optional[str] = None)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"session_id": session_id, "ts": time.time(), "surfaces": compute_surfaces(cwd)}
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         os.replace(tmp, path)
         old = sorted(cache_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         for p in old[_KEEP:]:

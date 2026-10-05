@@ -10,7 +10,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _head(root):

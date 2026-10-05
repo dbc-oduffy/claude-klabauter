@@ -338,3 +338,28 @@ def test_handler_default_worktree_is_range_mode(tmp_path: Path) -> None:
 
     assert result["error"] is None
     assert result["head_sha"] == sha2
+
+
+def test_two_runs_in_one_repo_freeze_disjoint_artifacts_and_exclude_pre_base_rows(tmp_path):
+    from coordinator_core.ops.review_mint.execute_review import prep_slice_id_for
+
+    _init_repo(tmp_path)
+    _commit(tmp_path, "seed.txt", "seed\n", "seed")
+    (tmp_path / "pre.py").write_text("old = 1\n")
+    _git(["add", "pre.py"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "row coded before the run base"], cwd=tmp_path)
+    base = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    (tmp_path / "a.py").write_text("a = 1\n")
+    (tmp_path / "b.py").write_text("b = 1\n")
+
+    sid_a = prep_slice_id_for("docs/plans/p.md", base, "run-a")
+    sid_b = prep_slice_id_for("docs/plans/p.md", base, "run-b")
+    ra = freeze_diff(tmp_path, base, sid_a, ["a.py"], worktree=True)
+    rb = freeze_diff(tmp_path, base, sid_b, ["b.py"], worktree=True)
+
+    assert ra["error"] is None and rb["error"] is None
+    assert ra["diff_path"] != rb["diff_path"]
+    text_a, text_b = Path(ra["diff_path"]).read_text(), Path(rb["diff_path"]).read_text()
+    assert "b/a.py" in text_a and "b/b.py" not in text_a
+    assert "b/b.py" in text_b and "b/a.py" not in text_b
+    assert "pre.py" not in text_a + text_b

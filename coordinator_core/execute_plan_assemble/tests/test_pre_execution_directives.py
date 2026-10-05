@@ -12,6 +12,9 @@ Negative-spec:
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from coordinator_core.session.record_homes import home_dir, record_path
 from coordinator_core.execute_plan_assemble.pre_execution import (
     pre_execution_directives,
 )
@@ -88,14 +91,14 @@ def test_judgment_points_are_untrusted_gates_with_no_recommendation():
         assert jp["recommendation"] is None
 
 
-def _repo_with_sizing(tmp_path, sizing_text, *, plan_sizing="state/sizings/s.yaml"):
+def _repo_with_sizing(tmp_path, sizing_text, *, plan_sizing=Path(record_path(".", "sizings", "s.yaml")).as_posix()):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
-    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    Path(home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     (tmp_path / PLAN_PATH).write_text(
         f"---\ntitle: t\nsizing_object: {plan_sizing}\n---\nbody\n", encoding="utf-8"
     )
     if sizing_text is not None:
-        (tmp_path / "state" / "sizings" / "s.yaml").write_text(sizing_text, encoding="utf-8")
+        Path(record_path(str(tmp_path), "sizings", "s.yaml")).write_text(sizing_text, encoding="utf-8")
 
 
 _ACCEPTED = "interaction_mode: {m}\nexit_criterion:\n  accepted:\n    pm_quote: ok\n    mode: {m}\n"
@@ -109,7 +112,7 @@ def _d2_args(tmp_path):
 def test_d2_uses_the_sizing_arm_for_an_accepted_pm_sizing(tmp_path):
     _repo_with_sizing(tmp_path, _ACCEPTED.format(m="pm"))
     assert _d2_args(tmp_path) == [
-        "authorize-invocation", PLAN_PATH, "--authorized-by-sizing", "state/sizings/s.yaml",
+        "authorize-invocation", PLAN_PATH, "--authorized-by-sizing", Path(record_path(".", "sizings", "s.yaml")).as_posix(),
     ]
 
 
@@ -121,7 +124,7 @@ def test_d2_keeps_typed_command_for_hands_on_sizing(tmp_path):
 def test_d2_falls_back_to_typed_command_when_sizing_missing_or_unaccepted(tmp_path):
     _repo_with_sizing(tmp_path, None)
     assert _d2_args(tmp_path)[2:] == ["--typed-command", "/execute-plan"]
-    (tmp_path / "state" / "sizings" / "s.yaml").write_text(
+    Path(record_path(str(tmp_path), "sizings", "s.yaml")).write_text(
         "interaction_mode: pm\nexit_criterion:\n  accepted: null\n", encoding="utf-8"
     )
     assert _d2_args(tmp_path)[2:] == ["--typed-command", "/execute-plan"]

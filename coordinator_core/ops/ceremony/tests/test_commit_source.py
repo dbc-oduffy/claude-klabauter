@@ -2,10 +2,14 @@
 
 import subprocess
 
+import pytest
+
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.ceremony import commit_source
 from coordinator_core.telemetry import spawn_counter
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 

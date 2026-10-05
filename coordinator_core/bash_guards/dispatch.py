@@ -435,7 +435,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "stale-write": (">", "tee"),
     "block-worktree-creation": ("worktree",),
     "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
-    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "xargs", "sh", "python"),
+    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
     "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
     "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
     "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
@@ -2312,6 +2312,10 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_reap_stale_git_lock import (
         check_reap_stale_git_lock as _check_reap_stale_git_lock,
     )
+    from coordinator_core.bash_guards.guard_piped_pytest_exit import (
+        check_piped_pytest_exit as _check_piped_pytest_exit,
+        MATCHERS as _matchers_piped_pytest_exit,
+    )
     from coordinator_core.bash_guards.guard_headless_claude_plugin_dir import (
         check_headless_claude_plugin_dir as _check_headless_claude_plugin_dir,
         MATCHERS as _matchers_headless_claude_plugin_dir,
@@ -3215,6 +3219,8 @@ def _build_guard_chain(
         # Rewrite/deny on headless `claude -p` without --plugin-dir; tail of the
         # advisory band, after every hard block.
         GuardEntry("headless-claude-plugin-dir", lambda: _check_headless_claude_plugin_dir(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_headless_claude_plugin_dir)),
+        # Advisory-only: piped pytest whose exit code is the filter's.
+        GuardEntry("piped-pytest-exit-advisory", lambda: _check_piped_pytest_exit(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_piped_pytest_exit)),
         # BX-7/BX-8's own platform-conditioned advisory policy
         # (`guard_multiprobe_banner.py` / `guard_plumbing_and_loops.py`) --
         # deliberately registered at the very TAIL, AFTER every rewrite/

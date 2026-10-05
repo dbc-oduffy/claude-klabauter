@@ -464,7 +464,7 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
         "(mechanize/reroute/wiki) first.\n"
         "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
-        "  Reason: needs a live CLAUDE.md write grant for this session.\n"
+        "  Reason: no live CLAUDE.md write grant.\n"
     )
     # knows the answer to. `_OVERRIDE_ENV_VAR` stays wired in `check()`.
     # C4(b) removed the resolved `PYTHONPATH=... python3 -m ...` grant

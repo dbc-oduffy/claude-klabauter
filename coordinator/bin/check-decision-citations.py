@@ -18,6 +18,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+GENERATES = [{"artifact": "state/baselines/decision-citations.md", "stamp_key": "generated_at", "sources": ["coordinator/bin/check-decision-citations.py"]}]
+UNSTAMPED_BY_DESIGN = ["state/baselines/decision-citations.md"]
+
 BASELINE_REL = "state/baselines/decision-citations.md"
 SC_WIKI_REL = "coordinator/docs/wiki/concurrent-em-git-operations/scoped-safety-commits.md"
 DECISION_DIRS = ("docs/decisions", "coordinator/docs/decisions")
@@ -45,7 +48,7 @@ def _settings_home() -> Path:
     explicit = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if explicit:
         return Path(explicit)
-    home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~")
+    home = os.environ.get("CLAUDE_HOME") or os.environ.get("USERPROFILE") or os.path.expanduser("~")
     return Path(home) / ".coordinator-claude-settings"
 
 
@@ -65,7 +68,9 @@ def _run(argv: list[str], cwd: Path | None = None) -> str | None:
 
 
 def repo_root() -> Path:
-    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    lib_dir = str(Path(__file__).resolve().parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
     from subject_repo import subject_repo_root
 
     root = subject_repo_root()

@@ -66,7 +66,7 @@ from coordinator_core.session.liveness import session_live
 
 SCHEMA_VERSION = 1
 
-#: Generator-provenance declaration (generator_provenance.py). `_write_json_
+#: Generator-provenance declaration (coordinator_core/ops/generator_census). `_write_json_
 #: atomic` writes under `settings_home() / "state" / "group-em"` --
 #: `settings_home()` resolves to `${CLAUDE_HOME:-$HOME}/.coordinator-claude-
 #: settings` (or `COORDINATOR_SETTINGS_HOME` when set), never a path inside

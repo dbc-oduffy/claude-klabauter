@@ -94,7 +94,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "plan-capture-persist"
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader).
 # persist_captured_plan() writes a new docs/plans/<date>-<slug>.md whose name
 # is derived from the captured plan's own title each call (and may delete a
 # differently-slugged duplicate in the same dir) -- a data-dependent target

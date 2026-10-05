@@ -379,8 +379,7 @@ def test_coverage_binary_change(tmp_path: Path) -> None:
 def test_coverage_mode_only_change(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sha1 = _commit(tmp_path, "script.sh", "echo hi\n", "add")
-    (tmp_path / "script.sh").chmod(0o755)
-    _git(["add", "script.sh"], cwd=tmp_path)
+    _git(["update-index", "--chmod=+x", "script.sh"], cwd=tmp_path)
     _git(["commit", "-q", "-m", "mode change"], cwd=tmp_path)
     sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
 

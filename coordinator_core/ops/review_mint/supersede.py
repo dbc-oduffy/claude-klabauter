@@ -46,6 +46,9 @@ from coordinator_core.ops.review_mint.wave_bookkeeping import (
     review_wave_bookkeeping_stem,
 )
 
+# Writes per-session subagent-share sidecars, gitignored and unstamped.
+GENERATES = []
+
 
 _GIT_TIMEOUT_SECS = 30
 

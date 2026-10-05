@@ -333,6 +333,7 @@ def _check_source_head_not_wip(dest: str, percolate_root: str) -> Optional[str]:
 def _evaluate_promotion_bar(
     dest: str, target: str, percolate_root: str, candidate_branch: str, main_branch: str,
     pm_soak_override: str = "",
+    soak_waived_by: str = "",
 ) -> List[str]:
     _bootstrap_engine()
     refusals: List[str] = []
@@ -361,8 +362,16 @@ def _evaluate_promotion_bar(
     cross_machine_refusal = _check_cross_machine_observed(dest, target)
     if cross_machine_refusal and pm_soak_override:
         # Predicate 4 is the one declared UNENFORCED (a soak-time proxy); only it
-        # yields to a PM ruling, and the ruling's words are printed, never implied.
-        print(f"klabauter-promote: predicate 4 waived by PM ruling: {pm_soak_override!r}", file=sys.stderr)
+        # yields to a PM ruling, and the ruling's words are printed, never implied. A waiver a
+        # delegate grants names the delegate, so the PM is never credited with a call they did not make.
+        if soak_waived_by:
+            print(
+                f"klabauter-promote: predicate 4 waived by {soak_waived_by} under the PM's delegation: "
+                f"{pm_soak_override!r}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"klabauter-promote: predicate 4 waived by PM ruling: {pm_soak_override!r}", file=sys.stderr)
         cross_machine_refusal = None
     if cross_machine_refusal:
         refusals.append(f"klabauter-promote: predicate 4 (cross-machine observation) FAILED —\n{cross_machine_refusal}")
@@ -394,6 +403,7 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     refusals = _evaluate_promotion_bar(
         dest, target, percolate_root, _CANDIDATE_BRANCH, main_branch,
         pm_soak_override=(args.pm_soak_override or "").strip(),
+        soak_waived_by=(args.soak_waived_by or "").strip(),
     )
     if refusals:
         for refusal in refusals:
@@ -425,6 +435,15 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     if result.returncode != 0:
         print((result.stderr or result.stdout or "").strip(), file=sys.stderr)
         return _EXIT_FAIL
+    # The push moves only the remote ref; a local main left behind reads as an unpromoted
+    # tree to anyone checking `git log main` in the mirror. Fast-forward-only, so it never rewrites.
+    local = _run(["git", "-C", dest, "fetch", ".", push_refspec])
+    if local.returncode != 0:
+        print(
+            f"klabauter-promote: remote '{main_branch}' promoted; local '{main_branch}' not "
+            f"fast-forwarded: {(local.stderr or local.stdout or '').strip()}",
+            file=sys.stderr,
+        )
 
     print(
         f"klabauter-promote: promoted '{_CANDIDATE_BRANCH}' onto "
@@ -463,6 +482,12 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PM_WORDS",
         default="",
         help="Waive predicate 4's soak floor only, citing the PM's verbatim ruling.",
+    )
+    parser.add_argument(
+        "--soak-waived-by",
+        metavar="AUTHORITY",
+        default="",
+        help="The delegate who granted the waiver under the PM's delegation; omit when the PM ruled directly.",
     )
     parser.set_defaults(func=_cmd_promote)
     return parser

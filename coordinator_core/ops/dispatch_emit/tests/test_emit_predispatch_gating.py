@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -27,9 +28,12 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
 )
 from coordinator_core.ops.dispatch_emit.predispatch import CHECK_PHASE_TITLE, AgentSpec
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from coordinator_core.session.record_homes import record_path
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN = "docs/plans/with-falsifier.md"
 PLAN_BODY_MARKER = "Acceptance criteria table: SECRET-PLAN-BODY"
@@ -69,7 +73,7 @@ def _compose(waves, *, predispatch=True, specs=None, **kw):
         waves,
         name="wf",
         description="inventory",
-        plan_path="state/mise-inventory/x.spine.md",
+        plan_path=Path(record_path(".", "mise-inventory", "x.spine.md")).as_posix(),
         predispatch=predispatch,
         review_specs=_review_spec_for() if specs is None else specs,
         **REVIEW_KW,

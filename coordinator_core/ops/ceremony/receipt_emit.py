@@ -73,7 +73,7 @@ from typing import Any, Optional
 # state/ceremony/<ceremony>/<sid-short>-<emitted_at>.json -- an unbounded,
 # session-keyed, data-dependent output set with no fixed artifact path (see
 # default_receipt_path/resolve_latest_receipt_path above), the case
-# generator_provenance.py reserves for MUTATES rather than GENERATES.
+# coordinator_core/ops/generator_census reserves for MUTATES rather than GENERATES.
 MUTATES = ["state/ceremony/**/*.json"]
 
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext

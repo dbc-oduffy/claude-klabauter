@@ -174,7 +174,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
 
-# Generator-provenance declaration (generator_provenance.py). Every real
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Every real
 # write in this module (override_log, scope-warnings.log) resolves under
 # <git_root>/.git/coordinator-sessions/<session_id>/ or a session_dir --
 # untracked guard bookkeeping, never a tracked repo artifact.
@@ -4871,12 +4871,16 @@ def check_destructive_git_clean(
     # it is not part of the memo key -- folding it in would be a no-op that
     # only widens the key for no reason.
     _clean_oracle_memo: Dict[Tuple[str, ...], Tuple[int, str]] = {}
+    # The oracle must run where the command runs: git then resolves the
+    # innermost repo itself, instead of the hook process's own cwd repo.
+    _pc = (payload or {}).get("cwd") if isinstance(payload, dict) else None
+    _clean_oracle_cwd = _pc if isinstance(_pc, str) and os.path.isdir(_pc) else None
 
     def _memo_run_clean_oracle(args: List[str]) -> Tuple[int, str]:
         key = tuple(args)
         cached = _clean_oracle_memo.get(key)
         if cached is None:
-            cached = _run_git(args, extra_env={"LC_ALL": "C"})
+            cached = _run_git(args, cwd=_clean_oracle_cwd, extra_env={"LC_ALL": "C"})
             _clean_oracle_memo[key] = cached
         return cached
 

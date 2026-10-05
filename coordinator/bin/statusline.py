@@ -64,6 +64,9 @@ import tempfile
 import time
 from pathlib import Path, PurePath
 
+# Writes per-session context-level and registry-memo records under settings home, outside the tracked tree.
+GENERATES = []
+
 _BIN_LIB_DIR = Path(__file__).resolve().parent / "lib"
 _COORDINATOR_LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 

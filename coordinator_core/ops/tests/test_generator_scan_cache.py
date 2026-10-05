@@ -169,6 +169,8 @@ def write():
 """
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_cold_warm_byte_identity(tmp_path: Path) -> None:
     _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
     _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
@@ -180,6 +182,8 @@ def test_cold_warm_byte_identity(tmp_path: Path) -> None:
     assert serialize_generator_records(cold) != "[]"
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_touching_one_file_rescans_only_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
     stable_path = _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
@@ -205,6 +209,8 @@ def test_touching_one_file_rescans_only_it(tmp_path: Path, monkeypatch: pytest.M
     assert calls == [stable_path]
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_corrupt_cache_warm_run_returns_full_correct_set(tmp_path: Path) -> None:
     _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
     _write_fixture_module(tmp_path, "gen_b.py", _UNDECLARED_WRITER_SOURCE)
@@ -220,6 +226,8 @@ def test_corrupt_cache_warm_run_returns_full_correct_set(tmp_path: Path) -> None
 
 # Symlink parity with the pre-C6 sweep
 # (rglob + path.stat()/is_file(), both of which follow symlinks by default).
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_symlinked_py_file_is_swept(tmp_path: Path) -> None:
     real_path = _write_fixture_module(tmp_path, "gen_a.py", _DECLARED_GENERATOR_SOURCE)
     sweep_dir = tmp_path / "coordinator_core"
@@ -234,6 +242,8 @@ def test_symlinked_py_file_is_swept(tmp_path: Path) -> None:
     assert any(key.endswith("gen_a_link.py") for key in keys)
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_symlinked_directory_is_not_recursed_into(tmp_path: Path) -> None:
     sweep_dir = tmp_path / "coordinator_core"
     sweep_dir.mkdir(parents=True, exist_ok=True)
@@ -251,6 +261,8 @@ def test_symlinked_directory_is_not_recursed_into(tmp_path: Path) -> None:
     assert not any("link_dir" in key for key in keys)
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_resolution_reruns_against_changed_tracked_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -357,6 +369,7 @@ def test_tracked_paths_missing_index_computes_fresh_and_does_not_raise(tmp_path:
     assert result is None or isinstance(result, frozenset)
 
 
+@pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_warm_discover_generators_process_time_under_bar() -> None:
     """AC1: warm `discover_generators` clears the 500ms brightline bar.
@@ -472,6 +485,8 @@ def test_save_content_cache_deterministic_bytes_across_key_order(
     assert first_bytes == second_bytes
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_stat_miss_hits_content_cache_and_never_parses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -503,6 +518,8 @@ def test_stat_miss_hits_content_cache_and_never_parses(
     assert module_path.exists()
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_content_cache_hit_is_independent_of_path_and_mtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -539,6 +556,8 @@ def test_content_cache_hit_is_independent_of_path_and_mtime(
     assert any(g.endswith("gen_a_copy.py") for g in generators)
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_content_cache_never_loaded_on_a_fully_warm_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -587,6 +606,7 @@ def test_shipped_content_cache_schema_matches_current_version() -> None:
     )
 
 
+@pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_cold_discover_generators_with_shipped_content_cache_under_bound() -> None:
     """Pins the cold-path fix: with the STAT cache deleted (simulating a

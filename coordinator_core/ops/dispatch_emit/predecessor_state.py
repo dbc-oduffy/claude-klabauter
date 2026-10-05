@@ -14,6 +14,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.dispatch_emit.spine_read import load_frontmatter_doc
+from coordinator_core.session.record_homes import home_dir
 
 PREDECESSOR_HEADING = "## Predecessor handoff state"
 
@@ -55,7 +56,7 @@ def resolve_predecessor_state(plan_text: str, repo_root: Path) -> str:
     skips the corpus scan -- an empty prefilter would match every handoff.
     """
     root = repo_root.resolve()
-    handoffs_dir = (root / "state" / "handoffs").resolve()
+    handoffs_dir = Path(home_dir(str(root), "handoffs")).resolve()
     front = _frontmatter_of_text(plan_text)
     deliverable_id = front.get("deliverable_id")
     if not (isinstance(deliverable_id, str) and deliverable_id.strip()):

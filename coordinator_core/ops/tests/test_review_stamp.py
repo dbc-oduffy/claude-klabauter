@@ -146,6 +146,24 @@ def test_mint_success(tmp_path):
     assert "review_stamp:" in plan_path.read_text(encoding="utf-8")
 
 
+def test_mint_finds_an_inline_review_line_outside_the_trailer_block(tmp_path):
+    # Shape of commits landed before terminal_commit split the removal line out:
+    # the anchor shares a paragraph with a non-trailer line, and a later trailer
+    # block follows, so git's trailer parser does not report it.
+    repo = _setup_repo(tmp_path)
+    _mint_success_fixture(repo)
+    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+    terminal_sha = _commit(
+        repo,
+        "land review\n\nRemoves declared write(s): gone.py\n"
+        "Inline-Review: applies 2026-09-27-integration -- execute-review: 1 slices, 2 fixes\n\n"
+        "Session-Id: sess1",
+    )
+    sha, sidecar, _ = m._resolve_terminal_commit(repo, "pln-example-abc123")
+    assert sha == terminal_sha
+    assert sidecar.name == "2026-09-27-integration.md"
+
+
 def test_mint_falls_back_to_receipt_session_id_when_sidecar_has_no_plan_id(tmp_path):
     """example-retrieval-repo cc6525cf0 repair path: a commit landed by the pre-fix
     engine carries an integration sidecar with NO `plan_id` at all. `mint`

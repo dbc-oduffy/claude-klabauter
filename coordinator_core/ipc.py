@@ -2538,6 +2538,14 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
                     f"{_OP_TIMEOUT_INDETERMINATE_MESSAGE} "
                     f"(op {method!r} timed out after {op_timeout}s)"
                 ),
+                "data": {
+                    "diagnosis": {
+                        "case": "no_reply",
+                        "op": method,
+                        "waited_secs": op_timeout,
+                        "stage": "op timed out",
+                    }
+                },
             },
         }
 

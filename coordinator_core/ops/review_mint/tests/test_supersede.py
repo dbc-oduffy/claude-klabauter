@@ -15,7 +15,7 @@ from coordinator_core.ops.review_mint.supersede import (
 from coordinator_core.win_portability import no_console_creationflags
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root, *args):

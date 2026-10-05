@@ -122,7 +122,7 @@ from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 #: NOT the settings-home root -- see the module docstring's "Storage location" § item 2.
 _SETTINGS_HOME_ANCHOR_SUBDIR = ("claude-klabauter", "write-bump-anchor")
 
-# Generator-provenance declaration (generator_provenance.py).
+# Generator-provenance declaration (coordinator_core/ops/generator_census).
 # write_session_start_record writes write_bump_launch_cwd under
 # sessions_dir()/<session_id>/ (.git/coordinator-sessions/, untracked) and
 # under the settings-home write-bump-anchor hub -- neither is a tracked

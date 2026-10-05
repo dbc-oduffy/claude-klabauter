@@ -740,6 +740,8 @@ def test_run_gate_pre_existing_failure_confirmed_on_both_sides_does_not_fail(
     assert result.unconfirmed == ()
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_run_gate_indeterminate_when_no_runner_detected_still_restores(tmp_path):
     calls = []
     result = run_gate(

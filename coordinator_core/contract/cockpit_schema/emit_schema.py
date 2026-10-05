@@ -87,7 +87,7 @@ from coordinator_core.contract.cockpit_schema.common import (
 )
 from coordinator_core.frontmatter.baton_class import baton_class
 
-# Generator-provenance declaration ONLY (C2, generator_provenance.py's AST
+# Generator-provenance declaration ONLY (C2, coordinator_core/ops/generator_census
 # reader) -- this module is a HARD EXTERNAL DEPENDENCY (DoE's sole
 # regeneration path for their frozen schema; CLAUDE.md § Architecture) and
 # nothing else in this file changes for this chunk.

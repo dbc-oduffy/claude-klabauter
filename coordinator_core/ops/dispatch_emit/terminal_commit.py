@@ -374,6 +374,11 @@ def _stamp_coded_commit(
     # A plan `review_stamp.mint` just wrote rides this commit even when none of
     # its rows flipped (a re-fire over already-coded rows).
     paths = sorted(set(rows_coded) | set(also_commit))
+    # `git status` lists a path only when a commit over it can carry it: an
+    # untracked gitignored plan (a warp run spine) is absent, so never staged.
+    stageable = _changed_paths(worktree_root, paths) if paths else None
+    if stageable is not None:
+        paths = [p for p in paths if p in stageable]
     if not paths:
         return {"rows_coded": {}, "coded_sha": None}
     n = sum(len(v) for v in rows_coded.values())
@@ -599,10 +604,81 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     return out
 
 
-def _subject(contributing: list) -> str:
+_DELIVERED_REPORT_RE = re.compile(
+    r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>',
+    re.MULTILINE,
+)
+_UNDELIVERED_REPORT_RE = re.compile(
+    r'^\s*"?[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:PARTIAL|BLOCKED)</exit-status>',
+    re.MULTILINE,
+)
+_PARTIAL_REPORT_RE = re.compile(
+    r'^\s*"?[*_`]{0,2}PARTIAL[*_`]{0,2}:|<exit-status>PARTIAL</exit-status>', re.MULTILINE
+)
+_UNDONE_LINE_RE = re.compile(r"^\s*[-*]?\s*[*_`]{0,2}(?:not done|undone|remaining)", re.IGNORECASE)
+_UNDONE_CAP = 400
+
+
+def _undone_summary(text: str) -> str:
+    """The report's named undone work: its ``Not done``/``Remaining`` lines, else its PARTIAL line."""
+    lines = text.splitlines()
+    picked = [ln.strip() for ln in lines if _UNDONE_LINE_RE.match(ln)]
+    if not picked:
+        picked = [ln.strip() for ln in lines if re.match(r'\s*"?[*_`]{0,2}PARTIAL', ln)]
+    return " | ".join(picked)[:_UNDONE_CAP]
+
+
+def _partial_chunks(
+    worktree_root: Path, request: CommitRequest, incomplete: set, withheld: Optional[dict] = None
+) -> list:
+    """Incomplete chunks whose executor itself reported DONE/DONE_WITH_CONCERNS: the row
+    is incomplete only because the delivery verdict failed (an AC needing a later runtime
+    step), and its files were reviewed with the wave. An executor PARTIAL or BLOCKED, an
+    unreadable report, or one carrying no DONE status stays stranded; a PARTIAL row is
+    recorded in ``withheld`` as ``{id: undone AC text}``."""
+    out: list = []
+    for chunk in request.chunks:
+        if chunk.id not in incomplete or not chunk.report:
+            continue
+        text = _read_rel(worktree_root, chunk.report)
+        if text is None:
+            continue
+        if _DELIVERED_REPORT_RE.search(text) and not _UNDELIVERED_REPORT_RE.search(text):
+            out.append(chunk)
+        elif withheld is not None and _PARTIAL_REPORT_RE.search(text):
+            withheld[chunk.id] = _undone_summary(text)
+    return out
+
+
+def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
+    """The subset of ``paths`` whose worktree bytes differ from HEAD (modified,
+    added, untracked or deleted): the files a commit over them can carry. One
+    scoped ``git status`` spawn; ``None`` when git could not answer."""
+    if not paths:
+        return set()
+    result = run_git(
+        [
+            "-C", str(worktree_root), "--no-optional-locks", "status",
+            "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--",
+            *[f":(literal){p}" for p in paths],
+        ],
+        binary=True,
+    )
+    if not result.ok:
+        return None
+    return {
+        entry[3:].decode("utf-8", "surrogateescape")
+        for entry in result.stdout_bytes.split(b"\0")
+        if len(entry) > 3
+    }
+
+
+def _subject(contributing: list, fallback: str) -> str:
     ids = ", ".join(c.id for c in contributing)
-    titles = "; ".join(c.title for c in contributing)
-    return f"{ids}: {titles}"
+    titles = "; ".join(c.title for c in contributing if c.title.strip())
+    if not ids:
+        return fallback
+    return f"{ids}: {titles}" if titles else ids
 
 
 @register_op("dispatch.terminal_commit")
@@ -665,6 +741,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
     paths]}`` for each ``incomplete_chunks`` id the request marker names, the
     work the commit left uncommitted; ``{}`` when none, or when no marker was read.
+    ``blockers`` (present only when non-empty) maps each executor-PARTIAL row, whose
+    files stay uncommitted, to the undone work its report names.
     Once the run reaches its commit (every refusal and no-op before that omits it),
     the reply also carries ``undeclared_dirty`` -- the
     dirty files (modified or untracked) in the directories of the run's declared
@@ -675,8 +753,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     stranded: dict = {}
     scope: dict = {}
     gated_ids: set = set()
-    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids)
+    blockers: dict = {}
+    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers)
     reply["stranded"] = stranded
+    if blockers:
+        reply["blockers"] = blockers
     if scope:
         reply.update(_undeclared_dirty(scope["root"], scope["request"]))
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
@@ -692,7 +773,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
 def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
-    gated_ids: Optional[set] = None,
+    gated_ids: Optional[set] = None, blockers: Optional[dict] = None,
 ) -> dict:
     if repo_root is None:
         return _error(
@@ -929,13 +1010,22 @@ def _terminal_commit(
         all_paths.extend(chunk_paths)
         prefix_files.extend(own_prefix_files)
 
+    withheld_partial: dict = {}
+    partial_chunks = _partial_chunks(worktree_root, request, incomplete_chunks, withheld_partial)
+    if withheld_partial and blockers is not None:
+        blockers.update(withheld_partial)
+    for chunk in partial_chunks:
+        own_prefix_files = _own_prefix_files(worktree_root, chunk, report_cache) or []
+        all_paths.extend(list(chunk.paths) + own_prefix_files)
+        prefix_files.extend(own_prefix_files)
+
     if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
 
     if not all_paths:
         return {"committed": False, "nothing_to_commit": True}
 
-    declared_writes = {p for c in done_chunks for p in c.paths}
+    declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []
@@ -963,14 +1053,20 @@ def _terminal_commit(
 
     scope.update(root=worktree_root, request=request)
     final_paths_set = set(all_paths)
-    contributing_chunks = [
-        c
-        for c in done_chunks
-        if any(p in final_paths_set or p in deleted_paths for p in list(c.paths)) or any(
-            p in final_paths_set
-            for p in _own_prefix_files(worktree_root, c, report_cache) or []
+    changed = _changed_paths(worktree_root, all_paths)
+
+    def contributes(c) -> bool:
+        def in_commit(p: str) -> bool:
+            return p in final_paths_set and (changed is None or p in changed)
+
+        return any(in_commit(p) or p in deleted_paths for p in list(c.paths)) or any(
+            in_commit(p) for p in _own_prefix_files(worktree_root, c, report_cache) or []
         )
-    ]
+
+    contributing_chunks = [c for c in done_chunks if contributes(c)]
+    contributing_partial = [c for c in partial_chunks if contributes(c)]
+    for c in contributing_partial:
+        stranded.pop(c.id, None)
 
     from datetime import datetime, timezone
 
@@ -1001,23 +1097,36 @@ def _terminal_commit(
         return _error(f"completion receipt write failed: {exc}", refused="receipt-write-failed")
     all_paths.extend(receipt_paths)
 
-    message_lines = [
+    subject = (
         f"review anchor: {request.plan_path} -- delivery PASS, no product files"
         if anchor_only
-        else _subject(contributing_chunks)
-    ]
+        else _subject(
+            contributing_chunks + contributing_partial,
+            f"review trail: {inline_review['integration_stem']}",
+        )
+    )
+    if not subject.strip(" :"):
+        _remove(worktree_root, receipt_paths)
+        return _error(
+            f"terminal commit subject {subject!r} is empty; chunk ids and the "
+            "integration stem are both blank",
+            refused="empty-subject",
+        )
+    paragraphs = [subject]
     if deleted_paths:
         # The undeclared-staged-deletion guard reads the message for a removal verb.
-        message_lines.append("Removes declared write(s): " + ", ".join(deleted_paths))
+        # Its own paragraph: a non-trailer line inside the trailer block makes git
+        # stop parsing the block, and review_stamp keys on the Inline-Review trailer.
+        paragraphs.append("Removes declared write(s): " + ", ".join(deleted_paths))
+    trailers = []
     if request.deliverable_id:
-        message_lines.append(f"Deliverable-Id: {request.deliverable_id}")
-    message_lines.append(
+        trailers.append(f"Deliverable-Id: {request.deliverable_id}")
+    trailers.append(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
-    message = "\n\n".join([message_lines[0], "\n".join(message_lines[1:])]) if len(
-        message_lines
-    ) > 1 else message_lines[0]
+    paragraphs.append("\n".join(trailers))
+    message = "\n\n".join(paragraphs)
 
     def commit_v2(params: dict, root: Path):
         return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
@@ -1051,11 +1160,23 @@ def _terminal_commit(
     if reply.get("committed") and reply.get("sha"):
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
+        no_delta = set(reply.get("no_delta") or [])
+        coded_chunks = [
+            c for c in contributing_chunks
+            if any(
+                p in deleted_paths or p not in no_delta
+                for p in list(c.paths) + (_own_prefix_files(worktree_root, c, report_cache) or [])
+                if p in final_paths_set or p in deleted_paths
+            )
+        ]
+        if len(coded_chunks) != len(contributing_chunks):
+            kept = {c.id for c in coded_chunks}
+            reply["no_product_hunk"] = [c.id for c in contributing_chunks if c.id not in kept]
         source_rows = (
             {request.plan_path: set()}
             if anchor_only
             else _source_rows_by_plan(
-                worktree_root, request.plan_path, [c.id for c in contributing_chunks]
+                worktree_root, request.plan_path, [c.id for c in coded_chunks]
             )
         )
         # Before the coded stamp: that commit carries the plan, so a stamp
@@ -1095,6 +1216,10 @@ def _terminal_commit(
         )
     reply["branch_check"] = branch_check
     reply["chunks_committed"] = [c.id for c in contributing_chunks]
+    no_hunk = [c for c in done_chunks if c not in contributing_chunks and c.id not in reply.get("no_product_hunk", [])]
+    if no_hunk:
+        reply["no_product_hunk"] = sorted(set(reply.get("no_product_hunk", [])) | {c.id for c in no_hunk})
+    reply["partial_committed"] = [c.id for c in contributing_partial]
     reply["dropped_absent"] = dropped_absent
     reply["deleted_paths"] = deleted_paths
     reply["unmarked_incomplete"] = unmarked_incomplete

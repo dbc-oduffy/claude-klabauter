@@ -20,6 +20,8 @@ from coordinator_core.frontmatter.primitives import (
     stamp_approved_body_sha,
 )
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _TASKS = (
     "## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: Row\n  change_kind: script-edit\n"
     "  surface: pkg/row.py\n  writes:\n    - pkg/row.py\n```\n"

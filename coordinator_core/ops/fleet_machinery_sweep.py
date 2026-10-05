@@ -126,7 +126,7 @@ _ALL_BUCKETS: Tuple[str, ...] = _STANZA2_BUCKETS + _STANZA1_BUCKETS
 
 _AUDIT_PATH = "state/audits/2026-09-02-fleet-machinery-sweep.md"
 
-# Generator-provenance declaration (generator_provenance.py's AST reader).
+# Generator-provenance declaration (coordinator_core/ops/generator_census reader).
 # The ONE write this module makes into claude-klabauter's own tracked tree is
 # `append_audit`'s (leg 5) -- every other write lands in a SIBLING repo
 # (`_write_ignore_block`'s .gitignore, C4's two audit records written there)

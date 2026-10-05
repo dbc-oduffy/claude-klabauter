@@ -140,7 +140,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
-# Generator-provenance declaration (generator_provenance.py). Appends a
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Appends a
 # sentinel block to the operator's POSIX shell rc/login-profile files
 # (module docstring: "the fleet's ONE sentinel-guarded POSIX shell-rc block
 # writer") -- the operator's home shell config, outside the tracked repo.

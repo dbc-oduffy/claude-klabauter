@@ -20,6 +20,9 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+# Writes the machine-local copies cache under settings home, outside the tracked tree.
+GENERATES = []
+
 #: Pointer files naming the doctrine checkout. Trap: the engine mirror ships
 #: coordinator/bin without coordinator/hooks, so self-location alone fails there.
 _ROOT_POINTERS = (
@@ -160,7 +163,7 @@ def write_cache_atomic(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
         os.replace(tmp, path)
     except BaseException:
         try:

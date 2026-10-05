@@ -22,6 +22,7 @@ import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_refs
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.review_mint.execute_review import (
@@ -30,6 +31,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     _DELIVERY_VERIFIER_ROLE_PREAMBLE,
     CRITERION_JUDGE_PHASE_TITLE,
     _agent_opts_for,
+    _host_native,
     _schema_literal,
     compose_criterion_judge,
     delivery_supersession_clause,
@@ -39,12 +41,19 @@ from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+# Writes per-session subagent-share sidecars and a one-shot workflow script, not stamped artifacts.
+GENERATES = []
+
 VERDICT_DIR = Path("state") / "delivery-verdicts"
 RECORD_KIND = "delivery-verdict"
 _PHASE = "Delivery re-verify"
 _CRITERION_STATUSES = ("met", "not_met", "indeterminate")
 _TESTS_PHASE = "Tests re-run"
 _TESTS_STATUSES = ("pass", "fail", "error")
+
+#: The verifier has no Write tool; `record` persists its returned verdict.
+_NO_SIDECAR_NOTE = "Return the verdict as your structured result only; the engine records it. Write no sidecar."
+_DELIVERY_SIDECAR_AGENT_TYPE = "coordinator:delivery-verifier"
 
 
 class ReverifyRefused(ValueError):
@@ -144,6 +153,32 @@ def _run_rel(repo_root: Path, record_path: Path) -> str:
         return resolved.as_posix()
 
 
+def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) -> str:
+    """Brief text crediting the plan's `coded` rows: those at an ancestor of `base` are backed by
+    construction; the rest name the plan's own commits, so a peer's commit in `base..HEAD` is not
+    judged as the plan's. Two git spawns total; empty when the spine names no coded SHA."""
+    by_ref = coded_row_refs(plan_path)
+    if not by_ref or repo_root is None:
+        return ""
+    ok = ancestor_refs(repo_root, list(by_ref), base)
+    before = [i for ref, ids in by_ref.items() if ref in ok for i in ids]
+    own = [ref for ref in by_ref if ref not in ok]
+    note = ""
+    if before:
+        note += (
+            "Delivered before this run's base: rows " + ", ".join(before) + " are `coded` at an "
+            "ancestor of run_base_sha; count them backed.\n"
+        )
+    if own:
+        note += (
+            "The plan's own commits are the `coded` rows' disposition_refs: " + ", ".join(own)
+            + ". Judge those commits (`git show <sha>`), never the raw base..HEAD range: other "
+            "sessions' commits and uncommitted edits in the shared tree are not this plan's "
+            "delivery and are never a claim against it.\n"
+        )
+    return note
+
+
 def compose_reverify_script(
     *,
     fragment: dict,
@@ -156,6 +191,7 @@ def compose_reverify_script(
     claims: List[dict],
     rerun_tests: bool = False,
     repo_root: Optional[Path] = None,
+    host_degraded: bool = False,
 ) -> str:
     """A Workflow script holding one delivery-verifier agent call, briefed with the prior FAIL's
     unbacked claims and told to verify them at `head_sha`, then the roster's criterion judge
@@ -186,10 +222,12 @@ def compose_reverify_script(
             f"`git diff {base}..{head_sha}` plus the files as they stand at HEAD). Return FAIL with "
             "claims_unbacked listing every claim unbacked at HEAD, PASS only when all are backed.\n"
         )
+    lead += _commit_credit_note(repo_root, plan_path, base)
     prompt = (
         f"{_DELIVERY_VERIFIER_ROLE_PREAMBLE}\n\n"
         f"{lead}"
         f"{delivery_supersession_clause(criterion).lstrip()}{chr(10) if criterion and criterion.superseded else ''}"
+        f"{_NO_SIDECAR_NOTE}\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {base}\n"
         f"head_sha: {head_sha}\n"
@@ -213,6 +251,7 @@ def compose_reverify_script(
         falsifier=None,
         criterion=criterion,
         prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
+        host_degraded=host_degraded,
     )
     phases = [_js_string_literal(_PHASE)]
     tests_lines = ""
@@ -222,11 +261,14 @@ def compose_reverify_script(
         tests_prompt = (
             f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
             "Run Python as `python3`, falling back to `python` when `python3` is absent. "
-            "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
+            "Report raw evidence; do not gate. Write your record and return sidecar_path -- required. "
+            "The engine stamps agent_type and target_plan on it at record time.\n"
+            f"plan_path: {plan_path}"
         )
+        tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
         tests_call = _agent_call_literal(
-            review.prep.agent_type,
-            tests_prompt,
+            tests_type,
+            tests_role + tests_prompt,
             _TESTS_PHASE,
             schema=True,
             as_arrow=False,
@@ -264,7 +306,10 @@ def compose_reverify_script(
         "supersedes": run_record_rel,
         "plan_id": plan_id,
         "head_sha": head_sha,
+        "plan_path": plan_path,
     }
+    if rerun_tests:
+        ident["tests_agent_type"] = tests_type
     return (
         "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
         f"{meta}\n"
@@ -332,11 +377,36 @@ def record_delivery_verdict(
     return rel.as_posix()
 
 
-def settle_tests_sidecar(repo_root: Path, tests: Optional[dict]) -> bool:
-    """Write the re-run verdict into the test-runner sidecar as `test_verdict` (and `run`/`failed`
-    when absent), leaving `status` -- the run-report lifecycle -- alone. A sidecar that already
-    carries `test_verdict`, is absent, or has no frontmatter is left alone; returns whether it
-    was rewritten."""
+_UNSET_VALUE_RE = re.compile(r"^(?:null|~|''|\"\")$")
+_KEY_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*?)[ \t]*$")
+
+
+def _bind_keys(fm_text: str, bind: Dict[str, str]) -> str:
+    """`fm_text` (newline-terminated) with each `bind` key set when absent or null; a key that
+    already carries a value is never overwritten."""
+    lines = fm_text.split("\n")
+    pending = dict(bind)
+    for i, line in enumerate(lines):
+        m = _KEY_LINE_RE.match(line)
+        if m and m.group(1) in pending:
+            value = pending.pop(m.group(1))
+            if _UNSET_VALUE_RE.match(m.group(2)):
+                lines[i] = f"{m.group(1)}: {value}"
+    tail = [f"{k}: {v}" for k, v in pending.items()]
+    return "\n".join(lines[:-1] + tail + lines[-1:])
+
+
+def settle_tests_sidecar(
+    repo_root: Path,
+    tests: Optional[dict],
+    *,
+    plan_path: Optional[str] = None,
+    agent_type: Optional[str] = None,
+) -> bool:
+    """Bind the test-runner sidecar to the plan (`target_plan`, `agent_type`: stamped here when
+    absent or null, never overwritten) and write the re-run verdict into it as `test_verdict`
+    (and `run`/`failed` when absent), leaving `status` -- the run-report lifecycle -- alone. An
+    absent sidecar or one with no frontmatter is left alone; returns whether it was rewritten."""
     if not tests or tests.get("status") not in _TESTS_STATUSES or not tests.get("sidecar"):
         return False
     path = Path(str(tests["sidecar"]))
@@ -350,17 +420,66 @@ def settle_tests_sidecar(repo_root: Path, tests: Optional[dict]) -> bool:
     norm = raw.replace("\r\n", "\n")
     split = split_frontmatter(norm)
     fm = _frontmatter(path)
-    if split is None or fm is None or "test_verdict" in fm:
+    if split is None or fm is None:
         return False
-    verdict = "errored" if tests["status"] == "error" else tests["status"]
-    add = f"test_verdict: {verdict}\n"
-    for key in ("run", "failed"):
-        if key not in fm and tests.get(key) is not None:
-            add += f"{key}: {tests[key]}\n"
     base = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
-    out = norm.replace(split.fm_text, base + add, 1)
+    bind = {k: v for k, v in (("agent_type", agent_type), ("target_plan", plan_path)) if v}
+    new_fm = _bind_keys(base, bind)
+    if "test_verdict" not in fm:
+        verdict = "errored" if tests["status"] == "error" else tests["status"]
+        new_fm += f"test_verdict: {verdict}\n"
+        for key in ("run", "failed"):
+            if key not in fm and tests.get(key) is not None:
+                new_fm += f"{key}: {tests[key]}\n"
+    if new_fm == base:
+        return False
+    out = norm.replace(split.fm_text, new_fm, 1)
     path.write_bytes((out.replace("\n", "\r\n") if crlf else out).encode("utf-8"))
     return True
+
+
+def persist_delivery_sidecar(
+    *,
+    repo_root: Path,
+    plan_path: Optional[str],
+    session_id: str,
+    head_sha: str,
+    verdict: str,
+    unbacked: List[dict],
+) -> Optional[str]:
+    """Write the verifier's returned verdict into a provisioned `delivery-verifier` run-report in
+    the session share dir, `agent_type` and `target_plan` stamped here: the verifier has no Write
+    tool. Exclusive-create per `(plan, head)`; returns the repo-relative path, or `None` when the
+    result names no plan or a segment is unsafe."""
+    from coordinator_core.session.machinery_paths import share_dir
+    from coordinator_core.subagent_sandbox.provision_report import _build_doc_text, _sanitize_segment
+
+    stem = _sanitize_segment(Path(plan_path).stem) if plan_path else None
+    session = _sanitize_segment(session_id or "unknown-session")
+    if stem is None or session is None:
+        return None
+    now = datetime.now(timezone.utc)
+    doc = _build_doc_text(
+        _DELIVERY_SIDECAR_AGENT_TYPE, now.isoformat(), "run-report",
+        lead_session_id=session_id or None, target_plan=plan_path,
+    )
+    split = split_frontmatter(doc)
+    if split is None:
+        return None
+    add = {"verdict": verdict, "head_sha": head_sha, "claims_unbacked": unbacked if verdict == "FAIL" else []}
+    fm_text = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
+    fm_text += yaml.safe_dump(add, default_flow_style=False, sort_keys=False)
+    doc = doc.replace(split.fm_text, fm_text, 1) + f"\n# Delivery verdict: {verdict}\n"
+    target = Path(share_dir(str(repo_root), session)) / f"{stem}.delivery-reverify.{head_sha[:12]}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(target, "x", encoding="utf-8", newline="\n") as fh:
+            fh.write(doc)
+    except FileExistsError:
+        pass
+    else:
+        declare_write(str(target))
+    return target.relative_to(repo_root).as_posix() if target.is_relative_to(repo_root) else target.as_posix()
 
 
 def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
@@ -493,7 +612,10 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
     return None
 
 
-def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path: str) -> dict:
+def emit_reverify(
+    *, repo_root: Path, plan_path: str, run_record: str, out_path: str, agent_type_host: Optional[str] = None
+) -> dict:
+    from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
     from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
     from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
@@ -533,6 +655,7 @@ def emit_reverify(*, repo_root: Path, plan_path: str, run_record: str, out_path:
         claims=claims,
         rerun_tests=_tests_stale(record),
         repo_root=repo_root,
+        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
     from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
@@ -601,7 +724,20 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             tests=result.get("tests") or None,
             foreign_claims=live_foreign_claims(repo_root, frozen or [], ident["head_sha"]),
         )
-        settle_tests_sidecar(repo_root, result.get("tests") or None)
+        settle_tests_sidecar(
+            repo_root,
+            result.get("tests") or None,
+            plan_path=ident.get("plan_path"),
+            agent_type=ident.get("tests_agent_type"),
+        )
+        persist_delivery_sidecar(
+            repo_root=repo_root,
+            plan_path=ident.get("plan_path"),
+            session_id=args.session_id,
+            head_sha=ident["head_sha"],
+            verdict=result["verdict"],
+            unbacked=result.get("claims_unbacked") or [],
+        )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)
         return 1

@@ -182,7 +182,7 @@ from coordinator_core.group_em.watch_heartbeat import _STAMP_FORMAT
 
 _SPOOL_RELATIVE_PATH = os.path.join("state", "group-em-watch-spool.jsonl")
 
-#: Generator-provenance declaration (generator_provenance.py's AST reader).
+#: Generator-provenance declaration (coordinator_core/ops/generator_census reader).
 #: `prune`'s mkstemp/os.replace rewrite targets `<repo_root>/state/
 #: group-em-watch-spool.jsonl` and nothing else -- per-box, per-repo runtime
 #: state the .gitignore names outright ("Group-EM standing-watch runtime

@@ -68,7 +68,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session.claimed_write import append_claimed_line
 
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader).
 # append_goal() writes central_state_root/goals-log.<machine>.jsonl -- a
 # per-machine shard whose filename is data-dependent (machine hostname slug),
 # so the write SET is not a fixed artifact list; MUTATES over GENERATES.

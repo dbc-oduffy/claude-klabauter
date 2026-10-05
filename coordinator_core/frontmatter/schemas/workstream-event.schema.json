@@ -30,7 +30,7 @@
     },
     "coordinator_root_path": {
       "type": "string",
-      "description": "Dual-tenant discriminator — the git root path of the repo this event's workstream belongs to. Mirrors workstream.schema.json's coordinator_root_path (same composite-natural-key component the engine's trackers.py already uses); required so the generator can filter a dual-tenant state/workstreams/events/ directory (the engine-hosted meta-repo case) to only the current repo's entries."
+      "description": "Dual-tenant discriminator, repo-root-relative: \".\" is the auto-resolve value (the coordinator root is the repo root); a monorepo sub-root is its relative path (for example \"subdir\"). Never absolute and never a repo basename: either mints a machine-specific repo identity and fragments the join key. No value of this field alone expresses a routed write (a record whose owning repo is not the repo hosting the store): an independent git root is not a path under the hosting root, and a relative escape resolves against the reader's cwd. A routed write needs a companion owner-qualified `repo` field ('<owner>/<repo>'), which this schema does not carry; until it exists a routed value is unspecified and a writer must not invent one. Mirrors workstream.schema.json's coordinator_root_path and is required so a dual-tenant state/workstreams/events/ directory can be filtered to one repo's entries."
     },
     "supersedes": {
       "type": "string",

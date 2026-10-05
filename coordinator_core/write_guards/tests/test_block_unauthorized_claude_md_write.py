@@ -380,7 +380,7 @@ class TestDenyTextNamesAlternativeAndOverride:
         result = guard.check(_payload("coordinator/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator/CLAUDE.md" in reason
-        assert "needs a live CLAUDE.md write grant for this session" in reason
+        assert "no live CLAUDE.md write grant" in reason
 
 
 class TestDirectionalDenyGrowthOnly:

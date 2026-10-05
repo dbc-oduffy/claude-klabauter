@@ -346,6 +346,8 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
+import gc
 import pathlib
 import re
 from typing import Callable
@@ -357,7 +359,12 @@ from coordinator_core.spawn_policy import (
     is_test_tree_site,
     sites_in_source,
 )
-from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
+from coordinator_core.spawn_policy.detect import (
+    _RECOGNIZED as _DETECT_RECOGNIZED,
+    _TRACKED_MODULES as _DETECT_TRACKED_MODULES,
+    DEFAULT_EXCLUDE,
+    discover_source_files,
+)
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS_FILE = pathlib.Path(__file__).resolve()
@@ -832,9 +839,42 @@ def _walk(node: ast.AST) -> tuple[ast.AST, ...]:
     pins `node` so a recycled `id` can never alias a dead tree."""
     hit = _WALK_CACHE.get(id(node))
     if hit is None:
-        hit = (node, tuple(ast.walk(node)))
+        # Breadth-first in `_fields` order: the same sequence `ast.walk` yields, which callers
+        # rely on for first-match tie-breaks.
+        nodes: list[ast.AST] = [node]
+        i = 0
+        while i < len(nodes):
+            current = nodes[i]
+            i += 1
+            for field in current._fields:
+                value = getattr(current, field, None)
+                if isinstance(value, list):
+                    nodes.extend(item for item in value if isinstance(item, ast.AST))
+                elif isinstance(value, ast.AST):
+                    nodes.append(value)
+        hit = (node, tuple(nodes))
         _WALK_CACHE[id(node)] = hit
     return hit[1]
+
+
+def _iter_stmts(tree: ast.AST) -> list[ast.stmt]:
+    """Every statement under `tree`, in no promised order, without descending into expressions.
+    For a query about statement-only node types (`ImportFrom`, `def`, `class`) this replaces an
+    `ast.walk` that spends nearly all its time inside expression subtrees."""
+    out: list[ast.stmt] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        for field in node._fields:
+            children = getattr(node, field, None)
+            if not isinstance(children, list) or not children:
+                continue
+            if field in ("handlers", "cases"):
+                stack.extend(children)
+            elif isinstance(children[0], ast.stmt):
+                out.extend(children)
+                stack.extend(children)
+    return out
 
 
 def _relpath(path: pathlib.Path, root: pathlib.Path) -> str:
@@ -992,7 +1032,25 @@ def _function_local_literal_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) ->
     return {name for name, count in bound.items() if count == 1 and name not in disqualified}
 
 
-def _is_constant_literal_iterable(node: ast.expr, literal_names: set[str]) -> bool:
+class _ScopedLiteralNames:
+    """`outer | _function_local_literal_names(fn)` as a membership-only view, computing the
+    function-local half on the first query -- most functions never iterate a bare name, and that
+    half walks the whole function."""
+
+    def __init__(self, outer: "set[str] | _ScopedLiteralNames", fn: ast.AST) -> None:
+        self._outer = outer
+        self._fn = fn
+        self._local: set[str] | None = None
+
+    def __contains__(self, name: object) -> bool:
+        if name in self._outer:
+            return True
+        if self._local is None:
+            self._local = _function_local_literal_names(self._fn)
+        return name in self._local
+
+
+def _is_constant_literal_iterable(node: ast.expr, literal_names: "set[str] | _ScopedLiteralNames") -> bool:
     inner = _unwrap_literal_wrapper(node)
     if isinstance(inner, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
         return True
@@ -1771,6 +1829,31 @@ class _FileRecord:
     spawn_sites: list
 
 
+_TRACKED_MODULES_RE = "|".join(sorted(re.escape(m) for m in _DETECT_TRACKED_MODULES))
+_RECOGNIZED_NAMES_RE = "|".join(sorted(re.escape(f) for _, f in _DETECT_RECOGNIZED))
+_IMPORT_LINE_RE = r"\b(?:import|from)\b[^\n]*"
+_BACKSLASH_IMPORT = re.compile(_IMPORT_LINE_RE + r"\\[ \t\r]*$", re.MULTILINE)
+_IMPORTS_TRACKED_MODULE = re.compile(
+    _IMPORT_LINE_RE + rf"\b(?:{_TRACKED_MODULES_RE})\b", re.MULTILINE
+)
+_FROM_TRACKED_MODULE = re.compile(rf"\bfrom\s+(?:{_TRACKED_MODULES_RE})\b")
+_NAMES_A_SPAWN_FUNCTION = re.compile(rf"[.'\"]\s*(?:{_RECOGNIZED_NAMES_RE})\b")
+
+
+def _may_hold_spawn_site(text: str) -> bool:
+    """Textual NECESSARY condition for `sites_in_source` to report anything, so a file failing
+    it can skip detection. The detector resolves a spawn only through an `import` of a tracked
+    module and a recognized function reached as `alias.func`, `getattr(alias, "func")`, or a
+    `from tracked import func` binding. A backslash-continued import line may hide either half
+    on the next line, so it keeps the file in. Over-matching costs one detection pass; a miss
+    would silently drop sites -- the gate's per-file equality probe is the guard."""
+    if _BACKSLASH_IMPORT.search(text):
+        return True
+    return bool(_IMPORTS_TRACKED_MODULE.search(text)) and bool(
+        _NAMES_A_SPAWN_FUNCTION.search(text) or _FROM_TRACKED_MODULE.search(text)
+    )
+
+
 def _load_file_records(files: list[tuple[str, pathlib.Path]]) -> list[_FileRecord]:
     """Reads, parses (`ast.parse`), and spawn-detects (`sites_in_source`, which does its own
     internal `ast.parse`) each file in `files` exactly ONCE.
@@ -1798,8 +1881,11 @@ def _load_file_records(files: list[tuple[str, pathlib.Path]]) -> list[_FileRecor
             tree = ast.parse(text, filename=str(file_path))
         except SyntaxError:
             continue
+        if not _may_hold_spawn_site(text):
+            records.append(_FileRecord(relpath, file_path, text, tree, []))
+            continue
         try:
-            spawn_sites = sites_in_source(text, relpath)
+            spawn_sites = sites_in_source(text, relpath, tree)
         except SpawnParseError:
             continue
         records.append(_FileRecord(relpath, file_path, text, tree, spawn_sites))
@@ -2051,7 +2137,7 @@ def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
 
         imported: set[str] = set()
         raw_imports: dict[str, set[tuple[str, str]]] = {}
-        for node in _walk(tree):
+        for node in _iter_stmts(tree):
             if isinstance(node, ast.ImportFrom):
                 abs_module = _absolute_import_module(relpath, node)
                 for alias in node.names:
@@ -2527,44 +2613,10 @@ def _is_attribution_search(
     attribute. Without clause 2 this would silence every early-exit loop in the tree."""
     if loop is None:
         return False
-
-    result_names: set[str] = set()
-    for node in _walk(loop):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if any(sub is call for sub in _walk(node.value)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for t in targets:
-                    result_names |= _names_in(t)
-
-    #: Every name the loop BINDS -- targets and assignments alike. A test built only from these
-    #: is reading the loop's own working state, never out-of-band state the spawn perturbed.
-    bound_in_loop: set[str] = set()
-    for node in _walk(loop):
-        if isinstance(node, (ast.For, ast.AsyncFor)):
-            bound_in_loop |= _names_in(node.target)
-        elif isinstance(node, ast.Assign):
-            for t in node.targets:
-                bound_in_loop |= _names_in(t)
-        elif isinstance(node, ast.AnnAssign):
-            bound_in_loop |= _names_in(node.target)
-        elif isinstance(node, ast.comprehension):
-            bound_in_loop |= _names_in(node.target)
-        #: MUTATED counts as bound. `covered.add(rel_path)` makes `covered` the loop's own
-        #: accumulator, so `if len(covered) == len(candidate_shas): break` is a
-        #: work-is-complete check, NOT an observation of state the spawn perturbed. Measured
-        #: 2026-08-19: without this, `plan_suggest_completion_steps` matched -- its spawn is
-        #: memoized behind a cache and may well deserve to be quiet, but not for THIS reason.
-        #: Out-of-band means the loop never touches it.
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if isinstance(node.func.value, ast.Name):
-                bound_in_loop.add(node.func.value.id)
-
-    excluded = set(tainted) | result_names | bound_in_loop
-    for node in _walk(loop):
-        if not isinstance(node, ast.If) or node.lineno <= call.lineno:
-            continue
-        test_names = _names_in(node.test)
-        if not test_names or (test_names & excluded):
+    facts = _loop_facts(loop)
+    excluded = set(tainted) | facts.result_names_by_call.get(id(call), set()) | facts.bound_in_loop
+    for lineno, test_names in facts.terminating_ifs:
+        if lineno <= call.lineno or not test_names or (test_names & excluded):
             continue
         #: MEASURED necessity, 2026-08-19: without requiring a name from OUTSIDE the loop, this
         #: matched `plan_suggest_completion_steps._plans_with_review_trail_coverage`, whose spawn
@@ -2573,8 +2625,7 @@ def _is_attribution_search(
         #: wearing a discriminator's clothes.
         if not (test_names - excluded):
             continue
-        if node.body and isinstance(node.body[-1], (ast.Return, ast.Break)):
-            return True
+        return True
     return False
 
 
@@ -2608,14 +2659,7 @@ def _has_enclosing_loop(fn: ast.AST, loop: ast.AST) -> bool:
     17's `has_outer_loop` gate: a `break` only exits the loop it is lexically inside, so a
     single-shot proof scoped to `loop`'s own body says nothing about an outer loop that keeps
     iterating regardless of what the inner loop does on any one pass."""
-    for node in _walk(fn):
-        if node is loop:
-            continue
-        if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
-            continue
-        if any(sub is loop for sub in _walk(node)):
-            return True
-    return False
+    return id(loop) in _fn_facts(fn).nested_loop_ids
 
 
 def _is_single_shot_terminal(
@@ -2653,30 +2697,8 @@ def _is_single_shot_terminal(
     if not isinstance(loop_body, list):
         return False
 
-    #: stmt id -> (stmt, the list that directly holds it). Populated for every statement inside
-    #: the loop, including nested `if`/`try`/`except` bodies -- comprehensions have no statement
-    #: bodies to index, so `_index` never recurses into one.
-    indexed: dict[int, tuple[ast.stmt, list[ast.stmt]]] = {}
-
-    def _index(body: list[ast.stmt]) -> None:
-        for stmt in body:
-            indexed[id(stmt)] = (stmt, body)
-            for field in ("body", "orelse", "finalbody"):
-                sub = getattr(stmt, field, None)
-                if isinstance(sub, list):
-                    _index(sub)
-            for handler in getattr(stmt, "handlers", None) or []:
-                _index(handler.body)
-
-    _index(loop_body)
-
-    #: Every indexed statement whose subtree contains `call`, innermost (smallest subtree) first.
-    ancestors = [
-        stmt
-        for _stmt_id, (stmt, _body) in indexed.items()
-        if any(sub is call for sub in _walk(stmt))
-    ]
-    ancestors.sort(key=lambda stmt: sum(1 for _ in _walk(stmt)))
+    indexed, ancestors_by_call = _loop_facts(loop).statement_index
+    ancestors = ancestors_by_call.get(id(call), ())
 
     for stmt in ancestors:
         _stmt, body = indexed[id(stmt)]
@@ -2734,19 +2756,16 @@ def _derived_names(seed: set[str], fn: ast.AST) -> set[str]:
     the directly-bound name misses it. Same bounded fixed-point idiom as
     `_tainted_names_for_loop`, and bounded for the same reason."""
     out = set(seed)
+    assigns = _fn_facts(fn).assigns
     for _ in range(10):
         grew = False
-        for node in _walk(fn):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+        for assign in assigns:
+            if not (assign.value_names & out):
                 continue
-            if not (_names_in(node.value) & out):
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                for name in _names_in(t):
-                    if name not in out:
-                        out.add(name)
-                        grew = True
+            for name in assign.target_names:
+                if name not in out:
+                    out.add(name)
+                    grew = True
         if not grew:
             break
     return out
@@ -2786,25 +2805,9 @@ def _result_indexed_by_loop_var(fn: ast.AST, result_name: str, loop_target_names
     by being a MAPPING the loop later indexes per item. This is a second, narrower route to
     "carries whole" alongside `_carries_whole`'s argv-shape route, not a replacement for it --
     the primary must still be a recognized spawn or same-callee candidate before this is checked."""
-    for node in _walk(fn):
-        if (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == result_name
-            and _names_in(node.slice) & loop_target_names
-        ):
-            return True
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == result_name
-            and node.args
-            and _names_in(node.args[0]) & loop_target_names
-        ):
-            return True
-    return False
+    return any(
+        keys & loop_target_names for keys in _fn_facts(fn).lookup_key_names.get(result_name, ())
+    )
 
 
 def _batched_primary_result_names(
@@ -2839,38 +2842,26 @@ def _batched_primary_result_names(
     2026-08-27, by RESULT INDEXING (`_result_indexed_by_loop_var`): the primary's own bound name
     is later subscripted/`.get()`-ed by the loop's own target name."""
     out: set[str] = set()
-    for node in _walk(fn):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+    for assign_call in _fn_facts(fn).assign_calls:
+        call_name = assign_call.call_name
+        is_spawn = assign_call.lineno in spawn_linenos and call_name in _SPAWN_API_NAMES
+        is_same_callee = callee is not None and (
+            call_name == callee
+            or callee in assign_call.names_here
+            or call_name in (f"{callee}s", f"{callee}s_from")
+        )
+        if not (is_spawn or is_same_callee):
             continue
-        for call in _walk(node.value):
-            if not isinstance(call, ast.Call):
-                continue
-            call_name = _call_callee_name(call)
-            is_spawn = call.lineno in spawn_linenos and call_name in _SPAWN_API_NAMES
-            names_here = {
-                n.id for n in _walk(call) if isinstance(n, ast.Name)
-            }
-            is_same_callee = callee is not None and (
-                call_name == callee
-                or callee in names_here
-                or call_name in (f"{callee}s", f"{callee}s_from")
+        bound_names = assign_call.bound_names
+        carries = any(_carries_whole(a, group_names) for a in assign_call.operands)
+        if not carries and loop_target_names:
+            carries = any(
+                _result_indexed_by_loop_var(fn, name, loop_target_names)
+                for name in bound_names
             )
-            if not (is_spawn or is_same_callee):
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            bound_names: set[str] = set()
-            for t in targets:
-                bound_names |= _names_in(t)
-            operands = list(call.args) + [kw.value for kw in call.keywords]
-            carries = any(_carries_whole(a, group_names) for a in operands)
-            if not carries and loop_target_names:
-                carries = any(
-                    _result_indexed_by_loop_var(fn, name, loop_target_names)
-                    for name in bound_names
-                )
-            if not carries:
-                continue
-            out |= bound_names
+        if not carries:
+            continue
+        out |= bound_names
     return out
 
 
@@ -2965,14 +2956,7 @@ def _enclosing_loop_of(fn: ast.AST, call: ast.Call) -> ast.AST | None:
     `return {rm: _pairing(rm, ...) for rm in rel_modules}` inside an `except` handler, so a
     statement-only matcher decides its sibling and not it -- the same lesson discriminator 9's
     docstring already records about covering both loop forms."""
-    best: ast.AST | None = None
-    best_lineno = -1
-    for node in _walk(fn):
-        if not isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
-            continue
-        if any(sub is call for sub in _walk(node)) and node.lineno > best_lineno:
-            best, best_lineno = node, node.lineno
-    return best
+    return _fn_facts(fn).innermost_loop_by_call.get(id(call))
 
 
 def _loop_iterables(loop: ast.AST) -> list[ast.expr]:
@@ -3022,38 +3006,217 @@ def _source_names(seed: set[str], fn: ast.AST) -> set[str]:
     provenance runs through a method call or a slice declines, because at that point what the
     loop iterates is no longer demonstrably the set the primary was handed."""
 
-    def _one_hop(expr: ast.expr) -> set[str]:
-        if isinstance(expr, _COMPREHENSIONS):
-            if len(expr.generators) == 1 and isinstance(expr.generators[0].iter, ast.Name):
-                return {expr.generators[0].iter.id}
-            return set()
-        if (
-            isinstance(expr, ast.Call)
-            and isinstance(expr.func, ast.Name)
-            and expr.func.id in ("list", "tuple", "sorted", "set")
-            and len(expr.args) == 1
-        ):
-            return _one_hop(expr.args[0])
-        if isinstance(expr, ast.Name):
-            return {expr.id}
-        return set()
-
     out = set(seed)
+    assigns = _fn_facts(fn).assigns
     for _ in range(3):
         grew = False
-        for node in _walk(fn):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+        for assign in assigns:
+            if not (assign.target_names & out):
                 continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if not any(_names_in(t) & out for t in targets):
-                continue
-            for name in _one_hop(node.value):
+            for name in assign.one_hop_sources:
                 if name not in out:
                     out.add(name)
                     grew = True
         if not grew:
             break
     return out
+
+
+def _filtering_one_hop(expr: ast.expr) -> set[str]:
+    """The single bare name `expr` filters or copies -- see `_source_names`."""
+    if isinstance(expr, _COMPREHENSIONS):
+        if len(expr.generators) == 1 and isinstance(expr.generators[0].iter, ast.Name):
+            return {expr.generators[0].iter.id}
+        return set()
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id in ("list", "tuple", "sorted", "set")
+        and len(expr.args) == 1
+    ):
+        return _filtering_one_hop(expr.args[0])
+    if isinstance(expr, ast.Name):
+        return {expr.id}
+    return set()
+
+
+@dataclasses.dataclass(frozen=True)
+class _AssignFact:
+    """One `Assign`/`AnnAssign` with a value, its names resolved once."""
+
+    value_names: set[str]
+    target_names: set[str]
+    one_hop_sources: set[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class _AssignCallFact:
+    """One call inside an assignment's value, with what discriminator 13 reads off it."""
+
+    call_name: str | None
+    lineno: int
+    names_here: set[str]
+    operands: list[ast.expr]
+    bound_names: set[str]
+
+
+class _FnFacts:
+    """Per-function name/loop facts discriminator 13 would otherwise re-derive by re-walking
+    `fn` once per marked call. Pure functions of `fn`'s subtree; never mutated after build."""
+
+    def __init__(self, fn: ast.AST) -> None:
+        self.assigns: list[_AssignFact] = []
+        self.assign_calls: list[_AssignCallFact] = []
+        self.lookup_key_names: dict[str, list[set[str]]] = {}
+        self.innermost_loop_by_call: dict[int, ast.AST] = {}
+        loops: list[ast.AST] = []
+        for node in _walk(fn):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                target_names: set[str] = set()
+                for t in targets:
+                    target_names |= _names_in(t)
+                self.assigns.append(
+                    _AssignFact(
+                        _names_in(node.value), target_names, _filtering_one_hop(node.value)
+                    )
+                )
+                for call in _walk(node.value):
+                    if isinstance(call, ast.Call):
+                        self.assign_calls.append(
+                            _AssignCallFact(
+                                _call_callee_name(call),
+                                call.lineno,
+                                {n.id for n in _walk(call) if isinstance(n, ast.Name)},
+                                list(call.args) + [kw.value for kw in call.keywords],
+                                target_names,
+                            )
+                        )
+            elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                self.lookup_key_names.setdefault(node.value.id, []).append(_names_in(node.slice))
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.args
+            ):
+                self.lookup_key_names.setdefault(node.func.value.id, []).append(
+                    _names_in(node.args[0])
+                )
+            if isinstance(node, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
+                loops.append(node)
+        # Strict `>` keeps the first loop in walk order on a lineno tie, as the per-call search did.
+        best_lineno: dict[int, int] = {}
+        self.nested_loop_ids: set[int] = set()
+        for loop in loops:
+            for sub in _walk(loop):
+                if isinstance(sub, ast.Call) and loop.lineno > best_lineno.get(id(sub), -1):
+                    best_lineno[id(sub)] = loop.lineno
+                    self.innermost_loop_by_call[id(sub)] = loop
+                elif sub is not loop and isinstance(sub, (ast.For, ast.AsyncFor, *_COMPREHENSIONS)):
+                    self.nested_loop_ids.add(id(sub))
+
+
+def _fn_facts(fn: ast.AST) -> _FnFacts:
+    """`_FnFacts` for `fn`, memoized on the node itself so the cache lives and dies with the
+    parse -- no module-level container to go stale or alias a recycled `id`."""
+    facts = getattr(fn, "_amp_fn_facts", None)
+    if facts is None:
+        facts = _FnFacts(fn)
+        fn._amp_fn_facts = facts  # type: ignore[attr-defined]
+    return facts
+
+
+class _LoopFacts:
+    """Per-loop facts discriminators 14 and 17 would otherwise re-derive once per call inside
+    the same loop. Pure functions of `loop`'s subtree; never mutated after build."""
+
+    def __init__(self, loop: ast.AST) -> None:
+        #: id(call) -> names bound by an assignment whose value contains that call.
+        self.result_names_by_call: dict[int, set[str]] = {}
+        #: Every name the loop BINDS -- targets and assignments alike. A test built only from
+        #: these is reading the loop's own working state, never out-of-band state the spawn
+        #: perturbed.
+        self.bound_in_loop: set[str] = set()
+        #: `(lineno, test names)` of each `If` whose body ends in a `Return`/`Break`.
+        self.terminating_ifs: list[tuple[int, set[str]]] = []
+        for node in _walk(loop):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                names: set[str] = set()
+                for t in targets:
+                    names |= _names_in(t)
+                for sub in _walk(node.value):
+                    if isinstance(sub, ast.Call):
+                        self.result_names_by_call.setdefault(id(sub), set()).update(names)
+            if isinstance(node, (ast.For, ast.AsyncFor)):
+                self.bound_in_loop |= _names_in(node.target)
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    self.bound_in_loop |= _names_in(t)
+            elif isinstance(node, ast.AnnAssign):
+                self.bound_in_loop |= _names_in(node.target)
+            elif isinstance(node, ast.comprehension):
+                self.bound_in_loop |= _names_in(node.target)
+            #: MUTATED counts as bound. `covered.add(rel_path)` makes `covered` the loop's own
+            #: accumulator, so `if len(covered) == len(candidate_shas): break` is a
+            #: work-is-complete check, NOT an observation of state the spawn perturbed. Measured
+            #: 2026-08-19: without this, `plan_suggest_completion_steps` matched -- its spawn is
+            #: memoized behind a cache and may well deserve to be quiet, but not for THIS reason.
+            #: Out-of-band means the loop never touches it.
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if isinstance(node.func.value, ast.Name):
+                    self.bound_in_loop.add(node.func.value.id)
+            if (
+                isinstance(node, ast.If)
+                and node.body
+                and isinstance(node.body[-1], (ast.Return, ast.Break))
+            ):
+                self.terminating_ifs.append((node.lineno, _names_in(node.test)))
+        self._statement_index: tuple | None = None
+        self._loop = loop
+
+    @property
+    def statement_index(
+        self,
+    ) -> tuple[dict[int, tuple[ast.stmt, list[ast.stmt]]], dict[int, list[ast.stmt]]]:
+        """`(stmt id -> (stmt, the list that directly holds it), id(call) -> the statements
+        whose subtree holds that call, innermost first)`, over the statements inside the loop
+        body -- including nested `if`/`try`/`except` bodies. Comprehensions have no statement
+        bodies to index, so `_index` never recurses into one. Built on first use."""
+        if self._statement_index is None:
+            indexed: dict[int, tuple[ast.stmt, list[ast.stmt]]] = {}
+
+            def _index(body: list[ast.stmt]) -> None:
+                for stmt in body:
+                    indexed[id(stmt)] = (stmt, body)
+                    for field in ("body", "orelse", "finalbody"):
+                        sub = getattr(stmt, field, None)
+                        if isinstance(sub, list):
+                            _index(sub)
+                    for handler in getattr(stmt, "handlers", None) or []:
+                        _index(handler.body)
+
+            _index(self._loop.body)
+            ancestors: dict[int, list[ast.stmt]] = {}
+            for stmt, _body in indexed.values():
+                for sub in _walk(stmt):
+                    if isinstance(sub, ast.Call):
+                        ancestors.setdefault(id(sub), []).append(stmt)
+            for chain in ancestors.values():
+                chain.sort(key=lambda stmt: len(_walk(stmt)))
+            self._statement_index = (indexed, ancestors)
+        return self._statement_index
+
+
+def _loop_facts(loop: ast.AST) -> _LoopFacts:
+    """`_LoopFacts` for `loop`, memoized on the node like `_fn_facts`."""
+    facts = getattr(loop, "_amp_loop_facts", None)
+    if facts is None:
+        facts = _LoopFacts(loop)
+        loop._amp_loop_facts = facts  # type: ignore[attr-defined]
+    return facts
 
 
 def _is_batched_primary_fallback(
@@ -3542,6 +3705,22 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
     SPAWN-BEARING = LEG 1 intersect LEG 2. Requiring both is what keeps precision -- leg 2
     alone would flag every dependency-injection seam regardless of whether the loop body ever
     calls it."""
+    #: Resolved once: neither the call sites nor their resolution depend on the fixed point's
+    #: state, so each round below iterates only the calls that reach an indexed definition.
+    edges: dict[tuple[str, str], list[tuple[ast.Call, list[tuple[tuple[str, str], ast.AST]]]]] = {}
+    for (rp, name), fn in index.func_defs.items():
+        fn_edges = []
+        for node in _walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = _call_callee_name(node)
+            if callee is None:
+                continue
+            targets = [(tgt, index.func_defs[tgt]) for tgt in _resolve_callee_def(index, rp, callee)]
+            if targets:
+                fn_edges.append((node, targets))
+        edges[(rp, name)] = fn_edges
+
     invoked: set[tuple[str, str, str]] = set()
     for (rp, name), fn in index.func_defs.items():
         params = set(_func_params(fn))
@@ -3558,14 +3737,8 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
         changed = False
         for (rp, name), fn in index.func_defs.items():
             params = set(_func_params(fn))
-            for node in _walk(fn):
-                if not isinstance(node, ast.Call):
-                    continue
-                callee = _call_callee_name(node)
-                if callee is None:
-                    continue
-                for tgt in _resolve_callee_def(index, rp, callee):
-                    tgt_fn = index.func_defs[tgt]
+            for node, targets in edges[(rp, name)]:
+                for tgt, tgt_fn in targets:
                     for p in params:
                         for slot in _forwarded_arg_slots(node, tgt_fn, p):
                             if (tgt[0], tgt[1], slot) in invoked and (rp, name, p) not in invoked:
@@ -3573,15 +3746,9 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
                                 changed = True
 
     tainted: set[tuple[str, str, str]] = set()
-    for (rp, name), fn in index.func_defs.items():
-        for node in _walk(fn):
-            if not isinstance(node, ast.Call):
-                continue
-            callee = _call_callee_name(node)
-            if callee is None:
-                continue
-            for tgt in _resolve_callee_def(index, rp, callee):
-                tgt_fn = index.func_defs[tgt]
+    for (rp, name), _fn in index.func_defs.items():
+        for node, targets in edges[(rp, name)]:
+            for tgt, tgt_fn in targets:
                 for arg in (*node.args, *[kw.value for kw in node.keywords]):
                     if isinstance(arg, ast.Name) and _is_direct_spawner_name(index, rp, arg.id):
                         for slot in _forwarded_arg_slots(node, tgt_fn, arg.id):
@@ -3594,14 +3761,8 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
             params = {p for p in _func_params(fn) if (rp, name, p) in tainted}
             if not params:
                 continue
-            for node in _walk(fn):
-                if not isinstance(node, ast.Call):
-                    continue
-                callee = _call_callee_name(node)
-                if callee is None:
-                    continue
-                for tgt in _resolve_callee_def(index, rp, callee):
-                    tgt_fn = index.func_defs[tgt]
+            for node, targets in edges[(rp, name)]:
+                for tgt, tgt_fn in targets:
                     for p in params:
                         for slot in _forwarded_arg_slots(node, tgt_fn, p):
                             if (tgt[0], tgt[1], slot) not in tainted:
@@ -3817,7 +3978,29 @@ def _is_repetition_loop(target: ast.expr, iterable: ast.expr, body: list[ast.AST
     return _is_count_bounded_range(iterable) and _is_discarded_target(target, body)
 
 
-class _QualifyingLoopVisitor(ast.NodeVisitor):
+class _FastNodeVisitor(ast.NodeVisitor):
+    """`ast.NodeVisitor` with the same dispatch and traversal order minus the per-node generator
+    and `visit_Constant` compatibility shim. Only for subclasses that define no deprecated
+    `visit_Num`/`visit_Str`-style handler -- those would stop being reached."""
+
+    def visit(self, node: ast.AST):
+        method = getattr(self, "visit_" + type(node).__name__, None)
+        if method is None:
+            return self.generic_visit(node)
+        return method(node)
+
+    def generic_visit(self, node: ast.AST) -> None:
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        self.visit(item)
+            elif isinstance(value, ast.AST):
+                self.visit(value)
+
+
+class _QualifyingLoopVisitor(_FastNodeVisitor):
     """Marks every `ast.Call` node that sits directly inside a qualifying loop's body -- a
     `for`/`async for`/comprehension whose iterable is NOT a constant-literal sequence
     (discriminator 2). `while` loops never qualify (discriminator 3) and are descended into
@@ -3873,7 +4056,7 @@ class _QualifyingLoopVisitor(ast.NodeVisitor):
         literal sequences (`_function_local_literal_names`). Pushed and popped exactly where the
         loop depth is, so a name qualifying inside one function never leaks into a sibling."""
         saved_literals = self._literal_names
-        self._literal_names = saved_literals | _function_local_literal_names(node)
+        self._literal_names = _ScopedLiteralNames(saved_literals, node)
         self._scope_boundary(node)
         self._literal_names = saved_literals
 
@@ -4171,6 +4354,25 @@ def _assign_call_ordinals(
     return ordinal_by_call
 
 
+def _gc_paused(func):
+    """Runs `func` with the cyclic collector off. A scan allocates millions of AST nodes that all
+    stay live until it returns, so collection only re-traverses them (about a quarter of the
+    scan's process time)."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
+    return wrapper
+
+
+@_gc_paused
 def find_unbatched_per_item_spawns(
     roots: tuple[pathlib.Path, ...],
     index: _FuncIndex | None = None,
@@ -4596,21 +4798,34 @@ class _ParamDefaultTracker(ast.NodeVisitor):
             scope = ".".join(self._stack)
             self._out.setdefault((self._relpath, scope), {}).update(bound)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._stack.append(node.name)
-        self._record(node)
-        self.generic_visit(node)
-        self._stack.pop()
+    def visit(self, node: ast.AST) -> None:
+        """Descends statement lists only: a `def`/`class` is always a statement, so expression
+        subtrees (the bulk of any module) cannot hold one. Fields are taken in `_fields` order
+        so a conditionally-redefined function overwrites in the order a full visit would."""
+        for field in node._fields:
+            children = getattr(node, field, None)
+            if field in ("handlers", "cases") and isinstance(children, list):
+                for child in children:
+                    self.visit(child)
+            elif isinstance(children, list) and children and isinstance(children[0], ast.stmt):
+                for stmt in children:
+                    self._visit_stmt(stmt)
 
-    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+    def _visit_stmt(self, stmt: ast.stmt) -> None:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._stack.append(stmt.name)
+            self._record(stmt)
+            self.visit(stmt)
+            self._stack.pop()
+        elif isinstance(stmt, ast.ClassDef):
+            self._stack.append(stmt.name)
+            self.visit(stmt)
+            self._stack.pop()
+        else:
+            self.visit(stmt)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._stack.append(node.name)
-        self.generic_visit(node)
-        self._stack.pop()
 
-
-class _EnclosingTracker(ast.NodeVisitor):
+class _EnclosingTracker(_FastNodeVisitor):
     """Records `(lineno, col_offset) -> dotted enclosing scope name` for every `ast.Call`,
     matching `test_no_spawn_per_item_loop`'s own reporting convention (dotted scope stack)."""
 

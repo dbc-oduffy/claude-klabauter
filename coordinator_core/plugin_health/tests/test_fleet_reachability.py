@@ -97,6 +97,27 @@ def test_regression_fixture_c79e66cd_shape(tmp_path: Path):
     assert result.missing == ["lint-frontmatter"]
 
 
+
+def test_doe_self_supplied_oracle_is_not_a_demand_but_an_unsupplied_one_still_fails(tmp_path: Path):
+    """An oracle DoE ships in its own coordinator/bin/ is served by DoE, not
+    demanded of claude-klabauter; one shipped by neither repo must still fail loud."""
+    agent_bin = tmp_path / "claude-klabauter-bin"
+    content_root = tmp_path / "doe"
+
+    _write_claude_klabauter_oracle(agent_bin, "query-records.py")
+    _write_doe_fence(content_root, "bin", "ported-oracle.py", "# DoE-owned oracle\n")
+    _write_doe_fence(
+        content_root,
+        "skills",
+        "SKILL.md",
+        "Run `coordinator/bin/ported-oracle` then `coordinator/bin/nowhere-oracle`.",
+    )
+
+    result = fr.check_fleet_reachability(agent_bin=agent_bin, content_root=content_root)
+
+    assert result.ok is False
+    assert result.missing == ["nowhere-oracle"]
+
 def test_extension_normalization_qualified_citation_matches_py_oracle(tmp_path: Path):
     agent_bin = tmp_path / "claude-klabauter-bin"
     content_root = tmp_path / "doe"

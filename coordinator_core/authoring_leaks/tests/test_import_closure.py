@@ -10,6 +10,9 @@ import pytest
 from coordinator_core.authoring_leaks import import_closure, leak_gate
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 
 def _git(root: Path, *args: str) -> None:
     subprocess.run(

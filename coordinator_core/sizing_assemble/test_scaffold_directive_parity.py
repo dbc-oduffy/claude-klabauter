@@ -5,6 +5,8 @@ import importlib.util
 import os
 from pathlib import Path
 
+import pytest
+
 import coordinator_core.sizing_assemble as sizing_assemble
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,6 +144,8 @@ class TestSizingAndPremiseThreading:
         directive = _directive(result["directives"], "d-scaffold-sizing-object")
         assert directive["missing"] == ["--premise-provenance"]
 
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
     def test_directive_run_verbatim_exits_zero_and_scaffolds_sizing(
         self, tmp_path: Path, monkeypatch
     ) -> None:

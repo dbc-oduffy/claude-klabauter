@@ -25,6 +25,8 @@ from coordinator_core.completion_receipts.store import (
 
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 NOW = "2026-10-01T12:00:00Z"
 
 

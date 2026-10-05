@@ -291,7 +291,7 @@ def _content_root(env: dict) -> str:
     updated for DR-071):
         1. registry ``repos.content_root``                   (canonical anchor)
         2. <settings-home>/machine-local/<pointer>           (durable file mirror)
-        3. ${CLAUDE_HOME:-$HOME}/.claude/<pointer>           (legacy fallback)
+        3. the pointer file under the legacy .claude dir of the Claude home (legacy fallback)
     where ``<pointer>`` is the content-root pointer name, retried under the
     pre-rename name for a box that has not migrated.
     Mirrors the bash ``cat ... || true`` (missing sentinel -> empty string)

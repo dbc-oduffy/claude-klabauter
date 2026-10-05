@@ -21,8 +21,8 @@ next call.
 ``coordinator.feature.cross_repo_memos`` and ``coordinator.feature.publishing``
 are ``on`` or ``off``; absent, ``on`` for an author box and ``off`` for a
 consumer box (``feature_enabled``). ``coordinator.feature.doctrine_edit_gate``
-is ``off`` on every profile until set ``on``: the doctrine-edit approval gate
-does not fire unless enabled.
+is ``on`` on every profile until set ``off``: the doctrine-edit approval gate
+and its sentinel-creation guards fire unless disabled.
 
 Change the level with ``machine-local set coordinator.guard_level warn``
 (or ``strict`` / ``off``); one guard with
@@ -154,11 +154,11 @@ _FEATURE_LABEL = {
 }
 
 #: Unset default per feature: ``"profile"`` follows the machine profile
-#: (on for author, off for consumer); ``"off"`` is off on every profile.
+#: (on for author, off for consumer); ``"on"``/``"off"`` hold on every profile.
 _FEATURE_DEFAULT = {
     "cross_repo_memos": "profile",
     "publishing": "profile",
-    "doctrine_edit_gate": "off",
+    "doctrine_edit_gate": "on",
 }
 
 
@@ -243,6 +243,8 @@ FLOOR_GUARDS = frozenset(
         # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
         # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
         "block-consumed-handoff-edit",
+        # a demotable sentinel guard lets an agent lower the level that gates it
+        "block-approval-sentinel-creation",
     }
 )
 

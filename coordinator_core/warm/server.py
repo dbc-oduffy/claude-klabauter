@@ -933,7 +933,115 @@ def _stamp_pool_future(dispatch_key: str, future: "concurrent.futures.Future") -
     _stamp_dispatch_outcome(dispatch_key, result)
 
 
-def _pool_broken_indeterminate_envelope(msg: dict) -> dict:
+#: Bound on the dead worker's stderr tail carried in the envelope.
+_WORKER_STDERR_TAIL_BYTES = 2048
+
+#: How long the post-mortem waits for a dying pool's processes to report an
+#: exit code; the pool terminates survivors only after it marks itself broken.
+_WORKER_EXIT_SETTLE_SECS = 1.0
+
+_WORKER_STDERR_DIRNAME = "pool-worker-stderr"
+
+#: Module-level so the file object outlives `_bind_worker_stderr_log`'s frame.
+_WORKER_STDERR_FILE = None
+
+
+def _worker_stderr_log(stderr_dir, pid: int) -> Path:
+    return Path(stderr_dir) / f"{pid}.log"
+
+
+def _bind_worker_stderr_log(stderr_dir) -> None:
+    """Point this worker's `sys.stderr` and `faulthandler` at `<dir>/<pid>.log`
+    so the server can read the tail of a worker that died. A resident server
+    is detached with stderr discarded, so without a file nothing a dying
+    worker writes survives it. Best-effort: an unwritable dir leaves stderr
+    as it was."""
+    global _WORKER_STDERR_FILE
+    if not stderr_dir:
+        return
+    try:
+        Path(stderr_dir).mkdir(parents=True, exist_ok=True)
+        fh = open(
+            _worker_stderr_log(stderr_dir, os.getpid()),
+            "w", buffering=1, encoding="utf-8", newline="\n",
+        )
+        faulthandler.enable(file=fh, all_threads=True)
+    except Exception:  # noqa: BLE001 -- diagnostics must never stop a worker booting
+        return
+    _WORKER_STDERR_FILE = fh
+    sys.stderr = fh
+
+
+def _read_stderr_tail(stderr_dir, pid: int) -> str:
+    """Last `_WORKER_STDERR_TAIL_BYTES` of a worker's stderr log; consumes the
+    log. Empty string when there is none. Never raises."""
+    if not stderr_dir:
+        return ""
+    path = _worker_stderr_log(stderr_dir, pid)
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _WORKER_STDERR_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+        path.unlink(missing_ok=True)
+        return tail
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _prune_worker_stderr_logs(stderr_dir) -> None:
+    try:
+        for stale in Path(stderr_dir).glob("*.log"):
+            stale.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _describe_exit(exitcode: int) -> str:
+    if exitcode < 0:
+        try:
+            return f"signal {signal.Signals(-exitcode).name}"
+        except ValueError:
+            return f"signal {-exitcode}"
+    return f"exit code {exitcode}"
+
+
+def _dead_worker_diagnosis(broken_pool, stderr_dir) -> dict:
+    """What a `BrokenProcessPool` can still say about the worker that died.
+
+    The pool does not record which worker held which task, so the culprit is
+    the first process with a nonzero exit that is not the pool's own SIGTERM
+    teardown of survivors; absent one, the first process that exited at all.
+    Never raises.
+    """
+    diagnosis: dict = {"case": "worker_died"}
+    try:
+        procs = list((getattr(broken_pool, "_processes", None) or {}).items())
+        deadline = time.monotonic() + _WORKER_EXIT_SETTLE_SECS
+        for _pid, proc in procs:
+            if proc.exitcode is None:
+                proc.join(max(0.0, deadline - time.monotonic()))
+        exited = [(pid, p.exitcode) for pid, p in procs if p.exitcode is not None]
+        sigterm = -int(signal.SIGTERM)
+        culprit = next(
+            ((pid, code) for pid, code in exited if code not in (0, sigterm)),
+            exited[0] if exited else None,
+        )
+        diagnosis["workers_exited"] = len(exited)
+        if culprit is not None:
+            pid, code = culprit
+            diagnosis.update(
+                worker_pid=pid,
+                exitcode=code,
+                exit=_describe_exit(code),
+                stderr_tail=_read_stderr_tail(stderr_dir, pid),
+            )
+    except Exception as exc:  # noqa: BLE001 -- a failing post-mortem must not mask the envelope
+        diagnosis["postmortem_error"] = repr(exc)
+    return diagnosis
+
+
+def _pool_broken_indeterminate_envelope(msg: dict, diagnosis: Optional[dict] = None) -> dict:
     """A JSON-RPC error envelope for a MUTATING op whose pool worker died
     with the request's outcome unknown -- the server-side sibling of
     `warm.client._indeterminate_envelope`, same `WARM_DISPATCH_INDETERMINATE`
@@ -945,15 +1053,24 @@ def _pool_broken_indeterminate_envelope(msg: dict) -> dict:
     a raised exception as a generic INTERNAL_ERROR, which would erase the
     distinction this envelope exists to carry (the op may have SUCCEEDED,
     not merely failed).
+
+    `diagnosis` (`_dead_worker_diagnosis`) lands in `error.data.diagnosis` and
+    is summarised in the message, because the caller's ladder prints the
+    message and may not print `data`.
     """
-    return {
-        "jsonrpc": "2.0",
-        "id": msg.get("id"),
-        "error": {
-            "code": WARM_DISPATCH_INDETERMINATE,
-            "message": _POOL_BROKEN_INDETERMINATE_MESSAGE,
-        },
-    }
+    message = _POOL_BROKEN_INDETERMINATE_MESSAGE
+    error: dict = {"code": WARM_DISPATCH_INDETERMINATE}
+    if diagnosis:
+        diagnosis = {**diagnosis, "op": msg.get("method")}
+        summary = f" [worker_died: op={msg.get('method')!r}"
+        if "exit" in diagnosis:
+            summary += f", worker pid {diagnosis['worker_pid']} died with {diagnosis['exit']}"
+        tail = diagnosis.get("stderr_tail")
+        summary += f", stderr tail: {tail!r}]" if tail else ", no stderr captured]"
+        message += summary
+        error["data"] = {"diagnosis": diagnosis}
+    error["message"] = message
+    return {"jsonrpc": "2.0", "id": msg.get("id"), "error": error}
 
 
 def _declare_execution_route() -> None:
@@ -1257,11 +1374,12 @@ def _repair_settings_home_to_pristine() -> None:
         os.environ["COORDINATOR_SETTINGS_HOME"] = str(_worker_pristine_settings_home)
 
 
-def _worker_process_init() -> None:
+def _worker_process_init(stderr_dir=None) -> None:
     global _worker_pristine_settings_home
     _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
 
     _bind_null_std_streams()
+    _bind_worker_stderr_log(stderr_dir)
     threading.Thread(
         target=_exit_with_parent,
         args=(os.getppid(),),
@@ -2007,9 +2125,13 @@ class _ServerContext:
         if self._dispatch_pool is None:
             with self._dispatch_pool_lock:
                 if self._dispatch_pool is None:
+                    stderr_dir = breadcrumb.svc_dir(self.engine_root) / _WORKER_STDERR_DIRNAME
+                    _prune_worker_stderr_logs(stderr_dir)
+                    self._worker_stderr_dir = stderr_dir
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
                         max_workers=DISPATCH_PROCESS_POOL_SIZE,
                         initializer=_worker_process_init,
+                        initargs=(str(stderr_dir),),
                     )
         return self._dispatch_pool
 
@@ -2075,6 +2197,7 @@ class _ServerContext:
             with self._dispatch_pool_lock:
                 broken = self._dispatch_pool
                 self._dispatch_pool = None
+            diagnosis = _dead_worker_diagnosis(broken, getattr(self, "_worker_stderr_dir", None))
             if broken is not None:
                 try:
                     broken.shutdown(wait=False)
@@ -2100,7 +2223,7 @@ class _ServerContext:
             if _op_may_mutate(msg.get("method")):
                 if dispatch_key is not None:
                     _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
-                return _pool_broken_indeterminate_envelope(msg)
+                return _pool_broken_indeterminate_envelope(msg, diagnosis)
             # `isolated=False`, explicitly: this fallback runs the op IN
             # THIS process, on this connection's own accept-thread -- the
             # exact threaded, unisolated shape the spike measured 8/8

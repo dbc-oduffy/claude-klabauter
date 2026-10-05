@@ -1,4 +1,4 @@
-"""Tripwire: claude-klabauter's tracked source holds no retired content-root name outside the ratified allowlist.
+"""Tripwire: this repo's tracked source holds no retired content-root name outside the ratified allowlist.
 
 Rule, in full:
 

@@ -99,7 +99,7 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
 from coordinator_core.commit_ledger.oracle import OracleReport
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: Generator-provenance declaration (coordinator_core/ops/generator_census).
 #: record_gate_memo() below writes state/ceremony/wsc-gate-verdict-memo/<hash>.json
 #: (hashed-key filename, one per distinct (gate_id, resolved-inputs) pair) -- a
 #: data-dependent set of tracked artifacts, not a fixed one, so this is a

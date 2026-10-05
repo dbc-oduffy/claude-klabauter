@@ -76,10 +76,6 @@ from coordinator_core.frontmatter.schema_validate import (
     _cf_queue_disposition_shape,
     _is_claude_klabauter_vendored_schema,
     validate_memo_cross_fields,
-    DIRECTION_BOTH,
-    DIRECTION_WE_AHEAD,
-    DIRECTION_WE_BEHIND,
-    _infer_drift_direction,
     check_schema_drift_advisory,
     _parse_semver_tuple,
     _read_bump_class,
@@ -4361,128 +4357,6 @@ _QUEUE_SCHEMA_NAMES = (
 )
 
 
-class TestInferDriftDirection:
-    """Unit coverage for _infer_drift_direction — the structural + text-fallback
-    best-effort AHEAD/BEHIND/BOTH read consumed by check_schema_drift_advisory and
-    surfaced through coordinator_core.frontmatter.schema_drift_watch.
-
-    Spec backlink: cross-repo/inbox/2026-07-23-example-cockpit-repo-em-coordinator-doc-new-category-no-validation.md
-    """
-
-    def test_local_only_field_is_we_are_ahead(self) -> None:
-        local = json.dumps({"properties": {"a": {"type": "string"}, "b": {"type": "string"}}})
-        doe = json.dumps({"properties": {"a": {"type": "string"}}})
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
-
-    def test_doe_only_field_is_we_are_behind(self) -> None:
-        local = json.dumps({"properties": {"a": {"type": "string"}}})
-        doe = json.dumps({"properties": {"a": {"type": "string"}, "b": {"type": "string"}}})
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_BEHIND
-
-    def test_additions_on_both_sides_is_both(self) -> None:
-        local = json.dumps({"properties": {"a": {"type": "string"}, "local_only": {"type": "string"}}})
-        doe = json.dumps({"properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}}})
-        assert _infer_drift_direction(local, doe) == DIRECTION_BOTH
-
-    def test_shared_leaf_extended_on_doe_side_is_we_are_behind(self) -> None:
-        local = json.dumps({"title": "short"})
-        doe = json.dumps({"title": "short but longer now"})
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_BEHIND
-
-    def test_shared_leaf_extended_on_local_side_is_we_are_ahead(self) -> None:
-        local = json.dumps({"title": "short but longer now"})
-        doe = json.dumps({"title": "short"})
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
-
-    def test_unrelated_value_change_is_both(self) -> None:
-        local = json.dumps({"title": "apples"})
-        doe = json.dumps({"title": "oranges"})
-        assert _infer_drift_direction(local, doe) == DIRECTION_BOTH
-
-    def test_non_json_local_addition_falls_back_to_text_containment_ahead(self) -> None:
-        # doe's text is a substring of local's -> local extended doe's content -> AHEAD.
-        assert _infer_drift_direction("not json {{{", "not json") == DIRECTION_WE_AHEAD
-
-    def test_non_json_doe_addition_falls_back_to_text_containment(self) -> None:
-        assert _infer_drift_direction("not json", "not json {{{") == DIRECTION_WE_BEHIND
-
-    def test_non_json_unrelated_text_is_both(self) -> None:
-        assert _infer_drift_direction("not json alpha", "not json beta") == DIRECTION_BOTH
-
-    def test_doe_only_version_bump_with_additive_extending_changes_is_we_are_behind(self) -> None:
-        # Shaped on the real plan-tasks pair (census 2): DoE-only properties,
-        # version 1.14.0 vs 2.0.0, bump-class changed, bump-note extended.
-        # Baton AC: "a one-sided version bump reports BEHIND, never BOTH".
-        local = json.dumps(
-            {
-                "x-schema-version": "1.14.0",
-                "x-bump-class": "additive",
-                "x-bump-note": "added an optional field",
-                "properties": {"a": {"type": "string"}},
-            }
-        )
-        doe = json.dumps(
-            {
-                "x-schema-version": "2.0.0",
-                "x-bump-class": "major",
-                "x-bump-note": "added an optional field, then extended it further",
-                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
-            }
-        )
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_BEHIND
-
-    def test_local_only_version_bump_with_additive_extending_changes_is_we_are_ahead(self) -> None:
-        # Mirror image of the BEHIND fixture above: local bumped, local-only property.
-        local = json.dumps(
-            {
-                "x-schema-version": "2.0.0",
-                "x-bump-class": "major",
-                "x-bump-note": "added an optional field, then extended it further",
-                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
-            }
-        )
-        doe = json.dumps(
-            {
-                "x-schema-version": "1.14.0",
-                "x-bump-class": "additive",
-                "x-bump-note": "added an optional field",
-                "properties": {"a": {"type": "string"}},
-            }
-        )
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
-
-    def test_version_bump_plus_property_only_on_each_side_is_both(self) -> None:
-        # A true two-sided drift stays BOTH even with a one-sided version bump.
-        local = json.dumps(
-            {
-                "x-schema-version": "2.0.0",
-                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
-            }
-        )
-        doe = json.dumps(
-            {
-                "x-schema-version": "1.14.0",
-                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
-            }
-        )
-        assert _infer_drift_direction(local, doe) == DIRECTION_BOTH
-
-    def test_equal_versions_with_diverged_content_is_unchanged(self) -> None:
-        local = json.dumps(
-            {
-                "x-schema-version": "1.0.0",
-                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
-            }
-        )
-        doe = json.dumps(
-            {
-                "x-schema-version": "1.0.0",
-                "properties": {"a": {"type": "string"}},
-            }
-        )
-        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
-
-
 def _advisory_git(repo: Path, *args: str) -> None:
     subprocess.run(
         ['git', '-C', str(repo), *args],
@@ -4807,7 +4681,7 @@ class TestCanonicalDriftAdvisory:
         self, fake_doe: Path, tmp_path: Path
     ) -> None:
         """AC2a: an ordinary (non-$comment) value edit still reports
-        diverged=True with a non-None direction — canonicalization only
+        diverged=True with an unknown direction (no recorded base) — canonicalization only
         absorbs formatting, never a value change."""
         edited = dict(_CANONICAL_WIDGET)
         edited["title"] = "widget (locally edited)"
@@ -4815,7 +4689,7 @@ class TestCanonicalDriftAdvisory:
         vendored.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         result = check_schema_drift_advisory(vendored, fake_doe)
         assert result["diverged"] is True
-        assert result["direction"] is not None
+        assert result["direction"] is None  # no base recorded: unknown
 
     def test_ac2b_comment_prose_only_delta_no_longer_diverges(
         self, fake_doe: Path, tmp_path: Path
@@ -4909,7 +4783,7 @@ class TestCanonicalDriftAdvisory:
         vendored.write_text(json.dumps(edited, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         result = check_schema_drift_advisory(vendored, fake_doe)
         assert result["diverged"] is True
-        assert result["direction"] is not None
+        assert result["direction"] is None  # no base recorded: unknown
 
     def test_ac3_malformed_vendored_json_falls_back_to_byte_diverged(
         self, fake_doe: Path, tmp_path: Path

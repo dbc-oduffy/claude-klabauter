@@ -54,6 +54,9 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _EXCLUDE_PREFIXES = (
     "state/", "archive/", "cross-repo/", "tasks/", "docs/",
     ".git/", ".coordinator-local/",
+    # Gitignored scratch holds `git archive` copies of the tree; scanning them
+    # reports a preamble the shipped tree no longer carries.
+    "scratch/",
 )
 
 # The canonical body, tolerant of the local name and indentation.

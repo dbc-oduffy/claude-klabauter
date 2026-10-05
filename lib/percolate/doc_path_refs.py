@@ -20,7 +20,7 @@ warn-only mode.
 
 Scope: concrete file refs only -- a path with an extension and no placeholder/glob characters,
 rooted at `lib/` or `bin/` and ANCHORED to the plugin via `coordinator/`, `<plugin-root>/`,
-`<engine-root>/coordinator/` or `${CLAUDE_PLUGIN_ROOT}/` (bare `bin/x` is a consuming-repo path).
+`<engine-root>/coordinator/` or the plugin-root environment-variable prefix (bare `bin/x` is a consuming-repo path).
 Refs on a line/sentence saying "if present" / "if it exists" / "absent: skip" are exempt. Directory refs, globs and `<placeholders>` are not graded.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-# Only paths anchored to the PLUGIN are graded: `<plugin-root>/`, `${CLAUDE_PLUGIN_ROOT}/`,
+# Only paths anchored to the PLUGIN are graded: the `<plugin-root>` placeholder, the plugin-root environment-variable prefix,
 # `coordinator/` or `<engine-root>/coordinator/`. A bare `bin/x.sh` is the consuming repo's own
 # optional extension point (e.g. `bin/check-fixture-sync.sh`), not a plugin file.
 _REF = re.compile(

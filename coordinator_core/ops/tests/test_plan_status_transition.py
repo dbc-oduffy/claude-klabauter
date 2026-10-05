@@ -1604,6 +1604,36 @@ def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
     assert p.stat().st_mtime_ns == before_mtime
 
 
+@pytest.mark.parametrize("verb", ["stamp-reviewed", "stamp-approved"])
+def test_rung_verb_on_executing_plan_with_changed_body_refuses_naming_restamp(
+    tmp_path, capsys, verb
+):
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    stamped = stamp_approved_body_sha("---\nstatus: executing\n---\n\nBody.\n")
+    original = stamped.replace("Body.", "Amended body.")
+    p = _write(tmp_path, "p.md", original)
+    rc = main([verb, "--plan", str(p)])
+    assert rc == 1
+    assert "review-exec-auth-stamp restamp" in capsys.readouterr().err
+    assert p.read_text(encoding="utf-8") == original
+
+
+def test_changed_body_message_names_restamp_only_when_executing():
+    from coordinator_core.frontmatter.primitives import (
+        check_approved_body,
+        stamp_approved_body_sha,
+    )
+
+    base = stamp_approved_body_sha("---\nstatus: executing\n---\n\nBody.\n")
+    msg = check_approved_body(base.replace("Body.", "New."))[1]
+    assert "review-exec-auth-stamp restamp" in msg
+    msg = check_approved_body(
+        base.replace("executing", "approved").replace("Body.", "New.")
+    )[1]
+    assert "restamp" not in msg and "re-approve" in msg
+
+
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
 def test_rung_verb_outside_flippable_aborts(tmp_path, capsys, verb, target):
     """AC5: a source outside _FLIPPABLE_STATUSES (and not frozen) aborts."""

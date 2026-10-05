@@ -1039,12 +1039,16 @@ static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w)
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
     if (!cmdline_w) return 1;
 
-    if (g_fall_code != 0) {
+    /* Silent unless COORDINATOR_DOOR_DEBUG is set: the cold leg is a success
+     * path, and any native stderr line is a terminating NativeCommandError
+     * under Windows PowerShell 5.1, even with 2>$null. */
+    int debug = GetEnvironmentVariableW(L"COORDINATOR_DOOR_DEBUG", NULL, 0) != 0;
+    if (debug && g_fall_code != 0) {
         fwprintf(stderr,
             L"door: falling through to the cold entrypoint (%s) "
             L"[server rejected the request, JSON-RPC code %ld]\n",
             script_path_w, g_fall_code);
-    } else {
+    } else if (debug) {
         fwprintf(stderr,
             L"door: falling through to the cold entrypoint (%s) [%s]\n",
             script_path_w, g_fall_reason);

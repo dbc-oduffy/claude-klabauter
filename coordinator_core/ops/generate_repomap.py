@@ -11,9 +11,9 @@ Spec backlink: docs/plans/2026-05-09-skill-consolidation-pass.md § T2
 
 Negative-spec:
     - Does NOT gate on RAG state.
-    - Reproduces the original's exact 3-tier generator resolution order
-      verbatim — (1) plugin-relative canonical path
-      (<plugin_root>/bin/repomap/generate-repomap.py), (2) legacy meta-repo
+    - Generator resolution order — (1) plugin-relative canonical path
+      (<plugin_root>/bin/repomap/generate-repomap.py), (1b) the coordinator/
+      tree beside this engine copy, (2) legacy meta-repo
       global install (~/.claude/.github/scripts/generate-repomap.py), (3)
       repo-local fallback (.github/scripts/generate-repomap.py). Tiers 2-3
       are intentional legacy bridges — do not add a fourth tier or reorder
@@ -36,6 +36,13 @@ import sys
 from typing import List, Optional
 
 from coordinator_core.trusted_root_guard import is_trusted as _trusted_root
+
+
+# The coordinator/ tree beside this engine copy; a forwarder whose plugin_root
+# names a clone that no longer carries the generator still resolves here.
+_ENGINE_PLUGIN_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "coordinator"
+)
 
 
 def _resolve_python_cmd() -> Optional[List[str]]:
@@ -64,6 +71,7 @@ def main(argv: List[str], plugin_root: Optional[str] = None, site: str = "genera
 
     candidates = [
         os.path.join(plugin_root, "bin", "repomap", "generate-repomap.py"),
+        os.path.join(_ENGINE_PLUGIN_ROOT, "bin", "repomap", "generate-repomap.py"),
         os.path.join(os.path.expanduser("~"), ".claude", ".github", "scripts", "generate-repomap.py"),
         os.path.join(".github", "scripts", "generate-repomap.py"),
     ]
@@ -71,8 +79,9 @@ def main(argv: List[str], plugin_root: Optional[str] = None, site: str = "genera
     if generator is None:
         print("ERROR: generate-repomap.py not found.", file=sys.stderr)
         print(f"  Expected (tier 1): {candidates[0]}", file=sys.stderr)
-        print(f"  Fallback (tier 2, legacy): {candidates[1]}", file=sys.stderr)
-        print(f"  Fallback  (tier 3): {candidates[2]}", file=sys.stderr)
+        print(f"  Fallback (engine copy): {candidates[1]}", file=sys.stderr)
+        print(f"  Fallback (tier 2, legacy): {candidates[2]}", file=sys.stderr)
+        print(f"  Fallback  (tier 3): {candidates[3]}", file=sys.stderr)
         print("  Install the coordinator-claude plugin or run the setup script.", file=sys.stderr)
         return 1
 

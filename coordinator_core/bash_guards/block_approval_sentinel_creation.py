@@ -26,9 +26,8 @@ path, not a text classifier over Bash strings), and the actual creation of a
 genuine approval is an act only the human PM performs out-of-band -- those
 hold regardless of whatever this classifier misses.
 
-OPT-IN. The doctrine-edit approval gate is off on every profile; this guard
-allows unless `machine-local set coordinator.feature.doctrine_edit_gate on`
-has been run.
+DEFAULT-ON. The doctrine-edit approval gate is on every profile; this guard
+allows only after `machine-local set coordinator.feature.doctrine_edit_gate off`.
 
 WHY THIS EXISTS. A sibling DoE-side hook denies edits to always-loaded
 doctrine surfaces (global CLAUDE.md and friends) unless a repo-root sentinel
@@ -202,7 +201,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     _SEPARATOR_TOKEN_RE,
     exceeds_tokenizable_ceiling,
 )
-from coordinator_core.machine_profile import LEVEL_VERB, apply_guard_level, feature_enabled
+from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -1182,8 +1181,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         "edits. Ask the PM to create it.\n\n"
         "Use instead:\n"
         "  %s\n"
-        "  %s\n\n"
-        "Lower it: `%s`." % (safe_argv0, safe_git, LEVEL_VERB)
+        "  %s" % (safe_argv0, safe_git)
     )
 
 
@@ -1198,7 +1196,131 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     if not feature_enabled("doctrine_edit_gate"):
         return None
-    return check_ungated(payload)
+    return gate_disable_denial(payload) or check_ungated(payload)
+
+
+_GATE_KEY_RE = re.compile(r"doctrine_edit_gate", re.IGNORECASE)
+_OFF_VALUE_RE = re.compile(r"(?<![\w.-])(?:off|false|0|no)(?![\w.-])", re.IGNORECASE)
+_WRITE_VERB_RE = re.compile(
+    r"(?<![\w-])(?:set|registry_set|set-content|add-content|out-file|tee|tee-object|sed)(?![\w-])|>",
+    re.IGNORECASE,
+)
+_SEGMENT_SPLIT_RE = re.compile(r";|&&|\|\||\||\n")
+_READ_HEADS = frozenset(
+    {
+        "git", "grep", "rg", "cat", "head", "tail", "wc", "ls",
+        "coordinator-safe-commit", "scoped-git-commit",
+    }
+)
+_RISK_GATE_OFF = (
+    "this command turns off the doctrine-edit approval gate or lowers the "
+    "guard level, the PM's sign-off on always-loaded doctrine; an agent "
+    "doing so voids it."
+)
+_LEVEL_SET_RE = re.compile(
+    r"(?:coordinator\.)?guard_level(?:\.([\w-]+))?[\s='\",:()\]]+([A-Za-z0-9]+)", re.IGNORECASE
+)
+_ENV_KEY_RE = re.compile(
+    r"MACHINE_LOCAL_COORDINATOR_(FEATURE_\w+|GUARD_LEVEL[\w-]*)[\"']?\s*[:=,]\s*[\"']?(\w+)",
+    re.IGNORECASE,
+)
+_SETTINGS_FILE_RE = re.compile(r"settings(?:\.local)?\.json", re.IGNORECASE)
+_ENV_WRITE_VERB_RE = re.compile(
+    r"(?<![\w-])(?:jq|write_text|json\.dump|dump|convertto-json)(?![\w-])", re.IGNORECASE
+)
+
+
+def _level_lowered(name: "str | None", value: str) -> bool:
+    from coordinator_core import machine_profile as mp
+
+    value = value.lower()
+    if value not in mp.LEVELS:
+        return False
+    rank = {lvl: -i for i, lvl in enumerate(mp.LEVELS)}
+    current = (
+        mp.guard_level(name.lower())
+        if name
+        else mp._explicit(mp.LEVEL_KEY, mp.LEVELS) or "warn"
+    )
+    return rank[value] < rank[current]
+
+
+def _segment_weakens(segment: str) -> bool:
+    if _GATE_KEY_RE.search(segment) and _OFF_VALUE_RE.search(segment):
+        return True
+    for name, value in _LEVEL_SET_RE.findall(segment):
+        if _level_lowered(name or None, value):
+            return True
+    if _SETTINGS_FILE_RE.search(segment) and (
+        _ENV_WRITE_VERB_RE.search(segment) or _WRITE_VERB_RE.search(segment)
+    ):
+        for key, value in _ENV_KEY_RE.findall(segment):
+            if key.upper().startswith("FEATURE_"):
+                if _OFF_VALUE_RE.fullmatch(value):
+                    return True
+            else:
+                suffix = key[len("GUARD_LEVEL"):].lstrip("_").replace("_", "-")
+                if _level_lowered(suffix or None, value):
+                    return True
+    return False
+
+
+def _segment_head(segment: str) -> str:
+    for tok in segment.split():
+        if _ASSIGN_RE.match(tok):
+            continue
+        return _normalize_executable_basename(tok.strip("'\""))
+    return ""
+
+
+def _turns_gate_off(cmd: str) -> bool:
+    """A write-verb segment that sets `doctrine_edit_gate` off, lowers
+    `guard_level`, or sets a settings `env` feature off / level lower.
+    Lexical like the rest of this module: dynamic assembly of the key evades
+    it. Read-only heads without a redirect are exempt."""
+    if not re.search(
+        r"doctrine_edit_gate|guard_level|machine_local_coordinator_", cmd, re.IGNORECASE
+    ):
+        return False
+    for segment in _SEGMENT_SPLIT_RE.split(cmd):
+        if _segment_head(segment) in _READ_HEADS and ">" not in segment:
+            continue
+        if (_WRITE_VERB_RE.search(segment) or _ENV_WRITE_VERB_RE.search(segment)) and _segment_weakens(segment):
+            return True
+    return False
+
+
+def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Deny a command that sets `doctrine_edit_gate` off, lowers
+    `guard_level`, or writes a settings `env` that does either, unless a fresh
+    PM approval sentinel exists. Raising, reading, or an unrelated command
+    never denies."""
+    if (payload.get("tool_name") or "") not in MATCHERS:
+        return None
+    tool_input = payload.get("tool_input") or {}
+    cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
+    if not _turns_gate_off(cmd.replace("\r", "")):
+        return None
+    from coordinator_core.write_guards.guard_doctrine_surface_edits import (
+        pm_approval_fresh,
+    )
+
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+    if pm_approval_fresh(cwd):
+        return None
+    envelope = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "BLOCKED: this turns off the doctrine-edit approval gate or lowers "
+                "the guard level. Ask the PM to change it."
+            ),
+        }
+    }
+    return apply_guard_level(
+        GUARD_NAME, envelope, risk=_RISK_GATE_OFF[0].upper() + _RISK_GATE_OFF[1:]
+    )
 
 
 def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

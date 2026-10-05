@@ -72,6 +72,9 @@ from coordinator_core.backlog_grind_assemble.readers_blitz import (
 from coordinator_core.contract import grind_vocab
 from coordinator_core.frontmatter import schema_validate
 
+# Writes per-run queue row files under a caller-supplied row dir, not a stamped artifact.
+GENERATES = []
+
 __all__ = [
     "ManifestEntry",
     "DeclinedEntry",

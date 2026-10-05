@@ -340,6 +340,19 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/ask_stage.py",
         ("_handler",),
     ),
+    # Enrolled 2026-10-05: each now measures an EMPTY function-granular reachable spawn set.
+    "install.probe_skill_frontmatter_valid": (
+        "coordinator_core/install/prereq_probe.py",
+        ("_probe_skill_frontmatter_valid_op",),
+    ),
+    "priority.set": (
+        "coordinator_core/ops/priority_set.py",
+        ("_priority_set",),
+    ),
+    "queue.promote": (
+        "coordinator_core/ops/queue_promote.py",
+        ("_queue_promote_handler",),
+    ),
     "sizing.resize": (
         "coordinator_core/ops/sizing_resize.py",
         ("_handler",),
@@ -2437,27 +2450,29 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
 #: an oracle). `completion.reconcile_commits` (1 pair) was killed and deleted 2026-08-23 (PM
 #: ruling, code gone); its row is removed rather than left pointing at a dead entrypoint, leaving
 #: 14 ops / 33 pairs (enumerated in `_CLUSTER_D4_OPEN_DISPOSITION` below). 2026-10-02:
-#: `ceremony.init_anchor_injection_state` left the list, now 13 ops -- 8e979f0826 took it to zero
-#: reachable spawns and it is enrolled in `_BUDGETED_ENTRYPOINTS`. `release_currency.py`
+#: `ceremony.init_anchor_injection_state` left the list, now 13 ops (before the three below) -- 8e979f0826 took it to zero
+#: reachable spawns and it is enrolled in `_BUDGETED_ENTRYPOINTS`. 2026-10-05:
+#: `install.probe_skill_frontmatter_valid`, `priority.set`, `queue.promote` left the list the same
+#: way, now 10 ops. `release_currency.py`
 #: alone accounts for 13 of the 20 distinct sites and all 13 of `plugin_health.sentinel`'s own
 #: pairs on that file -- nearly one-to-one, matching the brief's own characterization of this file
 #: as per-site work rather than shared machinery.
 #:
 #: DISPOSITION, NAMED HONESTLY PER AC19C (not silence, not a fabricated legitimation, not "a
-#: sibling op reaches it"): NONE of these 13 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
+#: sibling op reaches it"): NONE of these 10 ops is added to `_BUDGETED_ENTRYPOINTS`, and NONE of
 #: their cluster sites is added to `_LEGITIMIZED_SITES`. A `_Legitimation` requires an EXISTING
 #: companion test that asserts the op's OWN spawn count by exact equality (leg 2) AND was measured
-#: to actually execute the site (leg 3). Checked for all 13: no file under
+#: to actually execute the site (leg 3). Checked for all 10: no file under
 #: `coordinator_core/**/tests/*spawn_budget*.py` (the full, enumerated live list of every such file
-#: in the repo) matches any of these 13 ops' own handler modules or op names --
+#: in the repo) matches any of these 10 ops' own handler modules or op names --
 #: `goal.append`,
-#: `goal.close_day`, `goal.close_day_apply`, `install.probe_skill_frontmatter_valid`,
-#: `plugin_health.forwarder_drift`, `plugin_health.sentinel`, `priority.drain`, `priority.set`,
-#: `queue.promote`, `repo_setup.copy_console_subprocess_tripwire`,
+#: `goal.close_day`, `goal.close_day_apply`,
+#: `plugin_health.forwarder_drift`, `plugin_health.sentinel`, `priority.drain`,
+#: `repo_setup.copy_console_subprocess_tripwire`,
 #: `session.guard_hooks_kill_switch_detail`, `session.guard_settings_integrity`, `workflow.fire`
 #: have no exact-equality spawn-count-asserting companion at all -- leg 2 is undischarged for all
-#: 13, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
-#: turned up here: none of these 13 ops has ANY same-named `*_spawn_budget.py` file on disk, not
+#: 10, and the question of leg 3 does not arise. Unlike D3's cluster, no partial-exception case
+#: turned up here: none of these 10 ops has ANY same-named `*_spawn_budget.py` file on disk, not
 #: even one that asserts a narrower or monkeypatched shape.
 #:
 #: Building the missing companion fixture(s) for any of the 13 means writing to test files this
@@ -2477,12 +2492,9 @@ _CLUSTER_D4_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "goal.append": ("coordinator_core/ops/goal_append.py", "_goal_append"),
     "goal.close_day": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day"),
     "goal.close_day_apply": ("coordinator_core/ops/goal_close_day.py", "_goal_close_day_apply"),
-    "install.probe_skill_frontmatter_valid": ("coordinator_core/install/prereq_probe.py", "_probe_skill_frontmatter_valid_op"),
     "plugin_health.forwarder_drift": ("coordinator_core/plugin_health/forwarder_drift.py", "_plugin_health_forwarder_drift"),
     "plugin_health.sentinel": ("coordinator_core/plugin_health/sentinel.py", "_plugin_health_sentinel"),
     "priority.drain": ("coordinator_core/ops/priority_drain.py", "_priority_drain"),
-    "priority.set": ("coordinator_core/ops/priority_set.py", "_priority_set"),
-    "queue.promote": ("coordinator_core/ops/queue_promote.py", "_queue_promote_handler"),
     "repo_setup.copy_console_subprocess_tripwire": ("coordinator_core/ops/copy_plugin_template.py", "_copy_console_subprocess_tripwire"),
     "session.guard_hooks_kill_switch_detail": ("coordinator_core/ops/session/guard_settings_integrity.py", "_handler_kill_switch_detail"),
     "session.guard_settings_integrity": ("coordinator_core/ops/session/guard_settings_integrity.py", "_handler"),
@@ -2518,7 +2530,6 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "goal.close_day_apply": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
     ),
-    "install.probe_skill_frontmatter_valid": (),
     "plugin_health.forwarder_drift": (
         ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
     ),
@@ -2540,8 +2551,6 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/pyresolve.py", "_validate_interpreter", "<dynamic>", 0),
     ),
     "priority.drain": (),
-    "priority.set": (),
-    "queue.promote": (),
     "repo_setup.copy_console_subprocess_tripwire": (),
     "session.guard_hooks_kill_switch_detail": (),
     "session.guard_settings_integrity": (),
@@ -6619,7 +6628,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
     # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside
     # an enrolment is dead weight (AC20c).
-    "workflow.fire": 6,
+    "workflow.fire": 5,
     "machine.hibernate": 4,
     "orientation.regenerate_cache": 4,
     "branch.merge_into_workstream": 3,
@@ -6653,7 +6662,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #: the live number is not a safety margin -- it is room for a regression to
     #: land without this ratchet noticing.
     "hooks.cater_subagent_start": 1,
-    "priority.drain": 2,
+    "priority.drain": 1,
     "changelog.inject_anchor": 2,
     "ci.run_semgrep_scan": 2,
     "ci.run_shellcheck_sweep": 2,
@@ -6671,7 +6680,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "handoff.propagate": 3,
     "install.probe_windows_terminal_presence": 2,
     "plan.propagate": 3,
-    "plugin_health.forwarder_drift": 2,
+    "plugin_health.forwarder_drift": 1,
     "release.cut_tag": 2,
     # Lowered 2 -> 1 2026-10-02: 8e979f0826 swapped the legacy root resolver for read_content_root.
     "repo_setup.copy_console_subprocess_tripwire": 1,
@@ -6759,7 +6768,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # adopting a clone without verifying it points where the caller thinks.
     "install.clone_idempotent": 2,
     "install.detect_python3_appx_stub": 1,
-    "install.probe_skill_frontmatter_valid": 1,
     "invoke.from_argv": 1,
     "memo.fate_backfill": 1,
     "merge.quiet_activity_gate": 1,
@@ -6770,8 +6778,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.list_stale_executing": 1,
     "plan.persist_capture": 1,
     "plugin_health.drift": 1,
-    "priority.set": 1,
-    "queue.promote": 1,
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).

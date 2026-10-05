@@ -222,6 +222,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
+from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.emit import (
     check_agent_types_resolve,
     NoReviewStageError,
@@ -267,6 +268,16 @@ from coordinator_core.ops.review_mint.roster import (
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.ops._param_alias import aliased_param, spellings
+
+def _installed_plugin_root() -> Optional[str]:
+    """The coordinator plugin's content root from the on-disk install (the
+    harness install record, then the configured content root); None when no
+    install is found. File reads only -- the emitter subprocess carries no
+    harness plugin env, so ``CLAUDE_PLUGIN_ROOT`` alone under-reports."""
+    from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root
+
+    return resolve_plugin_root()
+
 
 def _load_review_inputs(route: str) -> tuple:
     """Return ``(fragment, stage_schemas)`` for ``route``; raise
@@ -1169,7 +1180,7 @@ def _dispatch_emit(
     # itself reads nothing from the environment; this is the one read.
     agent_type_host = resolve_agent_type_host(
         coordinator_agent_type_host=os.environ.get("COORDINATOR_AGENT_TYPE_HOST"),
-        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
+        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT") or _installed_plugin_root(),
     )
 
     plan_findings: list = []
@@ -1267,6 +1278,7 @@ def _dispatch_emit(
             script_path=_script_path_under(guarded_path, ask_ctx["root"]),
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
+            agent_type_host=agent_type_host,
         )
         receipt_plan_path = None
     else:
@@ -1293,6 +1305,7 @@ def _dispatch_emit(
             chatty=bool(params.get("chatty")),
             predispatch=bool(inventory_path),
             review_specs=inventory_review_specs,
+            credit_rows=rows_backed_before_base,
         )
 
     check_agent_types_resolve(
@@ -1399,7 +1412,7 @@ def _dispatch_emit(
     return reply
 
 
-_LANE_RUN_DIR = "state/mise-inventory"
+_LANE_RUN_DIR = Path(home_dir(".", "mise-inventory")).as_posix()
 _MAX_HEADROOM_RETRIES = 3
 _HEADROOM_STEP = 0.05
 

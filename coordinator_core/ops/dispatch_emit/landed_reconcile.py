@@ -35,6 +35,9 @@ from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.session.claimed_write import replace_text
 
+# Flips plan rows in place via replace_text; edits authored plans, emits no generated artifact.
+GENERATES = []
+
 
 def _names_a_landing(disposition: str) -> bool:
     text = disposition.strip().lower()

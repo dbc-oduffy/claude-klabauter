@@ -26,7 +26,7 @@ import pytest
 
 from coordinator_core.ops.ceremony import git_native, push as push_mod
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _LOCAL_BRANCH = "work/vm/2026-09-22"
 _REMOTE_BRANCH = "claude/compassionate-pascal-98ncw7"

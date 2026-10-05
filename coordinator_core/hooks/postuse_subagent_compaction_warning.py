@@ -31,6 +31,9 @@ from coordinator_core.hooks._envelope import context_only
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 
+# Writes warned-band marker files under settings home state, outside the tracked tree.
+GENERATES = []
+
 WARN_BANDS = (0.75, 0.90)
 _TAIL_BYTES = 262144
 _WINDOW_DEFAULT = 200000

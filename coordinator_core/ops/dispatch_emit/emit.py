@@ -271,7 +271,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple, Optional, Sequence
+from typing import Callable, NamedTuple, Optional, Sequence
 
 import yaml
 
@@ -291,7 +291,6 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
-from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -1312,6 +1311,10 @@ class PlanContext:
     claude_off_path: bool = False
     #: The criterion the judge is held to, resolved from the same plan text.
     operative_criterion: Optional[OperativeCriterion] = None
+    #: The plan body's ``## Execution notes`` text, size-capped; ``None`` when absent.
+    execution_notes: Optional[str] = None
+    #: Parsed frontmatter ``row_build_gate`` entries (``_parse_row_build_gates``).
+    row_build_gates: tuple = ()
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1656,7 +1659,124 @@ def derive_plan_context(
         ),
         repo_root=repo_root,
         claude_off_path=_claude_is_off_default_path(),
+        execution_notes=_capped_execution_notes(stripped_text),
+        row_build_gates=_parse_row_build_gates(plan_text),
     )
+
+
+_EXECUTION_NOTES_HEADING = "Execution notes"
+_EXECUTION_NOTES_CHAR_CAP = 4000
+
+
+def _capped_execution_notes(plan_text: str) -> Optional[str]:
+    """The ``## Execution notes`` section verbatim, cut to
+    ``_EXECUTION_NOTES_CHAR_CAP`` characters; ``None`` when absent or empty."""
+    body = _plan_section_body(plan_text, _EXECUTION_NOTES_HEADING)
+    if body is None or not body.strip():
+        return None
+    body = body.strip()
+    if len(body) > _EXECUTION_NOTES_CHAR_CAP:
+        body = body[: _EXECUTION_NOTES_CHAR_CAP - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+    return body
+
+
+def _parse_row_build_gates(plan_text: str) -> tuple:
+    """Frontmatter ``row_build_gate`` as ``((change_kind, surface_glob, command), ...)``.
+
+    Tolerant: absent key, bad YAML, or a malformed entry (non-mapping, empty
+    or non-string ``command``) yields nothing for that entry; never raises.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None or "row_build_gate" not in split.fm_text:
+        return ()
+    try:
+        doc = load_frontmatter_doc(split.fm_text)
+    except yaml.YAMLError:
+        return ()
+    raw = doc.get("row_build_gate") if isinstance(doc, dict) else None
+    if not isinstance(raw, list):
+        return ()
+    gates = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        command = entry.get("command")
+        if not isinstance(command, str) or not command.strip():
+            continue
+        when = entry.get("when")
+        when = when if isinstance(when, dict) else {}
+        kind = when.get("change_kind")
+        glob = when.get("surface_glob")
+        gates.append((
+            kind if isinstance(kind, str) and kind else None,
+            glob if isinstance(glob, str) and glob else None,
+            command.strip(),
+        ))
+    return tuple(gates)
+
+
+def _glob_regex(glob: str) -> "re.Pattern[str]":
+    out = []
+    i = 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _row_build_gate_commands(row: WaveRow, gates: tuple) -> list:
+    """Commands of every gate whose ``when`` matches ``row`` (``change_kind``
+    equal when given; ``surface_glob`` matching any declared write file)."""
+    if not gates:
+        return []
+    writes = [] if row.writes is UNDECLARED else [str(w).replace("\\", "/") for w in row.writes]
+    matched = []
+    for kind, glob, command in gates:
+        if kind is not None and row.change_kind != kind:
+            continue
+        if glob is not None:
+            rx = _glob_regex(glob)
+            if not any(rx.match(w) for w in writes):
+                continue
+        if command not in matched:
+            matched.append(command)
+    return matched
+
+
+def _build_gate_clause(commands: list) -> str:
+    lines = "\n".join(f"- `{c}`" for c in commands)
+    return (
+        "Build gate (mandatory): after your edits, run each command below and "
+        "read its output. If any fails, return PARTIAL naming the failing "
+        "command and its error, never DONE.\n" + lines
+    )
+
+
+def _execution_notes_block(context: Optional[PlanContext]) -> str:
+    if context is None or not context.execution_notes:
+        return ""
+    return f"## Execution notes (from the plan)\n\n{context.execution_notes}"
+
+
+def _plan_context_head(context: PlanContext) -> str:
+    """The plan-context preamble, then the plan's execution notes when present:
+    the one run-wide block ``_row_prompt`` and ``_row_agent_call_expr`` both hoist."""
+    notes = _execution_notes_block(context)
+    preamble = _plan_context_preamble(context)
+    return f"{preamble}\n\n{notes}" if notes else preamble
 
 
 def _prime_exit_criterion_statement(plan_text: str) -> Optional[str]:
@@ -2276,10 +2396,14 @@ def _row_prompt(
             f"\n\nCreate {', '.join(new_module_paths)} before editing any file "
             "that imports them."
         )
+    if plan_context is not None:
+        gate_commands = _row_build_gate_commands(row, plan_context.row_build_gates)
+        if gate_commands:
+            body += f"\n\n{_build_gate_clause(gate_commands)}"
     if predecessor_state:
         body += f"\n\n{predecessor_state}"
     if plan_context is not None:
-        body = f"{_plan_context_preamble(plan_context)}\n\n{body}"
+        body = f"{_plan_context_head(plan_context)}\n\n{body}"
     return f"{prompt_head}\n\n{body}"
 
 
@@ -2323,7 +2447,7 @@ def _row_agent_call_expr(
     else:
         head = f"{_prompt_head(preamble)}\n\n"
         if plan_context is not None:
-            head += f"{_plan_context_preamble(plan_context)}\n\n"
+            head += f"{_plan_context_head(plan_context)}\n\n"
         if not prompt.startswith(head):
             prompt_literal = _resolve_markers_plus(prompt)
         else:
@@ -3468,6 +3592,7 @@ def compose_script(
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
     predecessor_state: Optional[str] = None,
+    precredited_rows: Optional[Sequence[str]] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3909,11 +4034,9 @@ def compose_script(
         declared_paths=declared_paths,
         prompt_head=review_prompt_head,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
-        precredited_rows=(
-            rows_backed_before_base(Path(repo_root), plan_path, run_base_sha)
-            if repo_root is not None and plan_path and run_base_sha
-            else None
-        ),
+        run_key=(session_id or "")[:8] or (Path(script_path).stem if script_path else None),
+        precredited_rows=precredited_rows,
+        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     ):
         phase_titles.append(title)
         guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
@@ -3925,6 +4048,7 @@ def compose_script(
         falsifier=falsifier,
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
+        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     )
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
@@ -4495,6 +4619,7 @@ def emit_script(
     chatty: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
+    credit_rows: Optional[Callable[[Path, str, Optional[str]], Sequence[str]]] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
@@ -4640,6 +4765,12 @@ def emit_script(
     observed_branch = head_branch(repo_root) if repo_root is not None else None
     expected_branch = None if observed_branch in (None, "HEAD") else observed_branch
 
+    precredited_rows = (
+        credit_rows(Path(repo_root), spec_path.as_posix(), run_base_sha)
+        if credit_rows is not None and repo_root is not None and run_base_sha
+        else None
+    )
+
     return compose_script(
         waves,
         name=resolved_name,
@@ -4664,6 +4795,7 @@ def emit_script(
         predispatch=predispatch,
         review_specs=review_specs,
         predecessor_state=predecessor_state_section(plan_text, repo_root),
+        precredited_rows=precredited_rows,
     )
 
 

@@ -712,7 +712,7 @@ def resolve_engine_root(script_file: str) -> str:
 
 
 def _front_insert_on_path(root: str) -> str:
-    """Shared ``if root not in sys.path: sys.path.insert(0, root)`` body.
+    """Pin ``root`` at ``sys.path[0]``, moving it there if already present.
 
     The one insert primitive every path-mutating resolver wrapper in this
     module (``ensure_engine_on_path``, ``require_engine_on_path``,
@@ -720,9 +720,13 @@ def _front_insert_on_path(root: str) -> str:
     behavior — an explicit ``COORDINATOR_ENGINE_ROOT`` outranking an ambient editable
     install of ``coordinator_core`` — lives in exactly one place. Returns
     ``root`` unchanged, so callers can end on ``return _front_insert_on_path(root)``.
+
+    A membership-guarded insert is a trap: a root already present at the tail
+    (``PYTHONPATH``, an editable ``.pth``) skips the insert, and the cwd entry
+    (``''`` under ``python -c``) then shadows it with the cwd's own tree.
     """
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    if not sys.path or sys.path[0] != root:
+        sys.path[:] = [root] + [p for p in sys.path if p != root]
     return root
 
 
@@ -850,22 +854,16 @@ def _report_provenance(caller: str, root: str, axis: str) -> ProvenanceReport:
             return report
         from coordinator_core.engine_provenance_counter import record_engine_provenance
 
-        # Omitting cwd left resolve_git_root_cheap's
-        # `if not cwd: return None` guard firing on every call, so the sink
-        # silently never wrote a record (indistinguishable at the call site
-        # from an intentional unresolvable-root degrade). os.getcwd() is a
-        # MISS-MODE-appropriate cwd for this sink: a symlinked-ancestor
-        # divergence between this and resolve_git_root's realpath answer only
-        # changes WHERE the append-only record lands, never a VERDICT (no
-        # guard decision rides on it), matching resolve_git_root_cheap's own
-        # documented caller contract.
+        # cwd must be the caller's own root, never os.getcwd(): the process
+        # cwd can be an unrelated (nested) repo, and omitting it makes
+        # resolve_git_root_cheap return None so the sink silently never writes.
         record_engine_provenance(
             caller,
             axis,
             report.verdict,
             report.imported_file,
             report.engine_root,
-            cwd=os.getcwd(),
+            cwd=root,
         )
         return report
     except Exception:  # noqa: BLE001 -- never raise past this reporting seam
@@ -1931,6 +1929,30 @@ _NO_BUDGET_FALLBACK_SECS = 10
 _DUMP_PROBE_TIMEOUT_SECS = _NO_BUDGET_FALLBACK_SECS
 
 
+def _dump_op_timeouts_in_process(claude_klabauter_root: str) -> dict | None:
+    """The engine's `--dump-op-timeouts` payload computed in this interpreter, or None.
+
+    None means "use the probe spawn": the engine at `claude_klabauter_root` is not the one this
+    process would import (a different `coordinator_core` is already loaded, or the
+    import fails), so only the spawned child can speak for it. Same projection the CLI
+    prints -- `invoke.__main__._dump_op_timeouts` -- so the map cannot drift.
+    """
+    loaded = sys.modules.get("coordinator_core")
+    if loaded is not None:
+        loaded_file = getattr(loaded, "__file__", None) or ""
+        if os.path.normcase(os.path.realpath(os.path.dirname(os.path.dirname(loaded_file)))) !=                 os.path.normcase(os.path.realpath(claude_klabauter_root)):
+            return None
+    elif not os.path.isfile(os.path.join(claude_klabauter_root, "coordinator_core", "invoke", "__main__.py")):
+        return None
+    _front_insert_on_path(claude_klabauter_root)
+    try:
+        from coordinator_core.invoke.__main__ import _dump_op_timeouts  # noqa: PLC0415
+
+        return _dump_op_timeouts()
+    except Exception:
+        return None
+
+
 def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], probe_timeout: int) -> None:
     """Resolve the engine's per-op timeout budget map ONCE per process (DEC-1..3).
 
@@ -1961,44 +1983,46 @@ def _resolve_op_timeouts(claude_klabauter_root: str, env: dict[str, str], probe_
     _OP_TIMEOUTS_MAP = {}
     _OP_TIMEOUTS_STATE = "absent"
 
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "coordinator_core.invoke", "--dump-op-timeouts"],  # popup-safe-env-suppressed
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=probe_timeout,
-            env=env,
-            cwd=claude_klabauter_root,
-            **_no_console_kw(claude_klabauter_root),
-        )
-    except subprocess.TimeoutExpired:
-        _OP_TIMEOUTS_STATE = "error"
-        return
-
-    if proc.returncode != 0:
-        _argparse_absent = any(
-            tok in proc.stderr.lower()
-            for tok in (
-                "unrecognized arguments",
-                "unrecognized command",
-                "invalid choice",
-                "no such option",
-                "unknown option",
+    parsed = _dump_op_timeouts_in_process(claude_klabauter_root)
+    if parsed is None:
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "coordinator_core.invoke", "--dump-op-timeouts"],  # popup-safe-env-suppressed
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=probe_timeout,
+                env=env,
+                cwd=claude_klabauter_root,
+                **_no_console_kw(claude_klabauter_root),
             )
-        )
-        _OP_TIMEOUTS_STATE = "absent" if _argparse_absent else "error"
-        return
+        except subprocess.TimeoutExpired:
+            _OP_TIMEOUTS_STATE = "error"
+            return
 
-    if not proc.stdout.strip():
-        _OP_TIMEOUTS_STATE = "error"
-        return
+        if proc.returncode != 0:
+            _argparse_absent = any(
+                tok in proc.stderr.lower()
+                for tok in (
+                    "unrecognized arguments",
+                    "unrecognized command",
+                    "invalid choice",
+                    "no such option",
+                    "unknown option",
+                )
+            )
+            _OP_TIMEOUTS_STATE = "absent" if _argparse_absent else "error"
+            return
 
-    try:
-        parsed = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        _OP_TIMEOUTS_STATE = "error"
-        return
+        if not proc.stdout.strip():
+            _OP_TIMEOUTS_STATE = "error"
+            return
+
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            _OP_TIMEOUTS_STATE = "error"
+            return
 
     if not isinstance(parsed, dict) or "__default__" not in parsed:
         _OP_TIMEOUTS_STATE = "error"
@@ -3047,10 +3071,32 @@ def mutation_refusal_message(op: str, result: Any, *, op_stderr: str = "") -> st
             detail_parts.append(f"failed=0 (see {', '.join(family_failed_parts)})")
     if error_text_available:
         detail_parts.append(f"error={error_field!r}")
+    # Ops add classification fields beside exit_code (memo.draft's `rejection_class`);
+    # they are the only reason a refusal carries when its diagnostic never crossed
+    # the transport, so they are never dropped from the message.
+    reason_keys = ("rejection_class", "reason", "message", "refusal")
+    extras = [
+        f"{key}={result[key]!r}"
+        for key in reason_keys
+        if isinstance(result.get(key), str) and result[key]
+    ]
+    detail_parts.extend(extras)
     message = f"route_mutation: op={op!r} refused ({', '.join(detail_parts)})"
     if op_stderr:
         message += f"\n  child stderr (may include non-fatal/succeeding-leg output): {op_stderr}"
+    elif not error_text_available and not extras and not _failed_items_carry_reason(failed):
+        message += (
+            "\n  no reason reached the caller: the op's diagnostic did not cross the "
+            "transport (a stale warm server drops it). Re-run the refused call with "
+            "COORDINATOR_WARM=0 to read the op's own stderr."
+        )
     return message
+
+
+def _failed_items_carry_reason(failed: Any) -> bool:
+    return isinstance(failed, list) and any(
+        isinstance(item, dict) and item.get("reason") for item in failed
+    )
 
 
 def route_mutation(

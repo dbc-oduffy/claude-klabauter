@@ -1,0 +1,170 @@
+{
+  "atlas-doc.schema.json": {
+    "blob": "16ed711984f62ea96a815a280b6a57b47a8a9299",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "atlas-system-doc.schema.json": {
+    "blob": "c74c99a6fdb6d3d41fac6487fa027dc99c121285",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "bug-backlog.schema.json": {
+    "blob": "71d9990ed137050fe7326698c17e133d1427aec2",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "capability-manifest.schema.json": {
+    "blob": "3636d914df851a34734e23bbf21372a8211ca416",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "chatty-roster.schema.json": {
+    "blob": "98ff3260c539d0c71ef5a74cc1efabc9f13ef022",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "completion-entry.schema.json": {
+    "blob": "4f75b06478713a84041c2d61642416f71efe40d7",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "completion-receipt.schema.json": {
+    "blob": "23342e83820402f4607399d6031ac885420819d1",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "cross-repo-commitment.schema.json": {
+    "blob": "e340062dc8ff54aca9c861c848e20e0ea9ae9c97",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "debt-backlog.schema.json": {
+    "blob": "411248109a092595bc41b251851fec5c6ef1d2f8",
+    "doe_commit": "03e24d12e57e871b5040394774c4a684a7920dc6"
+  },
+  "decision.schema.json": {
+    "blob": "8d0e7b0b05df02de55e663df16fc34519a95e2fe",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "docs-check-sidecar.schema.json": {
+    "blob": "1510b28ef08266b87f27f16eec01963f78b02393",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "fleet-capability-index.schema.json": {
+    "blob": "71439f31ce3e1a7d76a961411a8038efa97eede3",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "goal.schema.json": {
+    "blob": "0c2d35e0bfa5d5e828fff60949ddaf0a305e6879",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "handoff-archived.schema.json": {
+    "blob": "c45753a4646163f50ad91a53cc0a63b6d1d8e4b4",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "handoff.schema.json": {
+    "blob": "407bdfd4e30fbb87887b23113813fe72f69a001e",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "health-status.schema.json": {
+    "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "improvement-queue.schema.json": {
+    "blob": "7655aeb610640a8154db26c867419c26f69aab2c",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "initiative.schema.json": {
+    "blob": "2d12f92ff1c46831e26565af022c70be557c113c",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "lesson-entry.schema.json": {
+    "blob": "d53cedfd36baad3ee7cbe7cda3a9793775ff1d16",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "lessons-outbox.schema.json": {
+    "blob": "482de7be6544cf840091c7d2829f10936470e846",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "orientation-cache.schema.json": {
+    "blob": "a183990022326257d097937542e790a2751a8937",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "percolate-store.schema.json": {
+    "blob": "15c5866d03d6ffc0610f0377027c4d133c266b8d",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "plan-coverage-check.schema.json": {
+    "blob": "9f4a4b3f0de7218dd0ea47bf7c422b0fc7290d0d",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "plan-tasks.schema.json": {
+    "blob": "0df70876453c14ed3f52ef58b8d18dc556146657",
+    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+  },
+  "plan.schema.json": {
+    "blob": "b1e5af4b91cfd91f8335ec363d8f6e80e2ad92ce",
+    "doe_commit": "4ddb54705c3ddc8b2d34e2991bdf6449797d0ed9"
+  },
+  "prior-art-check.schema.json": {
+    "blob": "70f770c2a1c104737f62f617b071f577575d309f",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "priority-intent.schema.json": {
+    "blob": "78bcbef1c3cc822edde79220298be91895324634",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "priority-ledger.schema.json": {
+    "blob": "f4a638b2bf673f6b93119b65242afae318a0c02f",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "problem-set.schema.json": {
+    "blob": "a8b4ae79d4ac1cb53f256cebdd1b0a0bc9092ff7",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "research-claim.schema.json": {
+    "blob": "d81eb409c87769bc4014db6a5c1a8a5f1044ac02",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "research-synthesis.schema.json": {
+    "blob": "d9070c6c1878823a4511e1f3acb75a4c9eba819c",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "review-findings.schema.json": {
+    "blob": "f40e90ed8c4247a471ae0c52d254b6014f398bb1",
+    "doe_commit": "7524b888db715e7ea5ce40df3d12c48be51ab74f"
+  },
+  "review-sidecar.schema.json": {
+    "blob": "174f3b83f30446332218d371a3eac09d4c0b6a80",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "review-trail.schema.json": {
+    "blob": "2eeff7dd7e5542850c9a90722a04d45fc08c7458",
+    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+  },
+  "roadmap.schema.json": {
+    "blob": "2c374b94dffebde8ac8503837b79bd321c85feee",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "run-report.schema.json": {
+    "blob": "cdf831d739af01f56c3c2b24138046881d830096",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "sizing-object.schema.json": {
+    "blob": "73365be8c146bcbcbb6169e8d5d42c7e2144553d",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "spike-result.schema.json": {
+    "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",
+    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+  },
+  "spine.schema.json": {
+    "blob": "229b83d4739a065bb8b181ca305b6b8bf42051d6",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "strategic-self-description.schema.json": {
+    "blob": "c799c2a5a45b449766afdabd3ff74c162a3a38c5",
+    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+  },
+  "workstream-event.schema.json": {
+    "blob": "b797cbcee7fb46fce5fde0935d921bd6841a8b40",
+    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+  },
+  "workstream.schema.json": {
+    "blob": "571a9cb0085c3e78b51ba25756b5f841298bef98",
+    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+  }
+}

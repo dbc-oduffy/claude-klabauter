@@ -22,11 +22,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+
+import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 _FORBIDDEN = ("dataclasses", "inspect", "typing")
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_declaration_surface_drags_no_expensive_stdlib_import():
     probe = (
         "import sys;"

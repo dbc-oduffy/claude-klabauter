@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from coordinator_core.tests._legacy_root_scan import unmarked_hits
+import pytest
+
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NAME = "d" + "oe-root"
 _KEY = "repos." + "d" + "oe_claude"

@@ -55,6 +55,9 @@ from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 
+# Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
+GENERATES = []
+
 _PARAMS = (
     Field("run_id", "str", required=True),
     Field("plan_path", "str"),

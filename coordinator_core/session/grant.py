@@ -98,7 +98,7 @@ from coordinator_core.session import core, liveness
 
 #: The only two legal values of the ``granted_by`` field (DR-088 § Decision:
 #: "Authorization is granted two ways" — explicit PM, or implicit ceremony).
-# Generator-provenance declaration (generator_provenance.py). write_tier_u_grant/
+# Generator-provenance declaration (coordinator_core/ops/generator_census). write_tier_u_grant/
 # revoke_tier_u_grant write/unlink only `.git/coordinator-sessions/<sid>/tier-u-
 # grant.json` -- git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []

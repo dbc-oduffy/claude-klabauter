@@ -59,6 +59,23 @@ _DELIVERY_VERIFIER_ROLE_PREAMBLE = (
 )
 
 
+_HOST_NATIVE_REVIEW_TYPE = "general-purpose"
+
+
+def _host_native(agent_type: str, host_degraded: bool) -> Tuple[str, str]:
+    """``(emitted agentType, role preamble)`` for a review-stage agent. On a
+    host that cannot resolve ``coordinator:*`` the stage runs as
+    ``general-purpose`` with its role folded into the prompt, so the review
+    wave still runs; otherwise the type is emitted unchanged."""
+    if not host_degraded or not agent_type.startswith("coordinator:"):
+        return agent_type, ""
+    return (
+        _HOST_NATIVE_REVIEW_TYPE,
+        f"You are acting as the {agent_type.split(':', 1)[1]} agent for this review stage: "
+        "perform that role's duties and return the structured result below.\n\n",
+    )
+
+
 def _resolve_schema_refs(schema, stage_schemas: Dict[str, dict], *, _seen=None):
     """shell-doc-ok: the JSON-Schema keyword ``$ref``, not a shell variable.
     Inline every ``{"$ref": "#/$defs/<name>"}`` in ``schema`` against
@@ -158,12 +175,16 @@ _NO_SLICES_REFUSAL = (
 )
 
 
-def prep_slice_id_for(plan_path: str, run_base_sha: Optional[str]) -> str:
-    """The frozen-diff slice id of one run's prep: plan stem plus run base, so concurrent runs of
-    different plans (or the same plan from different bases) never share
-    `state/review-trail/diffs/<id>.diff`."""
-    stem = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(plan_path.replace("\\", "/")).stem)
-    return f"{stem}-{(run_base_sha or 'nobase')[:12]}-prep"
+def prep_slice_id_for(
+    plan_path: str, run_base_sha: Optional[str], run_key: Optional[str] = None
+) -> str:
+    """The frozen-diff slice id of one run's prep: plan stem, `run_key` (the run's own unique id)
+    and run base, so concurrent runs never share `state/review-trail/diffs/<id>.diff`. Every
+    caller passes its run key: a plan-less route (queue grind, ask manifest) has no distinguishing
+    stem, so the run base alone would collide."""
+    safe = lambda s: re.sub(r"[^A-Za-z0-9_.-]", "-", s)  # noqa: E731
+    parts = [safe(Path(plan_path.replace("\\", "/")).stem), safe(run_key or ""), (run_base_sha or "nobase")[:12]]
+    return "-".join(p for p in parts if p) + "-prep"
 
 
 def compose_execute_review(
@@ -178,6 +199,8 @@ def compose_execute_review(
     prep_suffix_js: Optional[str] = None,
     criterion: Optional["OperativeCriterion"] = None,
     precredited_rows: Optional[List[str]] = None,
+    run_key: Optional[str] = None,
+    host_degraded: bool = False,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -229,7 +252,7 @@ def compose_execute_review(
 
     # -- 1. prep ----------------------------------------------------------
     prep_phase = "Review prep"
-    prep_slice_id = prep_slice_id_for(plan_path, run_base_sha)
+    prep_slice_id = prep_slice_id_for(plan_path, run_base_sha, run_key)
     credit_note = (
         "\nDelivered before this run's base (resume): rows "
         + ", ".join(precredited_rows)
@@ -238,8 +261,9 @@ def compose_execute_review(
         if precredited_rows
         else ""
     )
+    prep_type, prep_role = _host_native(review.prep.agent_type, host_degraded)
     prep_prompt = (
-        f"{prompt_head}\n\n"
+        f"{prompt_head}\n\n{prep_role}"
         f"Freeze and characterise this run's diff for review. Freeze it with the "
         f"`freeze-review-diff` launcher on PATH (the settings-home bin; the "
         f"`review.freeze_diff` op's entrypoint -- this repo need not carry "
@@ -248,7 +272,9 @@ def compose_execute_review(
         f"--paths <every declared path>`. --worktree is mandatory: the run's rows "
         f"land UNCOMMITTED in the working tree and a peer may commit meanwhile, so "
         f"`git diff base..HEAD` is never the run's diff. Return its single stdout "
-        f"line as whole_diff_path, verbatim; never write or edit a diff yourself. Under "
+        f"line as whole_diff_path, verbatim; never write or edit a diff yourself. Report "
+        f"product_files as the `product_files: N` line the launcher prints on stderr, verbatim; "
+        f"never a count of your own. Under "
         f"foreign_claims list ONLY declared paths that a commit in "
         f"{run_base_sha or 'run_base_sha'}..HEAD also changed: a peer landed inside this "
         f"run's footprint. Peers' work elsewhere in the shared tree is normal and is never "
@@ -263,12 +289,12 @@ def compose_execute_review(
         f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
     ).strip()
     prep_call = _agent_call_literal(
-        review.prep.agent_type,
+        prep_type,
         prep_prompt,
         prep_phase,
         schema=True,
         as_arrow=False,
-        agent_opts=_agent_opts_for(review.prep),
+        agent_opts=_agent_opts_for(review.prep, emitted_agent_type=prep_type),
         schema_literal=_schema_literal(review.prep.schema, stage_schemas),
     )
     if declared_paths_js:
@@ -299,8 +325,11 @@ def compose_execute_review(
             # A clean prep over a run whose rows changed nothing froze an empty
             # diff: there is nothing to review or commit, which is an outcome,
             # not a failed prep.
+            # A count of 0 that disagrees with the slices (one lists files) is not
+            # trusted: the run falls through to the slices guard instead of halting.
             f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
-            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length) {{ "
+            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
+            f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) {{ "
             f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
             f"prep: _reviewPrep, wave: null, integration: null }}; }}\n"
             # A failed or refused prep yields no slices -- a refusal reports
@@ -321,19 +350,20 @@ def compose_execute_review(
 
     item_lines: List[str] = []
     for agent in slice_agents:
+        slice_type, slice_role = _host_native(agent.agent_type, host_degraded)
         base_prompt = (
-            f"{prompt_head}\n\n"
+            f"{prompt_head}\n\n{slice_role}"
             f"Review your assigned slice of this run's diff.\n"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
         ).strip()
         call = _agent_call_literal(
-            agent.agent_type,
+            slice_type,
             base_prompt,
             wave_phase,
             schema=True,
             as_arrow=False,
-            agent_opts=_agent_opts_for(agent),
+            agent_opts=_agent_opts_for(agent, emitted_agent_type=slice_type),
             schema_literal=_schema_literal(agent.schema, stage_schemas),
         )
         # Splice the runtime slice object in via string concatenation
@@ -357,8 +387,13 @@ def compose_execute_review(
             if is_delivery_verifier
             else ""
         )
+        whole_type, whole_role = (
+            (agent.agent_type, "")
+            if is_delivery_verifier
+            else _host_native(agent.agent_type, host_degraded)
+        )
         wave_prompt = (
-            f"{prompt_head}\n\n"
+            f"{prompt_head}\n\n{whole_role}"
             f"Review this run's whole diff.\n"
             + (
                 f"Read only the frozen diff named by whole_diff_path below (this run's is "
@@ -372,7 +407,7 @@ def compose_execute_review(
             f"{role_note}"
         ).strip()
         emitted_agent_type = (
-            _DELIVERY_VERIFIER_HOST_NATIVE_TYPE if is_delivery_verifier else agent.agent_type
+            _DELIVERY_VERIFIER_HOST_NATIVE_TYPE if is_delivery_verifier else whole_type
         )
         call = _agent_call_literal(
             emitted_agent_type,
@@ -425,8 +460,11 @@ def compose_execute_review(
     # -- 3. integration (only when the fragment declares one stage) --------
     if review.integration is not None:
         integration_phase = "Review integration"
+        integration_type, integration_role = _host_native(
+            review.integration.agent_type, host_degraded
+        )
         integration_prompt = (
-            f"{prompt_head}\n\n"
+            f"{prompt_head}\n\n{integration_role}"
             f"Integrate this run's review wave into one residue pass. This run's "
             f"declared paths are already registered as your session's confined-"
             f"reviewer review targets -- Edit on any of them is sanctioned, not "
@@ -439,12 +477,12 @@ def compose_execute_review(
             f"run_base_sha: {run_base_sha}"
         ).strip()
         integration_call = _agent_call_literal(
-            review.integration.agent_type,
+            integration_type,
             integration_prompt,
             integration_phase,
             schema=True,
             as_arrow=False,
-            agent_opts=_agent_opts_for(review.integration),
+            agent_opts=_agent_opts_for(review.integration, emitted_agent_type=integration_type),
             schema_literal=_schema_literal(review.integration.schema, stage_schemas),
         )
         phases.append(
@@ -601,6 +639,7 @@ def compose_criterion_judge(
     falsifier: Optional[dict],
     prompt_head: str = "",
     criterion: Optional[OperativeCriterion] = None,
+    host_degraded: bool = False,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. Pointers only: the engine
@@ -615,20 +654,21 @@ def compose_criterion_judge(
             f"expected_when_true={falsifier['expected_when_true']!r}"
             + (f"; baseline_output={falsifier['baseline_output']!r}" if falsifier.get("baseline_output") else "")
         )
+    judge_type, judge_role = _host_native(review.judge.agent_type, host_degraded)
     prompt = (
-        f"{prompt_head}\n\n{_JUDGE_PREAMBLE}\n"
+        f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
         f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
         f"run_base_sha: {run_base_sha}"
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
     ).strip()
     return _agent_call_literal(
-        review.judge.agent_type,
+        judge_type,
         prompt,
         CRITERION_JUDGE_PHASE_TITLE,
         schema=True,
         as_arrow=False,
-        agent_opts=_agent_opts_for(review.judge),
+        agent_opts=_agent_opts_for(review.judge, emitted_agent_type=judge_type),
         schema_literal=_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)),
     )
 

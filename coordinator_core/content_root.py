@@ -25,6 +25,9 @@ from pathlib import Path
 from coordinator_core._settings_home import claude_config_dir, settings_home
 from coordinator_core.machine_resolver import _registry_get_exact, registry_get, registry_set
 
+# Writes a machine-local content-root pointer under settings home, outside the tracked tree.
+GENERATES = []
+
 CONTENT_ROOT_KEY = "repos.content_root"
 POINTER_NAME = ".coordinator-content-root"
 

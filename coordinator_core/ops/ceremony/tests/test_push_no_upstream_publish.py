@@ -9,7 +9,7 @@ from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.ceremony.tests.fixtures.push_repo import init_push_repo
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 _NO_UPSTREAM_STDERR = (

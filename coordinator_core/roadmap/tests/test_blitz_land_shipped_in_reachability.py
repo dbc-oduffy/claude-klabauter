@@ -12,7 +12,7 @@ from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap import plan_gate as pg
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 NO_COMMIT = "substantively-shipped-no-commit:2026-10-01"
 

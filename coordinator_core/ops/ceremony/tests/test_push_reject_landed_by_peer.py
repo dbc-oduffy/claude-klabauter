@@ -34,7 +34,7 @@ import pytest
 from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.git_native import GitResult
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git_replay_supports_ref_action() -> bool:

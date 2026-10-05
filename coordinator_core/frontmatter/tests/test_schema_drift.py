@@ -31,6 +31,10 @@ from coordinator_core.frontmatter.schema_validate import (
     SchemaDriftError,
     SchemaProbeUnavailableError,
     check_schema_drift,
+    DIRECTION_BOTH,
+    DIRECTION_WE_AHEAD,
+    DIRECTION_WE_BEHIND,
+    check_schema_drift_advisory,
     check_schema_drift_batch,
 )
 from coordinator_core.git_scope import reset_foreign_repo_probe_memo
@@ -58,6 +62,11 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
+def _put(path: Path, text: str) -> None:
+    """Write LF bytes: `write_text` would translate to CRLF on Windows and blur the CRLF-vs-LF cases."""
+    path.write_bytes(text.encode("utf-8"))
+
+
 def _body(marker: str) -> str:
     return json.dumps({"title": marker}, indent=2) + "\n"
 
@@ -70,7 +79,7 @@ def fake_doe(tmp_path: Path) -> Path:
     repo = tmp_path / "DoE-fake"
     (repo / "coordinator" / "schemas").mkdir(parents=True)
     for name in _NAMES:
-        (repo / "coordinator" / "schemas" / name).write_text(_body(name), encoding="utf-8")
+        _put(repo / "coordinator" / "schemas" / name, _body(name))
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "test@example.invalid")
     _git(repo, "config", "user.name", "schema drift test")
@@ -87,7 +96,7 @@ def vendored(tmp_path: Path) -> list[Path]:
     paths = []
     for name in _NAMES:
         path = directory / name
-        path.write_text(_body(name), encoding="utf-8")
+        _put(path, _body(name))
         paths.append(path)
     return paths
 
@@ -115,7 +124,7 @@ def test_matching_set_is_green_for_every_entry(fake_doe, vendored) -> None:
 
 
 def test_a_tampered_schema_fails_alone(fake_doe, vendored) -> None:
-    vendored[1].write_text(_body("tampered"), encoding="utf-8")
+    _put(vendored[1], _body("tampered"))
 
     results = check_schema_drift_batch(_pairs(vendored), fake_doe)
 
@@ -126,7 +135,7 @@ def test_a_tampered_schema_fails_alone(fake_doe, vendored) -> None:
 
 def test_a_path_absent_at_ref_is_a_finding_not_a_could_not_check(fake_doe, vendored) -> None:
     stray = vendored[0].parent / "stray.schema.json"
-    stray.write_text(_body("stray"), encoding="utf-8")
+    _put(stray, _body("stray"))
 
     results = check_schema_drift_batch(_pairs([vendored[0], stray]), fake_doe)
 
@@ -143,7 +152,7 @@ def test_an_unknown_ref_is_a_finding_for_every_entry(fake_doe, vendored) -> None
 
 def test_a_pinned_ref_compares_against_the_pin_not_head(fake_doe, vendored) -> None:
     pin = _git(fake_doe, "rev-parse", "HEAD")
-    (fake_doe / "coordinator" / "schemas" / _NAMES[0]).write_text(_body("moved"), encoding="utf-8")
+    _put(fake_doe / "coordinator" / "schemas" / _NAMES[0], _body("moved"))
     _git(fake_doe, "commit", "-qam", "DoE moves on")
 
     assert check_schema_drift_batch(_pairs(vendored, pin), fake_doe) == [None] * len(vendored)
@@ -177,7 +186,7 @@ def test_a_batch_that_did_not_complete_raises_could_not_check(
 
 def test_mixed_refs_resolve_in_one_batch(spawns, fake_doe, vendored) -> None:
     pin = _git(fake_doe, "rev-parse", "HEAD")
-    (fake_doe / "coordinator" / "schemas" / _NAMES[0]).write_text(_body("moved"), encoding="utf-8")
+    _put(fake_doe / "coordinator" / "schemas" / _NAMES[0], _body("moved"))
     _git(fake_doe, "commit", "-qam", "DoE moves on")
     spawns.clear()
     reset_foreign_repo_probe_memo()
@@ -192,7 +201,7 @@ def test_mixed_refs_resolve_in_one_batch(spawns, fake_doe, vendored) -> None:
 
 def test_single_form_raises_what_the_batch_returns(fake_doe, vendored) -> None:
     check_schema_drift(vendored[0], fake_doe)
-    vendored[0].write_text(_body("tampered"), encoding="utf-8")
+    _put(vendored[0], _body("tampered"))
 
     with pytest.raises(SchemaDriftError, match="diverges"):
         check_schema_drift(vendored[0], fake_doe)
@@ -215,6 +224,73 @@ def test_spawn_count_does_not_grow_with_the_set(spawns, fake_doe, vendored) -> N
     )
 
 
+def _record_base(fake_doe: Path, vendored: list[Path]) -> None:
+    manifest = {
+        path.name: {
+            "doe_commit": _git(fake_doe, "rev-parse", "HEAD"),
+            "blob": _git(fake_doe, "rev-parse", f"HEAD:coordinator/schemas/{path.name}"),
+        }
+        for path in vendored
+    }
+    (vendored[0].parent / "vendored-from.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _doe_edit(fake_doe: Path, marker: str) -> None:
+    _put(fake_doe / "coordinator" / "schemas" / _NAMES[0], _body(marker))
+    _git(fake_doe, "commit", "-qam", "DoE moves on")
+
+
+def test_doe_only_edit_against_recorded_base_says_re_vendor(fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _doe_edit(fake_doe, "doe rewrote this")
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Re-vendor: python3 bin/claude-klabauter-revendor-schema.py handoff.schema.json" in str(error)
+    assert "Both sides" not in str(error)
+
+
+def test_local_only_edit_against_recorded_base_says_memo_doe(fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _put(vendored[0], _body("local edit"))
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Memo DoE" in str(error)
+    assert "Re-vendor:" not in str(error)
+
+
+def test_both_sides_edited_against_recorded_base_says_reconcile(fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _doe_edit(fake_doe, "doe edit")
+    _put(vendored[0], _body("local edit"))
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Both sides changed since the recorded base" in str(error)
+
+
+def test_no_manifest_entry_says_direction_unknown(fake_doe, vendored) -> None:
+    _doe_edit(fake_doe, "doe edit")
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Direction unknown" in str(error)
+    assert "Both sides" not in str(error)
+
+
+def test_base_read_adds_no_spawn(spawns, fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _doe_edit(fake_doe, "doe edit")
+    spawns.clear()
+    reset_foreign_repo_probe_memo()
+
+    check_schema_drift_batch(_pairs(vendored), fake_doe)
+
+    assert len([argv for argv in spawns if "cat-file" in argv]) == 1
+    assert len(spawns) == 2, spawns
+
+
 def _load_revendor():
     spec = importlib.util.spec_from_file_location("claude_klabauter_revendor_schema", _REVENDOR)
     module = importlib.util.module_from_spec(spec)
@@ -232,7 +308,7 @@ def test_revendor_verify_costs_one_batch_not_one_read_per_schema(
         SimpleNamespace(name=path.name, vendored_path=path, pin_tracked=index == 0)
         for index, path in enumerate(vendored)
     ]
-    vendored[2].write_text(_body("tampered"), encoding="utf-8")
+    _put(vendored[2], _body("tampered"))
 
     failures = revendor._verify(plans, fake_doe, pin)
 
@@ -240,3 +316,39 @@ def test_revendor_verify_costs_one_batch_not_one_read_per_schema(
     cat_file_spawns = [argv for argv in spawns if "cat-file" in argv]
     assert len(cat_file_spawns) == 1, cat_file_spawns
     assert not [argv for argv in spawns if "show" in argv]
+
+
+def test_advisory_reads_direction_from_the_recorded_base(fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _doe_edit(fake_doe, "doe edit")
+    assert check_schema_drift_advisory(vendored[0], fake_doe)["direction"] == DIRECTION_WE_BEHIND
+
+    _put(vendored[0], _body("local edit"))
+    assert check_schema_drift_advisory(vendored[0], fake_doe)["direction"] == DIRECTION_BOTH
+
+
+def test_advisory_local_only_edit_is_we_are_ahead(fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _put(vendored[0], _body("local edit"))
+
+    assert check_schema_drift_advisory(vendored[0], fake_doe)["direction"] == DIRECTION_WE_AHEAD
+
+
+def test_advisory_without_a_base_is_direction_unknown(fake_doe, vendored) -> None:
+    _doe_edit(fake_doe, "doe edit")
+
+    result = check_schema_drift_advisory(vendored[0], fake_doe)
+
+    assert result["diverged"] is True and result["direction"] is None
+    assert "direction unknown" in result["detail"]
+
+
+def test_advisory_base_read_adds_no_spawn(spawns, fake_doe, vendored) -> None:
+    _record_base(fake_doe, vendored)
+    _doe_edit(fake_doe, "doe edit")
+    spawns.clear()
+    reset_foreign_repo_probe_memo()
+
+    check_schema_drift_advisory(vendored[0], fake_doe)
+
+    assert len(spawns) == 2, spawns

@@ -53,7 +53,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Generator-provenance declaration (generator_provenance.py).
+# Generator-provenance declaration (coordinator_core/ops/generator_census).
 # cmd_scaffold_goal writes state/goals/<date>-<slug>-<sid>.yaml;
 # cmd_commit_priorities/cmd_commit_archive_reset commit
 # state/week-changelog/HEADER*.md and archive/week-changelogs/<prior-week>/ --

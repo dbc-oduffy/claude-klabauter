@@ -16,6 +16,10 @@ from __future__ import annotations
 import datetime
 
 from coordinator_core.baton_assemble import _compute_fresh_output_path
+import pytest
+
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _today() -> str:

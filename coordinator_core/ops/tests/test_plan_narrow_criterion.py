@@ -6,11 +6,14 @@ import subprocess
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import approval_body_sha
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.ops import plan_narrow_criterion as mod
 from coordinator_core.ops import review_stamp as rs
 from coordinator_core.ops.ceremony import git_native
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 OLD = "Guard fails any session leaving entries outside the repo; the fleet and DoE sweeps find zero offenders"
 NEW = "Guard fails any DoE session leaving entries outside the repo; the DoE sweep finds zero offenders"
@@ -53,7 +56,7 @@ def _plan(statement=OLD, status="approved", utterance="yes spun off", digest=DIG
 
 
 def _git(root, *a):
-    subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 @pytest.fixture
@@ -153,7 +156,7 @@ def _mint(tmp_path, plan_text, criterion, delivery="PASS", tests="pass"):
     (repo / "a.txt").write_text("x")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "i")
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, **no_console_creationflags()).stdout.strip()
     rec = repo / "rec.md"
     rec.write_text("x")
     data = {

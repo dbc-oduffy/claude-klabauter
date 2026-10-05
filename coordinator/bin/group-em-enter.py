@@ -20,7 +20,7 @@ Cold path — one process, one call. Direct in-process import + call
 `coordinator/bin/group-em-watch.py` uses.
 
 Exit codes:
-  0 — Group-EM claimed (fresh, refreshed, or auto-replacing a dead holder).
+  0 — Group-EM claimed (fresh, refreshed, or displacing any prior holder).
   2 — usage error (no session id resolvable).
   5 — standing not claimed (the nomination leg failed or reported claimed=false);
       Group EM standing is taken, never refused over an incumbent, so a live or
@@ -67,7 +67,7 @@ def _render(payload: dict[str, Any]) -> str:
     nomination = payload.get("nomination") or {}
     standing = payload.get("standing") or {}
     lines: list[str] = []
-    claimed = bool(nomination.get("claimed"))
+    claimed = bool(standing.get("claimed", nomination.get("claimed")))
     lines.append("standing: CLAIMED" if claimed else "standing: REFUSED")
     holder = nomination.get("holder") or "unknown"
     if not claimed:
@@ -153,6 +153,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"group-em-enter: engine unresolvable — {exc}", file=sys.stderr)
         return EXIT_ENGINE_FAILED
+
+    from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv
+
+    try:
+        refuse_newline_argv(args.note, flag_name="--note", remedy="keep the note to one line.")
+    except ArgvFidelityError as exc:
+        parser.error(str(exc))
 
     try:
         payload = handler(

@@ -124,6 +124,8 @@ def test_gate_halt_raises_refusal_naming_kind(repo):
     assert "touchpoint" in str(exc.value) and "sizing-accept-exit-criterion" in str(exc.value)
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys, monkeypatch):
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
@@ -138,6 +140,8 @@ def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys, monke
     assert '"provisionSidecarCli": "/x/provision-sidecar"' in call
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_unresolvable_sidecar_cli_refuses_at_emit_and_writes_nothing(repo, capsys, monkeypatch):
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 

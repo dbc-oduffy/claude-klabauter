@@ -166,7 +166,7 @@ _ENGINE_ROOT = ENGINE_CHECKOUT_ROOT
 #: absolutize it the way coordinator-content-repo's `_message_envelope.py` does.
 _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#plan-persistence-check"
 
-#: Generator-provenance declaration (generator_provenance.py). This op fires
+#: Generator-provenance declaration (coordinator_core/ops/generator_census). This op fires
 #: for whichever repo the calling session's `ExitPlanMode` happened in
 #: (`repo_root_path`, resolved via `show_toplevel()` off the caller's own
 #: cwd -- meta-repo routing can redirect it to `_ENGINE_ROOT` instead, see

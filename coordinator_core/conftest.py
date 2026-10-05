@@ -1065,6 +1065,123 @@ def _no_live_state_corpus_writes(request):
 
 
 @_pytest.fixture(autouse=True)
+def _redirect_live_session_hub(monkeypatch, tmp_path_factory):
+    """While a non-UUID `COORDINATOR_SESSION_ID` is ambient, any
+    `session.core.sessions_dir` resolution that lands on the REAL repo's hub is answered with a per-test tmp hub instead, so an ambient
+    `COORDINATOR_SESSION_ID` plus a cwd-derived root cannot mint live entries.
+
+    Negative-spec: covers in-process `sessions_dir()` consumers only; code that
+    composes `<root>/.git/coordinator-sessions` itself, and child processes,
+    still reach the live hub and stay with `_no_new_live_session_hub_entries`."""
+    from coordinator_core.session import core as _core
+
+    original = _core._sessions_dir_resolve
+    live = os.path.normcase(os.path.abspath(_LIVE_HUB))
+    holder: dict = {}
+
+    def _resolve(cwd):
+        result = original(cwd)
+        sid = os.environ.get("COORDINATOR_SESSION_ID", "")
+        if (
+            result
+            and sid
+            and not _looks_like_a_harness_session_id(sid)
+            and os.path.normcase(os.path.abspath(result)) == live
+        ):
+            if "hub" not in holder:
+                holder["hub"] = str(
+                    tmp_path_factory.mktemp("redirected-live-hub") / "coordinator-sessions"
+                )
+            return holder["hub"]
+        return result
+
+    _core.reset_sessions_dir_cache()
+    monkeypatch.setattr(_core, "_sessions_dir_resolve", _resolve)
+    yield
+    _core.reset_sessions_dir_cache()
+
+
+_HUB_WRITE_EVENTS = ("os.remove", "os.rename", "os.link", "os.symlink", "shutil.copyfile")
+_hub_watch_active = False
+_hub_written: "set[str]" = set()
+
+
+def _hub_entry_of(target, hub: str) -> "str | None":
+    """The top-level hub entry name `target` sits under, or `None` when it is outside `hub`,
+    is the hub itself, or sits under a UUID-named (peer-session) entry."""
+    if not isinstance(target, (str, bytes, os.PathLike)):
+        return None
+    try:
+        path = os.path.normcase(os.path.abspath(os.fsdecode(target)))
+    except (TypeError, ValueError):
+        return None
+    prefix = os.path.normcase(os.path.abspath(hub)) + os.sep
+    if not path.startswith(prefix):
+        return None
+    name = path[len(prefix):].split(os.sep, 1)[0]
+    if not name or _looks_like_a_harness_session_id(name):
+        return None
+    return name
+
+
+def _hub_audit_hook(event: str, args: tuple) -> None:
+    if not _hub_watch_active:
+        return
+    if event == "open":
+        if len(args) >= 3 and isinstance(args[2], int) and args[2] & _WRITE_FLAGS:
+            target = args[0]
+        else:
+            return
+    elif event in _HUB_WRITE_EVENTS:
+        target = args[1] if event != "os.remove" and len(args) > 1 else args[0]
+    else:
+        return
+    if not isinstance(target, (str, bytes, os.PathLike)):
+        return
+    text = os.fsdecode(target)
+    if "coordinator-sessions" in text:
+        _hub_written.add(text)
+
+
+sys.addaudithook(_hub_audit_hook)
+
+
+def _writes_into_hub_entries(written, hub: str) -> "list[str]":
+    """Sorted hub-relative paths in `written` that sit under a non-UUID hub entry."""
+    prefix = os.path.normcase(os.path.abspath(hub)) + os.sep
+    return sorted(
+        {
+            os.path.normcase(os.path.abspath(p))[len(prefix):]
+            for p in written
+            if _hub_entry_of(p, hub) is not None
+        }
+    )
+
+
+@_pytest.fixture(autouse=True)
+def _no_writes_into_live_hub_entries():
+    """Fail a test whose own process wrote into a non-UUID entry of the real hub.
+
+    Attribution is by audit hook, not by before/after stat: peers write the hub's
+    shared infrastructure entries continuously, so a stat delta cannot tell their
+    writes from this test's. Writes from a spawned child are not seen."""
+    global _hub_watch_active
+    _hub_written.clear()
+    _hub_watch_active = True
+    try:
+        yield
+    finally:
+        _hub_watch_active = False
+    leaked = _writes_into_hub_entries(list(_hub_written), _LIVE_HUB)
+    _hub_written.clear()
+    assert not leaked, (
+        f"test wrote into existing entries of the REAL session hub {_LIVE_HUB}: "
+        f"{leaked!r} — the code under test resolved the hub from the process cwd "
+        "while taking its session id from a fixture. Point it at a tmp_path repo."
+    )
+
+
+@_pytest.fixture(autouse=True)
 def _no_new_live_session_hub_entries():
     try:
         before = _live_hub_session_dirs()

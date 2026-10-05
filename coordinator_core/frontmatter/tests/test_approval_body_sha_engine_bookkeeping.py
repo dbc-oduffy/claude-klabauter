@@ -103,6 +103,8 @@ def test_legacy_stamp_over_canonical_body_sha_is_accepted():
     assert check_approved_body(legacy.replace("Prose.", "Other."))[0] == APPROVED_BODY_CHANGED
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_terminal_commit_then_only_incomplete_emit_is_not_refused(tmp_path):
     """Real terminal_commit on an incomplete approved plan, then the emit gate."""
     import subprocess
@@ -160,12 +162,15 @@ _GATED_ROWS = """- id: C3
 """
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_clearing_an_external_gate_keeps_the_stamp_valid_and_real_edit_refuses(tmp_path):
     from coordinator_core.ops.plan_tasks_mutate import _clear_gate
 
     import subprocess
+    from coordinator_core.win_portability import no_console_creationflags
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     plan = tmp_path / "docs" / "plans" / "plan.md"
     approved = _approved(rows=_GATED_ROWS)

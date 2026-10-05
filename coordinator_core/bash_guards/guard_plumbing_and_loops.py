@@ -352,15 +352,15 @@ def _append_echo_line(envelope: Dict[str, Any]) -> Dict[str, Any]:
 #: the pipeline. No seam exists to consult here (no bash rewrite to reuse,
 #: no sibling BX-16 check) -- always the generic, every-platform advisory.
 _PIPELINE_FOREACH_OBJECT_SUMMARY = (
-    "a single in-process python3 call over the whole collection, zero per-item forks"
+    "a single in-process call over the whole collection, zero per-item forks"
 )
 
 
 def _pipeline_foreach_object_example() -> str:
     return (
-        "%s -c 'import glob\\nfor f in glob.glob(\"*.py\"):\\n    ...'  "
+        "foreach ($f in Get-ChildItem *.py) { ... }  "
         "# do the per-item work in-process instead of forking once per "
-        "pipeline object" % _pl_python3_invocation()
+        "pipeline object"
     )
 
 
@@ -655,6 +655,32 @@ def _record_powershell_non_verdict(reason: str) -> None:
     record_silent(_GUARD_NAME, reason)
 
 
+def _verdict_bash_shaped_loop_powershell(
+    cmd: str, payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """A bash `for`/`while read` loop sent through the PowerShell tool.
+    Advises with a PowerShell remedy: the bash leg's `python3 -c` example
+    is not a valid PowerShell command line."""
+    bash_primary = classify_command(cmd).primary
+    if bash_primary is None or bash_primary.shape not in (
+        Shape.FOR_LOOP,
+        Shape.WHILE_READ_LOOP,
+    ):
+        _record_powershell_non_verdict(
+            "no spawn shape matched on the PowerShell leg, or the text did not parse"
+        )
+        return None
+    label = "for-loop" if bash_primary.shape is Shape.FOR_LOOP else "while-read-loop"
+    return _generic_advisory(
+        label,
+        cmd,
+        "a PowerShell `foreach` statement over the collection, no per-item "
+        "native process",
+        "foreach ($f in Get-ChildItem *.txt) { ... }  # per-item work in-process",
+        payload,
+    )
+
+
 def _verdict_powershell(
     cmd: str,
     session_id: str,
@@ -705,10 +731,9 @@ def _verdict_powershell(
             return _generic_advisory(
                 "head-tail-plumbing",
                 cmd,
-                "a single python3 process collecting the same lines and "
-                "slicing head/tail in-process",
-                "python3 -c '...'  # reproduce the generator output and "
-                "slice [:N] / [-N:] in-process",
+                "Select-Object -First N / -Last N in the same pipeline, no "
+                "head/tail process",
+                "... | Select-Object -First 5  # slice in-process",
                 payload,
             )
         summary, example = _outlet_from_seam_result(seam_result, payload)
@@ -717,17 +742,17 @@ def _verdict_powershell(
         )
 
     classification = classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
-    if classification.tokens is None:
-        _record_powershell_non_verdict("unparseable command text")
-        return None
     primary = classification.primary
-    if primary is None:
-        _record_powershell_non_verdict("no spawn shape matched on the PowerShell leg")
-        return None
+    if classification.tokens is None or primary is None:
+        return _verdict_bash_shaped_loop_powershell(cmd, payload)
 
     if primary.shape is Shape.FOR_LOOP:
         return _generic_advisory(
-            "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
+            "for-loop",
+            cmd,
+            _FOR_LOOP_GENERIC_SUMMARY,
+            "foreach ($f in Get-ChildItem *.txt) { ... }  # per-item work in-process",
+            payload,
         )
     if primary.shape is Shape.PIPELINE_FOREACH_OBJECT:
         # New member (D2) -- no bash analogue, no seam to consult. Same

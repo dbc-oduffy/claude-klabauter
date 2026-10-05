@@ -216,7 +216,7 @@ _SEAM_PICKUP_NEXT_MOVE = "pickup->next-move"
 
 _ROUTE_TERMINAL = {
     "dispatch": "Agent(coordinator:executor)",
-    "spec-dispatch": "Agent(coordinator:executor)",
+    "spec-dispatch": "Skill(coordinator:plan|coordinator:execute-plan)",
     "plan": "Skill(coordinator:plan)",
     "shape": "Skill(coordinator:plan)",
     "roadmap": "Skill(coordinator:plan)",
@@ -604,7 +604,7 @@ def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
         skill = tool_input.get("skill")
         if not isinstance(skill, str):
             skill = tool_input.get("command")
-        return skill == _ident
+        return isinstance(skill, str) and skill in _ident.split("|")
     if kind == "Agent":
         return tool_name == "Agent"
     return False

@@ -75,6 +75,8 @@ def test_raw_ask_emits_without_spawning_or_naming_fire(repo, capsys):
     assert "--fire" not in out
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
 def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys, tshirt):
     _put(repo, tshirt)
@@ -85,6 +87,8 @@ def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys, tshirt):
     assert "--fire" not in out
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
 def test_gate_spawns_nothing(repo, tshirt):
     _put(repo, tshirt)

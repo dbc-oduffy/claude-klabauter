@@ -410,3 +410,26 @@ def test_a_live_write_or_unknown_claimant_still_blocks(tmp_path, monkeypatch, ki
     _peer_touch(root, "peer-writer", "pkg/mod.py", kind, monkeypatch)
     _peer_touch(root, "peer-reader", "pkg/mod.py", touch_record.KIND_READ, monkeypatch)
     assert rd.live_foreign_claims(Path(root), ["pkg/mod.py peer"], "HEAD") == ["pkg/mod.py peer"]
+
+
+def test_degraded_host_reverify_script_emits_no_coordinator_type_and_keeps_judge_and_tests():
+    import re
+
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].append(
+        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
+                                      "effort": "low", "schema": "judge-result"}]}
+    )
+    schemas = {**_STAGE_SCHEMAS, "judge-result": {"type": "object", "properties": {"status": {"type": "string"}},
+                                                  "required": ["status"]}}
+    kw = dict(
+        fragment=fragment, stage_schemas=schemas, plan_path="p.md", run_record_rel="r.md",
+        plan_id="pln-1", run_base_sha="a" * 40, head_sha="b" * 40, claims=_CLAIMS, rerun_tests=True,
+    )
+    normal = rd.compose_reverify_script(**kw)
+    degraded = rd.compose_reverify_script(host_degraded=True, **kw)
+    pattern = r"agentType:\s*['\"]coordinator:"
+    assert re.search(pattern, normal)
+    assert not re.search(pattern, degraded)
+    assert degraded.count("agent(") == normal.count("agent(") == 3
+    assert "criterion: _judge" in degraded

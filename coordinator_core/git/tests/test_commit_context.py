@@ -31,6 +31,9 @@ from coordinator_core.git.commit_context import (  # noqa: E402
 )
 from coordinator_core.git.git_index import parse_index_identity  # noqa: E402
 
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SIGNATURE = b"DIRC"
 _ZERO_SHA = "0" * 40
 

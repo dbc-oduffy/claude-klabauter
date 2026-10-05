@@ -353,7 +353,7 @@ def check(
             return None
         tool_input = payload.get("tool_input") or {}
         updated_input = dict(tool_input)
-        updated_input["command"] = "true"
+        updated_input["command"] = "$null"
         return rewrite_input(
             "PreToolUse", updated_input, context="%s\n\n%s" % (_footer(cwd), rendered)
         )

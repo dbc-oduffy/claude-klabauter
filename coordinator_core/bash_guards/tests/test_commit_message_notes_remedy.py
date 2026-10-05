@@ -9,6 +9,11 @@ from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.git.correction_note import SENTINEL, parse_note
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 
 def _git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, **no_console_passthrough_kwargs())

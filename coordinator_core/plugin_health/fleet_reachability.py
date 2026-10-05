@@ -512,6 +512,23 @@ def _doe_demand_tokens(content_root: Path) -> Set[str]:
     return tokens
 
 
+def _doe_self_supplied_names(content_root: Path) -> Set[str]:
+    """Normalized oracle names present in the content root's own
+    `coordinator/bin/`. A fence citing one of these is served by DoE itself
+    (DoE-owned oracles, or oracles ported out of claude-klabauter), so it is not a
+    demand on claude-klabauter's surface. Reuses the already-resolved `content_root`;
+    holds no path of its own."""
+    from coordinator_core.plugin_health.oracle_surface import live_oracle_names
+
+    coordinator_dir = content_root_for(content_root)
+    if coordinator_dir is None:
+        return set()
+    doe_bin = coordinator_dir / "bin"
+    if not doe_bin.is_dir():
+        return set()
+    return {_normalize(name) for name in live_oracle_names([doe_bin])}
+
+
 def _ledger_explains_missing(normalized_name: str, ledger_path: Optional[Path]) -> Optional[str]:
     """Consult `plugin_health.relocation_ledger.find_relocation` for a
     normalized name this gate would otherwise report missing. Returns a
@@ -620,7 +637,7 @@ def check_fleet_reachability(
 
     claude_klabauter_oracles = _claude_klabauter_oracle_names([resolved_agent_bin] + resolved_extra_dirs)
     doe_demand = _doe_demand_tokens(resolved_content_root)
-    candidate_missing = sorted(doe_demand - claude_klabauter_oracles)
+    candidate_missing = sorted(doe_demand - claude_klabauter_oracles - _doe_self_supplied_names(resolved_content_root))
 
     missing_normalized: List[str] = []
     ledger_notes: List[str] = []

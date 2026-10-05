@@ -1537,3 +1537,96 @@ def test_cli_sizing_arm_is_exclusive_with_typed_command(tmp_path: Path) -> None:
         rc = main(["authorize-invocation", str(tmp_path / plan), "--authorized-by-sizing", sizing, *extra])
         assert rc == EXIT_USAGE
     assert "execution_authorized_by" not in (tmp_path / plan).read_text(encoding="utf-8")
+
+
+def _plan_fm(tmp_path: Path, plan: str) -> dict:
+    return yaml.safe_load((tmp_path / plan).read_text(encoding="utf-8").split("---")[1])
+
+
+def test_delegation_arm_records_authority_and_source_only(tmp_path: Path) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_delegation_authorization
+
+    plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    code, result = stamp_delegation_authorization(
+        plan, "coordinator-content-repo-95 (Group EM)", "state/cross-repo/m.md", at="2026-10-05", repo_root=tmp_path
+    )
+    assert code == EXIT_OK, result
+    fm = _plan_fm(tmp_path, plan)
+    assert fm["execution_authorized_by"] == "coordinator-content-repo-95 (Group EM)"
+    assert fm["execution_authorized_note"] == (
+        "authorized by delegation: coordinator-content-repo-95 (Group EM) (source: state/cross-repo/m.md)"
+    )
+    assert "typed command" not in fm["execution_authorized_note"]
+    assert "pm_quote" not in fm and "utterance" not in fm
+    code, again = stamp_delegation_authorization(
+        plan, "coordinator-content-repo-95 (Group EM)", "state/cross-repo/m.md", at="2026-10-06", repo_root=tmp_path
+    )
+    assert code == EXIT_OK and again["applied"] is False
+
+
+def test_delegation_arm_standing_quote_is_labelled_not_an_utterance(tmp_path: Path) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_delegation_authorization
+
+    plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    code, result = stamp_delegation_authorization(
+        plan, "coordinator-content-repo-95 (Group EM)", "memo-7", standing_quote="just run them", at="2026-10-05",
+        repo_root=tmp_path,
+    )
+    assert code == EXIT_OK, result
+    fm = _plan_fm(tmp_path, plan)
+    note = fm["execution_authorized_note"]
+    assert note.startswith(
+        'PM standing direction (applies to all plans, not this plan specifically): '
+        '"just run them" (source: memo-7)'
+    )
+    assert "coordinator-content-repo-95 (Group EM)" in note
+    assert "PM verbatim" not in note and "utterance" not in fm and "pm_quote" not in fm
+
+
+def test_cli_delegation_refusals(tmp_path: Path) -> None:
+    plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    p = str(tmp_path / plan)
+    base = ["authorize-invocation", p, "--authorized-by-delegation", "a", "--delegation-source", "s"]
+    for extra in (
+        ["--typed-command", "/execute-plan"],
+        ["--utterance", "go"],
+        ["--authorized-by-sizing", "state/sizings/s.yaml"],
+    ):
+        assert main([*base, *extra]) == EXIT_USAGE
+    for bad in (
+        ["--authorized-by-delegation", "  ", "--delegation-source", "s"],
+        ["--authorized-by-delegation", "a", "--delegation-source", ""],
+        ["--authorized-by-delegation", "a", "--delegation-source", "s", "--standing-direction-quote", " "],
+        ["--authorized-by-delegation", "a"],
+    ):
+        assert main(["authorize-invocation", p, *bad]) == EXIT_USAGE
+    assert "execution_authorized_by" not in (tmp_path / plan).read_text(encoding="utf-8")
+
+
+def _stamped(tmp_path: Path, note: str) -> str:
+    plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    code, result = stamp_execution_authorization(plan, "PM", note, at="2026-10-05", repo_root=tmp_path)
+    assert code == EXIT_OK, result
+    return plan
+
+
+def test_supersede_note_keeps_old_note_below_marker_and_is_idempotent(tmp_path: Path) -> None:
+    plan = _stamped(tmp_path, "typed command /execute-plan")
+    args = ["stamp", str(tmp_path / plan), "--by", "PM", "--supersede-note", "by delegation"]
+    assert main(args) == EXIT_OK
+    note = _plan_fm(tmp_path, plan)["execution_authorized_note"]
+    assert note == "by delegation\\nSuperseded (inaccurate):\\ntyped command /execute-plan"
+    before = (tmp_path / plan).read_text(encoding="utf-8")
+    assert main(args) == EXIT_OK
+    assert (tmp_path / plan).read_text(encoding="utf-8") == before
+
+
+def test_supersede_note_exclusive_and_body_sha_guarded(tmp_path: Path) -> None:
+    plan = _stamped(tmp_path, "old")
+    path = tmp_path / plan
+    for other in ("--note", "--append-note"):
+        assert main(["stamp", str(path), "--by", "PM", "--supersede-note", "x", other, "y"]) == EXIT_USAGE
+    assert main(["stamp", str(path), "--by", "PM", "--supersede-note", " "]) == EXIT_USAGE
+    path.write_text(path.read_text(encoding="utf-8") + "\nmore body\n", encoding="utf-8")
+    assert main(["stamp", str(path), "--by", "PM", "--supersede-note", "new"]) == EXIT_BUSINESS_FAIL
+    assert _plan_fm(tmp_path, plan)["execution_authorized_note"] == "old"

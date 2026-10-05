@@ -13,6 +13,8 @@ from coordinator_core.ops.emit.priority_resolve import (
 
 from coordinator_core.ops.emit.tests.conftest import _ledger, _write_node  # noqa: F401
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.fixture()
 def node_dir(tmp_path: Path) -> Path:

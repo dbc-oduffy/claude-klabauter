@@ -81,7 +81,12 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import pm_adjudication
-from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError, _BRIEF_PRECEDENCE_CLAUSE, _meta_block
+from coordinator_core.ops.dispatch_emit.emit import (
+    NoReviewStageError,
+    _AGENT_TYPE_HOST_DEGRADED,
+    _BRIEF_PRECEDENCE_CLAUSE,
+    _meta_block,
+)
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
@@ -866,6 +871,8 @@ def compose_grind_script(
         run_base_sha=review_run_base_sha,
         declared_paths_js="_reviewPaths",
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
+        run_key=Path(run_dir).name,
+        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     )
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()

@@ -23,6 +23,8 @@ a message that merely mentions `--dry-run` must still deny as a bare commit.
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.bash_guards.dispatch_checks import (
     _bt_commit_is_noop_invocation,
     check_git_commit_safe_commit_advise,
@@ -49,18 +51,24 @@ def test_dry_run_as_message_value_does_not_read_as_noop() -> None:
     )
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_commit_dry_run_does_not_deny() -> None:
     cmd = "git add one.py && git commit --dry-run"
     result = check_git_commit_safe_commit_advise(cmd)
     assert result is None, f"expected no verdict on a no-op commit, got {result!r}"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_commit_version_does_not_deny() -> None:
     cmd = "git add one.py && git commit --version"
     result = check_git_commit_safe_commit_advise(cmd)
     assert result is None, f"expected no verdict on a no-op commit, got {result!r}"
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_compound_add_then_bare_commit_still_denies() -> None:
     cmd = "git add one.py && git commit -m wip"
     result = check_git_commit_safe_commit_advise(cmd)

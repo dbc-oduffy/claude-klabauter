@@ -1,7 +1,10 @@
 """headless-claude-plugin-dir: rewrite, pass-through, and unresolvable-root deny."""
 
+import json
+
 import pytest
 
+from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_headless_claude_plugin_dir as g
 
 ROOT = "/native/coordinator"
@@ -38,10 +41,39 @@ def test_path_and_env_prefix_rewritten():
     assert _rewritten("FOO=1 /usr/bin/claude -p x") == "FOO=1 /usr/bin/claude --plugin-dir /native/coordinator -p x"
 
 
+def test_bg_rewritten():
+    assert _rewritten('claude --bg -n x "go"') == 'claude --plugin-dir /native/coordinator --bg -n x "go"'
+
+
+def test_agent_bg_rewritten():
+    assert _rewritten("claude --agent r --bg x") == "claude --plugin-dir /native/coordinator --agent r --bg x"
+
+
+def _payload(tool_name, cmd, cwd):
+    return json.dumps({"tool_name": tool_name, "tool_input": {"command": cmd}, "cwd": str(cwd)})
+
+
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+@pytest.mark.parametrize("cmd", ['claude --bg -n x "go"', "claude --agent r --bg x"])
+def test_bg_rewritten_through_dispatch(tool_name, cmd, tmp_path):
+    out = dispatch.evaluate_payload_json(_payload(tool_name, cmd, tmp_path))
+    spec = out["hookSpecificOutput"]
+    assert spec["permissionDecision"] == "allow"
+    assert "--plugin-dir /native/coordinator" in spec["updatedInput"]["command"]
+
+
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path):
+    out = dispatch.evaluate_payload_json(_payload(tool_name, "claude --bg --plugin-dir /p x", tmp_path))
+    assert "updatedInput" not in json.dumps(out)
+
+
 @pytest.mark.parametrize(
     "cmd",
     [
         "claude -p x --plugin-dir /p",
+        "claude --bg --plugin-dir /p x",
+        'echo "claude --bg"',
         "claude --plugin-dir=/p -p x",
         "claude-author -p x",
         "claude-author.cmd -p x",

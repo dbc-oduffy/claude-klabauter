@@ -63,7 +63,7 @@ from coordinator_core.session import day_branch_cut_lock
 
 _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 
-#: Generator-provenance declaration (generator_provenance.py). `write_atomic`
+#: Generator-provenance declaration (coordinator_core/ops/generator_census). `write_atomic`
 #: rewrites `<repo_root>/state/group-em-watch.json` on every tick, but the
 #: destination has no genuine GENERATES contract: `repo_root` is a required
 #: parameter with no in-module default (`stamp`'s only caller-facing knob),
@@ -74,7 +74,7 @@ _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 #: `sources`/`stamp_key` contract expects -- there is no source set whose
 #: mtime this heartbeat is regenerated from. A MUTATES glob is the wrong
 #: tool too: the target is one concrete filename, which this module's own
-#: validator (`_valid_mutates_shape` in generator_provenance.py) reserves
+#: validator (`_valid_mutates_shape` in generator_census) reserves
 #: for GENERATES. Declared empty rather than inventing either.
 GENERATES = []
 

@@ -592,6 +592,8 @@ def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path):
     assert _TRAILER not in without
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
     repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
     (repo_root / ".git").rmdir()

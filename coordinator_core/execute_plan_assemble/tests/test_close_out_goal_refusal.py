@@ -455,7 +455,7 @@ class TestGoalGateEndToEnd:
         assert result["goal_gate"]["refused"] is True
         assert result["goal_gate"]["reason"] == coas.GOAL_REFUSAL_EXIT_CRITERION_ABSENT
         assert "next move" not in result["message"]
-        assert "close-out skill" in result["message"]
+        assert "plan-status-transition stamp-implemented" in result["message"]
 
     def test_asserted_false_refuses_ac4(self, tmp_path, monkeypatch):
         root = tmp_path

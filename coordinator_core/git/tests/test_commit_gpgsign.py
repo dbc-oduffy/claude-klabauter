@@ -21,6 +21,9 @@ import pytest
 from coordinator_core.git import commit as commit_mod
 from coordinator_core.git.run import GitResult
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 _ENV_KEYS = (
     "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",

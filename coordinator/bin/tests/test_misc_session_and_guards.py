@@ -12,6 +12,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -96,11 +100,11 @@ class RagFreshnessGateTests(unittest.TestCase):
         fake_gen = mock.Mock(returncode=0)
         calls = []
 
-        def _run(cmd, **kwargs):
+        def _fake_run(cmd, **kwargs):
             calls.append(cmd)
             return fake_check if "check-rag-state.py" in cmd[1] else fake_gen
 
-        with mock.patch.object(_cli.subprocess, "run", side_effect=_run), \
+        with mock.patch.object(_cli.subprocess, "run", side_effect=_fake_run), \
              mock.patch.object(Path, "is_file", return_value=True):
             rc = _cli._cmd_rag_freshness_gate(
                 ["--project-root", "/proj", "--task", "summary", "--focus-files", "a.py,b.py"]

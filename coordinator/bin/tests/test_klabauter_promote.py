@@ -130,6 +130,8 @@ class _SubprocessSpy:
             return _completed(self._merge_base_returncode, "", self._merge_base_stderr)
         if cmd[:1] == ["git"] and "push" in cmd:
             return _completed(self._push_returncode, "", self._push_stderr)
+        if cmd[:1] == ["git"] and "fetch" in cmd and "." in cmd:
+            return _completed(0, "", "")
         if cmd[:1] == ["git"] and "log" in cmd and "--format=%s" in cmd:
             if cmd[-1].endswith("^{commit}"):
                 return _completed(self._source_returncode, self._source_subject, "")
@@ -144,6 +146,7 @@ def _run_promote(
     monkeypatch,
     *,
     confirm: bool = False,
+    extra_argv: Optional[List[str]] = None,
     status_stdout: str = _STATUS_CLEAN_CANDIDATE,
     status_returncode: int = 0,
     status_stderr: str = "",
@@ -190,6 +193,7 @@ def _run_promote(
     argv = ["alpha", "--percolate-root", str(root)]
     if confirm:
         argv.append("--confirm")
+    argv.extend(extra_argv or [])
 
     parser = _mod._build_parser()
     args = parser.parse_args(argv)
@@ -441,7 +445,7 @@ def test_confirm_with_all_predicates_passing_pushes_fast_forward_refspec(tmp_pat
     rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
     assert rc == _mod._EXIT_OK
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
-    assert push_calls == [["git", "-C", dest, "push", "origin", "--ff-only", "candidate:main"]]
+    assert push_calls == [["git", "-C", dest, "push", "origin", "candidate:main"]]
 
 
 # H-predicate4-soak-floor — the dry-run and confirmed-push success
@@ -569,3 +573,29 @@ def test_launcher_cmd_and_ps1_match_gen_launcher_shim_regeneration():
     assert ps1_body == (_BIN_DIR / "klabauter-promote.ps1").read_text(encoding="utf-8"), (
         "klabauter-promote.ps1 on disk drifted from gen-launcher-shim.py -- regenerate, don't hand-edit"
     )
+
+
+def test_soak_waiver_by_the_pm_names_the_pm(tmp_path, monkeypatch, capsys):
+    rc, _spy, _dest = _run_promote(
+        tmp_path, monkeypatch, log_stdout=_recent_committer_date(),
+        extra_argv=["--pm-soak-override", "ship it"],
+    )
+    err = capsys.readouterr().err
+    assert "predicate 4 waived by PM ruling: 'ship it'" in err
+    assert "FAILED" not in err
+
+
+def test_soak_waiver_by_a_delegate_names_the_delegate_not_the_pm(tmp_path, monkeypatch, capsys):
+    rc, _spy, _dest = _run_promote(
+        tmp_path, monkeypatch, log_stdout=_recent_committer_date(),
+        extra_argv=["--pm-soak-override", "ship it", "--soak-waived-by", "coordinator-content-repo-95 (Group EM)"],
+    )
+    err = capsys.readouterr().err
+    assert "waived by coordinator-content-repo-95 (Group EM) under the PM's delegation: 'ship it'" in err
+    assert "waived by PM ruling" not in err
+
+
+def test_confirm_also_fast_forwards_the_local_main_branch(tmp_path, monkeypatch):
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
+    assert rc == _mod._EXIT_OK
+    assert ["git", "-C", dest, "fetch", ".", "candidate:main"] in spy.calls

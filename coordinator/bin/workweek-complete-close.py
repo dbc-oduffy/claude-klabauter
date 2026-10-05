@@ -49,7 +49,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
 
-# Generator-provenance declaration (generator_provenance.py).
+# Generator-provenance declaration (coordinator_core/ops/generator_census).
 # perform_archive_files moves the closing week's daily/priorities files into
 # archive/week-changelogs/<week-starting>/ and archive/review-trail/
 # <week-starting>/, and rewrites state/week-changelog/HEADER.md -- a

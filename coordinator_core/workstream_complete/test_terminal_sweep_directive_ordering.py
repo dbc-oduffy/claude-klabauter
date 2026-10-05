@@ -28,6 +28,10 @@ from pathlib import Path
 
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
+import pytest
+
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _gate() -> wsc.SessionShapeGate:

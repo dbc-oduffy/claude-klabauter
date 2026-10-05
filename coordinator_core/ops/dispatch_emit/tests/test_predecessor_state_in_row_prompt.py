@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from coordinator_core.ops.dispatch_emit.emit import _row_prompt
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.ops.dispatch_emit.predecessor_state import (
     predecessor_state_section,
     resolve_predecessor_state,
@@ -14,7 +17,7 @@ _STATE = "Chunk C1 WIP is committed."
 
 
 def _handoff(repo, name, deliverable_id, state=_STATE):
-    d = repo / "state" / "handoffs"
+    d = Path(home_dir(str(repo), "handoffs"))
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text(
         f"---\ndeliverable_id: {deliverable_id}\n---\n# H\n\n## Current State\n\n{state}\n\n## Other\n\nno-leak\n",

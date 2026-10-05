@@ -34,7 +34,7 @@ from coordinator_core.housekeeping import cycle
 from coordinator_core.housekeeping.gate_clear import CONFLICT
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo: Path, *args: str) -> None:

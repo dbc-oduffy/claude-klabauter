@@ -679,9 +679,8 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert out is not None
         ctx = out["hookSpecificOutput"]["additionalContext"]
         assert "pipeline-foreach-object" in ctx
-        assert "python3" in ctx
+        assert "foreach (" in ctx
         assert "xargs" not in ctx
-        assert guard._pl_python3_invocation() in ctx
 
     @requires_powershell_grammar
     def test_powershell_percent_alias_for_foreach_object_advises(self):

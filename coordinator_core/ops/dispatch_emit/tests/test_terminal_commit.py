@@ -190,6 +190,35 @@ def test_inline_review_trailer(repo):
     assert "Inline-Review: applies stem1 -- execute-review: 3 slices, 2 fixes" in log
 
 
+def test_inline_review_stays_a_git_trailer_beside_a_declared_deletion(repo):
+    # The removal line is not a trailer; sharing a paragraph with it hid the
+    # anchor from git's trailer parser, and review_stamp mint found no commit.
+    (repo / "tracked.py").write_text("x\n", encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    _git(["add", "tracked.py"], repo)
+    _git(["commit", "-q", "-m", "add tracked"], repo)
+    (repo / "tracked.py").unlink()
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C3", title="t3", paths=("tracked.py", "a.py")),),
+    )
+    script = _write_script(repo, request)
+    out = _call(
+        repo,
+        {
+            "script_path": script,
+            "incomplete_chunks": [],
+            "inline_review": {"integration_stem": "stem1", "slices": 3, "fixes": 2},
+        },
+    )
+    assert out["committed"] is True, out
+    trailers = subprocess.run(
+        ["git", "show", "-s", "--format=%(trailers:key=Inline-Review,valueonly=true)", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    assert "applies stem1 -- execute-review: 3 slices, 2 fixes" in trailers
+
+
 def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo):
     """2026-09-28 PM follow-up: `bookkeep_wave` has no production caller
     until this wiring exists. End-to-end, no manual `bookkeep_wave` call in
@@ -482,8 +511,12 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
     assert "error" not in out or out["committed"] is False
 
 
+# Two git processes via run_git; a third means a new spawn joined the hot path.
+_EXPECTED_SPAWNS = 2
+
+
 def test_process_time_and_spawns_on_a_40_path_request(repo):
-    # AC17: process time < 200ms, zero subprocess spawns for a clean 40-path
+    # AC17: process time < 200ms and a pinned spawn count for a clean 40-path
     # request (no eol-fallback path in this fixture).
     paths = []
     for i in range(40):
@@ -497,26 +530,27 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
 
     import subprocess as _subprocess
 
+    # Count at Popen, not run: git/run.py::run_git spawns through Popen, so a
+    # run-only counter reads zero whatever the op does.
     spawn_count = 0
-    real_run = _subprocess.run
+    real_init = _subprocess.Popen.__init__
 
-    def _counting_run(*args, **kwargs):
+    def _counting_init(self, *args, **kwargs):
         nonlocal spawn_count
         spawn_count += 1
-        return real_run(*args, **kwargs)
+        real_init(self, *args, **kwargs)
 
-    orig = _subprocess.run
-    _subprocess.run = _counting_run
+    _subprocess.Popen.__init__ = _counting_init
     try:
         start = time.process_time()
         out = _call(repo, {"script_path": script, "incomplete_chunks": []})
         elapsed_ms = (time.process_time() - start) * 1000
     finally:
-        _subprocess.run = orig
+        _subprocess.Popen.__init__ = real_init
 
     assert out["committed"] is True
     assert elapsed_ms < 200, f"process time {elapsed_ms}ms exceeds the 200ms bar"
-    assert spawn_count == 0, f"expected zero spawns, saw {spawn_count}"
+    assert spawn_count == _EXPECTED_SPAWNS, f"expected {_EXPECTED_SPAWNS} spawns, saw {spawn_count}"
 
 
 _PLAN = """---

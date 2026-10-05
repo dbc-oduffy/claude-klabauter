@@ -260,6 +260,25 @@ def _ps_flag_value(args: List[str], prefixes: tuple) -> Optional[str]:
     return None
 
 
+_PS_REDIRECT_RE = re.compile(r"^(?:\d|\*)?>{1,2}(?!&)(.*)$")
+
+
+def _ps_redirect_targets(tokens: List[str]) -> List[str]:
+    """File targets of `>`/`>>`/`N>` redirections in one tokenized
+    PowerShell segment. `$null`, other `$`-valued targets and `&`-merges are
+    dropped: an unexpandable target is never judged."""
+    out: List[str] = []
+    for i, tok in enumerate(tokens[1:], start=1):
+        m = _PS_REDIRECT_RE.match(tok)
+        if not m:
+            continue
+        target = m.group(1) or (tokens[i + 1] if i + 1 < len(tokens) else "")
+        target = _strip_ps_quotes(target)
+        if target and "$" not in target and not target.startswith(("&", ">")):
+            out.append(target)
+    return out
+
+
 def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> List[str]:
     """Raw candidate write-target strings for ONE already-tokenized
     PowerShell segment (`tokens`, from `_dialect.resolve_segments_for_dialect`),
@@ -273,12 +292,12 @@ def extract_write_sink_targets_powershell(tokens: List[str], head_low: str) -> L
     never a false deny. Does NOT attempt `cd`/`Set-Location` cwd-tracking --
     that parity gap is the caller's to note, not this extraction helper's.
     """
+    targets: List[str] = _ps_redirect_targets(tokens)
     if head_low not in PS_WRITE_SINK_CMDLETS:
-        return []
+        return targets
 
     args = tokens[1:]
     positional = [_strip_ps_quotes(t) for t in args if not t.startswith("-")]
-    targets: List[str] = []
 
     if head_low == "new-item":
         v = _ps_flag_value(args, ("-pa",))

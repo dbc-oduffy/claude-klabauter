@@ -14,6 +14,8 @@ import pytest
 from coordinator_core.session import claims, core, harness_registry as hr, liveness, scope, touch_record
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 OLD_SID = "11111111-1111-4111-8111-111111111111"
 NEW_SID = "22222222-2222-4222-8222-222222222222"
 

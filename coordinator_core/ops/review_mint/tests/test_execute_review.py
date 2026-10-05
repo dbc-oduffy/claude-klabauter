@@ -1,3 +1,4 @@
+import re
 import json
 
 import pytest
@@ -497,8 +498,39 @@ def test_single_reviewer_ok_over_no_product_file_is_a_no_op_not_a_refusal():
     assert "error" not in result
 
 
+def test_zero_product_files_disagreeing_with_a_slice_that_lists_files_does_not_halt():
+    prep = {**_PREP, "product_files": 0, "slices": [{"id": "s1", "files": ["x.py"], "diff_path": "d"}]}
+    result = _run_prep_block(prep)
+    assert "halted" not in result and result["slices"][0]["id"] == "s1"
+
+
+def test_prep_prompt_takes_product_files_from_the_launcher_line():
+    _, phases = _compose()
+    assert "`product_files: N` line the launcher prints on stderr" in phases[0][1]
+
+
 def test_prep_never_counts_the_runs_own_writes_as_foreign_claims():
     _, phases = _compose()
     _, prep_block = phases[0]
     assert "any write by this run itself" in prep_block
     assert ".coordinator-local/subagent-share/" in prep_block
+
+
+def test_host_degraded_review_wave_emits_no_coordinator_agent_type_and_keeps_every_stage():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    kwargs = dict(
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["coordinator_core/ops/review_mint/execute_review.py"],
+        prompt_head="BRIEF PRECEDENCE CLAUSE",
+    )
+    normal = compose_execute_review(review, **kwargs)
+    degraded = compose_execute_review(review, host_degraded=True, **kwargs)
+
+    assert [t for t, _ in degraded] == [t for t, _ in normal]
+    text = "\n".join(b for _, b in degraded)
+    assert not re.search(r"agentType:\s*['\"]coordinator:", text)
+    assert "agentType: 'general-purpose'" in text
+    assert "You are acting as the " in text
+    assert re.search(r"agentType:\s*['\"]coordinator:", "\n".join(b for _, b in normal))

@@ -455,12 +455,23 @@ def test_devnull_redirect_plus_genuine_outside_write_still_bumps(env, monkeypatc
     assert "hookSpecificOutput" in result
 
 
-def test_powershell_dialect_declines_and_records_silent(env, monkeypatch):
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+@pytest.mark.parametrize("slashes", ["/", "\\"])
+def test_redirect_to_a_non_repo_dir_bumps_under_both_tools(env, monkeypatch, tool, slashes):
+    _set_anchor(monkeypatch, env, "sess-redir-" + tool)
+    dest = str(env["outside"] / "redir.txt").replace("\\", "/").replace("/", slashes)
+    result = guard.check_bump_outside_repo_write(
+        "echo hi > " + dest, "sess-redir-" + tool, str(env["anchor"]), {"tool_name": tool}
+    )
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_powershell_alias_shape_declines_and_records_silent(env, monkeypatch):
     from coordinator_core.bash_guards import _verdict
 
     _set_anchor(monkeypatch, env, "sess-ps")
-    dest = env["outside"] / "redir.txt"
-    cmd = f"echo hi > {_posix(dest)}"
+    cmd = f"cp src.txt {_posix(env['outside'] / 'x.txt')}"
 
     with _verdict.collecting() as silences:
         result = guard.check_bump_outside_repo_write(

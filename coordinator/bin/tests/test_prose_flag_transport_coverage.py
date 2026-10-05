@@ -53,6 +53,7 @@ PROBE_PATH = Path(__file__).resolve().parent / "prose_transport_probe.py"
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_no_uncovered_prose_flag_transport_pairs():
     """Rule 1 gate: the probe must report zero UNREFUSED (entrypoint, flag)
     pairs among declared prose-bearing flags on `.cmd`-forwarded

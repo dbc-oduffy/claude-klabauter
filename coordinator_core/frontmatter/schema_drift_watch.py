@@ -649,8 +649,8 @@ def scan_vendored_schema_drift(
             local_version, doe_version, local_bump_class, doe_bump_class,
             doe_bump_note} per diverged schema.
             direction is one of schema_validate.DIRECTION_WE_AHEAD /
-            DIRECTION_WE_BEHIND / DIRECTION_BOTH (or None if an older advisory
-            build didn't emit it) — see schema_validate._infer_drift_direction.
+            DIRECTION_WE_BEHIND / DIRECTION_BOTH (None when no vendored-from base is
+            recorded) — see schema_validate._direction_from_base.
             divergence_kind is "shape" / "prose-only" / None, orthogonal to
             direction — whether the delta touches validation shape or is
             confined to prose (schema_validate.check_schema_drift_advisory's

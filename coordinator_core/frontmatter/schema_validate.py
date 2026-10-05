@@ -3374,8 +3374,10 @@ def _cf_plan_tasks_unratified_deferral_governed(
             'a valid authoring path on a GOVERNED plan.'
         ),
         'hint': (
-            "Use 'plan-tasks-resolve --backlogged' under an approved 'defer' "
-            "grouping, or 'deferred: false' where the deferral was never real."
+            "For a temporary hold use 'deferred_until: {reason, revisit_trigger}' "
+            "on the open row; to cut scope use 'plan-tasks-resolve --backlogged' "
+            "under an approved 'defer' grouping; or 'deferred: false' where the "
+            "deferral was never real."
         ),
     }
 
@@ -5294,7 +5296,11 @@ def check_schema_drift_batch(
             'This is NOT a drift finding — the comparison never ran.'
         )
 
-    tokens = sorted({f'{ref}:coordinator/schemas/{path.name}' for path, ref in pairs})
+    base_blobs = {path: _recorded_base_blob(path) for path, _ref in pairs}
+    tokens = sorted(
+        {f'{ref}:coordinator/schemas/{path.name}' for path, ref in pairs}
+        | {blob for blob in base_blobs.values() if blob}
+    )
     blobs = scoped_cat_file_batch(doe_repo_path, tokens)
     if blobs is None:
         raise SchemaProbeUnavailableError(
@@ -5304,13 +5310,53 @@ def check_schema_drift_batch(
         )
 
     return [
-        _drift_verdict(path, doe_repo_path, ref, blobs.get(f'{ref}:coordinator/schemas/{path.name}'))
+        _drift_verdict(
+            path,
+            doe_repo_path,
+            ref,
+            blobs.get(f'{ref}:coordinator/schemas/{path.name}'),
+            blobs.get(base_blobs[path]) if base_blobs[path] else None,
+        )
         for path, ref in pairs
     ]
 
 
+VENDORED_FROM_MANIFEST = 'vendored-from.json'
+
+
+def _recorded_base_blob(schema_path: Path) -> str | None:
+    """The DoE blob sha `schema_path` was vendored from, per the manifest beside it.
+
+    The manifest (`vendored-from.json`, written by `bin/claude-klabauter-revendor-schema.py`)
+    keeps the base out of the schema bytes, which stay identical to DoE's. None
+    when the manifest, or this schema's entry, is absent or malformed.
+    """
+    try:
+        manifest = json.loads(
+            (schema_path.parent / VENDORED_FROM_MANIFEST).read_text(encoding='utf-8')
+        )
+        blob = manifest[schema_path.name]['blob']
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return blob if isinstance(blob, str) and re.fullmatch(r'[0-9a-f]{40}', blob) else None
+
+
+def _direction_from_base(local: str, doe: str, base: str | None) -> str | None:
+    """AHEAD / BEHIND / BOTH from the recorded vendored-from base; None when unknown."""
+    if base is None:
+        return None
+    base = base.replace('\r\n', '\n').replace('\r', '\n')
+    if local == base:
+        return DIRECTION_WE_BEHIND if doe != base else None
+    return DIRECTION_WE_AHEAD if doe == base else DIRECTION_BOTH
+
+
 def _drift_verdict(
-    schema_path: Path, doe_repo_path: Path, ref: str, doe_content: str | None
+    schema_path: Path,
+    doe_repo_path: Path,
+    ref: str,
+    doe_content: str | None,
+    base_content: str | None = None,
 ) -> "SchemaDriftError | None":
     """One vendored schema against its already-fetched DoE text: None, or the finding.
 
@@ -5344,21 +5390,25 @@ def _drift_verdict(
         # mirror-vs-fork is a per-file property and co-location in schemas/ is
         # not evidence of a shared contract. Both contents are in hand at this
         # raise, so direction is stated, never guessed by the reader.
-        direction = _infer_drift_direction(local_content, doe_content)
+        direction = _direction_from_base(local_content, doe_content, base_content)
         remedy = {
             DIRECTION_WE_AHEAD: (
-                'Our vendored copy is AHEAD of DoE (reconciliation pending upstream). '
-                'The fix is UPWARD -- propagate our additions into '
-                f'{doe_schema_ref} in DoE. Copying DoE down would delete them.'
+                'Vendored copy was edited locally; DoE is still at the recorded base. '
+                f'Memo DoE with the change to {doe_schema_ref}. Copying DoE down deletes it.'
             ),
             DIRECTION_WE_BEHIND: (
-                'DoE is AHEAD of our vendored copy. Re-vendor downward via '
-                'bin/claude-klabauter-revendor-schema.py (which also moves any pin) -- '
-                'not a bare cp.'
+                'DoE moved past the recorded base; the vendored copy is unedited. '
+                f'Re-vendor: python3 bin/claude-klabauter-revendor-schema.py {schema_path.name}. '
+                'Not a bare cp.'
             ),
             DIRECTION_BOTH: (
-                'BOTH sides changed independently -- reconcile by hand. A '
-                'blind re-vendor in either direction drops one side.'
+                'Both sides changed since the recorded base. Reconcile by hand; a '
+                'blind re-vendor drops one side.'
+            ),
+            None: (
+                f'Direction unknown: no readable base in {VENDORED_FROM_MANIFEST}. '
+                'If DoE moved, re-vendor via bin/claude-klabauter-revendor-schema.py; if the '
+                'vendored copy was edited, memo DoE. Not a bare cp.'
             ),
         }[direction]
         return SchemaDriftError(
@@ -5806,9 +5856,8 @@ def _canonical_schema_text(text: str, *, strip_comments: bool = True) -> str | N
     explain the match", independent of whatever the default-True comparison
     already answered.
 
-    Returns None when `text` does not parse as JSON. Never raises — matches
-    `_infer_drift_direction`'s degrade-never-raise contract in this module, so
-    a malformed vendored schema falls back to the caller's byte comparison
+    Returns None when `text` does not parse as JSON. Never raises, so a
+    malformed vendored schema falls back to the caller's byte comparison
     instead of raising out of a "just check for drift" call.
     """
     try:
@@ -5817,116 +5866,6 @@ def _canonical_schema_text(text: str, *, strip_comments: bool = True) -> str | N
         return None
     node = _strip_comment_annotations(parsed) if strip_comments else parsed
     return json.dumps(node, sort_keys=True, separators=(",", ":"))
-
-
-# Top-level bump-metadata paths (as produced by _flatten_json) that
-# _infer_drift_direction resolves as a unit from the top-level
-# x-schema-version comparison rather than the generic per-leaf walk -- see
-# that function's docstring for the version rule. Nested only: a nested key
-# that happens to be named x-schema-version is an ordinary leaf.
-_VERSION_METADATA_PATHS: frozenset[tuple] = frozenset(
-    {
-        ("x-schema-version",),
-        ("x-bump-class",),
-        ("x-bump-note",),
-    }
-)
-
-
-def _infer_drift_direction(local_content: str, doe_content: str) -> str:
-    """Best-effort AHEAD / BEHIND / BOTH read on a byte-diverged schema pair.
-
-    Top-level version pass (preferred, ahead of the generic leaf walk):
-    read `x-schema-version` off each side's already-parsed top-level dict
-    (guarding that each parses to a dict and the value is a string) and parse
-    both with `_parse_semver_tuple`. When both parse and differ, the version
-    leaves record ONE direction (local < doe is behind, local > doe is
-    ahead), and the top-level paths `("x-schema-version",)`,
-    `("x-bump-class",)`, `("x-bump-note",)` are excluded from the generic
-    loop below — those three are bump metadata that moves with the version
-    by construction, and their string containment is noise. When either
-    version is unparseable, or both are equal, those paths stay in the
-    generic loop exactly as for any other leaf.
-
-    Generic structural pass: flatten both sides' parsed JSON to leaf paths.
-    A path present only locally is a local addition (AHEAD signal); a path
-    present only on DoE's side is a DoE addition we haven't re-vendored
-    (BEHIND signal). For a path both sides declare with a differing leaf value
-    (e.g. a description string edited on one side), string containment gives a
-    directional hint — the shorter string being a substring of the longer one
-    reads as "the other side extended it"; anything else (values diverged in
-    both directions, or non-string leaves that merely differ) cannot be
-    directionally attributed and folds into BOTH, never a guessed AHEAD/BEHIND.
-
-    Falls back to plain text containment when either side fails to parse as
-    JSON — a malformed vendored file is exactly the case a structural diff
-    cannot run over, but direction is still worth a best-effort answer rather
-    than silence.
-
-    Negative-spec: never raises — a comparison this uncertain by nature must
-    degrade to the conservative BOTH reading, never a wrong-but-confident
-    AHEAD/BEHIND. Only called when the two texts are already known to differ.
-    Adds no git read: this stays a pure function of the two texts.
-    """
-    try:
-        local_json = json.loads(local_content)
-        doe_json = json.loads(doe_content)
-    except (json.JSONDecodeError, ValueError):
-        if local_content in doe_content:
-            return DIRECTION_WE_BEHIND
-        if doe_content in local_content:
-            return DIRECTION_WE_AHEAD
-        return DIRECTION_BOTH
-
-    local_flat = _flatten_json(local_json)
-    doe_flat = _flatten_json(doe_json)
-
-    version_ahead = False
-    version_behind = False
-    excluded_paths: frozenset[tuple] = frozenset()
-    if isinstance(local_json, dict) and isinstance(doe_json, dict):
-        local_version_raw = local_json.get("x-schema-version")
-        doe_version_raw = doe_json.get("x-schema-version")
-        if isinstance(local_version_raw, str) and isinstance(doe_version_raw, str):
-            local_semver = _parse_semver_tuple(local_version_raw)
-            doe_semver = _parse_semver_tuple(doe_version_raw)
-            if local_semver is not None and doe_semver is not None and local_semver != doe_semver:
-                if local_semver < doe_semver:
-                    version_behind = True
-                else:
-                    version_ahead = True
-                excluded_paths = _VERSION_METADATA_PATHS
-
-    ahead = version_ahead or any(
-        path not in doe_flat for path in local_flat if path not in excluded_paths
-    )
-    behind = version_behind or any(
-        path not in local_flat for path in doe_flat if path not in excluded_paths
-    )
-
-    for path, local_value in local_flat.items():
-        if path in excluded_paths:
-            continue
-        if path not in doe_flat:
-            continue
-        doe_value = doe_flat[path]
-        if local_value == doe_value:
-            continue
-        if isinstance(local_value, str) and isinstance(doe_value, str):
-            if local_value != doe_value and local_value in doe_value:
-                behind = True
-            elif doe_value != local_value and doe_value in local_value:
-                ahead = True
-            else:
-                ahead = behind = True
-        else:
-            ahead = behind = True
-
-    if ahead and not behind:
-        return DIRECTION_WE_AHEAD
-    if behind and not ahead:
-        return DIRECTION_WE_BEHIND
-    return DIRECTION_BOTH
 
 
 def _parse_schema_dict(content: str) -> dict | None:
@@ -6199,9 +6138,10 @@ def check_schema_drift_advisory(schema_path: str | Path, doe_repo_path: str | Pa
                 reporting green. Additive key (2026-07-22, drift-watch wiring); the
                 schema/diverged/detail contract above is unchanged.
             direction (str | None): DIRECTION_WE_AHEAD / DIRECTION_WE_BEHIND /
-                DIRECTION_BOTH when diverged=True and determinate=True — see
-                _infer_drift_direction. None whenever diverged is False (matched
-                or indeterminate; there is nothing to be ahead/behind ON).
+                DIRECTION_BOTH when diverged=True and determinate=True, read
+                against the recorded vendored-from base (`_direction_from_base`).
+                None whenever diverged is False (matched or indeterminate), and
+                None when diverged but no base is recorded: unknown, never guessed.
                 Additive key (2026-07-23, directionality wiring) — the schema/
                 diverged/determinate/detail contract above is unchanged.
             divergence_kind (str | None): "shape" or "prose-only", orthogonal to
@@ -6355,8 +6295,10 @@ def check_schema_drift_advisory_batch(
         ]
 
     refs = {path: f'coordinator/schemas/{path.name}' for path in paths}
+    base_blobs = {path: _recorded_base_blob(path) for path in paths}
     blobs = scoped_cat_file_batch(
-        doe_repo_path, sorted({f'HEAD:{ref}' for ref in refs.values()})
+        doe_repo_path,
+        sorted({f'HEAD:{ref}' for ref in refs.values()} | {b for b in base_blobs.values() if b}),
     )
     if blobs is None:
         return [
@@ -6379,12 +6321,19 @@ def check_schema_drift_advisory_batch(
                 f'DoE repo path ({doe_repo_path}) unreadable or missing this schema at HEAD.',
             ))
             continue
-        results.append(_advisory_compare(path, doe_schema_ref, doe_repo_path, doe_content))
+        results.append(_advisory_compare(
+            path, doe_schema_ref, doe_repo_path, doe_content,
+            blobs.get(base_blobs[path]) if base_blobs[path] else None,
+        ))
     return results
 
 
 def _advisory_compare(
-    schema_path: Path, doe_schema_ref: str, doe_repo_path: Path, doe_content: str
+    schema_path: Path,
+    doe_schema_ref: str,
+    doe_repo_path: Path,
+    doe_content: str,
+    base_content: str | None = None,
 ) -> dict:
     """Reduce one vendored schema and its already-fetched DoE HEAD text to a verdict dict.
 
@@ -6468,8 +6417,9 @@ def _advisory_compare(
                 'detail': match_detail,
             }
 
-        direction = _infer_drift_direction(local_content, doe_content)
+        direction = _direction_from_base(local_content, doe_content, base_content)
         direction_prose = {
+            None: f'direction unknown (no readable base in {VENDORED_FROM_MANIFEST}) — diff against DoE before re-vendoring',
             DIRECTION_WE_AHEAD: 'we are ahead of DoE HEAD (reconciliation pending upstream)',
             DIRECTION_WE_BEHIND: 'DoE HEAD is ahead of our pin — re-vendor now',
             DIRECTION_BOTH: 'both sides changed independently — reconcile by hand, a blind re-vendor would drop our side',

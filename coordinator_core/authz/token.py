@@ -31,7 +31,7 @@ from typing import Optional
 
 _log = logging.getLogger(__name__)
 
-# Generator-provenance declaration (generator_provenance.py). write_tokens
+# Generator-provenance declaration (coordinator_core/ops/generator_census). write_tokens
 # writes token/token.ro under <repo>/.git/coordinator-service/ -- inside
 # .git, never a tracked repo artifact.
 GENERATES = []

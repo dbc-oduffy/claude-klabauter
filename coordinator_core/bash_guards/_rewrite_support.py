@@ -201,6 +201,15 @@ def _bt_render_interpreter_path(python_bin: str) -> str:
     return '"$HOME/%s"' % rel.replace(os.sep, "/").replace("\\", "/")
 
 
+def _bt_ps_python_c(script: str) -> str:
+    """``<interpreter> -c <script>`` as one PowerShell command: a quoted
+    interpreter path needs the ``&`` call operator, and a single quote in the
+    script is doubled, not bash-escaped."""
+    py = _bt_python3_invocation()
+    prefix = "& " + py if py[:1] in ("'", '"') else py
+    return "%s -c '%s'" % (prefix, script.replace("'", "''"))
+
+
 def _bt_python3_invocation() -> str:
     """Resolve the shell-ready interpreter prefix (e.g. ``python3``, or on a
     python.org Windows install with no `python3.exe` on PATH, ``py -3`` or an

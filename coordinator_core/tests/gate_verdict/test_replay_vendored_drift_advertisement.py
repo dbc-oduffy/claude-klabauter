@@ -17,12 +17,19 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 GATE_VERDICT_CASE = "vendored-schema-drift"
 
 _REPO = Path(__file__).resolve().parents[3]
 _ORACLES = _REPO / "coordinator_core/frontmatter/tests/test_schema_validate.py"
 _SCRIPT = _REPO / "bin/claude-klabauter-revendor-schema.py"
 _SCHEMA_NAME_RE = re.compile(r"([A-Za-z0-9_-]+)\.schema\.json$")
+
+# The script is authoring-only: the claude-klabauter-bin row excludes it, so the
+# published tree has no subject here, and an unguarded load fails collection there.
+if not _SCRIPT.is_file():
+    pytest.skip(f"{_SCRIPT.name} is not shipped in this tree", allow_module_level=True)
 
 _spec = importlib.util.spec_from_file_location("_revendor_schema_drift_adv", _SCRIPT)
 _mod = importlib.util.module_from_spec(_spec)

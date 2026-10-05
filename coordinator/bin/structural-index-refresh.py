@@ -29,6 +29,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Writes a refresh-status record under the gitignored .structural-index/.
+GENERATES = []
+
 KILL_SWITCH = "COORDINATOR_STRUCTURAL_INDEX_REFRESH_OFF"
 # Fragmented: the publish transform rewrites the contiguous codename, and a rewritten key never resolves.
 _INDEX_REPO = "project" "_rag"
@@ -92,7 +95,7 @@ def run_and_record(rag: Path, root: Path) -> int:
     try:
         path = record_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="\n")
     except OSError:
         pass
     return rc
@@ -118,7 +121,7 @@ def spawn_ensure(rag: Path, root: Path) -> "subprocess.Popen":
     }
     if os.name == "nt":
         kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         )
     else:
         kwargs["start_new_session"] = True

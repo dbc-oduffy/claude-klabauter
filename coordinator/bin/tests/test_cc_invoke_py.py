@@ -2847,3 +2847,11 @@ class TestDiagnosticsProbesEndToEnd(unittest.TestCase):
         self.assertIn("op error: code=-32001", text)
         self.assertIn("nothing is actually wedged", text)
         self.assertNotIn("engine will not import/start", text)
+
+
+def test_op_timeout_map_is_computed_in_process_without_a_probe_spawn(tmp_path):
+    from coordinator_core.invoke.__main__ import _dump_op_timeouts
+
+    root = str(Path(__file__).resolve().parents[3])
+    assert _mod._dump_op_timeouts_in_process(root) == _dump_op_timeouts()
+    assert _mod._dump_op_timeouts_in_process(str(tmp_path)) is None

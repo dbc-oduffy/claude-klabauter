@@ -111,7 +111,7 @@ from coordinator_core.wire_paths import rel_id as _wire_rel_id
 
 _LOG = logging.getLogger(__name__)
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader).
 # _handler() rewrites whichever state/handoffs/*.md stub(s) the caller names
 # via 'targets' -- a caller-supplied, data-dependent set, not a fixed artifact.
 MUTATES = ["state/handoffs/*.md"]

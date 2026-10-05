@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN = Path(__file__).resolve().parents[1] / "check-decision-citations.py"
 _spec = importlib.util.spec_from_file_location("check_decision_citations", _BIN)

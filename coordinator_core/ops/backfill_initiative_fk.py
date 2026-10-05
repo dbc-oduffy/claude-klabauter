@@ -125,7 +125,7 @@ from coordinator_core.ipc import DISPATCH_TIMEOUT_SECS
 from coordinator_core.win_portability import no_console_creationflags
 
 
-# Generator-provenance declaration (generator_provenance.py). This module
+# Generator-provenance declaration (coordinator_core/ops/generator_census). This module
 # writes only a PID lockfile at tempfile.gettempdir()/_LOCK_BASENAME --
 # process-runtime lock in the OS temp dir, never a tracked artifact. The
 # actual FK attach work is delegated via subprocess to the sibling

@@ -286,6 +286,7 @@ from __future__ import annotations
 
 MUTATES = ["docs/plans/*.md"]  # flips any caller-supplied --plan file's status: frontmatter field (data-dependent target)
 
+import json
 import os
 import re
 import sys
@@ -304,6 +305,8 @@ from coordinator_core.frontmatter.primitives import (
     rebuild,
     remove_fm_field,
     stamp_approved_body_sha,
+    check_approved_body,
+    APPROVED_BODY_CHANGED,
     replace_fm_field,
     split_frontmatter,
     unquote_yaml_scalar,
@@ -555,13 +558,15 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     treating every non-advancing result alike.
     """
     deliverable_id = (deliverable_id or "").strip()
+    target_kinds = _CASCADE_TARGET_KINDS
     if not deliverable_id:
         print(
-            f"{_PROG}: {plan_path} carries no deliverable_id — nothing to cascade "
-            "(join key absent; never falls back to the plan: handoff pointer)",
+            f"{_PROG}: {plan_path} carries no deliverable_id — handoff cascade skipped "
+            "(join key absent; never falls back to the plan: handoff pointer); "
+            "sizings still join on their plan FK",
             file=sys.stderr,
         )
-        return 0
+        target_kinds = ("sizing",)
 
     import asyncio
 
@@ -594,7 +599,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     # that no test, and no prior behaviour, ever produced.
     results: List["tuple[str, dict]"] = []
     any_advanced = False
-    for target_kind in _CASCADE_TARGET_KINDS:
+    for target_kind in target_kinds:
         result = asyncio.run(
             _cascade_handler(
                 {
@@ -613,6 +618,11 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
         for artifact in advanced:
             print(
                 f"{_PROG}: cascade advanced {artifact.get('path') or artifact.get('handoff_path')}",
+                file=sys.stderr,
+            )
+        for artifact in result.get("already_advanced", []):
+            print(
+                f"{_PROG}: cascade left {artifact.get('path')} as is: already advanced",
                 file=sys.stderr,
             )
         for artifact in result.get("refused", []):
@@ -648,7 +658,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     if not any_matched:
         print(
             f"{_PROG}: {plan_path} — cascade resolved no downstream artifact for any "
-            f"targeted kind ({', '.join(_CASCADE_TARGET_KINDS)}); the deliverable "
+            f"targeted kind ({', '.join(target_kinds)}); the deliverable "
             "legitimately has none — flip succeeded, no follow-up needed",
             file=sys.stderr,
         )
@@ -659,6 +669,21 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
             print(
                 f"{_PROG}: cascade resolved no downstream artifact for {plan_path}: "
                 f"{result.get('error')}",
+                file=sys.stderr,
+            )
+    # Trap: a re-stamp of an implemented plan is a no-op and never re-cascades,
+    # and archival moves the plan next, so this line is the only retry route.
+    for target_kind, result in results:
+        if result.get("candidates_matched", 0) and not result.get("advanced"):
+            params = json.dumps({
+                "deliverable_id": deliverable_id,
+                "source_kind": "plan",
+                "source_path": plan_path,
+                "target_kind": target_kind,
+            })
+            print(
+                f"{_PROG}: retry once the refusal clears: "
+                f"coordinator-invoke deliverable.cascade_terminal '{params}'",
                 file=sys.stderr,
             )
     return 2
@@ -3147,6 +3172,17 @@ def _stamp_rung(
 
         status_index = _FLIPPABLE_STATUSES_ORDER.index(status)
         is_reentry = allow_landed_reentry and status == "landed"
+
+        if (
+            status == "executing"
+            and target_status in ("reviewed", "approved")
+            and check_approved_body(text)[0] == APPROVED_BODY_CHANGED
+        ):
+            raise MutateAbort(
+                f"{_PROG}: {opts.plan} is executing and its body changed since approval; "
+                f"{verb} cannot re-approve it. "
+                "Use `review-exec-auth-stamp restamp <plan> --by <reviewer> --reason <text>`."
+            )
 
         if not is_reentry and status_index >= target_index:
             _state["flipped"] = False

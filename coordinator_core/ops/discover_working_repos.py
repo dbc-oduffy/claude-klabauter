@@ -68,6 +68,9 @@ from coordinator_core.machine_resolver import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
+# Writes the machine-local working-repos registry, outside the tracked tree.
+GENERATES = []
+
 
 _CREATIONFLAGS = no_console_creationflags()
 

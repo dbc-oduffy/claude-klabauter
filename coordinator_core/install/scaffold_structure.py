@@ -165,7 +165,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 
-# Generator-provenance declaration (generator_provenance.py). Scaffolds
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Scaffolds
 # README/.gitkeep/eager template files under a caller-supplied target root
 # per canonical-structure.yaml (docstring: "scaffold...directory...under a
 # target root") -- the target repo is a parameter, not fixed to claude-klabauter.

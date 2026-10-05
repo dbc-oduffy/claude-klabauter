@@ -1308,7 +1308,7 @@ def _scaffold_missing(
         premise_evidence=premise_evidence if recorded else None,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "x", encoding="utf-8") as fh:
+    with open(target, "x", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     from coordinator_core.session.declared_writes import declare_write
 

@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import lanes, op
 from coordinator_core.ops.dispatch_emit.lanes import PartNotReadyError
+from coordinator_core.session.record_homes import home_dir, record_path
 
 from .conftest import REVIEW_KW
 
@@ -45,7 +46,7 @@ def _review_inputs(monkeypatch):
 
 
 def _write_master(root: Path, text: str) -> Path:
-    inv = root / "state" / "mise-inventory" / f"{RUN}.md"
+    inv = Path(record_path(str(root), "mise-inventory", f"{RUN}.md"))
     inv.parent.mkdir(parents=True, exist_ok=True)
     inv.write_text(text, encoding="utf-8", newline="\n")
     return inv
@@ -101,7 +102,7 @@ def _pin_two_part_hub(root: Path, master: str) -> None:
         fixed_bytes=0,
         bound_plans=frozenset(),
         run_id=RUN,
-        source_inventory=f"state/mise-inventory/{RUN}.md",
+        source_inventory=Path(record_path(".", "mise-inventory", f"{RUN}.md")).as_posix(),
         start_sha="a" * 40,
     )
     pins = root / lanes.lane_map_path(RUN)
@@ -201,7 +202,7 @@ def test_a_falsifier_plan_with_a_py_instrument_gets_its_can_report_red_json(tmp_
     inv = _write_master(tmp_path, _inventory([("R1", "pkg/one.py", "-", "pending")]))
     reply = op._dispatch_emit({"inventory_path": str(inv), "output_path": str(tmp_path / "out.workflow.mjs")}, tmp_path)
 
-    report = tmp_path / "state" / "mise-inventory" / f"{RUN}.can-report-red" / "fixture.json"
+    report = Path(home_dir(str(tmp_path), "mise-inventory")) / f"{RUN}.can-report-red" / "fixture.json"
     assert report.is_file()
     assert isinstance(json.loads(report.read_text(encoding="utf-8")), dict)
     script = Path(reply["path"]).read_text(encoding="utf-8")
@@ -237,7 +238,7 @@ def test_a_part_the_estimate_cannot_shrink_is_refused_after_three_headroom_reduc
     with pytest.raises(lanes.RowOverBudgetError, match="3 headroom reductions"):
         _lanes(inv, root, hot_files=0)
 
-    leftovers = sorted(p.name for p in (root / "state" / "mise-inventory").iterdir())
+    leftovers = sorted(p.name for p in Path(home_dir(str(root), "mise-inventory")).iterdir())
     assert not any(name.endswith(".workflow.mjs") for name in leftovers), leftovers
 
 
@@ -273,5 +274,5 @@ def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_
     assert [r for p in lane["parts"] for r in p["rows"]] == ["H1", "H2", "H3"]
     assert lane["parts"][0]["script"] and not lane["parts"][1]["script"]
     assert Path(reply["parts"][0]["path"]).stat().st_size <= emit._WORKFLOW_SCRIPT_BYTE_CAP
-    names = {p.name for p in (root / "state" / "mise-inventory").iterdir()}
+    names = {p.name for p in Path(home_dir(str(root), "mise-inventory")).iterdir()}
     assert f"{RUN}-a.md" not in names and f"{RUN}-a-p1.md" in names

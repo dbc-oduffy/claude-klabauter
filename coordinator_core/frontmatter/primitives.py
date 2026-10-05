@@ -953,8 +953,14 @@ def check_approved_body(file_text: str) -> tuple[str, str]:
     current = approval_body_sha(file_text)
     if stamped.lower() in (current, canonical_body_sha(file_text)):
         return APPROVED_BODY_OK, ''
+    status = (read_fm_field_unquoted(split.fm_text, 'status') or '').lower()
+    remedy = (
+        'run `review-exec-auth-stamp restamp <plan> --by <reviewer> --reason <text>`'
+        if status == 'executing'
+        else 're-run plan review to re-approve'
+    )
     return (
         APPROVED_BODY_CHANGED,
         f'plan body changed since approval (approved_body_sha {stamped[:12]}, now '
-        f'{(current or "?")[:12]}): re-run plan review to re-approve',
+        f'{(current or "?")[:12]}): {remedy}',
     )

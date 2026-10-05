@@ -1125,7 +1125,7 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
 #: *arrival* without this assertion forcing a decision about it. Found in
 #: review 2026-08-21; `conftest.py` is loaded by every pytest run, so this
 #: surface is genuinely hot even though it is currently clean.
-_REPO_ROOT_PY_FILES: frozenset[str] = frozenset({"conftest.py"})
+_REPO_ROOT_PY_FILES: frozenset[str] = frozenset({"conftest.py", "drive_root_write_guard.py"})
 
 
 def test_top_level_py_files_have_no_bare_spawn():

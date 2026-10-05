@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit.emit import UnresolvedAgentTypeError
+
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.dispatch_emit.emit import NoWavesError
@@ -152,32 +154,52 @@ def test_dispatch_emit_round_trip_writes_and_returns_verdict(tmp_path):
     assert isinstance(result["warn_count"], int)
 
 
-def test_dispatch_emit_degrades_agent_type_for_a_bare_host_caller(tmp_path, monkeypatch):
-    """`_dispatch_emit` must resolve
-    `agent_type_host` from the CALLER's own env (`COORDINATOR_AGENT_TYPE_HOST`/
-    `CLAUDE_PLUGIN_ROOT`) and thread it into `emit_script`, or host agent-type
-    degradation (S1-C5/S1-C6) never fires from the one production entry point
-    that matters. A bare host caller -- neither env var set -- must emit
-    `general-purpose` agentType literals and the degradation narration."""
-    monkeypatch.delenv("COORDINATOR_AGENT_TYPE_HOST", raising=False)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-
+def test_dispatch_emit_refuses_coordinator_agent_types_for_a_bare_host_caller(tmp_path, monkeypatch):
+    """A host with no env override, no plugin env and no plugin install cannot
+    run the review-stage `coordinator:*` types, so the emit refuses."""
+    _bare_host(tmp_path, monkeypatch)
     plan_path = _write_fixture_plan(tmp_path)
     output_path = tmp_path / "out" / "emitted.mjs"
     output_path.parent.mkdir()
 
-    result = _dispatch_emit(
-        {
-            "plan_path": str(plan_path),
-            "output_path": str(output_path),
-        }
+    with pytest.raises(UnresolvedAgentTypeError, match="host cannot resolve"):
+        _dispatch_emit({"plan_path": str(plan_path), "output_path": str(output_path)})
+    assert not output_path.exists()
+
+
+def _bare_host(tmp_path, monkeypatch):
+    """No env override, no plugin env, and an empty config dir / content root."""
+    from coordinator_core.subagent_sandbox import provision_report
+
+    monkeypatch.delenv("COORDINATOR_AGENT_TYPE_HOST", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    monkeypatch.setattr(provision_report, "read_content_root", lambda: "")
+
+
+def test_dispatch_emit_installed_plugin_resolves_without_env(tmp_path, monkeypatch):
+    """The emitter subprocess has no harness plugin env; an install record
+    naming a coordinator plugin with content must keep the host
+    non-degraded."""
+    _bare_host(tmp_path, monkeypatch)
+    install = tmp_path / "installed-coordinator"
+    (install / "snippets").mkdir(parents=True)
+    plugins = tmp_path / "claude-config" / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"coordinator@mkt": [{"installPath": str(install)}]}}),
+        encoding="utf-8",
     )
+
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "out" / "emitted.mjs"
+    output_path.parent.mkdir()
+    result = _dispatch_emit({"plan_path": str(plan_path), "output_path": str(output_path)})
 
     assert result["ok"] is True
     written = output_path.read_text(encoding="utf-8")
-    assert "general-purpose" in written
-    assert "Agent-type host degradation" in written
-    assert "coordinator:executor" not in written
+    assert "Agent-type host degradation" not in written
+    assert "coordinator:executor" in written
 
 
 def test_dispatch_emit_defaults_target_root_to_output_path_parent(tmp_path):

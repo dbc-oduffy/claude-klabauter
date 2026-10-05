@@ -33,6 +33,9 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 TARGET = "state/handoffs"
 
 SPLIT_VERB_CASES = [

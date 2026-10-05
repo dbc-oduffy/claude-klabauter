@@ -403,8 +403,8 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
             f"- {kira_file} stamps findings_count={findings_count} with no "
             f"verified findings_ledger of its own and no sibling sidecar's "
             f"integrated_from naming it.{unstamped_note} Owed route: apply "
-            f"every finding and run `review-findings-ledger verify` on this "
-            f"sidecar, or a refactor executor stamping `integrated_from` if "
+            f"every finding, then `review-findings-ledger verify --sidecar "
+            f"<this sidecar>`; or a refactor executor stamping `integrated_from` if "
             f"the verdict recommended a rebuild."
         )
 

@@ -525,6 +525,50 @@ def _build_branch_fixtures(tmp_dir: Path) -> dict[tuple[str, str], tuple[bool, b
         any("no longer proves" in d for d in disproven),
     )
 
+    # --- _consults_kill_switch --- each source trips exactly one arm.
+    for expr, source in (
+        ("isinstance(node, ast.Name) and node.id == _SWITCH_GUARD_NAME", "_refuse_machine_mutation()\n"),
+        (
+            "isinstance(node, ast.Attribute) and node.attr == _SWITCH_GUARD_NAME",
+            "m._refuse_machine_mutation()\n",
+        ),
+        (
+            "isinstance(node, ast.FunctionDef) and node.name == _SWITCH_GUARD_NAME",
+            "def _refuse_machine_mutation():\n    pass\n",
+        ),
+        (
+            "isinstance(node, ast.Constant) and node.value == _SWITCH_ENV",
+            "x = 'COORDINATOR_DISABLE_MACHINE_MUTATION'\n",
+        ),
+    ):
+        add(
+            "_consults_kill_switch",
+            expr,
+            True,
+            D._consults_kill_switch(tmp_module(f"switch_{len(fixtures)}.py", source)),
+        )
+
+    # --- _carve_out_problems ---
+    carve = {"c.py": ("class", "reason")}
+    _unnamed, stale = D._carve_out_problems([], carve)
+    add("_carve_out_problems", "path is None", True, any("no longer exists" in s for s in stale))
+    p_inert = tmp_module("c.py", "x = 1\n")
+    _unnamed, stale = D._carve_out_problems([p_inert], carve)
+    add(
+        "_carve_out_problems",
+        "not _flagged_calls(path)",
+        True,
+        any("no longer write-reaching" in s for s in stale),
+    )
+    p_gated = tmp_module("c.py", "def f(p):\n    p.write_text('x')\n    _refuse_machine_mutation()\n")
+    _unnamed, stale = D._carve_out_problems([p_gated], carve)
+    add(
+        "_carve_out_problems",
+        "_consults_kill_switch(path)",
+        True,
+        any("now consults the switch" in s for s in stale),
+    )
+
     return fixtures
 
 

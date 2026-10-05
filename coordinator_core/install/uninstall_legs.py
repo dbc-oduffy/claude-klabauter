@@ -75,7 +75,7 @@ from coordinator_core.engine_root import coordinator_engine_root_with_class
 from coordinator_core.ops import render_template
 from coordinator_core.hooks import platform_localize
 
-# Generator-provenance declaration (generator_provenance.py). Every leg
+# Generator-provenance declaration (coordinator_core/ops/generator_census). Every leg
 # resolves its targets from CLAUDE_HOME/COORDINATOR_SETTINGS_HOME env
 # overrides per this module's own docstring ("Every leg resolves its
 # filesystem/registry targets from environment overrides...NEVER a

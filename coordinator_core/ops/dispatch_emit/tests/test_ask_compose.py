@@ -171,3 +171,17 @@ def test_size_phase_schema_and_prompt_require_gated_rows():
     assert '"gated"' in size_stage and '"owner_repo"' in size_stage
     assert "`gated`" in size_stage
     assert "gated: _gated" in script
+
+
+def test_degraded_host_ask_review_stages_emit_no_coordinator_review_type_and_keep_every_stage():
+    import re
+
+    def types(script):
+        return set(re.findall(r"agentType:\s*['\"]coordinator:([^'\"]+)", script))
+
+    review_types = {"code-reviewer", "integrator", "review-prep"}
+    normal = _compose()
+    degraded = _compose(agent_type_host="host")
+    assert review_types <= types(normal)
+    assert not review_types & types(degraded)
+    assert _titles(degraded) == _titles(normal)

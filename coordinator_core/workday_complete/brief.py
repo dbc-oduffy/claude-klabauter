@@ -117,6 +117,7 @@ from coordinator_core.contract.decision_object.judgment import (
     partition_reportable,
 )
 from coordinator_core.completion_receipts.day import receipts_for_day
+from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -897,6 +898,22 @@ def brief(
                 int(WorkdayExitCode.USAGE),
                 {"error": f"--for-date must be a valid YYYY-MM-DD date (got '{for_date}')"},
             )
+
+    # Trap: d_step3_consolidate refuses these checkouts, but no committing
+    # directive depends on it, so without this refusal apply() committed and
+    # pushed straight to main (example-game-repo 2026-09-22). Refusing here runs nothing.
+    branch = head_branch(Path.cwd())
+    if branch in (None, "HEAD", "main", "master"):
+        shown = "detached HEAD" if branch in (None, "HEAD") else f"'{branch}'"
+        return (
+            int(WorkdayExitCode.BUSINESS_FAIL),
+            {
+                "error": (
+                    f"workday-complete refuses a {shown} checkout: its directives commit "
+                    "and push. Run it from a workstream branch."
+                )
+            },
+        )
 
     try:
         resolve_operator_config(env=env)

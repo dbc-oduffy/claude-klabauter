@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TREES = ("coordinator", "coordinator_core", "bin", "scripts")
 NOUN = re.compile(r"claude-klabauter", re.IGNORECASE)

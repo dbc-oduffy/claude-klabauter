@@ -12,6 +12,9 @@ import pytest
 
 import coordinator_core.quick_wrap_assemble as qwa
 
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SID = "abcdefab-cdef-abcd-efab-cdefabcdefab"
 _PROSE = "Planned a rename; found the symbol is public API so I kept the alias."
 _REL = f".coordinator-local/subagent-share/{_SID}/coordinator-executor.abc.md"

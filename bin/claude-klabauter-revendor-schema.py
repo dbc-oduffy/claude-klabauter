@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import subprocess
@@ -111,6 +112,7 @@ from coordinator_core.ops.emit.doe_drift import (  # noqa: E402
 from coordinator_core.frontmatter.schema_validate import (  # noqa: E402
     SchemaDriftError,
     SchemaProbeUnavailableError,
+    VENDORED_FROM_MANIFEST,
     check_schema_drift_batch,
     format_validation_errors,
     _parse_semver,
@@ -461,6 +463,58 @@ def _rewrite_pin_registry(
             entry.name, new_sha, ref_label, reason, indent, eol
         )
     return "".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Vendored-from manifest — the base the drift check reads direction against
+# ---------------------------------------------------------------------------
+
+_MANIFEST_FILE = _SCHEMAS_DIR / VENDORED_FROM_MANIFEST
+
+
+def _git_blob_sha(data: bytes) -> str:
+    """The git blob sha of `data`, computed locally (no spawn)."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _lf(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n")
+
+
+def _load_manifest() -> dict[str, dict[str, str]]:
+    if not _MANIFEST_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(_MANIFEST_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _die(f"{_rel(_MANIFEST_FILE)} is unreadable ({exc}); fix or remove it.")
+        raise AssertionError  # unreachable
+    if not isinstance(data, dict):
+        _die(f"{_rel(_MANIFEST_FILE)} is not a JSON object.")
+    return data
+
+
+def _manifest_updates(plans: list["_Plan"], sha: str) -> dict[str, dict[str, str]]:
+    """Entries to record: each plan's incoming blob, where the manifest lacks it.
+
+    An entry whose blob already matches keeps its original commit.
+    """
+    manifest = _load_manifest()
+    updates: dict[str, dict[str, str]] = {}
+    for plan in plans:
+        key = plan.vendored_path.name
+        blob = _git_blob_sha(plan.incoming)
+        if (manifest.get(key) or {}).get("blob") != blob:
+            updates[key] = {"doe_commit": sha, "blob": blob}
+    return updates
+
+
+def _write_manifest(updates: dict[str, dict[str, str]]) -> None:
+    manifest = _load_manifest()
+    manifest.update(updates)
+    _MANIFEST_FILE.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -912,8 +966,15 @@ def run(
         _info(f"  - {plan.name}: {cls}; {'; '.join(bits) if bits else 'in sync'}")
 
     actionable = [p for p in plans if p.changes_anything]
+    base_updates = _manifest_updates(plans, sha)
     if not actionable:
-        _info(f"\nAlready in sync at {sha} (bytes AND pins) — no-op. Exiting 0.")
+        if base_updates:
+            if dry_run:
+                _info(f"\n[DRY RUN] Would record base in {_rel(_MANIFEST_FILE)}: {sorted(base_updates)}")
+            else:
+                _write_manifest(base_updates)
+                _info(f"\nRecorded base in {_rel(_MANIFEST_FILE)}: {sorted(base_updates)}")
+        _info(f"Already in sync at {sha} (bytes AND pins) — no-op. Exiting 0.")
         return 0
 
     # --- Step 6: gates ------------------------------------------------------
@@ -998,6 +1059,11 @@ def run(
     created: list[Path] = [
         p.vendored_path for p in actionable if p.needs_write and p.current is None
     ]
+    if base_updates:
+        if _MANIFEST_FILE.exists():
+            snapshots[_MANIFEST_FILE] = _MANIFEST_FILE.read_bytes()
+        else:
+            created.append(_MANIFEST_FILE)
 
     def _rollback() -> None:
         for path, data in snapshots.items():
@@ -1028,6 +1094,9 @@ def run(
                 f"  re-pinned {', '.join(p.name for p in repins)} -> {sha} in "
                 f"{_rel(_PIN_REGISTRY_FILE)}"
             )
+        if base_updates:
+            _write_manifest(base_updates)
+            _info(f"  recorded base for {', '.join(sorted(base_updates))} in {_rel(_MANIFEST_FILE)}")
     except Exception as exc:
         _rollback()
         _die(f"Write FAILED ({type(exc).__name__}: {exc}) — tree rolled back, nothing applied.")
@@ -1220,6 +1289,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--record-base",
+        action="store_true",
+        help=(
+            "Backfill vendored-from.json for the named schemas (default: all) that are "
+            "already byte-identical to DoE at --ref (pin-tracked: at their pin). Writes no schema."
+        ),
+    )
+    p.add_argument(
         "--decline",
         action="store_true",
         help=(
@@ -1325,10 +1402,53 @@ def _write_decline(
     return 0
 
 
+def _record_base(*, schema_names: list[str], doe_clone_arg: str | None, ref: str) -> int:
+    """Record the vendored-from base for schemas already byte-identical to DoE.
+
+    Backfill for schemas vendored before the manifest existed. Pin-tracked schemas
+    are read at their pin (the commit their gate already proves), the rest at `ref`.
+    Line endings are ignored in the comparison (a Windows checkout may hold CRLF
+    for a blob stored LF). A schema whose content differs from DoE there is skipped, never recorded: a base
+    that does not match the local bytes would misreport direction.
+    """
+    if doe_clone_arg:
+        clone = Path(doe_clone_arg).expanduser().resolve()
+    else:
+        try:
+            clone = resolve_doe_clone()
+        except DoeResolveError as exc:
+            _die(str(exc))
+            raise AssertionError  # unreachable
+    if not (clone / ".git").exists():
+        _die(f"DoE clone at {clone} does not look like a git repo (no .git).")
+    pins = _load_pin_registry(_PIN_REGISTRY_FILE)
+    names = [_normalize_schema_name(n) for n in schema_names] or _vendored_names()
+    updates: dict[str, dict[str, str]] = {}
+    for name in names:
+        path = _SCHEMAS_DIR / f"{name}{_SCHEMA_SUFFIX}"
+        if not path.exists():
+            _die(f"Not vendored in this repo: {name}.")
+        sha = _resolve_ref_sha(clone, pins[name].sha if name in pins else ref)
+        incoming = _git_show_bytes(clone, sha, f"{_DOE_SCHEMAS_REL}/{name}{_SCHEMA_SUFFIX}")
+        if _lf(path.read_bytes()) != _lf(incoming):
+            _info(f"  skipped {name}: bytes differ from DoE at {sha[:9]}")
+            continue
+        updates[path.name] = {"doe_commit": sha, "blob": _git_blob_sha(incoming)}
+        _info(f"  {name}: base {sha[:9]}")
+    if updates:
+        _write_manifest(updates)
+    _info(f"Recorded {len(updates)} base(s) in {_rel(_MANIFEST_FILE)}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.list:
         return _print_list()
+    if args.record_base:
+        return _record_base(
+            schema_names=list(args.schema), doe_clone_arg=args.doe_clone, ref=args.ref
+        )
     if args.decline:
         return _write_decline(
             schema_names=list(args.schema),

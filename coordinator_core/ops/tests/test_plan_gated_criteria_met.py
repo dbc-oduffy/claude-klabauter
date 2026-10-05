@@ -8,8 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops import plan_gated_criteria_met as mod
 from coordinator_core.ops.ceremony import git_native
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN = """---
 title: t
@@ -29,7 +32,7 @@ body
 
 
 def _git(root, *a):
-    subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 @pytest.fixture
@@ -54,7 +57,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def _sha(root):
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, **no_console_creationflags()).stdout.strip()
 
 
 def _run(root, rows):

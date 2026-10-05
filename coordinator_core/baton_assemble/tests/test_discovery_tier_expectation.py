@@ -47,6 +47,8 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _write_artifact
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _write_deliverable_carrier(root: Path, rel: str, deliverable_id: str) -> Path:
     return _write_artifact(root / rel, [f'deliverable_id: "{deliverable_id}"'])

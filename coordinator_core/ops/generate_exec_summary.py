@@ -84,7 +84,7 @@ from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.state_root import StateRootError
 from coordinator_core.state_root import _claude_klabauter_state as _guarded_claude_klabauter_state
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader).
 # THIS module is the real implementer of the write (main() below) -- `sources`
 # names itself, mirroring the sibling CLI trampoline's own GENERATES entry
 # (coordinator/bin/generate-exec-summary.py), which names this file as its

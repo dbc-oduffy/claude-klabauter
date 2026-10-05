@@ -62,7 +62,7 @@ from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 # mechanism — Windows entirely, POSIX's stable_pid_alive Layer 1 since the
 # 2026-07-27 ps-to-psutil port). ``pid_alive`` on POSIX is the sole
 # surviving `os.kill` user; see that docstring / ``_win_create_time_epoch``.
-# Generator-provenance declaration (generator_provenance.py). update_meta_field/
+# Generator-provenance declaration (coordinator_core/ops/generator_census). update_meta_field/
 # update_meta_fields write only `<session_dir>/meta.json` under
 # `.git/coordinator-sessions/<sid>/` -- git-internal session-hub state, never a
 # tracked repo artifact.

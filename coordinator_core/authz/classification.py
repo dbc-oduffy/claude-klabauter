@@ -3359,6 +3359,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-07-23-claude-klabauter-driven-ceremony-redesign.md § C17
     "ceremony.update_docs_scan": OpClass.COMPUTE_ONLY,
+    "deliverable.cascade_terminal": OpClass.MUTATING,
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_divergence_report": OpClass.COMPUTE_ONLY,

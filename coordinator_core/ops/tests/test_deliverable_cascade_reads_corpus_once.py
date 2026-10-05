@@ -54,7 +54,7 @@ _handler = cascade_mod._handler
 # reason its sibling test_deliverable_cascade_kinds.py does — the property
 # under test (commit scoping, fixture repo state) is that binary's own
 # behaviour. See that file's own pytestmark comment for the ratchet note.
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _run(params: dict, repo_root: Path) -> dict:

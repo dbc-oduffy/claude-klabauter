@@ -28,6 +28,9 @@ import pytest
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _write_artifact
 
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FALSIFIER_PATH = (
     _REPO_ROOT / "docs" / "research" / "spike-verdicts" / "one-hop-plan-completeness-falsifier.py"

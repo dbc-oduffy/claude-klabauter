@@ -167,6 +167,7 @@ ADVISORY_REWRITE_NAMES = [
     "block-subagent-plan-body-bash-write",
     "check-raw-pid-liveness",
     "headless-claude-plugin-dir",
+    "piped-pytest-exit-advisory",
 ]
 
 # The two platform-conditioned guards -- `fail_closed=True` (a crash still

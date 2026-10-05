@@ -1,8 +1,12 @@
 import asyncio
 import subprocess
 
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.docindex.render import OPEN_SENTINEL
 from coordinator_core.ops.docindex_emit import _docindex_emit
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _INDEX = (
     "---\nindex_source_dir: entries/\nentry_kind: wiki-entry\n"
@@ -13,7 +17,7 @@ _INDEX = (
 
 
 def _repo(tmp_path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / "entries").mkdir()
     (tmp_path / "entries" / "alpha.md").write_text("---\nsystem: alpha\n---\n# Alpha\n", encoding="utf-8")
     (tmp_path / "index.md").write_text(_INDEX, encoding="utf-8")

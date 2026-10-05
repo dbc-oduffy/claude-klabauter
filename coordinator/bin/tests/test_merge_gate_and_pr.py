@@ -29,6 +29,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _BIN_DIR = Path(__file__).parent.parent
 
 
@@ -172,6 +174,8 @@ def test_active_branch_guard_gh_failure_falls_back_to_git_log(monkeypatch):
     assert _mod.main(["active-branch-guard", "--pr", "123"]) == 0
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_active_branch_guard_git_log_fallback_reads_real_repo(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()

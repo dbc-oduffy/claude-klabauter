@@ -8,6 +8,9 @@ import pytest
 from coordinator_core.git import index_write
 from coordinator_core.git.git_objects import write_object
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 

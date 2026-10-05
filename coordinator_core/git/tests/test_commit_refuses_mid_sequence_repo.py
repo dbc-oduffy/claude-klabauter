@@ -23,6 +23,9 @@ import pytest
 
 from coordinator_core.git.commit import CommitRefused, commit_paths
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 

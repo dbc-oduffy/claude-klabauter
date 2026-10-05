@@ -43,6 +43,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
     _crlf_strip,
     _override,
 )
+from coordinator_core.bash_guards._rewrite_support import _bt_ps_python_c
 from coordinator_core.bash_guards._command_tokenizer import (
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
     token_matches_binary as _bt_token_matches_binary,
@@ -477,13 +478,44 @@ def _check_head_tail_plumbing_powershell(
     script_lines = body_lines + ["for _l in %s:" % slice_expr, "    print(_l)"]
     script = "\n".join(script_lines)
     return _allow_rewrite(
-        "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
+        _bt_ps_python_c(script),
         "Auto-rewrite: '%s' piped through head/tail forked twice; "
         "replaced with one python3 -c doing the same slice. %s"
         % (
             ht_tokens[0],
             operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
         ),
+    )
+
+
+def _bash_shaped_head_tail_advisory_powershell(
+    cmd: str, payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """A `<generator> | head/tail` pipeline sent through the PowerShell tool.
+    Advises only: the bash rewrite (`updatedInput`, `python3 -c`) is not a
+    valid PowerShell command, so the remedy offered is `Select-Object`."""
+    classification = _bt_classify_command(cmd)
+    if classification.tokens is None or not classification.has_shape(
+        _BT_Shape.HEAD_TAIL_PLUMBING
+    ):
+        return None
+    segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
+    if len(segments) != 2:
+        return None
+    (up_tokens, up_pipe_before), (ht_tokens, ht_pipe_before) = segments
+    if up_pipe_before or not ht_pipe_before or not ht_tokens or not up_tokens:
+        return None
+    if not any(_bt_token_matches_binary(ht_tokens[0], b) for b in ("head", "tail")):
+        return None
+    flag = "-First" if _bt_token_matches_binary(ht_tokens[0], "head") else "-Last"
+    return _advisory(
+        "Advisory: '... | %s' truncates output via an extra subprocess -- "
+        "use '... | Select-Object %s N' in-process. %s"
+        % (
+            ht_tokens[0],
+            flag,
+            operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
+        )
     )
 
 
@@ -562,7 +594,10 @@ def check_head_tail_plumbing_rewrite(
         return None
 
     if dialect is _dialect.Dialect.POWERSHELL:
-        return _check_head_tail_plumbing_powershell(cmd, payload=payload)
+        ps_result = _check_head_tail_plumbing_powershell(cmd, payload=payload)
+        if ps_result is not None:
+            return ps_result
+        return _bash_shaped_head_tail_advisory_powershell(cmd, payload)
 
     classification = _bt_classify_command(cmd)
     if classification.tokens is None:

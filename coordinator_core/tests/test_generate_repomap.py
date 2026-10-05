@@ -82,6 +82,9 @@ def test_main_generator_not_found_exits_1(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", "1")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "nonexistent-home"))
+    monkeypatch.setattr(
+        "coordinator_core.ops.generate_repomap._ENGINE_PLUGIN_ROOT", str(tmp_path / "no-engine")
+    )
     rc = main([], plugin_root=str(tmp_path / "no-such-plugin-root"))
     assert rc == 1
     err = capsys.readouterr().err
@@ -89,6 +92,29 @@ def test_main_generator_not_found_exits_1(tmp_path, monkeypatch, capsys):
     assert "Expected (tier 1)" in err
     assert "Fallback (tier 2, legacy)" in err
     assert "Fallback  (tier 3)" in err
+
+
+def test_main_retired_plugin_root_resolves_engine_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", "1")
+    engine_coord = tmp_path / "engine-coordinator"
+    gen = _make_generator(engine_coord)
+    monkeypatch.setattr(
+        "coordinator_core.ops.generate_repomap._ENGINE_PLUGIN_ROOT", str(engine_coord)
+    )
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("coordinator_core.ops.generate_repomap.subprocess.run", _fake_run)
+    rc = main(["--x"], plugin_root=str(tmp_path / "retired-doe-clone"))
+    assert rc == 0
+    assert captured["cmd"][-2:] == [str(gen), "--x"]
 
 
 def _make_generator(plugin_root: Path) -> Path:

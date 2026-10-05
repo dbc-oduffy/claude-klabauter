@@ -163,7 +163,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
 
-# Generator-provenance declaration (generator_provenance.py).
+# Generator-provenance declaration (coordinator_core/ops/generator_census).
 # _log_pathspec_divergence_override appends to
 # <git_root>/.git/coordinator-sessions/<session_id>/overrides.log -- inside
 # .git, an untracked audit trail, never a tracked repo artifact.

@@ -230,7 +230,7 @@ from coordinator_core.resolve_validation_cmd import (
     cs_resolve_fast_test_cmd,
 )
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader
 # — see that module for the discovery/coverage mechanism this feeds). This
 # module holds the derive-and-render implementation (build_cache/_render_cache/
 # write_cache all live here), so its own movement changes

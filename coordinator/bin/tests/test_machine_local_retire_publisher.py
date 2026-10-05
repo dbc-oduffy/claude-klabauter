@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _IMPL = Path(__file__).resolve().parents[2] / "templates" / "bin" / "_machine_local.py"
 

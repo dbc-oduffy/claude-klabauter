@@ -473,12 +473,24 @@ def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _plan_fk_matches(value: Any, plan_fk: str) -> bool:
+    """True when a record's `plan` field names `plan_fk`, tolerating a `<root>:` prefix."""
+    if not isinstance(value, str):
+        return False
+    norm = value.strip().replace("\\", "/")
+    head, sep, tail = norm.partition(":")
+    if sep and len(head) > 1:
+        norm = tail
+    return norm == plan_fk
+
+
 def _collect_live_candidates_for_kind(
     worktree_root: Path,
     deliverable_id: str,
     kind: _KindDescriptor = _HANDOFF_KIND,
     *,
     metas_out: Optional[Dict[str, dict]] = None,
+    plan_fk: str = "",
 ) -> tuple[List[dict], bool, List[dict]]:
     """Return ([{path, fm}, ...], scan_incomplete, unreadable) for every LIVE
     candidate of `kind` whose own `deliverable_id` field exact-matches the
@@ -516,6 +528,11 @@ def _collect_live_candidates_for_kind(
     `_predicate_refusal`) reuse this read instead of re-scanning. Return
     arity, return values and every existing caller are unaffected — this is
     an out-param, not a new return.
+
+    `plan_fk` (worktree-relative posix plan path, sizing kind only): a record whose
+    own `plan` field names this plan also matches, so a sizing that never carried
+    the plan's `deliverable_id` (minted onto the plan after the sizing was written)
+    still joins.
     """
     base_dir = worktree_root / Path(kind.corpus_subdir)
     matches: List[dict] = []
@@ -544,7 +561,8 @@ def _collect_live_candidates_for_kind(
         if metas_out is not None:
             metas_out[os.path.abspath(str(path))] = fm
         artifact_did = fm.get("deliverable_id")
-        if not isinstance(artifact_did, str) or artifact_did.strip() != deliverable_id:
+        did_match = bool(deliverable_id) and isinstance(artifact_did, str) and artifact_did.strip() == deliverable_id
+        if not did_match and not (plan_fk and _plan_fk_matches(fm.get("plan"), plan_fk)):
             continue
         lifecycle_value = fm.get(kind.lifecycle_field)
         if lifecycle_value in kind.terminal_values:
@@ -1164,7 +1182,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # as a genuine exception rather than degrading to an empty candidate set.
     target_kind: _KindDescriptor = _kind_descriptor(target_kind_name)
 
-    if not deliverable_id:
+    plan_fk_only = target_kind is _SIZING_KIND and source_kind == "plan" and bool(source_path)
+    if not deliverable_id and not plan_fk_only:
         return {
             "exit_code": 1,
             "deliverable_id": deliverable_id,
@@ -1223,9 +1242,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # from an index built over this same scan's frontmatter instead of
     # re-reading the corpus per candidate — `corpus_metas` is threaded below.
     corpus_metas: dict = {}
-    candidates, scan_incomplete, unreadable = _collect_live_candidates_for_kind(
-        worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas
-    )
 
     # Sizing kind's write side (C3) writes the `plan` FK alongside `status:
     # shipped` — normalized worktree-relative posix, matching the vendored
@@ -1247,6 +1263,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         except (OSError, ValueError):
             sizing_plan_fk = ""
             sizing_plan_fk_unresolved = True
+
+    candidates, scan_incomplete, unreadable = _collect_live_candidates_for_kind(
+        worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas,
+        plan_fk=sizing_plan_fk,
+    )
 
     # Self-advance guard (needed by C6b's handoff trigger; a no-op for C6's plan
     # trigger, whose source_path is never itself a handoff in this scan surface).
@@ -1303,7 +1324,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if passes_done > 1:
             corpus_metas = {}
             _collect_live_candidates_for_kind(
-                worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas
+                worktree_root, deliverable_id, kind=target_kind, metas_out=corpus_metas,
+                plan_fk=sizing_plan_fk,
             )
 
         for candidate in pending:

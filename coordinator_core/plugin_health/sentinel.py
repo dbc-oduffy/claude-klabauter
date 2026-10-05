@@ -121,7 +121,7 @@ from coordinator_core.plugin_health.probe_select import id_to_cluster, load_prob
 from coordinator_core.pyresolve import PythonPinInvalid, resolve_python_bin
 from coordinator_core.win_portability import is_executable
 
-# Generator-provenance declaration (generator_provenance.py). This sentinel writes
+# Generator-provenance declaration (coordinator_core/ops/generator_census). This sentinel writes
 # only `~/.claude/plugins/coordinator-claude/data/doctor-last-run.json` (settings-home
 # / operator home directory) -- never a path inside claude-klabauter's own tracked tree.
 GENERATES = []
@@ -1516,7 +1516,7 @@ def probe_p21() -> List[ProbeNote]:
     — the shared durable-then-fallback file-rungs reader every other
     pointer consumer in this codebase already uses — rather than re-deriving
     the two candidate paths (`<settings-home>/machine-local/<pointer>`, then
-    `${CLAUDE_HOME:-$HOME}/.claude/<pointer>`) here. That helper checks the
+    the pointer file under the legacy `.claude` directory of the Claude home) here. That helper checks the
     durable location FIRST and returns as soon as it finds non-empty content
     there, so a pass on the durable location structurally never reaches the
     legacy fallback.

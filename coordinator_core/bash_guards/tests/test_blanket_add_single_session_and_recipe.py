@@ -10,6 +10,9 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 
 def _git(repo, *args):
     return subprocess.run(

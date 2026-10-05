@@ -209,6 +209,7 @@ def compose_ask_script(
     plan_blitz_args: Optional[dict] = None,
     writes: Sequence[str] = (),
     roadmap_blitz_text: Optional[str] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -272,7 +273,9 @@ def compose_ask_script(
         run_base_sha=head_sha(repo_root) or "",
         declared_paths_js="_manifest.review_declared_paths",
         prompt_head=review_head,
+        run_key=run_id,
         prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel)",
+        host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
     )
     review_titles = [title for title, _ in review_blocks]
 

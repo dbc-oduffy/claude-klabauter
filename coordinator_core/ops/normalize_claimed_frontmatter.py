@@ -134,7 +134,7 @@ _CREATIONFLAGS = no_console_creationflags()
 
 _PROG = "normalize-claimed-frontmatter"
 
-# Generator-provenance declaration (C2, generator_provenance.py's AST reader).
+# Generator-provenance declaration (C2, coordinator_core/ops/generator_census reader).
 # main() rewrites whichever tracked handoff/plan/decision/review files
 # currently carry a <!-- consumed: --> body marker -- a data-dependent subset
 # of TYPE_TO_GLOB's directories, not a fixed artifact list.

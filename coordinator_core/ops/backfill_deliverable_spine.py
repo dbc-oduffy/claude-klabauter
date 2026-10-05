@@ -238,7 +238,7 @@ from coordinator_core.ops.mint_deliverable_id import mint as _mint
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
 
-# Generator-provenance declaration (generator_provenance.py). _stamp_file()
+# Generator-provenance declaration (coordinator_core/ops/generator_census). _stamp_file()
 # stamps deliverable_id onto whichever mutable artifacts in the corpus
 # (state/handoffs/*.md, docs/plans/*.md, archive/specs/**, state/roadmap/**/
 # OVERVIEW.md -- see the module docstring's "Corpus" section) currently lack

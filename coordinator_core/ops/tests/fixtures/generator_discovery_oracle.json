@@ -44,6 +44,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator/bin/check-decision-citations.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['state/baselines/decision-citations.md'] exempts ['state/baselines/decision-citations.md'] from staleness comparison",
+    "generator": "coordinator/bin/check-decision-citations.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator/bin/check-gitignore-template-drift.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator/bin/check-gitignore-template-drift.py",
     "mutates": [],
@@ -142,6 +149,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator/bin/copy-currency-refresh.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/copy-currency-refresh.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator/bin/corpus-currency-probe.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator/bin/corpus-currency-probe.py",
     "mutates": [],
@@ -184,19 +198,10 @@
     "verdict": "WRITE_TARGET_UNRESOLVED"
   },
   {
-    "detail": "coordinator/bin/emit-guard-enforcement-join.py declares 1 pair(s)",
+    "detail": "coordinator/bin/emit-guard-enforcement-join.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['state/audits/2026-09-07-guard-enforcement-join/guard-enforcement-join.yaml'] exempts ['state/audits/2026-09-07-guard-enforcement-join/guard-enforcement-join.yaml'] from staleness comparison",
     "generator": "coordinator/bin/emit-guard-enforcement-join.py",
     "mutates": [],
-    "pairs": [
-      {
-        "artifact": "state/audits/2026-09-07-guard-enforcement-join/guard-enforcement-join.yaml",
-        "generator": "coordinator/bin/emit-guard-enforcement-join.py",
-        "sources": [
-          "coordinator/bin/emit-guard-enforcement-join.py"
-        ],
-        "stamp_key": "source_sha"
-      }
-    ],
+    "pairs": [],
     "verdict": null
   },
   {
@@ -335,11 +340,11 @@
     "verdict": null
   },
   {
-    "detail": "coordinator/bin/measure-amplification-discriminator.py writes tracked path 'tasks/amp-discriminator-baseline.json' but declares no GENERATES",
+    "detail": "coordinator/bin/measure-amplification-discriminator.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['tasks/amp-discriminator-baseline.json'] exempts ['tasks/amp-discriminator-baseline.json'] from staleness comparison",
     "generator": "coordinator/bin/measure-amplification-discriminator.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": null
   },
   {
     "detail": "coordinator/bin/measure-hook-class-cost.py writes through an unresolved path expression and declares no GENERATES",
@@ -412,11 +417,11 @@
     "verdict": null
   },
   {
-    "detail": "coordinator/bin/publish-allowlist-generate.py writes tracked path 'setup/publish-targets.portable' but declares no GENERATES",
+    "detail": "coordinator/bin/publish-allowlist-generate.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['setup/publish-targets.portable'] exempts ['setup/publish-targets.portable'] from staleness comparison",
     "generator": "coordinator/bin/publish-allowlist-generate.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": null
   },
   {
     "detail": "coordinator/bin/publish.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -508,8 +513,22 @@
     "verdict": null
   },
   {
+    "detail": "coordinator/bin/statusline.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/statusline.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator/bin/stitch-observer-sidecar.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator/bin/stitch-observer-sidecar.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator/bin/structural-index-refresh.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator/bin/structural-index-refresh.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
@@ -716,6 +735,13 @@
     "verdict": "WRITE_TARGET_UNRESOLVED"
   },
   {
+    "detail": "coordinator_core/content_root.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/content_root.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py",
     "mutates": [],
@@ -723,40 +749,17 @@
     "verdict": "WRITE_TARGET_UNRESOLVED"
   },
   {
-    "detail": "coordinator_core/contract/cockpit_schema/emit_schema.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "detail": "coordinator_core/contract/cockpit_schema/emit_schema.py declares GENERATES = [] (declared-empty, no artifacts); GENERATES_EXTERNAL (destination is caller-supplied and foreign to this repo)",
     "generator": "coordinator_core/contract/cockpit_schema/emit_schema.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
   },
   {
-    "detail": "coordinator_core/contract/emit_memo_schema.py declares 2 pair(s)",
+    "detail": "coordinator_core/contract/emit_memo_schema.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['coordinator_core/contract/*-memo.schema.json'] exempts ['coordinator_core/contract/cross-repo-memo.schema.json', 'coordinator_core/contract/archived-memo.schema.json'] from staleness comparison",
     "generator": "coordinator_core/contract/emit_memo_schema.py",
     "mutates": [],
-    "pairs": [
-      {
-        "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
-        "generator": "coordinator_core/contract/emit_memo_schema.py",
-        "sources": [
-          "coordinator_core/contract/emit_memo_schema.py",
-          "coordinator_core/ops/fleet/memo_kinds.py",
-          "coordinator_core/ops/fleet/_memo_summary.py",
-          "coordinator_core/ops/fleet/memo_send.py"
-        ],
-        "stamp_key": "x-schema-version"
-      },
-      {
-        "artifact": "coordinator_core/contract/archived-memo.schema.json",
-        "generator": "coordinator_core/contract/emit_memo_schema.py",
-        "sources": [
-          "coordinator_core/contract/emit_memo_schema.py",
-          "coordinator_core/ops/fleet/memo_kinds.py",
-          "coordinator_core/ops/fleet/_memo_summary.py",
-          "coordinator_core/ops/fleet/memo_send.py"
-        ],
-        "stamp_key": "x-schema-version"
-      }
-    ],
+    "pairs": [],
     "verdict": null
   },
   {
@@ -776,13 +779,6 @@
   {
     "detail": "coordinator_core/distill/wiki_log_migrate.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator_core/distill/wiki_log_migrate.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
-  },
-  {
-    "detail": "coordinator_core/engine_provenance_counter.py MUTATES pattern(s) match no currently-tracked path: ['state/engine-provenance-counts.jsonl']",
-    "generator": "coordinator_core/engine_provenance_counter.py",
     "mutates": [],
     "pairs": [],
     "verdict": "WRITE_TARGET_UNRESOLVED"
@@ -866,13 +862,6 @@
   {
     "detail": "coordinator_core/group_em/atomic_record.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator_core/group_em/atomic_record.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
-  },
-  {
-    "detail": "coordinator_core/group_em/baseline.py MUTATES pattern(s) match no currently-tracked path: ['.coordinator-local/subagent-share/**/*.json']",
-    "generator": "coordinator_core/group_em/baseline.py",
     "mutates": [],
     "pairs": [],
     "verdict": "WRITE_TARGET_UNRESOLVED"
@@ -1061,6 +1050,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/hooks/postuse_subagent_compaction_warning.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/hooks/postuse_subagent_compaction_warning.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/hooks/runtime_tripwire_em_check.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/hooks/runtime_tripwire_em_check.py",
     "mutates": [],
@@ -1189,7 +1185,7 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/install/forwarder_door_census.py writes tracked path 'coordinator_core/ops/warm_entrypoint_allowlist.json' but declares no GENERATES",
+    "detail": "coordinator_core/install/forwarder_door_census.py declares 0 pair(s); UNSTAMPED_BY_DESIGN ['coordinator_core/ops/warm_entrypoint_allowlist.json'] exempts ['coordinator_core/ops/warm_entrypoint_allowlist.json'] from staleness comparison",
     "generator": "coordinator_core/install/forwarder_door_census.py",
     "mutates": [],
     "pairs": [],
@@ -1205,13 +1201,6 @@
   {
     "detail": "coordinator_core/install/gen_settings_hooks.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/install/gen_settings_hooks.py",
-    "mutates": [],
-    "pairs": [],
-    "verdict": null
-  },
-  {
-    "detail": "coordinator_core/install/hook_plane_verdict.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/install/hook_plane_verdict.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
@@ -1453,6 +1442,27 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/discover_working_repos.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/discover_working_repos.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/ask_stage.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/ask_stage.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/landed_reconcile.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/landed_reconcile.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/dispatch_emit/mark_landed.py writes through an unresolved path expression and declares no GENERATES",
     "generator": "coordinator_core/ops/dispatch_emit/mark_landed.py",
     "mutates": [],
@@ -1467,18 +1477,18 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/dispatch_emit/terminal_commit.py writes through an unresolved path expression and declares no GENERATES",
-    "generator": "coordinator_core/ops/dispatch_emit/terminal_commit.py",
+    "detail": "coordinator_core/ops/dispatch_emit/queue_select.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/queue_select.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
+    "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/distill_apply_disposal.py MUTATES pattern 'state/distillation-log.md' names a concrete path; a fixed artifact declares GENERATES",
-    "generator": "coordinator_core/ops/distill_apply_disposal.py",
+    "detail": "coordinator_core/ops/dispatch_emit/reverify_delivery.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "WRITE_TARGET_UNRESOLVED"
+    "verdict": null
   },
   {
     "detail": "coordinator_core/ops/dispatch_emit/terminal_commit.py writes through an unresolved path expression and declares no GENERATES",
@@ -1494,15 +1504,6 @@
       "state/distillation-log.md",
       "state/handoffs/**/*.md",
       "docs/wiki/**/*.md"
-    ],
-    "pairs": [],
-    "verdict": "MUTATES_DECLARED"
-  },
-  {
-    "detail": "coordinator_core/ops/docindex_emit.py declares MUTATES = ['**/*.md'] (corpus mutator, no staleness contract)",
-    "generator": "coordinator_core/ops/docindex_emit.py",
-    "mutates": [
-      "**/*.md"
     ],
     "pairs": [],
     "verdict": "MUTATES_DECLARED"
@@ -1798,8 +1799,8 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/ops/plan_prep_gate.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/ops/plan_prep_gate.py",
+    "detail": "coordinator_core/ops/plan_cross_plan_gate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_cross_plan_gate.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
@@ -1810,6 +1811,22 @@
     "mutates": [
       "docs/plans/*.md"
     ],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/plan_narrow_criterion.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_narrow_criterion.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/plan_prep_gate.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_prep_gate.py",
+    "mutates": [],
     "pairs": [],
     "verdict": null
   },
@@ -1901,11 +1918,21 @@
     "verdict": "UNDECLARED"
   },
   {
-    "detail": "coordinator_core/ops/review_freeze_diff.py MUTATES pattern(s) match no currently-tracked path: ['state/review-trail/diffs/*.diff', 'state/review-trail/diffs/*.head.sha']",
+    "detail": "coordinator_core/ops/review_freeze_diff.py declares MUTATES = ['state/review-trail/diffs/*.diff', 'state/review-trail/diffs/*.head.sha'] (corpus mutator, no staleness contract)",
     "generator": "coordinator_core/ops/review_freeze_diff.py",
+    "mutates": [
+      "state/review-trail/diffs/*.diff",
+      "state/review-trail/diffs/*.head.sha"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/review_mint/supersede.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/review_mint/supersede.py",
     "mutates": [],
     "pairs": [],
-    "verdict": "UNDECLARED"
+    "verdict": null
   },
   {
     "detail": "coordinator_core/ops/review_mint/wave_bookkeeping.py writes through an unresolved path expression and declares no GENERATES",
@@ -1929,8 +1956,8 @@
     "verdict": null
   },
   {
-    "detail": "coordinator_core/ops/plan_cross_plan_gate.py declares GENERATES = [] (declared-empty, no artifacts)",
-    "generator": "coordinator_core/ops/plan_cross_plan_gate.py",
+    "detail": "coordinator_core/ops/roadmap_blitz_stage.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/roadmap_blitz_stage.py",
     "mutates": [],
     "pairs": [],
     "verdict": null
@@ -2189,6 +2216,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/percolate/_entrypoint_depth_probe/sitecustomize.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/percolate/_entrypoint_depth_probe/sitecustomize.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/percolate/engine.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/percolate/engine.py",
     "mutates": [],
@@ -2259,6 +2293,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/roadmap/blitz_stage.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/roadmap/blitz_stage.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/session/claims.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/session/claims.py",
     "mutates": [],
@@ -2310,6 +2351,13 @@
   {
     "detail": "coordinator_core/session/grant_scope.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/session/grant_scope.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/session/incident_claims.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/session/incident_claims.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

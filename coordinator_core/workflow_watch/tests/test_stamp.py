@@ -26,6 +26,8 @@ from coordinator_core.workflow_watch.stamp import (
 )
 from coordinator_core.workflow_watch.terminal import TerminalRecord, TerminalWatcher
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _write(path, text):
     path.write_text(text, encoding="utf-8")

@@ -6,6 +6,8 @@ import stat
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 import coordinator_core.write_guards.p4_checkout_before_edit as guard
 from coordinator_core.p4 import runner, workspace
 from coordinator_core.p4.session_change import P4SessionChangeError

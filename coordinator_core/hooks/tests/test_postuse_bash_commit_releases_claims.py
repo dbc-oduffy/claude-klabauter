@@ -32,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E402
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SESSION = "sess-r03-bash-commit"
 
 

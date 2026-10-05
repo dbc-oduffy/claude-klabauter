@@ -221,6 +221,21 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
         return f"(version probe failed: {exc!r})"
 
 
+def build_attribution(module: str = "coordinator_core.warm.door.build") -> dict[str, object]:
+    """Who built this binary and with what command, recorded in provenance so
+    attribution never rests on a commit message. `builder` is the Claude
+    session id when one is set, else None: an unattributed build stays visibly
+    unattributed rather than guessed. `command` is the build's own canonical
+    invocation with `engine_root` as a placeholder (the field of that name
+    carries it), never `sys.argv`: an in-process caller (publish's mirror
+    rebuild) would otherwise record ITS argv -- operator paths and the source
+    checkout -- into a published file."""
+    return {
+        "builder": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+        "command": [Path(sys.executable).name, "-m", module, "<engine_root>"],
+    }
+
+
 def write_provenance(
     output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
     *, image_sha256: str | None = None,
@@ -291,6 +306,7 @@ def write_provenance(
         "compiler_version": _compiler_version(kind, compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "engine_root": str(Path(engine_root).resolve()),
+        **build_attribution(),
     }
     provenance_path = output_exe.parent / (output_exe.name + _PROVENANCE_SUFFIX)
     provenance_path.write_text(

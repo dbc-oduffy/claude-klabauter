@@ -246,7 +246,7 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 40
 
-#: Generator-provenance declaration (coordinator_core/ops/generator_provenance.py).
+#: Generator-provenance declaration (coordinator_core/ops/generator_census).
 #: This module's only write is _write_block_log()'s best-effort append under <git_root>/.git/coordinator-sessions/<session_id>/ --
 #: inside .git/, never a tracked repo artifact.
 GENERATES = []

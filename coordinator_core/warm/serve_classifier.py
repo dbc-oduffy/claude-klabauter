@@ -226,6 +226,8 @@ _PURE_CALL_TARGETS = frozenset(
         # string / regex / collection construction.
         "re.compile",
         "frozenset",
+        "set",
+        "contextvars.ContextVar",
         "str",
         "textwrap.dedent",
         # read-only lookups -- `os.environ.get(...)` / dict.get(...); no

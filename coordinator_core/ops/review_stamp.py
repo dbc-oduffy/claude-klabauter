@@ -107,6 +107,7 @@ PRODUCT_FILE_EXCLUDED_PREFIXES = (
 _COMMIT_WALK_BOUND = 500
 
 _APPLIES_RE = re.compile(r"^applies\s+(\S+)")
+_BODY_INLINE_REVIEW_RE = re.compile(r"^Inline-Review:\s*(.+?)\s*$")
 
 _FIELD_SEP = "\x1f"
 _MULTI_SEP = "\x1e"
@@ -271,7 +272,10 @@ def _resolve_terminal_commit(
 
     Returns (commit_sha, integration_sidecar_path, integration_data) or
     raises MintRefusal."""
-    fmt = f"{_HEADER_SENTINEL}%H{_FIELD_SEP}%(trailers:key=Session-Id,valueonly=true,unfold=true,separator={_MULTI_SEP}){_FIELD_SEP}%(trailers:key=Inline-Review,valueonly=true,unfold=true,separator={_MULTI_SEP})"
+    # The body (%B) rides after the header line: a commit whose Inline-Review line
+    # landed outside git's trailer block (a non-trailer line in the same paragraph)
+    # still carries the anchor, and the trailer field alone would miss it.
+    fmt = f"{_HEADER_SENTINEL}%H{_FIELD_SEP}%(trailers:key=Session-Id,valueonly=true,unfold=true,separator={_MULTI_SEP}){_FIELD_SEP}%(trailers:key=Inline-Review,valueonly=true,unfold=true,separator={_MULTI_SEP})%n%B"
     try:
         out = _run_git(
             ["log", "--no-merges", f"-{_COMMIT_WALK_BOUND}", f"--pretty=format:{fmt}"],
@@ -287,14 +291,18 @@ def _resolve_terminal_commit(
     )
     repair_candidate_sha: Optional[str] = None
 
-    for line in out.splitlines():
-        if not line.startswith(_HEADER_SENTINEL):
-            continue
-        header = line[len(_HEADER_SENTINEL):]
+    for record in out.split(_HEADER_SENTINEL)[1:]:
+        header, _, body = record.partition("\n")
         sha, _, rest = header.partition(_FIELD_SEP)
         commit_session, _, trailer_field = rest.partition(_FIELD_SEP)
         commit_session = commit_session.strip()
-        for trailer in [t for t in trailer_field.split(_MULTI_SEP) if t]:
+        anchors = [t for t in trailer_field.split(_MULTI_SEP) if t]
+        anchors += [
+            m.group(1)
+            for m in map(_BODY_INLINE_REVIEW_RE.match, body.splitlines())
+            if m and m.group(1) not in anchors
+        ]
+        for trailer in anchors:
             m = _APPLIES_RE.match(trailer.strip())
             if not m:
                 continue

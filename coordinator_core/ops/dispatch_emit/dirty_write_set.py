@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.pathspec import _declared_paths
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
@@ -48,25 +49,20 @@ def _dirty_in_write_set(
     Windows and macOS, whose git sets core.ignorecase) the pathspecs carry
     `:(icase,literal)` — git's own pathspec match stays case-sensitive otherwise —
     and the comparison folds case.
-    `run` resolves to `subprocess.run` at call time so a monkeypatch reaches it.
+    `run` is a test seam shaped like `run_git(args, timeout=)`; omitted, the shared `run_git` runs.
     """
     ordered = sorted({_norm(p) for p in paths if _norm(p)})
     if not ordered:
         return []
-    if run is None:
-        run = subprocess.run
     if ignorecase is None:
         ignorecase = _default_ignorecase()
     specs = [f":(icase,literal){p}" for p in ordered] if ignorecase else ordered
+    argv = [
+        "-C", str(repo_root), "--no-optional-locks", "status",
+        "--porcelain", "--untracked-files=all", "--", *specs,
+    ]
     try:
-        proc = run(
-            [
-                "git", "-C", str(repo_root), "--no-optional-locks", "status",
-                "--porcelain", "--untracked-files=all", "--", *specs,
-            ],
-            capture_output=True, text=True, encoding="utf-8", timeout=60,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        proc = (run or run_git)(argv, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:

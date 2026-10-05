@@ -750,7 +750,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     exclusion, so an edge onto an excluded row never dangles.
 
     The two exclusion reasons are NOT interchangeable past that point. A
-    closed disposition or ``deferred: true`` row's work is done, so a live
+    closed disposition row's work is done, so a live
     row's edge onto it is satisfied — that edge is stripped from the
     surviving row's ``depends_on`` and the surviving row is otherwise
     unaffected. An uncleared execution-blocking gate is the opposite: the
@@ -759,7 +759,9 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     itself excluded rather than edge-stripped. A row excluded for both
     reasons (closed disposition AND its own uncleared gate) resolves as
     satisfied: its work shipped, so the stale gate is bookkeeping, not a
-    live blocker.
+    live blocker. A ``deferred: true`` row's work did NOT ship: a row
+    depending on it, transitively, is withheld and reported with reason
+    ``withheld_by_deferred_dependency``.
 
     (Review: staff-eng, Finding 12) The same stop-at-satisfied rule also
     governs the PASS-THROUGH case: a satisfied row's own predecessor may
@@ -933,6 +935,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
 
     satisfied_ids: set[str] = set()
     blocked_ids: set[str] = set()
+    deferred_ids: set[str] = set()
     plan_edge_root: Optional[Path] = None
     plan_edge_cache: dict = {}
     plan_level_edges = frontmatter_plan_edges(source)
@@ -945,7 +948,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     )
     for raw in raw_rows:
         disposition = raw.get("disposition")
-        deferred = raw.get("deferred", False)
+        deferred = raw.get("deferred") is True or bool(raw.get("deferred_until"))
         em_performed = raw.get("performer") == "em"
         plan_hold = None
         if not (
@@ -971,7 +974,10 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 # mode must reach the gate ledger (StageManifest.gated).
                 _reason = ("external_gate", "uncleared external_gate blocking execution")
             elif deferred is True:
-                _reason = ("deferred", "deferred: true")
+                _reason = (
+                    "deferred",
+                    "deferred: true" if raw.get("deferred") is True else "deferred_until hold",
+                )
             elif em_performed:
                 _reason = ("em-performed", "performer: em")
             elif _is_operator_row(raw):
@@ -987,8 +993,11 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
                 )
 
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed:
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or em_performed:
             satisfied_ids.add(raw.get("id"))
+        elif deferred is True:
+            deferred_ids.add(raw.get("id"))
+            blocked_ids.add(raw.get("id"))
         elif (
             _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
             or _is_operator_row(raw)
@@ -1038,6 +1047,19 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             while cur in transitive_root:
                 cur = transitive_root[cur]
                 chain.append(cur)
+            if chain[-1] in deferred_ids:
+                exclusions.append(
+                    {
+                        "id": row_id,
+                        "reason": "withheld_by_deferred_dependency",
+                        "detail": (
+                            "withheld: depends_on -> "
+                            + " -> ".join(chain[1:])
+                            + f"; root {chain[-1]} is deferred, not delivered"
+                        ),
+                    }
+                )
+                continue
             exclusions.append(
                 {
                     "id": row_id,

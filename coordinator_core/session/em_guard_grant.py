@@ -151,7 +151,7 @@ from coordinator_core.session import core, guard_unlock_sentinel, liveness
 #: (a literal name list, never a derived predicate over guard metadata) was
 #: chosen to buy. A name outside this set is a validation error (exit 2),
 #: never a silent no-op — see ``write_em_guard_grant``.
-# Generator-provenance declaration (generator_provenance.py). write_em_guard_grant
+# Generator-provenance declaration (coordinator_core/ops/generator_census). write_em_guard_grant
 # writes only `.git/coordinator-sessions/<sid>/em-guard-grant.json` plus the DR-260
 # unlock sentinel (also under the git-internal session hub) -- never a tracked repo
 # artifact.

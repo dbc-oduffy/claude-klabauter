@@ -366,3 +366,20 @@ def test_live_staging_dir_survives_a_sibling_rows_stale_sweep(tmp_path):
     publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals(), out=io.StringIO())
 
     assert staging.is_dir()
+
+
+def test_published_diff_never_reports_the_mirrors_local_state_as_removed(tmp_path):
+    """`state/` and kin are never published, so a mirror's own runtime cache there
+    is absent from staging by construction and must not read as a REMOVE."""
+    dest = _seed_dest(tmp_path, with_git=True)
+    staging = publish._create_publish_staging_dir(dest)
+    cache = dest / "state" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "bt-python3-invocation-cache.json").write_text("{}\n", encoding="utf-8")
+
+    buf = io.StringIO()
+    totals = publish.RunTotals()
+    publish._report_published_diff(staging, dest, totals, out=buf)
+
+    assert "state/cache" not in buf.getvalue(), buf.getvalue()
+    assert totals.deleted == 0

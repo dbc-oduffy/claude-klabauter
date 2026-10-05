@@ -312,3 +312,31 @@ def test_a_ledger_write_failure_never_masks_the_indeterminate(_ledger_in_tmp, mo
     with pytest.raises(_mod.WarmDispatchIndeterminate) as caught:
         _mod._raise_on_process_failure(1, _envelope(-32004), "", "memo.draft", "/engine")
     assert caught.value.op == "memo.draft"
+
+
+# ---------------------------------------------------------------------------
+# The diagnosis the engine puts in the envelope reaches the caller's message
+# on both rungs.
+# ---------------------------------------------------------------------------
+
+_DIAGNOSED = (
+    "warm dispatch indeterminate [worker_died: op='memo.draft', worker pid 9 "
+    "died with exit code 7, stderr tail: 'boom-TAIL']"
+)
+
+
+def test_cold_rung_surfaces_the_worker_death_diagnosis():
+    with pytest.raises(_mod.WarmDispatchIndeterminate) as caught:
+        _mod._raise_on_process_failure(
+            1, _envelope(-32004, _DIAGNOSED), "", "memo.draft", "/engine"
+        )
+    text = str(caught.value)
+    assert "worker_died" in text and "exit code 7" in text and "boom-TAIL" in text
+
+
+def test_warm_rung_surfaces_the_no_reply_diagnosis():
+    message = "indeterminate [no_reply: op='memo.draft' waited 30.0s]"
+    envelope = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32004, "message": message}}
+    with pytest.raises(_mod.WarmDispatchIndeterminate) as caught:
+        _mod._apply_warm_envelope("memo.draft", envelope, "", None)
+    assert "no_reply" in str(caught.value) and "waited 30.0s" in str(caught.value)

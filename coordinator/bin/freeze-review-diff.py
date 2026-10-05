@@ -255,6 +255,11 @@ def main(argv: list[str]) -> int:
             f"{_PROG}: note: freeze written but not committed: {result['commit_error']}",
             file=sys.stderr,
         )
+    if args.worktree:
+        from coordinator_core.ops.review_stamp import product_files
+
+        # stderr only: stdout stays the single diff-path line its slurping callers parse.
+        print(f"product_files: {len(product_files(Path(result['diff_path'])))}", file=sys.stderr)
     print(result["diff_path"])
     return 0
 

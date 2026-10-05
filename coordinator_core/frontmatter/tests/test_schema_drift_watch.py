@@ -100,12 +100,21 @@ def fake_doe(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def vendored_dir(tmp_path: Path) -> Path:
-    """A throwaway vendored-schema dir, byte-identical to fake_doe's HEAD by default."""
+def vendored_dir(tmp_path: Path, fake_doe: Path) -> Path:
+    """A throwaway vendored-schema dir, byte-identical to fake_doe's HEAD by default,
+    with vendored-from.json recording fake_doe's seed commit as the base."""
     directory = tmp_path / "vendored"
     directory.mkdir()
+    manifest = {}
     for name in (_SCHEMA_A, _SCHEMA_B):
         (directory / name).write_text(_schema_body(name), encoding="utf-8")
+        blob = subprocess.run(
+            ["git", "-C", str(fake_doe), "rev-parse", f"HEAD:coordinator/schemas/{name}"],
+            check=True, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            **no_console_creationflags(),
+        ).stdout.strip()
+        manifest[name] = {"doe_commit": "0" * 40, "blob": blob}
+    (directory / "vendored-from.json").write_text(json.dumps(manifest), encoding="utf-8")
     return directory
 
 

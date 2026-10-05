@@ -1,5 +1,5 @@
-"""The doctrine-edit approval gate is opt-in: off unless
-``coordinator.feature.doctrine_edit_gate`` is ``on``, on author boxes too."""
+"""The doctrine-edit approval gate is default-on: off only when
+``coordinator.feature.doctrine_edit_gate`` is explicitly ``off``."""
 
 from __future__ import annotations
 
@@ -67,9 +67,35 @@ def _is_deny(result):
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
-def test_defaults_off_on_an_author_profile(author_box):
+@pytest.mark.parametrize("profile", ["author", "consumer"])
+def test_defaults_on_with_no_config(author_box, monkeypatch, profile):
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", profile)
+    mp.reset_cache()
+    assert mp.feature_enabled("doctrine_edit_gate") is True
+    assert _is_deny(block_approval_sentinel_creation.check(_touch_payload()))
+
+
+def test_forged_sentinel_write_is_refused_with_no_config(author_box, monkeypatch):
+    _set_gate(monkeypatch, None)
+    assert _is_deny(guard_doctrine_surface_edits.check(_sentinel_write_payload(author_box)))
+    assert _is_deny(block_approval_sentinel_creation.check(_touch_payload()))
+
+
+def test_genuine_pm_sentinel_still_passes(author_box, monkeypatch, tmp_path):
+    _set_gate(monkeypatch, None)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(guard_doctrine_surface_edits, "_git_root", lambda: str(repo))
+    monkeypatch.setattr(guard_doctrine_surface_edits, "read_content_root", lambda: "")
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(repo / "CLAUDE.md")}}
+    assert _is_deny(guard_doctrine_surface_edits.check(payload))
+    (repo / SENTINEL).write_text("", encoding="utf-8")  # the PM's out-of-band act
+    assert guard_doctrine_surface_edits.check(payload) is None
+
+
+def test_defaults_on_an_author_profile(author_box):
     assert mp.machine_profile() == "author"
-    assert mp.feature_enabled("doctrine_edit_gate") is False
+    assert mp.feature_enabled("doctrine_edit_gate") is True
     assert mp.feature_enabled("publishing") is True
     assert mp.feature_enabled("cross_repo_memos") is True
 
@@ -81,9 +107,8 @@ def test_explicit_on_enables_and_off_disables(author_box, monkeypatch):
     assert mp.feature_enabled("doctrine_edit_gate") is False
 
 
-@pytest.mark.parametrize("value", [None, "off"])
-def test_every_enforcement_point_allows_when_off(author_box, monkeypatch, value):
-    _set_gate(monkeypatch, value)
+def test_every_enforcement_point_allows_when_off(author_box, monkeypatch):
+    _set_gate(monkeypatch, "off")
     home = author_box
     assert guard_doctrine_surface_edits.check(_edit_payload(home)) is None
     assert guard_doctrine_surface_edits.check(_sentinel_write_payload(home)) is None

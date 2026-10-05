@@ -11,6 +11,10 @@ from pathlib import Path
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _session_dir(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_passthrough_kwargs())

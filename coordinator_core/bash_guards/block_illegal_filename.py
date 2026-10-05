@@ -115,9 +115,9 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
+from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._helpers import csn_check as _csn_check
 from coordinator_core.bash_guards._helpers import operator_override_note
-from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core._hook_envelope import allow_advisory, rewrite_input
 
@@ -470,6 +470,15 @@ def _rewrite_ctx(
     )
 
 
+def _silent_on_powershell(dialect: Optional[Dialect]) -> None:
+    if dialect is Dialect.POWERSHELL:
+        record_silent(
+            "block_illegal_filename",
+            "PowerShell: no `>`/`mv` destination with an illegal name; "
+            "cmdlet destinations are not scanned",
+        )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if os.environ.get(_OVERRIDE_ENV, "0") == "1":
@@ -477,14 +486,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         tool_name = payload.get("tool_name") or ""
         dialect = dialect_from_tool_name(tool_name)
-        if dialect is Dialect.POWERSHELL:
-            record_silent(
-                "block_illegal_filename",
-                "PowerShell dialect: heredoc/process-substitution/redirect "
-                "scanning here is POSIX-only shell text syntax",
-            )
-            return None
-        if dialect is not Dialect.BASH:
+        if dialect is None:
             return None
 
         tool_input = payload.get("tool_input") or {}
@@ -512,6 +514,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd_for_scan = re.sub(r"'[^']*'", "", cmd_for_scan)
 
         if not (_MV_WORD_RE.search(cmd_for_scan) or ">" in cmd):
+            _silent_on_powershell(dialect)
             return None
 
         dest_candidates = _extract_dest_candidates(cmd)
@@ -555,6 +558,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
             return allow_advisory("PreToolUse", ctx)
 
+        _silent_on_powershell(dialect)
         return None
     except Exception:
         return None

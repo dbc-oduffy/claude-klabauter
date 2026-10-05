@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -683,6 +684,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
+        from coordinator_core.ops.dispatch_emit.op import _installed_plugin_root
+        from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
         from coordinator_core.ops.dispatch_emit.reverify_delivery import ReverifyRefused, emit_reverify
 
         try:
@@ -691,6 +694,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 plan_path=args.plan,
                 run_record=args.reverify_delivery,
                 out_path=args.out_path,
+                agent_type_host=resolve_agent_type_host(
+                    coordinator_agent_type_host=os.environ.get("COORDINATOR_AGENT_TYPE_HOST"),
+                    claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT") or _installed_plugin_root(),
+                ),
             )
         except (ReverifyRefused, *_DATA_ERRORS) as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)

@@ -10,7 +10,7 @@ deliberate: a restructure that returns the same record COUNT with a different
 BASIS or verdict for some module is exactly the silent regression this guards
 against, and a count-only or length-only check would not catch it.
 
-Observed record count at capture time: 323 (recaptured 2026-09-30; 265 at the
+Observed record count at capture time: 336 (recaptured 2026-10-05; 323 at 2026-09-30; 265 at the
 2026-09-06 recapture, 255 at the original capture).
 
 RESOLVED 2026-09-06 -- the three records this fixture briefly pinned as degraded
@@ -84,6 +84,7 @@ def serialize_generator_records(records: list) -> str:
     return json.dumps([_serialize_value(record) for record in ordered], indent=2, sort_keys=True)
 
 
+@pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_discover_generators_matches_oracle() -> None:
     """Compare only records for GIT-TRACKED sources against the oracle.

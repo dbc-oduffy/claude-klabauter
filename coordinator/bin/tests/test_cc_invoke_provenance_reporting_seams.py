@@ -565,6 +565,27 @@ def test_report_provenance_actually_writes_a_record_through_the_real_sink(
     assert record["verdict"] == _mod.PROVENANCE_MATCH
 
 
+def test_report_provenance_never_writes_into_an_unrelated_process_cwd(
+    monkeypatch, tmp_path, clean_sys_path
+):
+    engine = tmp_path / "engine"
+    probe = tmp_path / "probe"
+    (engine / ".git").mkdir(parents=True)
+    (probe / ".git").mkdir(parents=True)
+
+    monkeypatch.chdir(probe)
+    monkeypatch.setattr(
+        _mod,
+        "provenance_against",
+        lambda *, root: _mod.EngineProvenance(_mod.PROVENANCE_MATCH, "/x/y.py", root),
+    )
+
+    _mod._report_provenance("ensure_engine_on_path", str(engine), "locator")
+
+    assert not (probe / "state").exists()
+    assert (engine / "state" / "engine-provenance-counts.jsonl").is_file()
+
+
 def test_publish_time_rename_transform_call_site_still_exists():
     """(b) the `_resolve_claude_klabauter_root` → `_resolve_claude_klabauter_root`
     publish-time rename transform's call site (the dual-export alias line)

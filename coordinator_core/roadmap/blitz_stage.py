@@ -65,6 +65,9 @@ from coordinator_core.roadmap.number_stubs import (
 from coordinator_core.session.claimed_write import create_exclusive
 from coordinator_core.sizing_assemble import TSHIRT_ORDER, TSHIRT_WEIGHT
 
+# Creates authored handoff stubs and a frozen gate report once per run; none is a regenerable stamped artifact.
+GENERATES = []
+
 _DOC_NEW = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-doc-new.py"
 _BAND = frozenset({"M", "L"})
 _SIZES = ("XS", "S", "M", "L", "XL", "XXL")

@@ -2943,9 +2943,6 @@ class SpinoffOrigin(NamedTuple):
     workstream: str | None
 
 
-_NO_SPINOFF_ORIGIN = SpinoffOrigin(None, None, None)
-
-
 def _resolve_spinoff_origin() -> SpinoffOrigin:
     """READ-ONLY resolve of a spinoff's origin baton and `workstream` off the
     baton this session currently holds.
@@ -2971,13 +2968,13 @@ def _resolve_spinoff_origin() -> SpinoffOrigin:
         )
         from coordinator_core.ops._fm_util import extract_frontmatter_scalar  # noqa: PLC0415
     except Exception:  # noqa: BLE001 -- best-effort; unresolvable engine degrades to None
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     session_id = _resolve_session_id()
     if session_id == "em-unknown":
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     repo_root_str = _current_repo_root()
     if not repo_root_str:
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     from pathlib import Path as _Path  # noqa: PLC0415
 
     worktree_root = _Path(repo_root_str)
@@ -2987,7 +2984,7 @@ def _resolve_spinoff_origin() -> SpinoffOrigin:
             handoffs_dir, session_id, repo_root=worktree_root
         )
     except OSError:
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     except RuntimeError as exc:
         # Negative-spec: does NOT re-raise and does NOT pick a candidate.
         print(
@@ -2995,9 +2992,9 @@ def _resolve_spinoff_origin() -> SpinoffOrigin:
             f"origin_handoff left null ({exc}). Run /spinoff to stamp provenance.",
             file=sys.stderr,
         )
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     if not origin_handoff:
-        return _NO_SPINOFF_ORIGIN
+        return SpinoffOrigin(None, None, None)
     try:
         text = (worktree_root / origin_handoff).read_text(encoding="utf-8", errors="replace")
     except OSError:

@@ -6,13 +6,14 @@ Every unit case injects a fake `run`; only the CLI-wiring cases spawn real git.
 
 from __future__ import annotations
 
-import subprocess
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from coordinator_core.ops.dispatch_emit import dirty_write_set as tool
+from coordinator_core.session.record_homes import record_path
 
 
 class FakeRun:
@@ -75,9 +76,9 @@ def test_path_outside_the_union_does_not_count(tmp_path) -> None:
     assert tool._dirty_in_write_set(["a.py"], tmp_path, run=run) == []
 
 
-def test_run_omitted_reaches_monkeypatched_subprocess_run(tmp_path, monkeypatch) -> None:
+def test_run_omitted_reaches_the_shared_git_runner(tmp_path, monkeypatch) -> None:
     fake = FakeRun(" M a.py\n")
-    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(tool, "run_git", fake)
     assert tool._dirty_in_write_set(["a.py"], tmp_path) == ["a.py"]
     assert len(fake.calls) == 1
 
@@ -180,7 +181,7 @@ ROWS_PREFIX = """\
 
 
 def test_writes_under_prefix_is_in_the_union(tmp_path) -> None:
-    with pytest.raises(tool.DirtyWriteSetError, match="state/audits/x.md"):
+    with pytest.raises(tool.DirtyWriteSetError, match=re.escape(Path(record_path(".", "audits", "x.md")).as_posix())):
         _guard(_plan(tmp_path, ROWS_PREFIX), tmp_path, FakeRun("?? state/audits/x.md\n"))
 
 

@@ -129,8 +129,11 @@ def _commit_schema(clone: Path, name: str, content: bytes) -> str:
     return out.stdout.strip()
 
 
+_REAL_MANIFEST = Path(__file__).resolve().parents[2] / "coordinator_core" / "frontmatter" / "schemas" / "vendored-from.json"
+
+
 @pytest.fixture
-def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Point the module's vendored-schema dir and pin registry at tmp paths."""
     schemas = tmp_path / "schemas"
     schemas.mkdir()
@@ -139,7 +142,12 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setattr(_mod, "_SCHEMAS_DIR", schemas)
     monkeypatch.setattr(_mod, "_PIN_REGISTRY_FILE", registry)
     monkeypatch.setattr(_mod, "_DECLINE_RECORDS_DIR", declines)
-    return {"schemas": schemas, "registry": registry, "declines": declines}
+    monkeypatch.setattr(_mod, "_MANIFEST_FILE", schemas / _mod.VENDORED_FROM_MANIFEST)
+    real = _REAL_MANIFEST
+    before = real.read_bytes() if real.exists() else None
+    yield {"schemas": schemas, "registry": registry, "declines": declines}
+    after = real.read_bytes() if real.exists() else None
+    assert after == before, "test wrote the real vendored-from.json"
 
 
 # ---------------------------------------------------------------------------

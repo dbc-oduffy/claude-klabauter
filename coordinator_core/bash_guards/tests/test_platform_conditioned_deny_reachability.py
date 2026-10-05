@@ -64,7 +64,7 @@ _MULTIPROBE_CONFIRMED_CMD = (
 )
 
 _MULTIPROBE_UNRECOGNIZED_CMD = (
-    'echo "=== facts ==="; pwd; whoami; curl -s http://example.com'
+    'echo "=== facts $PWD ==="; pwd; whoami; curl -s http://example.com'
 )
 
 _PLUMBING_CONFIRMED_CMD = "find . -type f | head -n 5"

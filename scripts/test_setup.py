@@ -2365,6 +2365,8 @@ os._exit(0)
         ),
     ],
 )
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_hard_exit_error_block_survives_redirected_output(
     setup_mod, tmp_path, scenario, agents_md, expected_code_name, error_head, error_tail
 ):

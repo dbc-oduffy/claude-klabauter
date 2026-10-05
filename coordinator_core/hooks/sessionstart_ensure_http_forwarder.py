@@ -278,39 +278,37 @@ def _ensure_current_forwarder(forwarder_path: Path) -> "Optional[str]":
         return None
     if _pid_is_a_forwarder(pid) is not True:
         return (
-            "the resident forwarder runs superseded code (running {0}, on disk {1}) but pid {2} "
-            "could not be confirmed to be a forwarder -- left running, restart it by hand".format(
+            "resident forwarder runs superseded code (running {0}, on disk {1}); pid {2} "
+            "is unconfirmed as a forwarder -- restart it".format(
                 running, on_disk, pid
             )
         )
     if not _retire_stale_forwarder(pid):
         return (
-            "the resident forwarder runs superseded code (running {0}, on disk {1}) and pid {2} "
-            "could not be terminated -- left running, restart it by hand".format(
+            "resident forwarder runs superseded code (running {0}, on disk {1}); pid {2} "
+            "could not be terminated -- restart it".format(
                 running, on_disk, pid
             )
         )
     if not _spawn_forwarder_detached(forwarder_path):
         return (
-            "retired the superseded forwarder at pid {0} but failed to spawn its successor -- THE "
-            "BOX HAS NO FORWARDER AND BASH GUARDS ARE FAILING OPEN until one binds".format(pid)
+            "retired superseded forwarder pid {0}; spawning its successor failed -- NO FORWARDER, "
+            "BASH GUARDS FAIL OPEN until one binds".format(pid)
         )
     if _await_successor_bind():
         return None
     if _spawn_forwarder_detached(forwarder_path) and _await_successor_bind():
         return None
     return (
-        "retired the superseded forwarder at pid {0} and its successor did not take port {1} "
-        "(launched, then lost the bind or exited) -- THE BOX HAS NO FORWARDER AND BASH GUARDS ARE "
-        "FAILING OPEN until one binds".format(pid, _FIXED_PORT)
+        "retired superseded forwarder pid {0}; successor did not take port {1} -- NO FORWARDER, "
+        "BASH GUARDS FAIL OPEN until one binds".format(pid, _FIXED_PORT)
     )
 
 
 def _disclose(reason: str) -> dict:
     return context_only(
         "SessionStart",
-        f"HTTP hook forwarder not ensured: {reason}. Bash-guard http calls may "
-        "find no backend this session.",
+        f"HTTP hook forwarder not ensured: {reason}. Bash guards may lack a backend.",
     )
 
 

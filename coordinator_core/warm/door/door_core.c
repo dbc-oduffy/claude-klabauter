@@ -564,7 +564,6 @@ static const char *const door_install_class_basenames[] = {
     "coordinator-uninstall",
     "gen-settings-hooks",
     "install-claude-author-wrapper",
-    "install-coordinator-content-repo-precommit-hook",
     "install-meta-repo-precommit-hook",
     "install-publish-repo-precommit-hook",
     "install-sentinel-write",

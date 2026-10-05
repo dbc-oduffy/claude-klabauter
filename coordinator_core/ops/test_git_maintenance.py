@@ -29,6 +29,8 @@ from coordinator_core.git.run import GitResult
 from coordinator_core.ops import git_maintenance as gm
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(

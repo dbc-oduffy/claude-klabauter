@@ -72,7 +72,7 @@ _LOG = logging.getLogger(__name__)
 #: Matches a path bash treats as absolute: POSIX ``/…`` or a Windows/Git-Bash
 #: drive-qualified ``C:…`` form. Mirrors the bash glob test
 #: ``[[ "$fpath" == /* || "$fpath" == [A-Za-z]:* ]]``.
-# Generator-provenance declaration (generator_provenance.py). touch/normalize_
+# Generator-provenance declaration (coordinator_core/ops/generator_census). touch/normalize_
 # touch_path/archive write/append/move only session-hub artifacts under
 # `.git/coordinator-sessions/` (touched.txt event log, session-dir archival) --
 # all inside `.git/`, never a tracked repo path.

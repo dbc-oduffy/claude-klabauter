@@ -1044,14 +1044,11 @@ class TestDivergingPathsHelper:
         from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
 
         root = _init_repo(tmp_path)
-        # The in-process settle path (C3e) answers a plain stat-mismatch
-        # without ever spawning `git` -- only a genuinely UNDETERMINED
-        # candidate (declined by `content_matches_index_sha`, which this
-        # repo's default `core.autocrlf=false` always declines) falls
-        # through to the `_run_git`-backed fallback this test is pinning.
-        # Mirrors `test_diverging_path_detected`'s stage-then-edit-again
-        # shape so the fallback -- not the zero-spawn fast path -- is what
-        # actually runs.
+        # The in-process settle path (C3e) answers a stage-then-edit file
+        # by hashing it, without spawning `git`. Only a candidate that
+        # `content_matches_index_sha` declines (None) reaches the
+        # `_run_git`-backed fallback this test pins, so the hash is forced
+        # indeterminate below.
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
         _git(root, "commit", "-q", "-m", "seed shared.txt")
@@ -1062,6 +1059,7 @@ class TestDivergingPathsHelper:
         def _boom(args, cwd=None, timeout=2.0):
             return 128, ""
 
+        monkeypatch.setattr(divergence, "content_matches_index_sha", lambda *_a: None)
         monkeypatch.setattr(divergence, "_run_git", _boom)
 
         with pytest.raises(DivergenceCheckFailed):
@@ -1094,6 +1092,7 @@ class TestDivergingPathsHelper:
                 return 0, ""
             return 128, ""
 
+        monkeypatch.setattr(divergence, "content_matches_index_sha", lambda *_a: None)
         monkeypatch.setattr(divergence, "_run_git", _fail_second)
 
         with pytest.raises(DivergenceCheckFailed):

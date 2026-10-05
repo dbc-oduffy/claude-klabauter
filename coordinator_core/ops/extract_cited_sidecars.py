@@ -81,7 +81,7 @@ _SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 _UUID_AUDIT_PATH = "state/audits/2026-09-02-cited-subagent-share-sidecars.md"
 _SHA_AUDIT_PATH = "state/audits/2026-09-02-cited-commit-shas.md"
 
-# Generator-provenance declaration (generator_provenance.py's AST reader).
+# Generator-provenance declaration (coordinator_core/ops/generator_census reader).
 # `main` writes both audit records above into claude-klabauter's own tracked tree, so
 # this is a real emitter, not a DECLARED-EMPTY one. `sources` names this
 # module: the scan, both renderers, and the write all live here, so its own

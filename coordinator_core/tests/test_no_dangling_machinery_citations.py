@@ -67,6 +67,10 @@ from coordinator_core.ops.extract_cited_sidecars import (
     _list_candidates,
 )
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 # Widened to match both the pre-C6
 # root and the current .coordinator-local root; the old state/-only pattern
 # left new citations against the relocated root invisible to this ratchet.

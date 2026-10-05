@@ -179,7 +179,7 @@ from typing import List, Optional, Tuple
 
 from coordinator_core.session import core, liveness
 
-# Generator-provenance declaration (generator_provenance.py). write_claude_md_write_
+# Generator-provenance declaration (coordinator_core/ops/generator_census). write_claude_md_write_
 # grant writes only `.git/coordinator-sessions/<sid>/claude-md-write-grant.json` --
 # git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []

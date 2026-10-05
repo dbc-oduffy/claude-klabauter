@@ -16,6 +16,9 @@ from coordinator_core.bash_guards.dispatch_checks import _lessons_archive_paired
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
 
 def _git(root: str, *args: str) -> None:
     subprocess.run(

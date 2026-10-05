@@ -103,7 +103,7 @@ to reformat).
 GENERATOR-PROVENANCE RATCHET (F3): this module writes to a path resolved
 from each discovered index document at runtime — one artifact per
 discovered index, never a fixed set knowable ahead of time — which is
-exactly the shape `coordinator_core.ops.generator_provenance`'s own module
+exactly the shape `coordinator_core.ops.generator_census`'s own module
 docstring names as the case `GENERATES` cannot express ("a corpus MUTATOR
 that rewrites however many tracked files currently match a data-dependent
 predicate ... rather than emitting a fixed set of artifacts"). A single

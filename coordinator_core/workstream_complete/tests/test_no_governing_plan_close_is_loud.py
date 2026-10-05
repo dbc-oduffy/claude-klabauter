@@ -13,6 +13,9 @@ import coordinator_core.workstream_complete as wsc
 from coordinator_core.ops.ceremony import wsc_disposition
 from coordinator_core.workstream_complete import judgments
 
+# The spawn is statically reachable from the code under test; tiered so a future change cannot spawn on the fast tier.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 POINT_ID = "no-governing-plan"
 
 

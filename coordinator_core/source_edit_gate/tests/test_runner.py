@@ -282,6 +282,7 @@ def test_run_selected_vitest_removes_temp_dir_on_success(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group semantics")
 def test_terminate_group_kills_grandchild_spawned_under_child(tmp_path):
     """A real child that spawns its own grandchild (mirrors the observed
