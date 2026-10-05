@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -283,6 +284,9 @@ def test_runtime_item_is_filled_by_the_script_not_the_composer(monkeypatch, tmp_
     assert "fanTrailer(" not in script.split("phase('each')")[1]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows refuses \\x01 in a filename, so no brief can carry it"
+)
 def test_reserved_marker_in_the_brief_is_refused(monkeypatch, tmp_path):
     name = "x \x01item\x01 y.md"
     (tmp_path / name).write_text("b", encoding="utf-8")
@@ -324,5 +328,7 @@ def test_vendored_structured_copy_matches_does_tree():
     if root is None:
         pytest.skip("coordinator-content-repo tree not present")
     vendored = _DOE_FIXTURE / "pipelines" / "deep-research"
+    # Line endings follow each checkout's autocrlf, not the content.
     for path in vendored.glob("structured*"):
-        assert path.read_bytes() == (root / "pipelines" / "deep-research" / path.name).read_bytes(), path.name
+        theirs = (root / "pipelines" / "deep-research" / path.name).read_bytes()
+        assert path.read_bytes().replace(b"\r\n", b"\n") == theirs.replace(b"\r\n", b"\n"), path.name

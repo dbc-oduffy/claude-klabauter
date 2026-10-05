@@ -7,12 +7,12 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C5.
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.emit import UnresolvedAgentTypeError
 
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ipc import _REGISTRY
@@ -154,17 +154,18 @@ def test_dispatch_emit_round_trip_writes_and_returns_verdict(tmp_path):
     assert isinstance(result["warn_count"], int)
 
 
-def test_dispatch_emit_refuses_coordinator_agent_types_for_a_bare_host_caller(tmp_path, monkeypatch):
+def test_dispatch_emit_degrades_every_coordinator_agent_type_for_a_bare_host_caller(tmp_path, monkeypatch):
     """A host with no env override, no plugin env and no plugin install cannot
-    run the review-stage `coordinator:*` types, so the emit refuses."""
+    run `coordinator:*` types, so every one is emitted host-native and the
+    emit lands rather than refusing."""
     _bare_host(tmp_path, monkeypatch)
     plan_path = _write_fixture_plan(tmp_path)
     output_path = tmp_path / "out" / "emitted.mjs"
     output_path.parent.mkdir()
 
-    with pytest.raises(UnresolvedAgentTypeError, match="host cannot resolve"):
-        _dispatch_emit({"plan_path": str(plan_path), "output_path": str(output_path)})
-    assert not output_path.exists()
+    _dispatch_emit({"plan_path": str(plan_path), "output_path": str(output_path)})
+    script = output_path.read_text(encoding="utf-8")
+    assert not re.search(r"""agentType:\s*["']coordinator:""", script)
 
 
 def _bare_host(tmp_path, monkeypatch):

@@ -77,3 +77,24 @@ def test_emit_script_carries_the_handoff_state_into_the_emitted_prompt(tmp_path)
     script = emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
     assert "Predecessor handoff state" in script
     assert _STATE in script
+
+
+def test_resume_guard_leads_the_row_prompt():
+    """A resumed run once re-landed a row the EM had reverted: the executor
+    checks the spine and the run's commit range before its first write."""
+    from coordinator_core.ops.dispatch_emit.emit import _with_resume_guard
+
+    section = _with_resume_guard("## Predecessor handoff state\n\nx", "abc123")
+    row = WaveRow(id="C1", title="t", surface="s", writes=UNDECLARED, reads=[], depends_on=[])
+    prompt = _row_prompt(row, "docs/plans/p.md", None, predecessor_state=section)
+    assert "row-closed-on-spine" in prompt and "wont_do" in prompt
+    assert "git log --format=%h%x20%s abc123..HEAD" in prompt
+    assert "writes-moved-outside-run" in prompt
+    assert "## Predecessor handoff state" in prompt
+
+
+def test_resume_guard_without_a_base_keeps_the_spine_check():
+    from coordinator_core.ops.dispatch_emit.emit import _with_resume_guard
+
+    guard = _with_resume_guard(None, None)
+    assert "row-closed-on-spine" in guard and "writes-moved-outside-run" not in guard

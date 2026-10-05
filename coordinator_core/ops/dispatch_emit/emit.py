@@ -319,6 +319,7 @@ from coordinator_core.ops.dispatch_emit.predispatch import (
 )
 from coordinator_core.ops.dispatch_emit.predecessor_state import predecessor_state_section
 from coordinator_core.ops.dispatch_emit.spine_read import (
+    NON_DISPATCHABLE_DISPOSITIONS,
     UNDECLARED,
     load_frontmatter_doc,
     read_spine,
@@ -4794,9 +4795,37 @@ def emit_script(
         chatty=chatty,
         predispatch=predispatch,
         review_specs=review_specs,
-        predecessor_state=predecessor_state_section(plan_text, repo_root),
+        predecessor_state=_with_resume_guard(
+            predecessor_state_section(plan_text, repo_root), run_base_sha
+        ),
         precredited_rows=precredited_rows,
     )
+
+
+def _resume_guard_clause(run_base_sha: Optional[str]) -> str:
+    """A resumed run re-dispatches every incomplete row from the script's
+    emit-time literal, blind to what the EM has done since (a revert, a
+    `wont_do` disposition); the executor is the only runtime reader of HEAD
+    and the spine, so it checks both before its first write."""
+    closed = ", ".join(sorted(NON_DISPATCHABLE_DISPOSITIONS | {"superseded", "abandoned"}))
+    clause = (
+        "BEFORE ANY WRITE, check two things. (1) Re-read your row in the plan "
+        f"spine now: if its status or disposition is one of {closed}, write "
+        "nothing and report `Status: BLOCKED` with reason `row-closed-on-spine`."
+    )
+    if run_base_sha:
+        clause += (
+            f" (2) Run `git log --format=%h%x20%s {run_base_sha}..HEAD -- <your row's writes>`: "
+            "if any listed commit's subject does not begin `checkpoint(`, a change outside "
+            "this run (a revert, a peer) moved your files; write nothing and report "
+            "`Status: BLOCKED` with reason `writes-moved-outside-run`, naming the commits."
+        )
+    return clause
+
+
+def _with_resume_guard(predecessor_state: Optional[str], run_base_sha: Optional[str]) -> str:
+    guard = _resume_guard_clause(run_base_sha)
+    return f"{guard}\n\n{predecessor_state}" if predecessor_state else guard
 
 
 def assert_zero_errors(script: str) -> None:
