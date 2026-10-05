@@ -2646,11 +2646,53 @@ class TestDecisionsShapeValidation:
         monkeypatch.setattr(ba_apply, "apply", _fake_apply)
 
         exit_code = ba_apply.main_apply(
-            ["handoff", "state/handoffs/h1.md", "--decisions", '{"j1": {"disposition": "proceed"}}']
+            ["handoff", "state/handoffs/h1.md", "--decisions", '{"j1": {"disposition": "proceed"}}', "--title", "t"]
         )
 
         assert exit_code == ba_apply.APPLY_EXIT_OK
         assert captured["decisions"] == {"j1": {"disposition": "proceed"}}
+
+
+class TestApplyHandoffRequiresATitle:
+    """example-stats-repo-em / example-game-repo-em memos 2026-10-05: a title-less `apply
+    handoff` committed `<date>-untitled-<id>.md` under a placeholder title."""
+
+    @pytest.mark.parametrize(
+        "extra",
+        [[], ["--title", "  "], ["--title", "PLACEHOLDER — replace with one-line handoff title"]],
+    )
+    def test_refuses_before_apply_runs(self, monkeypatch, capsys, extra):
+        def _never(*_a, **_k):
+            raise AssertionError("apply() reached without a title")
+
+        monkeypatch.setattr(ba_apply, "apply", _never)
+
+        exit_code = ba_apply.main_apply(["handoff", *extra])
+
+        assert exit_code == ba_apply.APPLY_EXIT_TRANSPORT_FAIL
+        assert "--title" in capsys.readouterr().err
+
+    def test_a_titled_handoff_reaches_apply(self, monkeypatch):
+        captured = {}
+
+        def _fake_apply(kind, artifact_path, *, session_id=None, repo_root=None,
+                        decisions=None, title=None, explicit_deliverable_id=None):
+            captured["title"] = title
+            return ba_apply.APPLY_EXIT_OK, {"landed": []}
+
+        monkeypatch.setattr(ba_apply, "apply", _fake_apply)
+
+        exit_code = ba_apply.main_apply(["handoff", "--title", "Friday likeness demo"])
+
+        assert exit_code == ba_apply.APPLY_EXIT_OK
+        assert captured["title"] == "Friday likeness demo"
+
+    def test_a_spinoff_is_not_held_to_it(self, monkeypatch):
+        monkeypatch.setattr(
+            ba_apply, "apply", lambda *_a, **_k: (ba_apply.APPLY_EXIT_OK, {"landed": []})
+        )
+
+        assert ba_apply.main_apply(["spinoff", "some-slug"]) == ba_apply.APPLY_EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -2701,7 +2743,7 @@ class TestDecisionsValueKeyEquivalence:
         monkeypatch.setattr(ba_apply, "apply", _fake_apply)
 
         exit_code = ba_apply.main_apply(
-            ["handoff", "state/handoffs/h1.md", "--decisions", '{"j1": {"value": "proceed"}}']
+            ["handoff", "state/handoffs/h1.md", "--decisions", '{"j1": {"value": "proceed"}}', "--title", "t"]
         )
 
         assert exit_code == ba_apply.APPLY_EXIT_OK

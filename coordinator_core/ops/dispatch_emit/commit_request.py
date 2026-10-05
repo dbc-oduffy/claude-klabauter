@@ -37,6 +37,7 @@ from typing import Optional
 import yaml
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 
 # The scaffolded sentinel `plan.schema.json` excludes from `deliverable_id`
 # by negative lookahead -- a plan still carrying it has no id yet.
@@ -142,12 +143,26 @@ def _chunk_to_dict(chunk: ChunkCommit) -> dict:
     }
 
 
+def _bare_path(path: str) -> str:
+    """A marker path as a repo-relative file path. Trap: emit writes
+    ``as_git_pathspec``-wrapped paths into the marker, and every consumer of
+    ``ChunkCommit.paths`` keys the filesystem or a tree with them, where a
+    pathspec prefix reads as a missing file. Any other pathspec magic names
+    no single file and is refused."""
+    bare = strip_literal_pathspec(path)
+    if bare.startswith(":("):
+        raise MalformedCommitRequestError(
+            f"chunk path {path!r} carries pathspec magic other than `:(literal)`"
+        )
+    return bare
+
+
 def _chunk_from_dict(obj: dict) -> ChunkCommit:
     try:
         return ChunkCommit(
             id=obj["id"],
             title=obj["title"],
-            paths=tuple(obj["paths"]),
+            paths=tuple(_bare_path(p) for p in obj["paths"]),
             prefixes=tuple(obj["prefixes"]),
             report=obj["report"],
         )

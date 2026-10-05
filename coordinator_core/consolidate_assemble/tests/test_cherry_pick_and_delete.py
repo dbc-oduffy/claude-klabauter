@@ -29,6 +29,7 @@ no follow-up cleanup)?
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -283,7 +284,13 @@ def _feat_cherry_picked_to_origin_main(tmp_path: Path, extra: bool) -> Path:
         _commit_all(root, "d")
     _git(root, "push", "-q", "origin", "feat")
     _git(root, "checkout", "-q", "main")
-    _git(root, "cherry-pick", *picked)
+    # A later committer date forces new SHAs; within one clock second the
+    # pick reproduced the originals and hid the defect half the time.
+    subprocess.run(
+        ["git", "cherry-pick", *picked], cwd=str(root), check=True, capture_output=True,
+        env={**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00Z"},
+        **no_console_creationflags(),
+    )
     _git(root, "push", "-q", "origin", "main")
     return root
 

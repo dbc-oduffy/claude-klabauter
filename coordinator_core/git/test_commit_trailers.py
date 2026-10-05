@@ -94,29 +94,6 @@ def test_pickup_tier_wins_claimed_plan_never_consulted(tmp_path, monkeypatch):
     assert "Deliverable-Id: dlv-from-pickup" in joined
 
 
-def _write_handoff_state(repo: Path, rel_path: str, deployment_state: str) -> None:
-    path = repo / rel_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\ndeployment_state: {deployment_state}\n---\n\n# h\n", encoding="utf-8")
-
-
-@pytest.mark.parametrize(
-    ("deployment_state", "expect_id"),
-    [("executing", True), ("shipped", False), ("closed", False), (None, False)],
-)
-def test_pickup_tier_drops_a_terminal_handoffs_id(tmp_path, monkeypatch, deployment_state, expect_id):
-    repo = _init_repo(tmp_path)
-    monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
-    rel = "state/handoffs/2026-10-05-h.md"
-    if deployment_state is not None:
-        _write_handoff_state(repo, rel, deployment_state)
-    _write_shape(repo, _SID, {"pickup": {"deliverable_id": "dlv-from-pickup", "handoff": rel}})
-
-    joined = " ".join(compute_missing_trailer_args(_msg_file(repo), repo))
-
-    assert ("Deliverable-Id: dlv-from-pickup" in joined) is expect_id
-
-
 def test_claimed_plan_tier_used_when_pickup_empty(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)

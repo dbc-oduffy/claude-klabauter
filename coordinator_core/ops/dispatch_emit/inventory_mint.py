@@ -264,6 +264,16 @@ def as_git_pathspec(path: str) -> str:
         return f"{_LITERAL_PATHSPEC_PREFIX}{path}"
     return path
 
+
+def strip_literal_pathspec(path: str) -> str:
+    """Inverse of `as_git_pathspec`: the bare repo-relative path, for a
+    consumer that touches the filesystem or a tree rather than git's
+    pathspec parser. A path with no `:(literal)` prefix is returned
+    unchanged."""
+    if path.startswith(_LITERAL_PATHSPEC_PREFIX):
+        return path[len(_LITERAL_PATHSPEC_PREFIX):]
+    return path
+
 _REQUIRED_COLUMNS = (
     "id",
     "spec path",

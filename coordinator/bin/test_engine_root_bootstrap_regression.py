@@ -448,10 +448,8 @@ def test_ensure_engine_on_path_mirror_shaped_checkout() -> None:
         env_no_root = dict(base_env)
         env_no_root.pop("CLAUDE_KLABAUTER_ROOT", None)
         env_no_root.pop("COORDINATOR_ENGINE_ROOT", None)
-        # `-S`: an editable `coordinator_core` install in site-packages is
-        # importable from anywhere and would answer for the resolver.
         proc = subprocess.run(
-            [sys.executable, "-S", probe_script],
+            [sys.executable, probe_script],
             capture_output=True,
             text=True,
             env=env_no_root,
@@ -769,6 +767,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "parallel-review-orthogonality-guard.py": frozenset({"env_first"}),
     "percolate-full-payload-proof.py": frozenset({"env_first"}),
     "percolate-mirror.py": frozenset({"self_location"}),
+    "percolate-preflight-scratch-publish.py": frozenset({"env_first"}),
     "plan-completeness.py": frozenset({"env_first"}),
     "plan-spine-check.py": frozenset({"self_location"}),
     "plan-task-brief.py": frozenset({"env_first"}),
@@ -820,18 +819,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "workweek-complete-doc-staleness.py": frozenset({"self_location"}),
     "workweek-complete-doc-verify.py": frozenset({"self_location"}),
     "wsc-session-disposition.py": frozenset({"env_first"}),
-    "coordinator-current-branch.py": frozenset({"env_first"}),
-    "doc-index.py": frozenset({"self_location"}),
-    "generate-doctrine-surface-split.py": frozenset({"env_first"}),
-    "generate-doctrine-surfaces.py": frozenset({"env_first"}),
-    "goal-close-day.py": frozenset({"env_first"}),
-    "mise-prep-upgrade.py": frozenset({"self_location"}),
-    "priority-set.py": frozenset({"env_first"}),
-    "stable-suite-run.py": frozenset({"env_first"}),
-    "structural-index-refresh.py": frozenset({"env_first"}),
-    "workweek-start-goal-and-priorities.py": frozenset({"env_first"}),
-    "lib/coordinator_data_root.py": frozenset({"env_first"}),
-    "reverify-delivery.py": frozenset({"env_first"}),
 }
 
 

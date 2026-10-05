@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import time
 from pathlib import Path
 from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
@@ -118,6 +119,13 @@ def _mode_for(path: Path) -> int:
         return _EXEC_MODE if (path.stat().st_mode & 0o111) else _DEFAULT_MODE
     except OSError:
         return _DEFAULT_MODE
+
+
+#: Emitted workflow output, mirroring the .gitignore patterns: `<plan>.workflow.mjs`,
+#: blitz/trail `fire-*.mjs`, mise-workflow scripts, and each one's `.emitted.json` receipt.
+_EPHEMERAL_EMISSION_RE = re.compile(
+    r"(?:\.workflow\.mjs|(?:^|/)state/plan-(?:blitz|trails)/.*/fire-[^/]*\.mjs|(?:^|/)state/mise-workflows/[^/]*\.mjs)(?:\.emitted\.json)?$"
+)
 
 
 class CommitRefused(Exception):
@@ -1024,6 +1032,17 @@ def commit_paths(
         path_list + delete_list + untrack_list, False, str(root)
     )
 
+    # Emitted workflow scripts and their receipts are ephemeral (regenerable
+    # from the plan spine, pruned by /distill); committing them bloats every
+    # clone. Removal (delete/untrack) stays allowed.
+    removing = set(delete_list) | set(untrack_list)
+    ephemeral = [p for p in path_list if p not in removing and _EPHEMERAL_EMISSION_RE.search(p)]
+    if ephemeral:
+        raise CommitRefused(
+            f"refusing to commit emitted workflow output: {ephemeral[:3]} -- "
+            "these are ephemeral and gitignored; drop them from the pathspec."
+        )
+
     # MID-SEQUENCE REFUSAL, and it has to sit HERE -- before the index read,
     # before the first object write, before the CAS. This function builds a
     # commit with exactly one parent (HEAD). In a repo partway through a
@@ -1285,7 +1304,8 @@ def commit_paths(
     # `deleted_paths` reaches it as `rollback_check.ABSENT`, matching that
     # module's own sentinel for "this candidate's new value is absence".
     if detect_rollback and old_head is not None:
-        declared_set = {d.replace("\\", "/") for d in declared_reverts}
+        # An untrack is already a declared removal; the file stays on disk.
+        declared_set = {d.replace("\\", "/") for d in declared_reverts} | set(untrack_list)
         # A deletion whose HEAD blob lands at another path in this same
         # commit is a move; absence at the old path restores nothing.
         added_blobs = {val[1] for val in assembled.values() if val is not _ABSENT}

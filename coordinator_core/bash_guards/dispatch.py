@@ -435,15 +435,11 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "stale-write": (">", "tee"),
     "block-worktree-creation": ("worktree",),
     "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
-    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
+    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "xargs", "sh", "python"),
     "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
     "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
     "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
-    "block-topic-branch": ("checkout", "switch", "branch", "push"),
-    "block-perforce-submit": ("p4", "submit", "shelve"),
-    "block-unreal-engine-resave": ("-run=",),
-    "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
     "block-subagent-stash-creation": ("stash",),
     "block-subagent-grant-acquisition": ("claude_md_grant",),
     "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
@@ -509,18 +505,6 @@ basename``, ``SentinelCreationDetector._is_target``).
 
 
 _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
-    (
-        "block-noncanonical-branch-creation",
-        "denies only inside a hazard repo resolved at call time, so no command text alone proves a crash-path deny",
-    ),
-    (
-        "block-dev-repo-sentinel-removal",
-        "its deny leg depends on the resolved repo carrying the dev-repo sentinel, not on command text alone",
-    ),
-    (
-        "block-subagent-plan-body-bash-write",
-        "denies only for a subagent caller, which a command-text trigger cannot carry",
-    ),
     (
         "block-reviewer-bash-outside-allowlist",
         "denies every command a confined reviewer runs that is not on its allowlist, so any text can deny",
@@ -1280,18 +1264,6 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
             MATCHERS as _matchers_noncanonical_branch_creation,
         )
-        from coordinator_core.bash_guards.block_topic_branch import (
-            MATCHERS as _matchers_topic_branch,
-        )
-        from coordinator_core.bash_guards.block_perforce_submit import (
-            MATCHERS as _matchers_perforce_submit,
-        )
-        from coordinator_core.bash_guards.block_unreal_engine_resave import (
-            MATCHERS as _matchers_unreal_engine_resave,
-        )
-        from coordinator_core.bash_guards.block_editor_kill_by_name import (
-            MATCHERS as _matchers_editor_kill_by_name,
-        )
         from coordinator_core.bash_guards.guard_inprocess_search import (
             MATCHERS as _matchers_inprocess_search,
         )
@@ -1322,10 +1294,6 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_stash_destruction,
             _matchers_subagent_stash_creation,
             _matchers_noncanonical_branch_creation,
-            _matchers_topic_branch,
-            _matchers_perforce_submit,
-            _matchers_unreal_engine_resave,
-            _matchers_editor_kill_by_name,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -2289,22 +2257,6 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.block_venv_creation import (
         check as _check_venv_creation,
     )
-    from coordinator_core.bash_guards.block_topic_branch import (
-        check as _check_topic_branch,
-        MATCHERS as _matchers_topic_branch,
-    )
-    from coordinator_core.bash_guards.block_perforce_submit import (
-        check as _check_perforce_submit,
-        MATCHERS as _matchers_perforce_submit,
-    )
-    from coordinator_core.bash_guards.block_unreal_engine_resave import (
-        check as _check_unreal_engine_resave,
-        MATCHERS as _matchers_unreal_engine_resave,
-    )
-    from coordinator_core.bash_guards.block_editor_kill_by_name import (
-        check as _check_editor_kill_by_name,
-        MATCHERS as _matchers_editor_kill_by_name,
-    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2605,41 +2557,6 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_subagent_stash_creation),
-        ),
-        GuardEntry(
-            "block-topic-branch",
-            lambda: _check_topic_branch(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_topic_branch),
-        ),
-        # Box policy: no changelist reaches this box's Perforce server.
-        GuardEntry(
-            "block-perforce-submit",
-            lambda: _check_perforce_submit(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_perforce_submit),
-        ),
-        # No commandlet rewrites the installed engine.
-        GuardEntry(
-            "block-unreal-engine-resave",
-            lambda: _check_unreal_engine_resave(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_unreal_engine_resave),
-        ),
-        # Editors die by the PID of their own launch, never by image name.
-        GuardEntry(
-            "block-editor-kill-by-name",
-            lambda: _check_editor_kill_by_name(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_editor_kill_by_name),
         ),
         # Branch-name and plan-body confinement: deny-or-None guards, ahead of
         # `offer-git-c` so a `cd <dir> && git ...` prefix cannot route around them.

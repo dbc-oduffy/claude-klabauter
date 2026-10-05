@@ -862,19 +862,6 @@ INLINE_PREFIX_TRIGGERS: Dict[Tuple[str, str], Callable[[str], Optional[Dict[str,
 #: charter, never a silent gap. A future session closing one of these should
 #: DELETE the row here and add it to ``LIVE_TRIGGERS`` above, not leave both.
 UNTRIGGERED: Dict[str, str] = {
-    "block_editor_kill_by_name": (
-        "Offers no override: the alternative is a PID-targeted kill, which "
-        "its message names and which this guard never denies."
-    ),
-    "block_unreal_engine_resave": (
-        "Offers no override: an engine-content rewrite needs a launcher Verify "
-        "to undo, so the only alternative is the scoped form its message names."
-    ),
-    "block_perforce_submit": (
-        "Offers no override (PM hard rule), so there is no alternative to keep "
-        "live; it arms only on a box whose machine-local registry names a "
-        "Perforce server, which a context-free trigger cannot assume."
-    ),
     "check_destructive_git_orphan": (
         "Target shape (which git-orphan-adjacent command combination this "
         "check actually denies) was not identified within this dispatch's "

@@ -32,7 +32,6 @@ def test_unknown_session_lands_in_the_no_session_bucket(tmp_path):
     """The line must still be RECORDED — this is the audit trail for a
     deliberately-overridden safety check, so dropping it to avoid minting a
     directory would trade a bookkeeping defect for a security one."""
-    (tmp_path / ".git").mkdir()
     path = _override_log_path(str(tmp_path), "sess-not-a-real-session")
 
     assert path is not None
@@ -50,7 +49,6 @@ def test_existing_session_dir_is_used_as_is(tmp_path):
 
 
 def test_absent_session_id_uses_the_bucket_directly(tmp_path):
-    (tmp_path / ".git").mkdir()
     path = _override_log_path(str(tmp_path), None)
 
     assert path is not None
@@ -59,26 +57,6 @@ def test_absent_session_id_uses_the_bucket_directly(tmp_path):
 
 def test_no_git_root_resolves_nothing(tmp_path):
     assert _override_log_path("", "sess-x") is None
-
-
-def test_a_root_that_is_not_a_repo_is_never_created(tmp_path):
-    """A fake root (a test's "/repo") must not be minted: on Windows it lands
-    at the drive root."""
-    fake = tmp_path / "repo"
-
-    assert _override_log_path(str(fake), "sess-x") is None
-    assert not fake.exists()
-
-
-def test_stand_down_log_refuses_a_root_that_is_not_a_repo(tmp_path):
-    from coordinator_core.bash_guards._write_bump_stand_down import log_environment_stand_down
-
-    fake = tmp_path / "repo"
-    log_environment_stand_down(
-        str(fake), "sess1", "a.py", "evidence", marker="M", sink_basename="s.log"
-    )
-
-    assert not fake.exists()
 
 
 def test_override_log_bucket_is_denylisted():

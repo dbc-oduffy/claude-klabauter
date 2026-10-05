@@ -68,11 +68,6 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from cc_invoke import ensure_engine_on_path  # noqa: E402
-
-ensure_engine_on_path(__file__)
-
 #: Populated by `_resolve_caller_context()`, deferred out of module scope so the non-stdlib
 #: import it performs is not a module-body-inertness violation
 #: (`coordinator_core.warm.serve_classifier`). Left resolvable as a plain module attribute (not a

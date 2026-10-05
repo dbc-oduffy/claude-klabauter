@@ -66,11 +66,6 @@ class TestBlockNoncanonicalBranchCreation:
         monkeypatch.setattr(
             block_noncanonical_branch_creation, "_is_hazard_repo", lambda git_root: True
         )
-        # block-topic-branch runs earlier in the chain and denies the same
-        # command; this class probes the noncanonical guard's own band.
-        from coordinator_core.bash_guards import block_topic_branch
-
-        monkeypatch.setattr(block_topic_branch, "check", lambda payload: None)
 
     def test_denies_through_dispatch(self):
         out = _evaluate(_payload_dict("git branch bad-name"))

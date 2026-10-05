@@ -223,6 +223,19 @@ def test_deletion_without_a_matching_add_still_refuses(tmp_path):
     assert gcommit.head_sha(repo) == before
 
 
+def test_untrack_is_not_a_rollback(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
+
+    sha = gcommit.commit_paths(
+        repo, [], "untrack live/s.yaml", untracked_paths=["live/s.yaml"],
+        detect_rollback=True,
+    )
+    assert sha
+    assert (repo / "live/s.yaml").exists()
+
+
 def test_commit_v2_pin_passes_detect_rollback(tmp_path):
     """Pin: `ceremony.commit_v2`'s `commit_paths` call always passes
     `detect_rollback=True`."""

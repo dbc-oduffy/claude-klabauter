@@ -147,7 +147,10 @@ def _delete_branch(name: str, remote: bool, repo_root: Path) -> dict[str, Any]:
         refusal = _refuse_unmerged_tips(name, remote, repo_root)
         if refusal is not None:
             raise RuntimeError(refusal)
-    flag = "-D" if force else "-d"
+    # `-D` either way: `_refuse_unmerged_tips` has already proved every commit
+    # patch-equivalent in origin's main, which `-d`'s ancestry test cannot see
+    # once a cherry-pick re-minted the SHAs.
+    flag = "-D"
     detail: dict[str, Any] = {"local_deleted": None, "forced": force}
     if _branch_exists_locally(name, repo_root):
         local_proc = _run_git(["branch", flag, name], repo_root)

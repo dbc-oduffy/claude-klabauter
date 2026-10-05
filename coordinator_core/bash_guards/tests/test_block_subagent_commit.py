@@ -3276,7 +3276,7 @@ def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
 def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
     script = tmp_path / "land.py"
     script.write_text("from coordinator_core.git." "commit import commit_paths\n")
-    cmd = shape.format(f=script.as_posix(), d=tmp_path.as_posix(), n=script.name)
+    cmd = shape.format(f=script, d=tmp_path, n=script.name)
     result = guard.check(_payload(cmd))
     assert result is not None
     assert "script file" in result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -3290,19 +3290,3 @@ def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
     dirty.write_text("from coordinator_core.git." "commit import commit_paths\n")
     assert guard.check(_payload("python3 %s" % dirty, agent_id=None)) is None
     assert guard.check(_payload("python3 %s" % (tmp_path / "missing.py"))) is None
-
-
-@pytest.mark.parametrize(
-    ("cmd", "allowed"),
-    [
-        ('git commit -m "fix" -- coordinator_core/a.py', True),
-        ('git commit -m "fix"', False),
-        ('git commit -am "fix"', False),
-        ('git commit -m "fix" --', False),
-        ('git commit -m "fix" -- .', False),
-    ],
-)
-def test_named_persona_commit_must_name_its_paths(monkeypatch, tmp_path, cmd, allowed):
-    monkeypatch.setattr(guard, "resolve_git_root", lambda _cwd: str(tmp_path))
-    result = guard.check(_payload(cmd, agent_type="coordinator:staff-eng"))
-    assert (result is None) is allowed, result

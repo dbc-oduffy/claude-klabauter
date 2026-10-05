@@ -33,18 +33,7 @@ def _import_module():
     return _mod
 
 
-_USAGE = (
-    "usage: plan-status-transition <verb> --plan <path> [options]\n"
-    "  e.g. plan-status-transition stamp-implemented --plan <p> "
-    "--falsifier-verdict pass --falsifier-output <raw> --prose <line>\n"
-    "  An unknown verb lists the supported verbs."
-)
-
-
 def main(argv: list[str]) -> int:
-    if argv[:1] in (["-h"], ["--help"]):
-        print(_USAGE)
-        return 0
     try:
         mod = _import_module()
     except RuntimeError as exc:

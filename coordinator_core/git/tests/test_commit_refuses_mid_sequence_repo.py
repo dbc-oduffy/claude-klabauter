@@ -104,3 +104,29 @@ def test_commit_paths_refuses_a_mid_rebase_repo(conflicted):
 
     assert "git rebase --continue" in str(caught.value)
     assert _git(conflicted, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "docs/plans/x.workflow.mjs",
+        "docs/plans/x.workflow.mjs.emitted.json",
+        "state/plan-blitz/20261002T142136Z/fire-0-1.mjs",
+        "state/mise-workflows/a.mjs.emitted.json",
+    ],
+)
+def test_commit_paths_refuses_emitted_workflow_output(tmp_path, rel):
+    r = tmp_path / "r"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@local")
+    _git(r, "config", "user.name", "t")
+    (r / "seed.txt").write_text("s\n", encoding="utf-8")
+    _git(r, "add", "seed.txt")
+    _git(r, "commit", "-q", "-m", "seed")
+    target = r / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x\n", encoding="utf-8")
+
+    with pytest.raises(CommitRefused, match="emitted workflow output"):
+        commit_paths(r, [rel], "should not land")

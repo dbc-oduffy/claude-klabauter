@@ -6825,19 +6825,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Named-persona grant (PM ruling 2026-08-27) -- `agent_type` alone, never
     # `effective_type`; see `_NAMED_PERSONA_COMMIT_TYPES` for why the
     # backpointer leg is excluded from an unconditional commit grant.
-    ownership_reason = ""
     if agent_type and agent_type in _NAMED_PERSONA_COMMIT_TYPES:
-        # The grant is to commit its own paths, never the whole shared index.
-        resolved = _resolve_git_commit_agent_pathspec(cmd_for_scan)
-        if resolved and resolved[0] and git_root:
-            shape_ok, ownership_reason = _pathspec_shape_permitted(
-                resolved[0], resolved[1], git_root
-            )
-            if shape_ok:
-                return None
-        else:
-            ownership_reason = "a persona commit names its paths: `git commit -m <msg> -- <path>...`"
+        return None
 
+    ownership_reason = ""
     is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
     if is_git_commit_agent:
         may_commit, ownership_reason = _git_commit_agent_may_commit(

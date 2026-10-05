@@ -59,7 +59,6 @@ pytestmark = [
 # Every hand-rolled trampoline fixed by the 2026-08-14 publish-round chunk,
 # relative to coordinator/bin/, invoked as `python3 <file> --help`.
 _SWEPT_HELP_ENTRYPOINTS = (
-    "plan-status-transition.py",
     "reverify-delivery.py",
     "backlog-grind-assemble.py",
     "consolidate-assemble.py",

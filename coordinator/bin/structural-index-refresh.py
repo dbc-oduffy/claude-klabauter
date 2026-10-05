@@ -29,14 +29,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# The published transform runs this source with no `__file__`; there the
-# engine is already importable.
-if "__file__" in globals():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-    from cc_invoke import ensure_engine_on_path
-
-    ensure_engine_on_path(__file__)
-
 # Writes a refresh-status record under the gitignored .structural-index/.
 GENERATES = []
 
