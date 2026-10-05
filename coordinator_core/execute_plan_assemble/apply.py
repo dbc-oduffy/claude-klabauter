@@ -254,7 +254,9 @@ def apply(
             ),
         }
 
-    directives, judgment_points = pre_execution_directives(plan_path, autonomous=autonomous)
+    directives, judgment_points = pre_execution_directives(
+        plan_path, autonomous=autonomous, repo_root=root
+    )
 
     composition_budget = make_fleet_budget("execute_plan_assemble")
     outcome = "directive_failed"

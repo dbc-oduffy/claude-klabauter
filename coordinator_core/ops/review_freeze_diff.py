@@ -531,10 +531,11 @@ def _freeze_diff_worktree(
     `parse_index_stat`) and never written by this function.
 
     A path that is neither covered by the tracked diff nor synthesizable
-    (absent everywhere, or tracked-and-unmodified) falls through to
-    `_uncovered_paths`'s existing refusal — same posture as range mode's own
-    K-101 coverage refusal, computed over the combined diff text with no
-    added spawn.
+    (absent everywhere, or tracked-and-unmodified) is reported in
+    `uncovered_paths` and never refused: the declared set is the footprint
+    CEILING of a run, and a row that left a declared file untouched is normal.
+    Refusing here pushed a prep agent to narrow `--paths` to an undeclared
+    file and report zero product files for a run that had edited 23.
 
     UNLIKE range mode (post-P157-C1), this function does NOT commit its
     writes: worktree mode exists for a review read that must not land a
@@ -593,12 +594,6 @@ def _freeze_diff_worktree(
         diff_text = diff_text + "".join(synthesized)
 
     uncovered = _uncovered_paths(diff_text, paths)
-    if uncovered:
-        return _error(
-            "--paths entries matched no change between base and the worktree: "
-            f"{', '.join(uncovered)} — re-run without them.",
-            uncovered_paths=uncovered,
-        )
 
     diffs_dir = repo_root / "state" / "review-trail" / "diffs"
     diffs_dir.mkdir(parents=True, exist_ok=True)
@@ -631,7 +626,7 @@ def _freeze_diff_worktree(
         "head_sha_path": str(sha_path),
         "head_sha": sha_content,
         "empty": not diff_text.strip(),
-        "uncovered_paths": [],
+        "uncovered_paths": uncovered,
         "error": None,
         "committed": False,
         "commit_sha": None,

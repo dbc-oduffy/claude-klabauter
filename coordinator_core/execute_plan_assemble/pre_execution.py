@@ -1,6 +1,8 @@
 """Phase-1 pre-execution directive list for `/execute-plan`.
 
-Pure function, zero I/O, zero spawns: `pre_execution_directives` returns the
+Zero spawns; the only I/O is d2's two best-effort reads (the plan's
+frontmatter and its sizing object, see `_accepted_sizing_mode`):
+`pre_execution_directives` returns the
 ordered directive list plus the `judgment_points` gating it, in the shape
 `coordinator_core.contract.apply_base.execute_directives` consumes. This
 module owns none of the gate mechanism (`apply_base` already implements
@@ -22,8 +24,12 @@ emit) depends on the three gates plus the wave-map point.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
+
+import yaml
+
+from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -46,6 +52,29 @@ def _slug_for(plan_path: str) -> str:
     paths are repo-relative forward-slash paths regardless of host OS.
     """
     return PurePosixPath(plan_path).stem
+
+
+def _accepted_sizing_path(plan_path: str, repo_root: Path | None) -> str | None:
+    """The plan's `sizing_object` path when that sizing is pm/ceo mode and carries
+    an accepted exit criterion; None on any other shape, including a missing or
+    unreadable plan or sizing -- the caller then keeps the typed-command arm."""
+    if repo_root is None:
+        return None
+    try:
+        split = split_frontmatter((repo_root / plan_path).read_text(encoding="utf-8"))
+        rel = (read_fm_field_unquoted(split.fm_text, "sizing_object") or "").strip() if split else ""
+        if not rel or rel.lower() in ("null", "~"):
+            return None
+        rel = rel.replace("\\", "/")
+        doc = yaml.safe_load((repo_root / rel).read_text(encoding="utf-8"))
+        ec = doc.get("exit_criterion") if isinstance(doc, dict) else None
+        accepted = ec.get("accepted") if isinstance(ec, dict) else None
+        if not isinstance(accepted, dict) or not str(accepted.get("pm_quote") or "").strip():
+            return None
+        mode = str(doc.get("interaction_mode") or accepted.get("mode") or "").strip()
+        return rel if mode in ("pm", "ceo") else None
+    except (OSError, ValueError, yaml.YAMLError, AttributeError):
+        return None
 
 
 def _build_judgment_points() -> list[dict[str, Any]]:
@@ -94,7 +123,7 @@ def _build_judgment_points() -> list[dict[str, Any]]:
 
 
 def pre_execution_directives(
-    plan_path: str, *, autonomous: bool = False
+    plan_path: str, *, autonomous: bool = False, repo_root: Path | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     slug = _slug_for(plan_path)
 
@@ -120,14 +149,19 @@ def pre_execution_directives(
             "args": ["stamp-check", plan_path],
             "depends_on": None,
         }
+        sizing_rel = _accepted_sizing_path(plan_path, repo_root)
+        auth_arm = (
+            ["--authorized-by-sizing", sizing_rel]
+            if sizing_rel
+            else ["--typed-command", "/execute-plan"]
+        )
         d2 = {
             "id": "d2",
             "cli": "review-exec-auth-stamp",
             "args": [
                 "authorize-invocation",
                 plan_path,
-                "--typed-command",
-                "/execute-plan",
+                *auth_arm,
             ],
             "depends_on": None,
         }

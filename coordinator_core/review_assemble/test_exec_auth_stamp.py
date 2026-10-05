@@ -1481,3 +1481,59 @@ def test_restamp_revert_to_witnessed_sha_removes_quartet(tmp_path: Path) -> None
     assert "execution_restamped_at" not in final_written
     assert "execution_restamped_from_sha" not in final_written
     assert "execution_restamped_note" not in final_written
+
+
+def _sizing_text(mode: str, *, accepted: bool = True, status: str = "sized") -> str:
+    acc = (
+        "  accepted:\n    pm_quote: yes that criterion is right\n    on: '2026-10-05'\n"
+        f"    mode: {mode}\n"
+        if accepted
+        else "  accepted: null\n"
+    )
+    return (
+        f"status: {status}\ninteraction_mode: {mode}\nexit_criterion:\n  statement: done\n{acc}"
+    )
+
+
+def _sizing_fixture(tmp_path: Path, sizing_text: str) -> tuple[str, str]:
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "p.md").write_text(_PLAN_TEXT, encoding="utf-8")
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(sizing_text, encoding="utf-8")
+    return "docs/plans/p.md", "state/sizings/s.yaml"
+
+
+def test_sizing_arm_stamps_the_sizing_note_for_pm_mode(tmp_path: Path) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    plan, sizing = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    code, result = stamp_sizing_authorization(plan, sizing, at="2026-10-05", repo_root=tmp_path)
+    assert code == EXIT_OK, result
+    fm = yaml.safe_load((tmp_path / plan).read_text(encoding="utf-8").split("---")[1])
+    assert fm["execution_authorized_note"] == (
+        "authorized by accepted sizing (mode=pm): state/sizings/s.yaml"
+    )
+    assert "yes that criterion" not in fm["execution_authorized_note"]
+    assert str(fm["execution_authorized_at"]) == "2026-10-05"
+
+
+def test_sizing_arm_refuses_hands_on_and_unaccepted(tmp_path: Path) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    plan, sizing = _sizing_fixture(tmp_path, _sizing_text("hands-on"))
+    code, result = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
+    assert code == EXIT_BUSINESS_FAIL and "hands-on" in result["error"]
+    assert "execution_authorized_by" not in (tmp_path / plan).read_text(encoding="utf-8")
+
+    (tmp_path / sizing).write_text(_sizing_text("pm", accepted=False), encoding="utf-8")
+    code, result = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
+    assert code == EXIT_BUSINESS_FAIL and "accepted" in result["error"]
+
+
+def test_cli_sizing_arm_is_exclusive_with_typed_command(tmp_path: Path) -> None:
+    plan, sizing = _sizing_fixture(tmp_path, _sizing_text("pm"))
+    for extra in (["--typed-command", "/execute-plan"], ["--utterance", "go"]):
+        rc = main(["authorize-invocation", str(tmp_path / plan), "--authorized-by-sizing", sizing, *extra])
+        assert rc == EXIT_USAGE
+    assert "execution_authorized_by" not in (tmp_path / plan).read_text(encoding="utf-8")

@@ -178,12 +178,11 @@ def test_worktree_freeze_requires_a_base(tmp_path: Path) -> None:
     assert not _diffs_dir(tmp_path).exists()
 
 
-def test_worktree_freeze_tracked_unmodified_declared_path_is_uncovered(
+def test_worktree_freeze_unmodified_declared_path_is_reported_not_refused(
     tmp_path: Path,
 ) -> None:
-    # Declaring a path that neither changed as a tracked file nor exists as
-    # a new untracked addition has nothing to freeze -- same coverage-
-    # refusal posture as range mode's own K-101 case.
+    # The declared set is a ceiling: an untouched declared path must not
+    # refuse the freeze of the declared paths that did change.
     _init_repo(tmp_path)
     base = _commit(tmp_path, "unmodified.txt", "same\n", "add unmodified.txt")
     (tmp_path / "changed.txt").write_text("v1\n")
@@ -200,8 +199,10 @@ def test_worktree_freeze_tracked_unmodified_declared_path_is_uncovered(
         worktree=True,
     )
 
-    assert result["error"] is not None
+    assert result["error"] is None
     assert result["uncovered_paths"] == ["unmodified.txt"]
+    assert "changed.txt" in Path(result["diff_path"]).read_text(encoding="utf-8")
+    assert not result["empty"]
     assert base  # keep the first commit sha referenced for clarity
 
 

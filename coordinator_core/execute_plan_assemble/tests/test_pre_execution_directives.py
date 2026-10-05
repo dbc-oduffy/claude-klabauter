@@ -86,3 +86,42 @@ def test_judgment_points_are_untrusted_gates_with_no_recommendation():
     assert len(judgment_points) == 4
     for jp in judgment_points:
         assert jp["recommendation"] is None
+
+
+def _repo_with_sizing(tmp_path, sizing_text, *, plan_sizing="state/sizings/s.yaml"):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / PLAN_PATH).write_text(
+        f"---\ntitle: t\nsizing_object: {plan_sizing}\n---\nbody\n", encoding="utf-8"
+    )
+    if sizing_text is not None:
+        (tmp_path / "state" / "sizings" / "s.yaml").write_text(sizing_text, encoding="utf-8")
+
+
+_ACCEPTED = "interaction_mode: {m}\nexit_criterion:\n  accepted:\n    pm_quote: ok\n    mode: {m}\n"
+
+
+def _d2_args(tmp_path):
+    directives, _ = pre_execution_directives(PLAN_PATH, repo_root=tmp_path)
+    return next(d for d in directives if d["id"] == "d2")["args"]
+
+
+def test_d2_uses_the_sizing_arm_for_an_accepted_pm_sizing(tmp_path):
+    _repo_with_sizing(tmp_path, _ACCEPTED.format(m="pm"))
+    assert _d2_args(tmp_path) == [
+        "authorize-invocation", PLAN_PATH, "--authorized-by-sizing", "state/sizings/s.yaml",
+    ]
+
+
+def test_d2_keeps_typed_command_for_hands_on_sizing(tmp_path):
+    _repo_with_sizing(tmp_path, _ACCEPTED.format(m="hands-on"))
+    assert _d2_args(tmp_path)[2:] == ["--typed-command", "/execute-plan"]
+
+
+def test_d2_falls_back_to_typed_command_when_sizing_missing_or_unaccepted(tmp_path):
+    _repo_with_sizing(tmp_path, None)
+    assert _d2_args(tmp_path)[2:] == ["--typed-command", "/execute-plan"]
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(
+        "interaction_mode: pm\nexit_criterion:\n  accepted: null\n", encoding="utf-8"
+    )
+    assert _d2_args(tmp_path)[2:] == ["--typed-command", "/execute-plan"]

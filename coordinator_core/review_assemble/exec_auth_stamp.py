@@ -864,6 +864,113 @@ def stamp_invocation_authorization(
     return exit_code, result
 
 
+#: Sizing statuses an execution may still be authorized from (the same pair
+#: `emit-wave-fire --from-sizing` fires from).
+_SIZING_AUTHORIZABLE_STATUS = ("sized", "routed")
+
+
+def stamp_sizing_authorization(
+    plan_path: str,
+    sizing_path: str,
+    *,
+    at: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> tuple[int, dict[str, Any]]:
+    """Mint execution authorization from an ACCEPTED sizing, for pm/ceo mode,
+    where the execute decision is not a further PM ask and there is no typed
+    command or utterance to record.
+
+    Reads the sizing's top-level `interaction_mode` and `status` and its
+    `exit_criterion.accepted` mapping (`{pm_quote, on, mode}`, written by
+    `sizing.accept_exit_criterion`). Refuses (EXIT_BUSINESS_FAIL) a sizing
+    that is unreadable, has no non-empty `accepted.pm_quote`, is not in
+    `_SIZING_AUTHORIZABLE_STATUS`, or whose mode is `hands-on` (hands-on
+    authorizes by the PM's own execution words, never by sizing acceptance).
+
+    The note names the mode and the sizing path only: the sizing's `pm_quote`
+    is the PM's acceptance of the exit criterion, never an execution
+    utterance, so it is not copied. Delegates the four-field write, with the
+    same convergence rules as `stamp_invocation_authorization`, to
+    `stamp_execution_authorization`.
+    """
+    root = repo_root or resolve_repo_root()
+    if root is None:
+        return EXIT_BUSINESS_FAIL, {"error": "could not resolve a git worktree root"}
+
+    sizing_rel = sizing_path.replace("\\", "/")
+    sizing_file = Path(sizing_path) if Path(sizing_path).is_absolute() else root / sizing_rel
+    import yaml
+
+    try:
+        doc = yaml.safe_load(sizing_file.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return EXIT_BUSINESS_FAIL, {"error": f"{sizing_path}: could not read sizing ({exc})"}
+    if not isinstance(doc, dict):
+        return EXIT_BUSINESS_FAIL, {"error": f"{sizing_path}: not a sizing object"}
+
+    ec = doc.get("exit_criterion")
+    accepted = ec.get("accepted") if isinstance(ec, dict) else None
+    if not isinstance(accepted, dict) or not str(accepted.get("pm_quote") or "").strip():
+        return EXIT_BUSINESS_FAIL, {
+            "error": f"refusing to mint: {sizing_path}: exit_criterion.accepted is not recorded -- "
+            f"accept it first (sizing-accept-exit-criterion)"
+        }
+    status = doc.get("status")
+    if status not in _SIZING_AUTHORIZABLE_STATUS:
+        return EXIT_BUSINESS_FAIL, {
+            "error": f"refusing to mint: {sizing_path}: status is {status!r}, "
+            f"not one of {list(_SIZING_AUTHORIZABLE_STATUS)}"
+        }
+    mode = str(doc.get("interaction_mode") or accepted.get("mode") or "").strip()
+    if mode not in ("pm", "ceo"):
+        return EXIT_BUSINESS_FAIL, {
+            "error": f"refusing to mint: {sizing_path}: interaction mode is {mode or 'absent'!r}; "
+            f"sizing acceptance authorizes only pm/ceo -- hands-on needs "
+            f"`--typed-command` with the PM's own words"
+        }
+
+    live_path = Path(plan_path) if Path(plan_path).is_absolute() else root / plan_path
+    if not live_path.is_file():
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: not found"}
+    text = live_path.read_text(encoding="utf-8", errors="replace")
+    if split_frontmatter(text) is None:
+        return EXIT_BUSINESS_FAIL, {"error": f"{plan_path}: no parseable frontmatter"}
+
+    from coordinator_core.frontmatter.primitives import APPROVED_BODY_CHANGED, check_approved_body
+
+    approved_state, approved_msg = check_approved_body(text)
+    if approved_state == APPROVED_BODY_CHANGED:
+        return EXIT_BUSINESS_FAIL, {"error": f"refusing to mint: {plan_path}: {approved_msg}"}
+
+    note = f"authorized by accepted sizing (mode={mode}): {sizing_rel}"
+    fm = split_frontmatter(text).fm_text
+    unchanged = read_fm_field_unquoted(fm, "execution_authorized_sha") == _canonical_body_sha(text, root)
+    existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")
+    existing_note = _current_note_text(
+        fm, read_fm_block_scalar(fm, "execution_authorized_note")
+    ) or ""
+    if unchanged and existing_note.endswith(note):
+        return EXIT_OK, {
+            "applied": False,
+            "sha": read_fm_field_unquoted(fm, "execution_authorized_sha"),
+            "note": note,
+            "message": f"{plan_path} is already authorized by this sizing against unchanged plan content -- no-op",
+        }
+
+    exit_code, result = stamp_execution_authorization(
+        plan_path,
+        "PM",
+        note,
+        at=at or (existing_at if unchanged and existing_at else None),
+        repo_root=root,
+        append_note=True,
+        fresh_authorization=True,
+    )
+    if exit_code == EXIT_OK:
+        result["note"] = note
+    return exit_code, result
+
+
 def _fire_stamp_reviewed(plan_path: str) -> None:
     """Fire ``stamp-reviewed`` (``coordinator_core.ops.plan_status_transition``)
     as a SEPARATE lock and commit, after this module's own exec-auth stamp
@@ -951,7 +1058,8 @@ USAGE = (
     "usage: review-exec-auth-stamp stamp <plan-path> --by <who> "
     "(--note <note> | --append-note <text>) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp authorize-invocation <plan-path> "
-    "--typed-command </command> [--utterance <PM's verbatim words>] [--at <YYYY-MM-DD>]\n"
+    "(--typed-command </command> [--utterance <PM's verbatim words>] | "
+    "--authorized-by-sizing <repo-relative sizing path>) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp mark-reviewed <plan-path>\n"
     "       review-exec-auth-stamp restamp <plan-path> --by <witness> "
     "--reason <one line> [--at <YYYY-MM-DD>]"
@@ -1071,6 +1179,7 @@ def _main_authorize_invocation(rest: list[str]) -> int:
 
     utterance: Optional[str] = None
     typed_command: Optional[str] = None
+    sizing_path: Optional[str] = None
     at: Optional[str] = None
     i = 1
     while i < len(rest):
@@ -1081,12 +1190,29 @@ def _main_authorize_invocation(rest: list[str]) -> int:
         elif arg == "--typed-command" and i + 1 < len(rest):
             typed_command = rest[i + 1]
             i += 2
+        elif arg == "--authorized-by-sizing" and i + 1 < len(rest):
+            sizing_path = rest[i + 1]
+            i += 2
         elif arg == "--at" and i + 1 < len(rest):
             at = rest[i + 1]
             i += 2
         else:
             print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
             return EXIT_USAGE
+
+    if sizing_path is not None:
+        if typed_command is not None or utterance is not None:
+            print(
+                "review-exec-auth-stamp: --authorized-by-sizing is mutually exclusive "
+                "with --typed-command and --utterance",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        exit_code, result = stamp_sizing_authorization(plan_path, sizing_path, at=at)
+        if exit_code == EXIT_OK:
+            _fire_stamp_approved(plan_path)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return exit_code
 
     # `--utterance` is deliberately optional: a bare `/execute-plan` with no
     # accompanying words is still a PM act, and the mint records it as one.
