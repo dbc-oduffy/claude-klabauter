@@ -215,7 +215,7 @@ from typing import Optional
 
 from coordinator_core._content_root_primitive import content_root_for
 from coordinator_core.cartography._guard import PathEscapeError
-from coordinator_core.content_root_pointer import read_content_root_pointer
+from coordinator_core.content_root import read_content_root
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
@@ -808,16 +808,16 @@ _PARAM_FIELDS = (
 
 
 def _pipeline_content_root() -> Path:
-    """DoE content root the pipeline manifests live under; refuses, never defaults."""
-    content_root = read_content_root_pointer()
-    if not content_root:
+    """Content root the pipeline manifests live under; refuses, never defaults."""
+    root = read_content_root()
+    if not root:
         raise PipelineEmitRefused(
-            ["coordinator-content-repo root unresolved: read_content_root_pointer() returned empty"]
+            ["content root unresolved: read_content_root() returned empty"]
         )
-    content_root = content_root_for(content_root)
+    content_root = content_root_for(root)
     if content_root is None:
         raise PipelineEmitRefused(
-            [f"{Path(content_root).as_posix()} is neither a private clone (no coordinator/) nor a flat mirror"]
+            [f"{Path(root).as_posix()} is neither a private clone (no coordinator/) nor a flat mirror"]
         )
     return Path(content_root)
 

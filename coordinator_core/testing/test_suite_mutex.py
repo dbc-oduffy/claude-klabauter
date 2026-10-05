@@ -263,3 +263,15 @@ def test_held_yields_false_and_does_not_release_foreign_lock() -> None:
     current = suite_mutex.holder()
     assert current is not None
     assert current["owner"] == "session-a"
+
+
+def test_mutex_owner_reads_the_harness_session_var_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude Code sets CLAUDE_CODE_SESSION_ID; CLAUDE_SESSION_ID is unset in practice.
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-sid")
+    assert suite_mutex.mutex_owner("suite-mutex") == "harness-sid"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "legacy-sid")
+    assert suite_mutex.mutex_owner("suite-mutex") == "harness-sid"
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+    assert suite_mutex.mutex_owner("suite-mutex") == "legacy-sid"

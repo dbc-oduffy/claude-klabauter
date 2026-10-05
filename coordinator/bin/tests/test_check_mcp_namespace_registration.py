@@ -16,8 +16,12 @@ SCRIPT = Path(__file__).resolve().parent.parent / "check-mcp-namespace-registrat
 _COORD = SCRIPT.parent.parent
 
 
-def _run(tmp_path: Path, registered: bool, extra_tools: str = "") -> subprocess.CompletedProcess:
+def _run(
+    tmp_path: Path, registered: bool, extra_tools: str = "", argv: tuple = (), env_extra: dict | None = None,
+    subject_is_cwd: bool = True,
+) -> subprocess.CompletedProcess:
     repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
     (repo / "coordinator" / "bin").mkdir(parents=True)
     (repo / "coordinator" / "agents").mkdir()
     lib = repo / "coordinator" / "lib" / "frontmatter_scan.py"
@@ -40,9 +44,11 @@ def _run(tmp_path: Path, registered: bool, extra_tools: str = "") -> subprocess.
     env = {"HOME": str(home), "USERPROFILE": str(home), "CLAUDE_CONFIG_DIR": str(home), "PATH": ""}
     if "SYSTEMROOT" in os.environ:
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    env.update(env_extra or {})
     return subprocess.run(
-        [sys.executable, str(repo / "coordinator" / "bin" / SCRIPT.name)],
-        capture_output=True, text=True, env=env, check=False, cwd=str(tmp_path),
+        [sys.executable, str(repo / "coordinator" / "bin" / SCRIPT.name), *argv],
+        capture_output=True, text=True, env=env, check=False,
+        cwd=str(repo if subject_is_cwd else tmp_path),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
@@ -70,3 +76,20 @@ def test_plugin_namespace_needs_truthy_enabled_plugin(tmp_path):
     r = _run(tmp_path, True, ', "mcp__plugin_context7_context7__q", "mcp__plugin_off_off__q"')
     assert "plugin_context7_context7" not in r.stdout
     assert "plugin_off_off" in r.stdout
+
+
+def test_subject_repo_comes_from_the_caller_not_the_script_location(tmp_path):
+    """The script copy sits in `repo`, but the subject is a different repo named by arg or env."""
+    subject = tmp_path / "subject"
+    (subject / ".git").mkdir(parents=True)
+    (subject / "coordinator" / "agents").mkdir(parents=True)
+    (subject / "coordinator" / "agents" / "other.md").write_text(
+        '---\nname: other\ntools: ["mcp__subject-only-srv__x"]\n---\n', encoding="utf-8"
+    )
+    by_arg = _run(tmp_path, True, argv=("--repo-root", str(subject)), subject_is_cwd=False)
+    assert "other.md" in by_arg.stdout and "subject-only-srv" in by_arg.stdout
+    assert "fix.md" not in by_arg.stdout
+    by_env = _run(
+        tmp_path / "e", True, env_extra={"COORDINATOR_SUBJECT_REPO_ROOT": str(subject)}, subject_is_cwd=False
+    )
+    assert "other.md" in by_env.stdout and "fix.md" not in by_env.stdout

@@ -187,7 +187,7 @@ def mutex_owner(prefix: str) -> str:
     path is holding the lock when no session id was available; callers MUST
     NOT collapse this to a single shared prefix.
     """
-    for var in ("CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID"):
+    for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID"):
         value = os.environ.get(var, "").strip()
         if value:
             return value

@@ -700,7 +700,7 @@ def _central_fan_in_matches(
             else convention_repo_key(cid)
         )
         if candidate_key in all_repos:
-            # Two spellings of one repo (authoring `repos.content_root` and the
+            # Two spellings of one repo (an authoring repo key and the
             # published `repos.content_root`) registered at the same path are
             # one receiver, not a disagreement.
             path = Path(all_repos[candidate_key])

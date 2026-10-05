@@ -33,6 +33,12 @@ Wire params ("docindex.emit"):
                                    every resolved index whose comparison is
                                    ordinary drift (never a hand-edit) is
                                    rewritten on disk.
+    rebaseline  (bool, optional, default False) — the sanctioned repair for a
+                                   hand-edit refusal: rewrite the region from
+                                   source even though its bytes disagree with
+                                   the recorded digest. Whatever was typed
+                                   inside the region is discarded, and the
+                                   result carries `rebaselined: true`.
 
 Reply fields:
     target_root (str)  — resolved target_root, echoed.
@@ -259,6 +265,7 @@ def _docindex_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError("docindex.emit requires param: target_root")
 
     write = bool(params.get("write", False))
+    rebaseline = bool(params.get("rebaseline", False))
     guarded_root = path_guard(target_root, ".")
 
     index_path = params.get("index_path")
@@ -316,7 +323,8 @@ def _docindex_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         cmp_result = compare(document_text, spec, entries)
 
         written = False
-        if write and not cmp_result.hand_edit and cmp_result.has_drift:
+        rebaselined = rebaseline and cmp_result.hand_edit
+        if rebaselined or (write and not cmp_result.hand_edit and cmp_result.has_drift):
             new_text = render(document_text, spec, entries)
             (guarded_root / rel_path).write_text(new_text, encoding="utf-8", newline="\n")
             written = True
@@ -333,6 +341,12 @@ def _docindex_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
                     {"identity": c.identity, "field": c.field} for c in cmp_result.changed
                 ],
                 "written": written,
+                "rebaselined": rebaselined,
+                **(
+                    {"repair": "doc-index --rebaseline rewrites the region from source, discarding the hand-edit"}
+                    if cmp_result.hand_edit and not rebaselined
+                    else {}
+                ),
             }
         )
 

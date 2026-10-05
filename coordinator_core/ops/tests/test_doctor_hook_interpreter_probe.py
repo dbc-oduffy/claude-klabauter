@@ -19,8 +19,8 @@ import pytest
 from coordinator_core.ops import doctor
 
 
-def _write_hooks_json(content_root: Path, command: str) -> None:
-    hooks_dir = content_root / "coordinator" / "hooks"
+def _write_hooks_json(checkout: Path, command: str) -> None:
+    hooks_dir = checkout / "coordinator" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     (hooks_dir / "hooks.json").write_text(
         json.dumps(
@@ -32,25 +32,25 @@ def _write_hooks_json(content_root: Path, command: str) -> None:
 
 
 @pytest.fixture
-def content_root(tmp_path: Path) -> Path:
+def checkout(tmp_path: Path) -> Path:
     root = tmp_path / "coordinator-content-repo"
     (root / "coordinator" / "hooks").mkdir(parents=True)
     return root
 
 
 @pytest.fixture(autouse=True)
-def _pin_content_root(content_root: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(content_root))
+def _pin_checkout(checkout: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(checkout))
     # No settings.json hooks block in these fixtures — hooks.json alone is the surface
     # under test, so point settings.json at an empty, isolated config dir rather than
     # whatever the running machine actually has under ~/.claude.
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(content_root.parent / "claude-config-empty"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(checkout.parent / "claude-config-empty"))
 
 
-def test_bareword_interpreter_absent_from_path_is_reported_fail(content_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_bareword_interpreter_absent_from_path_is_reported_fail(checkout: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """The plan's own fixture case: a bareword interpreter absent from PATH gives FAIL, and
     the finding names the consequence (its hooks fail open) rather than only the binary."""
-    _write_hooks_json(content_root, "totally-not-a-real-interpreter ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _write_hooks_json(checkout, "totally-not-a-real-interpreter ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
 
     empty_path_dir = tmp_path / "empty-path"
     empty_path_dir.mkdir()
@@ -65,10 +65,10 @@ def test_bareword_interpreter_absent_from_path_is_reported_fail(content_root: Pa
     ), layer.findings
 
 
-def test_interpreter_present_on_path_is_ok_and_quiet(content_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_interpreter_present_on_path_is_ok_and_quiet(checkout: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """A present interpreter gives OK — the plan's other fixture half — and the layer stays
     quiet, matching this module's house rule that a clean layer emits nothing to scroll past."""
-    _write_hooks_json(content_root, "findable-interpreter ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+    _write_hooks_json(checkout, "findable-interpreter ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
 
     path_dir = tmp_path / "fake-bin"
     path_dir.mkdir()
@@ -94,13 +94,13 @@ def test_no_readable_hooks_doc_is_unknown_not_ok(tmp_path: Path, monkeypatch: py
     A coordinator-content-repo root that resolves but carries no on-disk hooks.json, and no settings.json
     hooks block, must report UNKNOWN rather than a silent OK.
 
-    Pins `REPO_CONTENT_ROOT` to an empty throwaway tree (never deletes/unsets it) — an unset
+    Pins `MACHINE_LOCAL_REPOS_CONTENT_ROOT` to an empty throwaway tree (never deletes/unsets it) — an unset
     var falls through to this box's own sibling-resolution rungs, which would find the real
     checked-out coordinator-content-repo repo next to claude-klabauter and defeat the "no readable doc" case
     this test means to exercise."""
-    empty_content_root = tmp_path / "coordinator-content-repo-empty"
-    empty_content_root.mkdir()
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(empty_content_root))
+    empty_checkout = tmp_path / "coordinator-content-repo-empty"
+    empty_checkout.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(empty_checkout))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config-empty"))
 
     layer = doctor._check_hook_interpreter_resolvability()

@@ -30,8 +30,10 @@ from pathlib import Path
 from typing import Optional
 
 KILL_SWITCH = "COORDINATOR_STRUCTURAL_INDEX_REFRESH_OFF"
-REGISTRY_KEY = "repos.project_rag"
-ENSURE_SCRIPT = Path("example_retrieval_repo_scripts") / "structural_index_refresh.py"
+# Fragmented: the publish transform rewrites the contiguous codename, and a rewritten key never resolves.
+_INDEX_REPO = "project" "_rag"
+REGISTRY_KEY = f"repos.{_INDEX_REPO}"
+ENSURE_SCRIPT = Path(f"{_INDEX_REPO}_scripts") / "structural_index_refresh.py"
 DEFAULT_TIMEOUT = 30.0
 RECORD_NAME = "refresh-last.json"
 STDERR_TAIL_LINES = 5

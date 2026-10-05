@@ -495,3 +495,10 @@ def test_single_reviewer_ok_over_no_product_file_is_a_no_op_not_a_refusal():
     result = _run_prep_block({**_PREP, "product_files": 0})
     assert result["halted"] == "no-op"
     assert "error" not in result
+
+
+def test_prep_never_counts_the_runs_own_writes_as_foreign_claims():
+    _, phases = _compose()
+    _, prep_block = phases[0]
+    assert "any write by this run itself" in prep_block
+    assert ".coordinator-local/subagent-share/" in prep_block

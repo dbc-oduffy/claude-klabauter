@@ -432,6 +432,19 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "blanket-git-add": ("git",),
     "destructive-rm": ("rm",),
     "runaway-find": ("find",),
+    "stale-write": (">", "tee"),
+    "block-worktree-creation": ("worktree",),
+    "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
+    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "xargs", "sh", "python"),
+    "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
+    "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
+    "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
+    "block-stash-destruction": ("stash",),
+    "block-subagent-stash-creation": ("stash",),
+    "block-subagent-grant-acquisition": ("claude_md_grant",),
+    "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
+    "block-subagent-guard-grant": ("em_guard_grant",),
+    "guard-repo-setup-claude-home-refusal": ("repo-setup-args-and-register", "scaffold_structure"),
 }
 """Per-guard necessary preconditions, used ONLY on the crash path to scope a
 fail-closed deny to the class of command the crashed guard actually polices.
@@ -449,6 +462,18 @@ is keyed by guard name rather than derived from anything heuristic:
   - ``check_blanket_git_add``        -- ``re.search(r"\\bgit\\s+add\\b", cmd)``
   - ``check_destructive_rm``         -- ``re.search(r"\\brm\\b", cmd)``
   - ``check_runaway_find``           -- ``re.search(r"\\bfind\\b", cmd)``
+  - ``check_stale_write``            -- a ``>`` token or a ``tee`` head
+  - ``block_worktree_creation``      -- ``_WORKTREE_WORD_RE`` on the raw text
+  - ``p4_verb_fence``                -- a p4/git/attrib/chmod head, ``P4ALIASES``,
+                                        ``-EncodedCommand``, or a governed mention
+  - the four sentinel-creation guards -- the target basename, or an indirection
+                                        deny naming no target (``xargs``, a shell
+                                        or python interpreter)
+  - ``block_stash_destruction`` / ``block_subagent_stash_creation`` --
+                                        ``_STASH_WORD_RE`` on the raw text
+  - ``block_subagent_grant_acquisition`` / ``block_subagent_guard_grant`` /
+    ``block_subagent_findings_reject`` -- the gated module or trampoline name
+  - ``guard_repo_setup_claude_home_refusal`` -- a scaffold-mechanism marker
 
 A word-boundary regex is strictly narrower than the bare substring, and the
 two conjunction cases are weakened to one conjunct, so each entry over-matches
@@ -472,7 +497,57 @@ entry is the per-guard property test in
 ``tests/test_crash_trigger_is_wider_than_its_guard.py``: for every command the
 guard denies, its trigger matches. Do not add an entry here on a reading of
 the guard's early returns alone.
+
+Every trigger is lowercase: ``_crash_probe_variants`` case-folds the text it
+searches, because the guards' own matching folds case (``normalize_executable_
+basename``, ``SentinelCreationDetector._is_target``).
 """
+
+
+_CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
+    (
+        "block-reviewer-bash-outside-allowlist",
+        "denies every command a confined reviewer runs that is not on its allowlist, so any text can deny",
+    ),
+    (
+        "block-subagent-destructive-action",
+        "eight surface probes plus an unresolved-argv0 default-deny; no single necessary substring set",
+    ),
+    (
+        "block-subagent-commit",
+        "its pre-filter is 'commit' plus a 24-name hand-maintained op set plus python -c; a copy here would drift",
+    ),
+    (
+        "guard-host-subagent-bash-ban",
+        "denies every Bash command for a dispatched agent on an opted-in host; the command text is irrelevant",
+    ),
+    (
+        "guard-host-subagent-bash-spawn-shapes",
+        "denies by token-structure shape (loops, pipe stages, echo banners, % alias); no necessary substring",
+    ),
+    (
+        "check-test-suite-invocation",
+        "its dynamic pre-filter matches whatever test command the repo configures, which is arbitrary text",
+    ),
+    (
+        "guard-doctrine-surface-bash-write",
+        "its trigger set is the runtime governed-surface manifest plus indirection markers, not a fixed list",
+    ),
+    (
+        "multiprobe-banner",
+        "shape classifier over probe segments (echo/printf/git/pwd/date) joined by ===; no cheap necessary substring",
+    ),
+    (
+        "plumbing-and-loops",
+        "shape classifier over loops, head/tail pipes and PowerShell foreach aliases; no cheap necessary substring",
+    ),
+)
+"""Fail-closed guards that keep the chain-wide deny on crash because no cheap,
+provably-wider necessary precondition exists for them. Each entry is a
+decision, not an omission: ``tests/test_crash_deny_out_of_class_coverage.py``
+requires every fail-closed guard to be in exactly one of this tuple and
+``_CRASH_TRIGGER_SUBSTRINGS``. Moving a guard out means deriving its trigger
+from its own early returns and proving it with a per-guard property case."""
 
 
 _SENTINEL_ELIGIBLE_ADVISORY_GUARDS: "frozenset[str]" = frozenset(
@@ -591,6 +666,14 @@ def _crash_probe_variants(cmd: str) -> Tuple[str, ...]:
         (``check_no_verify`` tests its own flattened text) would still have seen
         it, so the stripped text alone is narrower than that guard.
 
+      - ``shlex`` and the PowerShell tokenizer merge adjacent quoted and
+        escaped fragments into one token, so ``touch .coordinator-over''ride-
+        worktree-guard`` names the sentinel with no contiguous basename in the
+        raw text. Every variant is therefore also searched with quote,
+        backtick and backslash characters deleted.
+      - Several guards fold case before comparing (``GIT.EXE``, a sentinel
+        basename), so every variant is searched lowercased.
+
     So the answer is the union rather than a pipeline: a token found in ANY
     variant counts as present, which keeps the probe wider than each guard
     individually without having to decide which normalization dominates. Adding
@@ -608,7 +691,11 @@ def _crash_probe_variants(cmd: str) -> Tuple[str, ...]:
         variants.append(_dc._normalize_git_exe_head_to_bare(_dc._strip_ws_quoted_spans(base)))
     except Exception:  # noqa: BLE001
         pass
-    return tuple(variants)
+    variants.extend(_CRASH_QUOTE_CHARS_RE.sub("", variant) for variant in tuple(variants))
+    return tuple(variant.lower() for variant in variants)
+
+
+_CRASH_QUOTE_CHARS_RE = re.compile(r"""['"`\\]""")
 
 
 def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[str] = None) -> Dict[str, Any]:

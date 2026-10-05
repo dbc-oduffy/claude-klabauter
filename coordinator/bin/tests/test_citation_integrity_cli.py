@@ -66,3 +66,17 @@ def test_anchor_missing_is_reported_but_never_gated(tmp_path: Path):
     assert "#no-such-heading" in human
     assert "docs/decisions/ is not scanned" in human
     assert "anchor_missing" not in cci.ALL_CLASSES
+
+
+def test_main_reads_the_callers_repo_via_arg_and_env(tmp_path, monkeypatch, capsys):
+    """A baseline-less subject repo skips by naming ITS baseline path, not the script checkout's."""
+    subject = tmp_path / "subject"
+    (subject / ".git").mkdir(parents=True)
+    expected = subject / "state" / "baselines" / "citation-integrity.json"
+    monkeypatch.delenv("COORDINATOR_SUBJECT_REPO_ROOT", raising=False)
+    assert cci.main(["--repo-root", str(subject)]) == 0
+    assert str(expected) in capsys.readouterr().err
+    monkeypatch.setenv("COORDINATOR_SUBJECT_REPO_ROOT", str(subject))
+    monkeypatch.chdir(tmp_path)
+    assert cci.main([]) == 0
+    assert str(expected) in capsys.readouterr().err

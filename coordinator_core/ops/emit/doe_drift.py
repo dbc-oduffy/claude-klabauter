@@ -199,9 +199,9 @@ def _read_toml_file(path: Path) -> Optional[dict]:
     return _parse_toml_text(path.read_text(encoding="utf-8"))
 
 
-# The working checkout's key first; `repos.content_root` is the legacy spelling no
-# current writer emits, kept so an older registry still resolves.
-_DOE_CLONE_KEYS = ("engine.working_repos.content_root", "repos.content_root")
+# The working checkout's key first. An older registry's legacy spelling resolves
+# through `read_content_root()`'s compat rung, never here.
+_CLONE_KEYS = ("engine.working_repos.content_root", "repos.content_root")
 
 
 def _lookup_dotted(data: dict, key: str) -> Optional[str]:
@@ -217,18 +217,18 @@ def _lookup_dotted(data: dict, key: str) -> Optional[str]:
     return node if isinstance(node, str) and node else None
 
 
-def _extract_repos_content_root_from_toml(data: dict) -> Optional[str]:
-    """The DoE clone path from a parsed registry, first hit in `_DOE_CLONE_KEYS`."""
-    for key in _DOE_CLONE_KEYS:
+def _extract_clone_from_toml(data: dict) -> Optional[str]:
+    """The DoE clone path from a parsed registry, first hit in `_CLONE_KEYS`."""
+    for key in _CLONE_KEYS:
         val = _lookup_dotted(data, key)
         if val:
             return val
     return None
 
 
-def _extract_repos_content_root_regex(text: str) -> Optional[str]:
+def _extract_clone_regex(text: str) -> Optional[str]:
     """Regex fallback for quoted-key form when TOML parser unavailable."""
-    for key in _DOE_CLONE_KEYS:
+    for key in _CLONE_KEYS:
         m = re.search(r'"' + re.escape(key) + r'"\s*=\s*[\'"]([^\'"]+)[\'"]', text)
         if m:
             return m.group(1).strip()
@@ -246,7 +246,7 @@ def resolve_doe_clone() -> Path:
     env/home read, no subprocess) rather than a hardcoded ``~/.claude/machine-local``
     literal — the settings-home indirection does NOT reintroduce a CLI dependency.
 
-    Keys tried, per file: `_DOE_CLONE_KEYS`, then `read_content_root()`. Raises DoeResolveError when none is
+    Keys tried, per file: `_CLONE_KEYS`, then `read_content_root()`. Raises DoeResolveError when none is
     set or the resolved path does not exist.
     """
     for registry_path in _registry_paths():
@@ -257,10 +257,10 @@ def resolve_doe_clone() -> Path:
         text = registry_path.read_text(encoding="utf-8")
         data = _parse_toml_text(text)
         if data is not None:
-            raw = _extract_repos_content_root_from_toml(data)
+            raw = _extract_clone_from_toml(data)
         else:
             # TOML parser unavailable — fall back to regex using already-read text.
-            raw = _extract_repos_content_root_regex(text)
+            raw = _extract_clone_regex(text)
         if raw:
             candidate = normalize_native_path(raw).expanduser()
             if candidate.is_dir():

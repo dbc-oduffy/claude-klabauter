@@ -64,7 +64,7 @@ def test_record_already_names_us_refreshes_and_reports_already_held(repo_root, r
     assert first is not None
 
 
-def test_record_names_another_live_does_not_claim(repo_root, record_dir, monkeypatch):
+def test_record_names_another_live_is_taken_over_and_reported(repo_root, record_dir, monkeypatch):
     nomination.claim(repo_root, "sid-incumbent", directory=record_dir)
 
     monkeypatch.setattr(nomination, "session_live", lambda sid: True)
@@ -76,19 +76,20 @@ def test_record_names_another_live_does_not_claim(repo_root, record_dir, monkeyp
 
     result = nomination.claim(repo_root, "sid-challenger", directory=record_dir)
 
-    assert result["claimed"] is False
-    assert result["holder"] == "sid-incumbent"
-    assert result["superseded_incumbent"]["session_id"] == "sid-incumbent"
-    assert result["superseded_incumbent"]["live"] is True
-    assert result["superseded_incumbent"]["live_reason"] == "live"
+    assert result["claimed"] is True
+    assert result["holder"] == "sid-challenger"
+    assert result["superseded_incumbent"] is None
+    assert result["displaced_holder"] == "sid-incumbent"
+    assert result["displaced_holder_live"] is True
+    assert result["displaced"]["live_reason"] == "live"
     assert result["replaced_holder"] is None
 
-    # Never claimed -- record on disk is unchanged.
     on_disk = nomination.read_record(repo_root, record_dir)
-    assert on_disk["session_id"] == "sid-incumbent"
+    assert on_disk["session_id"] == "sid-challenger"
+    assert on_disk["displaced_holder"] == "sid-incumbent"
 
 
-def test_record_names_another_no_registry_record_does_not_claim(repo_root, record_dir, monkeypatch):
+def test_record_names_another_no_registry_record_is_taken_over(repo_root, record_dir, monkeypatch):
     """Absence of registry evidence (no row for the incumbent's session_id at all) stays a
     refusal -- this fleet is multi-machine, and no row is indistinguishable from a session
     on another machine or with its messaging gate off. Never auto-replaced."""
@@ -99,14 +100,16 @@ def test_record_names_another_no_registry_record_does_not_claim(repo_root, recor
 
     result = nomination.claim(repo_root, "sid-challenger", directory=record_dir)
 
-    assert result["claimed"] is False
-    assert result["holder"] == "sid-incumbent"
-    assert result["superseded_incumbent"]["live"] is False
-    assert result["superseded_incumbent"]["live_reason"] == "no_registry_record"
+    assert result["claimed"] is True
+    assert result["holder"] == "sid-challenger"
+    assert result["superseded_incumbent"] is None
+    assert result["displaced_holder"] == "sid-incumbent"
+    assert result["displaced_holder_live"] is False
+    assert result["displaced"]["live_reason"] == "no_registry_record"
     assert result["replaced_holder"] is None
 
     on_disk = nomination.read_record(repo_root, record_dir)
-    assert on_disk["session_id"] == "sid-incumbent"
+    assert on_disk["session_id"] == "sid-challenger"
 
 
 def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_dir, monkeypatch):

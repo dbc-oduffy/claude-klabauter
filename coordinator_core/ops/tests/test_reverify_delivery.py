@@ -335,3 +335,38 @@ def test_judge_prompt_carries_latest_sizing_amendment_as_operative(tmp_path):
 def test_judge_prompt_is_unchanged_when_the_sizing_has_no_amendments(tmp_path):
     script = _judge_script(_amended_repo(tmp_path, []))
     assert "operative exit criterion" not in script
+
+
+def _result_json(head):
+    import json
+
+    return json.dumps({"verdict": "PASS", "claims_unbacked": [],
+                       "reverify_delivery": {"plan_id": "pln-example-abc123", "head_sha": head}})
+
+
+def test_record_persists_an_empty_live_list_that_supersedes_the_frozen_claims(tmp_path, monkeypatch):
+    repo, record, rel, head, _ = _foreign_record(tmp_path, 4)
+    monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
+    assert rd.main(["record", "--run-record", str(record), "--result-json", _result_json(head),
+                    "--repo-root", str(repo)]) == 0
+    assert rd.latest_foreign_claims_supersession(repo, rel) == []
+
+
+def test_record_persists_a_list_even_when_the_run_record_froze_no_claims(tmp_path):
+    repo, record, rel, head, _ = _foreign_record(tmp_path, 0)
+    text = record.read_text(encoding="utf-8").replace("foreign_claims: []\n", "")
+    record.write_text(text, encoding="utf-8")
+    assert rd.main(["record", "--run-record", str(record), "--result-json", _result_json(head),
+                    "--repo-root", str(repo)]) == 0
+    assert rd.latest_foreign_claims_supersession(repo, rel) == []
+
+
+def test_record_without_repo_root_writes_into_the_run_records_repo(tmp_path, monkeypatch):
+    repo, record, rel, head, _ = _foreign_record(tmp_path, 1)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
+    assert rd.main(["record", "--run-record", str(record), "--result-json", _result_json(head)]) == 0
+    assert rd.latest_foreign_claims_supersession(repo, rel) == []
+    assert not (elsewhere / rd.VERDICT_DIR).exists()

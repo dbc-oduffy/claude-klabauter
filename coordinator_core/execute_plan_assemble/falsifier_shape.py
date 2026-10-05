@@ -141,6 +141,28 @@ def _falsifier_exemption(prime_exit_criterion: Any) -> Optional[dict]:
     return exemption
 
 
+GOAL_REFUSAL_PRIME_ABSENT = "prime_exit_criterion_absent"
+GOAL_REFUSAL_FALSIFIER_ABSENT = "falsifier_absent"
+GOAL_REFUSAL_FALSIFIER_MISNESTED = "falsifier_misnested"
+
+
+def goal_falsifier_defect(fm: dict, root: Path) -> Optional[str]:
+    """Arms 0 and 1 of the close-out goal gate, as one decision: the
+    `GOAL_REFUSAL_*` reason a plan's frontmatter earns, or `None`.
+    Excludes `status_override_*`, which only the terminal gate honours.
+    Total: an unreadable date or sizing reads as grandfathered."""
+    if not (_plan_created_on_or_after_grandfather(fm) and _plan_is_m_plus(fm, root)):
+        return None
+    prime = fm.get("prime_exit_criterion")
+    if prime is None:
+        return GOAL_REFUSAL_PRIME_ABSENT
+    if _falsifier_exemption(prime) is not None or _falsifier_block(prime) is not None:
+        return None
+    if _falsifier_misnested(fm):
+        return GOAL_REFUSAL_FALSIFIER_MISNESTED
+    return GOAL_REFUSAL_FALSIFIER_ABSENT
+
+
 #: A `disposition_ref`/bare `baseline_ref` is always a bare hex commit sha --
 #: never a symbolic ref, branch name, or tag. Bounding the shape before ever
 #: handing the value to `git rev-parse` is deliberate defense-in-depth.

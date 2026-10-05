@@ -318,6 +318,7 @@ from coordinator_core.ops.dispatch_emit.predispatch import (
     AgentSpec,
     check_specs,
 )
+from coordinator_core.ops.dispatch_emit.predecessor_state import predecessor_state_section
 from coordinator_core.ops.dispatch_emit.spine_read import (
     UNDECLARED,
     load_frontmatter_doc,
@@ -1198,10 +1199,25 @@ def check_agent_types_resolve(
     agent_type_host: Optional[str],
 ) -> None:
     """Refuse a script naming a ``coordinator:<name>`` agentType with no
-    ``<claude_plugin_root>/agents/<name>.md``. Pure stat calls. Skipped when
-    agent types are host-degraded or the plugin root is unset or absent:
-    there is nothing to resolve against."""
-    if agent_type_host == _AGENT_TYPE_HOST_DEGRADED or not claude_plugin_root:
+    ``<claude_plugin_root>/agents/<name>.md``. Pure stat calls. On a
+    host-degraded emit every surviving ``coordinator:`` agentType is refused
+    outright (degradation substitutes only rostered types; the host cannot
+    run the rest). Skipped when the plugin root is unset or absent: there is
+    nothing to resolve against."""
+    if agent_type_host == _AGENT_TYPE_HOST_DEGRADED:
+        survivors: dict[str, int] = {}
+        for name in _COORDINATOR_AGENT_TYPE_RE.findall(script):
+            key = f"coordinator:{name}"
+            survivors[key] = survivors.get(key, 0) + 1
+        if survivors:
+            listed = ", ".join(f"{n} ({c}x)" for n, c in sorted(survivors.items()))
+            raise UnresolvedAgentTypeError(
+                f"refusing to write: host cannot resolve {listed}. Change the "
+                "row's agent_type, or set COORDINATOR_AGENT_TYPE_HOST=coordinator "
+                "if this host resolves the plugin."
+            )
+        return
+    if not claude_plugin_root:
         return
     agents_dir = Path(claude_plugin_root) / "agents"
     if not agents_dir.is_dir():
@@ -2186,8 +2202,14 @@ def _row_prompt(
     preamble: Optional[str] = None,
     new_module_paths: tuple = (),
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
+    predecessor_state: Optional[str] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
+
+    ``predecessor_state`` (optional) is the pre-rendered ``## Predecessor
+    handoff state`` section (``predecessor_state.predecessor_state_section``),
+    appended last so facts learned after the plan was written reach the
+    executor.
 
     ``new_module_paths`` (optional) names ``.py`` modules this row creates
     alongside edits to existing ones (``_new_module_paths``); when non-empty
@@ -2254,6 +2276,8 @@ def _row_prompt(
             f"\n\nCreate {', '.join(new_module_paths)} before editing any file "
             "that imports them."
         )
+    if predecessor_state:
+        body += f"\n\n{predecessor_state}"
     if plan_context is not None:
         body = f"{_plan_context_preamble(plan_context)}\n\n{body}"
     return f"{prompt_head}\n\n{body}"
@@ -2270,6 +2294,7 @@ def _row_agent_call_expr(
     memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     chatty_brief: Optional[str] = None,
     chatty_nonce_var: Optional[str] = None,
+    predecessor_state: Optional[str] = None,
 ) -> str:
     """Compose one row's ``agent(...)`` call expression -- the per-node body
     of the DAG's own ``_rows[id] = _runRow(...)`` registration (§ Design D4).
@@ -2291,6 +2316,7 @@ def _row_agent_call_expr(
         preamble=preamble,
         new_module_paths=new_module_paths,
         memo_deliveries=memo_deliveries,
+        predecessor_state=predecessor_state,
     )
     if shared is None:
         prompt_literal = _resolve_markers_plus(prompt)
@@ -3441,6 +3467,7 @@ def compose_script(
     chatty: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
+    predecessor_state: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3687,6 +3714,7 @@ def compose_script(
             preamble=preamble,
             new_module_paths=tuple(_new_module_paths(row, repo_root)),
             memo_deliveries=memo_deliveries,
+            predecessor_state=predecessor_state,
             chatty_brief=(
                 _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
                 if roster is not None
@@ -3757,6 +3785,7 @@ def compose_script(
                 preamble=preamble,
                 new_module_paths=tuple(_new_module_paths(row, repo_root)),
                 memo_deliveries=memo_deliveries,
+                predecessor_state=predecessor_state,
                 chatty_brief=_chatty.continuation_brief(row.id),
                 chatty_nonce_var="_n",
             ).replace("label: ", "label: 'continue:' + ", 1)
@@ -4634,6 +4663,7 @@ def emit_script(
         chatty=chatty,
         predispatch=predispatch,
         review_specs=review_specs,
+        predecessor_state=predecessor_state_section(plan_text, repo_root),
     )
 
 

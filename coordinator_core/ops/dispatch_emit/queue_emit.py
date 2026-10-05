@@ -87,6 +87,7 @@ from coordinator_core.ops.dispatch_emit.grind_profile import (
     validate_graph,
 )
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
+from coordinator_core.ops.dispatch_emit.receipt_extras_guard import refuse_colliding_receipt_extras
 
 __all__ = ["QueueEmission", "QueuePathEscapeError", "emit_queue_script"]
 
@@ -226,4 +227,5 @@ def emit_queue_script(
         "reemit": _reemit_argv(profile, appetite, Path(profile_dir), queue, overrides),
     }
 
+    refuse_colliding_receipt_extras(receipt_extras)
     return QueueEmission(script=script, receipt_extras=receipt_extras)

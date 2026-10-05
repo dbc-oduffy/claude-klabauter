@@ -22,8 +22,8 @@ in `coordinator_core/ops/__init__.py`'s `_EAGER_OP_MODULES`,
 per-worktree), and `coordinator_core/authz/classification.py` (MUTATING --
 see that module's comment on this entry for the reason).
 
-Returns exactly one payload:
-    {"as_of": "<iso>", "nomination": {...}, "roster": [...], "roster_excluded": [...],
+Returns exactly one payload (`standing` is `build_standing`'s shape, present on refusal too):
+    {"as_of": "<iso>", "nomination": {...}, "standing": {...}, "roster": [...], "roster_excluded": [...],
      "roster_considered": int, "digest": {...}, "baseline": {...}, "teammates": {...},
      "watch_liveness": {...}}
 
@@ -196,6 +196,11 @@ from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbea
 from coordinator_core.hooks.support import next_move_ledger
 
 
+def _str_param(params: Any, key: str) -> Optional[str]:
+    value = params.get(key) if isinstance(params, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
 def _leg_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
@@ -207,9 +212,16 @@ def _leg(result: dict[str, Any], key: str, outcome: tuple[Any, Optional[str]]) -
         result[f"{key}_error"] = error
 
 
-def _run_nomination(repo_root: str, caller_session_id: str) -> tuple[Optional[dict], Optional[str]]:
+def _run_nomination(
+    repo_root: str, caller_session_id: str, note: Optional[str] = None, operator: Optional[str] = None
+) -> tuple[Optional[dict], Optional[str]]:
     try:
-        return group_em_nomination.claim(repo_root, caller_session_id), None
+        return (
+            group_em_nomination.claim(
+                repo_root, caller_session_id, note=note, nominated_by=operator
+            ),
+            None,
+        )
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise per module docstring
         return None, _leg_error(exc)
 
@@ -407,6 +419,48 @@ def _stamp_entry_heartbeat(
     return None if stamped else "stamp-not-written"
 
 
+def _standing_message(nomination: dict, session_id: str) -> str:
+    holder = nomination.get("holder") or session_id
+    displaced = nomination.get("displaced_holder")
+    if not nomination.get("claimed"):
+        return "nomination refused"
+    if nomination.get("already_held"):
+        return f"{holder} already holds Group EM here (refreshed)"
+    if displaced and nomination.get("displaced_holder_live"):
+        return (
+            f"took Group EM from {displaced} -- that session is still running and does not "
+            "know yet; tell it"
+        )
+    if displaced:
+        return f"replaced lapsed nomination {displaced} with {holder} (prior holder was not live)"
+    return f"nominated {holder} as Group EM"
+
+
+def build_standing(nomination: Optional[dict], session_id: Optional[str], error: Optional[str]) -> dict:
+    """The `standing` payload leg: ``{claimed, message, session_id, record, source}`` plus
+    ``displaced_holder``/``displaced_holder_live`` when a takeover happened (and
+    ``needs_pm_decision`` when not claimed). `record` is the nomination verdict verbatim.
+    `group-em-autofire.py` reads `claimed`, `message` and `needs_pm_decision`."""
+    nom = nomination if isinstance(nomination, dict) else {}
+    claimed = bool(nom.get("claimed"))
+    standing: dict[str, Any] = {
+        "claimed": claimed,
+        "message": _standing_message(nom, session_id or "") if nom else f"nomination unavailable: {error}",
+        "session_id": nom.get("holder") or session_id,
+        "record": nomination,
+        "source": "engine",
+    }
+    if nom.get("displaced_holder"):
+        standing["displaced_holder"] = nom["displaced_holder"]
+        standing["displaced_holder_live"] = bool(nom.get("displaced_holder_live"))
+    if not claimed:
+        standing["needs_pm_decision"] = (
+            f"nomination was not claimed ({error or 'refused'}) -- this is not a "
+            "standing-ownership problem"
+        )
+    return standing
+
+
 @register_op("groupem.enter")
 def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.enter" handler.
@@ -415,6 +469,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
         repo_root (str, optional) -- the repo whose peer set is entered.
             Defaults to the CALLING process's own `os.getcwd()` when
             omitted, matching `session.peer_roster`'s own convention.
+        note, operator (str, optional) -- recorded on the nomination (`note`, `nominated_by`).
         caller_session_id (str, optional) -- defaults to
             `read_pass.caller_session_id()` (the `CLAUDE_CODE_SESSION_ID`
             env var) when omitted.
@@ -470,7 +525,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
     nomination_outcome = (
-        _run_nomination(target_root, caller_session_id)
+        _run_nomination(target_root, caller_session_id, _str_param(params, "note"), _str_param(params, "operator"))
         if caller_session_id
         else (None, "no-caller-session-id")
     )
@@ -485,6 +540,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Roster and digest are reported ABSENT with a reason, distinguishable from "ran and
     # found nothing" -- never an empty list, never a partially-built digest.
     group_em_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
+    result["standing"] = build_standing(nomination_value, caller_session_id, nomination_outcome[1])
 
     if group_em_refused:
         return result

@@ -195,3 +195,17 @@ def test_over_declaring_silently_disables_removals(tmp_path):
         "silently, with the round still reporting PASS"
     )
     assert len(found) == 1
+
+
+def test_walk_never_names_a_peer_scratch_clone(tmp_path):
+    root = _mirror(tmp_path)
+    clone = root / "scratch" / "benchmark-clones" / "gate-x" / "clone" / "coordinator_core" / "ops"
+    clone.mkdir(parents=True)
+    (clone / "mod.py").write_text("x = 1\n")
+
+    found = _mod._walk_published_payload([root])
+
+    assert not [p for p in found if "scratch" in p.parts], (
+        "a scratch clone reached declared_payload — its paths collide with removals "
+        "and scan-secrets refuses the round"
+    )

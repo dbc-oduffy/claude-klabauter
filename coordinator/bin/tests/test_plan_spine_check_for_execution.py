@@ -136,3 +136,26 @@ def test_width_rationale_helper_returns_none_when_absent():
 def test_width_rationale_helper_returns_none_when_empty():
     text = "# A plan\n\n## Width rationale\n\n## Next\n"
     assert psc._width_rationale(text) is None
+
+
+def _goal_plan(tmp_path: Path, tshirt: str) -> Path:
+    (tmp_path / "sizing.yaml").write_text(f"estimate:\n  tshirt: {tshirt}\n", encoding="utf-8")
+    path = tmp_path / "plan.md"
+    path.write_text(
+        "---\ntitle: t\ncreated: 2026-10-05\nsizing_object: sizing.yaml\n"
+        "prime_exit_criterion:\n  statement: s\n  # falsifier: owed\n---\n\n# A plan\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_for_execution_refuses_owed_falsifier_on_m_plan(tmp_path, capsys):
+    path = _goal_plan(tmp_path, "M")
+    assert psc.main([str(path), "--for-execution"]) == psc.EXIT_INVALID
+    assert "falsifier_exemption" in capsys.readouterr().out
+    assert psc.main([str(path)]) == psc.EXIT_OK
+
+
+def test_for_execution_passes_owed_falsifier_on_s_plan(tmp_path):
+    path = _goal_plan(tmp_path, "S")
+    assert psc.main([str(path), "--for-execution"]) == psc.EXIT_OK

@@ -150,3 +150,14 @@ def test_git_grep_failure_exits_two(tmp_path, capsys):
     (tmp_path / cdc.BASELINE_REL).write_text("## Dangling\n", encoding="utf-8")
     assert cdc.main(["--root", str(tmp_path)]) == 2
     assert "could not check" in capsys.readouterr().err
+
+
+def test_repo_root_is_the_callers_repo_not_the_script_location(corpus, tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SUBJECT_REPO_ROOT", raising=False)
+    monkeypatch.chdir(corpus)
+    assert cdc.repo_root() == corpus.resolve()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("COORDINATOR_SUBJECT_REPO_ROOT", str(corpus))
+    assert cdc.repo_root() == corpus.resolve()

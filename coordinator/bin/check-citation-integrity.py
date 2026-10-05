@@ -143,6 +143,8 @@ REPO_ROOT = _REPO_ROOT
 #: importing that module at module scope -- both derive from the same `REPO_ROOT`.
 WIKI_ROOT = REPO_ROOT / "docs" / "wiki"
 DEFAULT_BASELINE_PATH = REPO_ROOT / "state" / "baselines" / "citation-integrity.json"
+#: Subject repo that baseline identities are relative to; `main` rebinds it to the caller's repo.
+_SUBJECT = [REPO_ROOT]
 
 
 def _cg():
@@ -219,7 +221,7 @@ def citation_identity(verdict: "cg.Verdict") -> str:
     blind spot."""
     citation = verdict.citation
     try:
-        rel = citation.citing_file.resolve().relative_to(REPO_ROOT).as_posix()
+        rel = citation.citing_file.resolve().relative_to(_SUBJECT[0]).as_posix()
     except ValueError:
         rel = citation.citing_file.as_posix()
     return f"{rel}:{citation.raw_target}"
@@ -573,8 +575,8 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument(
         "--baseline",
         type=Path,
-        default=DEFAULT_BASELINE_PATH,
-        help="path to the class-partitioned baseline (default: state/baselines/citation-integrity.json)",
+        default=None,
+        help="path to the class-partitioned baseline (default: <subject repo>/state/baselines/citation-integrity.json)",
     )
     parser.add_argument(
         "--emit-baseline",
@@ -589,14 +591,25 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=REPO_ROOT,
-        help=argparse.SUPPRESS,  # test-only override for the dirty-tree check
+        default=None,
+        help="subject repo (default: env, then the cwd's repo)",
     )
     args = parser.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    from subject_repo import subject_repo_root
+
+    subject = subject_repo_root(args.repo_root)
+    if subject is None:
+        print("check-citation-integrity: no subject repo (pass --repo-root or run in a git repo)", file=sys.stderr)
+        return 1
+    _SUBJECT[0] = subject
+    subject_wiki = subject / "docs" / "wiki"
+    if args.baseline is None:
+        args.baseline = subject / "state" / "baselines" / "citation-integrity.json"
 
     if args.emit_baseline:
         if not args.i_know_the_tree_is_dirty:
-            dirty = _git_dirty_paths(args.repo_root)
+            dirty = _git_dirty_paths(subject)
             if dirty is None:
                 print(
                     "check-citation-integrity: --emit-baseline refused -- could not "
@@ -615,8 +628,8 @@ def main(argv: "list[str] | None" = None) -> int:
                 )
                 return 1
         cg = _cg()
-        report = cg.scan_corpus()
-        payload = build_baseline_payload(report, cg.WIKI_ROOT, baseline_sha=_git_head_sha(REPO_ROOT))
+        report = cg.scan_corpus(wiki_root=subject_wiki, repo_root=subject)
+        payload = build_baseline_payload(report, subject_wiki, baseline_sha=_git_head_sha(subject))
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
@@ -633,7 +646,9 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 0
 
-    exit_code, summary, human = run(baseline_path=args.baseline)
+    exit_code, summary, human = run(
+        wiki_root=subject_wiki, repo_root=subject, baseline_path=args.baseline
+    )
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:

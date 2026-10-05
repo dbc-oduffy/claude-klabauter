@@ -95,7 +95,10 @@ def test_an_empty_command_is_skippable_not_denied() -> None:
 
 
 def test_every_mapped_guard_has_at_least_one_case() -> None:
-    covered = {name for name, _ in DENIED_COMMANDS}
+    from coordinator_core.bash_guards.tests.test_crash_deny_out_of_class_coverage import _DENIED
+
+    # The live-guard cases in that file prove the guards mapped after this table.
+    covered = {name for name, _ in DENIED_COMMANDS} | {guard for guard, _cmd, _run in _DENIED}
     missing = set(_CRASH_TRIGGER_SUBSTRINGS) - covered
     assert not missing, (
         "mapped with no in-class command case, so its widening is asserted and not proved: "

@@ -14,6 +14,7 @@ unverifiable, never as missing. Always exits 0.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -98,9 +99,20 @@ def check(agents_dir: Path, repo_root: Path, config_home: Path) -> tuple[list[st
     return missing, sorted(unverifiable)
 
 
-def main() -> int:
-    repo_root = Path(git_root_walk() or Path.cwd())
-    missing, unverifiable = check(_ROOT / "agents", repo_root, _config_home())
+def _agents_dir(repo_root: Path) -> Path:
+    for rel in ("coordinator/agents", "agents"):
+        if (repo_root / rel).is_dir():
+            return repo_root / rel
+    return repo_root / "coordinator" / "agents"
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("--repo-root", default=None, help="subject repo (default: env, then cwd's repo)")
+    args = ap.parse_args(argv)
+    explicit = args.repo_root or os.environ.get("COORDINATOR_SUBJECT_REPO_ROOT")
+    repo_root = Path(explicit).resolve() if explicit else Path(git_root_walk() or Path.cwd())
+    missing, unverifiable = check(_agents_dir(repo_root), repo_root, _config_home())
     for line in missing:
         print(f"WARN {line}")
     if unverifiable:

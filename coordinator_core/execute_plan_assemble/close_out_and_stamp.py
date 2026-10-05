@@ -205,12 +205,16 @@ from coordinator_core.execute_plan_assemble.falsifier_shape import (
     _EXEMPTION_CLASS,
     _MPLUS_TSHIRTS,
     _REQUIRED_FALSIFIER_KEYS,
+    GOAL_REFUSAL_FALSIFIER_ABSENT,
+    GOAL_REFUSAL_FALSIFIER_MISNESTED,
+    GOAL_REFUSAL_PRIME_ABSENT,
     GRANDFATHER_DATE,
     _falsifier_block,
     _falsifier_exemption,
     _falsifier_misnested,
     _plan_created_on_or_after_grandfather,
     _plan_is_m_plus,
+    goal_falsifier_defect,
 )
 
 EXIT_OK = 0
@@ -1336,9 +1340,6 @@ GOAL_REFUSAL_NOT_ASSERTED = "exit_criterion_not_asserted"
 GOAL_REFUSAL_BASELINE_REF_PREFIX = "baseline_ref_"
 GOAL_REFUSAL_VERDICT_NOT_PASS = "falsifier_verdict_not_pass"
 GOAL_REFUSAL_DERIVED_FROM_UNRESOLVABLE = "derived_from_unresolvable"
-GOAL_REFUSAL_PRIME_ABSENT = "prime_exit_criterion_absent"
-GOAL_REFUSAL_FALSIFIER_ABSENT = "falsifier_absent"
-GOAL_REFUSAL_FALSIFIER_MISNESTED = "falsifier_misnested"
 
 _PRIME_ABSENT_NEXT_MOVE = (
     "Author prime_exit_criterion (statement + derived_from, plus a falsifier "
@@ -1490,9 +1491,7 @@ def _evaluate_goal_falsifier_gate(
         # Either predicate failing to read cleanly declines -- see each
         # helper's own docstring for why this arm alone fails toward
         # grandfathering rather than toward refusal.
-        if not _plan_created_on_or_after_grandfather(fm):
-            return None
-        if not _plan_is_m_plus(fm, root):
+        if goal_falsifier_defect(fm, root) != GOAL_REFUSAL_PRIME_ABSENT:
             return None
         if _read_status_override(plan_text) is not None:
             return {
@@ -1561,12 +1560,8 @@ def _evaluate_goal_falsifier_gate(
     # punish the discipline the hatch exists to reward.
     falsifier = _falsifier_block(prime)
     misnested_top_level = fm.get("falsifier") if _falsifier_misnested(fm) else None
-    falsifier_size_gated = (
-        _falsifier_exemption(prime) is None
-        and _plan_created_on_or_after_grandfather(fm)
-        and _plan_is_m_plus(fm, root)
-    )
-    if falsifier is None and falsifier_size_gated:
+    falsifier_defect = goal_falsifier_defect(fm, root)
+    if falsifier is None and falsifier_defect is not None:
         if misnested_top_level is not None:
             # A distinct reason from GOAL_REFUSAL_FALSIFIER_ABSENT (gh-
             # klabauter#63): the field is present, just nested one level

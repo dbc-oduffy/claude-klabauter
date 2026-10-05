@@ -394,7 +394,7 @@ def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(
 
     from coordinator_core.ops.review_mint import op as review_op_mod
 
-    monkeypatch.setattr(review_op_mod, "read_content_root_pointer", lambda: str(content_root))
+    monkeypatch.setattr(review_op_mod, "read_content_root", lambda: str(content_root))
 
     fragment, stage_schemas = op_mod._load_review_inputs("plan")
     assert fragment == _V5_FRAGMENT

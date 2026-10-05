@@ -244,7 +244,49 @@ def check_plan(path: Path, for_execution: bool = False) -> dict:
             report["verdict"] = "INVALID"
         else:
             report.setdefault("advisories", []).append(body_finding)
+    goal_finding = _goal_falsifier_finding(path, text, for_execution)
+    if goal_finding is not None:
+        report["rows"].append(goal_finding)
+        report["verdict"] = "INVALID"
     return report
+
+
+def _goal_falsifier_finding(path: Path, text: str, for_execution: bool):
+    """The close-out goal gate's arms 0/1, through the engine's own shared predicate."""
+    if not for_execution:
+        return None
+    _ensure_engine_on_path()
+    import yaml
+    from coordinator_core.execute_plan_assemble.falsifier_shape import goal_falsifier_defect
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    try:
+        fm = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    sizing = fm.get("sizing_object")
+    root = path.resolve().parent
+    if isinstance(sizing, str) and sizing.strip():
+        root = next(
+            (p for p in path.resolve().parents if (p / sizing.strip()).is_file()), root
+        )
+    defect = goal_falsifier_defect(fm, root)
+    if defect is None:
+        return None
+    return {
+        "row": "-",
+        "error": (
+            f"{defect}: M+ plan has no usable prime_exit_criterion.falsifier. "
+            "Author it via the falsifier step, or add a falsifier_exemption with a reason."
+        ),
+        "at": "prime_exit_criterion.falsifier",
+        "class": "structural",
+    }
 
 
 def _approved_body_finding(text: str, for_execution: bool):

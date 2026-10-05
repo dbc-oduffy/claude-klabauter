@@ -65,10 +65,13 @@ def _run(argv: list[str], cwd: Path | None = None) -> str | None:
 
 
 def repo_root() -> Path:
-    out = _run(["git", "rev-parse", "--show-toplevel"], cwd=Path(__file__).resolve().parent)
-    if not out or not out.strip():
-        raise CheckError("cannot resolve the repo root from the script location")
-    return Path(out.strip())
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+    from subject_repo import subject_repo_root
+
+    root = subject_repo_root()
+    if root is None:
+        raise CheckError("cannot resolve the subject repo (pass --root or run inside a git repo)")
+    return root
 
 
 def _registry_repo_paths() -> dict[str, Path]:
@@ -282,7 +285,7 @@ def check(root: Path, siblings: dict[str, set[str]] | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--emit-baseline", action="store_true", help=f"rewrite {BASELINE_REL}")
-    ap.add_argument("--root", type=Path, default=None, help="repo root (default: this script's repo)")
+    ap.add_argument("--root", type=Path, default=None, help="repo root (default: env, then the cwd's repo)")
     args = ap.parse_args(argv)
     try:
         root = args.root if args.root is not None else repo_root()

@@ -41,9 +41,13 @@ def test_skips_when_no_plugin_root():
     check_agent_types_resolve(_SCRIPT, claude_plugin_root=None, agent_type_host="coordinator")
 
 
-def test_skips_when_agent_types_are_host_degraded(tmp_path):
+def test_degraded_host_skips_the_plugin_stat_for_a_script_with_no_coordinator_type(tmp_path):
     root = _plugin(tmp_path)
-    check_agent_types_resolve(_SCRIPT, claude_plugin_root=root, agent_type_host="host")
+    check_agent_types_resolve(
+        "await agent('p', { agentType: 'general-purpose' });\n",
+        claude_plugin_root=root,
+        agent_type_host="host",
+    )
 
 
 def test_dispatch_emit_op_refuses_before_writing(tmp_path, monkeypatch):

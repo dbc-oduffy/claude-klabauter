@@ -72,8 +72,10 @@ class NominationResult(NamedTuple):
 
 
 def _nominate(nomination, repo_root: str, session_id: str, *, note: Optional[str] = None,
-              peer_name: Optional[str] = None) -> NominationResult:
-    verdict = nomination.claim(repo_root, session_id, peer_name=peer_name, nominated_by=note)
+              operator: Optional[str] = None, peer_name: Optional[str] = None) -> NominationResult:
+    verdict = nomination.claim(
+        repo_root, session_id, peer_name=peer_name, nominated_by=operator, note=note
+    )
     if not verdict.get("claimed"):
         incumbent = verdict.get("superseded_incumbent") or {}
         return NominationResult(
@@ -83,14 +85,16 @@ def _nominate(nomination, repo_root: str, session_id: str, *, note: Optional[str
             5,
             verdict,
         )
+    displaced = verdict.get("displaced_holder")
     if verdict.get("already_held"):
         message = f"{session_id} already holds Group EM for {repo_root} (refreshed)"
-    elif verdict.get("replaced_holder"):
-        replaced = verdict["replaced_holder"]
+    elif displaced and verdict.get("displaced_holder_live"):
         message = (
-            f"replaced lapsed nomination {replaced.get('session_id')} with {session_id} "
-            "(prior holder was not live)"
+            f"took Group EM from {displaced} -- that session is still running and does not "
+            "know yet; tell it"
         )
+    elif displaced:
+        message = f"replaced lapsed nomination {displaced} with {session_id} (prior holder was not live)"
     else:
         message = f"nominated {session_id} as Group EM for {repo_root}"
     return NominationResult(True, message, 0, verdict)
@@ -214,6 +218,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_nom.add_argument("--session-id", help="session id to nominate; default $CLAUDE_SESSION_ID")
     p_nom.add_argument("--repo", help="repo root; default cwd")
     p_nom.add_argument("--note", help="free-form note")
+    p_nom.add_argument("--operator", help="operator recorded as nominated_by")
 
     p_down = sub.add_parser("stand-down", help="stand down the Group EM nomination for a repo")
     p_down.add_argument("--session-id", help="session id standing down; default any holder")
@@ -259,7 +264,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not session_id:
             parser.error("give --session-id or set $CLAUDE_SESSION_ID")
         peer_name = _resolve_peer_name(session_registry, session_id)
-        result = _nominate(nomination, repo, session_id, note=args.note, peer_name=peer_name)
+        result = _nominate(nomination, repo, session_id, note=args.note,
+                          operator=args.operator, peer_name=peer_name)
         print(result.message, file=sys.stdout if result.ok else sys.stderr)
         return result.exit_code
 

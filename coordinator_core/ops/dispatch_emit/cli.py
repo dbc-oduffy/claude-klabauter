@@ -1056,6 +1056,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
 
     try:
+        if args.plan and not args.inventory:
+            from coordinator_core.ops.dispatch_emit.dirty_write_set import (
+                guard_against_dirty_write_set,
+            )
+            from coordinator_core.ops.dispatch_emit.op import _repo_root_for_plan
+
+            guard_root = repo_root or _repo_root_for_plan(args.plan)
+            if guard_root is not None:
+                guard_against_dirty_write_set(Path(args.plan), guard_root)
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
         except ScriptOverCapError as over:

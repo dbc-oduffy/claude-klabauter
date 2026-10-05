@@ -815,3 +815,20 @@ def test_guard_never_raises_on_a_stale_unreadable_lock_file_and_takes_over(tmp_p
         interval_seconds=18.0, writer_session_id="w1",
     )
     assert wrote is True
+
+
+def test_destroyed_tick_trace_renders_only_for_a_destroyed_tick_with_declinations():
+    base = {
+        "tick_source": "monitor",
+        "prior_tick_source": "entry",
+        "prior_last_tick_at": "2020-01-01T00:00:00Z",
+        "prior_declination_count": 2,
+        "prior_subscribed_peers": 3,
+    }
+    line = watch_heartbeat.destroyed_tick_trace(base)
+    assert line is not None
+    assert "destroyed tick trace: a prior entry tick" in line
+    assert "2 declination(s), 3 subscribed peer(s)" in line
+    assert watch_heartbeat.destroyed_tick_trace({**base, "prior_tick_source": "monitor"}) is None
+    assert watch_heartbeat.destroyed_tick_trace({**base, "prior_declination_count": 0}) is None
+    assert watch_heartbeat.destroyed_tick_trace({"tick_source": "monitor"}) is None

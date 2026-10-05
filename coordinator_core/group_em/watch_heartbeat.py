@@ -949,6 +949,14 @@ def read_liveness(
         "pid": record.get("pid"),
         "pid_start_epoch": record.get("pid_start_epoch"),
     }
+    for key in (
+        "prior_tick_source",
+        "prior_last_tick_at",
+        "prior_subscribed_peers",
+        "prior_declination_count",
+    ):
+        if key in record:
+            base[key] = record[key]
 
     deadline = record.get("next_expected_by")
     if not isinstance(deadline, str):
@@ -965,6 +973,30 @@ def read_liveness(
         return {"verdict": VERDICT_STALE, "seconds_overdue": round(overdue, 1),
                 "remedy": REARM_COMMAND, **base}
     return {"verdict": VERDICT_ARMED, "seconds_overdue": None, **base}
+
+
+def destroyed_tick_trace(liveness: dict, now_epoch: Optional[float] = None) -> Optional[str]:
+    """One line naming a prior tick this record overwrote, or None.
+
+    Non-None only when `prior_tick_source` differs from the current `tick_source` and
+    `prior_declination_count` is a positive int; an absent trace and a destroyed-nothing tick
+    stay silent rather than rendering a fabricated zero. For the deliberate read
+    (`group-em-watch-cli`), never an ambient surface: `prior_*` is written on nearly every tick."""
+    prior_source = liveness.get("prior_tick_source")
+    if not prior_source or prior_source == liveness.get("tick_source"):
+        return None
+    count = liveness.get("prior_declination_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        return None
+    age = timestamps.age_seconds(liveness.get("prior_last_tick_at"), now_epoch)
+    detail = f"a prior {prior_source} tick"
+    if age is not None:
+        detail += f" from {timestamps.age_phrase(age)} ago"
+    detail += f" was overwritten -- {count} declination(s)"
+    peers = liveness.get("prior_subscribed_peers")
+    if isinstance(peers, int) and not isinstance(peers, bool):
+        detail += f", {peers} subscribed peer(s)"
+    return f"  destroyed tick trace: {detail}"
 
 
 def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:

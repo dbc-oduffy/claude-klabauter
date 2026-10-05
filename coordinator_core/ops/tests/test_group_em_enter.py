@@ -16,7 +16,7 @@ from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.session import machinery_paths
 
 
-def test_payload_has_exactly_nine_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_ten_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -41,8 +41,8 @@ def test_payload_has_exactly_nine_keys(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert set(result.keys()) == {
-        "as_of", "nomination", "roster", "roster_excluded", "roster_considered", "digest",
-        "baseline", "teammates", "watch_liveness"
+        "as_of", "nomination", "standing", "roster", "roster_excluded", "roster_considered",
+        "digest", "baseline", "teammates", "watch_liveness"
     }
 
 
@@ -1092,3 +1092,42 @@ def test_stamp_failure_does_not_block_entry(tmp_path, monkeypatch):
     assert result["roster"] == []
     assert result["baseline"]["first_tick"] is True
     assert result["heartbeat_error"] == "OSError: disk full"
+
+
+def test_standing_leg_carries_takeover_and_the_exact_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
+    monkeypatch.setattr(
+        gee.group_em_send_pass, "build_send_digest", lambda *a, **k: {"entries": []}
+    )
+    verdict = {
+        "claimed": True, "holder": "sid-new", "already_held": False,
+        "superseded_incumbent": None, "replaced_holder": None,
+        "displaced_holder": "sid-old", "displaced_holder_live": True,
+    }
+    monkeypatch.setattr(gee.group_em_nomination, "claim", lambda *a, **k: verdict)
+    monkeypatch.setattr(
+        gee.group_em_baseline, "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    standing = gee._group_em_enter(
+        {"repo_root": str(tmp_path), "caller_session_id": "sid-new"}
+    )["standing"]
+
+    assert set(standing) == {
+        "claimed", "message", "session_id", "record", "source",
+        "displaced_holder", "displaced_holder_live",
+    }
+    assert standing["claimed"] is True and standing["source"] == "engine"
+    assert standing["session_id"] == "sid-new" and standing["record"] == verdict
+    assert standing["displaced_holder"] == "sid-old"
+    assert standing["displaced_holder_live"] is True
+    assert "sid-old" in standing["message"]
+
+
+def test_unclaimed_standing_names_needs_pm_decision(tmp_path, monkeypatch):
+    monkeypatch.setattr(gee.group_em_nomination, "claim", lambda *a, **k: {"claimed": False})
+    result = gee._group_em_enter({"repo_root": str(tmp_path), "caller_session_id": "s"})
+    assert result["standing"]["claimed"] is False
+    assert result["standing"]["needs_pm_decision"]

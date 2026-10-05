@@ -143,6 +143,31 @@ _NO_PLAN_BRIEF_LINE = "No plan PM brief was supplied for this review."
 _WASTE_ATTRIBUTION_TIMEOUT_S = 600
 
 
+def _call_bounded(label: str, fn, *args, **kwargs):
+    """Run `fn` on a daemon thread and raise ComposeError past `_WASTE_ATTRIBUTION_TIMEOUT_S`.
+
+    The in-process replacement for the subprocess `timeout=` backstop: a hung call is
+    abandoned (the daemon thread dies with the process) and the compose fails loud."""
+    import threading
+
+    box: dict[str, Any] = {}
+
+    def _target() -> None:
+        try:
+            box["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_target, daemon=True)
+    worker.start()
+    worker.join(_WASTE_ATTRIBUTION_TIMEOUT_S)
+    if worker.is_alive():
+        raise ComposeError(f"{label} exceeded {_WASTE_ATTRIBUTION_TIMEOUT_S}s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _require_dispatch_engine() -> str:
     """Put the DISPATCH engine root on `sys.path` and return it, fail-loud.
 
@@ -388,7 +413,7 @@ def _freeze_slices_batch(requests: list[dict[str, str]]) -> list[dict]:
     from coordinator_core.ops.review_freeze_diff import freeze_diffs_batch
 
     try:
-        return freeze_diffs_batch(_REPO_ROOT, requests)
+        return _call_bounded("freeze_diffs_batch", freeze_diffs_batch, _REPO_ROOT, requests)
     except Exception as exc:
         raise ComposeError(f"freeze_diffs_batch failed for this wave: {exc}") from exc
 
@@ -489,15 +514,21 @@ def _provision_phase(
         payload["contract_blocks"] = contract_block_names
 
     try:
-        sidecar_path = _provision(payload, str(policy_file), str(_REPO_ROOT))
+        sidecar_path = _call_bounded(
+            "provision_report._provision", _provision, payload, str(policy_file), str(_REPO_ROOT)
+        )
     except Exception as exc:
         raise ComposeError(
             f"provision_report._provision failed for {agent_type}/{provision_key}: {exc}"
         ) from exc
 
     try:
-        injected_blocks = assemble_contract_blocks_for_payload(
-            payload, cwd=None, report_sidecar_path=sidecar_path
+        injected_blocks = _call_bounded(
+            "provision_report.assemble_contract_blocks_for_payload",
+            assemble_contract_blocks_for_payload,
+            payload,
+            cwd=None,
+            report_sidecar_path=sidecar_path,
         )
     except Exception as exc:
         raise ComposeError(

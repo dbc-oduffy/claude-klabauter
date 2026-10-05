@@ -553,6 +553,16 @@ def _unwrap_task_output(result: Any) -> dict:
     raise ValueError("result carries no reverify_delivery payload, bare or in a task-output wrapper")
 
 
+def _repo_of_record(record: Path) -> Path:
+    """The repo owning a run record: the parent of its `.coordinator-local` (or `.git`) ancestor;
+    the cwd when the record sits under neither."""
+    start = record.resolve()
+    for parent in start.parents:
+        if parent.name == ".coordinator-local" or (parent / ".git").exists():
+            return parent.parent if parent.name == ".coordinator-local" else parent
+    return Path.cwd()
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = argparse.ArgumentParser(prog="reverify-delivery")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -562,7 +572,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     rec.add_argument("--repo-root", default=None)
     rec.add_argument("--session-id", default="")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    repo_root = Path(args.repo_root) if args.repo_root else Path.cwd()
+    repo_root = Path(args.repo_root) if args.repo_root else _repo_of_record(Path(args.run_record))
     raw = args.result_json
     try:
         if not raw.lstrip().startswith("{"):
@@ -583,9 +593,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             session_id=args.session_id,
             criterion=result.get("criterion") or None,
             tests=result.get("tests") or None,
-            foreign_claims=(
-                None if frozen is None else live_foreign_claims(repo_root, frozen, ident["head_sha"])
-            ),
+            foreign_claims=live_foreign_claims(repo_root, frozen or [], ident["head_sha"]),
         )
         settle_tests_sidecar(repo_root, result.get("tests") or None)
     except (OSError, ValueError, KeyError) as exc:
