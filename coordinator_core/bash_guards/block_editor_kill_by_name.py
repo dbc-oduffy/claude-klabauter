@@ -10,13 +10,16 @@ ShaderCompileWorker*, LiveCodingConsole* and UnrealTraceServer*:
     `Get-Process <name> | Stop-Process`;
   - `pkill <name>` / `killall <name>`.
 PID-targeted kills (`taskkill /PID`, `Stop-Process -Id`, `kill <pid>`) are
-allowed.
+allowed. A launched `.sh`/`.ps1`/`.py`/`.cmd`/`.bat` script that exists on
+disk is read and held to the same check, so a name-kill loop cannot hide in
+a watchdog script.
 
 No override.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -67,7 +70,7 @@ def _offence(tokens: List[str]) -> Optional[str]:
         return None
     head, args = tokens[0], tokens[1:]
     if token_matches_binary(head, "taskkill"):
-        hit = _names(_flag_values(args, ("/im", "-im")))
+        hit = _names(_flag_values(args, ("/im", "-im", "//im")))
         return f"taskkill /IM {hit[0]}" if hit else None
     if any(head.lower() == n.lower() for n in _STOP_PROCESS_NAMES):
         named = _flag_values(args, ("-name", "-processname"))
@@ -81,21 +84,52 @@ def _offence(tokens: List[str]) -> Optional[str]:
     return None
 
 
+_SCRIPT_SUFFIXES = (".sh", ".ps1", ".py", ".cmd", ".bat")
+_SCRIPT_READ_CAP_BYTES = 256 * 1024
+
+
+def _text_offence(text: str) -> Optional[str]:
+    if not _PRE_FILTER_RE.search(text):
+        return None
+    text = text.replace("\r", "")
+    for resolved in resolve_command_positions(text):
+        found = _offence(resolved.tokens)
+        if found:
+            return found
+    if _GET_PROCESS_PIPE_RE.search(text):
+        return "Get-Process <editor> | Stop-Process"
+    return None
+
+
+def _script_offence(cmd: str, cwd: Optional[str]) -> Optional[str]:
+    """A name-kill inside a launched script file. Unreadable files allow."""
+    for resolved in resolve_command_positions(cmd):
+        for tok in resolved.tokens:
+            tok = tok.strip("\"'")
+            if not tok.lower().endswith(_SCRIPT_SUFFIXES):
+                continue
+            path = tok if os.path.isabs(tok) or not cwd else os.path.join(cwd, tok)
+            try:
+                with open(path, "rb") as fh:
+                    body = fh.read(_SCRIPT_READ_CAP_BYTES).decode("utf-8", "replace")
+            except OSError:
+                continue
+            found = _text_offence(body)
+            if found:
+                return f"{tok} runs {found}"
+    return None
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
-    if not cmd or not _PRE_FILTER_RE.search(cmd):
+    if not cmd:
         return None
-    cmd = cmd.replace("\r", "")
-    offence = None
-    for resolved in resolve_command_positions(cmd):
-        offence = _offence(resolved.tokens)
-        if offence:
-            break
-    if offence is None and _GET_PROCESS_PIPE_RE.search(cmd):
-        offence = "Get-Process <editor> | Stop-Process"
+    offence = _text_offence(cmd)
+    if offence is None and any(sfx in cmd.lower() for sfx in _SCRIPT_SUFFIXES):
+        offence = _script_offence(cmd.replace("\r", ""), payload.get("cwd"))
     if offence is None:
         return None
     return {

@@ -3276,7 +3276,7 @@ def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
 def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
     script = tmp_path / "land.py"
     script.write_text("from coordinator_core.git." "commit import commit_paths\n")
-    cmd = shape.format(f=script, d=tmp_path, n=script.name)
+    cmd = shape.format(f=script.as_posix(), d=tmp_path.as_posix(), n=script.name)
     result = guard.check(_payload(cmd))
     assert result is not None
     assert "script file" in result["hookSpecificOutput"]["permissionDecisionReason"]

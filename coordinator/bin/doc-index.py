@@ -53,7 +53,10 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from cc_invoke import require_colocated_engine_on_path  # noqa: E402
+
+require_colocated_engine_on_path(__file__)
 
 from coordinator_core.ops.docindex_emit import _docindex_emit  # noqa: E402
 

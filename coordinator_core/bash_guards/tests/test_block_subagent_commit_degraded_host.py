@@ -22,12 +22,22 @@ commit.py's own pattern.
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from typing import Any, Dict, List
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 
 _GIT_COMMIT_AGENT_TYPE = guard._GIT_COMMIT_AGENT_TYPE
 _FAKE_REPO_ROOT = "/repo"
+
+
+@pytest.fixture(autouse=True)
+def _repo_root_under_tmp_path(tmp_path, monkeypatch):
+    """A stand-down here writes real audit logs under the resolved root."""
+    monkeypatch.setattr(sys.modules[__name__], "_FAKE_REPO_ROOT", str(tmp_path / "repo"))
 
 _SCOPED_COMMIT_CMD = 'git commit -m "msg" -- src/foo.py'
 
