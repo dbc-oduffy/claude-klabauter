@@ -338,3 +338,18 @@ def test_plan_source_advances_a_sizing_joined_only_by_its_plan_fk(tmp_path):
     assert result["exit_code"] == 0, result
     assert [Path(a["path"]).name for a in result["by_kind"]["sizing"]["advanced"]] == [sizing.name]
     assert yaml.safe_load(stranger.read_text(encoding="utf-8"))["status"] == "routed"
+
+
+@pytest.mark.parametrize(
+    "value, plan_fk",
+    [
+        ("docs/plans/p.md", "archive/specs/2026-10/p.md"),
+        ("archive/specs/2026-10/p.md", "docs/plans/p.md"),
+        ("claude-klabauter:docs/plans/p.md", "archive/specs/2026-10/p.md"),
+    ],
+)
+def test_plan_fk_join_resolves_an_archived_plan_path(value, plan_fk):
+    from coordinator_core.ops.deliverable_cascade import _plan_fk_matches
+
+    assert _plan_fk_matches(value, plan_fk)
+    assert not _plan_fk_matches(value, "archive/specs/2026-10/q.md")

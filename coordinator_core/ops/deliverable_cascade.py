@@ -167,6 +167,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import os
+import re
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
@@ -473,15 +474,27 @@ def _claimant(candidate_path: Path, repo_root: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+_ARCHIVED_PLAN_RE = re.compile(r"^archive/specs/\d{4}-\d{2}/([^/]+)$")
+
+
+def _plan_origin(path: str) -> str:
+    """An archived plan path mapped back to its `docs/plans/` origin; any other path unchanged."""
+    m = _ARCHIVED_PLAN_RE.match(path)
+    return f"docs/plans/{m.group(1)}" if m else path
+
+
 def _plan_fk_matches(value: Any, plan_fk: str) -> bool:
-    """True when a record's `plan` field names `plan_fk`, tolerating a `<root>:` prefix."""
+    """True when a record's `plan` field names `plan_fk`, tolerating a `<root>:` prefix.
+
+    Either side may be the plan's archived path: archival moves the file, never the FK.
+    """
     if not isinstance(value, str):
         return False
     norm = value.strip().replace("\\", "/")
     head, sep, tail = norm.partition(":")
     if sep and len(head) > 1:
         norm = tail
-    return norm == plan_fk
+    return _plan_origin(norm) == _plan_origin(plan_fk)
 
 
 def _collect_live_candidates_for_kind(
