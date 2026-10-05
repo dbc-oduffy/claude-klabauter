@@ -1038,21 +1038,23 @@ def commit_paths(
     # paths, and committed over the top; the merge parent survived only
     # because the pending commit was still on the remote.
     #
-    # Three `exists()` calls on a path already resolved, zero spawns: an
-    # ordinary commit into a settled repo pays three stats.
-    for _seq_file, _seq_verb in (
-        ("MERGE_HEAD", "merge"),
-        ("CHERRY_PICK_HEAD", "cherry-pick"),
-        ("REVERT_HEAD", "revert"),
+    # Five `exists()` calls on a path already resolved, zero spawns: an
+    # ordinary commit into a settled repo pays five stats.
+    for _seq_file, _seq_verb, _seq_finish in (
+        ("MERGE_HEAD", "merge", "git commit"),
+        ("CHERRY_PICK_HEAD", "cherry-pick", "git commit"),
+        ("REVERT_HEAD", "revert", "git commit"),
+        ("rebase-merge", "rebase", "git rebase --continue"),
+        ("rebase-apply", "rebase", "git rebase --continue"),
     ):
         if (gitdir / _seq_file).exists():
             raise CommitRefused(
                 f"{repo} is partway through a {_seq_verb} "
                 f"(`{_seq_file}` is present) -- refusing to commit, because "
-                "this route writes a single-parent commit and would drop the "
-                f"pending parent from history. Finish the {_seq_verb} (`git "
-                f"commit`) or abandon it (`git {_seq_verb} --abort`), then "
-                "run this again."
+                "this route writes a single-parent commit onto a HEAD the "
+                f"{_seq_verb} still owns. Finish the {_seq_verb} "
+                f"(`{_seq_finish}`) or abandon it (`git {_seq_verb} --abort`), "
+                "then run this again."
             )
 
     # THE ONE INDEX READ, and it decides nothing about mechanism: it answers

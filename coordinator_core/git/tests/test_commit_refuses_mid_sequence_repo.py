@@ -91,3 +91,16 @@ def test_commit_paths_commits_once_the_merge_is_finished(conflicted):
     assert outcome.sha
     subject = _git(conflicted, "log", "-1", "--format=%s").stdout.strip()
     assert subject == "lands cleanly", subject
+
+
+def test_commit_paths_refuses_a_mid_rebase_repo(conflicted):
+    _git(conflicted, "merge", "--abort")
+    (conflicted / ".git" / "rebase-merge").mkdir()
+    head_before = _git(conflicted, "rev-parse", "HEAD").stdout.strip()
+    (conflicted / "bystander.txt").write_text("two\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(CommitRefused) as caught:
+        commit_paths(conflicted, ["bystander.txt"], "should not land")
+
+    assert "git rebase --continue" in str(caught.value)
+    assert _git(conflicted, "rev-parse", "HEAD").stdout.strip() == head_before

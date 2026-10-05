@@ -1181,6 +1181,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-editor-kill-by-name",
+        "block-editor-kill-by-name-control",
+        "taskkill /F /PID 12345",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-subagent-stash-creation",
         "block-subagent-stash-creation-control",
         "git status",

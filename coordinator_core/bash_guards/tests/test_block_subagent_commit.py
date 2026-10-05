@@ -3290,3 +3290,19 @@ def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
     dirty.write_text("from coordinator_core.git." "commit import commit_paths\n")
     assert guard.check(_payload("python3 %s" % dirty, agent_id=None)) is None
     assert guard.check(_payload("python3 %s" % (tmp_path / "missing.py"))) is None
+
+
+@pytest.mark.parametrize(
+    ("cmd", "allowed"),
+    [
+        ('git commit -m "fix" -- coordinator_core/a.py', True),
+        ('git commit -m "fix"', False),
+        ('git commit -am "fix"', False),
+        ('git commit -m "fix" --', False),
+        ('git commit -m "fix" -- .', False),
+    ],
+)
+def test_named_persona_commit_must_name_its_paths(monkeypatch, tmp_path, cmd, allowed):
+    monkeypatch.setattr(guard, "resolve_git_root", lambda _cwd: str(tmp_path))
+    result = guard.check(_payload(cmd, agent_type="coordinator:staff-eng"))
+    assert (result is None) is allowed, result

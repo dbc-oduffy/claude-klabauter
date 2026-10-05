@@ -226,7 +226,12 @@ def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[s
 def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
     name, ref = args[0], args[1]
     remote = len(args) > 2 and args[2] == "origin"
-    merge_proc = _run_git(["merge", "--no-ff", ref], repo_root)
+    # `--no-edit`: with no terminal the message editor fails AFTER the merge
+    # result is staged, stranding MERGE_HEAD in a shared tree for the next
+    # committer to consume. Any failure aborts, so no in-progress merge is left.
+    merge_proc = _run_git(["merge", "--no-ff", "--no-edit", ref], repo_root)
+    if merge_proc.returncode != 0:
+        _run_git(["merge", "--abort"], repo_root)
     _fail("merge", merge_proc)
     delete_detail = _delete_branch(name, remote, repo_root)
     return {"cli": "merge-and-delete", **delete_detail}

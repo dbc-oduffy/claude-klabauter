@@ -183,6 +183,14 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-editor-kill-by-name",
+        "block-editor-kill-by-name-fire",
+        "taskkill /F /IM UnrealEditor.exe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+    ),
+    CorpusRow(
         "block-topic-branch",
         "block-topic-branch-fire",
         "git checkout -b topic/shape-probe",

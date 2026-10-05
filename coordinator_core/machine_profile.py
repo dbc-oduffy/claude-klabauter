@@ -246,6 +246,7 @@ FLOOR_GUARDS = frozenset(
         "block-topic-branch",  # fleet rule: commit only to the day branch; a level must not lower it
         "block-perforce-submit",  # PM box policy: nothing is submitted or shelved to Perforce
         "block-unreal-engine-resave",  # an engine-content rewrite needs a launcher Verify to undo
+        "block-editor-kill-by-name",  # a name-based kill takes down every session's editor
         # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
         # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
         "block-consumed-handoff-edit",

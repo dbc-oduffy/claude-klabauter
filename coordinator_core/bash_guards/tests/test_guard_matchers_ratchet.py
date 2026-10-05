@@ -184,6 +184,7 @@ EXPECTED: Dict[str, _Expected] = {
     "block-topic-branch": _Expected(("Bash", "PowerShell")),
     "block-perforce-submit": _Expected(("Bash", "PowerShell")),
     "block-unreal-engine-resave": _Expected(("Bash", "PowerShell")),
+    "block-editor-kill-by-name": _Expected(("Bash", "PowerShell")),
     "block-dev-repo-sentinel-removal": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-ban": _Expected(
         ("Bash",),
@@ -462,7 +463,7 @@ def test_discovery_found_the_expected_scope():
     declaring, PM directive 2026-09-29), and 29 -> 30 with
     `guard_headless_claude_plugin_dir`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 34, sorted(stems)
+    assert len(stems) == 35, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -485,7 +486,7 @@ def test_every_registered_guard_is_classified():
     54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
     with `background-publish`."""
     actual = _actual_matchers()
-    assert len(actual) == 62, sorted(actual)
+    assert len(actual) == 63, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -526,7 +527,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 62
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 63
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

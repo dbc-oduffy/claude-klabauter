@@ -443,6 +443,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
     "block-unreal-engine-resave": ("-run=",),
+    "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
     "block-subagent-stash-creation": ("stash",),
     "block-subagent-grant-acquisition": ("claude_md_grant",),
     "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
@@ -1288,6 +1289,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_unreal_engine_resave import (
             MATCHERS as _matchers_unreal_engine_resave,
         )
+        from coordinator_core.bash_guards.block_editor_kill_by_name import (
+            MATCHERS as _matchers_editor_kill_by_name,
+        )
         from coordinator_core.bash_guards.guard_inprocess_search import (
             MATCHERS as _matchers_inprocess_search,
         )
@@ -1321,6 +1325,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_topic_branch,
             _matchers_perforce_submit,
             _matchers_unreal_engine_resave,
+            _matchers_editor_kill_by_name,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -2296,6 +2301,10 @@ def _build_guard_chain(
         check as _check_unreal_engine_resave,
         MATCHERS as _matchers_unreal_engine_resave,
     )
+    from coordinator_core.bash_guards.block_editor_kill_by_name import (
+        check as _check_editor_kill_by_name,
+        MATCHERS as _matchers_editor_kill_by_name,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2622,6 +2631,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_unreal_engine_resave),
+        ),
+        # Editors die by the PID of their own launch, never by image name.
+        GuardEntry(
+            "block-editor-kill-by-name",
+            lambda: _check_editor_kill_by_name(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_editor_kill_by_name),
         ),
         # Branch-name and plan-body confinement: deny-or-None guards, ahead of
         # `offer-git-c` so a `cd <dir> && git ...` prefix cannot route around them.
