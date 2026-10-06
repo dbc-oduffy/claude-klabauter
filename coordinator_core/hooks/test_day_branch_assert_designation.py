@@ -84,3 +84,40 @@ def test_configured_branch_survives_a_second_boot_without_the_cloud_env(tmp_path
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     result = assert_day_branch(str(repo), "machine-a", "2026-09-22")
     assert result.outcome == COMPLIANT
+
+
+def test_cloud_container_root_records_designation_in_each_claude_branch_checkout(
+    tmp_path, monkeypatch
+):
+    """Cloud cwd is the dir above all checkouts (not a repo): each child
+    checkout on a `claude/` branch gets dayBranch; others are left alone."""
+    container = tmp_path / "container"
+    container.mkdir()
+    branches = {"a": "claude/sweep-abc123", "b": "claude/other-xyz", "c": "work/m/2026-10-06"}
+    for name, br in branches.items():
+        repo = container / name
+        repo.mkdir()
+        _run(["git", "init", "-q", str(repo)])
+        _run(["git", "-C", str(repo), "checkout", "-q", "-b", br])
+        _run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "x"])
+
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    result = assert_day_branch(str(container), "machine-a", "2026-10-06")
+
+    assert result.outcome == NOT_A_REPO
+    assert read_configured_day_branch(container / "a") == "claude/sweep-abc123"
+    assert read_configured_day_branch(container / "b") == "claude/other-xyz"
+    assert read_configured_day_branch(container / "c") is None
+
+
+def test_non_cloud_container_root_records_nothing(tmp_path, monkeypatch):
+    container = tmp_path / "container"
+    container.mkdir()
+    repo = container / "a"
+    repo.mkdir()
+    _run(["git", "init", "-q", str(repo)])
+    _run(["git", "-C", str(repo), "checkout", "-q", "-b", "claude/x"])
+    _run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "x"])
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    assert_day_branch(str(container), "machine-a", "2026-10-06")
+    assert read_configured_day_branch(repo) is None

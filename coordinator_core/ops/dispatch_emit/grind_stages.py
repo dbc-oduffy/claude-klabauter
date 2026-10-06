@@ -894,6 +894,10 @@ def compose_review_fix_commit_call(
     )
 
 
+#: Quoted heredoc delimiter for the run-cost record fed to `grind-row run-record`.
+RUN_RECORD_HEREDOC_DELIM = "RUN_RECORD_JSON"
+
+
 def compose_ledger_sweep_call(
     *,
     label: str,
@@ -917,28 +921,40 @@ def compose_ledger_sweep_call(
     the sweep clause is omitted rather than guessed."""
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", str(run_id))
     parts: list[tuple[str, str]] = [*_REPO_ANCHOR_PARTS]
+    if record_js:
+        # One verbatim Bash call: prose like "pass this JSON on stdin" is not
+        # executable -- the op-runner ran the verb with no stdin and the verb
+        # died on empty input. A quoted heredoc feeds the record; the record is
+        # one-line JSON.stringify output, so it cannot contain the delimiter line.
+        parts.append(("lit", "Run this exactly as written, as ONE Bash call (the heredoc feeds the record on stdin):\n```\n"))
+    elif queue_dirs:
+        parts.append(("lit", "Run "))
     if queue_dirs:
         queue_flags = " ".join(f"--queue {q}" for q in queue_dirs)
-        parts.append(("lit", f"Run `{ASSEMBLE_CMD} grind-row sweep --profile-dir "))
+        parts.append(("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row sweep --profile-dir "))
         parts.append(("expr", profile_dir_js))
         parts.append(("lit", f" --profile {profile} {queue_flags} --repo-root "))
         parts.append(("expr", repo_root_js))
-        parts.append(("lit", "`. Then run "))
-    else:
+        parts.append(("lit", "\n" if record_js else "`. Then run "))
+    elif not record_js:
         parts.append(("lit", "Run "))
-    parts.append(("lit", f"`{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id "))
+    parts.append(
+        ("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id ")
+    )
     parts.append(run_id_part)
     # --record-file is required by the verb; stdin ("-") is the only source here.
     parts.append(("lit", " --record-file - --repo-root "))
     parts.append(("expr", repo_root_js))
-    parts.append(("lit", "`"))
     if record_js:
-        parts.append(("lit", ", passing this JSON on stdin, byte for byte: "))
+        parts.append(("lit", f" <<'{RUN_RECORD_HEREDOC_DELIM}'\n"))
         parts.append(("expr", record_js))
+        parts.append(("lit", f"\n{RUN_RECORD_HEREDOC_DELIM}\n```\n"))
+    else:
+        parts.append(("lit", "`"))
     parts.append(
         (
             "lit",
-            ". Return `swept` when every command exits 0, else `sweep-failed` with the "
+            ("" if record_js else ".") + " Return `swept` when every command exits 0, else `sweep-failed` with the "
             "verbatim stderr in `reason`. Ledgers and run records under state/queue-grind/ "
             "are never committed. " + _NO_STAGING_CLAUSE,
         )

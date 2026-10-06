@@ -162,6 +162,8 @@ def assert_day_branch(
     same as COMPLIANT.
     """
     if not (Path(repo_root) / ".git").exists():
+        if _is_cloud_session():
+            record_mounted_checkout_designations(repo_root)
         return DayBranchAssertResult(NOT_A_REPO, "", "")
 
     branch = _current_branch(repo_root)
@@ -182,6 +184,41 @@ def assert_day_branch(
         return _case_a(repo_root, machine, today, env=env, stderr=stderr)
 
     return case_b_verdict(repo_root, branch)
+
+
+#: Harness-assigned cloud session branches share this prefix; it is the only
+#: signal available when the session cwd is the container dir above the checkouts.
+_CLOUD_SESSION_BRANCH_PREFIX = "claude/"
+
+
+def record_mounted_checkout_designations(container_root: str) -> list[str]:
+    """Record `coordinator.dayBranch` in each immediate child checkout of a
+    non-repo cloud session root whose current branch is a `claude/` session
+    branch. Zero git spawns; never raises. Returns the checkouts written."""
+    from coordinator_core.daily_branch import (
+        read_configured_day_branch,
+        record_day_branch_designation,
+    )
+
+    written: list[str] = []
+    try:
+        entries = sorted(os.scandir(container_root), key=lambda e: e.name)
+    except OSError:
+        return written
+    for entry in entries:
+        try:
+            if not entry.is_dir() or not os.path.lexists(os.path.join(entry.path, ".git")):
+                continue
+            branch = _current_branch(entry.path)
+            if not branch.startswith(_CLOUD_SESSION_BRANCH_PREFIX):
+                continue
+            if read_configured_day_branch(entry.path) is None and record_day_branch_designation(
+                entry.path, branch
+            ):
+                written.append(entry.path)
+        except Exception:  # noqa: BLE001 - one bad checkout must not block the others
+            continue
+    return written
 
 
 def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:

@@ -680,6 +680,14 @@ def cmd_run_record(rest: list[str]) -> int:
             return _usage(f"grind-row run-record: --record-file not found: {record_path}")
         raw_text = record_path.read_text(encoding="utf-8")
 
+    if not raw_text.strip():
+        print(
+            "grind-row run-record: no record on stdin -- feed it with a heredoc: "
+            "`... --record-file - --repo-root D <<'RUN_RECORD_JSON'` + JSON line + `RUN_RECORD_JSON`",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     try:
         record = json.loads(raw_text)
     except json.JSONDecodeError as exc:

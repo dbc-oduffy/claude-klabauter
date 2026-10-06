@@ -103,6 +103,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.backlog_grind_assemble import directives as _directives
 from coordinator_core.backlog_grind_assemble import readers_blitz as readers_bug_blitz
 from coordinator_core.backlog_grind_assemble import readers_debt as readers_debt_triage
 from coordinator_core.backlog_grind_assemble import readers_dogfood
@@ -174,6 +175,37 @@ def _apply_standing_grants(
     return remaining, decisions
 
 
+NOT_RUN_CLOUD = "not-run (cloud)"
+
+
+def _cloud_host() -> bool:
+    from coordinator_core.env_locality import locality
+
+    got = locality()
+    return got.call == "cloud" and got.confidence in ("certain", "high")
+
+
+def _resolve_tier_u_for_cloud(
+    directives: list[dict[str, Any]], judgment_points: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Cloud doctrine bars every broad suite: drop each Tier-U grant ask and its
+    `tier-u-grant-cli` directives, recording the ask as resolved `not-run (cloud)`."""
+    tier_u_jps = [jp for jp in judgment_points if str(jp.get("id", "")).endswith("-tier-u-grant")]
+    if not tier_u_jps:
+        return directives, judgment_points, {}
+    drop = {jp["id"] for jp in tier_u_jps}
+    decisions = {
+        jp["id"]: {
+            "disposition": NOT_RUN_CLOUD,
+            "basis": "cloud-host",
+            "question": jp.get("question"),
+        }
+        for jp in tier_u_jps
+    }
+    kept_directives = [d for d in directives if d.get("cli") != _directives._TIER_U_GRANT_CLI]
+    return kept_directives, [jp for jp in judgment_points if jp["id"] not in drop], decisions
+
+
 @dataclass(frozen=True)
 class BriefResult:
 
@@ -239,7 +271,13 @@ def brief(
         result = reader.collect(cadence, run_id=run_id)
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)
+    cloud_decisions: dict[str, Any] = {}
+    if _cloud_host():
+        directives, judgment_points, cloud_decisions = _resolve_tier_u_for_cloud(
+            directives, judgment_points
+        )
     judgment_points, decisions = _apply_standing_grants(judgment_points, standing_grants)
+    decisions.update(cloud_decisions)
     artifact: dict[str, Any] = {"cadence": cadence, "run_id": run_id}
     if standing_grants:
         artifact["standing_grants"] = sorted(set(standing_grants))

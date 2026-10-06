@@ -1096,7 +1096,13 @@ def compose_grind_script(
     commit_raw = stages.compose_commit_call(
         label="commit", phase_title="Grind", profile=profile.name, row_id_js="row.rowId",
         outcome_js="row.lastOutcome || 'settled'",
-        touched_files_js="row.touchedFiles", removed_files_js="row.removedFiles",
+        # Created files and the archive destination are staged too: a fixer reports new files
+        # under created_files, and a re-fix overwrites touchedFiles, dropping the archive copy.
+        touched_files_js=(
+            "Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
+            ".concat(row.closeResult ? [row.closeResult.new] : [])))"
+        ),
+        removed_files_js="row.removedFiles",
         agent_type_host=agent_type_host, trailers=commit_trailers,
     )
     lines.append("async function _commitCall(row) {\n" + _indent_block(_capture(commit_raw, "commit"), "  ") + "\n}")

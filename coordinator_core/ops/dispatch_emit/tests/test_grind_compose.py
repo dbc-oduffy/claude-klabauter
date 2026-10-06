@@ -322,7 +322,7 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
     # no literal manifest row path inside a "stage exactly"/"you hold the
     # lock on" clause -- those clauses interpolate a live expression now.
     for m in re.finditer(r"Stage exactly this touched list: \[", script):
-        assert script[m.end() : m.end() + 40].startswith(("' + ((row.touchedFiles", "' + ((_reviewPaths"))
+        assert script[m.end() : m.end() + 40].startswith(("' + ((row.touchedFiles", "' + ((_reviewPaths", "' + ((Array.from(new Set(row.touched"))
 
 
 # ---------------------------------------------------------------------------
@@ -923,7 +923,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert "passing this JSON on stdin, byte for byte: ' + (JSON.stringify(_runCostRecord()))" in script
+    assert "<<\\'RUN_RECORD_JSON\\'\\n' + (JSON.stringify(_runCostRecord())) + '\\nRUN_RECORD_JSON" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",

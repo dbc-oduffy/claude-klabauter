@@ -108,6 +108,7 @@ def _stub_operator_config(monkeypatch):
     resolve_operator_config() must never depend on THIS dev machine's real
     settings-home layout."""
     monkeypatch.setattr(bga, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
+    monkeypatch.setattr(bga, "_cloud_host", lambda: False)
 
 
 def _code_string_literals(source: str) -> list[str]:
@@ -492,7 +493,8 @@ class TestStandingGrant:
         )
         return [commit, tier_u, other]
 
-    def _patch(self, monkeypatch):
+    def _patch(self, monkeypatch, cloud=False):
+        monkeypatch.setattr(bga, "_cloud_host", lambda: cloud)
         jps = self._blitz_jps()
         for cadence in _CADENCES:
             reader = getattr(bga, f"readers_{cadence.replace('-', '_')}")
@@ -511,6 +513,22 @@ class TestStandingGrant:
         assert out["decisions"]["j-bug-blitz-commit-readiness"]["disposition"] == "ready-to-commit"
         assert out["decisions"]["j-bug-blitz-tier-u-grant"]["basis"] == "standing-grant:tests"
         assert out["artifact"]["standing_grants"] == ["commit", "tests"]
+
+    def test_cloud_host_resolves_tier_u_ask_as_not_run_and_drops_its_directives(self, monkeypatch):
+        self._patch(monkeypatch, cloud=True)
+        tier_u_dir = {"id": "d-w", "cli": bga_directives._TIER_U_GRANT_CLI, "args": ["check"]}
+        other_dir = {"id": "d-x", "cli": "other", "args": []}
+        monkeypatch.setattr(
+            bga.readers_bug_blitz, "collect",
+            lambda c, *, run_id=None: SimpleNamespace(
+                directives=[tier_u_dir, other_dir], judgment_points=self._blitz_jps()
+            ),
+        )
+        out = bga.brief("bug-blitz").decision_object
+        assert "j-bug-blitz-tier-u-grant" not in [jp["id"] for jp in out["judgment_points"]]
+        assert out["decisions"]["j-bug-blitz-tier-u-grant"]["disposition"] == "not-run (cloud)"
+        assert [d["id"] for d in out["directives"]] == ["d-x"]
+        assert len(out["judgment_points"]) == 2
 
     def test_no_grant_raises_every_ask(self, monkeypatch):
         self._patch(monkeypatch)
@@ -533,6 +551,14 @@ class TestStandingGrant:
         assert seen["g"] == ("commit", "tests")
 
 
+@pytest.fixture
+def _tmp_cwd_repo(tmp_path, monkeypatch):
+    """Telemetry resolves its hub from the process cwd; under a live session cwd=repo is the
+    real hub, which the conftest live-hub guard rightly refuses a test writing into."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.usefixtures("_tmp_cwd_repo")
 class TestApplyRunIdPassthrough:
     def test_supplied_run_id_reaches_the_recomputed_brief(self, monkeypatch):
         seen: dict = {}
@@ -1490,6 +1516,7 @@ class TestBugBlitzGateNotBypassedByWavePathCli:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_tmp_cwd_repo")
 class TestTemplateEmissionEndToEndThroughApply:
     """F2 -- both template-emission builders reach a real `apply()` call:
     the executor-dispatch-prompt-template via the real, unstubbed
@@ -1623,6 +1650,7 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         )
 
 
+@pytest.mark.usefixtures("_tmp_cwd_repo")
 class TestTemplateEmissionEndToEndThroughApplySpinoffOnly:
     def test_bug_blitz_spinoff_handoff_template_renders_substantial_body_end_to_end(
         self, tmp_path
@@ -1686,6 +1714,7 @@ class TestTemplateEmissionEndToEndThroughApplySpinoffOnly:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_tmp_cwd_repo")
 class TestHaikuVerifierDispatchEndToEndThroughApply:
     def test_mise_cadence_verifier_dispatch_carries_mise_enum_via_real_brief(self, tmp_path):
         # readers_mise.collect() emits d-mise-haiku-verifier-dispatch

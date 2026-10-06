@@ -47,7 +47,7 @@ port):
   the same way `oss_operative_strings._resolve_mcp_topology_path` and
   `cater_subagent_start._resolve_role_append_snippet_path` already resolve
   their own doctrine-plane artifacts: probe
-  `<claude-config-dir>/plugins/coordinator/<rel>` and
+  `<claude-config-dir>/plugins/coordinator-claude/coordinator/<rel>` and
   the marketplace-root sibling shape, then fall back to the content-root
   pointer + `coordinator_core.data_root.content_root_for` rung for a
   dev-clone box. Fail-open to `None`/absent on any miss — `_resolve_call_

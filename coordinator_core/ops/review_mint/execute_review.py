@@ -175,6 +175,10 @@ _NO_SLICES_REFUSAL = (
 )
 
 
+#: Placeholder for a run-time slice key; survives `prep_slice_id_for`'s sanitising.
+_SLICE_KEY_SENTINEL = "__SLICE_KEY__"
+
+
 def prep_slice_id_for(
     plan_path: str, run_base_sha: Optional[str], run_key: Optional[str] = None
 ) -> str:
@@ -201,6 +205,7 @@ def compose_execute_review(
     precredited_rows: Optional[List[str]] = None,
     run_key: Optional[str] = None,
     host_degraded: bool = False,
+    slice_key_js: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -229,6 +234,11 @@ def compose_execute_review(
     ``prep_suffix_js`` (only with ``declared_paths_js``) is a JS string
     expression concatenated onto the prep prompt after the declared paths.
 
+    ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
+    function composed once and called once per item (emit-wave-fire's per-baton
+    ``executeReview``): without it every concurrent call freezes under one static id and all but
+    the first collide and fail closed.
+
     1. **prep** -- one call bound to ``_reviewPrep``; prompt carries
        ``plan_path``, ``run_base_sha`` and ``declared_paths``.
     2. **review-wave** -- ONE ``parallel([...])`` holding
@@ -252,7 +262,11 @@ def compose_execute_review(
 
     # -- 1. prep ----------------------------------------------------------
     prep_phase = "Review prep"
-    prep_slice_id = prep_slice_id_for(plan_path, run_base_sha, run_key)
+    if slice_key_js and run_key:
+        raise ValueError("compose_execute_review takes at most one of run_key / slice_key_js")
+    prep_slice_id = prep_slice_id_for(
+        plan_path, run_base_sha, _SLICE_KEY_SENTINEL if slice_key_js else run_key
+    )
     credit_note = (
         "\nDelivered before this run's base (resume): rows "
         + ", ".join(precredited_rows)
@@ -495,6 +509,13 @@ def compose_execute_review(
             )
         )
 
+    if slice_key_js:
+        # Every occurrence sits inside a single-quoted prompt literal, so splicing closes and
+        # reopens that literal around the runtime key.
+        spliced = (
+            "' + String(" + slice_key_js + ").replace(/[^A-Za-z0-9_.-]/g, '-') + '"
+        )
+        phases = [(title, block.replace(_SLICE_KEY_SENTINEL, spliced)) for title, block in phases]
     return phases
 
 

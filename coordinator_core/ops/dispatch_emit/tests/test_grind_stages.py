@@ -122,9 +122,14 @@ def test_ledger_sweep_names_every_queue_and_never_commits():
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"], record_js="REC")
     assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (REPO_ROOT) + '" in call_text
     assert "grind-row run-record --profile p1 --run-id ' + 'run-1'" in call_text
-    # The verb requires --record-file; the emitted call reads the record from stdin.
+    # The verb requires --record-file; the emitted call feeds the record by quoted heredoc.
     assert " --record-file - --repo-root " in call_text
     assert "(REC)" in call_text
+    assert "<<\\'RUN_RECORD_JSON\\'" in call_text
+    assert "ONE Bash call" in call_text
+    assert "passing this JSON on stdin" not in call_text
+    # heredoc body is the record alone on its line, closed by the delimiter line
+    assert "<<\\'RUN_RECORD_JSON\\'\\n' + (REC) + '\\nRUN_RECORD_JSON\\n```" in call_text
     assert "commit_v2" not in call_text
     assert "coordinator:git-commit-agent" not in call_text
 
@@ -141,7 +146,7 @@ def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
         call_text,
     ).replace("' + '", "")
     start = flat.index(grind_stages.ASSEMBLE_CMD + " grind-row run-record")
-    command = flat[start : flat.index("`", start)]
+    command = flat[start : flat.index(" <<\\'RUN_RECORD_JSON", start)]
     argv = shlex.split(command[len(grind_stages.ASSEMBLE_CMD) :])
     assert argv[0] == "grind-row"
     return argv[1:]
@@ -163,13 +168,30 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
     argv = _emitted_run_record_argv(
         call_text, {"RUN_ID": "20261002T000000Z", "REPO_ROOT": tmp_path, "REC": "{}"}
     )
-    assert "passing this JSON on stdin" in call_text
+    assert "<<\\'RUN_RECORD_JSON\\'" in call_text
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"run_id": "20261002T000000Z"})))
     monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
 
     assert grind_rows.main(argv) == grind_rows.EXIT_OK
     written = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261002T000000Z.json"
     assert json.loads(written.read_text(encoding="utf-8")) == {"run_id": "20261002T000000Z"}
+
+
+def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, capsys):
+    """An op-runner that skips the heredoc gets a fix-naming error, not a JSON parse error."""
+    import io
+
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    rc = grind_rows.main([
+        "run-record", "--profile", "p1", "--run-id", "r1",
+        "--record-file", "-", "--repo-root", str(tmp_path),
+    ])
+    err = capsys.readouterr().err
+    assert rc == grind_rows.EXIT_USAGE
+    assert "no record on stdin" in err and "heredoc" in err
+    assert "not valid JSON" not in err
 
 
 def test_ledger_sweep_without_queue_dirs_omits_the_sweep():
