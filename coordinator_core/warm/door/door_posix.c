@@ -1757,15 +1757,6 @@ int main(int argc, char **argv) {
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf,
                                               &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE) {
-            write_all_fd(STDOUT_FILENO, resp.data, line_len);
-            write_all_fd(STDOUT_FILENO, "\n", 1);
-            free(resp.data);
-            free(rf.stdout_buf.data);
-            free(rf.stderr_buf.data);
-            free(engine_root);
-            return 1;
-        }
         free(resp.data);
 
         if (success) {

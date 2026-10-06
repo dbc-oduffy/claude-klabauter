@@ -32,7 +32,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
 
 _ACCEPT_TOUCHPOINTS = frozenset({"accept_sizing", "accept_exit_criterion"})
 _ACCEPTED_NULL_PREFIX = "`exit_criterion.accepted`"
-_PARAMS = (Field("sizing_path", "nonempty_str", required=True), Field("writes", "str_list"))
+_PARAMS = (
+    Field("sizing_path", "nonempty_str", required=True),
+    Field("writes", "str_list"),
+    Field("baton", "nonempty_str"),
+)
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
@@ -58,8 +62,14 @@ def _load_doc_new():
     return mod
 
 
-def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> GateVerdict:
-    """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause."""
+def gate(
+    repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None
+) -> GateVerdict:
+    """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
+
+    `baton` (repo-relative) goes to the mint at M+, which owns the baton checks; any other arm mints
+    no baton, so it refuses one.
+    """
     from coordinator_core import sizing_assemble as sa
 
     repo_root = Path(repo_root)
@@ -68,6 +78,9 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+
+    if baton and arm != ARM_M_PLUS:
+        return _halt(HALT_REFUSAL, f"baton given but arm {arm} mints no baton")
 
     route = effective_route(sizing)
     if route == "shape":  # DR-450 exemption: only the PM can state the JTBD, so no workflow fronts shape
@@ -113,7 +126,7 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
 
     doc_new = _load_doc_new()
     try:
-        baton = doc_new.mint_baton_from_sizing(sizing_rel, str(repo_root))
+        baton = doc_new.mint_baton_from_sizing(sizing_rel, str(repo_root), baton=baton)
     except doc_new.SizingMintRefused as exc:
         return _halt(HALT_REFUSAL, str(exc))
     # The effective route, so a PM-recorded accept_multi_session plans in the
@@ -125,7 +138,7 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
 
 @register_op("dispatch.ask_gate")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]).
+    """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str).
 
     Replies `GateVerdict.to_json()`; a malformed request replies `{"error": str}`.
     """
@@ -136,4 +149,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return refusal
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
-    return gate(main_worktree_root(Path(repo_root)), sizing_rel, writes=writes).to_json()
+    return gate(
+        main_worktree_root(Path(repo_root)), sizing_rel, writes=writes, baton=params.get("baton")
+    ).to_json()

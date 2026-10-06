@@ -513,10 +513,7 @@ def _config_identity(repo: Union[str, Path, None]) -> Tuple[Optional[str], Optio
                 candidates.append(home / ".gitconfig")
 
         if repo:
-            try:
-                candidates.append(Path(repo) / ".git" / "config")
-            except Exception:
-                pass
+            candidates.append(Path(repo) / ".git" / "config")
 
         name: Optional[str] = None
         email: Optional[str] = None
@@ -1324,29 +1321,11 @@ def commit_paths(
     if detect_rollback and old_head is not None:
         # An untrack is already a declared removal; the file stays on disk.
         declared_set = {d.replace("\\", "/") for d in declared_reverts} | set(untrack_list)
-        # A deletion whose HEAD blob lands at another path in this same
-        # commit is a move; absence at the old path restores nothing.
-        added_blobs = {val[1] for val in assembled.values() if val is not _ABSENT}
-        # An edit-then-move changes the blob, so the match is a same-basename
-        # add at a path HEAD did not hold.
-        new_names = set()
-        for ap, aval in assembled.items():
-            if aval is _ABSENT:
-                continue
-            a_dir, _, a_name = ap.rpartition("/")
-            if spine.get(a_dir, {}).get(a_name) is None:
-                new_names.add(a_name)
+        moved = rollback_check.moved_deletions(assembled, spine, _ABSENT)
         candidates: Dict[str, object] = {}
         for p, val in assembled.items():
-            if p in declared_set:
+            if p in declared_set or p in moved:
                 continue
-            if val is _ABSENT:
-                head_dir, _, head_name = p.rpartition("/")
-                head_entry = spine.get(head_dir, {}).get(head_name)
-                if head_entry is not None and (
-                    head_entry[1] in added_blobs or head_name in new_names
-                ):
-                    continue
             if val is not _ABSENT and val[1] in created_blobs and not packed_contains(
                 resolve_git_common_dir(repo), val[1]
             ):

@@ -64,7 +64,7 @@ class TestDefaultWhenNeither:
         rc = sa.main(["--tshirt", "M"])
         assert rc == sa.EXIT_OK
         out = json.loads(capsys.readouterr().out)
-        assert out["interaction_mode"] == "hands-on"
+        assert out["interaction_mode"] == "ceo"
         assert out["interaction_mode_source"] == "default"
 
     def test_malformed_fleet_value_degrades_to_default(self, monkeypatch, capsys):
@@ -72,7 +72,7 @@ class TestDefaultWhenNeither:
         rc = sa.main(["--tshirt", "M"])
         assert rc == sa.EXIT_OK
         out = json.loads(capsys.readouterr().out)
-        assert out["interaction_mode"] == "hands-on"
+        assert out["interaction_mode"] == "ceo"
         assert out["interaction_mode_source"] == "default"
 
 

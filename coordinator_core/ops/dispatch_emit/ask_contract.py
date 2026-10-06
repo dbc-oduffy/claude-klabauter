@@ -5,7 +5,10 @@ Signatures implemented in their own modules:
   ask_stage.stage(repo_root: Path, *, run_id: str, plan_rel: str | None = None,
                   sizing_rel: str | None = None, writes: Sequence[str] = ()) -> StageManifest
   ask_compose.compose_ask_script(*, repo_root: str, prompt: str | None, sizing_rel: str | None,
-                  run_id: str, session_id: str | None) -> str
+                  run_id: str, session_id: str | None, baton: dict | None = None,
+                  accept_pending: bool = False) -> str
+                  (`baton` = {"path", "deliverable_id"}; the accept phase composes when
+                  `accept_pending` or on a raw ask)
   ask_plan_blitz.wrap_stage(plan_blitz_text: str) -> tuple[str, list[str]]
 """
 
@@ -14,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-ASK_PHASES = ("size", "gate", "plan", "stage", "execute", "review")
+ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 RUN_DIR_ROOT = "scratch/warp"

@@ -206,7 +206,7 @@ class TestMultilineNoteGuard(TestActionDispositionValidation):
 
         assert result["exit_code"] == 1
         assert result["applied"] is False
-        assert "decision_note" in result["error"]
+        assert "--decision-note" in result["error"]
         assert "single-line" in result["error"]
         # realized_by must NOT be blamed — that was the exact misdirection this fixes.
         assert "realized_by" not in result["error"] and "realized-by" not in result["error"]
@@ -220,7 +220,7 @@ class TestMultilineNoteGuard(TestActionDispositionValidation):
 
         assert result["exit_code"] == 1
         assert result["applied"] is False
-        assert "actioned_note" in result["error"]
+        assert "--actioned-note" in result["error"]
         assert "single-line" in result["error"]
         assert Path(memo).read_bytes() == before
 
@@ -235,7 +235,7 @@ class TestMultilineNoteGuard(TestActionDispositionValidation):
 
         assert result["exit_code"] == 1
         assert result["applied"] is False
-        assert "decision_note" in result["error"]
+        assert "--decision-note" in result["error"]
         assert Path(memo).read_bytes() == before
 
     def test_carriage_return_in_actioned_note_rejected(self, tmp_path):
@@ -246,7 +246,7 @@ class TestMultilineNoteGuard(TestActionDispositionValidation):
 
         assert result["exit_code"] == 1
         assert result["applied"] is False
-        assert "actioned_note" in result["error"]
+        assert "--actioned-note" in result["error"]
         assert Path(memo).read_bytes() == before
 
     def test_singleline_note_with_valid_realized_by_still_succeeds(self, tmp_path):
@@ -1359,13 +1359,13 @@ created: 2026-06-01
         memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
         result = _action(memo, {"supersede_note": "n only"})
         assert result["exit_code"] == 1
-        assert "supersede_realized_by" in result["error"]
+        assert "--supersede-realized-by" in result["error"]
 
     def test_supersede_realized_by_requires_note(self, tmp_path):
         memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
         result = _action(memo, {"supersede_realized_by": "r only"})
         assert result["exit_code"] == 1
-        assert "supersede_note" in result["error"]
+        assert "--supersede-note" in result["error"]
 
     def test_supersede_mutually_exclusive_with_decision(self, tmp_path):
         memo = self._setup_memo(tmp_path, self._ACTIONED_NOTE_FIXTURE)
@@ -1906,28 +1906,6 @@ class TestResolveStampsActionedAt(TestResolve):
         # Same instant as the claim stamp written in the same closure.
         assert fm_dict["actioned_at"] == fm_dict["picked_up_at"]
         assert validate_memo_cross_fields(fm_dict) == []
-
-
-class TestHandlerAtDefaultAndErrorSpelling:
-    """memo.transition handler: `at` defaults to now; errors use op param spelling."""
-
-    @pytest.mark.parametrize("verb", ["claim", "resolve"])
-    def test_omitted_at_is_not_reported_missing(self, verb):
-        import asyncio
-        result = asyncio.run(_memo_mod._handler({"verb": verb, "memo": "m.md", "session_id": "s"}))
-        assert "missing required" not in str(result)
-
-    @pytest.mark.parametrize("verb", ["claim", "resolve"])
-    def test_missing_session_id_names_op_param_not_cli_flag(self, verb):
-        import asyncio
-        result = asyncio.run(_memo_mod._handler({"verb": verb, "memo": "m.md"}))
-        text = str(result)
-        assert "session_id" in text
-        assert "--session-id" not in text and "--at" not in text
-
-    def test_claim_blank_session_id_error_has_no_cli_flag(self, tmp_path):
-        result = _memo_mod._claim("m.md", " ", "2026-01-01T00:00:00Z")
-        assert "session_id" in str(result) and "--session-id" not in str(result)
 
 
 class TestClosureStampUnit:

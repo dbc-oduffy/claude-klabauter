@@ -74,7 +74,7 @@ def _commit_with_session_trailer(repo: Path, sid: str, message: str) -> None:
 class TestSessionIdResolution(unittest.TestCase):
     def setUp(self):
         self._env_backup = {}
-        for var in ("em_sid", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             self._env_backup[var] = None
 
     def tearDown(self):
@@ -83,7 +83,7 @@ class TestSessionIdResolution(unittest.TestCase):
         for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             os.environ.pop(var, None)
 
-    def test_em_sid_wins_over_everything(self, tmp_path_factory=None):
+    def test_coordinator_session_id_wins_over_everything(self, tmp_path_factory=None):
         import os
         import tempfile
 
@@ -100,7 +100,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ.pop("em_sid", None)
+            os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ["CLAUDE_SESSION_ID"] = "claude-session"
             os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-code-session"
             self.assertEqual(wsc.resolve_session_id(repo), "claude-session")
@@ -111,7 +111,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ.pop("em_sid", None)
+            os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-code-session"
             self.assertEqual(wsc.resolve_session_id(repo), "claude-code-session")
@@ -122,7 +122,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ.pop("em_sid", None)
+            os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             sentinel_dir = repo / ".git" / "coordinator-sessions"
@@ -138,7 +138,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ.pop("em_sid", None)
+            os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             sid = wsc.resolve_session_id(repo)
@@ -151,7 +151,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ.pop("em_sid", None)
+            os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             args = argparse.Namespace(repo_root=str(repo), format="eval")
@@ -1831,14 +1831,16 @@ class TestMemoPredecessorLeg(unittest.TestCase):
 class SessionClaimCliArgvTests(unittest.TestCase):
 
     def test_py_sibling_routes_through_the_interpreter_on_windows(self):
+        cli_path = Path("/bin/session-claim-cli.py")
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
-            argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli.py"))
+            argv = wsc._session_claim_cli_argv(cli_path)
         self.assertEqual(argv[0], sys.executable)
         self.assertTrue(argv[1].endswith("session-claim-cli.py"))
 
     def test_extensioned_cmd_path_is_invoked_directly_on_windows(self):
+        cli_path = Path("/bin/session-claim-cli.cmd")
         with unittest.mock.patch.object(wsc.os, "name", "nt"):
-            argv = wsc._session_claim_cli_argv(Path("/bin/session-claim-cli.cmd"))
+            argv = wsc._session_claim_cli_argv(cli_path)
         self.assertEqual(len(argv), 1)
         self.assertTrue(argv[0].endswith("session-claim-cli.cmd"))
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from coordinator_core.ops.sizing_acceptance import acceptance_source, acceptance_words
+
 _DISCHARGING_MODES = frozenset({"pm", "ceo"})
 _DR_PREFIX = "docs/decisions/"
 
@@ -38,9 +40,10 @@ def discharge_clauses(
     if not isinstance(accepted, Mapping):
         return {}
     mode = str(accepted.get("mode") or "").strip()
-    quote = str(accepted.get("pm_quote") or "").strip()
+    quote = (acceptance_words(accepted) or "").strip()
     if mode not in _DISCHARGING_MODES or not quote:
         return {}
+    who = "The APM ruling accepted" if acceptance_source(accepted) == "apm" else "The PM accepted"
     statement = str(criterion.get("statement") or "").strip()
     on = accepted.get("on")
 
@@ -70,7 +73,7 @@ def discharge_clauses(
             f"row {rid} writes {', '.join(paths)}" for rid, paths in hits
         )
         out[str(row.get("id"))] = (
-            f"Decision-record gate discharged ({gate}). The PM accepted this plan's exit "
+            f"Decision-record gate discharged ({gate}). {who} this plan's exit "
             f"criterion (mode {mode}, on {on}): \"{quote}\". Accepted statement: "
             f"\"{statement}\". A `proposed` status on that decision record is not a stop. "
             "Stop only if the record's decision falls outside the accepted statement, "

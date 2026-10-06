@@ -8,6 +8,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit.spine_read import (
     DanglingPlanDependencyError,
     read_spine,
+    resolve_plan_edge,
+    unlanded_plan_edges,
 )
 
 
@@ -142,3 +144,61 @@ def test_done_spelling_reads_as_coded_for_the_row_and_for_a_predecessor(tmp_path
 
     assert [r.id for r in rows] == ["D1", "D2", "D3"]
     assert {e["id"]: e["detail"] for e in exclusions}["D4"] == "disposition: coded"
+
+
+_EDGE = {"plan": "docs/plans/pred.md", "chunk": "P1", "gate_kind": "output-consumption-runtime"}
+
+
+def test_resolve_chunk_edge_to_open_row_returns_row_and_hold(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+
+    res = resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+    assert res.named_row["id"] == "P1"
+    assert res.hold is not None and "not yet coded" in res.hold
+
+
+def test_resolve_chunk_edge_to_done_row_is_coded_and_unheld(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "done")
+
+    res = resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+    assert res.named_row["disposition"] == "coded"
+    assert res.hold is None
+
+
+def test_resolve_status_edge_has_no_named_row(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+    edge = {"plan": "docs/plans/pred.md", "status": "approved", "gate_kind": "epistemic-premise"}
+
+    res = resolve_plan_edge("row 'D1'", edge, repo, {})
+
+    assert res.named_row is None
+
+
+def test_resolve_backslash_plan_reads_as_slash(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+
+    res = resolve_plan_edge("row 'D1'", {**_EDGE, "plan": "docs\\plans\\pred.md"}, repo, {})
+
+    assert res.named_row["id"] == "P1"
+
+
+def test_resolve_absent_plan_is_dangling(tmp_path):
+    repo = _repo(tmp_path)
+
+    with pytest.raises(DanglingPlanDependencyError):
+        resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+
+def test_held_first_edge_does_not_stop_a_later_dangling_edge_raising(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+    absent = {**_EDGE, "plan": "docs/plans/absent.md"}
+
+    with pytest.raises(DanglingPlanDependencyError):
+        unlanded_plan_edges("row 'D1'", [_EDGE, absent], repo, {})

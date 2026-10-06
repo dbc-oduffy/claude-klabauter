@@ -434,6 +434,8 @@ _TYPE_TO_GLOB: dict[str, str] = {
     # _YAML_WHOLE_FILE_TYPES below.
     'priority-intent':    'state/priority-intent-inbox/*.yaml',
     'priority-ledger':    'state/priority-ledger/*.yaml',
+    'subtractive-adjudication-record': 'state/mise-inventory/*-adjudication.md',
+    'completion-receipt': 'state/completion-receipts/**/*.md',
 }
 
 # Query types whose files are `.yaml` whole-file frontmatter (no `---` fences) —
@@ -451,7 +453,7 @@ _YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement'
 # component. Both shapes route through the same `_walk_glob_segments` walker —
 # see that function's docstring.
 _WILDCARD_DIR_TYPES: frozenset[str] = frozenset({
-    'roadmap', 'completion', 'handoff-archived', 'cutover',
+    'roadmap', 'completion', 'handoff-archived', 'cutover', 'completion-receipt',
 })
 
 # Synthetic types: one source FILE yields N records (one `## Session Ledger`

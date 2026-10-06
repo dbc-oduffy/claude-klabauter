@@ -513,20 +513,21 @@ def _doe_demand_tokens(content_root: Path) -> Set[str]:
 
 
 def _doe_self_supplied_names(content_root: Path) -> Set[str]:
-    """Normalized oracle names present in the content root's own
-    `coordinator/bin/`. A fence citing one of these is served by DoE itself
-    (DoE-owned oracles, or oracles ported out of claude-klabauter), so it is not a
-    demand on claude-klabauter's surface. Reuses the already-resolved `content_root`;
-    holds no path of its own."""
+    """Normalized oracle names the content root itself supplies: its
+    `coordinator/bin/` (DoE-owned oracles, or oracles ported out of claude-klabauter)
+    and its `coordinator/templates/bin/` (the forwarders DoE installs into
+    the settings home, `machine-local` among them). A fence citing one of
+    these is served by DoE itself, so it is not a demand on claude-klabauter's surface.
+    Reuses the already-resolved `content_root`; holds no path of its own."""
     from coordinator_core.plugin_health.oracle_surface import live_oracle_names
 
     coordinator_dir = content_root_for(content_root)
     if coordinator_dir is None:
         return set()
-    doe_bin = coordinator_dir / "bin"
-    if not doe_bin.is_dir():
+    doe_dirs = [d for d in (coordinator_dir / "bin", coordinator_dir / "templates" / "bin") if d.is_dir()]
+    if not doe_dirs:
         return set()
-    return {_normalize(name) for name in live_oracle_names([doe_bin])}
+    return {_normalize(name) for name in live_oracle_names(doe_dirs)}
 
 
 def _ledger_explains_missing(normalized_name: str, ledger_path: Optional[Path]) -> Optional[str]:

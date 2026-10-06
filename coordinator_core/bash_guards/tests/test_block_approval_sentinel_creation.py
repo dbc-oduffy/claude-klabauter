@@ -1087,17 +1087,3 @@ class TestReadOnlyProbeFalsePositives:
         monkeypatch.setattr(guard, "_MAX_SCRIPT_READ_BYTES", 1024)
         (tmp_path / "probe.py").write_text("x = 1\n" * 1000, encoding="utf-8")
         assert guard.check(_payload("python3 probe.py", cwd=str(tmp_path))) is not None
-
-
-class TestPythonOptionValueIsNotTheScript:
-    @pytest.mark.parametrize("opts", ["-W ignore", "-X utf8", "-u -W error"])
-    def test_clean_script_with_value_taking_option_allows(self, tmp_path, opts):
-        (tmp_path / "ok.py").write_text("print(1)\n", encoding="utf-8")
-        assert guard.check(_payload(f"python3 {opts} ok.py --flag", cwd=str(tmp_path))) is None
-
-    def test_script_mentioning_the_sentinel_still_denies(self, tmp_path):
-        (tmp_path / "bad.py").write_text(f"open('{SENTINEL}', 'w')\n", encoding="utf-8")
-        _reason(guard.check(_payload("python3 -W ignore bad.py", cwd=str(tmp_path))))
-
-    def test_missing_script_still_denies(self, tmp_path):
-        _reason(guard.check(_payload("python3 -W ignore nope.py", cwd=str(tmp_path))))

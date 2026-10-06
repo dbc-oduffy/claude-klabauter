@@ -148,8 +148,6 @@ from coordinator_core.git.git_index import IndexParseError, parse_index_stat
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
-from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
-from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
 
 
@@ -622,7 +620,6 @@ def _freeze_diff_worktree(
     declare_write(diff_path)
     sha_path.write_text(sha_content + "\n", encoding="utf-8", newline="\n")
     declare_write(sha_path)
-    register_diff_targets(repo_root, diff_text)
 
     return {
         "diff_path": str(diff_path),
@@ -635,20 +632,6 @@ def _freeze_diff_worktree(
         "commit_sha": None,
         "commit_error": None,
     }
-
-
-def register_diff_targets(repo_root: Path, diff_text: str) -> None:
-    """Register every file the frozen diff touches as the calling session's
-    review targets, so a confined reviewer may Edit exactly the reviewed files
-    (declared directory/glob pathspecs and widened test files included) and no
-    others. No session id or an unregistrable path registers nothing."""
-    session_id = resolve_session_id()
-    if not session_id:
-        return
-    try:
-        targets_add(repo_root, session_id, sorted(_covered_paths_from_diff(diff_text) - {"/dev/null"}))
-    except (LedgerError, OSError):
-        pass
 
 
 def _read_worktree_path_bytes(repo_root: Path, path: str) -> Optional[bytes]:

@@ -131,7 +131,7 @@ def _grep_commit_count_bugcompat(path: Path) -> str:
     string that would have been captured by the bash `$(...)`.
     """
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         print(f"skip: _grep_commit_count_bugcompat: text = path.read_text(errors=\"replace\") failed: {sys.exc_info()[1]}", file=sys.stderr)
         return "0\n0"
@@ -204,7 +204,7 @@ def _main(argv: List[str]) -> int:
     header = changelog_dir / "HEADER.md"
     if header.is_file():
         try:
-            text = header.read_text(errors="replace")
+            text = header.read_text(encoding="utf-8", errors="replace")
         except OSError:
             text = ""
         matched = False

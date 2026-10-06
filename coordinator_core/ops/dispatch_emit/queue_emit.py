@@ -28,8 +28,11 @@ Wire shape:
 (sha256 of the loaded profile's own source bytes -- a distinct fact from
 `triage_policy_sha256`, which digests only the inlined `triage_policy` text,
 not the whole profile), `appetite`, `resolved_knobs`, `manifest_digest`
-(`Manifest.digest`, never the manifest itself -- § Design § Selector, "Frozen
-means frozen"), `source` (the manifest's own `SourceOpResult`, JSON-shaped, or
+(`Manifest.digest` of the admitted-rows manifest, never the manifest itself --
+§ Design § Selector, "Frozen means frozen"), `not_admitted` (`{count, row_ids,
+arithmetic}`: selected rows the emit-time ceilings (`grind_admission.admit`) did
+not cover, left out of the manifest; distinct from `unselected`, which is rows
+filtered by `where`/`limit`), `source` (the manifest's own `SourceOpResult`, JSON-shaped, or
 `None`), and `reemit` -- the argv list a caller re-runs
 (`emit-dispatch-workflow.py --queue ... --profile ... --appetite ... [...]`)
 to re-derive this same script from the same queue/profile/appetite/overrides
@@ -80,13 +83,18 @@ from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit.grind_compose import compose_grind_script
+from coordinator_core.ops.dispatch_emit.grind_admission import (
+    NOT_ADMITTED_EXTRA_KEY,
+    admit,
+    receipt_block,
+)
+from coordinator_core.ops.dispatch_emit.grind_compose import _group_into_batches, compose_grind_script
 from coordinator_core.ops.dispatch_emit.grind_profile import (
     load_profile,
     resolve_appetite,
     validate_graph,
 )
-from coordinator_core.ops.dispatch_emit.queue_select import select_rows
+from coordinator_core.ops.dispatch_emit.queue_select import restrict_manifest, select_rows
 from coordinator_core.ops.dispatch_emit.receipt_extras_guard import refuse_colliding_receipt_extras
 
 __all__ = ["QueueEmission", "QueuePathEscapeError", "emit_queue_script"]
@@ -191,6 +199,18 @@ def emit_queue_script(
         source_row_dir=Path(guarded_run_dir) / "source-rows",
     )
 
+    run_order = [
+        entry.row_id
+        for _batch_id, chunk in _group_into_batches(manifest, resolved_knobs)
+        for entry in chunk
+    ]
+    admission = admit(
+        run_order,
+        max_agent_calls=resolved_knobs.get("max_agent_calls"),
+        budget_tokens=resolved_knobs.get("budget_tokens"),
+    )
+    manifest = restrict_manifest(manifest, admission.admitted)
+
     script = compose_grind_script(
         manifest,
         loaded_profile,
@@ -223,6 +243,8 @@ def emit_queue_script(
         "appetite": appetite,
         "resolved_knobs": dict(resolved_knobs),
         "manifest_digest": manifest.digest,
+        "unselected": {"count": len(manifest.unselected), "row_ids": list(manifest.unselected)},
+        NOT_ADMITTED_EXTRA_KEY: receipt_block(admission),
         "source": source_extra,
         "reemit": _reemit_argv(profile, appetite, Path(profile_dir), queue, overrides),
     }

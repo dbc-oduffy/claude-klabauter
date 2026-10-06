@@ -148,6 +148,26 @@ def test_reap_claims_for_repos_directive_present() -> None:
     )
 
 
+def test_suspended_reap_claims_op_is_named_in_ceremony_narration() -> None:
+    """The reap-claims directive no-ops while its op is suspended (the CLI door
+    swallows the refusal on stderr, exit 0), so the brief must say so in the
+    ceremony output rather than leave exit-0 silence."""
+    from coordinator_core import op_budget_suspension as obs
+
+    directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
+    assert obs.is_suspended("session.reap_claims_for_repos")
+    notice = wc_brief._suspended_directive_notice(directives)
+    assert "d_step2_66_reap_claims" in notice
+    assert "SUSPENDED, NO-OP" in notice
+    assert obs.refusal_message("session.reap_claims_for_repos") in notice
+
+
+def test_suspended_notice_is_empty_when_op_not_suspended(monkeypatch) -> None:
+    monkeypatch.setattr(wc_brief, "is_suspended", lambda op: False)
+    directives = wc_brief._build_directives({}, _EMPTY_OPEN_DAY_GOALS, _CLEAN_TREE)
+    assert wc_brief._suspended_directive_notice(directives) == ""
+
+
 def test_dirty_tree_scan_directive_always_present_but_gate_is_conditional() -> None:
     """`d_step2_5_dirty_tree_scan` (the auto-disposition run) fires every
     time regardless of verdict; `d_step3_consolidate`'s `depends_on` is

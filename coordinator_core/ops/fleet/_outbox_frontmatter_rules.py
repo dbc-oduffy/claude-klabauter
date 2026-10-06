@@ -180,8 +180,7 @@ def validate_outbox_frontmatter(fm: dict) -> list[str]:
         errors.append(
             f"kind {kind!r} is not a valid enum value "
             f"(must be one of: {', '.join(VALID_KINDS)}). "
-            f"Note: 'ack' is not a kind — acknowledgement is receipt-state. "
-            f"Answering an inbound memo: use in_reply_to, not a new kind."
+            f"Note: 'ack' is not a kind — acknowledgement is receipt-state."
         )
     nested = fm.get("scoped_to")
     if isinstance(nested, dict):

@@ -210,3 +210,42 @@ def test_declared_revert_flag_parses(tmp_path):
         ["--declared-revert", "a.txt", "--declared-revert", "b.txt", "subject"]
     )
     assert args.declared_reverts == ["a.txt", "b.txt"]
+
+
+def _archive_row(repo):
+    _commit_scoped(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit_scoped(repo, "live/s.yaml", "status: open\n", "touch")
+    (repo / "live/s.yaml").unlink()
+    (repo / "archive/2026-10").mkdir(parents=True)
+    (repo / "archive/2026-10/s.yaml").write_text("status: closed\n", encoding="utf-8", newline="\n")
+    msg_path = repo / "MSG"
+    msg_path.write_text("archive s\n", encoding="utf-8", newline="\n")
+    return msg_path
+
+
+def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
+    """Same rule as `commit.commit_paths`: a deletion paired with a NEW
+    same-named path is a rename-with-edit, never a depth-2 absence rollback."""
+    repo = _repo(tmp_path)
+    msg_path = _archive_row(repo)
+
+    result = git_native.commit_scoped(
+        ["archive/2026-10/s.yaml", "live/s.yaml"], str(msg_path), cwd=str(repo),
+        detect_rollback=True,
+    )
+
+    assert result.ok, result.stderr
+    assert not (repo / "live/s.yaml").exists()
+
+
+def test_bare_deletion_of_a_young_row_still_refuses(tmp_path):
+    repo = _repo(tmp_path)
+    msg_path = _archive_row(repo)
+    before = _head_sha(repo)
+
+    result = git_native.commit_scoped(
+        ["live/s.yaml"], str(msg_path), cwd=str(repo), detect_rollback=True,
+    )
+
+    assert result.ok is False
+    assert _head_sha(repo) == before

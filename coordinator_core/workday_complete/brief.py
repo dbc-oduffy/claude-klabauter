@@ -119,6 +119,7 @@ from coordinator_core.contract.decision_object.judgment import (
 from coordinator_core.completion_receipts.day import receipts_for_day
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.repo_root import git_common_dir
+from coordinator_core.op_budget_suspension import is_suspended, refusal_message
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_close_day import collect_open_day_goals
@@ -289,6 +290,25 @@ def _directive(
         "already_satisfied": already_satisfied,
         "stdin_from": stdin_from,
     }
+
+
+# Directive CLIs whose engine op can be suspended. The CLI door swallows the
+# dispatcher's refusal on stderr and exits 0, so without this the ceremony reports
+# the step as done while it reaped nothing.
+_DIRECTIVE_CLI_OPS = {"reap-claims-for-repos": "session.reap_claims_for_repos"}
+
+
+def _suspended_directive_notice(directives: list[dict[str, Any]]) -> str:
+    """One narration line per directive whose op is suspended; "" when none."""
+    lines = []
+    for directive in directives:
+        op = _DIRECTIVE_CLI_OPS.get(directive["cli"])
+        if op is not None and is_suspended(op):
+            lines.append(
+                f"SUSPENDED, NO-OP: directive {directive['id']} did nothing. "
+                f"{refusal_message(op)}"
+            )
+    return " ".join(lines)
 
 
 def _build_directives(
@@ -955,6 +975,9 @@ def brief(
         "not the assembler, so it is also never a directives[] entry — "
         "see this module's negative-spec."
     )
+    suspended_notice = _suspended_directive_notice(directives)
+    if suspended_notice:
+        narration = f"{narration} {suspended_notice}"
     reported_narration_suffix = _reported_narration_suffix(reported_judgment_points)
     if reported_narration_suffix:
         narration = f"{narration} {reported_narration_suffix}"

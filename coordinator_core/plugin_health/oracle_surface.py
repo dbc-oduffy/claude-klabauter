@@ -58,7 +58,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Set
 
-from coordinator_core.engine_root import coordinator_engine_root
+from coordinator_core.engine_root import coordinator_engine_root, is_published_engine_mirror
+from coordinator_core.machine_resolver import registry_get
 
 # Extensions (plus the bare/extensionless form) a reserved-family oracle
 # might carry on disk -- mirrors fleet_reachability._KNOWN_ORACLE_EXTENSIONS,
@@ -68,11 +69,31 @@ from coordinator_core.engine_root import coordinator_engine_root
 _ORACLE_FILE_EXTENSIONS = ("", ".py", ".js", ".sh", ".cmd")
 
 
+def _resolve_claude_klabauter_root() -> Optional[Path]:
+    """The claude-klabauter tree whose oracle surface a delete-safety gate must read.
+
+    A delete lands in the authoring tree (`repos.claude_klabauter`), so that is
+    the surface to diff against fleet demand. The resolved engine root is the
+    published mirror on every box, and the mirror is a strict subset of the
+    authoring `coordinator/bin/` (publisher-side oracles such as `publish` and
+    `percolate-*` are never mirrored); diffing against it reports every
+    unmirrored oracle as deleted. The engine root answers only when the
+    registry names no authoring checkout."""
+    registered = registry_get("repos.claude_klabauter")
+    if registered:
+        candidate = Path(registered)
+        if (candidate / "coordinator" / "bin").is_dir() and not is_published_engine_mirror(str(candidate)):
+            return candidate
+    try:
+        return Path(coordinator_engine_root())
+    except RuntimeError:
+        return None
+
+
 def resolve_agent_bin(claude_klabauter_root: Optional[Path] = None) -> Optional[Path]:
     if claude_klabauter_root is None:
-        try:
-            claude_klabauter_root = Path(coordinator_engine_root())
-        except RuntimeError:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root is None:
             return None
     candidate = Path(claude_klabauter_root) / "coordinator" / "bin"
     return candidate if candidate.is_dir() else None
@@ -80,9 +101,8 @@ def resolve_agent_bin(claude_klabauter_root: Optional[Path] = None) -> Optional[
 
 def resolve_extra_oracle_dirs(claude_klabauter_root: Optional[Path] = None) -> List[Path]:
     if claude_klabauter_root is None:
-        try:
-            claude_klabauter_root = Path(coordinator_engine_root())
-        except RuntimeError:
+        claude_klabauter_root = _resolve_claude_klabauter_root()
+        if claude_klabauter_root is None:
             return []
     claude_klabauter_root = Path(claude_klabauter_root)
     return [claude_klabauter_root / "bin", claude_klabauter_root / "coordinator" / "lib"]

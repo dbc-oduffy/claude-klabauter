@@ -941,10 +941,14 @@ def _supersede_continued(
     the ledger holder goes non-live, unattributable to any consumer forever.
     This path produced that shape at corpus scale — the op's DR-242 gate admits
     a predecessor that is claimed OR shipped, so a shipped-but-unmirrored
-    predecessor reached the flip with no holder on either the mirror or the
-    caller's side. Whenever the mirror carries no holder, the durable ledger is
-    consulted (`claim_state.resolve_historical_claim`) and its
-    `claimed_by`/`claimed_at` stamped alongside the flip. Nothing is invented:
+    predecessor (shipped by ledger / `shipped_in`, on-disk `deployment_state`
+    NOT yet `shipped`) reached the flip with no holder on either the mirror or
+    the caller's side. That case stays admitted. A baton whose on-disk
+    `deployment_state` is already `shipped` never reaches this function: the
+    handler's shipped-baton gate refuses it first, alongside the closed gate.
+    Whenever the mirror carries no holder, the durable ledger is consulted
+    (`claim_state.resolve_historical_claim`) and its `claimed_by`/`claimed_at`
+    stamped alongside the flip. Nothing is invented:
     a silent ledger yields no session id, never a manufactured one. The absence
     is sanctioned because the target `continued` is terminal; see
     `_attribute_claim_holder` and `docs/reference/baton-claim-lifecycle.md`.
@@ -1610,6 +1614,22 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 f"closed (closed_reason: {closed_reason}) — a closed baton "
                 "is terminal and is not superseded; if the closure was "
                 "wrong, reopen it first"
+            )
+            out["mode"] = mode
+            out["choke_point_refusal"] = True
+            return out
+
+        # Shipped-baton-is-terminal gate: sibling of the closed gate above,
+        # same choke point, before `do_stamp`, so a refusal leaves the file
+        # byte-identical. Keyed on the on-disk `deployment_state` alone: the
+        # legal-state table (docs/reference/handoff-legal-state-table.md)
+        # gives a terminal state no outbound supersede. A shipped-but-
+        # unmirrored predecessor (shipped via claim ledger / `shipped_in`,
+        # `deployment_state` not yet `shipped`) is still admitted.
+        if _current_deployment_state(contained) == "shipped":
+            out = _err(
+                f"mode='supersede' refused: {rel_id} is deployment_state: "
+                "shipped — a shipped baton is terminal and is not superseded"
             )
             out["mode"] = mode
             out["choke_point_refusal"] = True

@@ -432,11 +432,28 @@ class _IndexState:
     agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
         default_factory=dict
     )
+    #: path -> claimant sid -> the kind that claimant currently holds the path
+    #: with, folded across all of that claimant's sinks: ``w`` if any sink holds
+    #: a write, else ``None`` if any is kind-less, else ``r``. Unlike
+    #: ``recorded_kind`` it keeps a ``None`` entry, so a kind-less hold is
+    #: distinguishable from an absent one.
+    held_kind: Dict[str, Dict[str, Optional[str]]] = dataclasses.field(default_factory=dict)
+
+
+class _ClaimRead(tuple):
+    """``(claims, content_read_ok)`` that also carries ``held_kind``, so the
+    two-element unpacking every caller and test seam uses keeps working."""
+
+    held_kind: Dict[str, Optional[str]]
 
 
 def _read_stream_claims(sink_path: str) -> tuple:
-    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
-    return claims, not degraded
+    claims, held, degraded, _reasons = touch_record.read_stream_claims_and_held_kind(
+        sink_path
+    )
+    read = _ClaimRead((claims, not degraded))
+    read.held_kind = held
+    return read
 
 
 def _agent_owner_sid(agent_dir_path: str) -> tuple:
@@ -523,6 +540,21 @@ def _resolve_base(sessions_dir: Optional[str], cwd: Optional[str]) -> str:
     return core.sessions_dir(cwd)
 
 
+_NO_HELD = object()
+
+
+def _merge_held_kind(current, new: Optional[str]) -> Optional[str]:
+    """Fold two held kinds of one claimant on one path: write beats kind-less
+    beats read."""
+    if current is _NO_HELD:
+        return new
+    if touch_record.KIND_WRITE in (current, new):
+        return touch_record.KIND_WRITE
+    if current is None or new is None:
+        return None
+    return touch_record.KIND_READ
+
+
 def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _IndexState:
     """Full walk over every claimant's ``touch-record.jsonl`` — the ONLY O(claims)
     operation in this module. Resolves last-event-wins per path per
@@ -551,6 +583,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     edit_ts: Dict[str, Dict[str, datetime]] = {}
     recorded_name: Dict[str, Dict[str, str]] = {}
     recorded_kind: Dict[str, Dict[str, str]] = {}
+    held_kind: Dict[str, Dict[str, Optional[str]]] = {}
     agent_claims: Dict[str, Dict[str, Set[Optional[str]]]] = {}
     touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
@@ -561,7 +594,9 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
             if abort_cause is None:
                 abort_cause = ABORT_CAUSE_CAP_EXCEEDED
             break
-        stream_claims, content_read_ok = _read_stream_claims(touched_path)
+        read = _read_stream_claims(touched_path)
+        stream_claims, content_read_ok = read
+        stream_held = getattr(read, "held_kind", {})
         if not content_read_ok:
             complete = False
             if abort_cause is None:
@@ -581,11 +616,17 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                     recorded_name.setdefault(path, {})[claimant_sid] = event.name
                 if event.kind:
                     recorded_kind.setdefault(path, {})[claimant_sid] = event.kind
+                if path in stream_held:
+                    per_sid = held_kind.setdefault(path, {})
+                    per_sid[claimant_sid] = _merge_held_kind(
+                        per_sid.get(claimant_sid, _NO_HELD), stream_held[path]
+                    )
             else:
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
                 recorded_name.get(path, {}).pop(claimant_sid, None)
                 recorded_kind.get(path, {}).pop(claimant_sid, None)
+                held_kind.get(path, {}).pop(claimant_sid, None)
                 sid_sources = agent_claims.get(path, {}).get(claimant_sid)
                 if sid_sources is not None:
                     sid_sources.discard(agent_id)
@@ -617,6 +658,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         recorded_name=result_recorded_name,
         recorded_kind=result_recorded_kind,
         agent_claims=result_agent_claims,
+        held_kind={p: dict(k) for p, k in held_kind.items() if k},
     )
 
 
@@ -767,6 +809,11 @@ class CommitSet:
     small (bounded by concurrent in-flight agents, not by the claim ledger
     like ``peers``) but apply the same judgment as ``peers`` about crossing
     the op wire before assuming that holds at scale.
+
+    ``read_only`` is every path held by this session alone whose held kind is
+    ``r`` (read, never written). It is NOT in ``paths`` -- nothing there is
+    this session's to commit -- but is named so the omission is visible.
+    Sorted. A kind-less hold, or any hold that was ever a write, stays in ``paths``.
     """
 
     paths: List[str]
@@ -775,6 +822,7 @@ class CommitSet:
     abort_cause: Optional[str] = None
     peers: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
     in_flight_agent_claims: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
+    read_only: List[str] = dataclasses.field(default_factory=list)
 
 
 def commit_set(
@@ -828,6 +876,7 @@ def commit_set(
     """
     state = rebuild(sessions_dir=sessions_dir, cwd=cwd)
     mine: List[str] = []
+    read_only: List[str] = []
     contested: Dict[str, List[str]] = {}
     peer_only: Dict[str, List[str]] = {}
     in_flight_agent_claims: Dict[str, List[str]] = {}
@@ -843,11 +892,15 @@ def commit_set(
         sources = state.agent_claims.get(path, {}).get(session_id, [])
         if sources and None not in sources:
             in_flight_agent_claims[path] = [s for s in sources if s is not None]
+        elif state.held_kind.get(path, {}).get(session_id) == touch_record.KIND_READ:
+            read_only.append(path)
         else:
             mine.append(path)
     mine.sort()
+    read_only.sort()
     return CommitSet(
         paths=mine,
+        read_only=read_only,
         contested=contested,
         complete=state.complete,
         abort_cause=state.abort_cause,

@@ -201,6 +201,7 @@ from coordinator_core.wire_paths import rel_id
 #: shape through the SAME functions (gh-klabauter#71, F23b).
 from coordinator_core.execute_plan_assemble.falsifier_shape import (
     _BASELINE_REF_CROSS_REPO_RE,
+    _DISPOSITION_REF_QUALIFIED_RE,
     _DISPOSITION_REF_SHA_RE,
     _EXEMPTION_CLASS,
     _MPLUS_TSHIRTS,
@@ -930,7 +931,8 @@ class _GitIndeterminate(Exception):
 DISPOSITION_REF_GATED = "uncleared-execution-gate"
 
 #: A `disposition_ref` is always written by this module (or a human
-#: following the same convention) as a bare hex commit sha -- never a
+#: following the same convention) as a hex commit sha, optionally qualified
+#: `<repo_key>:<sha>` (`_DISPOSITION_REF_QUALIFIED_RE`) -- never a
 #: symbolic ref, branch name, or tag. Bounding the shape BEFORE ever handing
 #: the value to `git rev-parse` is deliberate defense-in-depth: it means an
 #: arbitrary string (blank, whitespace, a `-`-leading token that could be
@@ -941,6 +943,17 @@ DISPOSITION_REF_GATED = "uncleared-execution-gate"
 #: (imported below, this module's own docstring § re-export note) and used
 #: here before that import line runs -- safe, since nothing calls this
 #: module's functions until the whole module has finished loading.
+
+
+def _registered_repo_root(repo_key: str) -> Optional[Path]:
+    """`repos.<repo_key>` from the machine-local registry as an existing
+    directory, else `None` (unregistered key, or a path absent on this
+    machine). Zero spawns."""
+    raw = registry_get(f"repos.{repo_key}")
+    if not raw:
+        return None
+    root = Path(raw)
+    return root if root.is_dir() else None
 
 
 def _verify_disposition_ref(
@@ -957,30 +970,40 @@ def _verify_disposition_ref(
     `HEAD`. Otherwise `sha` is `None` and `reason` is exactly one of
     `DISPOSITION_REF_ABSENT` (not a non-blank string at all -- the row has no
     `disposition_ref`, or it is blank/whitespace-only), `DISPOSITION_REF_
-    MALFORMED` (present, but not a bare hex sha shape -- see `_DISPOSITION_
-    REF_SHA_RE`'s own docstring for why this is checked before ever reaching
-    git), `DISPOSITION_REF_UNRESOLVABLE` (hex-shaped, but `git rev-parse
-    --verify` cannot resolve it to a commit object in this repo -- a typo, a
-    sha from a repo this isn't, or an object this shallow/partial clone does
-    not have), `DISPOSITION_REF_NOT_ANCESTOR` (resolves to a real commit,
-    but `HEAD` never reached it -- a rebased-away, cherry-picked-into-a-
+    MALFORMED` (present, but neither a bare hex sha nor a
+    `<repo_key>:<sha>` shape -- see `_DISPOSITION_REF_SHA_RE`'s own docstring
+    for why this is checked before ever reaching git), `DISPOSITION_REF_
+    UNRESOLVABLE` (well-shaped, but `git rev-parse --verify` cannot resolve
+    it to a commit object in the named repo -- a typo, a sha from a repo this
+    isn't, or an object this shallow/partial clone does not have; for the
+    qualified form also an unregistered `repos.<repo_key>` or a registered
+    path that is not a directory), `DISPOSITION_REF_NOT_ANCESTOR` (resolves
+    to a real commit, but the named repo's `HEAD` never reached it -- a rebased-away, cherry-picked-into-a-
     different-branch, or fabricated sha), or `DISPOSITION_REF_INDETERMINATE`
     (a git probe timed out -- the ref is neither proven nor disproven).
     Never raises."""
     if not isinstance(ref, str) or not ref.strip():
         return None, DISPOSITION_REF_ABSENT
     ref = ref.strip()
-    if not _DISPOSITION_REF_SHA_RE.match(ref):
+    qualified = _DISPOSITION_REF_QUALIFIED_RE.match(ref)
+    if qualified is not None:
+        verify_root = _registered_repo_root(qualified.group(1))
+        if verify_root is None:
+            return None, DISPOSITION_REF_UNRESOLVABLE
+        ref = qualified.group(2)
+    elif _DISPOSITION_REF_SHA_RE.match(ref):
+        verify_root = repo_root
+    else:
         return None, DISPOSITION_REF_MALFORMED
 
-    resolve_result = _run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], repo_root)
+    resolve_result = _run_git(["rev-parse", "--verify", f"{ref}^{{commit}}"], verify_root)
     if resolve_result.timed_out:
         return None, DISPOSITION_REF_INDETERMINATE
     sha = (resolve_result.stdout or "").strip()
     if resolve_result.returncode != 0 or not sha:
         return None, DISPOSITION_REF_UNRESOLVABLE
 
-    ancestor_result = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root)
+    ancestor_result = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], verify_root)
     if ancestor_result.timed_out:
         return None, DISPOSITION_REF_INDETERMINATE
     if ancestor_result.returncode != 0:
@@ -989,10 +1012,10 @@ def _verify_disposition_ref(
     return sha, None
 
 
-#: `baseline_ref` alone may additionally carry a `<repo>:<sha>` cross-repo
-#: qualifier -- `disposition_ref` never does (`_verify_disposition_ref`
-#: above stays the same-repo-only check `_disposition_ref_evidence` and
-#: every `disposition_ref` caller uses). `<repo>` is a bare machine-local
+#: `baseline_ref`'s `<repo>:<sha>` form is verified for existence only,
+#: never ancestry (`_verify_baseline_ref`); `disposition_ref`'s qualified
+#: form is verified as an ancestor of the named repo's own HEAD
+#: (`_verify_disposition_ref`). `<repo>` is a bare machine-local
 #: registry key (`registry_get("repos.<repo>")`, the same resolution rung
 #: `discover_working_repos` already uses for a sibling
 #: repo lookup) -- never a filesystem path, so a plan file never embeds a
@@ -1036,11 +1059,8 @@ def _verify_baseline_ref(
         return _verify_disposition_ref(repo_root, stripped)
 
     repo_key, sha_token = qualified.group(1), qualified.group(2)
-    sibling_root_raw = registry_get(f"repos.{repo_key}")
-    if not sibling_root_raw:
-        return None, DISPOSITION_REF_UNRESOLVABLE
-    sibling_root = Path(sibling_root_raw)
-    if not sibling_root.is_dir():
+    sibling_root = _registered_repo_root(repo_key)
+    if sibling_root is None:
         return None, DISPOSITION_REF_UNRESOLVABLE
 
     resolve_result = _run_git(["rev-parse", "--verify", f"{sha_token}^{{commit}}"], sibling_root)

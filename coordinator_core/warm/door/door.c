@@ -2050,16 +2050,6 @@ int main(void) {
         int have_error = 0;
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf, &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE) {
-            HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
-            write_all(hout, resp.data, line_len);
-            write_all(hout, "\n", 1);
-            free(resp.data);
-            free(rf.stdout_buf.data);
-            free(rf.stderr_buf.data);
-            free(engine_root_w);
-            return 1;
-        }
         free(resp.data);
 
         if (success) {

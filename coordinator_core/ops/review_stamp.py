@@ -453,6 +453,9 @@ def _drop_review_stamp_block(fm_text: str) -> str:
     return "\n".join(kept)
 
 
+_RUN_REPORT_LIFECYCLE = frozenset({"open", "dispatched", "in_flight", "complete", "blocked", "thrashing"})
+
+
 def mint(
     plan_path: Path,
     repo_root: Path,
@@ -542,7 +545,7 @@ def mint(
     if superseding_record is not None:
         delivery_data = superseding_delivery(integration_data, delivery_data)
     if integration_path is not None:
-        from coordinator_core.ops.dispatch_emit.reverify_delivery import (
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import (
             latest_criterion_supersession,
             latest_delivery_supersession,
             latest_foreign_claims_supersession,
@@ -593,7 +596,7 @@ def mint(
 
     narrowing_receipt = None
     if criterion_status == "not_met" and delivery_verdict == "PASS" and tests_status == "pass":
-        from coordinator_core.ops.dispatch_emit.reverify_delivery import _newest_supersession
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import _newest_supersession
         from coordinator_core.ops.plan_narrow_criterion import criterion_waiver
 
         newest = _newest_supersession(repo_root, integration_path.relative_to(repo_root).as_posix()) \
@@ -635,6 +638,14 @@ def mint(
                 f"emit-dispatch-workflow --plan <plan> --reverify-delivery {hint}, "
                 "then reverify-delivery record"
             )
+        if (
+            "build/test verdict is" in refusal
+            and build_test_data.get("test_verdict") is None
+            and build_test_data.get("status") in _RUN_REPORT_LIFECYCLE
+        ):
+            from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
+
+            refusal += f"; record the runner's verdict: {RECORD_VERB} --result-json <runner result>"
         raise MintRefusal(refusal)
 
     try:

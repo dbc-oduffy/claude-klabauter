@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Mapping, Optional
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.warm import breadcrumb
 
 __all__ = [
@@ -303,13 +304,8 @@ def ensure_secret() -> str:
     ensure_directory_excludes_others()
     path = secret_path()
     minted = secrets.token_hex(SECRET_NBYTES)
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, minted.encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+    # mkstemp-backed: unique name, created 0o600 regardless of any stale sibling.
+    atomic_write_bytes(path, minted.encode("utf-8"), preserve_mode=False)
     return minted
 
 

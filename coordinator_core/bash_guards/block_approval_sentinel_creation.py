@@ -278,29 +278,6 @@ def _segments_with_background(tokens: List[str]) -> "list[tuple[list[str], bool,
     return segments
 
 
-_PYTHON_OPTS_WITH_SEPARATE_VALUE = frozenset({"-W", "-X"})
-
-
-def _drop_python_option_values(interpreter_args: List[str]) -> List[str]:
-    """`python3 -W ignore s.py` / `-X utf8`: the separate value of `-W`/`-X`
-    is not the script operand. Stops at the first operand or `--`."""
-    out: List[str] = []
-    i = 0
-    n = len(interpreter_args)
-    while i < n:
-        tok = interpreter_args[i]
-        if tok in _PYTHON_OPTS_WITH_SEPARATE_VALUE and i + 1 < n:
-            out.append(tok)
-            i += 2
-            continue
-        if tok == "--" or not tok.startswith("-") or tok == "-":
-            out.extend(interpreter_args[i:])
-            break
-        out.append(tok)
-        i += 1
-    return out
-
-
 def _first_operand_token(interpreter_args: List[str]) -> Optional[str]:
     """Item 33: the actual OPERAND token `_has_script_operand` (shared
     engine) only ever reports the presence of, as a boolean -- this
@@ -973,12 +950,14 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             # unexamined, same as before this item), so Item 33 only claims
             # a `python3` invocation here when it names an operand AND that
             # operand is not a `-m` module name.
-            if norm_head == "python3":
-                py_args = _drop_python_option_values(working[1:])
-                if _has_script_operand(py_args) and not _has_module_flag(py_args):
-                    return self._script_file_verdict(
-                        norm_head, [working[0]] + py_args, depth, prior_segments, stdin_target
-                    )
+            if (
+                norm_head == "python3"
+                and _has_script_operand(working[1:])
+                and not _has_module_flag(working[1:])
+            ):
+                return self._script_file_verdict(
+                    norm_head, working, depth, prior_segments, stdin_target
+                )
             if (
                 stdin_target
                 and norm_head in _READABLE_SCRIPT_INTERPRETERS

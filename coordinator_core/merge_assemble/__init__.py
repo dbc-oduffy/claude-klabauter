@@ -203,7 +203,10 @@ def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> 
     Reads the latest local `<tag_prefix>X.Y.Z` tag (`git tag --list
     '<prefix>*' --sort=-v:refname`, first line) and proposes the next patch
     tag that is free both locally and on origin; `current`/`proposed` are both
-    `None` when no matching tag exists yet (first release)."""
+    `None` when no matching tag exists yet (first release). When the repo
+    declares a version (`_declared_package_version`) it is named under
+    `declared`, and when it is ahead of the latest tag and free it is the
+    proposal (`bump: "declared"`) instead of a patch bump."""
     try:
         proc = _run_git(["tag", "--list", f"{tag_prefix}*", "--sort=-v:refname"], repo_root)
     except (OSError, subprocess.SubprocessError):
@@ -216,8 +219,44 @@ def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> 
     current = lines[0]
     if _parse_version_tag(current, tag_prefix) is None:
         return {"current": current, "proposed": None, "bump": "patch"}
-    proposed = next_free_patch_tag(current, set(lines) | _origin_tag_names(repo_root))
-    return {"current": current, "proposed": proposed, "bump": "patch"}
+    taken = set(lines) | _origin_tag_names(repo_root)
+    declared = _declared_package_version(repo_root)
+    result: dict[str, Any] = {"current": current, "bump": "patch"}
+    if declared is not None:
+        result["declared"] = declared
+        declared_tag = f"{tag_prefix}{declared}"
+        declared_parts = _parse_version_tag(declared_tag, tag_prefix)
+        current_parts = _parse_version_tag(current, tag_prefix)
+        if (
+            declared_parts is not None
+            and current_parts is not None
+            and declared_parts > current_parts
+            and declared_tag not in taken
+        ):
+            return {**result, "proposed": declared_tag, "bump": "declared"}
+    result["proposed"] = next_free_patch_tag(current, taken)
+    return result
+
+
+def _declared_package_version(repo_root: Path) -> Optional[str]:
+    """The version the repo declares for itself: `pyproject.toml`
+    `[project].version`, else `package.json` `version`. `None` when neither
+    file yields a plain `X.Y.Z` string. File reads only, no spawn."""
+    import json  # noqa: PLC0415
+    import tomllib  # noqa: PLC0415
+
+    candidates = (
+        ("pyproject.toml", lambda raw: tomllib.loads(raw).get("project", {}).get("version")),
+        ("package.json", lambda raw: json.loads(raw).get("version")),
+    )
+    for name, extract in candidates:
+        try:
+            value = extract((repo_root / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(value, str) and _parse_version_tag(f"v{value}", "v") is not None:
+            return value
+    return None
 
 
 def _parse_version_tag(value: str, tag_prefix: str) -> Optional[tuple[int, int, int]]:

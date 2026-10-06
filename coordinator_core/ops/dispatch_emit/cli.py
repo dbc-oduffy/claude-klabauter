@@ -78,6 +78,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -111,6 +112,7 @@ from coordinator_core.ops.dispatch_emit.mark_landed import (
     PhaseNotFoundError,
     mark_landed_and_restamp,
 )
+from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError
 from coordinator_core.session.core import resolve_session_id
 
@@ -197,6 +199,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sizing",
         default=None,
         help="existing sizing under state/sizings/; the same entry as --ask --sizing",
+    )
+    parser.add_argument(
+        "--baton",
+        default=None,
+        metavar="PATH",
+        help="existing baton under state/handoffs/ to join the sizing to (--ask/--sizing only)",
+    )
+    parser.add_argument(
+        "--deliverable-id",
+        default=None,
+        metavar="ID",
+        help="deliverable id the baton and sizing share (--ask/--sizing only)",
     )
     parser.add_argument(
         "--writes",
@@ -527,18 +541,19 @@ def _print_workflow_invocation(
     emitted script's own guard. This runs unconditionally after a successful
     emit, on both routes, so the printed line is never route-dependent.
 
-    The queue route's ``run_stamp`` is a caller-chosen run id, not something
-    this CLI mints (module docstring, ``emit.py`` — this module never
-    reads a clock) — the printed line therefore names it as a placeholder
-    the caller fills in, rather than inventing a value.
+    The queue route's ``run_stamp`` is a fire-time run id, never part of the
+    emitted script or its digest, so the printed call carries the UTC instant
+    of this print: a paste-ready call, not a placeholder to hand-fill. The
+    clock is read here, in the CLI, never in the emitter.
     """
     script_path = result.get("path")
     if not script_path:
         return
     if is_queue_route:
+        run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         print(
             "\n  Workflow({ scriptPath: "
-            f"{json.dumps(script_path)}, args: {{ run_stamp: '<YYYYMMDDThhmmssZ>', "
+            f"{json.dumps(script_path)}, args: {{ run_stamp: '{run_stamp}', "
             f"script_path: {json.dumps(script_path)}, profile_dir: "
             f"{json.dumps(profile_dir)}, repo_root: "
             f"{json.dumps(repo_root.as_posix() if repo_root else None)} }} }})",
@@ -576,6 +591,15 @@ def _emit_inventory_parts(
     `<run_id>-pN` spine and `-pN.workflow.mjs` script. The part count grows
     until every part composes under the cap; parts are fired in order."""
     count = max(2, -(-over.script_size * 11 // (_emit._WORKFLOW_SCRIPT_BYTE_CAP * 10)))
+    if not params.get("output_path"):
+        from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+
+        inventory = Path(params["inventory_path"])
+        run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
+        params = {
+            **params,
+            "output_path": str(inventory.parent / f"{run_id}{_REQUIRED_OUT_SUFFIX}"),
+        }
     while True:
         results: list = []
         try:
@@ -840,6 +864,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    if (args.baton or args.deliverable_id) and not is_ask_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --baton/--deliverable-id are accepted only with "
+            "--ask/--sizing",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if is_ask_route and args.fire:
         print(
             "emit-dispatch-workflow: ERROR — --fire is not accepted with --ask/--sizing; "
@@ -970,12 +1002,18 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     if not args.out_path and args.plan and not is_queue_route:
         # Default --out to <plan-basename>.workflow.mjs beside the plan, the
-        # plan route's only unambiguous target -- the queue and --inventory
-        # routes have no single plan file to derive a basename from, so they
-        # keep requiring --out explicitly.
+        # plan route's only unambiguous target. The --inventory route defaults
+        # in the op (beside its minted spine); the queue route has no single
+        # plan file to derive a basename from and keeps requiring --out.
         args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
 
-    if not args.out_path and not is_ask_route and not is_pipeline_route and not args.lanes:
+    if (
+        not args.out_path
+        and not is_ask_route
+        and not is_pipeline_route
+        and not args.lanes
+        and not (args.inventory and not is_queue_route)
+    ):
         print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
         return EXIT_USAGE
 
@@ -1019,6 +1057,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["sizing_path"] = args.sizing
         if args.writes:
             params["writes"] = list(args.writes)
+        if args.baton:
+            params["baton"] = args.baton
+        if args.deliverable_id:
+            params["deliverable_id"] = args.deliverable_id
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_pipeline_route:
@@ -1178,6 +1220,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     for key in ("batons", "uncommitted"):
         if key in result:
             print(f"emit-dispatch-workflow: {key}: {json.dumps(result[key])}", file=sys.stderr)
+    if (result.get(NOT_ADMITTED_EXTRA_KEY) or {}).get("count", 0) > 0:
+        print(
+            f"emit-dispatch-workflow: {NOT_ADMITTED_EXTRA_KEY}: "
+            f"{json.dumps(result[NOT_ADMITTED_EXTRA_KEY])}",
+            file=sys.stderr,
+        )
 
     if not result["ok"]:
         return EXIT_DATA_ERROR

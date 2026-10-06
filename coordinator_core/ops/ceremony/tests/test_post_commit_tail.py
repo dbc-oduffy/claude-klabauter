@@ -498,15 +498,14 @@ def test_origin_stub_close_commit_leaves_index_agreeing_with_head(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
+def test_origin_stub_close_survives_merge_retry_and_keeps_the_follow_up_sha(
     tmp_path, monkeypatch
 ):
-    """`push_with_retry` can fetch + `git rebase --onto` this origin-stub-
-    close follow-up commit on a rejected push before re-pushing, which
-    rewrites its sha. A concurrent peer push lands on the shared branch
-    first, forcing a genuine non-fast-forward reject; the returned sha must
-    be the post-rebase commit `resolve_post_push_sha` adopted, never the
-    pre-push sha `commit_paths` minted before the reject fired."""
+    """`push_with_retry` recovers a rejected push by MERGING the fetched
+    upstream, never by rewriting local commits. A concurrent peer push lands
+    on the shared branch first, forcing a genuine non-fast-forward reject;
+    the returned sha must stay the follow-up commit `commit_paths` minted
+    (the merge tip's first parent, and on the remote), not the merge commit."""
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -552,9 +551,9 @@ def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
         return real_resolve_post_push_sha(worktree_root, pre_push_sha)
 
     monkeypatch.setattr(m, "resolve_post_push_sha", _spy_resolve_post_push_sha)
-    # The reject -> rebase -> re-push ladder needs two real pushes; under a
+    # The reject -> merge -> re-push ladder needs two real pushes; under a
     # parallel test run the production 1.2s ladder fits only one. This test
-    # pins the rebased sha, not the budget.
+    # pins the kept sha, not the budget.
     from coordinator_core.ops.ceremony import push as push_mod
 
     monkeypatch.setattr(push_mod, "CEREMONY_PUSH_BUDGET_SECS", 30.0)
@@ -567,21 +566,25 @@ def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
     assert error is None, error
     assert pushed is True
     assert push_status == m.PUSH_STATUS_PUSHED
-    # The rebase-retry branch genuinely fired: the sha `commit_paths` minted
-    # before the reject differs from the sha that finally landed.
     assert captured_pre_push_sha["sha"] is not None
-    assert follow_up_sha != captured_pre_push_sha["sha"]
+    # Merge recovery rewrites nothing, so the follow-up sha survives the retry.
+    assert follow_up_sha == captured_pre_push_sha["sha"]
 
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
-    ).stdout.strip()
-    assert follow_up_sha == head
-    remote_log = subprocess.run(
-        ["git", "--git-dir", str(origin), "log", "--oneline", "work/rebase-retry"],
-        capture_output=True, text=True, check=True, **no_console_creationflags(),
-    ).stdout
-    assert follow_up_sha[:7] in remote_log
+    def _git(*args, git_dir=None):
+        base = ["git", "--git-dir", str(git_dir)] if git_dir else ["git"]
+        return subprocess.run(
+            base + list(args),
+            cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
+        ).stdout.strip()
+
+    # The reject genuinely fired and was merged: HEAD is a merge commit whose
+    # first parent is the follow-up commit and whose second is the peer's.
+    parents = _git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+    assert len(parents) == 2
+    assert parents[0] == follow_up_sha
+    remote_shas = _git("log", "--format=%H", "work/rebase-retry", git_dir=origin).split()
+    assert follow_up_sha in remote_shas
+    assert _git("rev-parse", "HEAD") in remote_shas
 
 
 # ---------------------------------------------------------------------------

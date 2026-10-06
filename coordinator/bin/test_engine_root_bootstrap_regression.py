@@ -239,6 +239,18 @@ def test_age_sweep_lessons_apply_path_imports_coordinator_core() -> None:
             env=env,
             **no_console_creationflags(),
         )
+        # The moved source must exist in HEAD, as a real aged lesson does:
+        # `git commit -- <old path>` rejects a path git has never committed.
+        subprocess.run(
+            [
+                "git", "-C", scratch, "-c", "user.name=probe",
+                "-c", "user.email=probe@example.invalid", "commit", "-q",
+                "-m", "seed", "--no-verify",
+            ],
+            check=True,
+            env=env,
+            **no_console_creationflags(),
+        )
         proc = subprocess.run(
             [
                 sys.executable,
@@ -832,6 +844,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "workweek-start-goal-and-priorities.py": frozenset({"env_first"}),
     "lib/coordinator_data_root.py": frozenset({"env_first"}),
     "reverify-delivery.py": frozenset({"env_first"}),
+    "test-verdict.py": frozenset({"env_first"}),
 }
 
 

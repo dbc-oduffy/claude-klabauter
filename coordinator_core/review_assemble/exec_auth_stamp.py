@@ -134,6 +134,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
     stamp_approved_body_sha,
 )
+from coordinator_core.ops.sizing_acceptance import acceptance_source, acceptance_words
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.pickup_assemble import resolve_repo_root
 
@@ -952,7 +953,7 @@ def stamp_sizing_authorization(
 
     ec = doc.get("exit_criterion")
     accepted = ec.get("accepted") if isinstance(ec, dict) else None
-    if not isinstance(accepted, dict) or not str(accepted.get("pm_quote") or "").strip():
+    if not acceptance_words(accepted):
         return EXIT_BUSINESS_FAIL, {
             "error": f"refusing to mint: {sizing_path}: exit_criterion.accepted is not recorded -- "
             f"accept it first (sizing-accept-exit-criterion)"
@@ -984,7 +985,8 @@ def stamp_sizing_authorization(
     if approved_state == APPROVED_BODY_CHANGED:
         return EXIT_BUSINESS_FAIL, {"error": f"refusing to mint: {plan_path}: {approved_msg}"}
 
-    note = f"authorized by accepted sizing (mode={mode}): {sizing_rel}"
+    src = ", source=apm" if acceptance_source(accepted) == "apm" else ""
+    note = f"authorized by accepted sizing (mode={mode}{src}): {sizing_rel}"
     fm = split_frontmatter(text).fm_text
     unchanged = read_fm_field_unquoted(fm, "execution_authorized_sha") == _canonical_body_sha(text, root)
     existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")

@@ -212,6 +212,12 @@ def compose_triage_call(
             "or `vanished` in `stale` rather than skipping it silently. "
             "Return `row` as each row's row_id exactly as given above -- "
             "never its path -- e.g. {\"row\": \"row3\", \"verdict\": ...}. "
+            "A row's `pm_ruling` field is a binding ruling, not context: read "
+            "it before the body, follow it, and quote it in that row's "
+            "`evidence`. When the ruling says to skip, keep parked, or names "
+            "what unblocks the row, and that condition still holds, the verdict "
+            "follows the ruling and the evidence says so -- never re-derive a "
+            "fresh verdict from the body alone. "
             "For every remaining row, decide a verdict from exactly this "
             f"list, verbatim, and no other value: {sorted(verdicts)}. Cite the "
             "evidence for it, size the row XS through XXL with the evidence for "
@@ -743,8 +749,10 @@ _COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
     ("expr", "REPO_ROOT"),
     (
         "lit",
-        " '{\"paths\":[...],\"deleted_paths\":[...],\"message\":\"<subject>\"}'` -- the only committer route. Raw `git commit` "
+        " '{\"paths\":[...],\"deleted_paths\":[...],\"message\":\"<subject>\",\"drop_ignored\":true}'` -- the only committer route. Raw `git commit` "
         "is refused by the block-subagent-commit guard and is NOT a route."
+        " `drop_ignored` drops gitignored scratch paths from the list and commits the rest; "
+        "put any `dropped_ignored` paths the result names in `reason`."
         " If the outcome is indeterminate, reconcile it against "
         "`git log` and `git status` before doing anything else -- never retry blind."
         " On commit-failed, put the verbatim refusal or the divergence you found in `reason`.",
@@ -898,10 +906,6 @@ def compose_review_fix_commit_call(
     )
 
 
-#: Quoted heredoc delimiter for the run-cost record fed to `grind-row run-record`.
-RUN_RECORD_HEREDOC_DELIM = "RUN_RECORD_JSON"
-
-
 def compose_ledger_sweep_call(
     *,
     label: str,
@@ -928,9 +932,8 @@ def compose_ledger_sweep_call(
     if record_js:
         # One verbatim Bash call: prose like "pass this JSON on stdin" is not
         # executable -- the op-runner ran the verb with no stdin and the verb
-        # died on empty input. A quoted heredoc feeds the record; the record is
-        # one-line JSON.stringify output, so it cannot contain the delimiter line.
-        parts.append(("lit", "Run this exactly as written, as ONE Bash call (the heredoc feeds the record on stdin):\n```\n"))
+        # died on empty input.
+        parts.append(("lit", "Run this exactly as written, as ONE Bash call:\n```\n"))
     elif queue_dirs:
         parts.append(("lit", "Run "))
     if queue_dirs:
@@ -946,14 +949,19 @@ def compose_ledger_sweep_call(
         ("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row run-record --profile {profile} --run-id ")
     )
     parts.append(run_id_part)
-    # --record-file is required by the verb; stdin ("-") is the only source here.
-    parts.append(("lit", " --record-file - --repo-root "))
-    parts.append(("expr", repo_root_js))
     if record_js:
-        parts.append(("lit", f" <<'{RUN_RECORD_HEREDOC_DELIM}'\n"))
-        parts.append(("expr", record_js))
-        parts.append(("lit", f"\n{RUN_RECORD_HEREDOC_DELIM}\n```\n"))
+        # The record rides as one percent-encoded, single-quoted token, never
+        # stdin: the hook-mode door is the only path that forwards stdin, so a
+        # heredoc or pipe reached the verb empty. `'` is encoded too, so the
+        # token is shell-safe in bash and PowerShell alike.
+        parts.append(("lit", " --record-urlenc '"))
+        parts.append(("expr", f"encodeURIComponent({record_js}).replace(/'/g, '%27')"))
+        parts.append(("lit", "' --repo-root "))
+        parts.append(("expr", repo_root_js))
+        parts.append(("lit", "\n```\n"))
     else:
+        parts.append(("lit", " --record-file - --repo-root "))
+        parts.append(("expr", repo_root_js))
         parts.append(("lit", "`"))
     parts.append(
         (
@@ -987,24 +995,30 @@ def compose_undo_call(
     *,
     label: str,
     phase_title: str,
-    touched_files: Sequence[str] = (),
-    touched_files_js: Optional[str] = None,
-    created_files: Sequence[str] = (),
-    created_files_js: Optional[str] = None,
+    paths: Sequence[str] = (),
+    paths_js: Optional[str] = None,
+    repo_root_js: str = "REPO_ROOT",
     agent_type_host: Optional[str] = None,
     preamble_expr: Optional[str] = None,
 ) -> str:
-    parts: list[tuple[str, str]] = [*_preamble_parts(preamble_expr), ("lit", "Restore these files from HEAD: [")]
-    parts.extend(_list_parts(touched_files, touched_files_js))
-    parts.append(("lit", "], and remove these files the fix created: ["))
-    parts.extend(_list_parts(created_files, created_files_js))
-    parts.append(
+    """The `undo` op-runner call: one `grind-row undo` command that puts every
+    declared path back to its HEAD state. ``paths_js`` is one runtime
+    expression for the union of touched and created paths; the encoder
+    expression must stay the twin of ``grind_vocab.encode_undo_paths``."""
+    paths_expr = paths_js if paths_js else json.dumps(list(paths))
+    parts: list[tuple[str, str]] = [
+        *_preamble_parts(preamble_expr),
+        ("lit", "Run this exactly as written, as ONE Bash call:\n```\n"),
+        ("lit", f"{ASSEMBLE_CMD} grind-row undo --paths-urlenc '"),
+        ("expr", f"encodeURIComponent(JSON.stringify({{paths: {paths_expr}}})).replace(/'/g, '%27')"),
+        ("lit", "' --repo-root "),
+        ("expr", repo_root_js),
         (
             "lit",
-            "]. Return `undone` only once `git status --porcelain` shows none of them modified, "
-            "deleted or untracked; otherwise return `undo-failed` with a reason. " + _NO_STAGING_CLAUSE,
-        )
-    )
+            "\n```\nReturn `undone` when it exits 0, else `undo-failed` with the verbatim stderr in "
+            "`reason`. " + _NO_STAGING_CLAUSE,
+        ),
+    ]
     schema = {
         "type": "object",
         "required": ["outcome"],
@@ -1017,7 +1031,7 @@ def compose_undo_call(
         _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
-        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type=OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
         schema=schema,

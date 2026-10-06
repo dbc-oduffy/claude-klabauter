@@ -894,6 +894,13 @@ def exercise_suspended_op(monkeypatch):
 # session-scoped snapshot would attribute litter to "somewhere in this run"
 # and force a re-run under `-k` to localize it).
 #
+# The append check `_no_appends_into_preexisting_hub_litter` is session-scoped
+# and costs, measured 2026-10-06 (`time.process_time`, k=1000) against a
+# synthetic 385-dir hub (380 UUID dirs + 5 fixture-named dirs of 2 files each):
+# 1.62ms per `_preexisting_hub_litter_mtimes` call -- listing plus stats of the
+# 5-dir subset -- so ~3.2ms per pytest session for the before/after pair, and
+# zero per test.
+#
 # NOT flaky under concurrent peers, which is the one thing this guard has to
 # get right on a box running 50-70 sessions against this same tree: a peer
 # session legitimately creates a directory here at any moment, so a new entry
@@ -904,10 +911,15 @@ def exercise_suspended_op(monkeypatch):
 # is neither.
 #
 # Negative-spec:
-#   - Does NOT detect an APPEND into a directory that already existed. That
-#     needs a per-file stat of ~380 directories per test, which this repo's
-#     brightline will not pay for; the two producer fixes above are what close
-#     that half, and a dir that is never minted is never appended into.
+#   - Does NOT detect, per test, an APPEND into a directory that already
+#     existed: that needs a per-file stat of ~380 directories per test, which
+#     this repo's brightline will not pay for. Two things close that half
+#     instead. `_no_appends_into_preexisting_hub_litter` (below) checks once per
+#     pytest session, over only the pre-existing non-UUID, non-registry dirs
+#     (a handful, never the ~380), and names the dir but not the test -- run
+#     with `-k` to localize. And `test_liveness.py::TestLiveSessionIdsCorpus` is
+#     the standing backstop that enumerates any surviving fixture-named dir as
+#     a phantom session, so a leak that outlives both is still caught there.
 #   - Does NOT clean up what it flags. A test that leaks into the live hub is
 #     broken and must fail loudly, not have its symptom swept.
 #   - Considers DIRECTORIES ONLY. The hub also carries plain files that no
@@ -935,6 +947,7 @@ def exercise_suspended_op(monkeypatch):
 #     where the leaking tests are. The root conftest re-exports the fixture
 #     by name so the `coordinator/` testpaths are covered too.
 
+import contextlib
 import json
 import uuid as _uuid
 
@@ -1241,6 +1254,84 @@ def _no_new_live_session_hub_entries():
         "repo, or pass the root explicitly. See this file's Live session-hub "
         "litter guard note."
     )
+
+
+def _preexisting_hub_litter_mtimes(hub: str) -> "dict[str, int]":
+    """Newest mtime (ns) of each fixture-named dir in `hub`, over the dir itself and
+    its direct files, keyed by dir name.
+
+    "Fixture-named" is the complement of everything a live peer legitimately writes:
+    UUID-shaped dirs (harness sessions), `liveness._NON_SESSION_DIR_NAMES` infra
+    sinks, and names in the harness session registry. What remains is a handful of
+    dirs, so the per-file stat never scales with the ~380-entry hub."""
+    from coordinator_core.session import liveness
+
+    try:
+        with os.scandir(hub) as entries:
+            names = [
+                e.name
+                for e in entries
+                if e.is_dir()
+                and e.name not in liveness._NON_SESSION_DIR_NAMES
+                and not _looks_like_a_harness_session_id(e.name)
+            ]
+    except OSError:
+        return {}
+    if not names:
+        return {}
+    try:
+        from coordinator_core.session import harness_registry
+
+        registered = set(harness_registry.snapshot())
+    except Exception:
+        registered = set()
+    result: "dict[str, int]" = {}
+    for name in names:
+        if name in registered:
+            continue
+        path = os.path.join(hub, name)
+        try:
+            newest = os.stat(path).st_mtime_ns
+            with os.scandir(path) as children:
+                for child in children:
+                    newest = max(newest, child.stat().st_mtime_ns)
+        except OSError:
+            continue
+        result[name] = newest
+    return result
+
+
+def _appended_hub_litter(before: "dict[str, int]", after: "dict[str, int]") -> "list[str]":
+    """Sorted names present in `before` whose newest mtime moved in `after`."""
+    return sorted(n for n, m in before.items() if n in after and after[n] != m)
+
+
+@contextlib.contextmanager
+def _watch_preexisting_hub_litter(hub: str):
+    """Fail on exit when a fixture-named dir that already sat in `hub` at entry was
+    written into meanwhile -- the append half `_no_new_live_session_hub_entries`
+    cannot see."""
+    before = _preexisting_hub_litter_mtimes(hub)
+    yield
+    appended = _appended_hub_litter(before, _preexisting_hub_litter_mtimes(hub))
+    if appended:
+        _pytest.fail(
+            f"_no_appends_into_preexisting_hub_litter: fixture-named dir(s) {appended!r} "
+            f"in the REAL session hub {hub} were written into during this run -- "
+            "a test or child process resolved the hub from the process cwd while "
+            "taking its session id from a fixture. Delete the dir, find the writer "
+            "with `-k`, and point it at a tmp_path repo.",
+            pytrace=False,
+        )
+
+
+@_pytest.fixture(scope="session", autouse=True)
+def _no_appends_into_preexisting_hub_litter():
+    """Session-scoped by design: two listings per run instead of two per test.
+    Per-test attribution is knowingly lost; the message names the dir and `-k`
+    localizes."""
+    with _watch_preexisting_hub_litter(_LIVE_HUB):
+        yield
 
 
 # ---------------------------------------------------------------------------

@@ -341,15 +341,3 @@ def test_healthy_settings_still_writes_snapshot_via_augmented_predicate(tmp_path
 
     assert "CLOBBERED" not in text
     assert (config_dir / ".settings-last-good.json").is_file()
-
-
-def test_cloud_only_probe_entry_is_not_a_settings_hook_surface(tmp_path):
-    from coordinator_core.ops.session import guard_settings_integrity as gsi
-
-    probe = '/root/klabauter/scripts/cloud_path_probe.py'
-    assert gsi._is_cloud_only_probe(f"python3 {probe}")
-    assert not gsi._is_cloud_only_probe("python3 /x/hooks/scripts/other_guard.py")
-
-    hooks = {"SessionStart": [{"hooks": [{"type": "command", "command": f"python3 {probe}"}]}]}
-    (tmp_path / "settings.json").write_text(json.dumps({"hooks": hooks}), encoding="utf-8")
-    assert gsi.detect_hook_delivery_duplication(config_dir=tmp_path).settings_present is False

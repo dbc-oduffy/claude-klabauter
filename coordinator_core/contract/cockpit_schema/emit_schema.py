@@ -1128,8 +1128,8 @@ def assert_no_version_desync(
         return
 
     try:
-        committed_json = json.loads(committed_path.read_text())
-    except (json.JSONDecodeError, OSError) as exc:
+        committed_json = json.loads(committed_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         # Was print()+return,
         # a fail-open no-op that would let this guard silently never fire
         # again once the committed file went unparseable. This guard exists

@@ -127,6 +127,8 @@ def _write_private_atomically(path: Path, content: str) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
+    # A stale tmp from a crashed writer would keep its (possibly wider) mode under O_TRUNC.
+    tmp_path.unlink(missing_ok=True)
     fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     try:
         os.write(fd, content.encode("ascii"))

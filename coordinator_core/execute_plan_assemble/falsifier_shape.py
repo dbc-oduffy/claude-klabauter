@@ -163,7 +163,7 @@ def goal_falsifier_defect(fm: dict, root: Path) -> Optional[str]:
     return GOAL_REFUSAL_FALSIFIER_ABSENT
 
 
-#: A `disposition_ref`/bare `baseline_ref` is always a bare hex commit sha --
+#: A bare `disposition_ref`/`baseline_ref` is always a hex commit sha --
 #: never a symbolic ref, branch name, or tag. Bounding the shape before ever
 #: handing the value to `git rev-parse` is deliberate defense-in-depth.
 _DISPOSITION_REF_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
@@ -171,3 +171,9 @@ _DISPOSITION_REF_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
 #: `baseline_ref` alone may additionally carry a `<repo>:<sha>` cross-repo
 #: qualifier -- `disposition_ref` never does.
 _BASELINE_REF_CROSS_REPO_RE = re.compile(r"^([a-z][a-z0-9_-]*):([0-9a-fA-F]{4,40})$")
+
+#: `disposition_ref` may also be `<repo_key>:<sha>` -- a superset of the
+#: vendored plan-tasks schema's `^([a-z][a-z0-9_-]+:)?[0-9a-f]{7,40}$`
+#: (key 2+ chars), so a value the schema admits is never MALFORMED at
+#: close-out.
+_DISPOSITION_REF_QUALIFIED_RE = re.compile(r"^([a-z][a-z0-9_-]+):([0-9a-fA-F]{4,40})$")

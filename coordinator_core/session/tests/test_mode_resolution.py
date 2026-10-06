@@ -312,7 +312,12 @@ class TestJobModeEnvironmentWins:
 
 
 class TestInteractionModeFleetWins:
-    def test_empty_fleet_record_defaults_to_hands_on(self, _isolate_sentinel_and_fleet):
+    def test_empty_fleet_record_defaults_to_ceo(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("interaction_mode", "s1") == "ceo"
+
+    def test_fleet_hands_on_still_overrides_default(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"interaction_mode": "hands-on"})
         assert resolve_mode("interaction_mode", "s1") == "hands-on"
 
     def test_fleet_pm_wins(self, _isolate_sentinel_and_fleet):
@@ -325,17 +330,17 @@ class TestInteractionModeFleetWins:
         _write_fleet(_home, {"interaction_mode": "ceo"})
         assert resolve_mode("interaction_mode", "s1") == "ceo"
 
-    def test_malformed_fleet_value_degrades_to_hands_on(self, _isolate_sentinel_and_fleet):
+    def test_malformed_fleet_value_degrades_to_ceo(self, _isolate_sentinel_and_fleet):
         _home = _isolate_sentinel_and_fleet[1]
         _write_fleet(_home, {"interaction_mode": "boss"})
-        assert resolve_mode("interaction_mode", "s1") == "hands-on"
+        assert resolve_mode("interaction_mode", "s1") == "ceo"
 
     def test_registry_entry_shape(self):
         entry = MODE_KEYS["interaction_mode"]
         assert entry.session_pair is None
         assert entry.precedence == "fleet-wins"
         assert entry.value_type == INTERACTION_MODE_VALUES
-        assert entry.default == "hands-on"
+        assert entry.default == "ceo"
         assert INTERACTION_MODES == ("hands-on", "pm", "ceo")
 
 

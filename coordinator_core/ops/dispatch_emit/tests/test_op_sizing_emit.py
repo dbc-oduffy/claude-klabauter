@@ -118,7 +118,7 @@ def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(re
 def test_gate_halt_raises_refusal_naming_kind(repo):
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 
-    _put(repo, "M", exit_criterion={"statement": "done", "accepted": None})
+    _put(repo, "M", interaction_mode="hands-on", exit_criterion={"statement": "done", "accepted": None})
     with pytest.raises(SizingFireRefused) as exc:
         _gate_sizing_at_emit(repo, REL, [])
     assert "touchpoint" in str(exc.value) and "sizing-accept-exit-criterion" in str(exc.value)

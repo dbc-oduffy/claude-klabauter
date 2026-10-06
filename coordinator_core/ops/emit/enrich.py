@@ -171,8 +171,13 @@ def _walk_last_modified_at(
             proc.stdout.close()
         except (OSError, ValueError):
             pass
-        proc.terminate()
-        proc.wait()
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
     return resolved
 
 

@@ -35,7 +35,7 @@ def test_unknown_tshirt_refuses():
 
 @pytest.mark.parametrize(
     "arm,route",
-    [("xs", "spec-dispatch"), ("s", "dispatch"), ("m_plus", "shape"), ("m_plus", "roadmap"), ("s", "pm-decision")],
+    [("xs", "spec-dispatch"), ("s", "dispatch"), ("m_plus", "goal-setting"), ("m_plus", "roadmap"), ("s", "pm-decision")],
 )
 def test_route_mismatch_refuses_by_name(arm, route):
     out = sf.collect_fire_refusals(_sizing(route=route), sizing_rel="state/sizings/a.yaml", arm=arm, writes=["x"])

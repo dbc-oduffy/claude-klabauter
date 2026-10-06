@@ -251,15 +251,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Print every registered op name, sorted, one per line, and exit 0.",
     )
     p.add_argument(
-        "--describe",
-        action="store_true",
-        default=False,
-        help=(
-            "Print <op>'s handler docstring (params, result shape) and exit 0 "
-            "without running the op. Exit 1 if <op> is not registered."
-        ),
-    )
-    p.add_argument(
         "--bare",
         action="store_true",
         default=False,
@@ -623,24 +614,6 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
         sys.stdout.write("".join(f"{name}\n" for name in sorted(OP_MODULE_MAP)))
-        sys.stdout.flush()
-        raise SystemExit(0)
-
-    if args.describe:
-        if args.op is None:
-            parser.error("--describe requires <op>")
-        import inspect
-
-        from coordinator_core.ipc import get_op_handler
-
-        try:
-            handler = get_op_handler(args.op)
-        except Exception:  # noqa: BLE001 -- suspended/killed op reads as unavailable
-            handler = None
-        if handler is None:
-            _fatal_stderr(f"--describe: op {args.op!r} is not registered (see --list)")
-        doc = inspect.getdoc(handler) or inspect.getdoc(inspect.unwrap(handler))
-        sys.stdout.write((doc or f"{args.op}: handler has no docstring") + "\n")
         sys.stdout.flush()
         raise SystemExit(0)
 

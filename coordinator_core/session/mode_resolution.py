@@ -322,11 +322,14 @@ MODE_KEYS: Dict[str, ModeKey] = {
     # `compaction_warnings`. It never removes a safety guard: it selects
     # which touchpoints render, exactly as `compaction_warnings` selects an
     # advisory variant without ever suppressing the advisory itself.
+    # Default `ceo` (DR-450): unset or malformed fleet record means no PM
+    # touchpoint halts the run. `ops/fleet/mode_control.py`'s
+    # `declared_default` must name the same value.
     "interaction_mode": ModeKey(
         session_pair=None,
         precedence="fleet-wins",
         value_type=INTERACTION_MODE_VALUES,
-        default=INTERACTION_MODES[0],
+        default="ceo",
     ),
 }
 

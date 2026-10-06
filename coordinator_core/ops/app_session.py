@@ -479,6 +479,7 @@ def _teardown(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _absent_key_result("app_session.teardown", key, f"no persisted handle for key {key!r}")
 
     was_live = _handle_is_live(handle)
+    denied = False
     if was_live:
         pid = handle.get("pid")
         try:
@@ -495,9 +496,11 @@ def _teardown(params: dict, repo_root: Optional[Path] = None) -> dict:
             start_epoch = handle.get("start_epoch")
             if start_epoch is None or int(proc.create_time()) == int(start_epoch):
                 proc.terminate()
-        except Exception:
-            # process already exited or is unreachable; nothing left to terminate
-            pass
+        except Exception as exc:
+            # NoSuchProcess: already exited, nothing left to terminate. AccessDenied
+            # means the signal was never delivered, so it must not read as a reap.
+            if type(exc).__name__ == "AccessDenied":
+                denied = True
 
     # Release the lock (remove the handle) unconditionally — even when the
     # process was already gone, a stale handle must never wedge a later
@@ -509,5 +512,5 @@ def _teardown(params: dict, repo_root: Optional[Path] = None) -> dict:
         "configured": True,
         "key": key,
         "was_live": was_live,
-        "reaped": was_live,
+        "reaped": was_live and not denied,
     }

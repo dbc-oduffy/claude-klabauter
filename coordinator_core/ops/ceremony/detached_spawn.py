@@ -510,10 +510,10 @@ def clear_failures_log(repo_root: str) -> None:
     if drained.strip():
         try:
             _append_to_failures_archive(repo_root, drained)
-        except Exception:
+        except Exception as exc:
             # Belt to the archive helper's own braces: retention must never be able to
             # keep the live log from draining, whatever the failure mode.
-            pass
+            print(f"skip: failures-archive append failed: {exc!r}", file=sys.stderr)
     try:
         log_path.write_text("", encoding="utf-8", newline="\n")
     except OSError:

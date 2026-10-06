@@ -637,7 +637,7 @@ def test_derive_agent_helper_target_map_extensionless_and_py_twin_prefers_py(
     mapping = _derive_agent_helper_target_map(agent_bin)
 
     assert mapping["foo"] == "foo.py"
-    warning = capsys.readouterr().out
+    warning = capsys.readouterr().err
     assert "foo" in warning
     assert "foo.py" in warning
 

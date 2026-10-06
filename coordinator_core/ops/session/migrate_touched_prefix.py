@@ -108,6 +108,7 @@ GENERATES = []  # rewrites touched.txt files under <git-common-dir>/coordinator-
 
 import argparse
 import json
+from coordinator_core.atomic_replace import atomic_write_bytes
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -405,9 +406,9 @@ def run_migration(
     report.drop_manifest = _rebuild_drop_manifest()
 
     manifest_path = resolved_backup_dir / "drop-manifest.json"
-    manifest_path.write_text(
-        json.dumps(report.drop_manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8", newline="\n",
+    atomic_write_bytes(
+        manifest_path,
+        (json.dumps(report.drop_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
 
     return report

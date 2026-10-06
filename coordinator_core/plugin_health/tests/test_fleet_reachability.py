@@ -642,11 +642,51 @@ def test_skip_when_claude_klabauter_root_unresolvable(tmp_path: Path, monkeypatc
     import coordinator_core.plugin_health.oracle_surface as oracle_surface
 
     monkeypatch.setattr(oracle_surface, "coordinator_engine_root", _raise)
+    monkeypatch.setattr(oracle_surface, "registry_get", lambda key: None)
 
     result = fr.check_fleet_reachability(content_root=content_root)
 
     assert result.ok is True
     assert result.skipped is True
+
+
+def test_oracle_surface_prefers_registered_authoring_tree_over_published_mirror(tmp_path: Path, monkeypatch):
+    """The engine root is the published mirror, a strict subset of the authoring
+    tree's `coordinator/bin/`; the delete-safety gate reads the authoring tree."""
+    import coordinator_core.plugin_health.oracle_surface as oracle_surface
+
+    authoring = tmp_path / "authoring"
+    mirror = tmp_path / "mirror"
+    (authoring / "coordinator" / "bin").mkdir(parents=True)
+    (mirror / "coordinator" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(oracle_surface, "registry_get", lambda key: str(authoring))
+    monkeypatch.setattr(oracle_surface, "coordinator_engine_root", lambda: str(mirror))
+
+    assert oracle_surface.resolve_agent_bin() == authoring / "coordinator" / "bin"
+
+    monkeypatch.setattr(oracle_surface, "is_published_engine_mirror", lambda root: root == str(authoring))
+
+    assert oracle_surface.resolve_agent_bin() == mirror / "coordinator" / "bin"
+
+
+def test_doe_template_forwarder_is_self_supplied_not_a_demand(tmp_path: Path):
+    agent_bin = tmp_path / "claude-klabauter-bin"
+    agent_bin.mkdir()
+    content_root = tmp_path / "doe"
+    _write_doe_fence(
+        content_root, "commands", "install.md", "Run `${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/machine-local`."
+    )
+    templates_bin = content_root / "coordinator" / "templates" / "bin"
+    templates_bin.mkdir(parents=True)
+    (templates_bin / "machine-local").write_text("#!/bin/sh\n", encoding="utf-8")
+    (templates_bin / "machine-local.cmd").write_text("@echo off\n", encoding="utf-8")
+
+    result = fr.check_fleet_reachability(
+        agent_bin=agent_bin, content_root=content_root, ledger_path=tmp_path / "none.json"
+    )
+
+    assert result.ok is True
+    assert result.missing == []
 
 
 def test_skip_when_content_root_unresolvable(tmp_path: Path, monkeypatch):

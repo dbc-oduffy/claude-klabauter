@@ -88,6 +88,7 @@ is an optional verification-only tool. See the per-site table below.
 | `ops/gate_dimension_docstrings.py` `_run_interrogate()` | (f) | 3rd-party Python CLI (interrogate), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` docstrings dimension, merge-gate cadence |
 | `ops/gate_dimension_tests.py` pytest `--cov` invocation (named at landing) | (f) | pytest, resolved with its `pytest-cov` plugin (`importlib.util.find_spec`), degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
 | `ops/gate_dimension_tests.py` diff-cover invocation (named at landing) | (f) | 3rd-party Python CLI (diff-cover), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
+| `coordinator/bin/statusline.py` `_run_inner()` (`shell=True` leg) | (h) | operator-supplied command string, shell parsing by definition | No — statusline delegation, outside the commit and session-start paths |
 
 ## Adversarial standard applied — no carve-out fails it
 
@@ -277,6 +278,26 @@ Anti-loophole teeth:
 Sites:
 - `coordinator_core/ops/cruft_sweep.py` `sweep_toolchain_caches()` (dry-run probe + prune, two calls: ordinals 0 and 1)
 
+## (h) operator-supplied command string, delegated verbatim
+
+Running a command string the operator authored in their own settings (the `statusLine` command
+`coordinator/bin/statusline.py` delegates to), exactly as the harness itself runs a
+`type: command` statusLine: through a shell, because the string is shell syntax the operator
+wrote (pipes, quoting, env expansion). No shell-free port exists — parsing it ourselves would
+reimplement a shell and diverge from the harness's reading of the same string. PM-delegate ruling
+2026-10-06 (row `2026-08-31-tf-warm-serve-violations-and-an-unregistered-sh-spawn`).
+
+Anti-loophole teeth:
+
+- The command string must originate from the operator's own configuration and be passed through
+  unmodified. A string claude-klabauter composes, templates, or interpolates is out of the class.
+- Sanctioned for the `shell=True` fallback leg only; the Windows leg that resolves `bash` and
+  invokes it directly is not in the register (`SHELL_UNKNOWN`, not gated).
+- Does not transfer to any other delegate-a-command surface; each is named or it is a violation.
+
+Sites:
+- `coordinator/bin/statusline.py` `_run_inner()` (`subprocess.run(command, shell=True, ...)`, ordinal 1; operator's statusLine command)
+
 ## Machine-readable register
 
 The block below is the parseable form of the `Sites:` bullets above, read by
@@ -427,6 +448,14 @@ entered below.
   argv_digest: "b78e5586548a"
   reason: "DoD docstrings dimension: optional interrogate coverage, resolved by gate_tool_resolve, degrades to UNAVAILABLE"
   ruled_on: "2026-09-30"
+- cls: h
+  path: coordinator/bin/statusline.py
+  enclosing: _run_inner
+  argv0: <dynamic>
+  ordinal: 1
+  argv_digest: "5d347fd948b6"
+  reason: "operator-supplied statusLine command string, delegated unmodified through a shell as the harness does; shell parsing is the contract, no shell-free port"
+  ruled_on: "2026-10-06"
 ```
 
 ## Adjudicated and CLOSED 2026-07-21 — no longer a residual

@@ -85,11 +85,6 @@ def test_unresolved_pm_decision_still_refuses_as_room(repo):
     assert halt["kind"] == "room" and halt["route"] == "pm-decision"
 
 
-def test_shape_route_still_halts_as_room(repo):
-    _put(repo, route="shape")
-    assert gate(repo, REL).halt["kind"] == "room"
-
-
 def test_composed_script_chains_four_stages_in_order(repo):
     _put(repo)
     script = _compose(repo)

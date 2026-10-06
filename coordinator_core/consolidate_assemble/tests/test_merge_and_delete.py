@@ -67,3 +67,61 @@ def test_a_merge_stopped_after_staging_is_aborted(repo):
     assert not (repo / ".git" / "MERGE_HEAD").exists()
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
     assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+
+
+_LEDGER = ".coordinator-local/memo-outbox/sent-ledger.jsonl"
+
+
+def _commit_file(root: Path, rel: str, text: str, msg: str) -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8", newline="\n")
+    _git(root, "add", rel)
+    _git(root, "commit", "-q", "-m", msg)
+
+
+@pytest.fixture()
+def ledger_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "lrepo"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "work/me")
+    _git(root, "config", "user.email", "t@local")
+    _git(root, "config", "user.name", "t")
+    _commit_file(root, _LEDGER, '{"id":"base"}\n', "seed")
+    _commit_file(root, "a.txt", "base\n", "seed a")
+    return root
+
+
+def test_ledger_only_conflict_is_resolved_by_union(ledger_repo, monkeypatch):
+    root = ledger_repo
+    _git(root, "checkout", "-q", "-b", "work/sibling")
+    _commit_file(root, _LEDGER, '{"id":"base"}\n{"id":"sib"}\n', "sib row")
+    _git(root, "checkout", "-q", "work/me")
+    _commit_file(root, _LEDGER, '{"id":"base"}\n{"id":"mine"}\n', "my row")
+
+    monkeypatch.setenv("COORDINATOR_OVERRIDE_BRANCH", "work/sibling")
+    apply_mod._dispatch_merge_and_delete(["work/sibling", "work/sibling"], root)
+
+    assert not (root / ".git" / "MERGE_HEAD").exists()
+    lines = (root / _LEDGER).read_text(encoding="utf-8").splitlines()
+    assert lines == ['{"id":"base"}', '{"id":"mine"}', '{"id":"sib"}']
+    assert _git(root, "branch", "--list", "work/sibling").stdout.strip() == ""
+    assert _git(root, "status", "--porcelain").stdout.strip() == ""
+
+
+def test_ledger_plus_other_conflict_aborts(ledger_repo):
+    root = ledger_repo
+    _git(root, "checkout", "-q", "-b", "work/sibling")
+    _commit_file(root, _LEDGER, '{"id":"base"}\n{"id":"sib"}\n', "sib row")
+    _commit_file(root, "a.txt", "sibling\n", "sib a")
+    _git(root, "checkout", "-q", "work/me")
+    _commit_file(root, _LEDGER, '{"id":"base"}\n{"id":"mine"}\n', "my row")
+    _commit_file(root, "a.txt", "mine\n", "my a")
+    head = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(Exception):
+        apply_mod._dispatch_merge_and_delete(["work/sibling", "work/sibling"], root)
+
+    assert not (root / ".git" / "MERGE_HEAD").exists()
+    assert _git(root, "rev-parse", "HEAD").stdout.strip() == head
+    assert _git(root, "branch", "--list", "work/sibling").stdout.strip() != ""

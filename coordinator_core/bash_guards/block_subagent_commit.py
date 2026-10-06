@@ -6526,10 +6526,66 @@ _OWNERSHIP_LEG_SUMMARY_MAX_BYTES = 70
 #: `_message_size.MESSAGE_PROSE_CAP_BYTES` (220) with room to spare;
 #: pinned by `test_git_commit_agent_orphan_denial_names_no_holder_caveat`.
 _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON = (
-    "BLOCKED: git-commit-agent -- no session holds a claim on this path. "
-    "no holder is not evidence no one wrote it: a write through a "
-    "subprocess or an unrecognised shape records no claim (SC-DR-023)."
+    "BLOCKED: git-commit-agent -- no session claims %s. "
+    "no holder is not evidence no one wrote it: a subprocess or "
+    "unrecognised write records no claim (SC-DR-023)."
 )
+
+#: Fixed prose is 156 bytes of the 220-byte cap; the named orphan paths get
+#: what is left, minus slack. A pathspec with several orphans names as many
+#: as fit and counts the rest, so the agent can tell which of its paths to
+#: re-claim without guessing.
+_ORPHAN_PATHS_MAX_BYTES = 60
+_ORPHAN_ONE_PATH_MAX_BYTES = 40
+_ORPHAN_MORE_SUFFIX_BYTES = len(" (+99 more)")
+_ORPHAN_PATHS_UNNAMED = "this path"
+
+_QUOTED_PATH_PATTERN = r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\""
+
+
+def _orphan_paths_from_reason(reason: str, classification_orphan: str) -> List[str]:
+    """Paths the scope report classified orphan, in report order, deduplicated.
+
+    Reads the ``'<path>' (<classification>)`` entries
+    ``assert_paths_in_session_scope`` writes -- the per-path list after the
+    enumeration marker when present (it covers every denied path), else the
+    lead fragment.
+    """
+    enumerated = reason.split(_OWNERSHIP_LEG_REASON_ENUMERATION_MARKER, 1)
+    scan = enumerated[1] if len(enumerated) == 2 else reason
+    entry_re = re.compile(
+        r"(?P<path>%s)\s+\(%s\)" % (_QUOTED_PATH_PATTERN, re.escape(classification_orphan))
+    )
+    paths: List[str] = []
+    for match in entry_re.finditer(scan):
+        raw = match.group("path")
+        try:
+            path = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            path = raw[1:-1]
+        if isinstance(path, str) and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _orphan_deny_reason(paths: List[str]) -> str:
+    named: List[str] = []
+    used = 0
+    for index, path in enumerate(paths):
+        shown = _elide_middle(path, _ORPHAN_ONE_PATH_MAX_BYTES)
+        cost = len(shown.encode("utf-8")) + (2 if named else 0)
+        remaining_after = len(paths) - index - 1
+        reserve = _ORPHAN_MORE_SUFFIX_BYTES if remaining_after else 0
+        if named and used + cost + reserve > _ORPHAN_PATHS_MAX_BYTES:
+            break
+        named.append(shown)
+        used += cost
+    if not named:
+        return _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON % _ORPHAN_PATHS_UNNAMED
+    text = ", ".join(named)
+    if len(named) < len(paths):
+        text += " (+%d more)" % (len(paths) - len(named))
+    return _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON % text
 
 
 #: `'<path>' (<classification>)` -- the shape `assert_paths_in_session_scope`
@@ -6554,12 +6610,21 @@ def _clip_bytes(text: str, max_bytes: int) -> str:
 
 
 def _elide_middle(text: str, max_bytes: int) -> str:
-    if len(text.encode("utf-8")) <= max_bytes:
+    """Elide the middle so the result fits ``max_bytes`` UTF-8 bytes.
+
+    Head and tail are cut by BYTES and decoded with ``errors="ignore"``: a
+    character-count cut lets a multi-byte path run several times over the
+    budget, and the caller's prose cap is a byte cap.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
         return text
     keep = max(max_bytes - 3, 2)
     head_n = min(keep // 3, 8)
     tail_n = keep - head_n
-    return text[:head_n] + "..." + text[len(text) - tail_n:]
+    head = encoded[:head_n].decode("utf-8", errors="ignore")
+    tail = encoded[len(encoded) - tail_n:].decode("utf-8", errors="ignore")
+    return head + "..." + tail
 
 
 def _ownership_leg_summary(reason: str, *, max_bytes: int = _OWNERSHIP_LEG_SUMMARY_MAX_BYTES) -> str:
@@ -6681,7 +6746,9 @@ def _deny_reason(
             )
         classification_orphan = _import_classification_orphan()
         if classification_orphan and classification_orphan in ownership_reason:
-            return _GIT_COMMIT_AGENT_ORPHAN_DENY_REASON
+            return _orphan_deny_reason(
+                _orphan_paths_from_reason(ownership_reason, classification_orphan)
+            )
         summary = _ownership_leg_summary(ownership_reason)
         if summary:
             return (

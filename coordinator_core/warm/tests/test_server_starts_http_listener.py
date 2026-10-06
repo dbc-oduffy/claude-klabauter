@@ -91,6 +91,9 @@ def _patch_boot_seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(server, "_preload_op_registry", lambda: None)
     monkeypatch.setattr(server, "_suppress_pool_worker_consoles", lambda: None)
     monkeypatch.setattr(server, "_declare_execution_route", lambda: None)
+    # `main()` scrubs this process's own `os.environ` at boot; run in-process it would
+    # delete the harness's ambient vars (e.g. COORDINATOR_PROBE_CANARY) for the session.
+    monkeypatch.setattr(server, "_scrub_test_harness_env", lambda: None)
     monkeypatch.setattr(election, "elect", lambda name, user_sid=None: 1)
     monkeypatch.setattr(election, "elect_unix_socket", lambda path: object())
     monkeypatch.setattr(server._ServerContext, "serve_forever", lambda self, handle: None)

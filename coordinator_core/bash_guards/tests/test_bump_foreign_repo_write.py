@@ -2249,6 +2249,48 @@ def test_interpreter_payload_write_into_own_repo_does_not_bump(repos, monkeypatc
     assert result is None
 
 
+def test_interpreter_payload_relative_write_after_cd_into_foreign_repo_bumps(repos, monkeypatch):
+    """`cd <foreign>/sub && python3 - <<EOF open('rel','w')` writes inside the
+    cd'd directory; resolving the payload against the starting cwd read it as
+    an own-repo write."""
+    _set_anchor(monkeypatch, repos, "sess-ip-cd-foreign")
+    sub = repos["foreign"] / "sub"
+    sub.mkdir()
+    cmd = f"cd {_posix(sub)} && python3 - <<'EOF'\nopen('git_native.py','w').write('x')\nEOF\n"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ip-cd-foreign", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_interpreter_payload_relative_write_after_cd_into_own_repo_does_not_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-ip-cd-own")
+    sub = repos["anchor"] / "sub"
+    sub.mkdir()
+    cmd = f"cd {_posix(sub)} && python3 - <<'EOF'\nopen('x.py','w').write('x')\nEOF\n"
+
+    result = guard.check_bump_foreign_repo_write(
+        cmd, "sess-ip-cd-own", str(repos["foreign"]), {}
+    )
+
+    assert result is None
+
+
+def test_interpreter_payload_relative_target_after_unresolved_cd_yields_no_candidate(tmp_path):
+    cmd = "cd $ELSEWHERE && python3 - <<'EOF'\nopen('x.py','w').write('x')\nEOF\n"
+    assert list(guard._iter_write_sink_candidates(cmd, str(tmp_path))) == []
+
+
+def test_interpreter_payload_absolute_target_after_unresolved_cd_still_yields(tmp_path):
+    dest = (tmp_path / "abs.py").as_posix()
+    cmd = f"cd $ELSEWHERE && python3 - <<'EOF'\nopen('{dest}','w').write('x')\nEOF\n"
+    cands = list(guard._iter_write_sink_candidates(cmd, str(tmp_path)))
+    assert [c[2] for c in cands] == [dest]
+
+
 def test_ac5_powershell_start_process_cross_repo_memo_invocation_recognized_under_powershell_dialect():
     """`Start-Process -FilePath cross-repo-memo ...` only resolves to a
     `cross-repo-memo` head once `expand_start_process_invocations` has run

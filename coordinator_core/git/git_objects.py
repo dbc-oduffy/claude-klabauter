@@ -81,8 +81,7 @@ def _retry_transient_read(op: "Callable[[], object]") -> object:
             raise
         except OSError as exc:
             last = exc
-    assert last is not None
-    raise last
+    raise last if last is not None else RuntimeError("transient-read retry exhausted")
 
 
 def _replace_with_retry(

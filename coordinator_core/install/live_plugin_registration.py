@@ -275,7 +275,7 @@ def _assert_live_plugin_registration(
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp.replace(path)
 

@@ -363,5 +363,97 @@ def test_an_unexpected_exception_still_yields_a_reason(tmp_path, monkeypatch):
 
 def test_missing_sizing_refusal_names_every_accepted_param():
     msg = _handler({"sizing_path": "state/sizings/x.yaml", "pm_quote": "q"})["error"]
-    for name in ("sizing", "pm_quote", "statement", "mode", "supersede"):
+    for name in ("sizing", "pm_quote", "apm_ruling", "statement", "mode", "supersede"):
         assert name in msg
+
+
+# ---------------------------------------------------------------------------
+# APM ruling
+# ---------------------------------------------------------------------------
+
+_CEO = "interaction_mode: ceo\n" + _PROPOSED
+_APM_ACCEPTED = (
+    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    on: '2026-01-01'\n"
+    "    mode: ceo\n"
+)
+_PM_ACCEPTED = (
+    "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
+    "  accepted:\n    pm_quote: PM said yes.\n    on: '2026-01-01'\n    mode: ceo\n"
+)
+
+
+def _apm(**overrides) -> dict:
+    params = {"sizing": "state/sizings/20260101-a.yaml", "apm_ruling": "Ruled fine."}
+    params.update(overrides)
+    return params
+
+
+def _doc(sizing: Path) -> dict:
+    return yaml.safe_load(sizing.read_text(encoding="utf-8"))
+
+
+def _setup(tmp_path, body: str):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    return repo, _seed_sizing(repo, exit_criterion=body)
+
+
+def test_apm_ruling_on_a_ceo_sizing_writes_the_apm_shape(tmp_path):
+    repo, sizing = _setup(tmp_path, _CEO)
+    result = _run(_apm(), repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    accepted = _doc(sizing)["exit_criterion"]["accepted"]
+    assert accepted["source"] == "apm" and accepted["apm_ruling"] == "Ruled fine."
+    assert accepted["mode"] == "ceo" and "pm_quote" not in accepted
+
+
+def test_apm_ruling_on_a_hands_on_sizing_is_refused_naming_hands_on(tmp_path):
+    repo, _ = _setup(tmp_path, _PROPOSED)
+    result = _run(_apm(), repo)
+    assert result["exit_code"] == 1 and "hands-on" in result["error"]
+
+
+def test_apm_ruling_mode_param_cannot_override_a_recorded_hands_on_mode(tmp_path):
+    repo, sizing = _setup(tmp_path, "interaction_mode: hands-on\n" + _PROPOSED)
+    before = sizing.read_text(encoding="utf-8")
+    result = _run(_apm(mode="ceo"), repo)
+    assert result["exit_code"] == 1 and "hands-on" in result["error"]
+    assert sizing.read_text(encoding="utf-8") == before
+
+
+def test_both_or_neither_words_is_refused(tmp_path):
+    repo, _ = _setup(tmp_path, _CEO)
+    assert _run(_apm(pm_quote="q"), repo)["exit_code"] == 1
+    assert _run({"sizing": "state/sizings/20260101-a.yaml"}, repo)["exit_code"] == 1
+
+
+@pytest.mark.parametrize("supersede", [False, True])
+def test_apm_ruling_never_displaces_a_pm_acceptance(tmp_path, supersede):
+    repo, sizing = _setup(tmp_path, _PM_ACCEPTED)
+    before = sizing.read_text(encoding="utf-8")
+    result = _run(_apm(supersede=supersede, apm_ruling="Other."), repo)
+    assert result["exit_code"] == 1
+    assert sizing.read_text(encoding="utf-8") == before
+
+
+def test_pm_quote_replaces_an_apm_acceptance_without_supersede(tmp_path):
+    repo, sizing = _setup(tmp_path, _APM_ACCEPTED)
+    result = _run(_base(pm_quote="PM overrules."), repo)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    accepted = _doc(sizing)["exit_criterion"]["accepted"]
+    assert accepted["pm_quote"] == "PM overrules." and "source" not in accepted
+
+
+def test_identical_apm_ruling_is_a_byte_identical_no_op(tmp_path):
+    repo, sizing = _setup(tmp_path, _APM_ACCEPTED)
+    before = sizing.read_text(encoding="utf-8")
+    result = _run(_apm(), repo)
+    assert result["exit_code"] == 0 and result["applied"] is False
+    assert sizing.read_text(encoding="utf-8") == before
+
+
+def test_omitted_mode_defaults_to_the_recorded_interaction_mode(tmp_path):
+    repo, sizing = _setup(tmp_path, _CEO)
+    assert _run(_base(), repo)["exit_code"] == 0
+    assert _doc(sizing)["exit_criterion"]["accepted"]["mode"] == "ceo"

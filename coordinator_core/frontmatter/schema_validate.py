@@ -7280,6 +7280,24 @@ def build_type_to_glob(schemas_dir: str | Path) -> dict[str, str]:
     return type_to_glob
 
 
+# Retired `kind` spellings that no schema registers any more, mapped to a live
+# kind whose schema owns them. READ-side only: `_byKind` stays the registry, so
+# a NEW write of a retired spelling is not endorsed by the schema. `the Staff Engineer-review`
+# left review-sidecar's `kinds` at 2.0.0 (persona-named wire literal); two
+# archived sidecars still declare it and sit outside the `applies_to` glob.
+# Retire an entry when the fleet census of that `kind:` reads 0.
+_LEGACY_KIND_ALIASES: dict[str, str] = {'patrik-review': 'staff-eng-review'}
+
+
+def _schema_name_for_kind(schemas: dict, kind_value: str) -> str | None:
+    """Schema owning `kind_value` via `_byKind`, else via `_LEGACY_KIND_ALIASES`."""
+    by_kind = schemas['_byKind']
+    name = by_kind.get(kind_value)
+    if name is None and kind_value in _LEGACY_KIND_ALIASES:
+        name = by_kind.get(_LEGACY_KIND_ALIASES[kind_value])
+    return name
+
+
 def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) -> dict | None:
     """Resolve schema for a file using archive-path-first (handoff-archived
     only), then kind-first, then glob-fallback strategy.
@@ -7373,7 +7391,7 @@ def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) ->
 
     if frontmatter is not None and frontmatter.get('kind') is not None:
         kind_value = str(frontmatter['kind'])
-        schema_name = schemas['_byKind'].get(kind_value)
+        schema_name = _schema_name_for_kind(schemas, kind_value)
         if schema_name is not None:
             return {'schemaName': schema_name, 'schema': schemas[schema_name]}
 
@@ -8898,7 +8916,7 @@ def _run_tree_walk(repo_root: str, as_json: bool, strict_refs: bool) -> int:
             declares_unregistered_kind = (
                 frontmatter is not None
                 and frontmatter.get('kind') is not None
-                and str(frontmatter['kind']) not in schemas['_byKind']
+                and _schema_name_for_kind(schemas, str(frontmatter['kind'])) is None
             )
             seen_files.add(repo_rel)
             if declares_unregistered_kind:

@@ -28,8 +28,9 @@ An `interaction_mode` already on record is never overwritten. Nothing else chang
 Negative-spec:
   - Does NOT write `pm_resolution`, `surfaced_to_pm`, `detents`, or `route` — those are
     other fields with their own writers; this op touches `exit_criterion` alone.
-  - Does NOT compose or infer `pm_quote` — it is the caller's verbatim transcription of
-    what the PM said, the same live-evidence discipline `sizing.decline`'s
+  - Does NOT compose or infer `pm_quote` or `apm_ruling`; the latter is the APM's verbatim
+    text, admitted only in pm/ceo mode and never over a PM acceptance. `pm_quote` is the
+    caller's verbatim transcription of what the PM said, the same live-evidence discipline `sizing.decline`'s
     `decision_record` and `sizing.discharge_surfaced`'s `resolved_by` both put on their
     own required params, applied here to the PM's own words instead of a file pointer.
   - Does NOT accept an empty `pm_quote`, a `statement` write with no statement already on
@@ -66,6 +67,13 @@ from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.sizing_acceptance import (
+    APM_ADMISSIBLE_MODES,
+    SOURCE_APM,
+    SOURCE_PM,
+    acceptance_source,
+    acceptance_words,
+)
 from coordinator_core.session.job_mode_env import INTERACTION_MODES
 
 # established per-module convention (see e.g. sizing_discharge_surfaced._SIZING_SCHEMA_PATH).
@@ -90,8 +98,8 @@ def _render_exit_criterion(mapping: dict) -> str:
 
 
 _PARAMS_HINT = (
-    "params: sizing (required, path under state/sizings/), pm_quote (required), "
-    "statement, mode, supersede"
+    "params: sizing (required, path under state/sizings/), exactly one of pm_quote / "
+    "apm_ruling (required), statement, mode, supersede"
 )
 
 
@@ -112,13 +120,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         sizing       (str)  — absolute or repo-relative path to the sizing-object under
                               `state/sizings/`. Required.
         pm_quote     (str)  — the PM's own verbatim words accepting the exit criterion.
-                              Required, non-empty. Never composed or paraphrased by
-                              this op or its caller.
+                              Exactly one of pm_quote / apm_ruling is required. Never
+                              composed or paraphrased by this op or its caller.
+        apm_ruling   (str)  — the APM's verbatim ruling standing in for the PM; admitted
+                              only when the effective mode is pm or ceo, and never over a
+                              PM acceptance. A pm_quote replaces an APM acceptance without
+                              `supersede`.
         statement    (str)  — the PM's amended criterion, replacing the proposed one in
                               the same write. Optional; when omitted the statement
                               already on record is kept.
         mode         (str)  — the interaction_mode this sizing ran under at acceptance
-                              time. Optional, must be one of hands-on/pm/ceo when given.
+                              time. Optional, one of hands-on/pm/ceo; omitted, the sizing's
+                              recorded interaction_mode, else hands-on.
         supersede    (bool) — overwrite an already-accepted criterion. Without it, a
                               second acceptance of an already-accepted criterion is
                               refused.
@@ -138,6 +151,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     sizing_raw: str = (params.get("sizing") or "").strip()
     pm_quote: str = (params.get("pm_quote") or "").strip()
+    apm_ruling: str = (params.get("apm_ruling") or "").strip()
     statement_param: str = (params.get("statement") or "").strip()
     mode: str = (params.get("mode") or "").strip()
     supersede: bool = bool(params.get("supersede"))
@@ -146,10 +160,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(
             f"missing required param: sizing — {_PARAMS_HINT}"
         )
-    if not pm_quote:
+    if pm_quote and apm_ruling:
+        return _err(f"pass exactly one of pm_quote / apm_ruling, not both; {_PARAMS_HINT}")
+    if not pm_quote and not apm_ruling:
         return _err(
-            "missing required param: pm_quote — the PM's verbatim acceptance; this op "
-            f"never composes or infers one; {_PARAMS_HINT}"
+            "missing required param: pm_quote or apm_ruling — the PM's or the APM's "
+            f"verbatim words; this op never composes or infers either; {_PARAMS_HINT}"
         )
     if mode and mode not in INTERACTION_MODES:
         return _err(
@@ -216,15 +232,41 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if refusal is not None:
             raise MutateAbort(f"refusing to accept on {p}: {refusal}")
 
-        new_accepted = {
-            "pm_quote": pm_quote,
-            "on": date.today().isoformat(),
-            "mode": mode or "hands-on",
-        }
+        eff_mode = mode or str(doc.get("interaction_mode") or "") or "hands-on"
+        existing_source = acceptance_source(existing_accepted)
+        today = date.today().isoformat()
+        if apm_ruling:
+            recorded_mode = str(doc.get("interaction_mode") or "")
+            if recorded_mode and mode and mode != recorded_mode:
+                raise MutateAbort(
+                    f"refusing to accept on {p}: mode {mode!r} contradicts the recorded "
+                    f"interaction_mode {recorded_mode!r}; an APM ruling is gated on the record"
+                )
+            if eff_mode not in APM_ADMISSIBLE_MODES:
+                raise MutateAbort(
+                    f"refusing to accept on {p}: an APM ruling stands in for the PM only in "
+                    f"{list(APM_ADMISSIBLE_MODES)!r} mode; this sizing is {eff_mode!r}"
+                )
+            if existing_source == SOURCE_PM:
+                raise MutateAbort(
+                    f"refusing to accept on {p}: exit_criterion.accepted already carries a "
+                    "PM acceptance; an APM ruling never displaces it"
+                )
+            new_accepted = {
+                "source": SOURCE_APM,
+                "apm_ruling": apm_ruling,
+                "on": today,
+                "mode": eff_mode,
+            }
+        else:
+            new_accepted = {"pm_quote": pm_quote, "on": today, "mode": eff_mode}
+        new_words = apm_ruling or pm_quote
 
-        if isinstance(existing_accepted, dict):
+        if isinstance(existing_accepted, dict) and not (
+            existing_source == SOURCE_APM and not apm_ruling
+        ):
             identical = (
-                existing_accepted.get("pm_quote") == pm_quote
+                acceptance_words(existing_accepted) == new_words
                 and existing_accepted.get("mode") == new_accepted["mode"]
                 and new_statement == existing_statement
             )
@@ -234,7 +276,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 if not statement_param:
                     raise MutateAbort(
                         f"refusing to accept on {p}: exit_criterion.accepted already carries "
-                        f"a PM acceptance ({str(existing_accepted.get('pm_quote'))[:120]!r}) — "
+                        f"an acceptance ({str(acceptance_words(existing_accepted))[:120]!r}) — "
                         "pass a new statement to amend it, or supersede to replace the "
                         "acceptance"
                     )
@@ -273,10 +315,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(f"accept_exit_criterion: {type(exc).__name__}: {exc}")
 
     if _state["applied"]:
+        what = "APM ruling accepting" if apm_ruling else "PM acceptance of"
         return {
             "exit_code": 0,
             "applied": True,
-            "message": f"recorded PM acceptance of the exit criterion on {sizing_raw}",
+            "message": f"recorded {what} the exit criterion on {sizing_raw}",
         }
     return {
         "exit_code": 0,

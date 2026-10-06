@@ -194,7 +194,7 @@ def _find_new_edges(referrer_path: Path, catalog: Dict[str, Tuple[Path, str]]) -
     per-file OSError tolerance).
     """
     try:
-        text = referrer_path.read_text(errors="replace")
+        text = referrer_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         _LOG.debug("backfill_reference_edges: could not read %s: %s", referrer_path, exc)
         return []

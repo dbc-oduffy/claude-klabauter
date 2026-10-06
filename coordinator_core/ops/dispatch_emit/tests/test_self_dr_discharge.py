@@ -47,3 +47,11 @@ def test_windows_separator():
 
 def test_ceo_mode_behaves_as_pm():
     assert list(discharge_clauses(_rows(), _sizing(mode="ceo"))) == ["C4"]
+
+
+def test_apm_acceptance_is_labelled_apm_ruling_not_pm_words():
+    sizing = {"exit_criterion": {"statement": "s", "accepted": {
+        "source": "apm", "apm_ruling": "ruled yes", "on": "2026-10-06", "mode": "ceo"}}}
+    clause = discharge_clauses(_rows(), sizing)["C4"]
+    assert "APM ruling" in clause and "ruled yes" in clause
+    assert "The PM" not in clause

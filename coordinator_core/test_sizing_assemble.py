@@ -1069,7 +1069,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # `interaction_mode` plus the appended `exit_criterion_pending` detent --
     # see the vendored schema's own x-bump-note.
     # Moved 1.24.0 -> 1.25.0 (additive optional `exit_criterion.amendments`).
-    assert schema["x-schema-version"] == "1.25.0"
+    # Moved 1.25.0 -> 1.26.0 (additive APM-ruling branch on accepted/amendments).
+    assert schema["x-schema-version"] == "1.26.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

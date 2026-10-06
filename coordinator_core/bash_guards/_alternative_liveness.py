@@ -1663,6 +1663,8 @@ def _probe_python_dash_m(argv: List[str], m_idx: int) -> Verdict:
             [resolved, "-c", "import " + module],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_PROBE_TIMEOUT_SEC,
             **_NO_WINDOW,
         )
@@ -1709,7 +1711,7 @@ def _probe_python_dash_c(argv: List[str]) -> Verdict:
     ]
     try:
         proc = subprocess.run(
-            probe_argv, input=script, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW
+            probe_argv, input=script, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return Verdict(VerdictStatus.DEAD, "interpreter invocation failed: %s" % exc)
@@ -1774,6 +1776,8 @@ def probe_command(alt: Alternative) -> Verdict:
                 help_argv,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=_PROBE_TIMEOUT_SEC,
                 env=_probe_env(),
                 **_NO_WINDOW,
@@ -1803,7 +1807,7 @@ def probe_command(alt: Alternative) -> Verdict:
     tmp = tempfile.mkdtemp(prefix="altlive-cmd-")
     try:
         try:
-            proc = subprocess.run(safe_argv, cwd=tmp, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
+            proc = subprocess.run(safe_argv, cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return Verdict(VerdictStatus.DEAD, "invocation failed: %s" % exc)
     finally:
@@ -1864,6 +1868,8 @@ def probe_flag(alt: Alternative) -> Verdict:
             [resolved, "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=_PROBE_TIMEOUT_SEC,
             env=_probe_env(),
             **_NO_WINDOW,

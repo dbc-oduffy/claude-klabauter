@@ -50,14 +50,19 @@ def test_concurrent_writers_keep_every_field(tmp_path, monkeypatch):
     assert not (tmp_path / core._META_LOCK_NAME).exists()
 
 
-def test_writer_waits_for_held_lock(tmp_path):
+def test_writer_waits_for_held_lock(tmp_path, monkeypatch):
     _seed(tmp_path)
+    # Stale/wait windows far above any scheduler stall: the lock is released by
+    # rmdir below, never by the writer reaping it as stale or timing out.
+    monkeypatch.setattr(core, "_META_LOCK_STALE_SECONDS", 60.0)
+    monkeypatch.setattr(core, "_META_LOCK_WAIT_SECONDS", 60.0)
     lock_dir = tmp_path / core._META_LOCK_NAME
     lock_dir.mkdir()
     done = threading.Event()
+    result = {}
 
     def write():
-        core.update_meta_field(str(tmp_path), "goal", "g")
+        result["ok"] = core.update_meta_field(str(tmp_path), "goal", "g")
         done.set()
 
     t = threading.Thread(target=write)
@@ -66,6 +71,7 @@ def test_writer_waits_for_held_lock(tmp_path):
     lock_dir.rmdir()
     assert done.wait(2.0)
     t.join()
+    assert result["ok"] is True
     assert core.read_meta_field(str(tmp_path), "goal") == "g"
 
 

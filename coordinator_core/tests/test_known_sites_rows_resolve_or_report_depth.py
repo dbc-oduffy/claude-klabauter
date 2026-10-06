@@ -17,7 +17,7 @@ past the one-hop gate's own horizon while still being a live per-item spawn -- a
 outcomes cannot be told apart without also consulting the depth-bounded deep oracle. A leg that
 deletes on "dark to the one-hop gate" alone would silently erase the second class's only record.
 
-CLASSIFICATION, per `_KNOWN_SITES` row `(path, enclosing, callee)`:
+CLASSIFICATION, per `_KNOWN_SITES` row `(path, enclosing, callee, ordinal)`:
     - the path and the enclosing-function symbol still resolve in source, AND the one-hop gate
       still reports the site -> LIVE_DEBT: real per-item spawn debt, row stands unchanged.
     - resolves in source, dark to the one-hop gate, but the depth-bounded deep oracle
@@ -32,7 +32,7 @@ CLASSIFICATION, per `_KNOWN_SITES` row `(path, enclosing, callee)`:
       re-pointed here.
 
 Only the row's OWN location -- the file and the enclosing function it is keyed on -- is checked
-for existence. The callee half of the key is not independently resolved: an amplification site's
+for existence. The callee and the per-call ordinal are not independently resolved: an amplification site's
 callee need not be defined in the same file (it may be imported), so callee existence is exactly
 the question the two collectors already answer by finding (or not finding) the site as a
 violation, not a question this module's path/symbol check re-derives.
@@ -42,9 +42,8 @@ consumes its `deep_find_with_site_depths` entry point -- the same collector and 
 discriminators as `_deep_find_unbatched_per_item_spawns`, returning each site's own lowest-visible
 depth from ONE walk instead of requiring a walk per depth; it adds no new discriminator and does
 not promote the oracle to gating. Nothing in this module asserts that any
-particular row must be one classification or another -- the one exception is the two AC6 cases
-below, which were located by hand this session specifically to prove the four-way split actually
-discriminates, not to freeze every row's disposition.
+particular row must be one classification or another; the four-way split's discrimination is
+proven by the synthetic `classify_known_site_*` legs.
 """
 
 from __future__ import annotations
@@ -75,7 +74,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _MAX_DEPTH = _MAX_PUBLISHED_DEPTH
 
-KnownSiteKey = tuple[str, str, str]
+KnownSiteKey = tuple[str, str, str, int]
 
 
 class KnownSiteClassification:
@@ -111,7 +110,7 @@ def _module_dotted(relpath: str) -> str:
 def _site_resolves_in_source(
     site: KnownSiteKey, index: TrackedFileIndex, repo_root: Path
 ) -> tuple[bool, str]:
-    path, enclosing, _callee = site
+    path, enclosing, _callee, _ordinal = site
     dotted = f"{_module_dotted(path)}.{enclosing}"
     row = Row(
         register=RegisterId(path, enclosing),
@@ -190,7 +189,7 @@ def test_classify_known_site_stale_when_enclosing_symbol_missing(tmp_path):
     module.parent.mkdir(parents=True)
     module.write_text("def other():\n    pass\n", encoding="utf-8")
     index = _index_for(tmp_path, "pkg/mod.py")
-    site = ("pkg/mod.py", "missing_fn", "some_callee")
+    site = ("pkg/mod.py", "missing_fn", "some_callee", 0)
 
     assessment = classify_known_site(site, index, frozenset(), {}, tmp_path, frozenset())
 
@@ -200,7 +199,7 @@ def test_classify_known_site_stale_when_enclosing_symbol_missing(tmp_path):
 
 def test_classify_known_site_stale_when_path_missing(tmp_path):
     index = _index_for(tmp_path)
-    site = ("pkg/gone.py", "some_fn", "some_callee")
+    site = ("pkg/gone.py", "some_fn", "some_callee", 0)
 
     assessment = classify_known_site(site, index, frozenset(), {}, tmp_path, frozenset())
 
@@ -212,7 +211,7 @@ def test_classify_known_site_live_debt_when_one_hop_gate_reports(tmp_path):
     module.parent.mkdir(parents=True)
     module.write_text("def check():\n    pass\n", encoding="utf-8")
     index = _index_for(tmp_path, "pkg/mod.py")
-    site = ("pkg/mod.py", "check", "spawner")
+    site = ("pkg/mod.py", "check", "spawner", 0)
 
     assessment = classify_known_site(site, index, frozenset({site}), {}, tmp_path, frozenset())
 
@@ -225,7 +224,7 @@ def test_classify_known_site_past_horizon_from_deep_oracle_records_lowest_depth(
     module.parent.mkdir(parents=True)
     module.write_text("def check():\n    pass\n", encoding="utf-8")
     index = _index_for(tmp_path, "pkg/mod.py")
-    site = ("pkg/mod.py", "check", "spawner")
+    site = ("pkg/mod.py", "check", "spawner", 0)
     deep_keys_by_depth = {2: frozenset(), 3: frozenset({site}), 4: frozenset({site})}
 
     assessment = classify_known_site(
@@ -247,7 +246,7 @@ def test_classify_known_site_past_horizon_unknown_depth_when_oracle_cannot_attri
     module.parent.mkdir(parents=True)
     module.write_text("def check():\n    pass\n", encoding="utf-8")
     index = _index_for(tmp_path, "pkg/mod.py")
-    site = ("pkg/mod.py", "check", "spawner")
+    site = ("pkg/mod.py", "check", "spawner", 0)
 
     assessment = classify_known_site(
         site, index, frozenset(), {}, tmp_path, deep_keys_unknown_depth=frozenset({site})
@@ -262,7 +261,7 @@ def test_classify_known_site_closure_candidate_when_dark_to_both(tmp_path):
     module.parent.mkdir(parents=True)
     module.write_text("def check():\n    pass\n", encoding="utf-8")
     index = _index_for(tmp_path, "pkg/mod.py")
-    site = ("pkg/mod.py", "check", "spawner")
+    site = ("pkg/mod.py", "check", "spawner", 0)
     deep_keys_by_depth = {2: frozenset(), 3: frozenset(), 4: frozenset()}
 
     assessment = classify_known_site(
@@ -336,27 +335,19 @@ def test_known_sites_rows_resolve_or_report_depth():
         for site in _KNOWN_SITES
     }
 
-    # AC6's two first-run cases, both real and already located by hand this session (see module
-    # docstring and the plan's C3 body): these prove the four-way split actually discriminates
-    # PAST_HORIZON from STALE, not that every row is frozen to a particular classification.
-    write_guards_site = (
-        "coordinator_core/write_guards/validate_frontmatter_schema_advisory.py",
-        "_reviewed_range_offer",
-        "_resolve_ref_to_sha",
-    )
-    relocated_site = (
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-        "_first_deliverable_commit_range_base",
-        "_run_git",
-    )
-
-    write_guards_assessment = assessments[write_guards_site]
-    assert write_guards_assessment.classification == KnownSiteClassification.PAST_HORIZON, (
-        write_guards_assessment
-    )
-    assert write_guards_assessment.depth is not None
-
-    relocated_assessment = assessments[relocated_site]
-    assert relocated_assessment.classification == KnownSiteClassification.STALE, (
-        relocated_assessment
-    )
+    # Every row is assessed, and each lands in exactly one of the four classes. The four-way
+    # split's discrimination is proven by the `classify_known_site_*` legs above, not by pinning
+    # a live row to a class: the two hand-located AC6 rows (`_reviewed_range_offer`,
+    # `_first_deliverable_commit_range_base`) left `_KNOWN_SITES` as the burn-down shrank.
+    valid = {
+        KnownSiteClassification.LIVE_DEBT,
+        KnownSiteClassification.PAST_HORIZON,
+        KnownSiteClassification.CLOSURE_CANDIDATE,
+        KnownSiteClassification.STALE,
+    }
+    assert set(assessments) == set(_KNOWN_SITES)
+    for site, assessment in assessments.items():
+        assert assessment.classification in valid, assessment
+        assert (assessment.depth is not None) <= (
+            assessment.classification == KnownSiteClassification.PAST_HORIZON
+        ), assessment

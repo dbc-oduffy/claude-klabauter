@@ -356,7 +356,7 @@ def _validate_send_params(params: dict):
     declared — every other field this send needs comes off the caller's own
     already-staged `state/memo-outbox/<topic>.md` draft, never off the wire.
     """
-    dry_run = params.get("dry_run", False)
+    dry_run = params.get("dry_run")
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
             _MODE, dry_run,

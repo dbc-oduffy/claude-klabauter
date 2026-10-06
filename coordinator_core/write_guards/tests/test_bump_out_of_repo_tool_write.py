@@ -722,10 +722,14 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
     (`additionalContext`, non-blocking) instead of a real `permissionDecision:
     "deny"`."""
     session_id = "verify-boundary-probe-anchored"
-    own_repo = _init_repo(tmp_path, "verify-boundary-own-repo")
-    foreign_repo = _init_repo(tmp_path, "verify-boundary-experiments")
-    cwd = str(own_repo)
-    foreign_file = str(foreign_repo / "coordinator.local.md")
+    if os.name == "nt":
+        cwd = r"C:\claude-klabauter"
+        foreign_file = r"C:\experiments\coordinator.local.md"
+    else:
+        own_repo = _init_repo(tmp_path, "verify-boundary-own-repo")
+        foreign_repo = _init_repo(tmp_path, "verify-boundary-experiments")
+        cwd = str(own_repo)
+        foreign_file = str(foreign_repo / "coordinator.local.md")
     session_start.write_session_start_record(session_id, launch_cwd=cwd)
     try:
         payload = {

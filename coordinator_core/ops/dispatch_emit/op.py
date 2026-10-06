@@ -117,6 +117,9 @@ Wire params:
                                      ``state/sizings/``; implies the ASK route.
                                      Exclusive of plan/inventory/queue
                                      (``SizingPathConflictError``).
+    baton (str, optional)         — ASK route: an existing baton under
+                                     ``state/handoffs/``; deliverable_id (str,
+                                     optional) must equal its id.
 
 Reply fields:
     {"path": "<written path>", "ok": bool,
@@ -205,6 +208,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from coordinator_core.atomic_replace import atomic_write_bytes
 import os
 import sys
 import uuid
@@ -223,6 +227,7 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
+from coordinator_core.ops.dispatch_emit.grind_admission import NOT_ADMITTED_EXTRA_KEY
 from coordinator_core.ops.dispatch_emit.emission_receipt import (
     _load_review_inputs,
     _receipt_session_id,
@@ -638,10 +643,9 @@ def restamp(script_path: Path, session_id: str) -> dict:
         )
 
     receipt["sha256"] = _script_sha256(script_path)
-    receipt_path.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
+    atomic_write_bytes(
+        receipt_path,
+        (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
     return receipt
 
@@ -652,7 +656,7 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
-            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "part",
+            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "part", "baton", "deliverable_id",
         )
     ),
     Field("inventory_part", "list"),
@@ -899,15 +903,25 @@ def _dispatch_emit(
         if sizing_path:
             ask_root = _sizing_root(params, repo_root, str(sizing_path))
             sizing_rel = _sizing_rel(ask_root, str(sizing_path))
-            ask_sizing = _gate_sizing_at_emit(ask_root, sizing_rel, list(params.get("writes") or []))
+            ask_baton = _read_baton_ids(
+                ask_root, params.get("baton"), params.get("deliverable_id")
+            )
+            ask_sizing = _gate_sizing_at_emit(
+                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton
+            )
         else:
             given_root = repo_root or params.get("target_root")
             if not given_root:
                 raise ValueError("dispatch.emit ask requires repo_root or target_root")
             ask_root = Path(given_root)
+            ask_baton = _read_baton_ids(
+                ask_root, params.get("baton"), params.get("deliverable_id")
+            )
         run_id = f"ask-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {"root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id}
+        if ask_baton is not None:
+            ask_ctx["baton"] = ask_baton
         if sizing_path:
             ask_ctx.update(ask_sizing)
             receipt_extras = {"batons": ask_sizing["batons"], "uncommitted": ask_sizing["uncommitted"]}
@@ -991,6 +1005,8 @@ def _dispatch_emit(
             raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
 
     output_path = aliased_param(params, "output_path", "out_path")
+    if not output_path and inventory_path and not is_queue_route:
+        output_path = str(guarded_spine_path.with_name(guarded_spine_path.stem + ".workflow.mjs"))
     if not output_path:
         raise ValueError(f"dispatch.emit requires param: {spellings('output_path', 'out_path')}")
 
@@ -1129,6 +1145,8 @@ def _dispatch_emit(
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
             agent_type_host=agent_type_host,
+            baton=ask_ctx.get("baton"),
+            accept_pending=bool(ask_ctx.get("accept_pending")),
         )
         receipt_plan_path = None
     else:
@@ -1238,6 +1256,9 @@ def _dispatch_emit(
         "warn_count": warn_count,
     }
 
+    if receipt_extras and NOT_ADMITTED_EXTRA_KEY in receipt_extras:
+        reply[NOT_ADMITTED_EXTRA_KEY] = receipt_extras[NOT_ADMITTED_EXTRA_KEY]
+
     if ask_ctx is not None:
         reply["run_id"] = ask_ctx["run_id"]
         if "batons" in ask_ctx:
@@ -1280,13 +1301,18 @@ def _inventory_repo_root(inventory: Path) -> Path:
     return parents[2]
 
 
+def _has_live_row(chunk_rows: list) -> bool:
+    kinds = _resolve_dep_kinds(chunk_rows)
+    return any(kinds[_strip_backtick(r["id"])] == _DEP_KIND_LIVE for r in chunk_rows)
+
+
 def _live_spec_paths(chunk_rows: list) -> list:
     kinds = _resolve_dep_kinds(chunk_rows)
     return sorted(
         {
             _strip_backtick(r["spec path"])
             for r in chunk_rows
-            if kinds[_strip_backtick(r["id"])] == _DEP_KIND_LIVE
+            if kinds[_strip_backtick(r["id"])] == _DEP_KIND_LIVE and _strip_backtick(r["spec path"])
         }
     )
 
@@ -1588,7 +1614,7 @@ def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
                     continue
                 part = parts_by_id[part_id]
                 sub_text = lanes.render_part_inventory(master_text, lane_map, part_id)
-                if not _live_spec_paths(parse_chunk_table(sub_text)):
+                if not _has_live_row(parse_chunk_table(sub_text)):
                     skipped.append(part_id)
                     continue
                 if not wanted and _part_already_emitted(root, part):
@@ -1660,15 +1686,52 @@ def _emit_lanes(params: dict, repo_root: Optional[Path]) -> dict:
     }
 
 
-def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
+def _read_baton_ids(root: Path, baton: Optional[str], deliverable_id: Optional[str]) -> Optional[dict]:
+    """`{"path", "deliverable_id"}` read in-process from an existing baton, or None when neither
+    flag is given. Refuses a missing file, a null id, or a `deliverable_id` the baton disagrees with."""
+    from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+
+    if baton is None and deliverable_id is None:
+        return None
+    if baton is None:
+        raise SizingFireRefused(["--deliverable-id needs --baton"])
+    rel = str(baton).replace("\\", "/")
+    prefix = Path(home_dir("", "handoffs")).as_posix() + "/"
+    if not rel.startswith(prefix) or ".." in rel.split("/"):
+        raise SizingFireRefused([f"baton must be repo-relative under {prefix}: {rel}"])
+    target = Path(root) / rel
+    if not target.is_file():
+        raise SizingFireRefused([f"baton not found on disk: {rel}"])
+    split = split_frontmatter(target.read_text(encoding="utf-8"))
+    fm = split.fm_text if split else ""
+    handoff_id = read_fm_field(fm, "handoff_id")
+    baton_dlv = read_fm_field(fm, "deliverable_id")
+    if not handoff_id or handoff_id == "null":
+        raise SizingFireRefused([f"baton {rel} carries no handoff_id"])
+    if not baton_dlv or baton_dlv == "null":
+        raise SizingFireRefused([f"baton {rel} carries a null deliverable_id"])
+    if deliverable_id is not None and deliverable_id != baton_dlv:
+        raise SizingFireRefused(
+            [f"--deliverable-id {deliverable_id!r} differs from baton {rel}'s {baton_dlv!r}"]
+        )
+    return {"path": rel, "deliverable_id": baton_dlv}
+
+
+def _gate_sizing_at_emit(
+    root: Path, sizing_rel: str, writes: list, baton: Optional[dict] = None
+) -> dict:
     """Run the in-run gate and the footprint check before any script is composed.
 
-    Returns ``plan_blitz_args``, ``writes``, ``batons`` and ``uncommitted`` for the emit;
-    raises ``SizingFireRefused`` on any halt. In-process only; ``uncommitted`` is derived
-    from whether the sizing already named a baton, never from git.
+    Returns ``plan_blitz_args``, ``writes``, ``batons`` and ``uncommitted`` for the emit, plus
+    ``baton`` and ``accept_pending`` when they apply; raises ``SizingFireRefused`` on any halt.
+    A ``touchpoint`` halt on a sizing whose mode is in ``APM_ADMISSIBLE_MODES`` is non-fatal:
+    the script embeds the accept phase and re-gates in-run. In-process only; ``uncommitted``
+    is derived from whether the sizing already named a baton, never from git.
     """
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_TOUCHPOINT
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
     from coordinator_core.ops.dispatch_emit.sizing_fire import (
         ARM_M_PLUS,
@@ -1676,7 +1739,9 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
         SizingFireRefused,
         SizingHandBack,
         load_sizing,
+        resolve_arm,
     )
+    from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES
     from coordinator_core.warm.caller_context import resolve_caller_context
 
     outside = paths_outside_repo_root(writes, root)
@@ -1684,10 +1749,24 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
         raise SizingFireRefused(
             [f"writes outside repo root {Path(root).as_posix()}: {', '.join(outside)}"]
         )
-    had_baton = bool(load_sizing(root, sizing_rel).get("baton"))
+    sizing = load_sizing(root, sizing_rel)
+    had_baton = bool(sizing.get("baton"))
     # An XS footprint is authored at run time when --writes is absent; the gate's
     # "XS needs writes" check re-runs in-run against the seeded set.
-    verdict = gate(root, sizing_rel, writes=writes or ["<footprint authored at run time>"])
+    verdict = gate(
+        root,
+        sizing_rel,
+        writes=writes or ["<footprint authored at run time>"],
+        baton=baton["path"] if baton else None,
+    )
+    accept_pending = False
+    if (
+        verdict.halt is not None
+        and verdict.halt.get("kind") == HALT_TOUCHPOINT
+        and sizing.get("interaction_mode") in APM_ADMISSIBLE_MODES
+    ):
+        accept_pending = True
+        verdict = replace(verdict, arm=resolve_arm(sizing), halt=None)
     if verdict.halt is not None:
         halt = verdict.halt
         if halt.get("handback"):
@@ -1697,6 +1776,10 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
             line += f" — run: {halt['touchpoint']}"
         raise SizingFireRefused([line])
     out: dict = {"writes": writes, "batons": [], "uncommitted": []}
+    if baton:
+        out["baton"] = baton
+    if accept_pending:
+        out["accept_pending"] = True
     if verdict.arm in (ARM_M_PLUS, ARM_ROADMAP):
         plugin_root = resolve_caller_context().plugin_root
         out["plan_blitz_args"] = plan_blitz_args.resolve(
@@ -1719,6 +1802,8 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
             baton_path = verdict.baton["path"]
             out["batons"] = [baton_path]
             out["uncommitted"] = [] if had_baton else [baton_path, sizing_rel]
+        elif accept_pending and baton:
+            out["batons"] = [baton["path"]]
     return out
 
 

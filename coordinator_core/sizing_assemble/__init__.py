@@ -1293,6 +1293,7 @@ def _scaffold_missing(
     decision: dict[str, Any],
     premise_provenance: Optional[str],
     premise_evidence: Optional[str],
+    deliverable_id: Optional[str] = None,
 ) -> None:
     """Create the sizing-object `--write` points at, via doc-new's own scaffold."""
     import importlib.util
@@ -1313,6 +1314,7 @@ def _scaffold_missing(
     recorded = premise_provenance not in (None, "unrecorded")
     text = mod._scaffold_sizing(
         title=intent,
+        deliverable_id=deliverable_id,
         premise=premise_provenance if recorded else None,
         premise_evidence=premise_evidence if recorded else None,
     )
@@ -1334,6 +1336,7 @@ def write_back(
     premise_provenance: Optional[str] = None,
     premise_evidence: Optional[str] = None,
     scout_evidence: Optional[list[str]] = None,
+    deliverable_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1370,7 +1373,9 @@ def write_back(
     if target is None:
         raise SizingAssembleError(f"{sizing!r} escapes state/sizings/")
     if not target.is_file():
-        _scaffold_missing(root, target, decision, premise_provenance, premise_evidence)
+        _scaffold_missing(
+            root, target, decision, premise_provenance, premise_evidence, deliverable_id
+        )
     record_premise = premise_provenance not in (None, "unrecorded")
     if record_premise and not (premise_evidence or "").strip():
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")
@@ -1383,6 +1388,15 @@ def write_back(
         if not isinstance(doc, dict):
             raise MutateAbort("sizing-object is not a YAML mapping")
         text = old
+        # Sizing an existing baton joins its deliverable; a different id already on the record is never overwritten.
+        if deliverable_id:
+            current = doc.get("deliverable_id")
+            if current and current != deliverable_id:
+                raise MutateAbort(
+                    f"deliverable_id is {current!r}, not {deliverable_id!r}; refusing to re-key the record"
+                )
+            if not current:
+                text = _set_scalar(text, "deliverable_id", json.dumps(deliverable_id))
 
         estimate = dict(doc.get("estimate") or {})
         estimate["tshirt"] = decision["resolved_estimate"]["tshirt"]
@@ -1531,6 +1545,7 @@ def main(argv: list[str]) -> int:
     interaction_mode_flag = None
     premise_evidence = None
     write_path = None
+    deliverable_id = None
     xl_exit_pick = None
     pm_resolution_key = None
     supersede = False
@@ -1566,6 +1581,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--premise-evidence" and i + 1 < len(argv):
             premise_evidence = argv[i + 1]
+            i += 2
+        elif tok == "--deliverable-id" and i + 1 < len(argv):
+            deliverable_id = argv[i + 1]
             i += 2
         elif tok == "--write" and i + 1 < len(argv):
             write_path = argv[i + 1]
@@ -1709,12 +1727,11 @@ def main(argv: list[str]) -> int:
                 write_path,
                 decision,
                 exit_criterion=exit_criterion,
-                interaction_mode=(
-                    interaction_mode if interaction_mode_source in ("flag", "fleet") else None
-                ),
+                interaction_mode=interaction_mode,
                 premise_provenance=premise_provenance,
                 premise_evidence=premise_evidence,
                 scout_evidence=scout_evidence,
+                deliverable_id=deliverable_id,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

@@ -207,6 +207,7 @@ def _main() -> None:
 if __name__ == "__main__":
     try:
         _main()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # Fail-open exit code; the diagnostic keeps a lost trailer traceable.
+        sys.stderr.write(f"claude-klabauter-commit-anchors: trailer generation failed: {exc!r}\n")
     sys.exit(0)

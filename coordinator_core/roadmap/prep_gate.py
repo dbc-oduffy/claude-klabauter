@@ -28,7 +28,11 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  distinguishable in the detail line because they route
                  differently once withheld: ``landed-work`` waits for a peer's
                  landing, ``commit-in-owner-repo`` needs a cross-repo commit
-                 dispatched under per-session assent.
+                 dispatched under per-session assent. A row's
+                 ``output-consumption-runtime`` ``depends_on_plan`` edge exempts
+                 only the top-level segments the NAMED sibling row creates, and a
+                 row still waiting on it is withheld; an edge that can never land
+                 refuses as kind ``predecessor-plan-dangling``.
   CI_RETIRED     No schedulable row's ``writes:``/``writes_under:`` names a path
                  under ``.github/workflows/`` — GitHub Actions is retired
                  fleet-wide.
@@ -358,8 +362,10 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     """
     from coordinator_core.ops.dispatch_emit.spine_read import (
         UNDECLARED,
+        DanglingPlanDependencyError,
         SpineReadError,
         executable_body,
+        load_rows_memo,
         read_spine,
     )
     from coordinator_core.ops.dispatch_emit.wave_map import (
@@ -370,7 +376,6 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     )
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus
-    from coordinator_core.ops.plan_tasks_render import load_rows
 
     # A raw substring test over the UNBLANKED body falls through to `read_spine()`
     # for a plan whose only ```yaml plan-tasks``` token lives inside an HTML
@@ -379,13 +384,18 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     # comments before matching, so the same reader used for EXTERNAL_DEPS'
     # `raw_spine_rows` decides presence here too, instead of a second, cheaper,
     # comment-blind guess.
-    if load_rows(text).status is LocateStatus.ABSENT:
+    if load_rows_memo(text).status is LocateStatus.ABSENT:
         return _defect(
             "spine-absent",
             "no ```yaml plan-tasks block — a plan with no spine declares no scope to schedule",
         )
     try:
         rows = read_spine(plan_path)
+    except DanglingPlanDependencyError:
+        return _defect(
+            "predecessor-plan-dangling",
+            "spine not evaluated past a dangling depends_on_plan edge — EXTERNAL_DEPS names each",
+        )
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
     # A row held out of the emit already -- because an earlier row's `epistemic-premise`
@@ -911,21 +921,23 @@ def _is_settings_home_path(normalized: str) -> bool:
 
 
 #: Dispositions ``dispatch_emit/spine_read.py`` treats as done, alongside
-#: ``deferred: true``. A literal set rather than an import: this gate is read by
-#: callers that have not loaded the emitter, and a gate that needs another
-#: subsystem to answer is a gate that fails for the wrong reason.
+#: ``deferred: true`` or a non-empty ``deferred_until`` hold. A literal set
+#: rather than an import: this gate is read by callers that have not loaded
+#: the emitter, and a gate that needs another subsystem to answer is a gate
+#: that fails for the wrong reason.
 _UNSCHEDULABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
 
 
 def _row_is_unschedulable(row: Dict[str, Any]) -> bool:
     """Will the wave-builder decline to schedule this row at all?
 
-    ``spine_read.py`` excludes a row that is explicitly ``deferred: true`` or
-    carries a closed disposition. Such a row is never dispatched, so nothing it
-    declares is ever resolved by a driver -- which is what makes an unresolvable
+    ``spine_read.py`` excludes a row that is explicitly ``deferred: true``,
+    carries a non-empty ``deferred_until`` hold, or carries a closed
+    disposition. Such a row is never dispatched, so nothing it declares is
+    ever resolved by a driver -- which is what makes an unresolvable
     declaration on it moot rather than defective.
     """
-    if row.get("deferred") is True:
+    if row.get("deferred") is True or bool(row.get("deferred_until")):
         return True
     return str(row.get("disposition") or "").strip() in _UNSCHEDULABLE_DISPOSITIONS
 
@@ -1149,12 +1161,66 @@ def _ci_retired(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+def _sibling_plan_edges(
+    row: Dict[str, Any], row_id: str, repo_root: Optional[Path], cache: dict
+) -> "tuple[frozenset, List[str], List[str]]":
+    """``(exempt, waiting, dangling)`` for one row's ``depends_on_plan`` edges.
+
+    Every edge is classified by ``spine_read.resolve_plan_edge`` — the emitter's
+    own evaluation — so gate and emitter cannot disagree about which edges
+    dangle. ``exempt`` is the top-level segments the NAMED predecessor row
+    creates, from an ``output-consumption-runtime`` edge only. An em-performed
+    row is never scheduled, so its edges are not read (as ``read_spine``).
+    """
+    from coordinator_core.ops.dispatch_emit import spine_read
+
+    edges = row.get("depends_on_plan")
+    if not edges or row.get("performer") == "em" or spine_read._is_memo_send_row(row):
+        return frozenset(), [], []
+    if not isinstance(edges, list):
+        return frozenset(), [], [f"row {row_id!r} depends_on_plan is {edges!r}, not a list"]
+    exempt: set = set()
+    waiting: List[str] = []
+    dangling: List[str] = []
+    for edge in edges:
+        try:
+            resolved = spine_read.resolve_plan_edge(f"row {row_id!r}", edge, repo_root, cache)
+        except (spine_read.DanglingPlanDependencyError, spine_read.MalformedDependencyEdgeError) as exc:
+            dangling.append(str(exc))
+            continue
+        if resolved.named_row is not None and edge.get("gate_kind") == "output-consumption-runtime":
+            exempt |= _created_roots([resolved.named_row])
+        if resolved.hold is not None:
+            waiting.append(f"{row_id}: {resolved.hold}")
+    return frozenset(exempt), waiting, dangling
+
+
+def _frontmatter_edge_dangling(edges: Any, repo_root: Optional[Path], cache: dict) -> List[str]:
+    """Dangling findings among the plan's frontmatter ``depends_on_plan`` edges."""
+    from coordinator_core.ops.dispatch_emit import spine_read
+
+    if not edges:
+        return []
+    if not isinstance(edges, list):
+        return [f"plan frontmatter depends_on_plan is {edges!r}, not a list"]
+    found: List[str] = []
+    for edge in edges:
+        try:
+            spine_read.resolve_plan_edge("plan frontmatter", edge, repo_root, cache)
+        except (spine_read.DanglingPlanDependencyError, spine_read.MalformedDependencyEdgeError) as exc:
+            found.append(str(exc))
+    return found
+
+
 def _external_deps(
     rows: List[Dict[str, Any]],
     root_names: frozenset,
     siblings: Sequence[str],
     nested_names: Optional[Dict[str, tuple]] = None,
     gitignored_roots: frozenset = frozenset(),
+    *,
+    repo_root: Optional[Path] = None,
+    plan_edges: Any = None,
 ) -> Dict[str, Any]:
     """The three-way split, at the granularity each leg earns.
 
@@ -1186,6 +1252,9 @@ def _external_deps(
     commit_gated: List[str] = []
     unkeyed_landed: List[str] = []
     withheld: List[str] = []
+    cache: dict = {}
+    dangling: List[str] = _frontmatter_edge_dangling(plan_edges, repo_root, cache)
+    waiting: List[str] = []
 
     for row in rows:
         row_id = str(row.get("id") or "<row with no id>")
@@ -1216,6 +1285,12 @@ def _external_deps(
         # PARTIAL-FIRE excluding 62 rows.
         if _row_is_unschedulable(row):
             continue
+        row_exempt, row_waiting, row_dangling = _sibling_plan_edges(row, row_id, repo_root, cache)
+        dangling += row_dangling
+        if row_waiting:
+            waiting += row_waiting
+            withheld.append(row_id)
+        row_created = created_roots | row_exempt
         ungated_index, ungated_findings = _ungated_reads(row, row_id)
         for finding in ungated_findings:
             undeclared[finding] = undeclared.get(finding, 0) + 1
@@ -1227,7 +1302,7 @@ def _external_deps(
                 )
                 continue
             reason = _path_leaves_repo(
-                field, value, root_names, siblings, created_roots, nested_names, gitignored_roots
+                field, value, root_names, siblings, row_created, nested_names, gitignored_roots
             )
             # external_reads_ungated clears a reads: hit only — never writes:/surface: —
             # per the APM ruling this field exists to serve. Keyed on (path,
@@ -1294,6 +1369,14 @@ def _external_deps(
         return _warned(
             _defect("path-placeholder", "; ".join(placeholders + defects), withheld=withheld)
         )
+    if dangling:
+        return _warned(
+            _defect(
+                "predecessor-plan-dangling",
+                "; ".join(dangling + defects),
+                withheld=withheld,
+            )
+        )
     if defects:
         detail = "; ".join(defects)
         if any("first path segment" in line for line in collapsed):
@@ -1317,6 +1400,8 @@ def _external_deps(
                 f" — of which needing a cross-repo commit ({'; '.join(commit_gated)}), "
                 "to be dispatched under per-session assent rather than refused"
             )
+        if waiting:
+            detail += f" — sibling-plan predecessors: {'; '.join(waiting)}"
         return _warned(_pass(detail, withheld=withheld))
     return _warned(_pass("no declared path leaves this repo"))
 
@@ -1676,12 +1761,13 @@ def plan_frontmatter(text: str) -> Dict[str, Any]:
     instead, which is the ONLY place that distinction is checked.
     """
     from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.dispatch_emit.spine_read import load_frontmatter_doc
 
     split = split_frontmatter(text)
     if split is None:
         return {}
     try:
-        loaded = yaml.safe_load(split.fm_text)
+        loaded = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -1702,12 +1788,13 @@ def frontmatter_parse_error(text: str) -> Optional[str]:
     parse-or-empty reader every other predicate already depends on.
     """
     from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.dispatch_emit.spine_read import load_frontmatter_doc
 
     split = split_frontmatter(text)
     if split is None:
         return None
     try:
-        yaml.safe_load(split.fm_text)
+        load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         if mark is not None:
@@ -1733,9 +1820,9 @@ def raw_spine_rows(text: str) -> List[Dict[str, Any]]:
     name a defect that may not exist.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
-    from coordinator_core.ops.plan_tasks_render import load_rows
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
 
-    result = load_rows(text)
+    result = load_rows_memo(text)
     if result.status is not LocateStatus.LOCATED:
         return []
     return [_with_canonical_disposition(row) for row in result.rows]
@@ -1786,12 +1873,21 @@ def evaluate_plan(
     fm = plan_frontmatter(text)
     parse_error = frontmatter_parse_error(text)
     try:
+        from coordinator_core.ops.dispatch_emit.spine_read import _repo_root_of
+
+        edge_root = repo_root if repo_root is not None else _repo_root_of(plan_path)
         prime_exit = _prime_exit(fm, repo_root, text)
         classes = {
             "SPINE": _spine(plan_path, text, repo_root),
             "CENSUS": _census(fm),
             "EXTERNAL_DEPS": _external_deps(
-                raw_spine_rows(text), root_names, siblings, nested_names, gitignored_roots
+                raw_spine_rows(text),
+                root_names,
+                siblings,
+                nested_names,
+                gitignored_roots,
+                repo_root=edge_root,
+                plan_edges=fm.get("depends_on_plan"),
             ),
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
@@ -1913,7 +2009,8 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
             "this repo, or `external_reads_ungated` (path/owner_repo/reason) for a row "
             "that only reads a sibling path without landing into it; a row CREATING a "
             "new top-level directory declares `writes_under: [<segment>/]` instead of a "
-            "gate"
+            "gate; a row whose top-level directory a SIBLING plan's row creates declares "
+            "`depends_on_plan: [{plan, chunk, gate_kind: output-consumption-runtime}]`"
         )
     if "CENSUS" in failing_classes:
         lines.append(
@@ -1977,6 +2074,14 @@ def refusal_message(
         lines.append(
             f"  status: {status} — this plan has already run; nothing is owed here "
             "(prep is a pre-execution property)."
+        )
+    elif any(
+        v["status"] == "DEFECT" and v["kind"] == "predecessor-plan-dangling"
+        for v in classes.values()
+    ):
+        lines.append(
+            "  fix: delete or repoint the dangling depends_on_plan edge(s); a predecessor "
+            "moved to archive/ may already be satisfied"
         )
     elif any(
         v["status"] == "DEFECT" and v["kind"] == "prime-exit-underived" for v in classes.values()

@@ -663,12 +663,9 @@ def compose_criterion_judge(
     prompt_head: str = "",
     criterion: Optional[OperativeCriterion] = None,
     host_degraded: bool = False,
-    prompt_suffix_js: Optional[str] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
-    ``None`` when the roster declares no judge. ``prompt_suffix_js`` is a JS
-    string expression appended to the prompt at run time, for a path the
-    script learns only then. Pointers only: the engine
+    ``None`` when the roster declares no judge. Pointers only: the engine
     never inlines or summarises the PM's words, the judge reads them from the
     plan and sizing artifacts."""
     if review.judge is None:
@@ -690,7 +687,7 @@ def compose_criterion_judge(
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
     ).strip()
-    call = _agent_call_literal(
+    return _agent_call_literal(
         judge_type,
         prompt,
         CRITERION_JUDGE_PHASE_TITLE,
@@ -699,10 +696,4 @@ def compose_criterion_judge(
         agent_opts=_agent_opts_for(review.judge, emitted_agent_type=judge_type),
         schema_literal=_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)),
     )
-    if prompt_suffix_js:
-        prefix = f"agent({_prompt_literal(prompt)}"
-        if not call.startswith(prefix):
-            raise ValueError("judge agent call does not open with its prompt literal")
-        call = f"{prefix} + {prompt_suffix_js}{call[len(prefix):]}"
-    return call
 

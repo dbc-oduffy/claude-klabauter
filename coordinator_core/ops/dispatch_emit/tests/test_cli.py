@@ -91,9 +91,87 @@ def test_successful_emit_prints_workflow_invocation_queue_route(tmp_path, monkey
     assert cli_module.main(argv) == cli_module.EXIT_OK
     captured = capsys.readouterr()
     assert "Workflow({" in captured.err
-    assert "run_stamp" in captured.err
     assert "script_path" in captured.err
     assert "profile_dir" in captured.err
+
+
+def test_queue_route_invocation_carries_a_minted_run_stamp(tmp_path, monkeypatch, capsys):
+    """The printed call is paste-ready: run_stamp is a UTC stamp the emitted
+    script's fire-args guard accepts, never a placeholder."""
+    import re
+
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    out_path = repo_root / "state" / "queue-grind" / "out.workflow.mjs"
+    monkeypatch.chdir(repo_root)
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(out_path),
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    err = capsys.readouterr().err
+    assert "<YYYYMMDDThhmmssZ>" not in err
+    assert re.search(r"run_stamp: '\d{8}T\d{6}Z'", err)
+
+
+def test_queue_route_receipt_names_rows_the_appetite_left_out(tmp_path, monkeypatch, capsys):
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    out_path = repo_root / "state" / "queue-grind" / "out.workflow.mjs"
+    monkeypatch.chdir(repo_root)
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--limit", "1",
+        "--out", str(out_path),
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    reply = json.loads(capsys.readouterr().out)
+    receipt = json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
+    assert receipt["unselected"] == {"count": 1, "row_ids": ["row1"]}
+
+
+def _emit_with_not_admitted(tmp_path, monkeypatch, capsys, count):
+    from coordinator_core.ops.dispatch_emit import op as op_module
+
+    real = op_module.emit_queue_script
+
+    def fake(*args, **kwargs):
+        emission = real(*args, **kwargs)
+        block = {
+            "count": count,
+            "row_ids": [f"r{i}" for i in range(count)],
+            "arithmetic": {"admitted_count": 2},
+        }
+        return type(emission)(
+            script=emission.script,
+            receipt_extras={**emission.receipt_extras, "not_admitted": block},
+        )
+
+    monkeypatch.setattr(op_module, "emit_queue_script", fake)
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    out_path = repo_root / "state" / "queue-grind" / "out.workflow.mjs"
+    monkeypatch.chdir(repo_root)
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(out_path),
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    return capsys.readouterr()
+
+
+def test_queue_route_echoes_not_admitted_to_stderr(tmp_path, monkeypatch, capsys):
+    captured = _emit_with_not_admitted(tmp_path, monkeypatch, capsys, 2)
+    assert "emit-dispatch-workflow: not_admitted:" in captured.err
+    assert json.loads(captured.out)["not_admitted"]["count"] == 2
+
+
+def test_queue_route_prints_no_not_admitted_line_at_zero(tmp_path, monkeypatch, capsys):
+    captured = _emit_with_not_admitted(tmp_path, monkeypatch, capsys, 0)
+    assert "not_admitted:" not in captured.err
 
 
 def test_successful_emit_prints_workflow_invocation_plan_route(tmp_path, monkeypatch, capsys):

@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -110,9 +111,9 @@ def _write_range_prep(repo_root: Path, session_id: str, plan: str, base: str, he
         "product_files": len(files),
         "whole_diff_sidecars": {},
     }
-    target.write_text(
-        "---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n",
-        encoding="utf-8", newline="\n",
+    atomic_write_bytes(
+        target,
+        ("---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n").encode("utf-8"),
     )
     declare_write(str(target))
     return target

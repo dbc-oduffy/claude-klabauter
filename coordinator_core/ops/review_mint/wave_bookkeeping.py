@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field_raw,
     rebuild,
@@ -359,12 +360,13 @@ def bookkeep_wave(
     )
     record_path.parent.mkdir(parents=True, exist_ok=True)
     fm_text = _render_record_frontmatter(record)
-    record_path.write_text(
-        "---\n" + fm_text + "\n---\n\n"
-        "## Wave bookkeeping\n\n"
-        "Mechanical, no-agent record: review_mint.wave_bookkeeping.bookkeep_wave.\n",
-        encoding="utf-8",
-        newline="\n",
+    atomic_write_bytes(
+        record_path,
+        (
+            "---\n" + fm_text + "\n---\n\n"
+            "## Wave bookkeeping\n\n"
+            "Mechanical, no-agent record: review_mint.wave_bookkeeping.bookkeep_wave.\n"
+        ).encode("utf-8"),
     )
 
     record["sidecar_path"] = str(record_path)

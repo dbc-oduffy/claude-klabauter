@@ -4,7 +4,7 @@ stage against HEAD and supersede a frozen FAIL.
 `emit-dispatch-workflow --plan P --reverify-delivery RUN_RECORD` emits a one-stage Workflow
 script; `record` turns its returned result into an append-only delivery-verdict record under
 `state/delivery-verdicts/<YYYY-MM>/` that names the run record it supersedes.
-`latest_delivery_supersession` is what `review_stamp.mint` reads in place of the frozen verdict;
+`verdict_supersession.latest_delivery_supersession` is what `review_stamp.mint` reads in place of the frozen verdict;
 the original run record is never edited.
 """
 
@@ -20,6 +20,11 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from coordinator_core.completion_receipts.test_verdict import (
+    TestVerdictRefused,
+    bind_sidecar,
+    record_test_verdict,
+)
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.delivery_credit import ancestor_refs, coded_row_refs
@@ -38,14 +43,21 @@ from coordinator_core.ops.review_mint.execute_review import (
     resolve_operative_criterion_for_plan,
 )
 from coordinator_core.ops.review_mint.roster import parse_execute_review
+from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F401 -- re-exported for callers of this module
+    RECORD_KIND,
+    VERDICT_DIR,
+    _frontmatter,
+    latest_criterion_supersession,
+    latest_delivery_supersession,
+    latest_foreign_claims_supersession,
+    latest_tests_supersession,
+)
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 # Writes per-session subagent-share sidecars and a one-shot workflow script, not stamped artifacts.
 GENERATES = []
 
-VERDICT_DIR = Path("state") / "delivery-verdicts"
-RECORD_KIND = "delivery-verdict"
 _PHASE = "Delivery re-verify"
 _CRITERION_STATUSES = ("met", "not_met", "indeterminate")
 _TESTS_PHASE = "Tests re-run"
@@ -58,21 +70,6 @@ _DELIVERY_SIDECAR_AGENT_TYPE = "coordinator:delivery-verifier"
 
 class ReverifyRefused(ValueError):
     """No script or record was produced; the message names why."""
-
-
-def _frontmatter(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
-    except OSError:
-        return None
-    split = split_frontmatter(text)
-    if split is None:
-        return None
-    try:
-        data = yaml.safe_load(split.fm_text) or {}
-    except yaml.YAMLError:
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def _delivery_block(record: dict) -> Optional[dict]:
@@ -402,25 +399,6 @@ def record_delivery_verdict(
     return rel.as_posix()
 
 
-_UNSET_VALUE_RE = re.compile(r"^(?:null|~|''|\"\")$")
-_KEY_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]*(.*?)[ \t]*$")
-
-
-def _bind_keys(fm_text: str, bind: Dict[str, str]) -> str:
-    """`fm_text` (newline-terminated) with each `bind` key set when absent or null; a key that
-    already carries a value is never overwritten."""
-    lines = fm_text.split("\n")
-    pending = dict(bind)
-    for i, line in enumerate(lines):
-        m = _KEY_LINE_RE.match(line)
-        if m and m.group(1) in pending:
-            value = pending.pop(m.group(1))
-            if _UNSET_VALUE_RE.match(m.group(2)):
-                lines[i] = f"{m.group(1)}: {value}"
-    tail = [f"{k}: {v}" for k, v in pending.items()]
-    return "\n".join(lines[:-1] + tail + lines[-1:])
-
-
 def settle_tests_sidecar(
     repo_root: Path,
     tests: Optional[dict],
@@ -428,38 +406,22 @@ def settle_tests_sidecar(
     plan_path: Optional[str] = None,
     agent_type: Optional[str] = None,
 ) -> bool:
-    """Bind the test-runner sidecar to the plan (`target_plan`, `agent_type`: stamped here when
-    absent or null, never overwritten) and write the re-run verdict into it as `test_verdict`
-    (and `run`/`failed` when absent), leaving `status` -- the run-report lifecycle -- alone. An
-    absent sidecar or one with no frontmatter is left alone; returns whether it was rewritten."""
+    """Write the re-run verdict into the test-runner sidecar through `record_test_verdict`
+    (`test_verdict`, `target_plan`, `agent_type`). When the writer refuses (already verdicted,
+    contradictory counts, foreign owner), fall back to `bind_sidecar`: binding alone, `status`
+    untouched. Returns whether the sidecar was rewritten."""
     if not tests or tests.get("status") not in _TESTS_STATUSES or not tests.get("sidecar"):
         return False
-    path = Path(str(tests["sidecar"]))
-    if not path.is_absolute():
-        path = repo_root / path
+    result = {
+        "status": tests["status"],
+        "tests_run": tests.get("run"),
+        "tests_failed": tests.get("failed"),
+        "sidecar_path": str(tests["sidecar"]),
+    }
     try:
-        raw = path.read_bytes().decode("utf-8")
-    except OSError:
-        return False
-    crlf = "\r\n" in raw
-    norm = raw.replace("\r\n", "\n")
-    split = split_frontmatter(norm)
-    fm = _frontmatter(path)
-    if split is None or fm is None:
-        return False
-    base = split.fm_text if split.fm_text.endswith("\n") else split.fm_text + "\n"
-    bind = {k: v for k, v in (("agent_type", agent_type), ("target_plan", plan_path)) if v}
-    new_fm = _bind_keys(base, bind)
-    if "test_verdict" not in fm:
-        verdict = "errored" if tests["status"] == "error" else tests["status"]
-        new_fm += f"test_verdict: {verdict}\n"
-        for key in ("run", "failed"):
-            if key not in fm and tests.get(key) is not None:
-                new_fm += f"{key}: {tests[key]}\n"
-    if new_fm == base:
-        return False
-    out = norm.replace(split.fm_text, new_fm, 1)
-    path.write_bytes((out.replace("\n", "\r\n") if crlf else out).encode("utf-8"))
+        record_test_verdict(repo_root, result, plan_path=plan_path, agent_type=agent_type)
+    except TestVerdictRefused:
+        return bind_sidecar(repo_root, str(tests["sidecar"]), plan_path=plan_path, agent_type=agent_type)
     return True
 
 
@@ -505,58 +467,6 @@ def persist_delivery_sidecar(
     else:
         declare_write(str(target))
     return target.relative_to(repo_root).as_posix() if target.is_relative_to(repo_root) else target.as_posix()
-
-
-def _newest_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
-    base = repo_root / VERDICT_DIR
-    if not base.is_dir():
-        return None
-    best: Optional[tuple] = None
-    for path in base.glob("*/*.md"):
-        fm = _frontmatter(path)
-        if not fm or fm.get("kind") != RECORD_KIND or fm.get("supersedes") != run_record_rel:
-            continue
-        if not isinstance(fm.get("delivery"), dict):
-            continue
-        key = (str(fm.get("recorded_at") or ""), path.name)
-        if best is None or key > best[0]:
-            best = (key, fm)
-    return best[1] if best else None
-
-
-def latest_delivery_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
-    """The `delivery` block of the newest delivery-verdict record superseding `run_record_rel`,
-    else `None`, with the record's `head_sha` (the HEAD it verified) added when it has one.
-    Newest is by `recorded_at`."""
-    fm = _newest_supersession(repo_root, run_record_rel)
-    if not fm:
-        return None
-    head = fm.get("head_sha")
-    return {**fm["delivery"], "head_sha": str(head)} if head else fm["delivery"]
-
-
-def latest_criterion_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
-    """The `criterion` block of that same newest record; `None` when there is no record or it
-    predates criterion re-judging."""
-    fm = _newest_supersession(repo_root, run_record_rel)
-    criterion = fm.get("criterion") if fm else None
-    return criterion if isinstance(criterion, dict) and criterion.get("status") else None
-
-
-def latest_tests_supersession(repo_root: Path, run_record_rel: str) -> Optional[dict]:
-    """The `tests` block of that same newest record; `None` when there is no record or it
-    predates test re-running."""
-    fm = _newest_supersession(repo_root, run_record_rel)
-    tests = fm.get("tests") if fm else None
-    return tests if isinstance(tests, dict) and tests.get("status") else None
-
-
-def latest_foreign_claims_supersession(repo_root: Path, run_record_rel: str) -> Optional[List[str]]:
-    """The still-live `foreign_claims` of that same newest record; `None` for an old-shape record
-    (the frozen `prep.foreign_claims` then stands)."""
-    fm = _newest_supersession(repo_root, run_record_rel)
-    claims = fm.get("foreign_claims") if fm else None
-    return [str(c) for c in claims] if isinstance(claims, list) else None
 
 
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")

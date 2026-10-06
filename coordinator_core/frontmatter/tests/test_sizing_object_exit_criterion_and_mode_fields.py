@@ -128,6 +128,46 @@ class TestExitCriterionField:
         assert any(e["field"] == "exit_criterion" for e in errors), errors
 
 
+_APM = {"source": "apm", "apm_ruling": "x", "on": "2026-10-06", "mode": "ceo"}
+
+
+def _ec_errors(accepted=None, amendments=None):
+    ec = {"statement": "S", "accepted": accepted}
+    if amendments is not None:
+        ec["amendments"] = amendments
+    fm = _minimal_sizing_object(exit_criterion=ec)
+    return [e for e in validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA) if e["field"].startswith("exit_criterion")]
+
+
+class TestApmAcceptanceShape:
+    def test_apm_accepted_is_valid(self):
+        assert not _ec_errors(_APM)
+
+    def test_apm_with_run_id_is_valid(self):
+        assert not _ec_errors({**_APM, "run_id": "r1"})
+
+    def test_apm_with_pm_quote_is_rejected(self):
+        assert _ec_errors({**_APM, "pm_quote": "q"})
+
+    def test_source_pm_is_rejected(self):
+        assert _ec_errors({**_APM, "source": "pm"})
+
+    def test_empty_apm_ruling_is_rejected(self):
+        assert _ec_errors({**_APM, "apm_ruling": ""})
+
+    def test_apm_amendment_is_valid(self):
+        assert not _ec_errors(_APM, [{**_APM, "statement": "T"}])
+
+    def test_apm_amendment_with_pm_quote_is_rejected(self):
+        assert _ec_errors(_APM, [{**_APM, "statement": "T", "pm_quote": "q"}])
+
+    def test_apm_hands_on_acceptance_is_rejected(self):
+        assert _ec_errors({**_APM, "mode": "hands-on"})
+
+    def test_apm_hands_on_amendment_is_rejected(self):
+        assert _ec_errors(_APM, [{**_APM, "mode": "hands-on", "statement": "T"}])
+
+
 class TestInteractionModeField:
     @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
     def test_each_mode_value_is_valid(self, mode):

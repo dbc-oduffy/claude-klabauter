@@ -57,6 +57,30 @@ class TestParams(unittest.TestCase):
         )
 
 
+class TestApmRuling(unittest.TestCase):
+    def test_apm_ruling_forwarded_without_pm_quote(self):
+        self.assertEqual(
+            cli.build_params(["--sizing", "s", "--apm-ruling", "r"]),
+            {"sizing": "s", "apm_ruling": "r"},
+        )
+
+    def test_both_flags_is_a_usage_error(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["--sizing", "s", "--pm-quote", "q", "--apm-ruling", "r"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_neither_flag_is_a_usage_error(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["--sizing", "s"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_help_names_apm_ruling(self):
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            cli.main(["--help"])
+        self.assertIn("--apm-ruling", out.getvalue())
+
+
 class TestRouting(unittest.TestCase):
     def test_routes_the_op_and_returns_its_exit_code(self):
         import op_trampoline

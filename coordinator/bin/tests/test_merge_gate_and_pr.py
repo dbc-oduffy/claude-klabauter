@@ -85,6 +85,34 @@ def test_pr_body_all_sections_in_template_order(monkeypatch, capsys):
     assert "abc123 first commit" in out
 
 
+@pytest.mark.parametrize("flag,heading", [("verification", "Verification"), ("risk", "Risk and rollback")])
+def test_pr_body_multiline_section_travels_as_a_file(monkeypatch, capsys, tmp_path, flag, heading):
+    monkeypatch.setattr(_mod, "_commit_log", lambda commit_range: "abc123 first commit")
+    f = tmp_path / f"{flag}.md"
+    f.write_text("- line one\n- line two\n", encoding="utf-8")
+    rc = _mod.main([
+        "pr-body",
+        "--ship-verdict", "Ship",
+        "--release-notes", "Notes.",
+        f"--{flag}-file", str(f),
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"## {heading}\n\n- line one\n- line two\n\n##" in out
+
+
+@pytest.mark.parametrize("flag", ["verification", "risk"])
+def test_pr_body_inline_newline_is_refused_and_inline_plus_file_conflicts(monkeypatch, tmp_path, flag):
+    monkeypatch.setattr(_mod, "_commit_log", lambda commit_range: "")
+    f = tmp_path / "x.md"
+    f.write_text("body", encoding="utf-8")
+    base = ["pr-body", "--ship-verdict", "Ship", "--release-notes", "Notes."]
+    with pytest.raises(SystemExit):
+        _mod.main(base + [f"--{flag}", "a\nb"])
+    with pytest.raises(SystemExit):
+        _mod.main(base + [f"--{flag}", "a", f"--{flag}-file", str(f)])
+
+
 def test_pr_body_absent_sections_render_guidance_and_drop_demo_path(monkeypatch, capsys):
     monkeypatch.setattr(_mod, "_commit_log", lambda commit_range: "abc123 first commit")
     rc = _mod.main([

@@ -1309,6 +1309,19 @@ def _is_substitution_prefixed(cmd: str, target: str) -> bool:
     return total <= prefixed
 
 
+_PROBE_BASE_A = os.path.abspath(os.sep + "probe-a")
+_PROBE_BASE_B = os.path.abspath(os.sep + "probe-b")
+
+
+def _is_relative_target(raw_target: str) -> bool:
+    """True when `raw_target` resolves differently under two distinct bases --
+    its value depends on a cwd this guard does not know. Goes through the same
+    `_resolve_relative` the candidates use."""
+    return _resolve_relative(_PROBE_BASE_A, raw_target) != _resolve_relative(
+        _PROBE_BASE_B, raw_target
+    )
+
+
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str]
 ) -> Iterator[Tuple[str, str, Optional[str]]]:
@@ -1358,9 +1371,10 @@ def _iter_write_sink_candidates(
     ALSO yields every candidate `extract_interpreter_payload_write_sink_
     targets` finds in `cmd`'s heredoc bodies and `python`/`python3 -c`
     payloads, labelled `interpreter-payload` and resolved against the
-    starting cwd, never a `cd`-tracked one -- identical to
+    `cd`-tracked `effective_cwd` the depth-0 walk ends on -- identical to
     `bump_outside_repo_write._iter_write_sink_candidates`, whose docstring
-    carries the rationale.
+    carries the rationale. An unresolved depth-0 `cd` makes the cwd unknown:
+    a RELATIVE payload target is then dropped, an absolute one still yields.
 
     Negative-spec: `preserve_windows_backslashes` makes this guard rule on
     the TYPED path, not the EXECUTED one -- deliberate. Modelling execution
@@ -1391,7 +1405,6 @@ def _iter_write_sink_candidates(
         return
 
     effective_cwd = cwd or os.getcwd()
-    payload_base_cwd = effective_cwd
     cwd_unresolved = False
     for rc in resolved_segments:
         if rc.depth != 0:
@@ -1409,6 +1422,8 @@ def _iter_write_sink_candidates(
                 resolved = _resolve_relative(effective_cwd, positional[0])
                 if resolved is not None:
                     effective_cwd = resolved
+                else:
+                    cwd_unresolved = True
             continue
 
         if cwd_unresolved:
@@ -1431,7 +1446,9 @@ def _iter_write_sink_candidates(
             yield (resolved_target, head_base, raw_target)
 
     for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
-        resolved_target = _resolve_relative(payload_base_cwd, raw_target)
+        if cwd_unresolved and _is_relative_target(raw_target):
+            continue
+        resolved_target = _resolve_relative(effective_cwd, raw_target)
         if resolved_target is None:
             continue
         yield (resolved_target, "interpreter-payload", raw_target)

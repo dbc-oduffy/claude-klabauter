@@ -281,8 +281,8 @@ def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[s
     return names
 
 
-def unique_commits(run_git: RunGit, repo_root: Path, current: str, stale_ref: str) -> list[str]:
-    proc = run_git(["log", "--oneline", f"{current}..{stale_ref}"], repo_root)
+def unique_commits(run_git: RunGit, repo_root: Path, base: str, stale_ref: str) -> list[str]:
+    proc = run_git(["log", "--oneline", f"{base}..{stale_ref}"], repo_root)
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
@@ -353,7 +353,9 @@ def brief(
             branches_report.append({**entry, "tip_author": author, "operator": operator, "category": category})
             continue
 
-        commits = unique_commits(run_git, repo_root, current, ref)
+        # Counted against main, not the checked-out branch: a `current` behind main would
+        # report every main-only commit as unique to each stale branch.
+        commits = unique_commits(run_git, repo_root, main_branch or current, ref)
         branches_report.append(
             {
                 **entry,

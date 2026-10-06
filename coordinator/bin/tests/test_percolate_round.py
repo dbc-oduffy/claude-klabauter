@@ -2675,7 +2675,13 @@ def _wire_lock_test_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[s
     """Same shape as `test_publish_row_isolation.py`'s `_wire_common_fakes`
     -- stubs every precondition `main()` runs before its OWN lock loop (Part
     B) and row loop, so this test drives the REAL lock-acquisition code
-    (the code under test for D1) rather than a hand-rolled stand-in for it."""
+    (the code under test for D1) rather than a hand-rolled stand-in for it.
+
+    `main()` writes the machine-local publish-provenance record at round end;
+    `COORDINATOR_SETTINGS_HOME` is pointed under `tmp_path` so that write never
+    reaches the real settings home."""
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
 
     def fake_row(name: str, dest: Path) -> str:
         src = tmp_path / f"src-{name}"

@@ -2626,12 +2626,17 @@ class TestSupersedeArchiveHandoff:
 
         The durable ledger is the evidence that was already on disk the whole
         time. Nothing here is inferred from the calling session.
+
+        "Shipped" here is the shipped-but-unmirrored shape: `shipped_in` set,
+        on-disk `deployment_state` not yet `shipped`. A baton whose on-disk
+        `deployment_state` is already `shipped` is terminal and is refused
+        (`test_handoff_supersede_shipped_refused`).
         """
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
-            repo, "ledger-holder.md", "open", "shipped",
-            extra="scope:\n  - state/handoffs/ledger-holder.md\n",
+            repo, "ledger-holder.md", "open", "in_flight",
+            extra="shipped_in: 0123abc\nscope:\n  - state/handoffs/ledger-holder.md\n",
         )
         _seed_ledger_claim(repo, hp, "cf725a50-e1be-443e-957c-1c4be5ff964b", "2026-08-10T16:25:36Z")
 
@@ -2654,8 +2659,8 @@ class TestSupersedeArchiveHandoff:
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
-            repo, "dead-holder.md", "open", "shipped",
-            extra="scope:\n  - state/handoffs/dead-holder.md\n",
+            repo, "dead-holder.md", "open", "in_flight",
+            extra="shipped_in: 0123abc\nscope:\n  - state/handoffs/dead-holder.md\n",
         )
         _seed_ledger_claim(repo, hp, "dead-session-id", "2026-08-10T16:25:36Z", pid="999999999")
 
@@ -2669,8 +2674,9 @@ class TestSupersedeArchiveHandoff:
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
-            repo, "mirror-wins.md", "claimed", "shipped",
+            repo, "mirror-wins.md", "claimed", "in_flight",
             extra=(
+                "shipped_in: 0123abc\n"
                 "claimed_by: mirror-session\n"
                 "claimed_at: 2026-08-01T00:00:00Z\n"
                 "scope:\n  - state/handoffs/mirror-wins.md\n"
@@ -2695,8 +2701,8 @@ class TestSupersedeArchiveHandoff:
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
-            repo, "no-evidence.md", "open", "shipped",
-            extra="scope:\n  - state/handoffs/no-evidence.md\n",
+            repo, "no-evidence.md", "open", "in_flight",
+            extra="shipped_in: 0123abc\nscope:\n  - state/handoffs/no-evidence.md\n",
         )
 
         import io

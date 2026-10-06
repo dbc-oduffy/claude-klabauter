@@ -204,7 +204,40 @@ def _mirror_to_durable_sink(git_root: Path, line: str, sink_basename: str) -> No
             return
         sink = git_root / "state" / "stand-downs"
         sink.mkdir(parents=True, exist_ok=True)
-        with open(sink / sink_basename, "a", encoding="utf-8", newline="\n") as fh:
+        path = sink / sink_basename
+        if _sink_already_holds(path, line):
+            return
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
     except Exception:
         return
+
+
+_SINK_TAIL_BYTES = 65536
+
+
+def _sink_already_holds(path: Path, line: str) -> bool:
+    """True when the tracked sink's tail already carries this record.
+
+    The sink is committed, so a line per tool call keeps the tree dirty
+    forever; one line per distinct (session, marker, target, evidence) keeps
+    the durable copy and drops the repeats. The timestamp is the only part of
+    a line that varies between repeats, so equality is on everything after it.
+
+    Only the last `_SINK_TAIL_BYTES` are read: repeats are adjacent in time, so
+    the tail holds them, and the read stays constant-cost as the sink grows. A
+    record older than the tail is written once more, which is the cheap error.
+    A read failure answers False for the same reason.
+    """
+    key = line.split(" | ", 1)[-1]
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, 2)
+            fh.seek(max(0, size - _SINK_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = tail.splitlines(keepends=True)
+    if size > _SINK_TAIL_BYTES:
+        lines = lines[1:]
+    return any(existing.split(" | ", 1)[-1] == key for existing in lines)

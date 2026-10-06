@@ -25,8 +25,11 @@ this module's existence.
 
 Column mapping, applied per live Chunk-table row:
     id            -> row `id` (backtick-stripped).
-    footprint     -> row `writes` (comma-split, each cell backtick-quoted;
-                     a malformed footprint cell -- one whose entries are
+    footprint     -> row `writes` / `writes_under` (comma-split, each cell
+                     backtick-quoted), UNIONED with the source plan chunk's
+                     own `writes` / `writes_under` for a plan-sourced
+                     single-chunk row (`_plan_chunk_repairs`); a cell entry
+                     beyond the chunk's declaration is kept. A malformed footprint cell -- one whose entries are
                      not cleanly backtick-quoted -- raises
                      `FootprintUnreadableError` naming the row and the raw
                      cell rather than silently emitting a broken `writes`
@@ -35,6 +38,10 @@ Column mapping, applied per live Chunk-table row:
                      "output-consumption-runtime"}` edge per comma-split
                      id (minus any edge whose target row is
                      closed-satisfied -- see `_resolve_dep_kinds`), PLUS
+                     one edge per live `depends_on` target of the source
+                     plan chunk the cell omits (a target absent from the
+                     inventory and not `coded` in the plan refuses with
+                     `PlanDependencyUnaccountedError`), PLUS
                      one such edge, added on top, to every earlier LIVE
                      row (table order) whose `writes` set intersects this
                      row's `writes` set and that isn't already named by
@@ -100,8 +107,11 @@ Negative-spec:
     the composed script is the fleet's one verification surface for a
     spine, minted or hand-authored alike.
   - Does NOT infer a `depends_on` edge beyond the Chunk table's `deps`
-    column and the one write-overlap edge documented in the `deps` column
-    mapping above -- no transitive closure, no same-spec-path grouping.
+    column, the write-overlap edge, and the source plan chunk's own
+    declared `depends_on` documented in the `deps` column mapping above
+    -- no transitive closure, no same-spec-path grouping. A repaired edge
+    is the source plan's own declaration, not an inference (the same
+    argument that carries `execution_mode` and `deferred_until`).
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § S1-C4
 (coordinator-claude#47).
@@ -276,14 +286,17 @@ def strip_literal_pathspec(path: str) -> str:
 
 _REQUIRED_COLUMNS = (
     "id",
-    "spec path",
     "summary",
     "footprint",
     "deps",
     "verification",
-    "complexity",
     "disposition",
 )
+
+#: Columns a Chunk table may omit; an absent column or a blank/`—`/`-` cell
+#: reads as `""` on every row dict.
+_OPTIONAL_COLUMNS = ("spec path", "complexity")
+_ABSENT_CELLS = frozenset({"", "\u2014", "-"})
 
 
 class InventoryMintError(ValueError):
@@ -353,6 +366,12 @@ class WritesUnderNotDirectoryError(InventoryMintError):
     (plan-tasks.schema.json's own `writes_under` item pattern), never a
     concrete file; a concrete file belongs in an ordinary backtick-quoted
     `writes:` entry instead (issue coordinator-klabauter#45 class B)."""
+
+
+class PlanDependencyUnaccountedError(InventoryMintError):
+    """A plan-sourced row's source chunk depends on a target that is neither
+    a row of the inventory nor `coded` in the plan -- the row would fire
+    ahead of its premise."""
 
 
 class UnrecognizedDispositionError(InventoryMintError):
@@ -543,6 +562,8 @@ def parse_chunk_table(text: str) -> List[Dict[str, str]]:
         )
 
     header = [cell.lower() for cell in _parse_pipe_row(lines[0])]
+    if "cx" in header and "complexity" not in header:
+        header = ["complexity" if col == "cx" else col for col in header]
     missing = [col for col in _REQUIRED_COLUMNS if col not in header]
     if missing:
         raise ChunkTableMalformedError(
@@ -558,7 +579,11 @@ def parse_chunk_table(text: str) -> List[Dict[str, str]]:
                 f"Chunk table row column count ({len(cells)}) disagrees "
                 f"with header ({len(header)}): {line!r}"
             )
-        rows.append(dict(zip(header, cells)))
+        row = dict(zip(header, cells))
+        for col in _OPTIONAL_COLUMNS:
+            cell = row.get(col, "").strip()
+            row[col] = "" if cell in _ABSENT_CELLS else row[col]
+        rows.append(row)
     return rows
 
 
@@ -569,11 +594,13 @@ def _infer_change_kind(writes: List[str]) -> str:
 
 
 def _row_body(row_id: str, spec_path: str, summary: str, verification: str, complexity: str) -> str:
+    spec_line = f"Spec: {spec_path} ({row_id})\n" if spec_path else ""
+    complexity_line = f"Complexity: {complexity}\n" if complexity else ""
     return (
-        f"Spec: {spec_path} ({row_id})\n"
+        f"{spec_line}"
         f"{summary}\n"
         f"Verification (this row is DONE only when this holds): {verification}\n"
-        f"Complexity: {complexity}\n"
+        f"{complexity_line}"
     )
 
 
@@ -756,6 +783,90 @@ def _plan_raw_rows_by_id(
     return plan_cache[plan_path]
 
 
+_WRITABLE_GATE_KINDS = ("output-consumption-runtime", "epistemic-premise")
+
+
+def _plan_chunk_repairs(
+    chunk_rows: List[Dict[str, str]],
+    inventory_path: Path,
+    plan_cache: Dict[Path, Dict[str, dict]],
+    skip_landed: bool,
+) -> Tuple[List[Dict[str, str]], Dict[str, dict]]:
+    """Pre-pass over the single-chunk-reference rows: `(chunk_rows with each
+    row's `deps` cell gaining its chunk's live edges, {row id: repair})`.
+
+    A repair carries the chunk's `writes`/`writes_under`/`deferred_until`,
+    the dep ids added to the cell, and the gate kind each added edge keeps.
+    Reads only `plan_cache`; a row with no spec path, or naming no plan
+    row, is untouched. Raises `PlanDependencyUnaccountedError` for a chunk
+    edge whose target is neither an inventory row nor `coded` in the plan."""
+    inventory_ids = {_strip_backtick(row["id"]) for row in chunk_rows}
+    repairs: Dict[str, dict] = {}
+    out_rows: List[Dict[str, str]] = []
+    for row in chunk_rows:
+        row_id = _strip_backtick(row["id"])
+        spec_path = _strip_backtick(row.get("spec path", ""))
+        out_rows.append(row)
+        if not spec_path:
+            continue
+        raw_rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+        named = raw_rows.get(row_id) or raw_rows.get(_bare_plan_row_id(row_id))
+        if named is None:
+            continue
+        if _raw_disposition_kind(row_id, row["disposition"]) != _DEP_KIND_LIVE:
+            continue
+        if skip_landed and with_canonical_disposition(named).get("disposition") == "coded":
+            continue
+        prefix = row_id.split("-", 1)[0] if "-" in row_id else None
+        cell_deps = _split_id_list(row["deps"])
+        added: List[str] = []
+        gate_kinds: Dict[str, str] = {}
+        for edge in named.get("depends_on") or []:
+            if not isinstance(edge, dict) or not isinstance(edge.get("chunk"), str):
+                continue
+            target = edge["chunk"]
+            inv_id = next(
+                (
+                    cand
+                    for cand in (target, f"{prefix}-{target}" if prefix else None)
+                    if cand and cand in inventory_ids
+                ),
+                None,
+            )
+            if inv_id is None:
+                plan_target = raw_rows.get(target)
+                if (
+                    plan_target is not None
+                    and with_canonical_disposition(plan_target).get("disposition") == "coded"
+                ):
+                    continue
+                raise PlanDependencyUnaccountedError(
+                    f"chunk table row {row_id!r}: its source chunk depends on "
+                    f"{target!r}, which is not a row of this inventory and is "
+                    f"not coded in {spec_path!r}; the row would fire ahead of "
+                    "its premise -- add the target to the inventory or land it"
+                )
+            if inv_id == row_id or inv_id in cell_deps or inv_id in added:
+                continue
+            added.append(inv_id)
+            kind = edge.get("gate_kind")
+            gate_kinds[inv_id] = (
+                kind if kind in _WRITABLE_GATE_KINDS else "output-consumption-runtime"
+            )
+        repairs[row_id] = {
+            "writes": [w for w in (named.get("writes") or []) if isinstance(w, str)],
+            "writes_under": [
+                w for w in (named.get("writes_under") or []) if isinstance(w, str)
+            ],
+            "deferred_until": named.get("deferred_until") or None,
+            "added_deps": added,
+            "gate_kinds": gate_kinds,
+        }
+        if added:
+            out_rows[-1] = dict(row, deps=", ".join(cell_deps + added))
+    return out_rows, repairs
+
+
 def _plan_sub_rows(
     inventory_path: Optional[Path],
     spec_path: str,
@@ -823,12 +934,17 @@ def mint_rows(
     nothing -- every existing standalone `mint_rows(rows)` call keeps its
     prior behaviour unchanged.
     """
-    dep_kinds = _resolve_dep_kinds(chunk_rows)
     plan_cache: Dict[Path, Dict[str, dict]] = {}
+    repairs: Dict[str, dict] = {}
+    if inventory_path is not None:
+        chunk_rows, repairs = _plan_chunk_repairs(
+            chunk_rows, inventory_path, plan_cache, skip_landed
+        )
+    dep_kinds = _resolve_dep_kinds(chunk_rows)
     if skip_landed and inventory_path is not None:
         for row in chunk_rows:
             row_id = _strip_backtick(row["id"])
-            if dep_kinds[row_id] != _DEP_KIND_LIVE:
+            if dep_kinds[row_id] != _DEP_KIND_LIVE or not _strip_backtick(row["spec path"]):
                 continue
             raw_rows = _plan_raw_rows_by_id(
                 inventory_path, _strip_backtick(row["spec path"]), plan_cache
@@ -847,6 +963,19 @@ def mint_rows(
         if dep_kinds[row_id] != _DEP_KIND_LIVE:
             continue
         writes, writes_under = _split_footprint(row_id, row["footprint"])
+        repair = repairs.get(row_id)
+        if repair is not None:
+            add_writes = [w for w in repair["writes"] if w not in writes]
+            add_under = [w for w in repair["writes_under"] if w not in writes_under]
+            writes = writes + add_writes
+            writes_under = writes_under + add_under
+            added_all = add_writes + add_under + repair["added_deps"]
+            if added_all:
+                warnings.warn(
+                    f"chunk table row {row_id!r} repaired from its source plan "
+                    f"chunk: added {added_all!r}",
+                    stacklevel=2,
+                )
         if not writes and not writes_under:
             raise FootprintUnreadableError(
                 f"chunk table row {row_id!r} is LIVE ({row['disposition']!r}) "
@@ -883,13 +1012,19 @@ def mint_rows(
         # Every minted id an inter-item `deps` edge from this row must fan
         # out onto -- the WHOLE dependency item's chunk set, not just its
         # roots: a dependent's root(s) may consume any of its output.
+        repair_gates = repairs.get(row_id, {}).get("gate_kinds", {})
         inter_item_targets: List[dict] = [
-            {"chunk": target, "gate_kind": "output-consumption-runtime"}
+            {
+                "chunk": target,
+                "gate_kind": repair_gates.get(dep_id, "output-consumption-runtime"),
+            }
             for dep_id in sorted(explicit_dep_ids)
             for target in item_all_ids.get(dep_id, [dep_id])
         ]
 
-        sub_rows = _plan_sub_rows(inventory_path, spec_path, spine_cache)
+        sub_rows = (
+            _plan_sub_rows(inventory_path, spec_path, spine_cache) if spec_path else None
+        )
         if sub_rows:
             # An item id (or its plan-prefix-stripped form) that already
             # names ONE specific row in the target plan's spine -- checked
@@ -1020,11 +1155,16 @@ def mint_rows(
         }
         if writes_under:
             entry["writes_under"] = writes_under
-        execution_mode = _plan_row_execution_mode(
-            inventory_path, spec_path, row_id, plan_cache
+        execution_mode = (
+            _plan_row_execution_mode(inventory_path, spec_path, row_id, plan_cache)
+            if spec_path
+            else None
         )
         if execution_mode == "operator":
             entry["execution_mode"] = execution_mode
+        deferred_until = repairs.get(row_id, {}).get("deferred_until")
+        if deferred_until:
+            entry["deferred_until"] = deferred_until
         if depends_on:
             entry["depends_on"] = depends_on
         minted.append(entry)

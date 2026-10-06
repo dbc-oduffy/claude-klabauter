@@ -1120,22 +1120,22 @@ def pin_session_path(report: Report) -> None:
     else:
         settings = {}
     settings.setdefault("env", {})["PATH"] = value
-    tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
-    tmp_path.replace(settings_path)
+    _atomic_write_json(settings_path, settings)
 
     # Read back off disk, not asserted from the dict just written — the same
     # rule `verify_plugin_settings` exists to enforce.
     landed = None
+    readback_error = None
     try:
-        landed = json.loads(settings_path.read_text()).get("env", {}).get("PATH")
-    except Exception:  # noqa: BLE001 - a read-back failure is a recorded verdict
-        pass
+        landed = json.loads(settings_path.read_text(encoding="utf-8")).get("env", {}).get("PATH")
+    except Exception as exc:  # noqa: BLE001 - a read-back failure is a recorded verdict
+        readback_error = repr(exc)
     report.session_path_pin = {
         "settings_path": str(settings_path),
         "pinned": landed == value,
         "value": value,
         "on_disk": landed,
+        **({"readback_error": readback_error} if readback_error else {}),
     }
 
 
@@ -1517,9 +1517,7 @@ def drop_double_fired_settings_hooks(report: Report) -> None:
     report.hook_dedupe = {"settings_path": str(settings_path), "removed": removed}
     if not removed:
         return
-    tmp = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(settings, indent=2), newline="\n")
-    tmp.replace(settings_path)
+    _atomic_write_json(settings_path, settings)
     _safe_print(f"[cloud_setup] removed {len(removed)} double-fired hook(s) from {settings_path}")
 
 
@@ -1600,10 +1598,8 @@ def run_claude_klabauter_setup(report: Report) -> None:
         # only the last 40 lines, marked when truncated.
         all_lines = (result.stdout or "").rstrip().splitlines()
         tail_lines = all_lines if len(all_lines) <= 40 else ["... (earlier output omitted)", *all_lines[-40:]]
-        kept: dict = {}
-        _keep_failed_output(SETUP_OUTPUT_LOG, result.stdout, kept)
         raise RuntimeError(
-            f"scripts/setup.py exited {result.returncode} (full output: {kept['output_log']})"
+            f"scripts/setup.py exited {result.returncode}"
             + _hard_probe_failure_summary(result.stdout)
             + "\n--- combined output (tail) ---\n"
             + "\n".join(tail_lines)
@@ -1782,9 +1778,7 @@ def register_plugin_settings() -> None:
     env_block[AUTO_COMPACT_WINDOW_ENV] = str(CLOUD_AUTO_COMPACT_WINDOW_TOKENS)
     settings[AUTO_COMPACT_WINDOW_SETTING] = CLOUD_AUTO_COMPACT_WINDOW_TOKENS
 
-    tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
-    tmp_path.replace(settings_path)
+    _atomic_write_json(settings_path, settings)
 
 
 #: The coordinator plugin's settings-env checker, relative to its clone. Its
@@ -2993,7 +2987,6 @@ _REPROBE_PAUSE_S = 0.5
 
 
 RAG_INSTALL_OUTPUT_LOG = Path("/root/example-retrieval-repo-cloud-install-output.log")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
-SETUP_OUTPUT_LOG = Path("/root/cloud-setup-setup-py-output.log")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 _OUTPUT_TAIL_CHARS = 1500
 
 
@@ -3420,7 +3413,14 @@ def start_work_target_indexing(report: Report) -> None:
     if retrieval_half_skipped(report) or not report.rag_install or report.rag_install.get("exit_code") != 0:
         report.rag_work_targets = {"skipped": "retrieval install did not succeed"}
         return
-    import rag_work_target_index as worker
+    _scripts_dir = str(Path(__file__).resolve().parent)
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    try:
+        import rag_work_target_index as worker
+    except ImportError as exc:
+        report.rag_work_targets = {"error": f"import rag_work_target_index failed: {exc}"}
+        return
 
     raw = os.environ.get(SESSION_FOCUS_ENV) or (report.session_focus_env or {}).get(SESSION_FOCUS_ENV)
     keys = worker.parse_targets(raw)
@@ -3495,9 +3495,7 @@ def _set_plugin_settings_env(key: str, value: str, report: Report) -> None:
             settings = {}
         env_block = settings.setdefault("env", {})
         env_block[key] = value
-        tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(settings, indent=2), newline="\n")
-        tmp_path.replace(settings_path)
+        _atomic_write_json(settings_path, settings)
         report.session_focus_env = {key: value}
         print(f"[cloud_setup] session focus: env.{key}={value!r}")
     except Exception as e:  # noqa: BLE001 - advisory write, never fatal
@@ -4469,9 +4467,14 @@ def _rewrite_bare_python3(hooks: object, interpreter: str) -> int:
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, indent=2), newline="\n")
-    tmp_path.replace(path)
+    """pid-unique tmp sibling: concurrent writers of one settings.json never share a tmp."""
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8", newline="\n")
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def pin_hook_interpreter(report: Report) -> None:

@@ -805,6 +805,28 @@ def _last_verb_wins(events: list[TouchEvent]) -> list[TouchEvent]:
     return [latest[path] for path in order]
 
 
+def _held_kind(events: list[TouchEvent]) -> dict[str, Optional[str]]:
+    """Fold ``events`` to the kind each path is currently held with: only
+    TOUCHes after the path's last RELEASE count. ``KIND_WRITE`` if any is a
+    write; else ``None`` if any is kind-less; else ``KIND_READ``. A path
+    whose last event is a RELEASE is absent."""
+    since_release: dict[str, list[Optional[str]]] = {}
+    for event in events:
+        if event.verb == VERB_RELEASE:
+            since_release.pop(event.path, None)
+        else:
+            since_release.setdefault(event.path, []).append(event.kind)
+    held: dict[str, Optional[str]] = {}
+    for path, kinds in since_release.items():
+        if KIND_WRITE in kinds:
+            held[path] = KIND_WRITE
+        elif any(k != KIND_READ for k in kinds):
+            held[path] = KIND_UNKNOWN
+        else:
+            held[path] = KIND_READ
+    return held
+
+
 def compact_record(sink: "Path | str") -> None:
     """Rewrite ``sink`` to its last-verb-wins projection, one line per path.
 
@@ -1247,8 +1269,18 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
 
 
 def _read_stream_claims(sink_path: "Path | str") -> tuple[dict[str, TouchEvent], bool, tuple[str, ...]]:
-    """Read one sink's whole family and fold it to its own last-verb-wins
-    claim map, in family (generation, position) order -- see module
+    """Last-verb-wins claim map of one sink's family; the first three
+    elements of ``read_stream_claims_and_held_kind`` minus the kind map."""
+    claims, _held, degraded, reasons = read_stream_claims_and_held_kind(sink_path)
+    return claims, degraded, reasons
+
+
+def read_stream_claims_and_held_kind(
+    sink_path: "Path | str",
+) -> tuple[dict[str, TouchEvent], dict[str, Optional[str]], bool, tuple[str, ...]]:
+    """Read one sink's whole family once and fold it to its own
+    last-verb-wins claim map and its held-kind map (``_held_kind``), in
+    family (generation, position) order -- see module
     docstring's Cross-file ordering section. Never raises: an unreadable
     member or a malformed complete line each set the returned degrade flag
     (and are counted -- see ``_note_degrade``) rather than aborting the
@@ -1278,7 +1310,10 @@ def _read_stream_claims(sink_path: "Path | str") -> tuple[dict[str, TouchEvent],
                 reasons.append(f"malformed:{member.name}")
                 _note_degrade("malformed_line", f"{member}: {exc}")
 
-    return {e.path: e for e in _last_verb_wins(events)} if events else {}, degraded, tuple(reasons)
+    if not events:
+        return {}, {}, degraded, tuple(reasons)
+    claims = {e.path: e for e in _last_verb_wins(events)}
+    return claims, _held_kind(events), degraded, tuple(reasons)
 
 
 def _merge_across_streams(per_stream_claims: list[dict[str, TouchEvent]]) -> dict[str, TouchEvent]:

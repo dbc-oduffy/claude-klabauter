@@ -2412,12 +2412,10 @@ class TestVerifyBaselineRef:
         assert sha is None
         assert reason == coas.DISPOSITION_REF_UNRESOLVABLE
 
-    def test_disposition_ref_never_accepts_the_cross_repo_form(self, tmp_path, monkeypatch):
-        """The row's own proposed_action scopes the same-repo check as
-        unchanged for `disposition_ref` -- `_verify_disposition_ref` must
-        still reject a `<repo>:<sha>` token outright (malformed, not
-        resolved against any sibling), even when a matching registry entry
-        exists."""
+    def test_disposition_ref_qualified_form_resolves_in_the_named_repo(self, tmp_path, monkeypatch):
+        """`_verify_disposition_ref` reads `<repo>:<sha>` against the named
+        repo (the plan-tasks schema admits it); a sha that repo lacks is
+        UNRESOLVABLE, never MALFORMED."""
         root = tmp_path
         _init_repo(root)
         (root / "seed.txt").write_text("seed")
@@ -2428,7 +2426,7 @@ class TestVerifyBaselineRef:
         sha, reason = coas._verify_disposition_ref(root, "klabauter:eb6be84a")
 
         assert sha is None
-        assert reason == coas.DISPOSITION_REF_MALFORMED
+        assert reason == coas.DISPOSITION_REF_UNRESOLVABLE
 
 
 class TestDispositionRefEvidenceInDetermineShipped:

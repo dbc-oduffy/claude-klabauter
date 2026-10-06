@@ -959,6 +959,7 @@ def _bind_worker_stderr_log(stderr_dir) -> None:
     global _WORKER_STDERR_FILE
     if not stderr_dir:
         return
+    fh = None
     try:
         Path(stderr_dir).mkdir(parents=True, exist_ok=True)
         fh = open(
@@ -967,6 +968,8 @@ def _bind_worker_stderr_log(stderr_dir) -> None:
         )
         faulthandler.enable(file=fh, all_threads=True)
     except Exception:  # noqa: BLE001 -- diagnostics must never stop a worker booting
+        if fh is not None:
+            fh.close()
         return
     _WORKER_STDERR_FILE = fh
     sys.stderr = fh

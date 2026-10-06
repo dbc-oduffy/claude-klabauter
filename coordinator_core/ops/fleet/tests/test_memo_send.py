@@ -205,9 +205,6 @@ class TestValidateSendParams:
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_omitted_dry_run_defaults_false(self):
-        assert _validate_send_params({"topic": "a-topic"}) == (False, "a-topic")
-
     def test_unknown_param_rejected(self):
         result = _validate_send_params({"dry_run": True, "topic": "x", "body": "nope"})
         assert isinstance(result, dict)

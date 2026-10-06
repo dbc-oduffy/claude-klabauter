@@ -507,8 +507,11 @@ def _spill_blocks_to_companion(
     if resolved is None:
         return None
     companion_path, rel_path = resolved
-    with open(companion_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(injected_blocks)
+    try:
+        with open(companion_path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(injected_blocks)
+    except OSError:
+        return None
     return rel_path
 
 

@@ -1699,6 +1699,27 @@ def project_self_scope(lines: List[str]) -> Set[str]:
     return {path for path, verb in last_verb.items() if verb == "T"}
 
 
+def project_self_write_scope(sink_path: "Path | str") -> Tuple[Set[str], bool]:
+    """Self-facing projection over one claimant's touch record that drops
+    read-only holds: the live ``T`` paths (last verb T) whose held kind
+    (``touch_record.read_stream_claims_and_held_kind``) is not ``r``.
+    A write-kind or kind-less hold stays; a path held only by ``kind:r``
+    touches leaves. Returns ``(paths, degraded)``; ``degraded`` is the
+    family read's flag, and callers treat it as they treat
+    ``_read_touch_record_as_legacy_lines``'s -- never as a clean narrowing.
+
+    Trap: only scope-candidate selection may use this. Release and
+    restate paths stay kind-blind so a release still reaches a read hold.
+    """
+    claims, held, degraded, _reasons = touch_record.read_stream_claims_and_held_kind(sink_path)
+    paths = {
+        path
+        for path, event in claims.items()
+        if event.verb == touch_record.VERB_TOUCH and held.get(path) != touch_record.KIND_READ
+    }
+    return paths, degraded
+
+
 def _collect_peer_path_mtimes(
     lines: List[str], root: Optional[str]
 ) -> Dict[str, float]:
@@ -3983,7 +4004,8 @@ def compute_scope(
     # mtime-dirty fallback partially compensates.
     touched_file = Path(sdir) / _TOUCH_RECORD_FILENAME
     raw_touch_lines, self_read_degraded = _read_touch_record_as_legacy_lines(touched_file)
-    if self_read_degraded:
+    self_claimed_paths, self_write_degraded = project_self_write_scope(touched_file)
+    if self_read_degraded or self_write_degraded:
         print(
             f"cs_compute_scope: degraded read of {touched_file} "
             f"(non-fatal, scope may be incomplete): see "
@@ -3991,14 +4013,14 @@ def compute_scope(
             file=sys.stderr,
         )
 
-    # SELF-facing projection (P3): a path whose last event is R is
-    # RELEASED here — `project_self_scope` never applies the peer-facing
+    # SELF-facing write projection (P3): a path whose last event is R is
+    # RELEASED here, and a read-only hold is dropped —
+    # `project_self_write_scope` never applies the peer-facing
     # mtime re-claim (that arm must not widen `my_scope`). For a bare-line
     # legacy corpus (no writer emits an event line yet, so every line
     # parses to T at unknown time via the fail-safe) this reproduces the
     # pre-existing "every non-empty line is a candidate" behaviour exactly,
     # one candidate per distinct path, order-preserving.
-    self_claimed_paths = project_self_scope(raw_touch_lines)
     touched_set: List[str] = []
     for line in raw_touch_lines:
         _, _, path = parse_touch_event(line)

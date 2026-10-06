@@ -132,6 +132,36 @@ CLOSURE_CLOSING_BRANCHES: frozenset[str] = frozenset({"fix", "refute-close"})
 ABSENT_SENTINELS_KEY: str = "absent_sentinels"
 
 
+def encode_undo_paths(paths: list[str]) -> str:
+    """Render `paths` as the `grind-row undo --paths-urlenc` token: percent-encoded
+    JSON `{"paths": [...]}` in which `'` is encoded too, so it is one shell-safe
+    single-quoted token."""
+    from urllib.parse import quote
+
+    return quote(json.dumps({"paths": list(paths)}, sort_keys=True), safe="")
+
+
+def decode_undo_paths(token: str) -> list[str]:
+    """Inverse of `encode_undo_paths`; returns `sorted(set(paths))`. Raises
+    `ValueError` on malformed JSON, a missing or unknown key, an empty list, or an
+    entry that is not a non-empty string."""
+    from urllib.parse import unquote
+
+    try:
+        obj = json.loads(unquote(token))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"undo paths token is not valid JSON: {exc}") from exc
+    if not isinstance(obj, dict) or set(obj) != {"paths"}:
+        raise ValueError("undo paths token must be an object with exactly the key 'paths'")
+    paths = obj["paths"]
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("undo paths token 'paths' must be a non-empty list")
+    for entry in paths:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError("undo paths entries must be non-empty strings")
+    return sorted(set(paths))
+
+
 def _vocab_out_dir(out_dir: str | os.PathLike[str] | None = None) -> Path:
     if out_dir is not None:
         return Path(out_dir).resolve()

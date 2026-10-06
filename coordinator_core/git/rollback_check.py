@@ -104,6 +104,39 @@ _TREE_CACHE_MAX_ENTRIES = 4096
 _TREE_CACHE: "Dict[Tuple[str, str], Optional[Dict[str, Tuple[int, str]]]]" = {}
 
 
+def moved_deletions(
+    assembled: "Dict[str, object]",
+    head_spine: "Dict[str, Dict[str, Tuple[int, str]]]",
+    absent: object,
+) -> "set":
+    """Deleted paths in one commit that are moves, not rollbacks.
+
+    ``assembled`` maps path -> ``(mode, blob_sha)`` or the caller's ``absent``
+    sentinel; ``head_spine`` maps dir -> {name: (mode, sha)} for HEAD. A
+    deletion is a move when its HEAD blob lands at another path in the same
+    commit, or when a path with the same file name is NEW in this commit
+    (rename-with-edit: queue-row archival moves the row and stamps it closed).
+    Both commit routes must use this one rule; two copies drifted once.
+    """
+    added_blobs = {v[1] for v in assembled.values() if v is not absent}
+    new_names = set()
+    for path, val in assembled.items():
+        if val is absent:
+            continue
+        d, _, name = path.rpartition("/")
+        if head_spine.get(d, {}).get(name) is None:
+            new_names.add(name)
+    moved = set()
+    for path, val in assembled.items():
+        if val is not absent:
+            continue
+        d, _, name = path.rpartition("/")
+        entry = head_spine.get(d, {}).get(name)
+        if (entry is not None and entry[1] in added_blobs) or name in new_names:
+            moved.add(path)
+    return moved
+
+
 class RollbackFinding(NamedTuple):
     path: str
     depth: int

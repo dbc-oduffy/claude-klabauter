@@ -101,7 +101,7 @@ def _row_id(row: Mapping[str, str]) -> str:
 
 
 def _row_plan(row: Mapping[str, str]) -> str:
-    return _strip_backtick(row["spec path"])
+    return _strip_backtick(row.get("spec path", ""))
 
 
 def _row_writes(row: Mapping[str, str]) -> List[str]:

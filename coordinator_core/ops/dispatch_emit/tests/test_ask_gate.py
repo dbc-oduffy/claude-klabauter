@@ -43,8 +43,14 @@ def _put(repo, tshirt="S", route="spec-dispatch", accepted=None, mode="pm", **ov
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_room_route_halts_as_room_with_route(repo):
-    _put(repo, tshirt="XL", route="shape", accepted={"pm_quote": "y"})
+def test_pm_decision_with_null_xl_exit_halts_as_room_with_route(repo):
+    _put(repo, tshirt="XL", route="pm-decision", accepted={"pm_quote": "y"}, xl_exit=None)
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "pm-decision"
+
+
+def test_accepted_xl_shape_halts_as_room(repo):
+    _put(repo, tshirt="XL", route="shape", accepted=ACCEPTED)
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "shape"
 
@@ -87,7 +93,6 @@ def test_accepted_m_returns_arm_and_baton(repo):
     assert v.to_json()["baton"]["id"] == v.baton["id"]
 
 
-
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 def test_accepted_multi_session_xl_baton_carries_the_plan_route(repo):
@@ -120,7 +125,7 @@ def _composed_objects(op: str) -> list:
     return [
         [pair.split(":")[0].strip() for pair in body.split(",")]
         for body in re.findall(r"\{ ([^{}]*?) \}", expr)
-        if ("run_id" in body or "sizing_path" in body) and not body.startswith("commit_sizing_path")
+        if "run_id" in body or "sizing_path" in body
     ]
 
 
@@ -180,3 +185,9 @@ def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
 
     reply = _handler(params, repo_root=repo)
     assert set(reply) == {"error"} and "dispatch.ask_gate" in reply["error"]
+
+
+def test_baton_given_at_xs_is_refused_naming_the_arm(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
+    v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/x.md")
+    assert v.arm is None and v.halt["kind"] == "refusal" and "mints no baton" in v.halt["reason"]

@@ -244,7 +244,7 @@ def _containment_check(memo: str, cwd: str | None = None) -> tuple[Path, Path]:
     toplevel = _show_toplevel(cwd=str(m.parent))
     if not toplevel:
         raise ValueError(
-            f"memo.transition: memo outside containment (must be under a git repo "
+            f"memo.transition: --memo outside containment (must be under a git repo "
             f"cross-repo/ or state/ subtree): {memo!r} (resolved {m}) — could not "
             f"determine git root"
         )
@@ -255,7 +255,7 @@ def _containment_check(memo: str, cwd: str | None = None) -> tuple[Path, Path]:
             return m, git_root
 
     raise ValueError(
-        f"memo.transition: memo outside containment (must be under a git repo "
+        f"memo.transition: --memo outside containment (must be under a git repo "
         f"cross-repo/ or state/ subtree): resolved {m} is not under "
         f"{git_root}/cross-repo or {git_root}/state"
     )
@@ -698,10 +698,10 @@ def _claim_stamp_fields(fm_text: str, session_id: str, at: str) -> str:
 def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
     if not session_id or not session_id.strip():
         return _err(
-            "claim requires a non-empty session_id (empty picked_up_by would corrupt the claim gate)"
+            "claim requires a non-empty --session-id (empty picked_up_by would corrupt the claim gate)"
         )
     if not at or not at.strip():
-        return _err("claim requires a non-empty at (ISO timestamp)")
+        return _err("claim requires --at <ISO timestamp>")
 
     # Containment gate MUST fire before any frontmatter-primitive call (lesson: externally-triggered-ops-must-contain).
     # Wrap in try/except so containment ValueError returns _err()
@@ -714,7 +714,7 @@ def _claim(memo: str, session_id: str, at: str, cwd: str | None = None) -> dict:
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"claim: containment check timed out for memo {memo!r}")
+        return _err(f"claim: containment check timed out for --memo {memo!r}")
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
@@ -814,12 +814,12 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
 
     if decision_note and ("\n" in decision_note or "\r" in decision_note):
         return _err(
-            f"{verb}: decision_note must be single-line (no embedded \\n or \\r) — "
+            f"{verb}: --decision-note must be single-line (no embedded \\n or \\r) — "
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
     if actioned_note and ("\n" in actioned_note or "\r" in actioned_note):
         return _err(
-            f"{verb}: actioned_note must be single-line (no embedded \\n or \\r) — "
+            f"{verb}: --actioned-note must be single-line (no embedded \\n or \\r) — "
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
 
@@ -837,22 +837,22 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
 
     if supersede_note and ("\n" in supersede_note or "\r" in supersede_note):
         return _err(
-            f"{verb}: supersede_note must be single-line (no embedded \\n or \\r) — "
+            f"{verb}: --supersede-note must be single-line (no embedded \\n or \\r) — "
             "serialize_yaml_scalar does not support multi-line scalar values"
         )
 
     if supersede_note or supersede_realized_by:
         if decision or actioned_note or superseded_by:
             return _err(
-                f"{verb}: supersede_note/supersede_realized_by are mutually "
-                "exclusive with decision/actioned_note/superseded_by — "
+                f"{verb}: --supersede-note/--supersede-realized-by are mutually "
+                "exclusive with --decision/--actioned-note/--superseded-by — "
                 "supersede corrects an EXISTING disposition, it does not set a new one"
             )
         if not supersede_note:
-            return _err(f"{verb}: supersede_realized_by requires supersede_note")
+            return _err(f"{verb}: --supersede-realized-by requires --supersede-note")
         if not supersede_realized_by:
             return _err(
-                f"{verb}: supersede_note requires supersede_realized_by "
+                f"{verb}: --supersede-note requires --supersede-realized-by "
                 "(a pointer to what realized the reversal: a commit SHA, a memo, or a baton)"
             )
         return None
@@ -860,28 +860,28 @@ def _validate_action_disposition(params: dict, verb: str = "action") -> dict | N
     if superseded_by:
         if decision or actioned_note:
             return _err(
-                f"{verb}: superseded_by and decision/actioned_note are "
+                f"{verb}: --superseded-by and --decision/--actioned-note are "
                 "mutually exclusive"
             )
         return None
 
     if decision and actioned_note:
-        return _err(f"{verb}: decision and actioned_note are mutually exclusive")
+        return _err(f"{verb}: --decision and --actioned-note are mutually exclusive")
     if not decision and not actioned_note:
         return _err(
-            f"{verb} requires either decision (accepted|partial|declined) "
-            "[decision_note] [realized_by] or actioned_note"
+            f"{verb} requires either --decision <accepted|partial|declined> "
+            "[--decision-note <text>] [--realized-by <ptr>] or --actioned-note <text>"
         )
 
     if decision:
         valid_decisions = ("accepted", "partial", "declined")
         if decision not in valid_decisions:
             return _err(
-                f"{verb}: decision must be one of: {', '.join(valid_decisions)} "
+                f"{verb}: --decision must be one of: {', '.join(valid_decisions)} "
                 f'(got "{decision}")'
             )
         if decision in ("accepted", "partial") and not realized_by:
-            return _err(f"{verb}: realized_by is required when decision is {decision}")
+            return _err(f"{verb}: --realized-by is required when --decision is {decision}")
 
     return None
 
@@ -1069,7 +1069,7 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
         same_decision = params.get("decision") and params.get("decision") == read_fm_field_unquoted(
             fm_text, "decision"
         )
-        route = "; to amend the note or realized_by only, pass correct_realization" if same_decision else ""
+        route = "; to amend the note or realized_by only, pass --correct-realization" if same_decision else ""
         raise MutateAbort(f"memo is already actioned with a different disposition — cannot re-action{route}")
 
     new_decision = params.get("decision")
@@ -1078,8 +1078,8 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
     if not new_decision:
         if cur_decision is not None or not params.get("actioned_note"):
             raise MutateAbort(
-                f"{verb}: correct_realization requires decision matching the on-disk "
-                "decision value on a decision-shape memo, or actioned_note on an "
+                f"{verb}: --correct-realization requires --decision matching the on-disk "
+                "decision value on a decision-shape memo, or --actioned-note on an "
                 "actioned_note-shape memo — the disposition shape cannot change"
             )
         return _apply_note_correction(fm_text, params)
@@ -1218,7 +1218,7 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"action: containment check timed out for memo {memo!r}")
+        return _err(f"action: containment check timed out for --memo {memo!r}")
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
@@ -1260,7 +1260,7 @@ def _action(memo: str, params: dict, cwd: str | None = None) -> dict:
         if params.get("supersede_note"):
             if status not in ("actioned", "superseded"):
                 raise MutateAbort(
-                    "action: supersede_note requires the memo to already be actioned "
+                    "action: --supersede-note requires the memo to already be actioned "
                     "or superseded — there is no disposition yet to supersede"
                 )
             corrected = _handle_supersede(split.fm_text, params)
@@ -1370,7 +1370,7 @@ def _release(memo: str, cwd: str | None = None) -> dict:
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"release: containment check timed out for memo {memo!r}")
+        return _err(f"release: containment check timed out for --memo {memo!r}")
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
@@ -1454,7 +1454,7 @@ def _lift(memo: str, cwd: str | None = None) -> dict:
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"lift: containment check timed out for memo {memo!r}")
+        return _err(f"lift: containment check timed out for --memo {memo!r}")
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
@@ -1532,10 +1532,10 @@ def _close(memo: str, at: str, cwd: str | None = None) -> dict:
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"close: containment check timed out for memo {memo!r}")
+        return _err(f"close: containment check timed out for --memo {memo!r}")
 
     if not at or not at.strip():
-        return _err("close requires a non-empty at (ISO timestamp)")
+        return _err("close requires --at <ISO timestamp>")
     _at = at.strip()
 
     if not memo_path.is_file():
@@ -1681,17 +1681,17 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
 
     if not session_id or not session_id.strip():
         return _err(
-            "resolve requires a non-empty session_id (empty picked_up_by would corrupt the claim gate)"
+            "resolve requires a non-empty --session-id (empty picked_up_by would corrupt the claim gate)"
         )
     if not at or not at.strip():
-        return _err("resolve requires a non-empty at (ISO timestamp)")
+        return _err("resolve requires --at <ISO timestamp>")
 
     try:
         memo_path, git_root = _containment_check(memo, cwd)
     except ValueError as exc:
         return _err(str(exc))
     except subprocess.TimeoutExpired:
-        return _err(f"resolve: containment check timed out for memo {memo!r}")
+        return _err(f"resolve: containment check timed out for --memo {memo!r}")
 
     if not memo_path.is_file():
         return _err(f"memo not found: {memo_path}")
@@ -1822,7 +1822,7 @@ async def _handler(
         memo (str) — path to the target memo file.
 
     Verb-specific required params:
-        claim  : session_id (str, required, non-empty), optional at (str, ISO timestamp; defaults to now).
+        claim  : session_id (str, required, non-empty), at (str, ISO timestamp).
                  Accepts a memo at status "open" OR "delivered" (see below).
         action : exactly one of:
                    decision (str: accepted|partial|declined) + optional decision_note, realized_by
@@ -1833,7 +1833,7 @@ async def _handler(
                  plus optional at (str, ISO timestamp) — the closure instant stamped
                  into actioned_at, defaulting to now when absent (_closure_stamp).
         release: (no additional params)
-        resolve: session_id (str, required, non-empty), optional at (defaults to now), plus the
+        resolve: session_id (str, required, non-empty), at (str, ISO timestamp), plus the
                  same disposition params as action — atomic open→actioned, no intermediate
                  in_progress write (native-only, no JS mirror — see module docstring; C1 of
                  docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md).
@@ -1896,12 +1896,10 @@ async def _handler(
     memo = (params.get("memo") or "").strip()
     session_id = (params.get("session_id") or "").strip()
     at = (params.get("at") or "").strip()
-    if verb in ("claim", "resolve", "claim-action") and not at:
-        at = _closure_stamp(params)
 
     missing = [name for name, val in (("verb", verb), ("memo", memo)) if not val]
     if verb in ("claim", "resolve", "claim-action"):
-        missing += [n for n, v in (("session_id", session_id),) if not v]
+        missing += [n for n, v in (("session_id", session_id), ("at", at)) if not v]
     elif verb == "close" and not at:
         missing.append("at")
     if missing:

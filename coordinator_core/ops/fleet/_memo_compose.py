@@ -153,9 +153,7 @@ def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
 
 
 def resolve_sender_id(from_id: Optional[str], root: Optional[str] = None) -> str:
-    if not from_id:
-        return _resolve_engine_sender_id(root)
-    raw = from_id
+    raw = from_id or _resolve_engine_sender_id(root)
     try:
         return _canonical_receiver_id(raw)
     except (RegistryReadError, AmbiguousReceiverError) as exc:

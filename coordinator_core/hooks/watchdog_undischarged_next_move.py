@@ -193,6 +193,7 @@ from coordinator_core.hooks._envelope import allow_advisory, deny, no_advisory
 from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
     _resolve_posture as _resolve_posture_for_cwd,
 )
+from coordinator_core.hooks.support.touch_record import _touch_record_jsonl_paths
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session import machinery_paths
@@ -474,33 +475,6 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
         os.remove(path)
     except OSError:
         pass
-
-
-def _touch_record_jsonl_paths(session_dir: str) -> list:
-    paths = []
-    try:
-        with open(
-            os.path.join(session_dir, "touch-record.jsonl"),
-            "r",
-            encoding="utf-8",
-            errors="replace",
-        ) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                rel = row.get("path")
-                if isinstance(rel, str) and rel:
-                    paths.append(rel)
-    except OSError:
-        pass
-    return paths
 
 
 def _touched_txt_paths(session_dir: str) -> list:

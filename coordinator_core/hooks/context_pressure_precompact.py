@@ -84,6 +84,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
@@ -107,10 +108,12 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=2.0,
             **no_console_creationflags(),
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         return ""
     if proc.returncode != 0:
         return ""
@@ -314,9 +317,7 @@ def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
 
         capped = lines[:_TOTAL_LINE_CAP]
         state_path = os.path.join(tmpdir, f"compaction-state-{session_id}.md")
-        with open(state_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(capped))
-            fh.write("\n")
+        atomic_write_bytes(state_path, ("\n".join(capped) + "\n").encode("utf-8"))
     except Exception:
         pass
 

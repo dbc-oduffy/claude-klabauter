@@ -142,6 +142,7 @@ from __future__ import annotations
 GENERATES = []
 
 import json
+from coordinator_core.atomic_replace import atomic_write_bytes
 import os
 import sys
 import tempfile
@@ -405,19 +406,21 @@ def run_self_probe(config_dir: Optional[Path] = None) -> str:
             marker.parent.mkdir(parents=True, exist_ok=True)
             since = date.today()
             expires = since + timedelta(days=_REARM_EXPIRY_DAYS)
-            marker.write_text(
-                # (requires a parseable `Expires: YYYY-MM-DD` line) — a marker
-                # MALFORMED branch (see this dispatch's report; a `#`-comment-
-                f"Since: {since.isoformat()}\n"
-                f"Expires: {expires.isoformat()}\n"
-                "Reason: guard_hook_generation_self_probe.py detected an "
-                f"empty/unresolvable {COORDINATOR_CONTENT_ROOT_ENV_KEY} at "
-                "SessionStart.\n"
-                "Disarm condition: confirm COORDINATOR_CONTENT_ROOT resolves "
-                "to a real, existing coordinator content root on this "
-                "machine (re-run the installer or /coordinator:setup), then "
-                "delete this marker.\n",
-                encoding="utf-8", newline="\n",
+            atomic_write_bytes(
+                marker,
+                (
+                    # (requires a parseable `Expires: YYYY-MM-DD` line) — a marker
+                    # MALFORMED branch (see this dispatch's report; a `#`-comment-
+                    f"Since: {since.isoformat()}\n"
+                    f"Expires: {expires.isoformat()}\n"
+                    "Reason: guard_hook_generation_self_probe.py detected an "
+                    f"empty/unresolvable {COORDINATOR_CONTENT_ROOT_ENV_KEY} at "
+                    "SessionStart.\n"
+                    "Disarm condition: confirm COORDINATOR_CONTENT_ROOT resolves "
+                    "to a real, existing coordinator content root on this "
+                    "machine (re-run the installer or /coordinator:setup), then "
+                    "delete this marker.\n"
+                ).encode("utf-8"),
             )
         except OSError:
             print(

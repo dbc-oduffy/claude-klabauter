@@ -2271,6 +2271,83 @@ def test_ownership_leg_orphan_denial_stays_under_prose_cap(monkeypatch):
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
+def _orphan_scope_reason(paths, *, peer=None):
+    """The real multi-path reason shape ``assert_paths_in_session_scope``
+    writes: lead fragment for the first denied path, then the enumeration."""
+    cls = _scope_report._CLASSIFICATION_ORPHAN
+    entries = ["%r (%s)" % (p, cls) for p in paths]
+    if peer:
+        entries.insert(1, "%r (claimed by live session other)" % peer)
+    return "path outside session sess1 scope: %r (%s); denied paths (%d): %s" % (
+        paths[0],
+        cls,
+        len(entries),
+        ", ".join(entries),
+    )
+
+
+def test_ownership_leg_orphan_denial_names_the_orphan_path(monkeypatch):
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- orphan.py',
+        scope_result=(False, _orphan_scope_reason(["orphan.py"])),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no session claims orphan.py." in reason
+    assert "SC-DR-023" in reason
+
+
+def test_ownership_leg_orphan_denial_names_only_orphans_in_a_mixed_pathspec(monkeypatch):
+    reason_text = _orphan_scope_reason(["a/orphan1.py", "b/orphan2.py"], peer="held.py")
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- a/orphan1.py held.py b/orphan2.py',
+        scope_result=(False, reason_text),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "a/orphan1.py, b/orphan2.py" in reason
+    assert "held.py" not in reason
+
+
+def test_ownership_leg_orphan_denial_with_many_long_paths_stays_under_cap(monkeypatch):
+    from coordinator_core.bash_guards._message_size import (
+        MESSAGE_PROSE_CAP_BYTES,
+        measure_envelope,
+    )
+
+    paths = ["coordinator_core/some/deep/package/module_%d_with_long_name.py" % i for i in range(6)]
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- ' + " ".join(paths),
+        scope_result=(False, _orphan_scope_reason(paths)),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "more)" in reason
+    assert "no holder is not evidence no one wrote it" in reason
+    measurement = measure_envelope({"hookSpecificOutput": {"permissionDecisionReason": reason}})
+    assert not measurement.over_cap
+    assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["\u65e5\u672c\u8a9e" * 20 + ".py", "x/" + "\u00e9" * 80],
+    ids=["cjk", "latin1-accents"],
+)
+def test_ownership_leg_orphan_denial_with_multibyte_path_stays_under_cap(monkeypatch, path):
+    from coordinator_core.bash_guards._message_size import measure_envelope
+
+    result = _gca_denies(
+        monkeypatch,
+        'git commit -m "msg" -- ' + path,
+        scope_result=(False, _orphan_scope_reason([path])),
+    )
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no holder is not evidence no one wrote it" in reason
+    measurement = measure_envelope({"hookSpecificOutput": {"permissionDecisionReason": reason}})
+    assert not measurement.over_cap
+
+
 def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
     """REVERSED VERDICT, and the reversal is the fix: an indeterminate call no
     longer denies here.

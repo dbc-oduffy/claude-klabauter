@@ -78,9 +78,9 @@ def _fire(tmp_path):
 
 
 def _stub_mint(monkeypatch, calls=None):
-    def mint(sizing_rel, repo_root):
+    def mint(sizing_rel, repo_root, **kw):
         if calls is not None:
-            calls.append(sizing_rel)
+            calls.append((sizing_rel, kw))
         return {"id": "hnd-1", "path": BATON_REL, "title": "Minted baton", "created": True}
 
     monkeypatch.setattr(ewf, "_load_mint", lambda: mint)
@@ -100,11 +100,11 @@ def test_bare_sizing_names_every_failing_field_once(tmp_path, capsys):
         assert field in err
 
 
-def test_route_shape_with_missing_interaction_mode_names_both(tmp_path, capsys):
+def test_s_shape_with_missing_interaction_mode_names_tshirt_and_mode(tmp_path, capsys):
     _setup(tmp_path, _sizing("S", route="shape", interaction_mode=None), baton=None)
     assert _fire(tmp_path) == ewf.EXIT_REFUSED
     err = capsys.readouterr().err
-    assert "route" in err and "interaction_mode" in err
+    assert "estimate.tshirt" in err and "interaction_mode" in err
 
 
 def test_fire_field_and_mint_field_failures_refuse_together(tmp_path, capsys, monkeypatch):
@@ -234,3 +234,62 @@ def test_emitted_baton_is_complete_and_schema_valid(tmp_path, monkeypatch):
     assert "1. Read the plan at docs/plans/p.md." in text
     assert "Verify the exit criterion: it works" in text
     assert "3-7 numbered steps" not in text
+
+
+EXISTING = (
+    "---\nhandoff_id: hnd-existing\ntitle: Existing baton\nstatus: open\n"
+    "deliverable_id: dlv-aaa\n---\n\n# body\n"
+)
+
+
+def _fire_with(tmp_path, *extra):
+    return ewf.main([
+        "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
+        "--plugin-root", str(_plugin(tmp_path)), "--from-sizing", SIZING_REL,
+        "--live-engine-tree", *extra,
+    ])
+
+
+def test_baton_and_deliverable_id_are_forwarded_to_the_mint(tmp_path, monkeypatch):
+    calls = []
+    _stub_mint(monkeypatch, calls)
+    _setup(tmp_path, _sizing("M"))
+    assert _fire_with(tmp_path, "--baton", BATON_REL, "--deliverable-id", "dlv-aaa") == ewf.EXIT_OK
+    assert calls == [(SIZING_REL, {"baton": BATON_REL, "deliverable_id": "dlv-aaa"})]
+
+
+@pytest.mark.parametrize("flag,value", [("--baton", BATON_REL), ("--deliverable-id", "dlv-aaa")])
+def test_baton_flags_without_from_sizing_are_refused(tmp_path, capsys, flag, value):
+    rc = ewf.main([
+        "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
+        flag, value,
+    ])
+    assert rc == ewf.EXIT_REFUSED
+    assert "--from-sizing" in capsys.readouterr().err
+
+
+def test_null_acceptance_names_both_accept_forms(tmp_path):
+    sizing = _sizing("M")
+    sizing["exit_criterion"]["accepted"] = None
+    msg = " ".join(ewf._collect_sizing_refusals(sizing))
+    assert "--pm-quote" in msg and "--apm-ruling" in msg
+
+
+def test_existing_baton_is_fired_without_minting_a_new_one(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path, _sizing("M"), baton=EXISTING)
+    before = sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir())
+    assert _fire_with(tmp_path, "--baton", BATON_REL, "--deliverable-id", "dlv-aaa") == ewf.EXIT_OK
+    assert _bound(tmp_path)["id"] == "hnd-existing"
+    assert sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir()) == before
+    sz = yaml.safe_load((tmp_path / SIZING_REL).read_text(encoding="utf-8"))
+    assert sz["baton"] == BATON_REL and sz["deliverable_id"] == "dlv-aaa"
+
+
+def test_deliverable_mismatch_refuses_naming_both_ids(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path, _sizing("M"), baton=EXISTING)
+    assert _fire_with(tmp_path, "--baton", BATON_REL, "--deliverable-id", "dlv-zzz") == ewf.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert "dlv-aaa" in err and "dlv-zzz" in err
+    assert not (tmp_path / "trail" / "fire-0-1.mjs").exists()

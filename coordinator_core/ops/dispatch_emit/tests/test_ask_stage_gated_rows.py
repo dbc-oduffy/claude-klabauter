@@ -11,6 +11,7 @@ PLAN_REL = "docs/plans/2026-10-03-gated.md"
 
 def _plan(gate_block: str, extra_dep: bool = False) -> str:
     dep = "  depends_on:\n    - chunk: G1\n" if extra_dep else ""
+    default_dep = "  depends_on:\n    - chunk: U1\n"
     return f"""---
 title: fixture
 ---
@@ -38,7 +39,7 @@ title: fixture
   surface: pkg/t.py
   writes:
     - pkg/t.py
-{dep or "  depends_on:\n    - chunk: U1\n"}```
+{dep or default_dep}```
 """
 
 

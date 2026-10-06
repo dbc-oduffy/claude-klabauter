@@ -113,6 +113,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.session.core import init as _session_init, sessions_dir
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 
@@ -315,9 +316,7 @@ def write_session_start_record(
         if base:
             sdir = _ensure_initialised_session_dir(session_id, base, resolved_cwd)
             if sdir is not None:
-                (sdir / _RECORD_FILENAME).write_text(
-                    resolved_cwd, encoding="utf-8", newline="\n"
-                )
+                atomic_write_bytes(sdir / _RECORD_FILENAME, resolved_cwd.encode("utf-8"))
                 in_repo_ok = True
     except Exception:
         # Fail open, unconditionally -- see module docstring "FAIL OPEN". A record that

@@ -30,6 +30,9 @@ Negative-spec:
   - Does NOT compare head_sha: peers commit to the shared branch mid-run.
     Only the branch NAME is checked (detached, unreadable, or differing from
     the marker's ``expected_branch`` refuses before any write).
+  - Carries exactly one undeclared file: the ``state/sizings/`` sizing the
+    plan (or minted spine) cites as ``sizing_object:``, which the ask arm
+    rewrites mid-run. Never for an anchor-only run, never outside that dir.
   - Does NOT commit a dirty file no chunk declares: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine.
   - Does NOT write a receipt when there is nothing to commit.
@@ -70,6 +73,7 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -158,6 +162,31 @@ def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
             return fh.read()
     except OSError:
         return None
+
+
+def _cited_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[str]:
+    """Worktree-relative path of the sizing the run's plan or minted spine cites
+    as ``sizing_object:``, when it is an existing file under ``state/sizings/``.
+
+    The warp ask arm rewrites that sizing during the run (``status: routed``, the
+    ``plan:`` link) and no chunk declares it, so the commit carries it by this
+    citation. In-process reads only: no spawn.
+    """
+    if not plan_path:
+        return None
+    text = _read_rel(worktree_root, plan_path)
+    if text is None:
+        return None
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+    split = split_frontmatter(text)
+    cited = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    if not cited:
+        return None
+    guarded = contained_path(worktree_root / cited, [Path(home_dir(str(worktree_root), "sizings"))])
+    if guarded is None or not guarded.is_file():
+        return None
+    return guarded.relative_to(worktree_root.resolve()).as_posix()
 
 
 def _spine_row_ids(plan_text: str) -> Optional[set]:
@@ -1144,6 +1173,11 @@ def _terminal_commit(
 
     if not all_paths:
         return {"committed": False, "nothing_to_commit": True}
+
+    if not anchor_only:
+        cited_sizing = _cited_sizing(worktree_root, request.plan_path)
+        if cited_sizing is not None and cited_sizing not in all_paths:
+            all_paths.append(cited_sizing)
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]

@@ -3293,9 +3293,10 @@ def _commit_scoped_private_index(
     # not-ok GitResult; nothing is staged on the shared index, so there is nothing to unstage.
     if detect_rollback and old_head is not None:
         declared_set = {d.replace("\\", "/") for d in declared_reverts}
+        moved = rollback_check.moved_deletions(assembled, head_spine or {}, _ABSENT)
         candidates: Dict[str, object] = {}
         for p, val in assembled.items():
-            if p in declared_set:
+            if p in declared_set or p in moved:
                 continue
             candidates[p] = rollback_check.ABSENT if val is _ABSENT else val[1]
         if candidates:
@@ -5821,6 +5822,10 @@ def push_streamed(
     finally:
         if proc.poll() is None:
             proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         returncode = proc.wait()
         try:
             if proc.stderr is not None:

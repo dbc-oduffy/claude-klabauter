@@ -250,3 +250,30 @@ def test_emit_leg_script_resolves_on_flat_mirror(monkeypatch, tmp_path: Path):
         apply_mod._dispatch_emit_dispatch_workflow(["--plan", PLAN_PATH], tmp_path)
 
     assert captured["argv"][1] == str(flat / "bin" / "emit-dispatch-workflow.py")
+
+
+def _sizing_repo(tmp_path: Path, accepted: str, mode: str = "ceo") -> None:
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "p.md").write_text(
+        "---\nsizing_object: s.yaml\n---\nbody\n", encoding="utf-8"
+    )
+    (tmp_path / "s.yaml").write_text(
+        f"interaction_mode: {mode}\nexit_criterion:\n  accepted:\n{accepted}", encoding="utf-8"
+    )
+
+
+_APM = "    source: apm\n    apm_ruling: ruled\n    mode: ceo\n"
+
+
+def test_accepted_sizing_path_accepts_apm_acceptance_in_ceo_mode(tmp_path: Path):
+    from coordinator_core.execute_plan_assemble.pre_execution import _accepted_sizing_path
+
+    _sizing_repo(tmp_path, _APM)
+    assert _accepted_sizing_path("docs/plans/p.md", tmp_path) == "s.yaml"
+
+
+def test_accepted_sizing_path_refuses_apm_acceptance_in_hands_on(tmp_path: Path):
+    from coordinator_core.execute_plan_assemble.pre_execution import _accepted_sizing_path
+
+    _sizing_repo(tmp_path, _APM, mode="hands-on")
+    assert _accepted_sizing_path("docs/plans/p.md", tmp_path) is None

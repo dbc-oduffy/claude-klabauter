@@ -64,7 +64,6 @@ _PARAMS = (
     Field("run_id", "str", required=True),
     Field("plan_path", "str"),
     Field("sizing_path", "str"),
-    Field("commit_sizing_path", "str"),
     Field("writes", "str_list"),
     Field("gated", "list"),
     Field("session_id", "str"),
@@ -128,7 +127,6 @@ def stage(
     writes: Sequence[str] = (),
     gated: Sequence[Mapping] = (),
     session_id: Optional[str] = None,
-    commit_sizing_rel: Optional[str] = None,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`)."""
     root = Path(repo_root)
@@ -221,13 +219,6 @@ def stage(
                 )
             )
 
-    carried_sizing = sizing_rel or commit_sizing_rel
-    if carried_sizing:
-        # The run flips the sizing to routed and links its plan; no row declares it.
-        chunks.append(
-            ChunkCommit(id="sizing", title="sizing record", paths=(carried_sizing,))
-        )
-
     branch = head_branch(root)
     marker = render_marker(
         CommitRequest(
@@ -283,7 +274,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             writes=writes,
             gated=[g for g in (params.get("gated") or []) if isinstance(g, dict)],
             session_id=params.get("session_id") or None,
-            commit_sizing_rel=params.get("commit_sizing_path") or None,
         )
     except (AskStageError, SizingFireRefused) as exc:
         return {"error": str(exc)}

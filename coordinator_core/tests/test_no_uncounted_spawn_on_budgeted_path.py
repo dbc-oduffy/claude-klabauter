@@ -1019,6 +1019,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/strategic_emit.py",
         ("_strategic_emit",),
     ),
+    "test_verdict.record": (
+        "coordinator_core/ops/verdict_record_op.py",
+        ("_record_handler",),
+    ),
     "tracker.advance_status": (
         "coordinator_core/ops/tracker/advance_status.py",
         ("_handler",),

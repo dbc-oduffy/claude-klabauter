@@ -324,6 +324,30 @@ def test_limit(tmp_path):
     assert len(manifest.entries) == 2
 
 
+def test_unselected_names_rows_the_where_and_limit_leave_out(tmp_path):
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "a.yaml", **_base_row(severity="P0"))
+    _write_row(queue_dir / "b.yaml", **_base_row(severity="P1"))
+    _write_row(queue_dir / "c.yaml", **_base_row(severity="P3"))
+    where = [[["severity", "in", ["P0", "P1"]]]]
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, where=where)
+    assert manifest.unselected == ("c",)
+    limited = _select(queue=[queue_dir], repo_root=tmp_path, where=where, limit=1)
+    assert limited.unselected == ("b", "c")
+
+
+def test_unselected_is_outside_the_manifest_digest(tmp_path):
+    queue_dir = tmp_path / "state" / "bug-backlog"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "a.yaml", **_base_row(severity="P0"))
+    _write_row(queue_dir / "b.yaml", **_base_row(severity="P3"))
+    narrow = _select(queue=[queue_dir], repo_root=tmp_path, where=[[["severity", "==", "P0"]]])
+    (queue_dir / "b.yaml").unlink()
+    alone = _select(queue=[queue_dir], repo_root=tmp_path, where=[[["severity", "==", "P0"]]])
+    assert narrow.digest == alone.digest
+
+
 def test_zero_spawn(tmp_path, monkeypatch):
     queue_dir = tmp_path / "state" / "bug-backlog"
     queue_dir.mkdir(parents=True)

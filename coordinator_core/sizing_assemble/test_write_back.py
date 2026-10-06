@@ -71,6 +71,16 @@ def test_write_sets_estimate_route_detents_and_status(repo: Path) -> None:
     assert "# dispatch | plan" in path.read_text(encoding="utf-8")
 
 
+def test_write_joins_a_given_deliverable_id_and_never_rekeys(repo: Path) -> None:
+    path = _sizing(repo)
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    sizing_assemble.write_back(repo, rel, _decision("M"), deliverable_id="dlv-a-111111")
+    assert _load(path)["deliverable_id"] == "dlv-a-111111"
+    with pytest.raises(sizing_assemble.SizingAssembleError):
+        sizing_assemble.write_back(repo, rel, _decision("M"), deliverable_id="dlv-b-222222")
+    assert _load(path)["deliverable_id"] == "dlv-a-111111"
+
+
 def test_write_never_regresses_terminal_status(repo: Path) -> None:
     path = _sizing(repo, _DRAFT.replace("status: draft", "status: shipped"))
     sizing_assemble.write_back(repo, str(path), _decision("M"))
@@ -210,3 +220,30 @@ def test_placeholder_intent_is_replaced_by_computed_intent(repo: Path) -> None:
     path = _sizing(repo, _DRAFT.replace("Ship the thing", "PLACEHOLDER - the PM's ask"))
     sizing_assemble.write_back(repo, str(path), _decision("M"))
     assert _load(path)["intent"] == "Ship the thing"
+
+
+def test_cli_write_persists_default_resolved_mode(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A default-resolved mode is printed AND persisted: the reported
+    `interaction_mode` must be on the record, or a consumer reading the
+    record (emit-roadmap-fire) sees an empty mode."""
+    from coordinator_core.session import fleet_mode as fleet_mode_module
+    from coordinator_core.session import mode_resolution as mode_resolution_module
+
+    monkeypatch.setattr(fleet_mode_module, "read_fleet_mode", lambda: {})
+    monkeypatch.setattr(mode_resolution_module, "read_fleet_mode", lambda: {})
+    path = _sizing(repo)
+    monkeypatch.chdir(repo)
+    rc = sizing_assemble.main(
+        [
+            "--tshirt", "M",
+            "--write", Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
+            "--premise-provenance", "read",
+            "--premise-evidence", "tests/x.py:3",
+        ]
+    )
+    assert rc == sizing_assemble.EXIT_OK
+    # Default is ceo per docs/plans/2026-10-06-warp-one-pass-fire.md (§ Problem: "The default mode becomes ceo").
+    assert "ceo" in capsys.readouterr().out
+    assert _load(path)["interaction_mode"] == "ceo"

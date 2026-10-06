@@ -207,3 +207,98 @@ def test_cli_prints_baton_path_and_refuses_xs(repo, monkeypatch):
     bad = subprocess.run(env_cmd, cwd=str(repo), capture_output=True, text=True, timeout=60,
                          **_NO_CONSOLE)
     assert bad.returncode == 1 and "estimate.tshirt" in bad.stderr
+
+
+def _baton_for(repo: Path, dlv: str | None = _DLV, handoff_id: str | None = "hnd-existing-1") -> str:
+    rel = "state/handoffs/2026-10-01-existing.md"
+    lines = ["---", 'title: "existing"']
+    if handoff_id:
+        lines.append(f"handoff_id: {handoff_id}")
+    if dlv:
+        lines.append(f"deliverable_id: {dlv}")
+    lines += ["---", "", "# existing", ""]
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    return rel
+
+
+def test_baton_kwarg_joins_existing_baton_without_a_new_file(repo):
+    sizing = _put(repo, _sizing_text())
+    rel = _baton_for(repo)
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), baton=rel)
+
+    assert result["created"] is False
+    assert result["id"] == "hnd-existing-1" and result["path"] == rel
+    assert yaml.safe_load(sizing.read_text(encoding="utf-8"))["baton"] == rel
+    assert [p.name for p in (repo / "state" / "handoffs").glob("*.md")] == ["2026-10-01-existing.md"]
+
+
+def test_baton_kwarg_with_differing_deliverable_id_refuses_writing_nothing(repo):
+    sizing = _put(repo, _sizing_text())
+    rel = _baton_for(repo, dlv="dlv-other-999")
+    before = sizing.read_bytes()
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), baton=rel)
+    assert exc.value.fields == ["deliverable_id"]
+    assert sizing.read_bytes() == before
+
+
+def test_baton_kwarg_refuses_when_edge_names_another_baton(repo):
+    sizing = _put(repo, _sizing_text(baton="state/handoffs/2026-10-01-other.md"))
+    (repo / "state" / "handoffs").mkdir(parents=True)
+    (repo / "state" / "handoffs" / "2026-10-01-other.md").write_text("---\n---\n", encoding="utf-8")
+    rel = _baton_for(repo)
+    before = sizing.read_bytes()
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), baton=rel)
+    assert exc.value.fields == ["baton"]
+    assert sizing.read_bytes() == before
+
+
+@pytest.mark.parametrize("missing", ["handoff_id", "deliverable_id"])
+def test_baton_kwarg_refuses_a_baton_lacking_an_id(repo, missing):
+    sizing = _put(repo, _sizing_text())
+    rel = _baton_for(
+        repo, dlv=None if missing == "deliverable_id" else _DLV,
+        handoff_id=None if missing == "handoff_id" else "hnd-existing-1",
+    )
+    before = sizing.read_bytes()
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), baton=rel)
+    assert exc.value.fields == ["baton"]
+    assert sizing.read_bytes() == before
+
+
+def test_deliverable_id_kwarg_is_carried_without_a_mint_call(repo, monkeypatch):
+    text = _sizing_text().replace(f'deliverable_id: "{_DLV}"\n', "")
+    _put(repo, text)
+
+    def _no_mint(*_a, **_k):
+        raise AssertionError("mint-deliverable-id must not run")
+
+    monkeypatch.setattr(_cli, "_mint_deliverable_id", _no_mint)
+    monkeypatch.setattr(_cli, "_mint_deliverable_id_from_title", _no_mint)
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), deliverable_id="dlv-given-1")
+    assert _frontmatter(repo / result["path"])["deliverable_id"] == "dlv-given-1"
+
+
+def test_deliverable_id_kwarg_differing_from_edge_baton_refuses_without_writing(repo):
+    text = _sizing_text(baton="state/handoffs/2026-10-01-existing.md").replace(
+        f'deliverable_id: "{_DLV}"\n', ""
+    )
+    sizing = _put(repo, text)
+    _baton_for(repo)
+    before = sizing.read_bytes()
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), deliverable_id="dlv-given-1")
+    assert exc.value.fields == ["deliverable_id"]
+    assert sizing.read_bytes() == before
+
+
+def test_deliverable_id_kwarg_differing_from_sizing_refuses_without_writing(repo):
+    _put(repo, _sizing_text())
+    with pytest.raises(_cli.SizingMintRefused) as exc:
+        _cli.mint_baton_from_sizing(_SIZING_REL, str(repo), deliverable_id="dlv-given-1")
+    assert exc.value.fields == ["deliverable_id"]
+    assert not (repo / "state" / "handoffs").exists()

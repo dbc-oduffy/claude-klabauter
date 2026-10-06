@@ -282,6 +282,8 @@ def _git(clone: Path, *args) -> subprocess.CompletedProcess:
         ["git", "-C", str(clone)] + [str(a) for a in args],
         capture_output=True,
         check=False,
+        stdin=subprocess.DEVNULL,
+        timeout=60,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 

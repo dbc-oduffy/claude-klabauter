@@ -40,7 +40,7 @@ def _crosses_boundary(old_cwd: str, new_cwd: str, sibling_root: str) -> bool:
 
     def _inside(candidate: str) -> bool:
         norm = _norm(candidate)
-        return norm == root_norm or norm.startswith(root_norm + os.sep)
+        return norm == root_norm or norm.startswith(root_norm.rstrip(os.sep) + os.sep)
 
     return _inside(new_cwd) != _inside(old_cwd)
 

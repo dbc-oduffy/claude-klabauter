@@ -1539,6 +1539,44 @@ def test_c1_ac2_inline_dash_c_open_write_mode_target_bumps(env, monkeypatch):
     assert "hookSpecificOutput" in result
 
 
+def test_payload_relative_write_after_cd_outside_any_repo_bumps(env, monkeypatch):
+    """The payload runs in the `cd`-tracked directory, not the starting cwd:
+    `cd <outside> && python3 - <<EOF open('rel','w')` lands outside any repo."""
+    _set_anchor(monkeypatch, env, "sess-payload-cd-outside")
+    cmd = (
+        f"cd {_posix(env['outside'])} && python3 - <<'EOF'\n"
+        "open('mine.patch','w').write('x')\n"
+        "EOF\n"
+    )
+
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-payload-cd-outside", str(env["anchor"]), {}
+    )
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_payload_relative_write_after_cd_into_repo_from_outside_does_not_bump(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-payload-cd-inrepo")
+    cmd = (
+        f"cd {_posix(env['anchor'])} && python3 - <<'EOF'\n"
+        "open('mine.patch','w').write('x')\n"
+        "EOF\n"
+    )
+
+    result = guard.check_bump_outside_repo_write(
+        cmd, "sess-payload-cd-inrepo", str(env["outside"]), {}
+    )
+
+    assert result is None
+
+
+def test_payload_relative_target_after_unresolved_cd_yields_no_candidate(tmp_path):
+    cmd = "cd $ELSEWHERE && python3 - <<'EOF'\nopen('x.py','w').write('x')\nEOF\n"
+    assert list(guard._iter_write_sink_candidates(cmd, str(tmp_path))) == []
+
+
 def test_c1_ac3_same_payload_with_in_repo_target_does_not_bump(env, monkeypatch):
     """The AC1/AC2 payload shapes with an IN-REPO target must never false
     deny -- the caller's own no-git-root predicate still applies to a

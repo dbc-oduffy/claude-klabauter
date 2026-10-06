@@ -259,9 +259,9 @@ def _bootstrap_dirs() -> list[str]:
 
 
 def _is_under_bootstrap_dir(file_path: str) -> bool:
-    abs_file = os.path.abspath(file_path)
+    abs_file = os.path.normcase(os.path.abspath(file_path))
     for d in _bootstrap_dirs():
-        abs_dir = os.path.abspath(d)
+        abs_dir = os.path.normcase(os.path.abspath(d))
         if abs_file == abs_dir or (abs_file + os.sep).startswith(abs_dir + os.sep):
             return True
     return False

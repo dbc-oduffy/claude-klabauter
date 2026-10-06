@@ -435,6 +435,10 @@ class SafeCommitOffer(TypedDict):
     # `reconciliation`, off the one dirty read that seam already pays for.
     # Absent means "not computed this call", never "none".
     mtime_orphans: NotRequired[List[str]]
+    # `read_only` (additive, NotRequired): paths this session holds only by
+    # reading them (`CommitSet.read_only`). Never in `safe_paths`; named so
+    # the omission is visible.
+    read_only: NotRequired[List[str]]
     # their-writes plan) — the four-bucket ownership readout (mine / named
     # peer / unattributed / degraded), extending C3's post-commit `residue`
     # report rather than replacing it. ADDITIVE ONLY: every pre-existing key
@@ -678,6 +682,9 @@ class CommitOfferReport(TypedDict):
     # `reconciliation.unclaimed`. Absent on the early-return envelopes, which
     # never reach the dirty read.
     mtime_orphans: NotRequired[List[str]]
+    # `read_only` (additive, NotRequired): copied from
+    # `SafeCommitOffer.read_only`; never committed. Absent when empty.
+    read_only: NotRequired[List[str]]
     # write ledger against, and what it found. REPORT-ONLY, never a gate:
     # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
     # widen the commit boundary, exactly like `residue`/`excluded` above.
@@ -1172,7 +1179,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
 
     safe_paths.sort()
 
-    return {
+    offer: SafeCommitOffer = {
         "session_id": session_id,
         "safe_paths": safe_paths,
         "excluded": excluded,
@@ -1185,6 +1192,9 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             "degraded": degraded,
         },
     }
+    if answer.read_only:
+        offer["read_only"] = list(answer.read_only)
+    return offer
 
 
 def _default_groups(
@@ -2069,7 +2079,7 @@ async def commit_session_offer_async(
             "dropped_paths": dropped_paths,
         }
 
-    return {
+    final_report: CommitOfferReport = {
         "session_id": session_id,
         "groups": group_results,
         "excluded": _excluded_with_peer_owned_dirty(
@@ -2084,6 +2094,9 @@ async def commit_session_offer_async(
         ),
         "outcome": outcome,
     }
+    if offer.get("read_only"):
+        final_report["read_only"] = list(offer["read_only"])
+    return final_report
 
 
 def commit_session_offer(
@@ -2263,6 +2276,7 @@ _REPORT_PATH_PREVIEW_COUNT = 8
 
 #: `_REPORT_PATH_PREVIEW_COUNT` and `_EXCLUDED_LOG_PREVIEW_COUNT`: a per-class
 _RESIDUE_CLASS_SAMPLE_COUNT = 3
+_READ_ONLY_PREVIEW_COUNT = 5
 
 #: code-reviewer (Finding 1) -- `_RESIDUE_CLASS_SAMPLE_COUNT` above only
 #: section specifically. Mirrors `_RESIDUE_CLASS_SAMPLE_COUNT`'s reasoning:
@@ -2312,6 +2326,19 @@ def _mtime_orphans_line(paths: Sequence[str]) -> str:
         "Written since this session started, claimed by no session: %d "
         "path(s) — %s%s. NAMED, NOT ADOPTED: if one is yours, its claim is "
         "missing; commit it by explicit pathspec."
+        % (len(paths), ", ".join(shown), tail)
+    )
+
+
+def _read_only_line(paths: Sequence[str]) -> str:
+    """One line NAMING the read-only paths left out of the offer, capped at
+    `_READ_ONLY_PREVIEW_COUNT` with a `(+N more)` tail. Names, never offers."""
+    shown = list(paths[:_READ_ONLY_PREVIEW_COUNT])
+    remaining = len(paths) - len(shown)
+    tail = " (+%d more)" % remaining if remaining > 0 else ""
+    return (
+        "Read-only, left out of the offer: %d path(s) — %s%s. This session "
+        "only read them."
         % (len(paths), ", ".join(shown), tail)
     )
 
@@ -2463,6 +2490,9 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
     mtime_orphans = report.get("mtime_orphans") or []
     if mtime_orphans:
         lines.append(_mtime_orphans_line(mtime_orphans))
+    read_only = report.get("read_only") or []
+    if read_only:
+        lines.append(_read_only_line(read_only))
     if not reconciliation.get("reconciled", False):
         lines.append(
             "Ledger not reconciled against the tree this call — the two "
@@ -2728,8 +2758,14 @@ def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> s
         len(offer["safe_paths"]),
         len(offer["excluded"]),
     )
+    read_only = offer.get("read_only") or []
+    read_only_suffix = "\n" + _read_only_line(read_only) if read_only else ""
     if not reconciliation.get("reconciled", False):
-        return line + ", unclaimed: unchecked (no worktree root this call)"
+        return (
+            line
+            + ", unclaimed: unchecked (no worktree root this call)"
+            + read_only_suffix
+        )
     unclaimed = reconciliation.get("unclaimed") or []
     line += ", unclaimed-and-dirty: %d" % len(unclaimed)
     if unclaimed:
@@ -2746,7 +2782,7 @@ def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> s
     mtime_orphans = offer.get("mtime_orphans") or []
     if mtime_orphans:
         line += "\n" + _mtime_orphans_line(mtime_orphans)
-    return line
+    return line + read_only_suffix
 
 
 def _error_envelope(message: str) -> dict:

@@ -149,10 +149,10 @@ _LOGGER = logging.getLogger(__name__)
 
 import yaml
 
-from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
-from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops.plan_tasks_render import RowsResult, load_rows
 
 
 class _Undeclared:
@@ -223,7 +223,7 @@ def _plan_status(target: Path) -> Optional[str]:
     if split is None:
         return ""
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return ""
     return str(doc.get("status") or "") if isinstance(doc, dict) else ""
@@ -264,6 +264,84 @@ def _unlanded_plan_edge(
     )
 
 
+class PlanEdgeResolution(NamedTuple):
+    """``named_row`` the predecessor row (canonical disposition) of a chunk edge,
+    None for a status edge; ``hold`` the detail while the edge is unsatisfied,
+    None once satisfied."""
+
+    named_row: Optional[dict]
+    hold: Optional[str]
+
+
+def resolve_plan_edge(
+    owner: str, edge, repo_root: Optional[Path], plan_cache: dict
+) -> PlanEdgeResolution:
+    """One ``depends_on_plan`` edge: raises ``MalformedDependencyEdgeError`` or
+    ``DanglingPlanDependencyError`` for a bad edge, else reports hold state."""
+    if (
+        not isinstance(edge, dict)
+        or not edge.get("plan")
+        or bool(edge.get("chunk")) == bool(edge.get("status"))
+    ):
+        raise MalformedDependencyEdgeError(
+            f"{owner} depends_on_plan entry {edge!r} must be "
+            "{plan: <repo-relative .md path>, chunk: <row id> | status: <plan status>, "
+            "gate_kind: <kind>}"
+        )
+    rel = str(edge["plan"]).replace("\\", "/")
+    chunk = edge.get("chunk")
+    label = f"{rel} {chunk or edge['status']}"
+    if ".." in rel.split("/") or rel.startswith("/"):
+        raise DanglingPlanDependencyError(
+            f"{owner} depends_on_plan {label}: path escapes the repo"
+        )
+    if repo_root is None:
+        return PlanEdgeResolution(
+            None, f"depends_on_plan {label}: no repo root to resolve it against"
+        )
+    target = repo_root / rel
+    if not chunk:
+        hold = _status_edge_hold(owner, label, str(edge["status"]), _plan_status(target))
+        return PlanEdgeResolution(None, hold)
+    if target not in plan_cache:
+        try:
+            loaded = load_rows(target.read_text(encoding="utf-8"))
+        except OSError:
+            plan_cache[target] = None
+        else:
+            plan_cache[target] = (
+                {
+                    r["id"]: with_canonical_disposition(r)
+                    for r in loaded.rows
+                    if isinstance(r, dict) and r.get("id")
+                }
+                if loaded.status is LocateStatus.LOCATED
+                else None
+            )
+    rows_by_id = plan_cache[target]
+    if rows_by_id is None:
+        raise DanglingPlanDependencyError(
+            f"{owner} depends_on_plan {label}: plan is absent or has no spine"
+        )
+    named = rows_by_id.get(chunk)
+    if named is None:
+        raise DanglingPlanDependencyError(
+            f"{owner} depends_on_plan {label}: no such row in that plan"
+        )
+    disposition = named.get("disposition")
+    if disposition in _TERMINAL_NON_CODED:
+        raise DanglingPlanDependencyError(
+            f"{owner} depends_on_plan {label}: predecessor is {disposition}, "
+            "never coded"
+        )
+    hold = (
+        None
+        if disposition == "coded"
+        else f"depends_on_plan {label}: predecessor not yet coded"
+    )
+    return PlanEdgeResolution(named, hold)
+
+
 def unlanded_plan_edges(
     owner: str, edges, repo_root: Optional[Path], plan_cache: dict
 ) -> Optional[str]:
@@ -275,64 +353,8 @@ def unlanded_plan_edges(
         raise MalformedDependencyEdgeError(f"{owner} depends_on_plan is {edges!r}, not a list")
     held: Optional[str] = None
     for edge in edges:
-        if (
-            not isinstance(edge, dict)
-            or not edge.get("plan")
-            or bool(edge.get("chunk")) == bool(edge.get("status"))
-        ):
-            raise MalformedDependencyEdgeError(
-                f"{owner} depends_on_plan entry {edge!r} must be "
-                "{plan: <repo-relative .md path>, chunk: <row id> | status: <plan status>, "
-                "gate_kind: <kind>}"
-            )
-        rel = str(edge["plan"]).replace("\\", "/")
-        chunk = edge.get("chunk")
-        label = f"{rel} {chunk or edge['status']}"
-        if ".." in rel.split("/") or rel.startswith("/"):
-            raise DanglingPlanDependencyError(
-                f"{owner} depends_on_plan {label}: path escapes the repo"
-            )
-        if repo_root is None:
-            held = held or f"depends_on_plan {label}: no repo root to resolve it against"
-            continue
-        target = repo_root / rel
-        if not chunk:
-            hold = _status_edge_hold(owner, label, str(edge["status"]), _plan_status(target))
-            held = held or hold
-            continue
-        if target not in plan_cache:
-            try:
-                loaded = load_rows(target.read_text(encoding="utf-8"))
-            except OSError:
-                plan_cache[target] = None
-            else:
-                plan_cache[target] = (
-                    {
-                        r["id"]: with_canonical_disposition(r)
-                        for r in loaded.rows
-                        if isinstance(r, dict) and r.get("id")
-                    }
-                    if loaded.status is LocateStatus.LOCATED
-                    else None
-                )
-        rows_by_id = plan_cache[target]
-        if rows_by_id is None:
-            raise DanglingPlanDependencyError(
-                f"{owner} depends_on_plan {label}: plan is absent or has no spine"
-            )
-        named = rows_by_id.get(chunk)
-        if named is None:
-            raise DanglingPlanDependencyError(
-                f"{owner} depends_on_plan {label}: no such row in that plan"
-            )
-        disposition = named.get("disposition")
-        if disposition in _TERMINAL_NON_CODED:
-            raise DanglingPlanDependencyError(
-                f"{owner} depends_on_plan {label}: predecessor is {disposition}, "
-                "never coded"
-            )
-        if disposition != "coded":
-            held = held or f"depends_on_plan {label}: predecessor not yet coded"
+        hold = resolve_plan_edge(owner, edge, repo_root, plan_cache).hold
+        held = held or hold
     return held
 
 
@@ -658,11 +680,27 @@ def load_frontmatter_doc(fm_text: str):
         return _remember(_FM_DOCS, fm_text, yaml.load(fm_text, Loader=_YAML_LOADER))
 
 
+def _parse_rows(source: str) -> RowsResult:
+    """``plan_tasks_render.load_rows`` with libyaml: the same LOCATED/ABSENT/MALFORMED
+    contract, ~10x cheaper on a real spine (pure-Python ``safe_load`` was ~95% of the
+    prep gate's cost on a large plan)."""
+    located = locate_fenced_block(source)
+    if located.status is not LocateStatus.LOCATED:
+        return RowsResult(status=located.status, rows=[])
+    try:
+        rows = yaml.load(located.body, Loader=_YAML_LOADER) or []
+    except yaml.YAMLError:
+        return RowsResult(status=LocateStatus.MALFORMED, rows=[])
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return RowsResult(status=LocateStatus.MALFORMED, rows=[])
+    return RowsResult(status=LocateStatus.LOCATED, rows=rows)
+
+
 def load_rows_memo(source: str):
-    """``load_rows(source)`` memoised per process by text; the result is read-only."""
+    """Spine rows of `source`, parsed once per process per text; the result is read-only."""
     hit = _ROWS_MEMO.get(source)
     if hit is None:
-        hit = _remember(_ROWS_MEMO, source, load_rows(source))
+        hit = _remember(_ROWS_MEMO, source, _parse_rows(source))
     return hit
 
 
@@ -712,7 +750,7 @@ def frontmatter_plan_edges(source: str):
     if split is None:
         return None
     try:
-        doc = yaml.safe_load(split.fm_text)
+        doc = load_frontmatter_doc(split.fm_text)
     except yaml.YAMLError:
         return None
     return doc.get("depends_on_plan") if isinstance(doc, dict) else None

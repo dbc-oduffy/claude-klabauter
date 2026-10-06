@@ -84,10 +84,12 @@ def _git(repo_root: str, *args: str) -> str | None:
             ["git", "-C", repo_root, *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=2.0,
             **no_console_creationflags(),
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     if result.returncode != 0:
         return None

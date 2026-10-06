@@ -200,10 +200,13 @@ def build(
         "-o", str(output),
         *[str(path) for path in _SOURCES],
     ]
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"door build: compile timed out after 120s\ncommand: {' '.join(cmd)}")
     if proc.returncode != 0:
         raise SystemExit(
             f"door build: compile failed (exit {proc.returncode})\n"

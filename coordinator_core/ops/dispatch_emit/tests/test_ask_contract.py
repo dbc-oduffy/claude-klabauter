@@ -20,7 +20,7 @@ def test_manifest_round_trip():
 
 
 def test_phase_order_and_names():
-    assert c.ASK_PHASES == ("size", "gate", "plan", "stage", "execute", "review")
+    assert c.ASK_PHASES == ("size", "gate", "accept", "plan", "stage", "execute", "review")
     assert (c.OP_ASK_GATE, c.OP_ASK_STAGE) == ("dispatch.ask_gate", "dispatch.ask_stage")
     assert (c.HALT_ROOM, c.HALT_TOUCHPOINT, c.HALT_REFUSAL) == ("room", "touchpoint", "refusal")
 

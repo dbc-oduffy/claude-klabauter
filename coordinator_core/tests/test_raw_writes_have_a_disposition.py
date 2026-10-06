@@ -326,6 +326,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/handoff_discharge_landed.py': ('git-internal', 'O_EXCL batch lock under the git common dir: _acquire_lock; the handoff stamp write itself goes through claimed_write.replace_text'),
     'coordinator_core/telemetry/traffic_manifest.py': ('in-repo-non-state', 'operator-named --out file for a generated traffic manifest; no state/ target'),
     'coordinator_core/hooks/preuse_sendmessage_dispatch.py': ('outside-repo', 'once-per-agent advised marker beside the harness transcript under <transcript>/subagents/workflows/<run>: _claim_once'),
+    'coordinator_core/ops/migrate_completion_log_legacy.py': ('outside-repo', 'git --pathspec-from-file list under tempfile.mkstemp(), removed after the commit: _commit_moved'),
     'coordinator_core/hooks/flag_em_poll_in_flight.py':('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
     'coordinator_core/hooks/guard_doctrine_surface_bash_write.py': ('in-repo-non-state', 'no write: the raw-write vocabulary appears only in docstrings and patterns the guard detects'),
     'coordinator_core/hooks/guard_doctrine_surface_ratio_precommit.py': ('outside-repo', 'accumulator json under machine_local_dir() (settings home): _save_accumulator'),
@@ -355,6 +356,8 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bash_guards/_write_bump_session_start.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_session_start_record'),
     'coordinator_core/bash_guards/_write_bump_sink_shapes.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _bound_literal_paths, _strip_comments_and_docstrings'),
     'coordinator_core/bash_guards/_write_bump_stand_down.py': ('to-fix', 'raw-write site(s): _mirror_to_durable_sink, log_environment_stand_down; runtime observed=yes (n=15), sample=/tmp/pytest-of-root/pytest-705/test_deny_grant_allow_consumed0/anchor/state/stand-downs/foreign-repo-write.log'),
+    'coordinator_core/bash_guards/bump_outside_repo_write.py': ('in-repo-non-state', 'no write: the raw-write vocabulary appears only in a docstring describing the interpreter payload sinks the guard detects'),
+    'coordinator_core/consolidate_assemble/apply.py': ('ignored-target', 'line-union rewrite of the memo-outbox sent-ledger under gitignored .coordinator-local/ during a merge-and-delete conflict: _union_resolve_ledgers'),
     'coordinator_core/bash_guards/block_approval_sentinel_creation.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
     'coordinator_core/bash_guards/block_subagent_commit.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _open_call_is_read_only'),
     'coordinator_core/bash_guards/block_subagent_destructive_action.py': ('outside-repo', 'C6-migrated: _log_fail_open now routes through session/claimed_write.py::append_claimed_line (entry wrapped at bash_guards/dispatch.py::main); residual raw-write site(s) near tempdir/home/settings-home construct: _rotate_fail_open_log_if_oversized'),
@@ -407,7 +410,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/hooks/plan_persistence_check.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _append_readme_row, _handler'),
     'coordinator_core/hooks/platform_localize.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: atomic_write'),
     'coordinator_core/hooks/postuse_advisory_dispatch.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _check_group_em_watch_arm_sync, _check_group_em_watch_arm_sync._touch_checked_sentinel, _check_runtime_tripwire_sync, _persist_workflow_run_record, _save_advisory_state'),
-    'coordinator_core/hooks/runtime_tripwire_em_check.py': ('to-fix', "raw-write site(s): _check_hooks_json_staleness, _check_push_failures; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/hooks/subagent_zero_tool_use.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _append_record_sync, _persist_final_report_sync'),
     'coordinator_core/hooks/track_dispatched_agents.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _process_dispatched_sync, _write_backpointer_sync'),
     'coordinator_core/hooks/ue_knowledge_distrust.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _run_bootstrap'),
@@ -522,7 +524,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/session/guard_hook_generation_self_probe.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _atomic_write_text, run_self_probe'),
     'coordinator_core/ops/session/guard_settings_integrity.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _atomic_copy, evaluate_settings_integrity'),
     'coordinator_core/ops/session/legacy_touch_corpus_migrate.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
-    'coordinator_core/ops/session/migrate_touched_prefix.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: run_migration'),
     'coordinator_core/ops/session/record_pickup.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: _record_pickup_sync, _try_claim_lock_dir [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/session_baton_promote.py': ('to-fix', 'INDIRECTION (D3 caught, static missed): handoff_path.write_text(...) writes the promoted baton handoff (~L215/239); target built from a Path variable, static regex missed the nearby state-signal token'),
     'coordinator_core/ops/session_hierarchy_derive.py': ('claims-explicitly', "claim token in _atomic_write_json [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
@@ -579,7 +580,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/warm/cookie.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_private_atomically'),
     'coordinator_core/warm/door/build.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: build, write_provenance, write_sidecar'),
     'coordinator_core/warm/door/build_posix.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_provenance'),
-    'coordinator_core/warm/door_credential.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: ensure_secret'),
     'coordinator_core/warm/election.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _acquire_election_lock'),
     'coordinator_core/warm/front_door.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: flush, write_discovery'),
     'coordinator_core/warm/front_door_routing.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_routing_table'),
@@ -605,7 +605,6 @@ _TO_FIX_CEILING: FrozenSet[str] = frozenset({
     'coordinator_core/block_discharge.py',
     'coordinator_core/hooks/context_pressure_precompact.py',
     'coordinator_core/hooks/nudge_unrouted_sizing.py',
-    'coordinator_core/hooks/runtime_tripwire_em_check.py',
     'coordinator_core/ops/archive_auto_memory_rows.py',
     'coordinator_core/ops/ceremony/detached_spawn.py',
     'coordinator_core/ops/ceremony/housekeeping_liveness.py',
@@ -800,10 +799,11 @@ def test_at_close_out_the_ceiling_is_empty():
     recategorized eight more to-fix members that held no actual `state/`
     write to the category their real write target names (53 to 35 -- see
     the register's C7 comment block for the full per-module breakdown); retiring the
-    backlog-history shard deleted one to-fix module outright (35 to 34); deleting generator_scan_cache.py took it 34 to 33), so
+    backlog-history shard deleted one to-fix module outright (35 to 34); deleting generator_scan_cache.py took it 34 to 33; the bug-sweep atomic-write pass left
+    runtime_tripwire_em_check.py with no raw token (33 to 32)), so
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
-    assert len(_TO_FIX_CEILING) == 33
+    assert len(_TO_FIX_CEILING) == 32
 
 
 @pytest.mark.parametrize(

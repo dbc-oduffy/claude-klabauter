@@ -46,7 +46,7 @@ def _isolate(tmp_path, monkeypatch):
     import coordinator_core.ipc as ipc
 
     monkeypatch.setattr(ipc, "dispatch_message", echo)
-    monkeypatch.setattr(ewf, "_load_mint", lambda: lambda rel, root: {
+    monkeypatch.setattr(ewf, "_load_mint", lambda: lambda rel, root, **_kw: {
         "id": "hnd-1", "path": BATON_REL, "title": "Minted baton", "created": True})
 
 

@@ -110,6 +110,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core._hook_envelope import payload_of
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.daily_branch import is_work_branch
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.repo_root import show_toplevel
@@ -358,8 +359,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
         if not _ensure_cursor_dir(cursor_dir):
             return None
         try:
-            with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(str(log_size))
+            atomic_write_bytes(cursor_path, str(log_size).encode("utf-8"))
         except Exception:
             pass
         return None
@@ -376,8 +376,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
         pass
 
     try:
-        with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(log_size))
+        atomic_write_bytes(cursor_path, str(log_size).encode("utf-8"))
     except Exception:
         pass
 
@@ -465,8 +464,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         if not _ensure_cursor_dir(cursor_dir):
             return None
         try:
-            with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(current_hash)
+            atomic_write_bytes(cursor_path, current_hash.encode("utf-8"))
         except Exception:
             pass
         return None
@@ -475,8 +473,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         return None
 
     try:
-        with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(current_hash)
+        atomic_write_bytes(cursor_path, current_hash.encode("utf-8"))
     except Exception:
         pass
 

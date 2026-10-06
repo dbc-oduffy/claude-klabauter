@@ -947,10 +947,10 @@ def _gitignored_paths(
 
     Negative spec: never a per-path spawn, never a directory-listing/tree
     walk (this repo's ``pathspec.py`` forbids exactly that for the identical
-    reason), and never applied to a ``writes_under:`` prefix -- a prefix
-    names no concrete file at emit time, so there is nothing here yet to
-    check; the runtime preflight prompt already tells the dispatched agent
-    to check-ignore a prefix's own probe file itself.
+    reason). A ``writes_under:`` prefix names no concrete file, so the caller
+    probes it through a stand-in path, ``_prefix_probe`` (the prefix plus
+    ``.coordinator-ignore-probe``), appended to the same ``paths`` union; a
+    prefix whose probe is in the matched set is gitignored.
     Returns a ``_GitignoreFilterResult``: the matched-path set, and a
     ``degraded`` flag the caller uses to make a fail-open run visible in the
     emitted script itself (see ``_GitignoreFilterResult`` and
@@ -984,6 +984,15 @@ def _gitignored_paths(
         ),
         degraded=False,
     )
+
+
+_PREFIX_PROBE_NAME = ".coordinator-ignore-probe"
+
+
+def _prefix_probe(prefix: str) -> str:
+    """The stand-in file path ``check-ignore`` is asked about for a
+    ``writes_under:`` prefix: the prefix with exactly one trailing ``/``."""
+    return prefix.replace("\\", "/").rstrip("/") + "/" + _PREFIX_PROBE_NAME
 
 
 def _dedupe_preserve_order(paths: list[str]) -> list[str]:
@@ -2249,7 +2258,6 @@ def _row_return_contract(
     else:
         footprint = [report_path]
 
-
     parts.append(
         self_verify_constraint(
             commit_authority=_EMITTED_COMMIT_AUTHORITY,
@@ -3074,6 +3082,20 @@ def _gitignore_degraded_narration() -> str:
     )
 
 
+def _gitignored_prefix_narration(dropped: list[tuple[str, str]]) -> str:
+    """A comment block naming each ``(row id, prefix)`` pair whose
+    ``writes_under:`` prefix is gitignored and so left out of the
+    terminal-commit marker."""
+    lines = [
+        "  // GITIGNORED writes_under PREFIX(ES) -- left out of the terminal-commit",
+        "  // marker (nothing under an ignored prefix can be committed):",
+    ]
+    lines.extend(
+        f"  //   row {rid}: {prefix.replace(chr(10), ' ')}" for rid, prefix in dropped
+    )
+    return "\n".join(lines)
+
+
 def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -3112,29 +3134,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  const _skippedDone = [];\n"
         "  const _unusableChecks = [];\n"
         "  const _reviews = [];\n"
-        "  const _heldBy = {};\n"
-        "  const _rowIdOf = new WeakMap();\n"
-        f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
-        f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
-        "  function _depBlocker(deps, results) {\n"
-        "    for (let i = 0; i < results.length; i++) {\n"
-        "      const r = results[i];\n"
-        "      const t = JSON.stringify(r ?? null);\n"
-        "      const settled = typeof r === 'string' && "
-        "(r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));\n"
-        "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
-        "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
-        "        return _rowIdOf.get(deps[i]) || '?';\n"
-        "      }\n"
-        "    }\n"
-        "    return null;\n"
-        "  }\n"
-        "  function _runRow(id, deps, verifyScope, run, commit) {\n"
-        "    const p = _runRowInner(id, deps, verifyScope, run, commit);\n"
-        "    _rowIdOf.set(p, id);\n"
-        "    return p;\n"
-        "  }\n"
-        "  async function _runRowInner(id, deps, verifyScope, run, commit) {\n"
+        "  async function _runRow(id, deps, verifyScope, run, commit) {\n"
         "    const _depResults = await Promise.all(deps);\n"
         "    const plan = _rowPlan[id];\n"
         "    if (_halted) {\n"
@@ -3155,13 +3155,6 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "r.startsWith('ROUTED-OUT:'))) {\n"
         "      _routedOut.push(id);\n"
         "      return 'ROUTED-OUT: a dependency was routed out';\n"
-        "    }\n"
-        "    const _blocker = _depBlocker(deps, _depResults);\n"
-        "    if (_blocker) {\n"
-        "      _notStarted.push(id);\n"
-        "      _blockedChunks.push(id);\n"
-        "      _heldBy[id] = _blocker;\n"
-        "      return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';\n"
         "    }\n"
         "    if (_alreadyDone.has(id)) {\n"
         "      _skippedDone.push(id);\n"
@@ -3548,6 +3541,7 @@ def _terminal_commit_marker(
     deliverable_id: Optional[str],
     session_id: Optional[str],
     expected_branch: Optional[str] = None,
+    row_prefixes: dict[str, tuple[str, ...]],
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
     (``commit_request.render_marker``) recording what this run promises
@@ -3569,7 +3563,7 @@ def _terminal_commit_marker(
             id=row.id,
             title=row.title,
             paths=tuple(row_pathspecs.get(row.id, ())),
-            prefixes=tuple(row.writes_under),
+            prefixes=tuple(row_prefixes.get(row.id, ())),
             report=_dispatch_report_path(plan_path, row.id) if plan_path else "",
         )
         for row in rows
@@ -3750,10 +3744,23 @@ def compose_script(
         row_pathspecs[row.id] = _widen_with_test_candidates(raw, repo_root)
     gitignored, gitignore_filter_degraded = _gitignored_paths(
         _dedupe_preserve_order(
-            path for paths in row_pathspecs.values() for path in paths
+            [
+                *(path for paths in row_pathspecs.values() for path in paths),
+                *(_prefix_probe(pfx) for row in flat_rows for pfx in row.writes_under),
+            ]
         ),
         repo_root=repo_root,
     )
+    row_prefixes = {
+        row.id: tuple(p for p in row.writes_under if _prefix_probe(p) not in gitignored)
+        for row in flat_rows
+    }
+    dropped_prefixes = [
+        (row.id, p)
+        for row in flat_rows
+        for p in row.writes_under
+        if _prefix_probe(p) in gitignored
+    ]
     row_pathspecs = {
         rid: [p for p in paths if p not in gitignored]
         for rid, paths in row_pathspecs.items()
@@ -3770,6 +3777,9 @@ def compose_script(
 
     if gitignore_filter_degraded:
         body_blocks.append(_gitignore_degraded_narration())
+
+    if dropped_prefixes:
+        body_blocks.append(_gitignored_prefix_narration(dropped_prefixes))
 
     if agent_type_host == _AGENT_TYPE_HOST_DEGRADED:
         body_blocks.append(_agent_type_host_degraded_narration())
@@ -4028,6 +4038,7 @@ def compose_script(
         deliverable_id=deliverable_id,
         session_id=session_id,
         expected_branch=expected_branch,
+        row_prefixes=row_prefixes,
     )
     if marker is not None:
         # Unindented: commit_request.parse_marker matches on line-start

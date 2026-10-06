@@ -227,11 +227,14 @@ def test_state_dir_is_loud_tier_not_quiet(repo_root: Path) -> None:
     assert second is not None and "permissionDecision" not in second["hookSpecificOutput"]
 
 
-def test_archive_dir_is_exempt_transcript_not_citation(repo_root: Path) -> None:
+def test_archive_dir_is_loud_tier_not_quiet(repo_root: Path) -> None:
     target = repo_root / "archive" / "bug-backlog" / "note.yaml"
     target.parent.mkdir(parents=True)
     offending = "the repo lives at " + "X:" + r"\example-game-workbench-repo"
-    assert check(_write_payload(str(target), offending, session_id="archive-session")) is None
+    first = check(_write_payload(str(target), offending, session_id="archive-session"))
+    second = check(_write_payload(str(target), offending, session_id="archive-session"))
+    assert first is not None and "permissionDecision" not in first["hookSpecificOutput"]
+    assert second is not None and "permissionDecision" not in second["hookSpecificOutput"]
 
 
 def test_subagent_share_sidecar_quoting_its_own_finding_is_allowed(repo_root: Path) -> None:

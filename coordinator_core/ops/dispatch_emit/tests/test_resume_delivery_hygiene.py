@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 def test_settle_writes_test_verdict_and_leaves_lifecycle_status(tmp_path):
     side = tmp_path / "runner.md"
-    side.write_text("---\nstatus: open\nagent_type: t\n---\nbody\n", encoding="utf-8", newline="")
+    side.write_text("---\nstatus: open\nagent_type: coordinator:test-runner\n---\nbody\n", encoding="utf-8", newline="")
     assert settle_tests_sidecar(tmp_path, {"status": "pass", "run": 124, "failed": 0, "sidecar": "runner.md"})
     text = side.read_text(encoding="utf-8")
     assert "status: open" in text and "test_verdict: pass" in text

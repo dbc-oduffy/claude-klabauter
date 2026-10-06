@@ -30,6 +30,7 @@ from typing import Any
 import yaml
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.ops.sizing_acceptance import acceptance_words
 
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -69,7 +70,7 @@ def _accepted_sizing_path(plan_path: str, repo_root: Path | None) -> str | None:
         doc = yaml.safe_load((repo_root / rel).read_text(encoding="utf-8"))
         ec = doc.get("exit_criterion") if isinstance(doc, dict) else None
         accepted = ec.get("accepted") if isinstance(ec, dict) else None
-        if not isinstance(accepted, dict) or not str(accepted.get("pm_quote") or "").strip():
+        if not acceptance_words(accepted):
             return None
         mode = str(doc.get("interaction_mode") or accepted.get("mode") or "").strip()
         return rel if mode in ("pm", "ceo") else None

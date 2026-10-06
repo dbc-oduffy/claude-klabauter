@@ -168,6 +168,19 @@ Neither guard is a stand-in for that case; only the CPU-time floor has any
 chance of catching it, and only past a wide catastrophic threshold, not a tight
 one -- see the "Secondary guard" test docstrings below.
 
+The CPU floor is a catastrophic-blowup tripwire only, and is inert BY DESIGN on
+sub-20ms rows: `write_guards_engine` (~15.6ms idle against a 150ms floor, ~9.6x)
+and `hooks_auto_push` (15.6-31.3ms idle against 150ms, ~4.8-9.6x). The floor is
+deliberately that wide there -- spawn noise and the ~15.6ms Windows tick are a
+large fraction of so small a signal -- so it cannot fire before
+`module_count_ceiling` and `heavy_modules_expected_absent` have; on those rows the
+structural axes carry the guard alone. Do not read the floor as cover on a small
+row, and do not tighten it to make it fire: a tight floor on a few-millisecond
+baseline is tick-quantisation noise, not a signal. The rule is about baseline
+size, not the file: a heavier row is not inert, and its floor is set tight
+enough to trip on a real regression (`hooks_postuse_advisory_dispatch`: ~101.6ms
+per call against a 600ms floor, ~1.45x per its own comment).
+
 A SECOND dead zone this revision closes for module count specifically: a
 module-count ceiling cannot see a path-only `sys.path` growth with zero new
 modules -- exactly what a plain-path `.pth`-shaped fix (append a directory to

@@ -81,6 +81,7 @@ __all__ = [
     "SourceOpResult",
     "Manifest",
     "select_rows",
+    "restrict_manifest",
     "RouteToRefusedError",
     "DuplicateStemError",
     "UnparseableRowError",
@@ -191,6 +192,7 @@ class Manifest:
     source: Optional[SourceOpResult]
     digest: str
     declined: tuple[DeclinedEntry, ...] = ()
+    unselected: tuple[str, ...] = ()
 
 
 def _repo_relative(path: Path, repo_root: Path) -> str:
@@ -707,6 +709,9 @@ def select_rows(
     if limit is not None:
         filtered = filtered[:limit]
 
+    selected_ids = {r[0] for r in filtered}
+    unselected = tuple(sorted(r[0] for r in rows if r[0] not in selected_ids))
+
     ledger_by_row = _read_ledger_lines(profile, repo_root)
     handback_marks = _read_handback_marks(profile, repo_root)
 
@@ -754,6 +759,23 @@ def select_rows(
 
     declined_sorted = tuple(sorted(declined, key=lambda d: d.row_id))
 
+    return Manifest(
+        entries=tuple(entries),
+        batch_sizes=dict(batch_sizes),
+        source=source_result,
+        digest=_manifest_digest(entries, batch_sizes, source_result, declined_sorted),
+        declined=declined_sorted,
+        unselected=unselected,
+    )
+
+
+def _manifest_digest(
+    entries: Sequence[ManifestEntry],
+    batch_sizes: Mapping[str, int],
+    source_result: Optional[SourceOpResult],
+    declined: Sequence[DeclinedEntry],
+) -> str:
+    """The one canonical-JSON digest `select_rows` and `restrict_manifest` share."""
     canonical = {
         "entries": [
             {
@@ -775,18 +797,21 @@ def select_rows(
             if source_result is not None
             else None
         ),
-        "declined": [
-            {"row_id": d.row_id, "path": d.path, "reason": d.reason} for d in declined_sorted
-        ],
+        "declined": [{"row_id": d.row_id, "path": d.path, "reason": d.reason} for d in declined],
     }
-    manifest_digest = hashlib.sha256(
-        json.dumps(canonical, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()
 
+
+def restrict_manifest(manifest: Manifest, row_ids: Sequence[str]) -> Manifest:
+    """Rebuild `manifest` over only the entries named in `row_ids`, in their existing
+    order, with the digest recomputed over what remains."""
+    keep = set(row_ids)
+    entries = tuple(e for e in manifest.entries if e.row_id in keep)
     return Manifest(
-        entries=tuple(entries),
-        batch_sizes=dict(batch_sizes),
-        source=source_result,
-        digest=manifest_digest,
-        declined=declined_sorted,
+        entries=entries,
+        batch_sizes=manifest.batch_sizes,
+        source=manifest.source,
+        digest=_manifest_digest(entries, manifest.batch_sizes, manifest.source, manifest.declined),
+        declined=manifest.declined,
+        unselected=manifest.unselected,
     )

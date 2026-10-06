@@ -818,7 +818,15 @@ class TestLiveSessionIdsMetalessEnumeration:
 class TestLiveSessionIdsCorpus:
     """Q20/Q24 golden-diff against the REAL on-disk meta.json corpus of this
     repo's own session registry: the native pass must not raise and must
-    return a frozenset of strings; every returned sid must be a real dir."""
+    return a frozenset of strings; every returned sid must be a real dir.
+
+    Division of labour with the litter guards in `coordinator_core/conftest.py`:
+    the per-test guard sees only a fresh MINT, and the session-scoped
+    `_no_appends_into_preexisting_hub_litter` sees an append into a pre-existing
+    fixture-named dir only when a write lands during the run. A fixture-named
+    dir that already sits in the hub is enumerated here by
+    `test_every_non_uuid_real_child_is_denylisted_or_a_file` -- this class is
+    the standing backstop for appends, not the guards."""
 
     def test_no_raise_and_shape_against_real_registry(self):
         result = liveness.live_session_ids()
@@ -3240,3 +3248,71 @@ class TestCloudResumedSessionStaleRepoMeta:
         )
         self._ticks_record(registry_dir, "s-dead", 2147483000, time.time() - 30)
         assert liveness.session_live("s-dead", cwd=str(repo)) is False
+
+
+class TestPreexistingHubLitterAppendGuard:
+    """Planted-failure proof for conftest's `_no_appends_into_preexisting_hub_litter`:
+    an append into a pre-existing non-UUID dir of a temp hub fails the session.
+
+    Drives `_watch_preexisting_hub_litter` against a temp hub rather than
+    monkeypatching conftest's `_LIVE_HUB`, which would point the per-test hub
+    guards at the temp hub too."""
+
+    @pytest.fixture
+    def hub(self, tmp_path, monkeypatch):
+        from coordinator_core.session import harness_registry
+
+        monkeypatch.setattr(harness_registry, "snapshot", lambda: {})
+        hub = tmp_path / "hub"
+        hub.mkdir()
+        return hub
+
+    @staticmethod
+    def _watch(hub, mutate):
+        from coordinator_core import conftest as cc
+
+        with cc._watch_preexisting_hub_litter(str(hub)):
+            mutate()
+
+    @staticmethod
+    def _append(path):
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("x\n")
+        st = os.stat(path)
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+
+    def test_append_into_preexisting_non_uuid_dir_fails(self, hub):
+        log = hub / "sess-1" / "repo-identity-gate.log"
+        log.parent.mkdir()
+        log.write_text("seed\n")
+        with pytest.raises(pytest.fail.Exception, match="sess-1"):
+            self._watch(hub, lambda: self._append(log))
+
+    def test_untouched_litter_is_not_flagged(self, hub):
+        (hub / "sess-1").mkdir()
+        (hub / "sess-1" / "a.log").write_text("seed\n")
+        self._watch(hub, lambda: None)
+
+    @pytest.mark.parametrize(
+        "name", ["3f2a1c9e-0000-4000-8000-0000000000aa", "logs", "decisions"]
+    )
+    def test_peer_and_infra_dirs_are_never_flagged(self, hub, name):
+        f = hub / name / "a.log"
+        f.parent.mkdir()
+        f.write_text("seed\n")
+        self._watch(hub, lambda: self._append(f))
+
+    def test_registered_non_uuid_session_is_never_flagged(self, hub, monkeypatch):
+        from coordinator_core.session import harness_registry
+
+        monkeypatch.setattr(harness_registry, "snapshot", lambda: {"peer-x": object()})
+        f = hub / "peer-x" / "a.log"
+        f.parent.mkdir()
+        f.write_text("seed\n")
+        self._watch(hub, lambda: self._append(f))
+
+    def test_dir_minted_during_the_run_is_left_to_the_per_test_guard(self, hub):
+        self._watch(hub, lambda: (hub / "fresh").mkdir())
+
+    def test_missing_hub_is_a_no_op(self, tmp_path):
+        self._watch(tmp_path / "nope", lambda: None)

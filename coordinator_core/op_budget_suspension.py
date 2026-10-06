@@ -335,6 +335,10 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "max under the bar, per this table's standing rule."
         ),
         "spinoff": None,
+        "fallback": (
+            "Claim release is report-only and human-invoked: drop a stale handoff "
+            "claim per row by hand."
+        ),
     },
     "records.history": {
         "c2_citation": {

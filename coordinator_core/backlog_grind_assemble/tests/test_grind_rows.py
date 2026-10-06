@@ -694,6 +694,31 @@ class TestRunRecordVerb:
         # No leftover temp file.
         assert list(target.parent.glob(".*.tmp-*")) == []
 
+    def test_reads_a_percent_encoded_record_argument(self, tmp_path, capsys):
+        from urllib.parse import quote
+
+        record = {"reason": "it's — café"}
+        exit_code = grind_rows.main(
+            [
+                "run-record", "--profile", "bug", "--run-id", "20260922T000000Z",
+                "--record-urlenc", quote(json.dumps(record), safe=""),
+                "--repo-root", str(tmp_path),
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_OK
+        target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000000Z.json"
+        assert json.loads(target.read_text(encoding="utf-8")) == record
+
+    def test_record_file_and_urlenc_together_is_usage(self, tmp_path, capsys):
+        exit_code = grind_rows.main(
+            [
+                "run-record", "--profile", "bug", "--run-id", "20260922T000000Z",
+                "--record-file", "-", "--record-urlenc", "%7B%7D",
+                "--repo-root", str(tmp_path),
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_USAGE
+
     def test_reads_from_stdin_when_record_file_is_a_dash(self, tmp_path, monkeypatch, capsys):
         import io
 

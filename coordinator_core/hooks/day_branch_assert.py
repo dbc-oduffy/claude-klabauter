@@ -57,19 +57,8 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 
-#: Harness-assigned cloud session branches share this prefix; it is the only
-#: signal available when the session cwd is the container dir above the checkouts.
-_CLOUD_SESSION_BRANCH_PREFIX = "claude/"
-
-
-def is_cloud_session(env: Optional[dict] = None) -> bool:
-    """True under the cloud harness (`CLAUDE_CODE_REMOTE=true`); shared with
-    `bash_guards.block_topic_branch`."""
-    source = os.environ if env is None else env
-    return (source.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
-
-
-_is_cloud_session = is_cloud_session
+def _is_cloud_session() -> bool:
+    return (os.environ.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
 
 
 CUT = "FRESH-CUT"
@@ -197,6 +186,9 @@ def assert_day_branch(
     return case_b_verdict(repo_root, branch)
 
 
+#: Harness-assigned cloud session branches share this prefix; it is the only
+#: signal available when the session cwd is the container dir above the checkouts.
+_CLOUD_SESSION_BRANCH_PREFIX = "claude/"
 
 
 def record_mounted_checkout_designations(container_root: str) -> list[str]:

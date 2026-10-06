@@ -19,11 +19,16 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     HALT_REFUSAL,
+    HALT_TOUCHPOINT,
     OP_ASK_GATE,
     OP_ASK_STAGE,
     RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
+from coordinator_core.ops.dispatch_emit.pm_adjudication import (
+    ADJUDICATOR_AGENT_TYPE,
+    IRREVERSIBLE_GATE_SOURCE,
+)
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
@@ -66,10 +71,12 @@ def _cat(*parts: str) -> str:
     return " + ".join(p[3:] if p.startswith("js:") else _lit(p) for p in parts)
 
 
-def _agent(prompt_expr: str, *, label: str, phase: str, agent_type: str, schema: dict) -> str:
+def _agent(
+    prompt_expr: str, *, label: str, phase: str, agent_type: str, schema: dict, agent_model: Optional[str] = None
+) -> str:
     return (
         f"agent({prompt_expr}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
-        f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type)}, "
+        f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, "
         f"schema: {json.dumps(schema, sort_keys=True)} }})"
     )
 
@@ -100,6 +107,17 @@ _GATE_SCHEMA = _obj(
         "route": _STR,
     },
 )
+_ACCEPT_SCHEMA = _obj(
+    ["verdict", "pmOnly", "ruling"],
+    {
+        "verdict": {"type": "string", "enum": ["ruled", "pm-only"]},
+        "pmOnly": {"type": "boolean"},
+        "pmOnlyGround": _STR,
+        "ruling": _STR,
+        "statement": _STR,
+    },
+)
+_ACCEPT_RESULT_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
 _MANIFEST_SCHEMA = _obj(
     ["run_dir", "rows", "review_declared_paths", "marker_path"],
@@ -142,26 +160,37 @@ def _scoped_test_call(agent_type_host: Optional[str]) -> str:
     return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
 
 
-_USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
-HALT_USAGE_LIMIT = "usage_limit"
+_PLAN_SLOT = "PLAN_PATH_SLOT_X"
+_RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
+_JUDGE_PATH_CLAUSE = (
+    "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "
+    "then its exit_criterion is the spec and there is no Verification section."
+)
 
 
-def _usage_limit_helper_js() -> str:
-    """`_haltOnUsageLimit(e)`: a limit-shaped agent failure becomes a resumable `_halted`; any other error rethrows.
+def _criterion_judge_call(
+    review, stage_schemas: dict, *, run_base_sha: str, head: str, agent_type_host: Optional[str]
+) -> Optional[str]:
+    """The roster judge's call EXPRESSION, naming the plan (or XS sizing) known only at run time.
 
-    The run id the harness resumes from is not visible to the script, so the halt carries a hint to
-    read it from the Workflow result.
+    `compose_criterion_judge` takes `plan_path` as a compile-time literal; the slot stands in and
+    is spliced out for the runtime expression. Trap: no falsifier leg -- the plan's falsifier is
+    unknown until the plan exists, and the judge reads the plan itself.
     """
-    return (
-        f"  const _USAGE_LIMIT_RE = {_USAGE_LIMIT_RE};\n"
-        "  function _haltOnUsageLimit(e) {\n"
-        "    const msg = String((e && (e.message ?? e)) ?? '');\n"
-        "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
-        f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
-        "resume_from_run_id: 'this Workflow run id (wf_...)', "
-        "next_action: 'After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id.' };\n"
-        "  }"
+    call = compose_criterion_judge(
+        review,
+        stage_schemas=stage_schemas,
+        plan_path=_PLAN_SLOT,
+        run_base_sha=run_base_sha,
+        falsifier=None,
+        prompt_head=head + _JUDGE_PATH_CLAUSE,
+        host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
     )
+    if call is None:
+        return None
+    if call.count(_PLAN_SLOT) != 2:
+        raise AskComposeRefused("criterion judge prompt no longer names its plan path exactly twice")
+    return call.replace(_PLAN_SLOT, f"' + {_RUNTIME_PLAN_PATH_JS} + '")
 
 
 def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
@@ -180,15 +209,25 @@ def _read_plan_blitz() -> str:
     return load_plan_blitz_text()
 
 
-def _phase_titles(*, with_size: bool, blitz_phases: list[str], review_titles: list[str]) -> list[str]:
+def _phase_titles(
+    *,
+    with_size: bool,
+    blitz_phases: list[str],
+    review_titles: list[str],
+    judged: bool = False,
+    with_accept: bool = False,
+) -> list[str]:
     titles: list[str] = []
     for phase in ASK_PHASES:
         if phase == "size" and not with_size:
             continue
+        if phase == "accept" and not with_accept:
+            continue
         titles.append(phase)
         if phase == "plan":
             titles.extend(t for t in blitz_phases if t not in titles)
-    for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles, _emit._TEST_PHASE_TITLE]:
+    judge_titles = [CRITERION_JUDGE_PHASE_TITLE] if judged else []
+    for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles, *judge_titles, _emit._TEST_PHASE_TITLE]:
         if extra not in titles:
             titles.append(extra)
     return titles
@@ -250,6 +289,8 @@ def compose_ask_script(
     writes: Sequence[str] = (),
     roadmap_blitz_text: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    baton: Optional[dict] = None,
+    accept_pending: bool = False,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -259,6 +300,9 @@ def compose_ask_script(
     is written to, carried into `next_action.params` for `dispatch.terminal_commit`.
     `plan_blitz_args` is spread first into the planBlitz call, so `mode`, `repoRoot` and `batons`
     always win; `writes` seeds the emit-time write set the gate and stage ops receive.
+    `baton` ({"path", "deliverable_id"}) is passed to the size scaffold and the gate verb. The
+    accept phase (an APM ruling recorded in-run, then a re-gate) composes when `accept_pending`
+    or on a raw ask; it never writes a `pm_quote`.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -306,11 +350,12 @@ def compose_ask_script(
         return _cat(f"{head}\n\n{anchor}\n\n", *lines_and_exprs)
 
     review_head = head + session_tail
+    run_base_sha = head_sha(repo_root) or ""
     review_blocks = compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
         plan_path=manifest_rel,
-        run_base_sha=head_sha(repo_root) or "",
+        run_base_sha=run_base_sha,
         declared_paths_js="_manifest.review_declared_paths",
         prompt_head=review_head,
         run_key=run_id,
@@ -318,6 +363,13 @@ def compose_ask_script(
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
     )
     review_titles = [title for title, _ in review_blocks]
+    judge_expr = _criterion_judge_call(
+        review,
+        review_stage_schemas,
+        run_base_sha=run_base_sha,
+        head=head,
+        agent_type_host=agent_type_host,
+    )
 
     b: list[str] = []
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
@@ -332,9 +384,10 @@ def compose_ask_script(
     if blitz_fn:
         b.append(blitz_fn)
     b.append(_row_runner_js())
-    b.append(_usage_limit_helper_js())
-    for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR, _emit._FALSIFIER_RESULT_VAR):
+    for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
+    if judge_expr is not None:
+        b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
     if not sizing_rel:
         b.append("  phase('size');")
@@ -345,7 +398,12 @@ def compose_ask_script(
             "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
             "--route, --name, --premise executed|read|not-applicable with --premise-evidence, --exit-criterion (one sentence "
             "stating what done means) and --interaction-mode (the `interaction_mode` step (1)'s sizing-assemble returned, verbatim; never choose one); "
-            "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
+            + (
+                f"also pass --deliverable-id {baton['deliverable_id']} to that scaffold call, and "
+                if baton
+                else ""
+            )
+            + "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
             "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "
             "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "
             "sizing_rel, and as `writes` the repo-relative files the ask will create, edit or "
@@ -363,17 +421,71 @@ def compose_ask_script(
         b.append("  _gated = _sized.gated ?? [];")
 
     b.append("  phase('gate');")
+    gate_payload = "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes" + (
+        ", baton: " + json.dumps(baton["path"]) if baton else ""
+    ) + " })"
     gate_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_ASK_GATE} '",
-        "js:JSON.stringify({ sizing_path: _sizingRel, writes: _writes })",
+        gate_payload,
         "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
     )
-    b.append(
-        f"  const _gate = await {_agent(gate_prompt, label='gate', phase='gate', agent_type=agent_type, schema=_GATE_SCHEMA)};"
-    )
+    gate_call = _agent(gate_prompt, label="gate", phase="gate", agent_type=agent_type, schema=_GATE_SCHEMA)
+    b.append(f"  let _gate = await {gate_call};")
+
+    if accept_pending or not sizing_rel:
+        apm_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "phase: accept\n\nYou are the PM's delegate for one exit criterion. Nobody escalates to the "
+            "human here: a scope, direction or priority matter is yours as the APM. Read the sizing at ",
+            "js:_sizingRel",
+            " and judge its exit_criterion.statement: is it a done-state this ask can be held to? Rule "
+            "it as written (verdict 'ruled', statement omitted), or amend it by returning the better "
+            "one-sentence statement. Return the ruling verbatim as ruling. Never rule on a merge, "
+            "publish, push to main or cross-repo commit gate: return verdict 'pm-only' with "
+            "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
+            "right answer, or needs such an external or irreversible action. Being unsure is not a "
+            "ground. You stage and commit nothing.",
+        )
+        apm_call = _agent(
+            apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
+            schema=_ACCEPT_SCHEMA, agent_model="sonnet"
+        )
+        accept_payload = (
+            "js:JSON.stringify({ sizing: _sizingRel, apm_ruling: _apm.ruling, run_id: _runId"
+            + ", ...(_apm.statement ? { statement: _apm.statement } : {}) })"
+        )
+        run_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run `{_INVOKE} sizing.accept_exit_criterion '",
+            accept_payload,
+            "'` and return ok true when it succeeds. If it replies `{\"error\": ...}` return ok false "
+            "and that message as error.",
+        )
+        run_call = _agent(
+            run_prompt, label="accept-record", phase="accept", agent_type=agent_type, schema=_ACCEPT_RESULT_SCHEMA
+        )
+        b.append(
+            f"  if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)}) {{\n"
+            "    phase('accept');\n"
+            "    let _apm = null;\n"
+            f"    try {{ _apm = await {apm_call}; }} catch (_e) {{ _apm = null; }}\n"
+            f"    const _apmGated = new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i').test(_apm?.ruling ?? '');\n"
+            "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling) {\n"
+            "      let _recorded = null;\n"
+            f"      try {{ _recorded = await {run_call}; }} catch (_e) {{ _recorded = null; }}\n"
+            "      if (_recorded && _recorded.ok === true) {\n"
+            f"        _gate = await {gate_call};\n"
+            "      }\n"
+            "    }\n"
+            f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
+            "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _apm.verdict, "
+            "pmOnlyGround: _apm.pmOnlyGround ?? (_apmGated ? 'external-or-irreversible' : null), ruling: _apm.ruling ?? null } } };\n"
+            "    }\n"
+            "  }"
+        )
     b.append(
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
         f"{_lit(HALT_REFUSAL)}, ..._gate.halt, sizing: _sizingRel, run_id: _runId }}; }}"
@@ -384,7 +496,7 @@ def compose_ask_script(
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID, ...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID } "
         ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, session_id: _SESSION_ID })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
@@ -479,30 +591,20 @@ def compose_ask_script(
     )
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
-    b.append(
-        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length) {{"
-    )
-    b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
-    b.append("    try {")
-    b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
-    b.append("    } catch (e) { _haltOnUsageLimit(e); }")
-    b.append("  }")
-    judge_expr = compose_criterion_judge(
-        review,
-        stage_schemas=review_stage_schemas,
-        plan_path=manifest_rel,
-        run_base_sha=head_sha(repo_root) or "",
-        falsifier=None,
-        prompt_head=review_head,
-        host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
-        prompt_suffix_js="'\nplan: ' + (_planRel ?? _sizingRel) + ' (a sizing: its exit_criterion is the criterion)'",
-    )
-    if judge_expr:
-        b.append(f"  if (!_halted && _manifest && !_manifest.error) {{")
-        b.append(f"    phase({_lit(CRITERION_JUDGE_PHASE_TITLE)});")
+    test_guard = f"_gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length"
+    if judge_expr is None:
+        b.append(f"  if (!_halted && {test_guard}) {{")
+        b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+        b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
+        b.append("  }")
+    else:
+        b.append("  if (!_halted) {")
+        b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
         b.append(
-            f"    {_emit._FALSIFIER_RESULT_VAR} = await "
-            f"{_emit._never_stranding_criterion(judge_expr, judge=True)};"
+            f"    [{_emit._TEST_RESULT_VAR}, {_emit._FALSIFIER_RESULT_VAR}] = await parallel([\n"
+            f"      () => ({test_guard}) ? {_scoped_test_call(agent_type_host)} : null,\n"
+            f"      () => {_emit._never_stranding_criterion(judge_expr, judge=True)},\n"
+            "    ]);"
         )
         b.append("  }")
     review_vars = _emit.review_stage_vars(
@@ -514,7 +616,7 @@ def compose_ask_script(
         has_commit_request=True,
         review_vars=review_vars,
         test_var=_emit._TEST_RESULT_VAR,
-        falsifier_var=_emit._FALSIFIER_RESULT_VAR if judge_expr else None,
+        falsifier_var=_emit._FALSIFIER_RESULT_VAR if judge_expr is not None else None,
         verification_var="_verifications",
         test_absent_status="not_run",
         script_path=script_path,
@@ -525,7 +627,7 @@ def compose_ask_script(
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
-        "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
+        "blocked: _blockedChunks, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
@@ -536,7 +638,7 @@ def compose_ask_script(
     meta = _emit._meta_block(
         "warp-ask",
         "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review.",
-        _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=[*review_titles, *([CRITERION_JUDGE_PHASE_TITLE] if judge_expr else [])]),
+        _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=review_titles, judged=judge_expr is not None, with_accept=accept_pending or not sizing_rel),
     )
     script = (
         f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n"

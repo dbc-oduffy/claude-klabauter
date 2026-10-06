@@ -10,8 +10,8 @@ otherwise takes by hand (``prep_sidecar``, ``wave_sidecar_paths``,
 
 A stage's return is read ONLY from its sidecar's frontmatter, under the field
 names of ``review-stage.schema.json`` (judge: ``status`` in met/not_met/
-indeterminate; delivery: ``verdict`` PASS/FAIL; tests: ``status`` in
-pass/fail/not_run with optional ``run``/``failed``; prep: ``run_base_sha`` and
+indeterminate; delivery: ``verdict`` PASS/FAIL; tests: ``test_verdict_of``
+(``test_verdict``, else ``status``) in pass/fail/not_run with optional ``run``/``failed``; prep: ``run_base_sha`` and
 ``product_files``). A sidecar that carries no such field is not that stage's
 return, and a stage with none raises ``ShareStageMissing`` naming the dispatch
 that produces it. The judge's verdict must also be newer than the HEAD commit.
@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from coordinator_core.completion_receipts.verdict import test_verdict_of
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
     _DELIVERY_SUFFIX,
@@ -99,7 +100,8 @@ def _head_commit_time(repo_root: Path, head: str) -> float:
 def _reverify_record(repo_root: Path, share: Path, plan_id: str, head: str) -> Optional[Dict[str, Any]]:
     """Newest delivery-verdict record superseding this plan's run record in ``share``, usable only
     when its ``head_sha`` is an ancestor-or-equal of ``head`` and its delivery verdict is explicit."""
-    from coordinator_core.ops.dispatch_emit.reverify_delivery import _newest_supersession, _run_rel
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import _run_rel
+    from coordinator_core.ops.dispatch_emit.verdict_supersession import _newest_supersession
 
     best: Optional[Dict[str, Any]] = None
     for path in sorted(share.glob("*.review-wave-bookkeeping.md")):
@@ -221,7 +223,7 @@ def assemble_from_share(
 
     tests = _newest([
         (p, fm) for p, fm in bound
-        if "test-runner" in kind(fm) and fm.get("status") in _TESTS_STATUSES
+        if "test-runner" in kind(fm) and test_verdict_of(fm) in _TESTS_STATUSES
     ])
     if tests is None and isinstance((reverify or {}).get("tests"), dict) and reverify["tests"].get("status") in _TESTS_STATUSES:
         t = reverify["tests"]
@@ -241,7 +243,7 @@ def assemble_from_share(
     if isinstance(d_fm.get("claims_unbacked"), list):
         delivery_ret["unbacked"] = d_fm["claims_unbacked"]
     t_path, t_fm = tests
-    tests_ret: Dict[str, Any] = {"status": t_fm["status"], "sidecar": _rel(t_path, repo_root)}
+    tests_ret: Dict[str, Any] = {"status": test_verdict_of(t_fm), "sidecar": _rel(t_path, repo_root)}
     for key in ("run", "failed"):
         if key in t_fm:
             tests_ret[key] = t_fm[key]

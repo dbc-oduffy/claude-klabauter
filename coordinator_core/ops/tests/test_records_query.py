@@ -1089,6 +1089,7 @@ class TestNewTypeGlobCoverage:
             "decision", "review", "lesson", "handoff-ledger", "research-claim",
             "goal", "research-synthesis", "gap-report", "coverage-audit",
             "archived-memo", "sizing-object", "cutover",
+            "subtractive-adjudication-record", "completion-receipt",
             "priority-intent", "priority-ledger", "spike-result",
             "spine",
         }

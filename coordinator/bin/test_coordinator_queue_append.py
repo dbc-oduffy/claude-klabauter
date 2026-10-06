@@ -2670,3 +2670,11 @@ def test_swept_output_root_refuses_instead_of_writing() -> None:
         raise AssertionError(
             f"{name}: " + f"expected a one-line stderr message naming the temp-dir refusal; got {result.stderr!r}"
         )
+
+
+def test_plain_help_states_status_is_required_outside_lessons() -> None:
+    result = _run_cli(["--help"])
+    assert result.returncode == 0, result.stderr
+    text = " ".join(result.stdout.split())
+    assert "Required for every shared-base schema" in text
+    assert "defaults to open only for --schema lessons" in text

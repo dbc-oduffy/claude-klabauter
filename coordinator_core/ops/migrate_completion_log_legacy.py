@@ -34,8 +34,8 @@ Negative-spec:
       overwritten, not treated as an error) — mirrors the bash `[[ -e "$dst" ]]`
       skip branch exactly.
     - Uses `git mv` via subprocess (not a plain filesystem rename) so the
-      move is staged as a git rename, matching the bash oracle's use of
-      `git -C "$REPO_ROOT" mv "$src" "$dst"`.
+      move is a git rename, then commits exactly the moved paths with
+      `--pathspec-from-file` so no staged state is left in the shared index.
     - Exit codes reproduced exactly: 0 = success (0+ files moved, or no-op
       when no monoliths found); 1 = usage/environment error (not in a repo
       with archive/completed/, or --root points at a non-existent path with
@@ -50,6 +50,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 from coordinator_core.win_portability import no_console_creationflags
 import sys
 from typing import List, Optional
@@ -87,15 +88,36 @@ def _find_monoliths(completed_dir: str) -> List[str]:
     return sorted(hits)
 
 
-def _git_mv(repo_root: str, src: str, dst: str) -> bool:
-    result = subprocess.run(
-        ["git", "-C", repo_root, "mv", src, dst],
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    )
+def _commit_moved(repo_root: str, srcs: List[str], dst_dir: str) -> bool:
+    """Commit exactly the moved sources and their destinations through
+    `--pathspec-from-file` (the set can exceed the Windows argv limit), so the
+    staged renames never linger in the shared index. One spawn regardless of N."""
+    rels: List[str] = []
+    for src in srcs:
+        name = os.path.basename(src)
+        rels.append(os.path.relpath(src, repo_root).replace(os.sep, "/"))
+        rels.append(os.path.relpath(os.path.join(dst_dir, name), repo_root).replace(os.sep, "/"))
+    fd, pathspec_file = tempfile.mkstemp(prefix="migrate-legacy-pathspec-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(rels) + "\n")
+        result = subprocess.run(
+            [
+                "git", "-C", repo_root, "commit", "-q", "-m",
+                "migrate: move legacy completion monoliths under archive/completed/legacy/",
+                f"--pathspec-from-file={pathspec_file}",
+            ],
+            capture_output=True,
+            text=True,
+            **no_console_creationflags(),
+        )
+    finally:
+        try:
+            os.remove(pathspec_file)
+        except OSError:
+            pass
     if result.returncode != 0 and result.stderr.strip():
-        print(f"  git mv stderr: {result.stderr.strip()}", file=sys.stderr)
+        print(f"  git commit stderr: {result.stderr.strip()}", file=sys.stderr)
     return result.returncode == 0
 
 
@@ -203,7 +225,9 @@ def main(argv: List[str]) -> int:
         print(f"MOVE: archive/completed/{filename}  →  archive/completed/legacy/{filename}")
         to_move.append(src)
 
-    if _git_mv_batch(repo_root, to_move, legacy_dir):
+    if _git_mv_batch(repo_root, to_move, legacy_dir) and (
+        not to_move or _commit_moved(repo_root, to_move, legacy_dir)
+    ):
         for src in to_move:
             filename = os.path.basename(src)
             dst = os.path.join(legacy_dir, filename)
@@ -225,13 +249,6 @@ def main(argv: List[str]) -> int:
     print(f"  Moved:  {moved}")
     print(f"  Failed: {failed}")
     print("")
-
-    if moved > 0:
-        print("Next step: commit the staged renames.")
-        print(
-            "  git commit -m 'migrate: move legacy completion monoliths under archive/completed/legacy/'"
-        )
-        print("")
 
     print("Note: legacy/ entries are excluded from query-completions results.")
     print("  query-completions.sh targets archive/completed/*/*.md (per-entry files).")

@@ -208,6 +208,17 @@ def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
     assert "await _drainSweep();" in script
 
 
+def test_commit_failed_hand_back_names_the_runnable_sweep_command():
+    script = _compose()
+    assert "grind-row sweep; never commit" not in script
+    assert script.count("+ SWEEP_HINT") == 2
+    hint = script[script.index("const SWEEP_HINT"):]
+    hint = hint[: hint.index("\n")]
+    assert "backlog-grind-assemble grind-row sweep --profile-dir " in hint
+    assert "+ PROFILE_DIR +" in hint and "+ REPO_ROOT +" in hint
+    assert "--profile fixture --queue state/bug-backlog --repo-root " in hint
+
+
 def test_no_git_mv_stash_add_dash_a():
     script = _compose()
     for token in ("git mv", "git stash", "add -A"):
@@ -489,6 +500,8 @@ def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_b
     result, _budget = _run(batches, script_by_kind, batch_size=1, budget_tokens=1)
     handback_types = {h["type"] for h in result["handed_back"]}
     assert "budget-exhausted" in handback_types
+    reasons = [h["reason"] for h in result["handed_back"] if h["type"] == "budget-exhausted"]
+    assert reasons and all("emit-admitted row" in r for r in reasons)
 
 
 def test_max_agent_calls_is_the_deterministic_secondary_bound():
@@ -923,7 +936,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
     script = _compose()
-    assert "<<\\'RUN_RECORD_JSON\\'\\n' + (JSON.stringify(_runCostRecord())) + '\\nRUN_RECORD_JSON" in script
+    assert r"""--record-urlenc \'' + (encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/'/g, '%27')) + '\' --repo-root '""" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
     for key in ("profile:", "appetite:", "resolved_knobs: RESOLVED_KNOBS", "manifest_digest: MANIFEST_DIGEST",

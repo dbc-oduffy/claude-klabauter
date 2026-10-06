@@ -59,8 +59,7 @@ def _all_non_commit_calls() -> dict:
         "undo": grind_stages.compose_undo_call(
             label="undo:row1",
             phase_title="Undo",
-            touched_files=["a.py"],
-            created_files=["b.py"],
+            paths=["a.py", "b.py"],
         ),
     }
 
@@ -122,31 +121,40 @@ def test_ledger_sweep_names_every_queue_and_never_commits():
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"], record_js="REC")
     assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (REPO_ROOT) + '" in call_text
     assert "grind-row run-record --profile p1 --run-id ' + 'run-1'" in call_text
-    # The verb requires --record-file; the emitted call feeds the record by quoted heredoc.
-    assert " --record-file - --repo-root " in call_text
-    assert "(REC)" in call_text
-    assert "<<\\'RUN_RECORD_JSON\\'" in call_text
+    # The record rides as one percent-encoded, single-quoted token, never stdin.
+    assert " --record-urlenc \\'" in call_text
     assert "ONE Bash call" in call_text
-    assert "passing this JSON on stdin" not in call_text
-    # heredoc body is the record alone on its line, closed by the delimiter line
-    assert "<<\\'RUN_RECORD_JSON\\'\\n' + (REC) + '\\nRUN_RECORD_JSON\\n```" in call_text
+    assert "encodeURIComponent(REC).replace(/'/g, '%27')" in call_text
+    assert "--record-file" not in call_text
     assert "commit_v2" not in call_text
     assert "coordinator:git-commit-agent" not in call_text
 
 
+def _js_encode_uri_component(text: str) -> str:
+    """JS `encodeURIComponent`: UTF-8 percent-encoding, unreserved set
+    `A-Z a-z 0-9 - _ . ! ~ * ' ( )`."""
+    from urllib.parse import quote
+
+    return quote(text, safe="-_.!~*'()")
+
+
 def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
     """The `grind-row run-record` argv the op-runner is told to run, with each
-    `' + (EXPR) + '` splice bound from ``bindings`` -- the verb onward."""
+    `' + (EXPR) + '` splice evaluated from ``bindings`` -- the verb onward.
+    The record splice is evaluated the way the Workflow runtime would."""
     import re
     import shlex
 
-    flat = re.sub(
-        r"' \+ \(([A-Za-z_][\w.]*)\) \+ '",
-        lambda m: shlex.quote(str(bindings[m.group(1)])),
-        call_text,
-    ).replace("' + '", "")
+    def _eval(expr: str) -> str:
+        m = re.fullmatch(r"encodeURIComponent\((\w+)\)\.replace\(/'/g, '%27'\)", expr)
+        if m:
+            return _js_encode_uri_component(bindings[m.group(1)]).replace("'", "%27")
+        return str(bindings[expr])
+
+    flat = re.sub(r"' \+ \((.+?)\) \+ '", lambda m: _eval(m.group(1)), call_text)
+    flat = flat.replace("' + '", "").replace("\\'", "'")
     start = flat.index(grind_stages.ASSEMBLE_CMD + " grind-row run-record")
-    command = flat[start : flat.index(" <<\\'RUN_RECORD_JSON", start)]
+    command = flat[start : flat.index("\\n```", start)]
     argv = shlex.split(command[len(grind_stages.ASSEMBLE_CMD) :])
     assert argv[0] == "grind-row"
     return argv[1:]
@@ -154,9 +162,9 @@ def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
 
 def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
     """The drain brief and `grind_rows.cmd_run_record` agree: the argv the
-    brief names, fed the record on stdin as the brief says, writes the run
-    record. A required flag the brief omits exits 2 and the run dies
-    `stage-dead` with no run-cost record."""
+    brief names, run as written with NOTHING on stdin, writes the run record
+    byte-faithfully -- including a quote and non-ASCII in a reason string,
+    the shapes that break a hand-quoted or piped blob."""
     import io
 
     from coordinator_core.backlog_grind_assemble import grind_rows
@@ -165,16 +173,17 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
         label="ledger-sweep:drain", phase_title="Grind", profile="p1",
         queue_dirs=[], run_id_js="RUN_ID", record_js="REC",
     )
+    record = {"run_id": "20261002T000000Z", "reason": "it's \"quoted\" — café; $(x) `y`"}
     argv = _emitted_run_record_argv(
-        call_text, {"RUN_ID": "20261002T000000Z", "REPO_ROOT": tmp_path, "REC": "{}"}
+        call_text,
+        {"RUN_ID": "20261002T000000Z", "REPO_ROOT": str(tmp_path), "REC": json.dumps(record)},
     )
-    assert "<<\\'RUN_RECORD_JSON\\'" in call_text
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"run_id": "20261002T000000Z"})))
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
     monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
 
     assert grind_rows.main(argv) == grind_rows.EXIT_OK
-    written = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261002T000000Z.json"
-    assert json.loads(written.read_text(encoding="utf-8")) == {"run_id": "20261002T000000Z"}
+    target = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261002T000000Z.json"
+    assert json.loads(target.read_text(encoding="utf-8")) == record
 
 
 def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, capsys):
@@ -408,15 +417,21 @@ def test_commit_schema_carries_a_failure_reason():
     assert "verbatim refusal or the divergence you found in `reason`" in call_text
 
 
-def test_undo_prompt_interpolates_touched_and_created_js_expressions():
+def test_undo_call_is_one_verb_command_run_by_the_op_runner():
     call_text = grind_stages.compose_undo_call(
-        label="undo:row1",
-        phase_title="Undo",
-        touched_files_js="fixResult.touched_files",
-        created_files_js="fixResult.extra_files",
+        label="undo:row1", phase_title="Undo", paths_js="fixResult.paths"
     )
-    assert "(fixResult.touched_files).join(', ')" in call_text
-    assert "(fixResult.extra_files).join(', ')" in call_text
+    assert "grind-row undo --paths-urlenc \\'" in call_text
+    assert "encodeURIComponent(JSON.stringify({paths: fixResult.paths})).replace(/'/g, '%27')" in call_text
+    assert "\\' --repo-root ' + (REPO_ROOT)" in call_text
+    assert "ONE Bash call" in call_text
+    assert "git checkout" not in call_text
+    assert f"agentType: '{grind_stages.OP_RUNNER_AGENT_TYPE}'" in call_text
+
+
+def test_undo_call_static_paths_render_a_json_array():
+    call_text = grind_stages.compose_undo_call(label="u", phase_title="U", paths=["a.py", "b c.py"])
+    assert 'JSON.stringify({paths: ["a.py", "b c.py"]})' in call_text
 
 
 def test_ledger_sweep_interpolates_run_id():
@@ -689,3 +704,28 @@ def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger
     assert '"X: 1"' in text
     assert "no-op" in text
     assert "state/queue-grind/ path" in text
+
+
+def test_triage_brief_binds_a_rows_pm_ruling():
+    """An APM/PM ruling on a row is binding triage input: a grind that
+    re-derived `park` from the body alone re-triaged rows the APM had ruled
+    `cloud grinds: skip`."""
+    call_text = grind_stages.compose_triage_call(
+        label="triage:b0", phase_title="Grind", run_dir="RUN", profile="p1",
+        batch_id="b0", triage_depth="standard", verdicts=["fix", "park"],
+    )
+    assert "`pm_ruling` field is a binding ruling" in call_text
+    assert "quote it in that row\\'s `evidence`" in call_text
+    assert "never re-derive a fresh verdict from the body alone" in call_text
+
+
+def test_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths():
+    text = grind_stages.compose_commit_call(
+        label="commit:row1", phase_title="Commit", row_id="row1", touched_files=["a.py"]
+    )
+    assert "drop_ignored" in text
+    assert "dropped_ignored" in text
+    review = grind_stages.compose_review_fix_commit_call(
+        label="commit:rv", phase_title="Commit", touched_files_js="TOUCHED"
+    )
+    assert "drop_ignored" in review

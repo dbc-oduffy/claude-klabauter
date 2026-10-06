@@ -2942,6 +2942,21 @@ def _wg_foreign_family_sidecar_write_fire(
     }
 
 
+def _wg_hand_set_test_verdict_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    return {
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": "state/subagent-share/sess-fff/coordinator-test-runner.abc123def456.md",
+            "old_string": "status: open",
+            "new_string": "test_verdict: pass",
+        },
+        "cwd": str(scratch_dir),
+        "session_id": "sess-fff",
+    }
+
+
 def _wg_session_display_name_as_identifier_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -3111,6 +3126,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_foreign_family_sidecar_write", "control", False, _wg_benign),
     WriteGuardRow("block_goals_log_hand_write", "fire", True, _wg_goals_log_fire),
     WriteGuardRow("block_goals_log_hand_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_hand_set_test_verdict", "fire", True, _wg_hand_set_test_verdict_fire
+    ),
+    WriteGuardRow("block_hand_set_test_verdict", "control", False, _wg_benign),
     WriteGuardRow(
         "block_hand_authored_handoff_creation",
         "fire",

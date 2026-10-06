@@ -313,8 +313,7 @@ def _peer_claim_warnings(
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
     ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
-    gets one warning naming (capped at 5) its untracked files outside ``paths``; a failure there
-    degrades to a "companion state indeterminate" warning.
+    gets one warning naming (capped at 5) its untracked files outside ``paths``, degrading likewise.
     """
     if not paths:
         return []
@@ -645,6 +644,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         conversion neither this module nor its `blob_fallback` can
         reproduce).
 
+    Gitignored-untracked `paths` refuse; `force_ignored` (list) commits them, `drop_ignored` (bool) drops them.
+
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
     caller's worktree is main_worktree_root(repo_root).
     """
@@ -723,7 +724,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(force_ignored, list) or not all(isinstance(p, str) for p in force_ignored):
         return _error("params.force_ignored must be a list of strings")
     exempt = {p.replace("\\", "/") for p in force_ignored}
+    raw_drop_ignored = params.get("drop_ignored", False)
+    if not isinstance(raw_drop_ignored, bool):
+        return _error("params.drop_ignored must be a boolean")
     ignored = [p for p in _ignored_untracked(worktree_root, raw_paths) if p not in exempt]
+    dropped_ignored: list = []
+    if ignored and raw_drop_ignored:
+        dropped_ignored = ignored
+        raw_paths = [p for p in raw_paths if p not in set(ignored)]
+        if not (raw_paths or raw_deleted or raw_untracked):
+            shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
+            return _error(
+                f"every path is gitignored and untracked, nothing left to commit: {shown}.",
+                dropped_ignored=dropped_ignored,
+            )
+        ignored = []
     if ignored:
         shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
         return _error(
@@ -837,7 +852,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         index_stale_warning = str(exc)
         index_stale_paths = list(exc.paths)
     except IndexParseError as exc:
-        # Raised reading the index before the ref moves: nothing landed.
         return _error(
             f"{exc}. Nothing committed; resolve any unmerged path, or convert a v4 "
             "index with `git update-index --index-version 2`."
@@ -852,6 +866,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # legitimate success and the operator still needs to see why, not a
     # fact buried in a dict key nobody is obliged to read.
     warnings = []
+    if dropped_ignored:
+        shown = ", ".join(dropped_ignored[:5]) + (", ..." if len(dropped_ignored) > 5 else "")
+        warnings.append(
+            f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
+        )
     warnings.extend(peer_claim_warnings)
     if outcome.sign_warning is not None:
         # First-class: the only warning meaning "this commit is not what the branch's protection expects."
@@ -965,4 +984,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "warnings": warnings,
         "guard_class_relay": guard_class_relay,
         "index_stale": index_stale_paths,
+        "dropped_ignored": dropped_ignored,
     }

@@ -1368,13 +1368,6 @@ def _session_advisory_already_fired(
         if shape_key is None:
             return False
         gitdir = _resolve_gitdir_for_dedupe(cwd)
-        if gitdir is None:
-            # A session rooted above its checkouts (cloud) has no gitdir; a
-            # temp-dir store keeps the once-per-session contract.
-            import tempfile
-            from pathlib import Path
-
-            gitdir = Path(tempfile.gettempdir()) / "coordinator-gitless-advisory-dedupe"
         if _already_advised(gitdir, session_id, shape_key):
             return True
         _mark_advised(gitdir, session_id, shape_key)

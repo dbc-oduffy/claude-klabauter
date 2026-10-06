@@ -459,6 +459,20 @@ def _extract_inline_c_payload(tokens_after_interpreter: List[str]) -> Optional[s
 # ---------------------------------------------------------------------------
 
 
+_PROBE_BASE_A = os.path.abspath(os.sep + "probe-a")
+_PROBE_BASE_B = os.path.abspath(os.sep + "probe-b")
+
+
+def _is_relative_target(raw_target: str) -> bool:
+    """True when `raw_target` resolves differently under two distinct bases --
+    i.e. its value depends on a cwd the caller does not know. Uses the same
+    `_resolve_relative` the candidates go through, so MSYS/drive/`~` absolutes
+    classify as the guard itself sees them."""
+    return _resolve_relative(_PROBE_BASE_A, raw_target) != _resolve_relative(
+        _PROBE_BASE_B, raw_target
+    )
+
+
 def _iter_write_sink_candidates(
     cmd: str, cwd: Optional[str], preserve_windows_backslashes: Optional[bool] = None
 ) -> Iterator[Tuple[str, str, str]]:
@@ -502,13 +516,13 @@ def _iter_write_sink_candidates(
     interpreter_payload_write_sink_targets` finds inside `cmd`'s own heredoc
     bodies and `python`/`python3 -c` payloads (2026-08-14 PM-ratified
     reversal -- see module docstring, "WRITE-SINK CLASSIFICATION"). These
-    are resolved against the ORIGINAL `effective_cwd` (before this
-    function's own `cd`-tracking loop below runs), not the possibly-mutated
-    one a later segment sees -- an interpreter payload's own filesystem
-    context is not reliably correlated with a shell `cd` elsewhere in the
-    same multi-line command, and resolving against the untracked starting
-    cwd is the conservative choice for a speed bump that must never invent
-    a wrong-but-plausible base.
+    are resolved against the `effective_cwd` the depth-0 `cd` walk ends on:
+    the extractor carries no position, and the dominant shape is `cd <dir>
+    && python3 - <<EOF ... open('rel','w')`, where the payload runs in the
+    cd'd directory -- resolving against the starting cwd read a mirror write
+    as in-repo. When a depth-0 `cd` could not be resolved, the cwd is
+    unknown, so a RELATIVE payload target is dropped (never composed onto a
+    guessed base); an absolute one still yields.
 
     `resolve_command_positions` (both here and the nested `-c`-payload
     re-entry below) is called with `preserve_windows_backslashes=
@@ -544,7 +558,7 @@ def _iter_write_sink_candidates(
         return
 
     effective_cwd = cwd or os.getcwd()
-    payload_base_cwd = effective_cwd
+    cwd_unknown = False
     for rc in resolved_segments:
         if rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
             continue
@@ -553,9 +567,13 @@ def _iter_write_sink_candidates(
         if rc.depth == 0 and head_base == "cd":
             positional = [t for t in rc.tokens[1:] if not t.startswith("-")]
             if len(positional) == 1:
-                resolved = _resolve_relative(effective_cwd, positional[0])
+                resolved = None
+                if "$" not in positional[0] and "`" not in positional[0]:
+                    resolved = _resolve_relative(effective_cwd, positional[0])
                 if resolved is not None:
                     effective_cwd = resolved
+                else:
+                    cwd_unknown = True
             continue
 
         for raw_target in extract_write_sink_targets_for_segment(rc.tokens, head_base):
@@ -585,7 +603,9 @@ def _iter_write_sink_candidates(
                     yield (resolved_target, nested_head, raw_target)
 
     for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
-        resolved_target = _resolve_relative(payload_base_cwd, raw_target)
+        if cwd_unknown and _is_relative_target(raw_target):
+            continue
+        resolved_target = _resolve_relative(effective_cwd, raw_target)
         if resolved_target is None:
             continue
         yield (resolved_target, "interpreter-payload", raw_target)

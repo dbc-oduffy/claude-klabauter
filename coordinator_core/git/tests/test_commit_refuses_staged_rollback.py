@@ -208,6 +208,43 @@ def test_move_of_a_path_absent_at_depth_2_is_not_a_rollback(tmp_path):
     assert outcome.sha
 
 
+def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
+    """Queue-row archival moves the row AND stamps it closed, so the blob at
+    the new path differs from HEAD's; the same-named new path still makes it
+    a move."""
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: open\n", "touch")
+    (repo / "archive/2026-10").mkdir(parents=True)
+    (repo / "live/s.yaml").unlink()
+    (repo / "archive/2026-10/s.yaml").write_text("status: closed\n", encoding="utf-8", newline="\n")
+
+    outcome = gcommit.commit_paths(
+        repo, ["archive/2026-10/s.yaml"], "archive s", deleted_paths=["live/s.yaml"],
+        detect_rollback=True,
+    )
+    assert outcome.sha
+
+
+def test_same_name_already_tracked_elsewhere_does_not_excuse_a_deletion(tmp_path):
+    """Only a NEW same-named path pairs with the deletion; editing a file that
+    already exists under the same name elsewhere is not a move."""
+    repo = _repo(tmp_path)
+    _commit(repo, "other/s.yaml", "a\n", "other")
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: open\n", "touch")
+    (repo / "live/s.yaml").unlink()
+    (repo / "other/s.yaml").write_text("b\n", encoding="utf-8", newline="\n")
+    before = gcommit.head_sha(repo)
+
+    with pytest.raises(StagedRollbackRefused):
+        gcommit.commit_paths(
+            repo, ["other/s.yaml"], "edit + delete", deleted_paths=["live/s.yaml"],
+            detect_rollback=True,
+        )
+    assert gcommit.head_sha(repo) == before
+
+
 def test_deletion_without_a_matching_add_still_refuses(tmp_path):
     repo = _repo(tmp_path)
     _commit(repo, "live/s.yaml", "status: routed\n", "create")

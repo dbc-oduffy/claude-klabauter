@@ -286,7 +286,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry dispatch resolves repo_root=None and the handler refuses outright.
     "plan.prep_gate":                        "common_dir",
     "plan.stamp_prepped":                    "common_dir",
-    "artifact.adopt":                        "common_dir",
     "plan.gated_criteria_met":               "common_dir",
     "plan.cross_plan_gate":                  "common_dir",
     "goal.match_candidates":                 "common_dir",
@@ -710,6 +709,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # review_mint.record_superseding_review / receipt.approve — MUTATING: write
     # only the caller's own worktree, never a `params.repo_root` override.
     "review_mint.record_superseding_review":    "common_dir",
+    # test_verdict.record — MUTATING: writes only the caller's own worktree sidecar.
+    "test_verdict.record":                      "common_dir",
     "receipt.approve":                          "common_dir",
     "fanout.poll_scratch_dir":                  "none",
     "fanout.compose":                           "none",

@@ -204,7 +204,6 @@ from coordinator_core.hooks.auto_push import (
     _cockpit_publish_script,
     _maybe_publish_cockpit_contract,
 )
-from coordinator_core.push_hold import read_hold
 from coordinator_core.session.core import session_dir
 
 __all__ = ["push_outstanding"]
@@ -628,13 +627,9 @@ def push_outstanding(
     root = Path(worktree_root)
     arm_t_start = time.time()
 
-    branch = head_branch(root)
-    hold_note = read_hold(root, branch)
-    if hold_note is not None:
-        return PushOutcome(exit_code=0, skipped=["push:hold", f"push:hold-note:{hold_note}"])
-
     p4_pending = None if decide_only else _p4_leg_precheck(root, session_id)
 
+    branch = head_branch(root)
     current_sha = head_sha(root) if branch is not None else None
     upstream_sha: Optional[str] = None
 

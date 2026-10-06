@@ -57,6 +57,7 @@ __all__ = [
     "strip_annotations",
     "PROSE_ANNOTATION_KEYWORDS",
     "AUTHORING_ANNOTATION_KEYWORDS",
+    "LOCATOR_KEYWORDS",
 ]
 
 
@@ -70,6 +71,16 @@ AUTHORING_ANNOTATION_KEYWORDS = frozenset({"x-bump-class", "x-bump-note"})
 """Root-level annotations ABOUT a version bump rather than about document
 shape. A validator behaves identically with or without them. A NAMED
 allowlist, never an `x-*` glob (see module negative spec)."""
+
+
+LOCATOR_KEYWORDS = frozenset({"applies_to"})
+"""Root-level keys that say WHERE a schema applies (which files it governs),
+not WHAT it validates: a validator accepts and rejects the same documents
+whatever they say. Code-consumed as routing (`schema_validate.load_schemas`'s
+file-to-schema glob table), which is why this is kept apart from
+`AUTHORING_ANNOTATION_KEYWORDS` (prose about a bump). Locator agreement with
+DoE is a separate gate's job, not the shape hash's. Root-only: a schema
+PROPERTY named `applies_to` stays hashed. Mirrors DoE's `_LOCATOR_KEYWORDS`."""
 
 
 _SINGLE_SCHEMA_KEYWORDS = frozenset(
@@ -173,7 +184,8 @@ def semantic_shape_hash(schema: dict) -> str:
 
     Insensitive to: key order (canonicalized with `sort_keys=True`), prose
     annotations (`description`, `$comment`) at schema positions, root-level
-    authoring annotations (`x-bump-class`, `x-bump-note`), and the
+    authoring annotations (`x-bump-class`, `x-bump-note`), root-level locator
+    keys (`applies_to` -- routing, not validation), and the
     `x-schema-version` value itself -- the version is the thing the gate above
     this compares SEPARATELY, so folding it into the hash would make every
     shape comparison trivially "changed" whenever the version moved and hide
@@ -183,13 +195,13 @@ def semantic_shape_hash(schema: dict) -> str:
     removed `required` entry, an added or removed `properties` key, and a
     changed `type`.
 
-    Does not mutate `schema`: the two `.pop`s below act on a shallow copy, and
+    Does not mutate `schema`: the `.pop`s below act on a shallow copy, and
     `strip_annotations` builds a fresh container at every node it descends
     into.
     """
     stripped = dict(schema)
     stripped.pop(_VERSION_KEYWORD, None)
-    for key in AUTHORING_ANNOTATION_KEYWORDS:
+    for key in AUTHORING_ANNOTATION_KEYWORDS | LOCATOR_KEYWORDS:
         stripped.pop(key, None)
     shape = strip_annotations(stripped)
     canonical = json.dumps(shape, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

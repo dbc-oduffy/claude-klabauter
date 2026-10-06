@@ -116,8 +116,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "research-claim.schema.json": {
-    "blob": "d81eb409c87769bc4014db6a5c1a8a5f1044ac02",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "e870dccedc2b2b923da9884c2e15600813b7a62f",
+    "doe_commit": "bdeabeb260b3bc566f157e7e01c2f5a625e3a6a7"
   },
   "research-synthesis.schema.json": {
     "blob": "d9070c6c1878823a4511e1f3acb75a4c9eba819c",
@@ -128,8 +128,8 @@
     "doe_commit": "7524b888db715e7ea5ce40df3d12c48be51ab74f"
   },
   "review-sidecar.schema.json": {
-    "blob": "174f3b83f30446332218d371a3eac09d4c0b6a80",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "69da75a7b40f6917d8a93cec2e16fc0e8c543977",
+    "doe_commit": "1f009d625268738ca60c44f90a4d4abc233f9092"
   },
   "review-trail.schema.json": {
     "blob": "2eeff7dd7e5542850c9a90722a04d45fc08c7458",

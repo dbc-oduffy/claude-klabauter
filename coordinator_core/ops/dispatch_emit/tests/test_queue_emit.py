@@ -87,6 +87,32 @@ def _setup_repo(tmp_path: Path, *, n_rows: int = 3) -> tuple[Path, Path, Path]:
     return repo_root, queue_dir, run_dir
 
 
+def _profile_dir_with_max_agent_calls(profile_dir: Path, max_agent_calls: int) -> Path:
+    """A copy of the fixture profile whose first (standard) appetite sets ``max_agent_calls``."""
+    profile_dir.mkdir(parents=True)
+    source = (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8")
+    assert "max_agent_calls: 40" in source
+    (profile_dir / "fixture.yaml").write_text(
+        source.replace("max_agent_calls: 40", f"max_agent_calls: {max_agent_calls}", 1),
+        encoding="utf-8",
+    )
+    return profile_dir
+
+
+def _batches_const(script: str) -> list:
+    line = next(ln for ln in script.splitlines() if ln.startswith("const BATCHES = "))
+    return json.loads(line[len("const BATCHES = "):-1])
+
+
+def _script_string_const(script: str, name: str) -> str:
+    line = next(ln for ln in script.splitlines() if ln.startswith(f"const {name} = "))
+    return line[len(f"const {name} = "):-1].strip("'\"")
+
+
+def _batched_row_ids(script: str) -> list:
+    return [row if isinstance(row, str) else row["row_id"] for b in _batches_const(script) for row in b["rows"]]
+
+
 def _emit(tmp_path: Path, *, n_rows: int = 3, **overrides):
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path, n_rows=n_rows)
     kwargs: dict = dict(
@@ -124,6 +150,28 @@ def test_emit_queue_script_end_to_end(tmp_path):
     assert extras["reemit"][0] == "emit-dispatch-workflow.py"
     assert extras["reemit"][1:3] == ["--profile", "fixture"]
     assert "plan" not in extras
+
+
+def test_21_row_emit_at_standard_ceiling_admits_12_and_names_9(tmp_path):
+    emission = _emit(tmp_path, n_rows=21)
+    not_admitted = emission.receipt_extras["not_admitted"]
+    run_order = sorted(f"row{i}" for i in range(21))
+    assert not_admitted["count"] == 9
+    assert not_admitted["row_ids"] == run_order[12:]
+    assert not_admitted["arithmetic"]["admitted_count"] == 12
+    assert _batched_row_ids(emission.script) == run_order[:12]
+
+
+def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
+    profile_dir = _profile_dir_with_max_agent_calls(tmp_path / "profiles", 67)
+    emission = _emit(tmp_path, n_rows=21, profile_dir=profile_dir)
+    assert emission.receipt_extras["not_admitted"]["count"] == 0
+    assert len(_batched_row_ids(emission.script)) == 21
+
+
+def test_receipt_manifest_digest_matches_the_scripts_frozen_digest(tmp_path):
+    emission = _emit(tmp_path, n_rows=21)
+    assert emission.receipt_extras["manifest_digest"] == _script_string_const(emission.script, "MANIFEST_DIGEST")
 
 
 def test_receipt_extras_reemit_argv_round_trips_through_cli(tmp_path):
@@ -221,7 +269,7 @@ def test_queue_emission_fields_pinned_to_the_design_doc():
 # ---------------------------------------------------------------------------
 
 
-def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeypatch):
+def _run_900_row_perf(tmp_path, monkeypatch, profile_dir):
     repo_root = tmp_path
     (repo_root / ".git").mkdir()
     queue_dir = repo_root / "state" / "bug-backlog"
@@ -265,7 +313,7 @@ def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeyp
         "standard",
         None,
         queue=[queue_dir],
-        profile_dir=_FIXTURE_PROFILE_DIR,
+        profile_dir=profile_dir,
         repo_root=repo_root,
         run_dir=run_dir,
         session_id="sess1",
@@ -276,6 +324,20 @@ def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeyp
     assert calls == []
     assert elapsed_ms < 500.0
     assert emission.script
+    return emission
+
+
+def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeypatch):
+    emission = _run_900_row_perf(tmp_path, monkeypatch, _FIXTURE_PROFILE_DIR)
+    assert emission.receipt_extras["not_admitted"]["count"] == 888
+
+
+def test_synthetic_900_row_queue_fully_admitted_composes_all_rows_zero_spawn(tmp_path, monkeypatch):
+    emission = _run_900_row_perf(
+        tmp_path, monkeypatch, _profile_dir_with_max_agent_calls(tmp_path / "profiles", 2835)
+    )
+    assert emission.receipt_extras["not_admitted"]["count"] == 0
+    assert len(_batches_const(emission.script)) >= 900 // 12
 
 
 # ---------------------------------------------------------------------------

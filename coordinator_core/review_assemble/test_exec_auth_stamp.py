@@ -1630,3 +1630,26 @@ def test_supersede_note_exclusive_and_body_sha_guarded(tmp_path: Path) -> None:
     path.write_text(path.read_text(encoding="utf-8") + "\nmore body\n", encoding="utf-8")
     assert main(["stamp", str(path), "--by", "PM", "--supersede-note", "new"]) == EXIT_BUSINESS_FAIL
     assert _plan_fm(tmp_path, plan)["execution_authorized_note"] == "old"
+
+
+def test_sizing_arm_apm_acceptance_authorizes_ceo_and_not_hands_on(tmp_path: Path) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    def apm(mode: str) -> str:
+        return (
+            f"status: sized\ninteraction_mode: {mode}\nexit_criterion:\n  statement: done\n"
+            f"  accepted:\n    source: apm\n    apm_ruling: ruled\n    on: '2026-10-06'\n    mode: {mode}\n"
+        )
+
+    plan, sizing = _sizing_fixture(tmp_path, apm("ceo"))
+    code, result = stamp_sizing_authorization(plan, sizing, at="2026-10-06", repo_root=tmp_path)
+    assert code == EXIT_OK, result
+    assert _plan_fm(tmp_path, plan)["execution_authorized_note"] == (
+        "authorized by accepted sizing (mode=ceo, source=apm): state/sizings/s.yaml"
+    )
+    code, again = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
+    assert code == EXIT_OK and again["applied"] is False
+
+    plan2, _ = _sizing_fixture(tmp_path / "b", apm("hands-on"))
+    code, result = stamp_sizing_authorization(plan2, sizing, repo_root=tmp_path / "b")
+    assert code == EXIT_BUSINESS_FAIL and "hands-on" in result["error"]

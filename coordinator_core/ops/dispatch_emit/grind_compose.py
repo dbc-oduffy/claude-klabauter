@@ -10,7 +10,9 @@ wrapper function. ``grind_stages.py`` (C5) supplies every ``agent(...)``
 call's text; this module owns the manifest/routing consts, the runtime
 mutex, the generic edge interpreter driving those calls PER ROW at run
 time, the downstream-first bounded admission gate, the actual-spend
-accounting, and the hand-back document.
+accounting, and the hand-back document. Emit-time admission
+(``grind_admission``, via ``queue_emit``) owns the ceiling; the runtime
+gates here are a backstop.
 
 **Live routing.** ``ROUTING`` is the profile's own graph, rendered once as
 data; a small generic interpreter (``routeAfterTriage``/``followEdge`` in
@@ -56,9 +58,10 @@ per-row manifest-path stand-in. This module always supplies the live
 expression: a fix's lock-key/"files you hold" clause reads the row's
 runtime ``declaredFiles``; a commit's "stage exactly this touched list"
 and declared-deletion clauses read the row's runtime
-``touchedFiles``/``removedFiles``; an undo restores the same live
-``touchedFiles``; the ledger-only commits (batch-end and drain) read the
-live ``unsettled``/``RUN_ID`` in scope at commit time. The mutex lock keys
+``touchedFiles``/``removedFiles``; an undo runs one ``grind-row undo`` verb
+call over the union of the live touched and created paths; the
+ledger-only commits (batch-end and drain) read the live
+``unsettled``/``RUN_ID`` in scope at commit time. The mutex lock keys
 `withLock` acquires are computed from these SAME live values, so the
 actual lock scope and the prompt's own description of it never diverge.
 
@@ -263,6 +266,13 @@ class _Batch:
     triaged: bool = False
     close_called: bool = False
 
+
+_EXHAUSTED_REASON = (
+    "emit-admitted row; runtime ceiling reached (per-row cost above the measured "
+    "admission cost, or runtime budget bound)"
+)
+
+
 def run_admission(
     batches: Sequence[tuple[str, Sequence[str]]],
     routing: Mapping[str, dict],
@@ -276,6 +286,10 @@ def run_admission(
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
+
+    Emit-time admission (``grind_admission``, via ``queue_emit``) owns the
+    ceiling; the gates here are a runtime backstop. A row handed back
+    ``budget-exhausted`` was emit-admitted and outran its measured cost.
 
     ``budget_tokens``, when given, mirrors the rendered `.mjs`'s
     ``BUDGET_TOKENS`` ceiling: admission halts once the next batch's
@@ -589,7 +603,7 @@ def run_admission(
     if exhausted:
         for bid in queue:
             for rid in batch_objs[bid].row_ids:
-                handed_back.append({"row": rid, "type": "budget-exhausted", "reason": "admission ceiling reached"})
+                handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
 
     end_spent = budget.spent()
     return {
@@ -950,6 +964,17 @@ def compose_grind_script(
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
     lines.append("const REPO_ROOT = args.repo_root;")
+    # The commit-failed hand-back names the runnable sweep spelling, not the
+    # bare verb: the verb is not a binary and takes required flags.
+    if queue_dirs:
+        _sweep_flags = " ".join(f"--queue {q}" for q in queue_dirs)
+        lines.append(
+            f"const SWEEP_HINT = ' -- settle ledgers with `' + {_js_string_literal(stages.ASSEMBLE_CMD + ' grind-row sweep --profile-dir ')}"
+            f" + PROFILE_DIR + {_js_string_literal(f' --profile {profile.name} {_sweep_flags} --repo-root ')}"
+            " + REPO_ROOT + '`; never commit them';"
+        )
+    else:
+        lines.append("const SWEEP_HINT = ' -- never commit ledgers';")
     preamble_expr: Optional[str] = None
     if preamble:
         lines.append(f"const PREAMBLE = {_js_string_literal(preamble)};")
@@ -1109,8 +1134,10 @@ def compose_grind_script(
 
     undo_raw = stages.compose_undo_call(
         label="undo", phase_title="Grind",
-        touched_files_js="row.touchedFiles.concat(row.closeResult ? [row.closeResult.old] : [])",
-        created_files_js="row.createdFiles.concat(row.closeResult ? [row.closeResult.new] : [])",
+        paths_js=(
+            "Array.from(new Set(row.touchedFiles.concat(row.createdFiles || [])"
+            ".concat(row.closeResult ? [row.closeResult.old, row.closeResult.new] : [])))"
+        ),
         agent_type_host=agent_type_host, preamble_expr=preamble_expr,
     )
     lines.append("async function _undoCall(row) {\n" + _indent_block(_capture(undo_raw, "undo"), "  ") + "\n}")
@@ -1228,7 +1255,7 @@ def compose_grind_script(
         "    applyRoute(row, itemRow, route, 'refute-close confirmed');\n"
         "    if (route.kind === 'handback') {\n"
         "      const _cresult = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\" + _commitReason(_cresult) + ' -- settle ledgers with grind-row sweep; never commit them'); }\n"
+        "      if (_cresult.outcome !== 'committed') { _handBack(itemRow, 'commit-failed', \"close's archive-move commit did not land\" + _commitReason(_cresult) + SWEEP_HINT); }\n"
         "      else { row.sha = _cresult.sha || ''; "
         "_settled.push({ row: itemRow, outcome: 'committed', sha: row.sha }); }\n"
         "    }\n"
@@ -1316,7 +1343,7 @@ def compose_grind_script(
         "async function _commitStage(rowId) {\n"
         "  const row = _rows[rowId];\n"
         "  const result = await withLock(['@commit'], async () => _commitCall(row));\n"
-        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land' + _commitReason(result) + ' -- settle ledgers with grind-row sweep; never commit them'); return; }\n"
+        "  if (result.outcome !== 'committed') { row.done = true; _handBack(rowId, 'commit-failed', 'commit did not land' + _commitReason(result) + SWEEP_HINT); return; }\n"
         "  row.done = true; row.sha = result.sha || '';\n"
         "  _settled.push({ row: rowId, outcome: 'committed', sha: row.sha });\n"
         "}"
@@ -1388,7 +1415,7 @@ def compose_grind_script(
         "  }\n"
         "  if (_exhausted) {\n"
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
-        "_handBack(r, 'budget-exhausted', 'admission ceiling reached'); }\n"
+        "_handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); }\n"
         "  }\n"
         "  await _drainSweep();\n"
         "}\n"

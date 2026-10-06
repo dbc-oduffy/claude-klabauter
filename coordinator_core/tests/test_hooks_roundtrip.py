@@ -175,8 +175,19 @@ def test_envelope_no_advisory_is_empty_dict() -> None:
 # ---------------------------------------------------------------------------
 
 def test_registry_enumeration_all_five_hooks() -> None:
-    """After `import coordinator_core.ops`, all 5 hooks.* methods are in the registry."""
-    import coordinator_core.ops  # noqa: F401 — triggers hooks registration side-effect
+    """After importing their modules, all 5 hooks.* methods are in the registry.
+
+    Registration is lazy (bare `import coordinator_core.ops` / `.hooks` registers
+    nothing), so the test imports each hook module it enumerates; otherwise it
+    passes only when another test in the same process imported them first.
+    """
+    from coordinator_core.hooks import (  # noqa: F401 — import registers each op
+        nudge_em_code_dispatch,
+        nudge_foreground_agent_dispatch,
+        nudge_unauthorized_handoff,
+        postuse_advisory_dispatch,
+        suggest_sonnet_research,
+    )
     from coordinator_core.ipc import _REGISTRY
 
     expected = {

@@ -187,17 +187,49 @@ def test_degraded_host_ask_review_stages_emit_no_coordinator_review_type_and_kee
     assert _titles(degraded) == _titles(normal)
 
 
-def test_criterion_judge_runs_and_feeds_the_digest_when_the_roster_declares_one():
-    import copy
+_JUDGE_FRAGMENT = {
+    **REVIEW_KW["review_roster_fragment"],
+    "execute_review": {
+        "stages": [
+            *REVIEW_KW["review_roster_fragment"]["execute_review"]["stages"],
+            {
+                "kind": "judge",
+                "agents": [
+                    {"agentType": "coordinator:criterion-judge", "model": "opus", "effort": "low", "schema": "judge"}
+                ],
+            },
+        ]
+    },
+}
+_JUDGE_KW = {
+    "review_roster_fragment": _JUDGE_FRAGMENT,
+    "review_stage_schemas": {**REVIEW_KW["review_stage_schemas"], "judge": {"type": "object"}},
+}
 
-    fragment = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
-    fragment["execute_review"]["stages"].append(
-        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
-                                      "effort": "low", "schema": "judge-result"}]}
-    )
-    schemas = {**REVIEW_KW["review_stage_schemas"], "judge-result": {"type": "object"}}
-    script = _compose(review_roster_fragment=fragment, review_stage_schemas=schemas)
+
+def test_a_roster_judge_runs_in_the_test_phase_and_feeds_the_criterion_digest():
+    script = _compose(**_JUDGE_KW)
+    assert "agentType: 'coordinator:criterion-judge'" in script
     assert "Criterion judge" in _titles(script)
-    assert "_falsifierResult = await" in script
+    assert "[_testResult, _falsifierResult] = await parallel([" in script
+    assert "let _falsifierResult = null;" in script
     assert "(_planRel ?? _sizingRel)" in script
-    assert "Criterion judge" not in _titles(_compose())
+    assert "PLAN_PATH_SLOT_X" not in script
+    assert "criterion leg threw" in script
+    assert "_falsifierResult.differs_from_baseline" in script
+
+
+def test_the_judge_leg_runs_on_the_xs_arm_where_the_scoped_test_does_not():
+    script = _compose(**_JUDGE_KW)
+    assert "() => (_gate.arm !== 'xs' && (_manifest.review_declared_paths ?? []).length) ? agent(" in script
+
+
+def test_a_roster_without_a_judge_leaves_the_criterion_unrun():
+    script = _compose()
+    assert "_falsifierResult" not in script
+    assert "Criterion judge" not in _titles(script)
+
+
+def test_the_judge_script_validates_with_zero_errors():
+    findings = run_checks(_compose(**_JUDGE_KW))
+    assert [f for f in findings if f.severity is Severity.ERROR] == []

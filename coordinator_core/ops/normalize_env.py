@@ -194,7 +194,7 @@ def _ne_handle_restore(restore_file: str, home: Path, out) -> int:
     saved_path = None
     saved_pymanager = None
     try:
-        text = restore_path.read_text(errors="replace")
+        text = restore_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         text = ""
     for line in text.splitlines():
@@ -535,7 +535,7 @@ def _ne_darwin_bash_profile_repair(
             return
 
     try:
-        prior_content = bp_path.read_text(errors="replace") if bp_path.is_file() else ""
+        prior_content = bp_path.read_text(encoding="utf-8", errors="replace") if bp_path.is_file() else ""
     except OSError:
         print("  ERROR: failed to produce base content for ~/.bash_profile; prior content preserved.", file=sys.stderr)
         return

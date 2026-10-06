@@ -49,6 +49,10 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   commit's run-cost record is written through this verb instead of being
   hand-written, and the write is declared like every other row mutation.
 
+- `undo --paths-urlenc E --repo-root R`: implemented in `grind_undo.py` (the
+  one verb here that spawns git): puts each named path back to HEAD when this
+  session declared it and no live peer holds it.
+
 Every one of check/append/close/settle/run-record's ACTUAL writes/moves/
 deletes is declared via `session.declared_writes.declare_write` (DR-276),
 so the session that runs the verb holds the touch-claim the committer's
@@ -91,6 +95,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.backlog_grind_assemble.grind_undo import cmd_undo
 from coordinator_core.contract.grind_vocab import (
     CLOSURE_CLOSING_BRANCHES,
     LEDGER_LINE_FIELDS,
@@ -653,26 +658,35 @@ def cmd_sweep(rest: list[str]) -> int:
 
 
 def cmd_run_record(rest: list[str]) -> int:
-    """`run-record --profile P --run-id T [--record-file F] --repo-root D`:
+    """`run-record --profile P --run-id T [--record-file F|- | --record-urlenc E] --repo-root D`:
     atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
-    the JSON at `--record-file`, or from stdin when it is `-` or absent (the
-    drain's op-runner pipes the record; it cannot reliably write a file), contained
+    the JSON at `--record-file`, from stdin when it is `-` or absent, or from
+    `--record-urlenc` (the JSON percent-encoded into one shell-safe token -- the
+    drain's op-runner passes it that way because an agent asked to pipe a blob
+    to stdin "byte for byte" ran the verb with empty stdin), contained
     under `--repo-root`. The sole route the committer agent has for the
     drain run record -- it carries no Write tool, so it invokes this verb
     instead of hand-writing the file, and the write is declared like every
     other row-verb mutation (§ Design § Row verbs, `run-record`)."""
     flags = _parse_flags(
-        rest, required=("profile", "run-id", "repo-root"), optional=("record-file",)
+        rest, required=("profile", "run-id", "repo-root"),
+        optional=("record-file", "record-urlenc"),
     )
     if flags is None:
         return _usage(
-            "usage: grind-row run-record --profile P --run-id T [--record-file F|-] "
-            "--repo-root D"
+            "usage: grind-row run-record --profile P --run-id T "
+            "[--record-file F|- | --record-urlenc E] --repo-root D"
         )
 
     repo_root = Path(flags["repo-root"])
     record_file = flags.get("record-file", "-")
-    if record_file == "-":
+    if "record-urlenc" in flags:
+        if "record-file" in flags:
+            return _usage("grind-row run-record: pass --record-file or --record-urlenc, not both")
+        from urllib.parse import unquote
+
+        raw_text = unquote(flags["record-urlenc"])
+    elif record_file == "-":
         raw_text = sys.stdin.read()
     else:
         record_path = Path(record_file)
@@ -726,12 +740,13 @@ _VERBS = {
     "settle": cmd_settle,
     "sweep": cmd_sweep,
     "run-record": cmd_run_record,
+    "undo": cmd_undo,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle|sweep|run-record [...]")
+        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:
