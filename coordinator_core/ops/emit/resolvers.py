@@ -664,7 +664,7 @@ def resolve_coordinator_root() -> Path:
 
     Purpose: locate the coordinator clone whose ``bin/query-records.py`` exists so section
     porters that read from it find the real records reader.  The W4.2 cutover relocated the
-    coordinator SOURCE out of ``~/.claude/plugins/coordinator-claude/coordinator/`` into the
+    coordinator SOURCE out of ``~/.claude/plugins/coordinator/`` into the
     DoE clone at ``<content-root>/coordinator``; the legacy plugin dir is now stale/empty.  The
     2026-07-22 de-node cutover then retired ``bin/query-records.js`` fleet-wide (claude-klabauter's own
     production dependency on it dropped to zero -- see

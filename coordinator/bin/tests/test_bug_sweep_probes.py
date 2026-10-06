@@ -15,6 +15,7 @@ Coverage:
     test_verify_diff_alert_branch_reports_missing_files
     test_verify_diff_missing_fix_now_file_exits_2
     test_verify_diff_malformed_json_exits_2
+    test_verify_diff_counts_new_untracked_file_as_changed
 """
 from __future__ import annotations
 
@@ -213,3 +214,30 @@ def test_verify_diff_malformed_json_exits_2(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 2
+
+
+def test_verify_diff_counts_new_untracked_file_as_changed(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "new_mod.py").write_text("print(3)\n")
+    (repo / ".gitignore").write_text("ignored.py\n")
+    (repo / "ignored.py").write_text("x\n")
+
+    fix_now = tmp_path / "phase2-fix-now.json"
+    fix_now.write_text('[{"file": "new_mod.py"}, {"file": "ignored.py"}]')
+
+    proc = subprocess.run(
+        [
+            "python3",
+            str(_BIN_DIR / "bug-sweep-probes.py"),
+            "verify-diff",
+            "--fix-now",
+            str(fix_now),
+            "--repo-root",
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert '"ignored.py"' in proc.stdout and '"new_mod.py"' not in proc.stdout

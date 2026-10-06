@@ -1,7 +1,7 @@
 """
 dag.py — Python port of bin/lib/walk-handoff-dag.js.
 
-Port source: plugins/coordinator-claude/coordinator/bin/lib/walk-handoff-dag.js
+Port source: plugins/coordinator/bin/lib/walk-handoff-dag.js
 Spec backlink: docs/plans/2026-06-29-handoff-lineage-dag-fan-in-fan-out.md § Primitive interface
 
 Purpose: edge-kind-aware handoff DAG traversal primitive. Shared kernel for forward

@@ -114,6 +114,15 @@ def test_execute_review_scopes_to_its_own_declared_paths(tmp_path, monkeypatch):
     assert fn.count("JSON.stringify(declaredPaths)") == 1
 
 
+def test_each_baton_freezes_under_its_own_slice_id(tmp_path, monkeypatch):
+    """XS reviews run concurrently, within a fire and across fires on one base SHA. A static slice
+    id made every prep after the first collide and fail closed (cockpit plan-blitz, 2026-10-06)."""
+    _path, text = _fire_text(tmp_path, monkeypatch)
+    fn = text[text.index(SIGNATURE): text.index("const args = ")]
+    assert "__SLICE_KEY__" not in fn
+    assert "--slice-id ' + String(batonId).replace(/[^A-Za-z0-9_.-]/g, '-') + '-" in fn
+
+
 @pytest.mark.spawns_process
 def test_emitted_function_parses(tmp_path, monkeypatch):
     import shutil

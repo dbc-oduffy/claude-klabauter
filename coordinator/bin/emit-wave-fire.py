@@ -716,6 +716,7 @@ def _execute_review_function(review, stage_schemas: dict, repo_root: str) -> str
         declared_paths_js="declaredPaths",
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         prep_suffix_js="'\\nbaton_id: ' + String(batonId)",
+        slice_key_js="batonId",
     )
     body = "\n".join(block for _title, block in blocks)
     integration = "_reviewIntegration" if review.integration is not None else "null"
