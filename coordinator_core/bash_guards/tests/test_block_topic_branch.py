@@ -6,6 +6,7 @@ subprocess spawning is made fatal to prove the path spawns nothing.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -271,3 +272,32 @@ def test_non_mirror_repo_candidate_push_denied(repo, tmp_path, monkeypatch):
     (mirror / ".git").mkdir(parents=True)
     _registry(tmp_path, monkeypatch, mirror)
     assert _denied(_check(repo, "git push origin candidate"))
+
+
+def _msys(path, lower=False):
+    s = path.as_posix()
+    drive = s[0].lower() if lower else s[0].upper()
+    return f"/{drive}{s[2:]}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths translate on Windows only")
+@pytest.mark.parametrize("lower", [False, True])
+def test_publish_mirror_push_via_msys_dash_c(repo, tmp_path, monkeypatch, lower):
+    mirror = tmp_path / "mirror"
+    (mirror / ".git").mkdir(parents=True)
+    _registry(tmp_path, monkeypatch, mirror)
+    assert _check(repo, f"git -C {_msys(mirror, lower)} push origin candidate") is None
+    assert _denied(_check(repo, f"git -C {_msys(mirror, lower)} push origin topic-x"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths translate on Windows only")
+def test_publish_mirror_push_from_msys_cwd(repo, tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    (mirror / ".git").mkdir(parents=True)
+    _registry(tmp_path, monkeypatch, mirror)
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git push origin candidate"},
+        "cwd": _msys(mirror),
+    }
+    assert guard.check(payload) is None

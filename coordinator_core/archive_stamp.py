@@ -185,6 +185,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2483,6 +2484,16 @@ def _parse_disposition_args(args: tuple[str, ...]) -> dict:
             i += 2
         else:
             i += 1
+    if (
+        params.get("realized_by")
+        and not params.get("decision")
+        and not (
+            params.get("actioned_note")
+            or params.get("superseded_by")
+            or params.get("supersede_note")
+        )
+    ):
+        params["decision"] = "accepted"
     return params
 
 
@@ -2738,6 +2749,77 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
     if rc != 0:
         print(f"cs_resolve_memo: {result.get('error', 'unknown error')}", file=sys.stderr)
     return result if return_result else rc
+
+
+def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
+    """Resolve N memos with one disposition, landing ONE commit per git root
+    through ``git_native.commit_scoped`` instead of one commit per memo.
+
+    A single path takes the unchanged ``cs_resolve_memo`` route. Each memo's
+    write goes to disk with ``defer_commit``; memos that fail leave the others
+    stamped and committed, and the return is 1 if any failed."""
+    if len(memo_paths) == 1:
+        return int(cs_resolve_memo(memo_paths[0], *disposition_args))
+
+    from coordinator_core.ops.ceremony import git_native
+    from coordinator_core.session import scope as session_scope
+    from coordinator_core.wire_paths import rel_id
+
+    disposition_params = _parse_disposition_args(disposition_args)
+    failed = 0
+    landed: dict[Path, list[tuple[str, str]]] = {}
+    sid_by_root: dict[Path, str] = {}
+    for memo_path in memo_paths:
+        worktree = _worktree_root(Path(memo_path))
+        sid = resolve_current_session_id(worktree_root=worktree) if worktree else None
+        if not sid or worktree is None:
+            print(f"cs_resolve_memos: {memo_path}: could not resolve a session id or git root", file=sys.stderr)
+            failed += 1
+            continue
+        result = _call_memo_transition(
+            memo_path,
+            {"verb": "resolve", "session_id": sid, "at": _now_iso(), "defer_commit": True, **disposition_params},
+        )
+        _print_surface_advisory_line("cs_resolve_memos", result, worktree)
+        if int(result.get("exit_code", 1)) != 0:
+            print(f"cs_resolve_memos: {memo_path}: {result.get('error', 'unknown error')}", file=sys.stderr)
+            failed += 1
+            continue
+        if result.get("applied"):
+            try:
+                pathspec = rel_id(Path(memo_path).resolve(), worktree)
+            except ValueError:
+                pathspec = str(Path(memo_path).resolve())
+            landed.setdefault(worktree, []).append((memo_path, pathspec))
+            sid_by_root[worktree] = sid
+
+    for root, entries in landed.items():
+        pathspecs = [p for _, p in entries]
+        subject = f"memo.transition resolve: {len(pathspecs)} memos\n\n" + "\n".join(f"- {p}" for p in pathspecs) + "\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+            fh.write(subject)
+            msg_path = fh.name
+        try:
+            commit = git_native.commit_scoped(
+                pathspecs, msg_path, root, attributed_session_id=sid_by_root[root]
+            )
+        finally:
+            try:
+                Path(msg_path).unlink()
+            except OSError:
+                pass
+        if not commit.ok:
+            print(
+                f"cs_resolve_memos: frontmatter writes applied but the batch commit failed: {commit.stderr}",
+                file=sys.stderr,
+            )
+            failed += len(pathspecs)
+            continue
+        session_scope.release_committed_claims_or_retain(
+            root, pathspecs, sid_by_root[root], "memo.transition"
+        )
+        print(f"cs_resolve_memos: resolved {len(pathspecs)} memos in commit {commit.stdout.strip()}")
+    return 1 if failed else 0
 
 
 # ---------------------------------------------------------------------------

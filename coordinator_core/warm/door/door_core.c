@@ -488,6 +488,7 @@ int door_argv_declares_advisory(int argc, const char *const *argv) {
  * parity test's falsifier greps for `door_stdin_reading_basenames`.
  * ========================================================================= */
 static const char *const door_stdin_reading_basenames[] = {
+    "backlog-grind-assemble",
     "claims-emit",
     "detect-initiative-candidates",
     "distill-log-append",
@@ -531,6 +532,7 @@ typedef struct {
 } door_stdin_scope_t;
 
 static const door_stdin_scope_t door_stdin_subcommand_scoped[] = {
+    { "backlog-grind-assemble", "grind-row" },
     { "misc-session-and-guards", "claim-classify" },
 };
 

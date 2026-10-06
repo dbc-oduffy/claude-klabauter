@@ -260,7 +260,14 @@ def _offending_ref(
 
     from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
 
-    start = cwd or os.getcwd()
+    from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
+
+    def _native(p: str) -> str:
+        translated = translate_msys_path(p)
+        return p if translated is None else translated
+
+    start = _native(cwd or os.getcwd())
+    c_dirs = [_native(d) for d in c_dirs]
     for d in c_dirs:
         start = d if os.path.isabs(d) else os.path.join(start, d)
     git_root = resolve_git_root_cheap(start)

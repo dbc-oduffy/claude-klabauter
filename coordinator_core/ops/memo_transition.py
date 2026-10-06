@@ -1773,6 +1773,13 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
             f"INTERNAL ERROR — post-write status key count ≠ 1. Inspect {memo} immediately."
         )
 
+    if params.get("defer_commit"):
+        # Batch caller (archive_stamp.cs_resolve_memos) lands one commit for all memos.
+        return _attach_surface_advisory(
+            _ok(True, f"resolved {memo} (picked_up_by {_sid}; commit deferred)"),
+            params, new_text, git_root,
+        )
+
     commit_sha, commit_error = _commit_terminal_write(
         memo_path, git_root, "resolve", new_text, attributed_session_id=_sid,
     )

@@ -277,3 +277,39 @@ def test_novel_content_skips_the_history_walk(tmp_path, monkeypatch):
     with pytest.raises(StagedRollbackRefused):
         _commit(repo, "p.txt", "v0\n", "restore", detect_rollback=True)
     assert [list(w) for w in walked] == [["p.txt"]]
+
+
+def test_edit_then_move_is_not_a_rollback(tmp_path):
+    """Archiving a row whose content was edited in the same commit changes the
+    blob, so the move is recognised by basename landing at a new path."""
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: routed\n", "create")
+    _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
+    (repo / "archive").mkdir()
+    (repo / "live/s.yaml").unlink()
+    (repo / "archive/s.yaml").write_text("status: closed\n", encoding="utf-8", newline="\n")
+
+    outcome = gcommit.commit_paths(
+        repo, ["archive/s.yaml"], "archive s", deleted_paths=["live/s.yaml"],
+        detect_rollback=True,
+    )
+    assert outcome.sha
+
+
+def test_edit_after_an_earlier_close_is_not_a_rollback(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: open\n", "create")
+    _commit(repo, "live/s.yaml", "status: closed\n", "close")
+    outcome = _commit(
+        repo, "live/s.yaml", "status: closed\nnote: later edit\n", "edit", detect_rollback=True
+    )
+    assert outcome.sha
+
+
+def test_true_revert_to_an_older_blob_still_refuses(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "live/s.yaml", "status: open\n", "create")
+    _commit(repo, "live/s.yaml", "status: closed\n", "close")
+    _commit(repo, "live/s.yaml", "status: closed\nnote: later\n", "edit")
+    with pytest.raises(StagedRollbackRefused):
+        _commit(repo, "live/s.yaml", "status: open\n", "revert", detect_rollback=True)
