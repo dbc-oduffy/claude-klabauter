@@ -121,6 +121,20 @@ def _agent_call(
     )
 
 
+#: JS twin of `_shq_literal`: a single-quoted shell token, `'` as `'\\''`.
+SHQ_JS = "const _shq = (s) => \"'\" + String(s).replace(/'/g, \"'\\\\''\") + \"'\";"
+
+
+def _shq_literal(text: str) -> str:
+    """One single-quoted shell token; spaces, backslashes and `'` survive."""
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _shq_part(js_expr: str) -> tuple[str, str]:
+    """A prompt part that quotes the runtime path ``js_expr`` as one shell token."""
+    return ("expr", f"_shq({js_expr})")
+
+
 def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
     """Build a JS EXPRESSION (string literal(s) concatenated with ``+``)
     that evaluates, at RUN time, to a full prompt -- letting a caller splice
@@ -194,18 +208,17 @@ def compose_triage_call(
     batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
     depth_part: tuple[str, str] = ("expr", triage_depth_js) if triage_depth_js else ("lit", triage_depth)
     rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
-    script_part: tuple[str, str] = ("expr", script_path_js) if script_path_js else ("lit", "<script>")
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
         rows_part,
         ("lit", ". Run `" + ASSEMBLE_CMD + " grind-row check --manifest "),
-        script_part,
+        _shq_part(script_path_js) if script_path_js else ("lit", "<script>"),
         ("lit", " --batch "),
         batch_id_part,
         ("lit", " --repo-root "),
-        ("expr", repo_root_js),
+        _shq_part(repo_root_js),
         (
             "lit",
             "` first, and list any row it reports as `stale` "
@@ -237,7 +250,7 @@ def compose_triage_call(
         ),
         run_id_part,
         ("lit", " --repo-root "),
-        ("expr", repo_root_js),
+        _shq_part(repo_root_js),
         (
             "lit",
             "` immediately (idempotent under a retried agent -- an identical "
@@ -301,7 +314,7 @@ def compose_refute_close_call(
     preamble_expr: Optional[str] = None,
 ) -> str:
     proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
-    profile_dir_part: tuple[str, str] = ("expr", profile_dir_js) if profile_dir_js else ("lit", profile_dir)
+    profile_dir_part: tuple[str, str] = _shq_part(profile_dir_js) if profile_dir_js else ("lit", _shq_literal(profile_dir))
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
@@ -322,7 +335,7 @@ def compose_refute_close_call(
         ),
         run_id_part,
         ("lit", " --repo-root "),
-        ("expr", repo_root_js),
+        _shq_part(repo_root_js),
         (
             "lit",
             "`, and report the `{old,new}` path pair it prints as that "
@@ -442,7 +455,7 @@ def compose_resize_call(
         ),
         run_id_part,
         ("lit", " --repo-root "),
-        ("expr", repo_root_js),
+        _shq_part(repo_root_js),
         (
             "lit",
             f"` immediately. {plan_note}; {fix_note}; "
@@ -564,7 +577,7 @@ def compose_fix_call(
         " If `backlog-grind-assemble grind-row close` exits 3 (digest mismatch -- the row changed "
         "since the manifest was emitted), report MANIFEST_STALE and stop."
     )
-    parts.append(("expr", profile_dir_js) if profile_dir_js else ("lit", "<profile dir>"))
+    parts.append(_shq_part(profile_dir_js) if profile_dir_js else ("lit", "<profile dir>"))
     parts.append(("lit", f" --profile {profile} --row "))
     parts.append(("expr", row_path_js) if row_path_js else ("lit", "<row path>"))
     parts.append(("lit", " --digest "))
@@ -575,7 +588,7 @@ def compose_fix_call(
     ))
     parts.append(("expr", run_id_js) if run_id_js else ("lit", "<run-id>"))
     parts.append(("lit", " --repo-root "))
-    parts.append(("expr", repo_root_js))
+    parts.append(_shq_part(repo_root_js))
     parts.append((
         "lit",
         "`, reporting the `{{old,new}}` path pair it prints as "
@@ -749,7 +762,7 @@ _COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
         " Then commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         "/bin/coordinator-invoke\" ceremony.commit_v2 --repo ",
     ),
-    ("expr", "REPO_ROOT"),
+    _shq_part("REPO_ROOT"),
     (
         "lit",
         " '{\"paths\":[...],\"deleted_paths\":[...],\"message\":\"<subject>\",\"drop_ignored\":true}'` -- the only committer route. Raw `git commit` "
@@ -865,7 +878,7 @@ def compose_commit_call(
     parts.append(("lit", f" Once the commit lands, settle the ledger with `{ASSEMBLE_CMD} grind-row settle --profile {profile} --row-id "))
     parts.append(row_id_part)
     parts.append(("lit", " --repo-root "))
-    parts.append(("expr", repo_root_js))
+    parts.append(_shq_part(repo_root_js))
     parts.append(("lit", "` (it takes only those three flags); never stage what it removes."))
     return _compose_commit_agent_call(
         parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
@@ -942,9 +955,9 @@ def compose_ledger_sweep_call(
     if queue_dirs:
         queue_flags = " ".join(f"--queue {q}" for q in queue_dirs)
         parts.append(("lit", f"{'' if record_js else '`'}{ASSEMBLE_CMD} grind-row sweep --profile-dir "))
-        parts.append(("expr", profile_dir_js))
+        parts.append(_shq_part(profile_dir_js))
         parts.append(("lit", f" --profile {profile} {queue_flags} --repo-root "))
-        parts.append(("expr", repo_root_js))
+        parts.append(_shq_part(repo_root_js))
         parts.append(("lit", "\n" if record_js else "`. Then run "))
     elif not record_js:
         parts.append(("lit", "Run "))
@@ -960,11 +973,11 @@ def compose_ledger_sweep_call(
         parts.append(("lit", " --record-urlenc '"))
         parts.append(("expr", f"encodeURIComponent({record_js}).replace(/'/g, '%27')"))
         parts.append(("lit", "' --repo-root "))
-        parts.append(("expr", repo_root_js))
+        parts.append(_shq_part(repo_root_js))
         parts.append(("lit", "\n```\n"))
     else:
         parts.append(("lit", " --record-file - --repo-root "))
-        parts.append(("expr", repo_root_js))
+        parts.append(_shq_part(repo_root_js))
         parts.append(("lit", "`"))
     parts.append(
         (
@@ -1015,7 +1028,7 @@ def compose_undo_call(
         ("lit", f"{ASSEMBLE_CMD} grind-row undo --paths-urlenc '"),
         ("expr", f"encodeURIComponent(JSON.stringify({{paths: {paths_expr}}})).replace(/'/g, '%27')"),
         ("lit", "' --repo-root "),
-        ("expr", repo_root_js),
+        _shq_part(repo_root_js),
         (
             "lit",
             "\n```\nReturn `undone` when it exits 0, else `undo-failed` with the verbatim stderr in "

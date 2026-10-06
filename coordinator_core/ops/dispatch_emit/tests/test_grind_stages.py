@@ -119,7 +119,7 @@ def test_commit_prompt_never_names_a_ledger_in_its_path_lists():
 
 def test_ledger_sweep_names_every_queue_and_never_commits():
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"], record_js="REC")
-    assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (REPO_ROOT) + '" in call_text
+    assert "grind-row sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile p1 --queue state/bug-backlog --queue state/other --repo-root ' + (_shq(REPO_ROOT)) + '" in call_text
     assert "grind-row run-record --profile p1 --run-id ' + 'run-1'" in call_text
     # The record rides as one percent-encoded, single-quoted token, never stdin.
     assert " --record-urlenc \\'" in call_text
@@ -149,6 +149,9 @@ def _emitted_run_record_argv(call_text: str, bindings: dict) -> list:
         m = re.fullmatch(r"encodeURIComponent\((\w+)\)\.replace\(/'/g, '%27'\)", expr)
         if m:
             return _js_encode_uri_component(bindings[m.group(1)]).replace("'", "%27")
+        m = re.fullmatch(r"_shq\((\w+)\)", expr)
+        if m:
+            return shlex.quote(str(bindings[m.group(1)]))
         return str(bindings[expr])
 
     flat = re.sub(r"' \+ \((.+?)\) \+ '", lambda m: _eval(m.group(1)), call_text)
@@ -340,7 +343,7 @@ def test_commit_prompt_gives_full_settle_invocation():
         repo_root_js="R",
     )
     assert "backlog-grind-assemble grind-row settle --profile p1 --row-id " in call_text
-    assert "' --repo-root ' + (R) + '` (it takes only those three flags" in call_text
+    assert "' --repo-root ' + (_shq(R)) + '` (it takes only those three flags" in call_text
     assert "'row1'" in call_text
 
 
@@ -369,7 +372,7 @@ def _assert_commit_route_bound_to_repo_root(call_text):
     # coordinator-safe-commit, which its rules forbid; `--repo` bound to the
     # fire-time REPO_ROOT, never the firing session's cwd.
     assert "coordinator-safe-commit" not in call_text
-    assert 'coordinator-invoke" ceremony.commit_v2 --repo \' + (REPO_ROOT) + \'' in call_text
+    assert 'coordinator-invoke" ceremony.commit_v2 --repo \' + (_shq(REPO_ROOT)) + \'' in call_text
     assert call_text.lstrip().startswith("await agent('Your repo is `' + (REPO_ROOT) + '`")
 
 
@@ -423,7 +426,7 @@ def test_undo_call_is_one_verb_command_run_by_the_op_runner():
     )
     assert "grind-row undo --paths-urlenc \\'" in call_text
     assert "encodeURIComponent(JSON.stringify({paths: fixResult.paths})).replace(/'/g, '%27')" in call_text
-    assert "\\' --repo-root ' + (REPO_ROOT)" in call_text
+    assert "\\' --repo-root ' + (_shq(REPO_ROOT))" in call_text
     assert "ONE Bash call" in call_text
     assert "git checkout" not in call_text
     assert f"agentType: '{grind_stages.OP_RUNNER_AGENT_TYPE}'" in call_text
@@ -686,7 +689,7 @@ def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
         assert "Your repo is `' + (REPO_ROOT) + '`" in call_text, kind
         assert "--repo-root ." not in call_text, kind
         if "--repo-root" in call_text:
-            assert "--repo-root ' + (REPO_ROOT) + '" in call_text, kind
+            assert "--repo-root ' + (_shq(REPO_ROOT)) + '" in call_text, kind
 
 
 def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger():
@@ -737,3 +740,34 @@ def test_fix_prompt_fences_the_published_mirror():
     )
     assert "published mirror" in call_text
     assert "publish.mirrors.*" in call_text
+
+
+def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
+    import json
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from coordinator_core.ops.dispatch_emit import grind_stages as gs
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    profile_dir = "C:\\a b\\profiles"
+    repo_root = "/r o/it's"
+    sweep = gs.compose_ledger_sweep_call(
+        label="s", phase_title="p", profile="x", queue_dirs=["q"], run_id="r1",
+    )
+    script = (
+        gs.SHQ_JS
+        + f"\nconst PROFILE_DIR = {json.dumps(profile_dir)}, REPO_ROOT = {json.dumps(repo_root)};\n"
+        + f"(async () => {{ const agent = async (p) => console.log(p);\n{sweep}; }})();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    assert "--profile-dir 'C:\\a b\\profiles' " in out.stdout
+    assert "--repo-root '/r o/it'\\''s'" in out.stdout

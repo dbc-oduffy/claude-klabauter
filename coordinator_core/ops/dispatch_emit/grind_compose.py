@@ -960,6 +960,7 @@ def compose_grind_script(
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
     lines.append(f"const ARCHIVE_PATH = {_js_string_literal(profile.archive_path)};")
     lines.append(ARCHIVE_DESTINATION_JS)
+    lines.append(stages.SHQ_JS)
     lines.append("const PROFILE_DIR = args.profile_dir;")
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
@@ -970,8 +971,8 @@ def compose_grind_script(
         _sweep_flags = " ".join(f"--queue {q}" for q in queue_dirs)
         lines.append(
             f"const SWEEP_HINT = ' -- settle ledgers with `' + {_js_string_literal(stages.ASSEMBLE_CMD + ' grind-row sweep --profile-dir ')}"
-            f" + PROFILE_DIR + {_js_string_literal(f' --profile {profile.name} {_sweep_flags} --repo-root ')}"
-            " + REPO_ROOT + '`; never commit them';"
+            f" + _shq(PROFILE_DIR) + {_js_string_literal(f' --profile {profile.name} {_sweep_flags} --repo-root ')}"
+            " + _shq(REPO_ROOT) + '`; never commit them';"
         )
     else:
         lines.append("const SWEEP_HINT = ' -- never commit ledgers';")

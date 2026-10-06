@@ -203,7 +203,7 @@ def test_drain_sweeps_the_full_queue_set_and_commits_nothing():
     script = _compose()
     drain = script[script.index("async function _drainSweep()"):]
     drain = drain[: drain.index("\n}\n")]
-    assert "grind-row sweep --profile-dir ' + (PROFILE_DIR) + ' --profile fixture --queue state/bug-backlog --repo-root ' + (REPO_ROOT)" in drain
+    assert "grind-row sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --repo-root ' + (_shq(REPO_ROOT))" in drain
     assert "commit_v2" not in drain
     assert "await _drainSweep();" in script
 
@@ -215,7 +215,7 @@ def test_commit_failed_hand_back_names_the_runnable_sweep_command():
     hint = script[script.index("const SWEEP_HINT"):]
     hint = hint[: hint.index("\n")]
     assert "backlog-grind-assemble grind-row sweep --profile-dir " in hint
-    assert "+ PROFILE_DIR +" in hint and "+ REPO_ROOT +" in hint
+    assert "+ _shq(PROFILE_DIR) +" in hint and "+ _shq(REPO_ROOT) +" in hint
     assert "--profile fixture --queue state/bug-backlog --repo-root " in hint
 
 
