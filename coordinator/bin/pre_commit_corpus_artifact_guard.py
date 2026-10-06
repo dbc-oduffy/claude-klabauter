@@ -85,13 +85,17 @@ _MAX_MB_ENV = "OVERSIZE_BLOB_MAX_MB"
 
 
 def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        capture_output=True,
-        text=True,
-        shell=False,
-        **_NO_CONSOLE,
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            shell=False,
+            timeout=15,
+            **_NO_CONSOLE,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(["git", *args], 124, "", "git timed out")
 
 
 def _staged_paths() -> list[str]:

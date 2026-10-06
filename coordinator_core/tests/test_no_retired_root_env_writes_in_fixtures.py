@@ -87,10 +87,19 @@ EXCLUDED_PATHS: dict[str, str] = {
     ),
 }
 
-#: Directory names never walked: caches, and the scratch tree sessions write
-#: throwaway copies of real modules into.
+#: Directory names never walked: caches, and the gitignored trees sessions and
+#: builds write throwaway copies of real modules into (`scratch`, `scratchpad`
+#: snapshots, setuptools `build/lib`).
 _SKIP_DIR_PARTS = frozenset(
-    {".git", "__pycache__", "subagent-share", "node_modules", "scratch"}
+    {
+        ".git",
+        "__pycache__",
+        "subagent-share",
+        "node_modules",
+        "scratch",
+        "scratchpad",
+        "build",
+    }
 )
 
 

@@ -733,6 +733,14 @@ def test_top_level_em_denied_when_mutex_held(repo, held_mutex):
     assert "2026-07-23T10:00:00Z" in reason
 
 
+def test_mutex_deny_names_a_wait_command_the_guards_allow(repo, held_mutex):
+    """The refusal's wait command must itself pass this guard, or the caller is
+    pushed back to a raw pid poll that another guard denies."""
+    reason = _reason(guard.check(_payload("with-suite-mutex -- pytest", repo)))
+    assert "with-suite-mutex --wait" in reason
+    assert guard.check(_payload("with-suite-mutex --wait", repo)) is None
+
+
 def test_scoped_run_allowed_even_when_mutex_held(repo, held_mutex):
     cmd = "pytest coordinator_core/frontmatter/tests/test_x.py"
     assert guard.check(_payload(cmd, repo)) is None

@@ -507,6 +507,18 @@ Body.
     assert row["send_message_address_unavailable_reason"] is None
 
 
+def test_parse_fm_dict_ignores_commented_out_yaml_lines():
+    from coordinator_core.session.work_state import _parse_fm_dict
+
+    fm = _parse_fm_dict(
+        "type: plan\n"
+        "# predecessor_handoff: state/handoffs/x.md\n"
+        "#prime_exit_criterion: something\n"
+        "status: approved\n"
+    )
+    assert fm == {"type": "plan", "status": "approved"}
+
+
 def test_session_work_state_imports_standalone_without_ops_light_check():
     result = subprocess.run(
         [

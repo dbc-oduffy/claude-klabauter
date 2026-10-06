@@ -48,6 +48,7 @@ Negative-spec:
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -363,3 +364,50 @@ def test_resolved_scale_carries_no_remediation(repo, monkeypatch):
     assert "remediation" not in review_scale, (
         f"a gate whose measurement ran carries no remediation: {review_scale}"
     )
+
+
+def _bare_session_start_spawns(repo: Path, monkeypatch, sid: str) -> "tuple[object, list[list[str]]]":
+    from coordinator_core.workstream_complete import directives_memo_lifecycle as lifecycle
+
+    calls = _wrap_popen_for_git_spawn_count(monkeypatch)
+    return lifecycle.resolve_session_start_time(repo, sid), calls
+
+
+def test_session_start_ladder_without_claim_dir_costs_two_spawns_not_seven(repo, monkeypatch):
+    """No claim dir -> the ref ladder runs. With an `origin/main` ref present
+    it must be one `for-each-ref` plus one `log`, never a `merge-base` probe
+    per candidate ref."""
+    base_sha = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    _git("update-ref", "refs/remotes/origin/main", base_sha, cwd=repo)
+    _commit(repo, "work.txt", "w\n", "work")
+
+    start, calls = _bare_session_start_spawns(repo, monkeypatch, "44444444-4444-4444-4444-444444444444")
+
+    assert start is not None
+    assert len(calls) <= 2, [c[1:] if c[1] != '-C' else c[3:] for c in calls]
+    assert not any("merge-base" in c for c in calls), [c[3:] for c in calls]
+
+
+def test_session_start_ladder_with_no_candidate_refs_costs_two_spawns(repo, monkeypatch):
+    """A repo whose only branch is neither main nor master and has no remote:
+    one `for-each-ref`, then the whole-history `log` fallback."""
+    _git("branch", "-m", "feature", cwd=repo)
+
+    start, calls = _bare_session_start_spawns(repo, monkeypatch, "55555555-5555-5555-5555-555555555555")
+
+    assert start is not None
+    assert len(calls) <= 2, [c[1:] if c[1] != '-C' else c[3:] for c in calls]
+
+
+def test_session_start_ladder_anchors_on_first_commit_past_upstream(repo, monkeypatch):
+    """Semantics preserved: the anchor is the earliest commit on HEAD not
+    reachable from the resolved base."""
+    base_sha = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    _git("update-ref", "refs/remotes/origin/main", base_sha, cwd=repo)
+    first_own_sha = _commit(repo, "a.txt", "a\n", "first-own")
+    _commit(repo, "b.txt", "b\n", "second-own")
+    first_own = _git("log", "-1", "--format=%cI", first_own_sha, cwd=repo).stdout.strip()
+
+    start, _ = _bare_session_start_spawns(repo, monkeypatch, "66666666-6666-6666-6666-666666666666")
+
+    assert start == datetime.fromisoformat(first_own)

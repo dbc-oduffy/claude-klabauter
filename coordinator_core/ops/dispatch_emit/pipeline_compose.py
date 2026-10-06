@@ -55,9 +55,9 @@ _IN_CHUNKS = """async function inChunks(items, run, size) {
     out.push(...await parallel(items.slice(i, i + size).map((item, j) => () => run(item, i + j))));
   }
   return out;
-}
+}"""
 
-const withItem = (text, item) => text.split(ITEM_MARK).join(String(item));"""
+_WITH_ITEM = """const withItem = (text, item) => text.split(ITEM_MARK).join(String(item));"""
 
 _PRODUCED = """const produced = async (label, call) => {
   const value = await call;
@@ -412,6 +412,8 @@ def compose_pipeline_script(
         out += ["", _FAN_OUT]
     if any(s.max_concurrent is not None for s in fanned):
         out += ["", _IN_CHUNKS]
+    if any(not s.fan_out.emit_time and _uses_item(s, manifest) for s in fanned):
+        out += ["", _WITH_ITEM]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
     out += ["const pre = {};", "const post = {};", "const subjRets = [];", "const results = [];", ""]
     out += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "")

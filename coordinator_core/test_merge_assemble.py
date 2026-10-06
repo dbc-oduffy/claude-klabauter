@@ -202,6 +202,17 @@ class TestBrief:
         }
         assert all(jp["recommendation"] is None for jp in do["judgment_points"])
 
+    def test_grant_handback_is_deferred_past_apply_not_dispatched(self, tmp_path, monkeypatch):
+        # The grant authorizes the pre-merge suite, which runs after apply
+        # returns; a dispatched handback revokes it before that suite can use it.
+        self._stub_git(monkeypatch)
+        directives = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"]
+        by_id = {d["id"]: d for d in directives}
+        write, handback = by_id["d_grant_write"], by_id["d_grant_handback"]
+        assert write["already_satisfied"] is False
+        assert handback["already_satisfied"] is True
+        assert "revoke --only-ceremony merging-to-main" in handback["skipped_reason"]
+
     def test_directives_are_well_formed_for_apply_base_ordering(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
         do = merge_assemble.brief(repo_root=tmp_path).decision_object

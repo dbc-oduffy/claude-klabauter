@@ -99,8 +99,23 @@ def _base_env(settings_home: Path) -> dict:
     env = dict(os.environ)
     env["COORDINATOR_SETTINGS_HOME"] = str(settings_home)
     env.pop("CLAUDE_SESSION_ID", None)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
     env.pop("COORDINATOR_SESSION_ID", None)
     return env
+
+
+class _PsutilWithProcess:
+    """psutil with only `Process` replaced, as seen by the wrapper module.
+
+    Patching `psutil.Process` itself would also blind conftest's foreign-kill
+    guard, which resolves a pid's parents through the real class."""
+
+    def __init__(self, real, fake_process):
+        self._real = real
+        self.Process = lambda _pid: fake_process
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 
 def _lock_dir(settings_home: Path) -> Path:
@@ -347,7 +362,7 @@ def test_non_interrupt_exception_between_suspend_and_resume_resumes_and_reaps_ch
         fake_ps_process.resume = _fake_resume
 
         with mock.patch.object(module.subprocess, "Popen", return_value=real_process), \
-             mock.patch.object(module.psutil, "Process", return_value=fake_ps_process), \
+             mock.patch.object(module, "psutil", _PsutilWithProcess(module.psutil, fake_ps_process)), \
              mock.patch.object(module.suite_mutex, "held", return_value=_FakeHeld()):
             with pytest.raises(RuntimeError, match="simulated lock I/O failure"):
                 module.main(["--", sys.executable, "-c", "print(1)"])
@@ -514,3 +529,72 @@ def test_max_runtime_rejects_a_non_numeric_value(tmp_path):
     )
     assert result.returncode == 2
     assert "--max-runtime" in result.stderr
+
+
+def test_wait_returns_immediately_when_mutex_is_free(tmp_path):
+    env = _base_env(tmp_path)
+    result = _run(["--wait"], env=env, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert not _lock_dir(tmp_path).exists()
+
+
+def test_wait_blocks_until_holder_releases_then_exits_zero(tmp_path):
+    """The wait the guard's refusal names: unblocks when the holder's run ends."""
+    env = _base_env(tmp_path)
+    holder = threading.Thread(
+        target=lambda: _run(
+            ["--", sys.executable, "-c", "import time; time.sleep(2.0)"],
+            env=env, timeout=30,
+        )
+    )
+    holder.start()
+    deadline = time.monotonic() + 15
+    while not _lock_dir(tmp_path).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _lock_dir(tmp_path).exists(), "holder never took the mutex"
+
+    started = time.monotonic()
+    result = _run(["--wait"], env=env, timeout=30)
+    waited = time.monotonic() - started
+    holder.join(timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert waited > 0.5, f"--wait returned while the mutex was still held ({waited:.2f}s)"
+    assert not _lock_dir(tmp_path).exists()
+
+
+def test_wait_times_out_naming_the_holder(tmp_path):
+    env = _base_env(tmp_path)
+    holder = threading.Thread(
+        target=lambda: _run(
+            ["--",
+             sys.executable, "-c", "import time; time.sleep(4.0)"],
+            env=env, timeout=30,
+        )
+    )
+    holder.start()
+    deadline = time.monotonic() + 15
+    while not _lock_dir(tmp_path).exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    result = _run(["--wait", "--wait-timeout", "0.5"], env=env, timeout=30)
+    holder.join(timeout=30)
+
+    assert result.returncode == 1
+    assert "time.sleep(4.0)" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--wait", "--", "true"],
+        ["--wait", "--max-runtime", "5"],
+        ["--wait", "--wait-timeout", "soon"],
+        ["--wait", "--wait-timeout"],
+        ["--wait", "--wait-timeout", "-1"],
+    ],
+)
+def test_wait_rejects_malformed_invocations(tmp_path, args):
+    result = _run(args, env=_base_env(tmp_path))
+    assert result.returncode == 2
+    assert "--wait" in result.stderr

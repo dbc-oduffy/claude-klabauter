@@ -423,14 +423,15 @@ _CEREMONY_NAME = "merging-to-main"
 #: normalizes it), so an auditor reading a live grant can tell what minted
 #: it. Under `/workweek-complete` Step 16's nested invocation this write
 #: REPLACES workweek's grant (one grant file per session); the guard then
-#: resolves the nesting correctly — this ceremony's handback matches and
-#: fires, and workweek's outer handback finds nothing of its own and
-#: no-ops. Both of workweek's Tier-U consumers fire before Step 16, so
-#: nothing downstream of the replacement needs the outer grant.
+#: resolves the nesting correctly — the post-suite handback names this
+#: ceremony and matches, and workweek's outer handback finds nothing of
+#: its own and no-ops. Both of workweek's Tier-U consumers fire before
+#: Step 16, so nothing downstream of the replacement needs the outer grant.
 _TIER_U_GRANT_NOTE = (
     "implicit ceremony grant: /merging-to-main — minted after the node "
-    "ceremony gate, handed back at d_grant_handback once the post-merge "
-    "re-verify has run"
+    "ceremony gate, for the pre-merge suite that runs after apply; handed "
+    "back by the guarded revoke once that suite and its re-validation have "
+    "run"
 )
 
 _DEFAULT_SHIP_VERDICT_TEXT = (
@@ -529,7 +530,19 @@ def build_directives(
     and `d5` use. `depends_on: ["d2"]` is retained: it is the true ordering
     edge, and `apply_base.execute_directives` now propagates a
     judgment-block through it rather than firing a dependent whose
-    dependency never landed."""
+    dependency never landed.
+
+    **`d_grant_handback` is a deferred narrated no-op, never an apply-time
+    dispatch.** The grant exists to authorize the pre-merge project suite
+    and the Step 6 re-validation, both agent Bash runs that happen AFTER
+    `apply()` returns (`d0` and the other gates run engine-side and are
+    never guard-checked). Revoking at the end of `apply()` therefore
+    destroyed the grant before its only consumers fired. The directive keeps
+    its id, its guarded args and its order after `d_grant_write` so the
+    contract stays visible (`test_ceremony_grant_seams`), and lands
+    `already_satisfied` with a `skipped_reason` naming the guarded revoke
+    to run once the suite is done. `_compensate_grant_write` still hands
+    the grant back when apply aborts: an aborted ceremony runs no suite."""
     cut_tag = proposed_tag or f"{tag_prefix}0.0.0"
     if release_notes_text is None:
         release_notes_text = f"Release {cut_tag}."
@@ -633,7 +646,14 @@ def build_directives(
             "cli": "tier-u-grant",
             "args": ["revoke", "--only-ceremony", _CEREMONY_NAME],
             "depends_on": None,
-            "already_satisfied": False,
+            "already_satisfied": True,
+            "skipped_reason": (
+                "grant handback is a POST-suite step — the Tier-U grant authorizes "
+                "the pre-merge project suite and its Step 6 re-validation, which run "
+                "after apply returns; revoking here would destroy it before either "
+                "fires. Run it once validation has passed: `tier-u-grant-cli revoke "
+                f"--only-ceremony {_CEREMONY_NAME}` (guarded: a PM grant is left alone)"
+            ),
         },
     ]
 

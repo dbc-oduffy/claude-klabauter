@@ -43,6 +43,7 @@ _INSTALL_PLANE_OUTSIDE_SETTINGS_HOME = {
     "detect_test_cmd": "frontmatter keys in the target project's coordinator.local.md",
     "forwarder_door_census": "coordinator_core/ops/warm_entrypoint_allowlist.json in claude-klabauter's own tree",
     "scaffold_structure": "manifest-declared directories in the target project",
+    "settings_env": "the caller-supplied settings.json, rewritten by the spawned check-settings-env.py",
 }
 
 # Modules that write into the settings home yet carry no AST reference to it.

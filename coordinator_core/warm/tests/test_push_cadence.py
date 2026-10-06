@@ -430,13 +430,11 @@ def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():
     assert push_cadence.EXIT_SWEEP_CEILING_SECS < push_cadence.SWEEP_TOTAL_CEILING_SECS
 
 
-def test_sweep_lock_hold_secs_is_keyed_to_the_cadence_budget():
-    """`_SWEEP_LOCK_HOLD_SECS` must track `CADENCE_PUSH_RETRY_BUDGET_SECS`
-    (the cadence path's own budget) -- not the interactive
-    `PUSH_RETRY_BUDGET_SECS` this sweep never spends -- so the lock stays a
-    bounded margin over the work it actually guards
-    (overengineering-reviewer finding 5)."""
-    assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
+def test_sweep_lock_hold_secs_is_keyed_to_the_largest_per_repo_ceiling():
+    """`_SWEEP_LOCK_HOLD_SECS` must cover the largest push a sweep can admit --
+    a repo configured up to `PUSH_CEILING_MAX_SECS` -- plus a bounded margin, so
+    the lock never expires under a push still in flight."""
+    assert push_cadence._SWEEP_LOCK_HOLD_SECS == push_cadence.PUSH_CEILING_MAX_SECS + 10.0
 
 
 # ---------------------------------------------------------------------------

@@ -197,7 +197,7 @@ REASON_INDIRECTION = "indirection"
 
 #: Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window so `_message_size`
 #: exempts the backticked route from the prose cap.
-INDIRECTION_REMEDY = "Use instead: `./path/to/script.sh` (executable, shebang)."
+INDIRECTION_REMEDY = "Use instead: `./path/to/script.py` (executable, shebang)."
 
 
 def indirection_deny_reason(label: str, safe_shape: str) -> str:

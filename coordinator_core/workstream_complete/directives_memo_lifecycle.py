@@ -613,6 +613,63 @@ def _git_common_dir(repo_root: Path) -> Optional[Path]:
     return common if common.is_absolute() else repo_root / common
 
 
+_BASE_REF_PATTERNS = ("refs/heads", "refs/remotes/origin/main", "refs/remotes/origin/master")
+
+
+def _session_base_candidates(repo_root: Path) -> list[str]:
+    """Refs HEAD has commits beyond, in ladder order: the current branch's
+    upstream, then `origin/main`, `origin/master`, `main`, `master`.
+
+    One `for-each-ref` spawn answers "which candidates exist", "what is HEAD's
+    upstream" and "is HEAD ahead of each", so the caller reads `[0]` and never
+    pays a `log` per rung. `%(upstream:track)` covers the upstream, which the
+    ref patterns do not list; `%(ahead-behind:HEAD)` covers the rest and needs
+    git >= 2.41. On an older git the atom fails the call: the retry drops it and
+    the ladder comes back unfiltered. `base..HEAD` selects the same commits as
+    `merge-base(HEAD, base)..HEAD`, so no `merge-base` spawn is needed.
+    """
+    atoms = "%(HEAD)%09%(refname)%09%(upstream)%09%(upstream:track,nobracket)"
+    proc = _run_git(
+        repo_root,
+        ["for-each-ref", f"--format={atoms}%09%(ahead-behind:HEAD)", *_BASE_REF_PATTERNS],
+    )
+    counted = proc is not None and proc.returncode == 0
+    if not counted:
+        proc = _run_git(repo_root, ["for-each-ref", f"--format={atoms}", *_BASE_REF_PATTERNS])
+        if proc is None or proc.returncode != 0:
+            return []
+    existing: set[str] = set()
+    behind_head: set[str] = set()
+    upstream = ""
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        head_mark, refname, upstream_ref, track = parts[:4]
+        existing.add(refname)
+        if head_mark.strip() == "*":
+            upstream = upstream_ref
+            if upstream and "ahead" in track:
+                behind_head.add(upstream)
+        counts = parts[4].split() if len(parts) > 4 else []
+        if len(counts) == 2 and counts[1] != "0":
+            behind_head.add(refname)
+    ladder = (
+        upstream,
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+        "refs/heads/main",
+        "refs/heads/master",
+    )
+    return list(
+        dict.fromkeys(
+            ref
+            for ref in ladder
+            if ref and (ref == upstream or ref in existing) and (not counted or ref in behind_head)
+        )
+    )
+
+
 def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
     """Resolves `$SESSION_START_TIME` (`d-resolve-session-start-time`): the
     mtime of `.git/coordinator-sessions/<sid>/` under the git COMMON dir
@@ -637,10 +694,11 @@ def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
         except OSError:
             pass
 
-    for base in ("@{upstream}", "origin/main", "origin/master", "main", "master"):
-        # `base..HEAD` is the same commit set as `merge-base(HEAD, base)..HEAD`;
-        # a missing ref fails this one spawn, so no separate merge-base probe.
-        log_proc = _run_git(repo_root, ["log", "--reverse", "--format=%cI", f"{base}..HEAD"])
+    candidates = _session_base_candidates(repo_root)
+    if candidates:
+        log_proc = _run_git(
+            repo_root, ["log", "--reverse", "--format=%cI", f"{candidates[0]}..HEAD"]
+        )
         if log_proc is not None and log_proc.returncode == 0 and log_proc.stdout.strip():
             first_line = log_proc.stdout.strip().splitlines()[0]
             parsed = _parse_iso(first_line)

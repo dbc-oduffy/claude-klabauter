@@ -15,7 +15,8 @@ Roadmap format read (the shape ``roadmap-planning`` Phase 1 emits):
   - ``clusters.md``: one ``## <id> — <title>`` section per cluster; a section's
     ``**blocked_by:**`` / ``**blocks:**`` lines are the cluster dependency edges.
     An optional ``**loe:** <XS|S|M|L|XL|XXL>`` line is the cluster's declared size.
-    An optional ``Stub slug prefix: `<x>``` line names the stub-id prefix.
+    An optional ``Stub slug prefix: `<x>``` line names the stub-id prefix;
+      a date-led roadmap id with no such line is refused (the default prefix would be the year).
   - ``reconciliation.md``: the KEEP verdict table; absent -> every cluster is KEEP.
 
 Gate report contract: the BARE ``roadmap.plan_gate`` result for the roadmap, serialized by
@@ -82,6 +83,9 @@ _PREFIX_RE = re.compile(r"Stub slug prefix:\s*`?([a-z0-9][a-z0-9-]*)`?", re.IGNO
 _FM_ROADMAP_ID_RE = re.compile(r"^roadmap_id:\s*['\"]?([a-z0-9][a-z0-9-]*)", re.MULTILINE)
 
 GATE_REPORT_NAME = "wave-1.gate-report.json"
+
+
+_DATE_LED_RE = re.compile(r"\d{4}(?:-\d{2}){0,2}(?:-|$)")
 
 
 class BlitzStageRefused(ValueError):
@@ -367,11 +371,17 @@ def _commit(repo_root: Path, paths: List[str], message: str) -> Tuple[Optional[s
     return None, str(reply.get("error") or reply)
 
 
-def _freeze_gate_report(repo_root: Path, roadmap_id: str, stub_paths: List[str]) -> Dict[str, Any]:
+def _freeze_gate_report(
+    repo_root: Path, roadmap_id: str, stub_paths: List[str], audit_passed: bool
+) -> Dict[str, Any]:
+    """The report is write-once (0444), so a failed audit defers it: freezing over stubs the
+    audit could not find would pin a report no rerun can correct."""
     rel = Path(record_homes.record_path("", "plan-blitz", f"{roadmap_id}/{GATE_REPORT_NAME}")).as_posix()
     target = repo_root / rel
     if target.is_file():
         return {"gate_report_path": rel, "gate_report_state": "already-frozen"}
+    if not audit_passed:
+        return {"gate_report_path": None, "gate_report_state": "deferred-audit-failed"}
     from coordinator_core.ops.roadmap_plan_gate import _handler as plan_gate_op, bare_text
 
     report = plan_gate_op({"roadmap_id": roadmap_id}, repo_root=repo_root)
@@ -457,7 +467,15 @@ def stage_roadmap(
     numbering = number_clusters(unit_labels, unit_edges, {})
     width = max(2, len(str(max(v["number"] for v in numbering.values()))))
     prefix_match = _PREFIX_RE.search(clusters_text)
-    prefix = prefix_match.group(1) if prefix_match else roadmap_id.split("-")[0]
+    if prefix_match:
+        prefix = prefix_match.group(1)
+    elif _DATE_LED_RE.match(roadmap_id):
+        raise BlitzStageRefused(
+            f"roadmap id {roadmap_id!r} is date-led and clusters.md has no `Stub slug prefix: `<x>`` line; "
+            "the default prefix would be the year and collide with every other date-led roadmap's stub ids"
+        )
+    else:
+        prefix = roadmap_id.split("-")[0]
     for label, info in numbering.items():
         info["stub_id"] = f"{prefix}-{str(info['number']).zfill(width)}"
         info["covers"] = fold["units"][label]["sources"]
@@ -537,7 +555,9 @@ def stage_roadmap(
         if sha:
             commits.append({"sha": sha, "paths": new_paths})
 
-    frozen = _freeze_gate_report(repo_root, roadmap_id, [s["path"] for s in stubs])
+    frozen = _freeze_gate_report(
+        repo_root, roadmap_id, [s["path"] for s in stubs], audit["passed"]
+    )
     if commit and frozen["gate_report_state"] == "frozen-now":
         sha, err = _commit(
             repo_root,

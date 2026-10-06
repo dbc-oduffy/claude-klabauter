@@ -49,6 +49,21 @@ class SettingsEnvError(RuntimeError):
         self.record = record
 
 
+def _journal_resolution(settings_path: Path, record: dict) -> None:
+    """Journal the settings file a pass touched; empty when it applied nothing.
+
+    Runs before the non-zero-exit raise: a partial `--apply` may already have
+    rewritten the file.
+    """
+    from coordinator_core.install import resolution_journal
+
+    resolution_journal.record_resolution(
+        "settings-env",
+        0,
+        [WriteSurfaceEntry(kind="file-path", path=str(settings_path))] if record["applied"] else (),
+    )
+
+
 def apply_settings_env(plugin_root: Path, settings_path: Path) -> dict:
     """Run the checker's `--apply` pass; return `{exit_code, applied, findings}`.
 
@@ -82,6 +97,7 @@ def apply_settings_env(plugin_root: Path, settings_path: Path) -> dict:
         "applied": verdict.get("applied") or [],
         "findings": findings,
     }
+    _journal_resolution(settings_path, record)
     if result.returncode != 0:
         named = ", ".join(f"{f.get('var')} ({f.get('kind')})" for f in findings) or "<none named>"
         raise SettingsEnvError(f"check-settings-env exited {result.returncode}; unapplied: {named}", record)

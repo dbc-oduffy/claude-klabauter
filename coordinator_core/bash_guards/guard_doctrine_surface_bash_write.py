@@ -215,9 +215,19 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 41
 
-_WIKI_ANCHOR = (
-    "coordinator/docs/wiki/guards/guard-message-concision.md"
-    "#doctrine-surface-bash-write-guard-carve-outs-and-remedies"
+# Page-level on purpose: the section fragment alone cost ~75 prose bytes of the
+# 220-byte cap (MESSAGE_PROSE_CAP_BYTES). The page's own section for this guard
+# is "Doctrine-surface Bash-write guard: carve-outs and remedies".
+_WIKI_ANCHOR = "coordinator/docs/wiki/guards/guard-message-concision.md"
+
+
+#: Sizing records are schema-checked on Write/Edit only; the same sink
+#: predicate refuses a shell write into their home.
+_SIZING_RECORD_IDENTIFIERS = ("state/sizings/",)
+_SIZING_RECORD_DENY = (
+    "Shell write into state/sizings bypasses the sizing-object schema check. "
+    "New record: `sizing-assemble --write`. Amend: `sizing.record_pm_resolution` "
+    "or `sizing-accept-exit-criterion`."
 )
 
 
@@ -1577,9 +1587,8 @@ def _compose_deny_message(
         )
     else:
         prose = (
-            "BLOCKED: this Bash command writes a governed doctrine "
-            "surface. If the real target is one of the governed files, use "
-            "Write or Edit."
+            "BLOCKED: writes a governed doctrine surface. If the target "
+            "is a governed file, use Write/Edit."
         )
     return f"{prose}\n\nSee {citation}."
 
@@ -1635,6 +1644,15 @@ def check(
     if not cmd:
         return None
     cmd = cmd.replace("\r", "")
+
+    if is_denied_bash_write(cmd, _SIZING_RECORD_IDENTIFIERS):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": _SIZING_RECORD_DENY,
+            }
+        }
 
     if not feature_enabled("doctrine_edit_gate"):
         return _check_advisory(cmd, governed_surfaces, str(payload.get("cwd") or ""))

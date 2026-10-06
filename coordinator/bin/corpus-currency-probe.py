@@ -297,7 +297,13 @@ def run_probe(
 
 def _write_sentinel(sentinel_path: Path, sentinel: dict[str, Any]) -> None:
     sentinel_path.parent.mkdir(parents=True, exist_ok=True)
-    sentinel_path.write_text(json.dumps(sentinel, indent=2) + "\n", encoding="utf-8", newline="\n")
+    tmp = sentinel_path.with_name(f".{sentinel_path.name}.tmp{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(sentinel, indent=2) + "\n", encoding="utf-8", newline="\n")
+        os.replace(tmp, sentinel_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def build_parser() -> argparse.ArgumentParser:

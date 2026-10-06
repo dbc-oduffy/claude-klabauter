@@ -113,6 +113,47 @@ def test_allows(repo, cmd):
     assert _check(repo, cmd) is None
 
 
+def _mirror(monkeypatch, root):
+    from coordinator_core import engine_root
+
+    monkeypatch.setattr(
+        engine_root, "is_published_engine_mirror", lambda r: str(r) == str(root)
+    )
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git push origin candidate",
+        "git push -u origin candidate",
+        "git push origin HEAD:candidate",
+        "git push origin HEAD:refs/heads/candidate",
+    ],
+)
+def test_publish_branch_push_allowed_in_published_mirror(repo, monkeypatch, cmd):
+    _mirror(monkeypatch, repo)
+    assert _check(repo, cmd) is None
+
+
+def test_publish_branch_push_via_dash_c_into_mirror(repo, tmp_path_factory, monkeypatch):
+    _mirror(monkeypatch, repo)
+    other = tmp_path_factory.mktemp("cwd")
+    assert _check(other, f"git -C {repo} push origin candidate") is None
+
+
+def test_publish_branch_push_still_denied_outside_mirror(repo, monkeypatch):
+    _mirror(monkeypatch, repo / "elsewhere")
+    assert _denied(_check(repo, "git push origin candidate"))
+
+
+def test_other_topic_refs_still_denied_in_published_mirror(repo, monkeypatch):
+    _mirror(monkeypatch, repo)
+    assert _denied(_check(repo, "git push origin fix/foo"))
+    assert _denied(_check(repo, "git push origin candidate-2"))
+    assert _denied(_check(repo, "git checkout -b candidate"))
+    assert _denied(_check(repo, "git branch candidate"))
+
+
 def test_push_head_denied_when_head_is_a_topic_branch(repo):
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/fix/foo\n", encoding="utf-8")
     assert _denied(_check(repo, "git push origin HEAD"))

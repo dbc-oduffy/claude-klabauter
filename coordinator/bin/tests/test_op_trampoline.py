@@ -98,6 +98,16 @@ class TestResolveRepoRootOrExit(unittest.TestCase):
 
 
 class TestResolveClaudeKlabauterRootOrExit(unittest.TestCase):
+    def setUp(self):
+        # `resolve_claude_klabauter_root_or_exit` does `from cc_invoke import ...` at call
+        # time, which reads `sys.modules["cc_invoke"]`, while the patches below
+        # target `op_trampoline.cc_invoke` (bound at import). A peer test that
+        # pops `cc_invoke` and re-imports it leaves the two as different module
+        # objects, so the patch never reaches the code under test.
+        patcher = mock.patch.dict(sys.modules, {"cc_invoke": op_trampoline.cc_invoke})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_success_returns_root_and_updates_sys_path(self):
         fake_root = os.path.join(os.getcwd(), "fake-claude-klabauter-live-root")
         original_path = list(sys.path)

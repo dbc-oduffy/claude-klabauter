@@ -28,7 +28,9 @@ def test_served_within_bound_returns_response_quietly(client, monkeypatch, capsy
         return {"jsonrpc": "2.0", "id": 1, "result": "ok"} if len(calls) >= 2 else None
 
     monkeypatch.setattr(client, "try_warm_dispatch", fake)
-    assert settle_warm_miss(MSG)["result"] == "ok"
+    response = settle_warm_miss(MSG)
+    assert response is not None
+    assert response["result"] == "ok"
     err = capsys.readouterr().err
     assert "waiting up to" in err
     assert "ENGINE UNREACHABLE" not in err
@@ -56,6 +58,22 @@ def test_expiry_prints_loud_line_once(client, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert err.count("ENGINE UNREACHABLE") == 1
     assert "running ping COLD: no warm server answered within" in err
+
+
+def test_in_process_serve_prints_terse_line_not_defect_text(client, monkeypatch, capsys):
+    from coordinator_core.invoke.warm_miss import serving_in_process, settle_warm_miss
+
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda *a, **k: None)
+    with serving_in_process():
+        assert settle_warm_miss(MSG) is None
+    err = capsys.readouterr().err
+    assert "ENGINE UNREACHABLE" not in err
+    assert "defect" not in err
+    assert "COLD" not in err
+    assert err.count("path=in-process") == 1
+
+    assert settle_warm_miss(MSG) is None
+    assert "ENGINE UNREACHABLE" in capsys.readouterr().err
 
 
 def test_wait_off_prints_loud_line_without_waiting(client, monkeypatch, capsys):

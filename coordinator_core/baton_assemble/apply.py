@@ -2702,8 +2702,8 @@ def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
     `additionalContext` envelope for the session baton. Their hook's ONLY
     human-facing surface is that event (no `PostToolUse` registration), so it
     can announce only what it can read off disk at the next prompt, and there
-    was nothing to read: `baton_assemble`'s single `merge_baton` call
-    (`_print_commits_into_baton`) passes `commits=` alone, so a minted
+    was nothing to read: `baton_assemble`'s only other `merge_baton` call
+    (`_record_commits_into_baton`) passed `commits=` alone, so a minted
     handoff's path was never written anywhere. This function is that missing
     signal; the shape was ours to pick and they asked us to pick it.
 
@@ -2715,7 +2715,7 @@ def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
     from a pickup to every reader of the record, including the announce leg
     that has to word the two differently.
 
-    Fail-open, matching `_print_commits_into_baton` and `session_baton.store`
+    Fail-open, matching `_record_commits_into_baton` and `session_baton.store`
     throughout: an unresolvable session id or an unwritable store is
     swallowed. This runs AFTER the artifact is committed, so raising here
     would fail a run whose real work already landed -- and an advisory that
@@ -2733,6 +2733,32 @@ def _record_mint_into_baton(root: Path, artifact_rel_path: str) -> None:
         from coordinator_core.session_baton.store import merge_baton
 
         merge_baton(sid, cwd=str(root), minted_artifacts=[artifact_rel_path])
+    except Exception:  # noqa: BLE001 — advisory write must never raise into apply()
+        pass
+
+
+def _record_commits_into_baton(root: Path) -> None:
+    """Merge this session's Session-Id-attributed commit shas
+    (`session.commits`, a full-history `git log` walk) into its baton record
+    (`session_baton.store.merge_baton`, dedup-extends). Runs on the handoff
+    write path after `_scoped_commit`, so the handoff's own commit is
+    included; `brief` stays spawn-free for this lookup.
+
+    Fail-open: an advisory record must never fail a run whose work landed.
+    """
+    try:
+        sid = _resolve_current_session_id()
+    except Exception:  # noqa: BLE001 — advisory write must never raise into apply()
+        return
+    if not sid:
+        return
+    try:
+        from coordinator_core.ops.session_commits import resolve_session_commits
+        from coordinator_core.session_baton.store import merge_baton
+
+        shas = [c["sha"] for c in resolve_session_commits(root, sid)]
+        if shas:
+            merge_baton(sid, cwd=str(root), commits=shas)
     except Exception:  # noqa: BLE001 — advisory write must never raise into apply()
         pass
 
@@ -2963,6 +2989,8 @@ def apply(
 
         if exit_code == APPLY_EXIT_OK:
             _record_mint_into_baton(root, committed_artifact_path)
+            if kind == "handoff":
+                _record_commits_into_baton(root)
 
         return _finalize_report(exit_code, report)
 

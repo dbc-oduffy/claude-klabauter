@@ -67,16 +67,21 @@ This script does not mutate on macOS. Manual steps to satisfy prereqs:
 
   git core.longpaths: Windows-only — not applicable on macOS.
 
+Current prereq probe results:
+
 Run the above brew/apt/dnf commands, then re-run the coordinator install.
 """
 
 
-def test_dry_run_matches_golden_fixture_no_probe_lib():
+def test_dry_run_matches_golden_fixture_no_probe_lib(tmp_path):
     if ne._ne_is_windows():
         pytest.skip("golden fixture captured for the macOS/Linux offers-only path")
     if _local_uname_is_not_darwin():
         pytest.skip("golden fixture is Darwin-specific text")
-    port_out, port_rc = _run_port(["--dry-run"])
+    # Probe output is host-dependent (installed tool versions); stub it empty
+    # so the fixture pins only the machine-independent text.
+    with patch.object(ne, "_ne_run_probe_fn", return_value=""):
+        port_out, port_rc = _run_port(["--dry-run"], home=tmp_path)
     assert port_rc == 0
     assert port_out == _GOLDEN_DRY_RUN_MACOS_LINUX
 

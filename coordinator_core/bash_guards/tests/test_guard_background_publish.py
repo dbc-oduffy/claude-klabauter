@@ -24,6 +24,10 @@ def test_publish_cli_is_backgrounded_with_input_preserved(cmd):
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
+def test_help_in_one_segment_does_not_shield_a_later_round():
+    assert check_background_publish(_payload("percolate-push --help && percolate-push t"))
+
+
 def test_powershell_tool_is_covered():
     assert check_background_publish(_payload("python x\\percolate-round.py t", tool="PowerShell"))
 
@@ -36,6 +40,14 @@ def test_powershell_tool_is_covered():
     "git status",
     "grep -n gap coordinator/bin/percolate-round.py | head -3",
     "sed -n 1,5p coordinator/bin/publish.py",
+    "grep -n 'percolate-push' some.log",
+    "grep -nE 'foo|percolate-push' x.log",
+    "grep 'a; percolate-round' x",
+    'rg "(percolate-push|publish.py)" .',
+    "echo x | grep -c percolate-push",
+    "python3 coordinator/bin/coordinator-publish.py --help",
+    "percolate-push -h",
+    "python3 coordinator/bin/publish.py t --help",
     "python3 - <<'EOF'\nopen('coordinator/bin/publish.py')\nEOF",
 ])
 def test_non_publish_commands_are_untouched(cmd):

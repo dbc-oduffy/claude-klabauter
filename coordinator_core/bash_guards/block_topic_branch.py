@@ -56,6 +56,8 @@ _BRANCH_CREATE_COMPATIBLE_FLAGS = frozenset({"-f", "--force", "-t", "--track", "
 _PUSH_OPT_WITH_ARG = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
 _HEADS_PREFIX = "refs/heads/"
+# publish.py's commit-only round leaves the mirror's work on this branch.
+_PUBLISH_BRANCH = "candidate"
 
 
 def _looks_unreadable(name: str) -> bool:
@@ -163,6 +165,14 @@ def _machine() -> str:
     return compute_machine()
 
 
+def _is_publish_push(sub: str, ref: str, git_root: Optional[str]) -> bool:
+    if sub != "push" or ref != _PUBLISH_BRANCH or not git_root:
+        return False
+    from coordinator_core.engine_root import is_published_engine_mirror
+
+    return is_published_engine_mirror(git_root)
+
+
 def _is_day_branch(name: str, configured: Optional[str], machine: str) -> bool:
     if configured and name == configured:
         return True
@@ -249,6 +259,8 @@ def _offending_ref(
         elif ref.startswith("refs/"):
             continue
         if ref == "main":
+            continue
+        if _is_publish_push(sub, ref, git_root):
             continue
         if machine is None:
             machine = _machine()

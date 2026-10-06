@@ -15,7 +15,7 @@ from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph, subjects
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_structured"
-_ORACLE = _FIXTURE / "oracle" / "structured-research-fixture.workflow.mjs"
+_ORACLE = _FIXTURE / "oracle" / "structured-research-fixture.oracle.mjs"
 
 
 def _subject_keys() -> list[str]:

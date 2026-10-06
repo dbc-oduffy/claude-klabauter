@@ -93,6 +93,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("ops/orphan_branch_sweep.py", "pr_merged_at"): (
         "machine-read -- composes a `git log --after=` argument"
     ),
+    ("baton_assemble/__init__.py", "created_at"): (
+        "machine-read -- composes a `git log --since=` argument"
+    ),
     ("goals/reassess_krs.py", "recorded_at"): (
         "PERSISTED prose: the same provenance string is written into the goal "
         "YAML as a comment line. A relative age is true only at write time, so "

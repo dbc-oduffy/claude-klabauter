@@ -5723,16 +5723,21 @@ def push_streamed(
     remote_name: Optional[str] = None,
     silence_secs: float = STALL_SILENCE_SECS,
     total_timeout: Optional[float] = None,
+    local_ref: Optional[str] = None,
+    remote_ref: Optional[str] = None,
 ) -> GitResult:
-    """`git push --progress [<remote_name>]`, killed on a stderr silence stall.
+    """`git push --progress [<remote_name> [<local_ref>:<remote_ref>]]`, killed on a stderr silence stall.
 
     Stall bound: no stderr line for `silence_secs`. Total bound: `total_timeout` since spawn,
     regardless of progress. `stall_killed` is True only for the silence bound; the child's real
     returncode is kept on a stall kill, and `PUSH_STALL_MARKER` is appended to stderr.
+    The refspec is appended only when both refs are given, exactly as `push_refspec` builds it.
     """
     args = ["git", "push", "--progress"]
     if remote_name:
         args.append(remote_name)
+        if local_ref is not None and remote_ref is not None:
+            args.append(f"{local_ref}:{remote_ref}")
 
     try:
         proc = subprocess.Popen(

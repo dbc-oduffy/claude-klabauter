@@ -76,7 +76,10 @@ def enabled_plugins(config_home: Path) -> set[str]:
 
 
 def agent_namespaces(agent_file: Path) -> set[str]:
-    tools = scan_frontmatter(read_text(agent_file)).get("tools", "")
+    text = read_text(agent_file)
+    if text is None:
+        raise OSError(f"cannot read {agent_file}")
+    tools = scan_frontmatter(text).get("tools", "")
     entries = tools if isinstance(tools, list) else [tools]
     return {m.group(1) for entry in entries if isinstance(entry, str) for m in _NS_RE.finditer(entry)}
 
@@ -87,7 +90,12 @@ def check(agents_dir: Path, repo_root: Path, config_home: Path) -> tuple[list[st
     missing: list[str] = []
     unverifiable: set[str] = set()
     for agent in sorted(agents_dir.glob("*.md")):
-        for ns in sorted(agent_namespaces(agent)):
+        try:
+            namespaces = sorted(agent_namespaces(agent))
+        except OSError as exc:
+            missing.append(f"{agent.name}: unreadable, tool namespaces not checked ({exc})")
+            continue
+        for ns in namespaces:
             if ns.startswith("claude_ai_"):
                 unverifiable.add(ns)
             elif ns in servers:

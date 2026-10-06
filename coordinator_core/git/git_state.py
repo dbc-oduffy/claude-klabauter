@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import contextvars
 import os
+import re
 import struct
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -560,10 +561,9 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     `" [source-head <sha12>]"` for `repo`'s HEAD, or `""` when HEAD does
     not resolve.
 
-    THE STAMP NAMES HEAD; IT DOES NOT NAME THE PUBLISHED BYTES. Percolate
-    copies the source WORKTREE, so the payload equals this sha only when the
-    source tree happens to be clean for the paths carried -- on a box running
-    50-70 concurrent sessions in one tree that is close to never.
+    THE STAMP NAMES HEAD; IT DOES NOT NAME THE PUBLISHED BYTES. publish.py
+    materializes every row from the round-pinned committed ref
+    (`_round_pin_source_sha` -> `_git_materialize_ref`), not the worktree.
 
     THE SPELLING IS THE FIX AND IS LOAD-BEARING. Do NOT shorten `-head` to
     `[source <sha>]`: that spelling reads as a claim about provenance of the
@@ -612,6 +612,18 @@ def format_source_sha_suffix(sha: Optional[str]) -> str:
     Resolve the sha however the caller must; format it only here.
     """
     return f" [source-head {sha[:12]}]" if sha else ""
+
+
+_SOURCE_HEAD_STAMP_RE = re.compile(r"\[source-head ([0-9a-f]{7,40})\]\s*$")
+
+
+def parse_source_sha_suffix(subject: str) -> Optional[str]:
+    """Inverse of `format_source_sha_suffix`: the sha in a subject's
+    trailing `[source-head <sha>]` stamp, or None when the subject does not end
+    with one. The two must change together. Zero-spawn.
+    """
+    m = _SOURCE_HEAD_STAMP_RE.search(subject)
+    return m.group(1) if m else None
 
 
 def head_tree_sha(repo: Union[str, Path]) -> Optional[str]:

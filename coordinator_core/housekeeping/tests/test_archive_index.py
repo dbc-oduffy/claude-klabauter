@@ -245,9 +245,11 @@ _CLAUDE_KLABAUTER_ROOT uses."""
 
 @pytest.fixture(scope="module")
 def scaled_index(tmp_path_factory):
-    """Builds the corpus fixture UNDER THE REPO'S OWN DRIVE ANCHOR
-    (`_CLAUDE_KLABAUTER_ROOT.anchor`), never pytest's default `tmp_path`/
-    `tmp_path_factory` root -- this is load-bearing, not cosmetic.
+    """Builds the corpus fixture UNDER THE REPO'S OWN VOLUME
+    (`<repo>/scratch/`, gitignored), never pytest's default `tmp_path`/
+    `tmp_path_factory` root -- this is load-bearing, not cosmetic. (The drive
+    root itself is unusable: read-only on macOS, a stray real folder on
+    Windows.)
     `tmp_path_factory`'s default root sits under the system TEMP directory,
     which on this box's own measurement is a DIFFERENT NTFS volume from the
     repo's own drive with 8dot3 (short-filename) generation enabled; the
@@ -260,12 +262,12 @@ def scaled_index(tmp_path_factory):
     repo's own drive anchor -- an 8-10x gap explained entirely by filename
     length (short 8-char names read fast on BOTH volumes) rather than file
     count, directory count, or content size. Matches
-    test_archival_commit_process_budget.py's own `_CLAUDE_KLABAUTER_ROOT.anchor`-
-    rooted scratch-dir convention for exactly this reason -- a benchmark
+    test_archival_commit_process_budget.py's own repo-volume scratch-dir
+    convention for exactly this reason -- a benchmark
     fixture must be measured on the volume that carries the real cost, not
     whichever one pytest defaults to.
     """
-    dest_root = Path(_CLAUDE_KLABAUTER_ROOT.anchor) / f"_c4bench_{os.getpid()}"
+    dest_root = _CLAUDE_KLABAUTER_ROOT / "scratch" / f"_c4bench_{os.getpid()}"
     dest_root.mkdir(parents=True, exist_ok=True)
     root = dest_root / "corpus"
     fixture = build_corpus(root)

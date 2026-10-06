@@ -231,7 +231,13 @@ def _apply(path: Path, findings: list[dict[str, object]]) -> list[str]:
             doc["env"].pop(str(finding["var"]), None)
         else:
             doc["env"][str(finding["var"])] = str(finding["expected"])
-    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8", newline="\n")
+    tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return [str(f["var"]) for f in repairable]
 
 

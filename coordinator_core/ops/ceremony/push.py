@@ -188,7 +188,7 @@ PUSH_RETRY_BUDGET_SECS: float = 18.0
 #:
 #: This ladder deadline is the retained fallback behind `git_native.push_streamed`'s silence watchdog
 #: (`STALL_SILENCE_SECS`); it bounds every remote leg via the shared `deadline`. A single `push_streamed`
-#: call is bounded by `ipc.DISPATCH_TIMEOUT_SECS`.
+#: call is bounded by the ladder's remaining deadline (`ipc.DISPATCH_TIMEOUT_SECS` only when no deadline).
 CADENCE_PUSH_RETRY_BUDGET_SECS: float = 16.0
 
 #: The push budget for a CEREMONY op, which is a different job from the cadence
@@ -1516,7 +1516,18 @@ def push_with_retry(
         # `push.default=simple` a bare push refuses when the upstream's name differs from the local
         # branch's, and `--set-upstream` would repoint tracking. No upstream keeps the bare push
         # (handled by the `publish_day_branch` arm below).
-        if upstream_info is not None:
+        streamed_total = (
+            DISPATCH_TIMEOUT_SECS if deadline is None else max(0.0, leg_timeout)
+        )
+        if upstream_info is not None and use_streamed_push:
+            push_result = git_native.push_streamed(
+                root,
+                remote_name=upstream_info.remote_name,
+                local_ref="HEAD",
+                remote_ref=upstream_info.branch_ref,
+                total_timeout=streamed_total,
+            )
+        elif upstream_info is not None:
             push_result = (
                 git_native.push_refspec(
                     root, upstream_info.remote_name, "HEAD", upstream_info.branch_ref
@@ -1531,11 +1542,7 @@ def push_with_retry(
                 )
             )
         elif use_streamed_push:
-            # `push_streamed` owns its silence and total bounds; `leg_timeout` would kill a
-            # still-progressing push.
-            push_result = git_native.push_streamed(
-                root, total_timeout=DISPATCH_TIMEOUT_SECS
-            )
+            push_result = git_native.push_streamed(root, total_timeout=streamed_total)
         else:
             push_result = (
                 git_native.push(root)

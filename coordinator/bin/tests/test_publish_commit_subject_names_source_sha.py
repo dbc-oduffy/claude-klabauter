@@ -204,6 +204,7 @@ def test_commit_published_dests_stamps_the_round_pinned_sha_not_live_head(
         {repo_root: {dest_dir}},
         succeeded_row_names=["claude-klabauter"],
         round_pinned_shas=round_pinned_shas,
+        rows_feeding_root={repo_root: frozenset({"claude-klabauter"})},
     )
     assert ok is True
 

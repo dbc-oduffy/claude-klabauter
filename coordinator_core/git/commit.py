@@ -1130,7 +1130,18 @@ def commit_paths(
             try:
                 data = (root / p).read_bytes()
             except FileNotFoundError as exc:
-                if entry is not None:
+                # Tracked at the INDEX (unstaged `rm`) or at HEAD only (a
+                # `git rm` already dropped the index entry): both are a
+                # removal the caller left undeclared. The HEAD probe runs
+                # only on this refusal path, so an ordinary commit pays none.
+                tracked = entry is not None
+                if not tracked:
+                    head_dir, _, head_name = p.rpartition("/")
+                    head_spine = read_tree_spine(repo, [p])
+                    tracked = head_spine is not None and head_name in head_spine.get(
+                        head_dir, {}
+                    )
+                if tracked:
                     # The caller named a path git still tracks and the worktree
                     # no longer has: a deletion, undeclared. Naming the
                     # parameter is the difference between a refusal the caller

@@ -13,9 +13,11 @@ import is deferred into the function that needs it.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import sys
-from typing import Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 #: How long `_wait_for_warm_boot` may wait for a just-spawned warm server to
 #: start answering, in seconds. `COORDINATOR_WARM_BOOT_WAIT_SECS` overrides it;
@@ -183,6 +185,26 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     return response, waited
 
 
+#: True while the caller will serve a miss in its own interpreter (cc_invoke
+#: rung 3). The miss is then not a cold spawn, so the "ENGINE UNREACHABLE ...
+#: COLD ... defect" register would be false; a terse path=in-process line
+#: replaces it. A context flag, not a parameter, so callers that patch
+#: `settle_warm_miss` with a one-argument stand-in keep working.
+_serving_in_process: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "warm_miss_serving_in_process", default=False
+)
+
+
+@contextlib.contextmanager
+def serving_in_process() -> Iterator[None]:
+    """Scope in which `settle_warm_miss` words a miss as an in-process serve."""
+    token = _serving_in_process.set(True)
+    try:
+        yield
+    finally:
+        _serving_in_process.reset(token)
+
+
 def settle_warm_miss(msg: dict) -> Optional[dict]:
     """Handle a warm miss for `msg`: wait once, bounded, then pass loudly.
 
@@ -218,12 +240,19 @@ def settle_warm_miss(msg: dict) -> Optional[dict]:
             else "no warm server answered, and the boot wait is off "
             "in this process"
         )
-        print(
-            f"[warm-client] ENGINE UNREACHABLE -- running {msg.get('method')} "
-            f"COLD: {why}. This is a defect (reaching the engine is "
-            "budgeted in hundreds of milliseconds), not a queue; the "
-            "op still runs, slower.",
-            file=sys.stderr,
-        )
+        if _serving_in_process.get():
+            print(
+                f"[warm-client] no warm server answered ({why}); "
+                f"{msg.get('method')} path=in-process.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[warm-client] ENGINE UNREACHABLE -- running {msg.get('method')} "
+                f"COLD: {why}. This is a defect (reaching the engine is "
+                "budgeted in hundreds of milliseconds), not a queue; the "
+                "op still runs, slower.",
+                file=sys.stderr,
+            )
         sys.stderr.flush()
     return response

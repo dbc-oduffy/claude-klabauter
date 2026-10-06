@@ -20,7 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph,
 
 _TESTS = Path(__file__).parent / "fixtures"
 _DOE_FIXTURE = _TESTS / "pipeline_doe_structured"
-_ORACLE = _TESTS / "pipeline_structured" / "oracle" / "structured-research-fixture.workflow.mjs"
+_ORACLE = _TESTS / "pipeline_structured" / "oracle" / "structured-research-fixture.oracle.mjs"
 _VERIFIERS = [
     {"role": "verifier-alpha", "topic": "alpha", "name": "Alpha topic"},
     {"role": "verifier-beta", "topic": "beta", "name": "Beta topic"},
@@ -281,7 +281,21 @@ def test_runtime_item_is_filled_by_the_script_not_the_composer(monkeypatch, tmp_
     ]
     script = _run(monkeypatch, tmp_path, stages)
     assert "withItem(common.prompts['each'], item)" in script
+    assert "const withItem = " in script and "inChunks" not in script
     assert "fanTrailer(" not in script.split("phase('each')")[1]
+
+
+def test_with_item_is_defined_exactly_when_it_is_called(monkeypatch, tmp_path):
+    chunked = [
+        _stage("src", fan_out="none", output="{{scratch_dir}}/src.json", schema=_FAILED),
+        _stage("each", fan_out={"over": "stage.src.return.failed"}, depends_on=["src"], max_concurrent=2),
+    ]
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    script = _run(monkeypatch, tmp_path / "a", chunked)
+    assert script.count("const withItem = ") == 1 and "withItem(common.prompts['each'], item)" in script
+    plain = [_stage("one", fan_out="none")]
+    assert "withItem" not in _run(monkeypatch, tmp_path / "b", plain)
 
 
 @pytest.mark.skipif(

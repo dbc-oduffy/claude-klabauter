@@ -761,12 +761,12 @@ def _kevent_register_with_retry(kq: int, pid: int, max_retries: int = 5) -> bool
 
 
 def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional[str]):
-    pre_children = _proc_listchildpids(os.getpid())
-    if pre_children:
-        raise RuntimeError(
-            f"process_time window-open assertion failed: os.getpid() already "
-            f"has children {pre_children} before this invocation spawned anything"
-        )
+    # BASELINE, not an emptiness assertion: a pytest-xdist worker (or any
+    # host process) can carry a child an earlier test leaked -- a live
+    # Popen or an unreaped zombie. Attribution is keyed to root_pid's own
+    # rusage, so a pre-existing child cannot enter the figure; the window
+    # integrity check is that no child APPEARS or REMAINS beyond baseline.
+    baseline_children = frozenset(_proc_listchildpids(os.getpid()))
 
     kq = _libc.kqueue()
     if kq < 0:
@@ -788,9 +788,9 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
         # root is spawned POSIX_SPAWN_START_SUSPENDED and only SIGCONT'd a
         # few lines down, so an exception before that leaves it suspended
         # forever, and an exception after SIGCONT leaves a live tree
-        # running, unreaped, contaminating the next invocation's
-        # window-open assertion. `reaped` tracks whether wait4()/waitpid()
-        # already ran normally so this finally never double-reaps.
+        # running, unreaped, and leaked into every later window's baseline.
+        # `reaped` tracks whether wait4()/waitpid() already ran normally so
+        # this finally never double-reaps.
         reaped = False
         try:
             if not _kevent_register_with_retry(kq, root_pid):
@@ -846,11 +846,14 @@ def _darwin_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optiona
             else:  # pragma: no cover - py<3.9 fallback
                 rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
 
-            post_children = _proc_listchildpids(os.getpid())
+            post_children = [
+                c for c in _proc_listchildpids(os.getpid()) if c not in baseline_children
+            ]
             if post_children:
                 raise RuntimeError(
                     f"process_time window-close assertion failed: os.getpid() "
-                    f"still has children {post_children} after root {root_pid} exited"
+                    f"has children {post_children} beyond the pre-window baseline "
+                    f"after root {root_pid} exited"
                 )
 
             return process_time_ms, len(seen), attach_failed, rc

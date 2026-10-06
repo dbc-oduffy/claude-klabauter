@@ -725,7 +725,13 @@ def _write_waste_report(report: dict, run_id: str, slice_id: str) -> Path:
     out_dir = _REPO_ROOT / "state" / "review-trail" / "waste-reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{run_id}.{slice_id}.json"
-    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
+    tmp = out_path.with_name(f".{out_path.name}.tmp{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
+        os.replace(tmp, out_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return out_path
 
 

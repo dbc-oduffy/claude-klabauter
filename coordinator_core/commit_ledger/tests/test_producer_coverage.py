@@ -135,6 +135,45 @@ _EXEMPT_PRODUCERS = {
     ),
 }
 
+#: Named exemptions INSIDE a `_WIRED_PRODUCERS` file. The argv scan above is
+#: per-file, so listing `git_native.py` as wired hides every `commit-tree`
+#: function in it; this pins them per function instead.
+#: key = (file relative to `coordinator_core/`, function name).
+_EXEMPT_COMMIT_TREE_FUNCTIONS = {
+    ("ops/ceremony/git_native.py", "commit_tree_merge"): (
+        "sole caller `ops/ceremony/push.py::_rebase_onto_fetched_ref` (push "
+        "ladder divergence recovery). The merge authors no content -- its tree "
+        "is a clean merge-tree of two already-ledgered lines -- so there is no "
+        "baton-owned work to attribute, and a row would add a committer/"
+        "handoff resolve plus a ledger write to the push hot path against the "
+        "brightline spawn budget. APM ruling 2026-10-06: no ledger wiring."
+    ),
+}
+
+#: `git_native.py` functions that issue `commit-tree` and ARE ledger-covered
+#: (`record_ledger_entry` at the op handler / after the CAS lands).
+_LEDGERED_COMMIT_TREE_FUNCTIONS = {
+    ("ops/ceremony/git_native.py", "_commit_scoped_private_index"),
+    ("ops/ceremony/git_native.py", "commit_authored_content"),
+}
+
+
+def _functions_issuing_commit_tree(rel: str) -> set[tuple[str, str]]:
+    """Top-level functions in `rel` whose body holds the string literal
+    `"commit-tree"` (an argv element)."""
+    import ast
+
+    tree = ast.parse((_CORE / rel).read_text(encoding="utf-8"))
+    found = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and sub.value == "commit-tree":
+                found.add((rel, node.name))
+                break
+    return found
+
 
 def _iter_source_files():
     for path in _CORE.rglob("*.py"):
@@ -279,4 +318,57 @@ def test_apply_base_never_imports_coordinator_core_ops_at_module_level():
         "module-level import here de-registers session.boot_sweep and "
         "session.sweep_consumed_handoffs for any process importing this "
         "module first."
+    )
+
+
+def test_git_native_commit_tree_functions_are_ledgered_or_named_exempt():
+    """`git_native.py` is whole-file listed in `_WIRED_PRODUCERS`, so the
+    per-file argv scan cannot see a `commit-tree` function inside it that
+    writes no ledger row. Pin them per function: every one is either in
+    `_LEDGERED_COMMIT_TREE_FUNCTIONS` or carries a named reason in
+    `_EXEMPT_COMMIT_TREE_FUNCTIONS`, and the only exempt one is
+    `commit_tree_merge`."""
+    rel = "ops/ceremony/git_native.py"
+    found = _functions_issuing_commit_tree(rel)
+    known = _LEDGERED_COMMIT_TREE_FUNCTIONS | set(_EXEMPT_COMMIT_TREE_FUNCTIONS)
+
+    unknown = sorted(found - known)
+    assert not unknown, (
+        f"New commit-tree function(s) in {rel}: {unknown} -- wire the ledger "
+        "(apply_base.record_ledger_entry) and add to "
+        "_LEDGERED_COMMIT_TREE_FUNCTIONS, or add a named reason to "
+        "_EXEMPT_COMMIT_TREE_FUNCTIONS."
+    )
+    stale = sorted(known - found)
+    assert not stale, (
+        f"Pinned commit-tree function(s) no longer found: {stale} -- update "
+        "the pinned sets."
+    )
+    assert set(_EXEMPT_COMMIT_TREE_FUNCTIONS) == {(rel, "commit_tree_merge")}
+
+
+def test_commit_tree_merge_has_only_the_exempt_push_ladder_caller():
+    """The `commit_tree_merge` exemption rests on its sole caller being the
+    push ladder's divergence recovery; a second caller voids the reason."""
+    import ast
+
+    callers = set()
+    for path, rel in _iter_source_files():
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "commit_tree_merge" not in text:
+            continue
+        for fn in ast.walk(ast.parse(text)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for sub in ast.walk(fn):
+                if (
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and sub.func.attr == "commit_tree_merge"
+                ):
+                    callers.add((rel, fn.name))
+    assert callers == {("ops/ceremony/push.py", "_rebase_onto_fetched_ref")}, (
+        f"commit_tree_merge callers changed: {sorted(callers)} -- the "
+        "no-ledger exemption was granted for the push ladder's "
+        "_rebase_onto_fetched_ref only; re-rule before adding a caller."
     )

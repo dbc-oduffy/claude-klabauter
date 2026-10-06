@@ -304,10 +304,12 @@ def _dispatch_orphan_branch_sweep(args: list[str], repo_root: Path) -> dict[str,
 
 
 def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """`d_grant_write` / `d_grant_handback` — the ceremony's Tier-U token,
-    minted after the ceremony gate and handed back at its close
-    (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-ceremony-grants-belong-in-
-    code-not-prose.md § 3).
+    """`d_grant_write` — the ceremony's Tier-U token, minted after the
+    ceremony gate (cross-repo/inbox/2026-08-04-coordinator-content-repo-em-ceremony-grants-
+    belong-in-code-not-prose.md § 3). `d_grant_handback` is
+    `already_satisfied` in `build_directives` (it runs after the suite,
+    outside apply), so only `grant` and the abort compensator reach this
+    handler in a real run.
 
     IN-PROCESS, unlike every other handler in this table, and that is the
     point. The grant is a single small JSON write into
@@ -358,16 +360,16 @@ def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
 def _compensate_grant_write(
     directive: dict[str, Any], repo_root: Path, detail: Optional[dict[str, Any]]
 ) -> Any:
-    """Hand the grant back when the ceremony dies before reaching
-    `d_grant_handback`.
+    """Hand the grant back when apply aborts after `d_grant_write`.
 
-    Without this, the handback is only as reliable as the ceremony's
-    completion: `apply_base.execute_directives` returns
-    `APPLY_EXIT_PARTIAL_MUTATION` the moment a handler raises, so every
-    later directive — including the handback — never dispatches, and the
-    grant outlives the ceremony that minted it. It stays bounded by session
-    liveness either way, so the leak degrades to the pre-handback behaviour
-    rather than past it; this closes it rather than documenting it.
+    `d_grant_handback` is deferred past apply (the suite it authorizes runs
+    afterwards), so a clean apply leaves the grant live on purpose; an
+    aborted one runs no suite. `apply_base.execute_directives` returns
+    `APPLY_EXIT_PARTIAL_MUTATION` the moment a handler raises, so without
+    this the grant would outlive a ceremony that never reaches its suite.
+    It stays bounded by session liveness either way, so the leak degrades
+    to the pre-handback behaviour rather than past it; this closes it
+    rather than documenting it.
 
     Uses the SAME guarded call as the directive it compensates, so the
     compensation cannot destroy a PM grant (or another ceremony's, under

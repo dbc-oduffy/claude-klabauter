@@ -67,6 +67,21 @@ def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
         rmtree_or_raise(base, label="warm runtime base")
 
 
+@pytest.fixture(autouse=True)
+def _restore_process_environ():
+    """`server.main()` boots as a server process: it scrubs caller-prefixed
+    vars (`COORDINATOR_PROBE_*` etc.) and writes the execution route into the
+    process's own `os.environ`. Driven in-process here, that mutation would
+    outlive the test, so the whole block is restored on teardown.
+    """
+    saved = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 def _stamp(tmp_path: Path) -> None:
     skew.write_engine_stamp(tmp_path, "sha-boot")
 

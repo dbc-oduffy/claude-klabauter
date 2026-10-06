@@ -36,6 +36,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))
@@ -176,3 +178,51 @@ class TestDestIsOwnedSubdirDecidesTheFlag:
         orphan_dir.mkdir(parents=True)
 
         assert publish._dest_is_owned_subdir(orphan_dir) is False
+
+
+class TestCacheOnlyDestinationDirectory:
+    """A destination top-level directory holding no real file (only `__pycache__`
+    bytecode, the residue of a source directory deleted upstream) is not an orphan:
+    `sync_mirror`'s top-level presence check must not FATAL on it, while a directory
+    with a real file absent from source still aborts."""
+
+    @pytest.fixture(autouse=True)
+    def _no_override(self, monkeypatch):
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_ORPHAN_SWEEP", raising=False)
+
+    @staticmethod
+    def _trees(tmp_path: Path) -> "tuple[Path, Path]":
+        src, dst = tmp_path / "src", tmp_path / "dst"
+        (src / "kept").mkdir(parents=True)
+        (src / "kept" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (dst / "kept").mkdir(parents=True)
+        return src, dst
+
+    @staticmethod
+    def _sync(src: Path, dst: Path):
+        return publish_sync.sync_mirror(
+            src, dst, publish_sync.load_ignore(src), dry_run=False
+        )
+
+    def test_cache_only_destination_directory_is_not_an_orphan(self, tmp_path):
+        src, dst = self._trees(tmp_path)
+        cache = dst / "orient_assemble" / "__pycache__"
+        cache.mkdir(parents=True)
+        (cache / "mod.cpython-314.pyc").write_bytes(b"\x00")
+
+        self._sync(src, dst)
+
+        assert (dst / "kept" / "a.py").is_file()
+
+    def test_destination_directory_with_a_real_file_still_aborts(self, tmp_path):
+        src, dst = self._trees(tmp_path)
+        (dst / "gone").mkdir()
+        (dst / "gone" / "real.py").write_text("y = 2\n", encoding="utf-8")
+        (dst / "gone" / "__pycache__").mkdir()
+        (dst / "gone" / "__pycache__" / "real.cpython-314.pyc").write_bytes(b"\x00")
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._sync(src, dst)
+
+        assert exc_info.value.code == 3
+        assert (dst / "gone" / "real.py").is_file()

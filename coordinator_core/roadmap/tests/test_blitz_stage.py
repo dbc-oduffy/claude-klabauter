@@ -28,10 +28,12 @@ CLUSTERS = """# Clusters — rm-test
 **Rows:** C. **loe:** M
 **blocked_by:** C2.
 
-## C4 — Tiny
-**Rows:** D. **loe:** XS
+## C4 — Side
+**Rows:** D. **loe:** M
 **blocked_by:** none.
 """
+
+CLUSTERS_WITH_XS = CLUSTERS.replace("D. **loe:** M", "D. **loe:** XS")
 
 RECON = """| Cluster | Verdict |
 |---|---|
@@ -54,15 +56,19 @@ def commit_calls(monkeypatch):
     return calls
 
 
+def _make_roadmap(tmp_path: Path, roadmap_id: str, clusters: str) -> Path:
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    run = tmp_path / "state" / "roadmap" / roadmap_id
+    run.mkdir(parents=True)
+    (run / "clusters.md").write_text(clusters, encoding="utf-8")
+    (run / "reconciliation.md").write_text(RECON, encoding="utf-8")
+    (run / "OVERVIEW.md").write_text(f"---\nroadmap_id: {roadmap_id}\n---\n# o\n", encoding="utf-8")
+    return run
+
+
 @pytest.fixture
 def roadmap(tmp_path: Path) -> Path:
-    (tmp_path / ".git").mkdir()
-    run = tmp_path / "state" / "roadmap" / "rm-test"
-    run.mkdir(parents=True)
-    (run / "clusters.md").write_text(CLUSTERS, encoding="utf-8")
-    (run / "reconciliation.md").write_text(RECON, encoding="utf-8")
-    (run / "OVERVIEW.md").write_text("---\nroadmap_id: rm-test\n---\n# o\n", encoding="utf-8")
-    return run
+    return _make_roadmap(tmp_path, "rm-test", CLUSTERS)
 
 
 def _fm(path: Path) -> str:
@@ -84,7 +90,21 @@ def test_stubs_scaffolded_and_numbered_from_cluster_edges(tmp_path, roadmap):
     assert reply["numbering"]["C3"]["wave"] > reply["numbering"]["C2"]["wave"] > reply["numbering"]["C1"]["wave"]
 
 
+def test_date_led_roadmap_id_without_prefix_line_is_refused(tmp_path):
+    run = _make_roadmap(tmp_path, "2026-10-06-alpha", CLUSTERS.replace("> Stub slug prefix: `rmt`.\n", ""))
+    with pytest.raises(bs.BlitzStageRefused, match="date-led"):
+        bs.stage_roadmap(tmp_path, str(run / "OVERVIEW.md"))
+    assert not (tmp_path / "state" / "handoffs").exists()
+
+
+def test_date_led_roadmap_id_with_prefix_line_stages(tmp_path):
+    run = _make_roadmap(tmp_path, "2026-10-06-alpha", CLUSTERS)
+    reply = bs.stage_roadmap(tmp_path, str(run / "OVERVIEW.md"))
+    assert {s["stub_id"] for s in reply["stubs"]} >= {"rmt-01"}
+
+
 def test_edges_path_overrides_cluster_edges(tmp_path, roadmap):
+    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
     edges = tmp_path / "edges.txt"
     edges.write_text("C1\nC2\nC3\nC4\nC1 <- C4\n", encoding="utf-8")
     reply = bs.stage_roadmap(tmp_path, str(roadmap), edges_path=str(edges))
@@ -96,6 +116,7 @@ def test_edges_path_overrides_cluster_edges(tmp_path, roadmap):
 
 
 def test_edge_free_small_cluster_is_flagged_unfoldable(tmp_path, roadmap):
+    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     ids = {s["cluster"]: s["stub_id"] for s in reply["stubs"]}
     folds = reply["folds"]
@@ -236,7 +257,11 @@ def test_a_dependent_is_preferred_over_a_dependency(tmp_path, roadmap):
 
 
 def test_edge_free_stubs_share_a_wave_and_the_dependent_is_later(tmp_path, roadmap):
-    _write_clusters(roadmap, """## C1 — a
+    (roadmap / "reconciliation.md").write_text(
+        "| Cluster | Verdict |\n|---|---|\n| C1 | **KEEP** |\n| C2 | **KEEP** |\n| C3 | **KEEP** |\n",
+        encoding="utf-8",
+    )
+    (roadmap / "clusters.md").write_text("""## C1 — a
 **loe:** M
 
 ## C2 — b
@@ -245,7 +270,7 @@ def test_edge_free_stubs_share_a_wave_and_the_dependent_is_later(tmp_path, roadm
 ## C3 — c
 **loe:** L
 **blocked_by:** C1.
-""")
+""", encoding="utf-8")
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     wave = {s["cluster"]: s["wave"] for s in reply["stubs"]}
     assert wave["C1"] == wave["C2"] == 1 and wave["C3"] == 2
@@ -263,12 +288,33 @@ def test_unknown_size_is_refused(tmp_path, roadmap):
 
 
 def test_audit_result_is_surfaced(tmp_path, roadmap):
+    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     audit = reply["audit"]
     assert set(audit) == {"exit_code", "passed", "stdout", "stderr"}
     assert any("Stub-coverage: all 4 KEEP cluster(s) named exactly once" in line for line in audit["stdout"])
     assert audit["passed"] is False and audit["exit_code"] == 1
     assert any("Audit 7" in line and "XS" in line for line in audit["stderr"])
+
+
+def test_failed_audit_does_not_freeze_the_gate_report(tmp_path, roadmap):
+    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["audit"]["passed"] is False
+    assert reply["gate_report_state"] == "deferred-audit-failed"
+    assert reply["gate_report_path"] is None
+    assert not (tmp_path / "state" / "plan-blitz").exists()
+    assert len(reply["commits"]) == 1
+
+
+def test_passing_audit_after_a_failed_one_freezes_on_rerun(tmp_path, roadmap):
+    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
+    assert bs.stage_roadmap(tmp_path, str(roadmap))["gate_report_state"] == "deferred-audit-failed"
+    (roadmap / "clusters.md").write_text(CLUSTERS, encoding="utf-8")
+    for stub in (tmp_path / "state" / "handoffs").glob("*rmt-04.md"):
+        stub.write_text(stub.read_text(encoding="utf-8").replace("loe: XS", "loe: M"), encoding="utf-8")
+    again = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert again["audit"]["passed"] is True and again["gate_report_state"] == "frozen-now"
 
 
 def test_gate_report_frozen_in_plan_gate_shape(tmp_path, roadmap):

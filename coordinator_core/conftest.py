@@ -1101,6 +1101,28 @@ def _redirect_live_session_hub(monkeypatch, tmp_path_factory):
     _core.reset_sessions_dir_cache()
 
 
+@_pytest.fixture(autouse=True)
+def _op_latency_never_appends_to_live_hub(monkeypatch):
+    """Drop op-latency rows whose sink is the REAL hub's `logs/op-latency.jsonl`.
+
+    `op_latency._write_entry` falls back to `Path.cwd()` when no repo is stamped, and a
+    test's cwd is the live repo, so every in-process dispatch minted a row there and
+    tripped `_no_writes_into_live_hub_entries` at teardown. Tests that assert rows give
+    the writer a tmp repo, whose sink this guard leaves alone."""
+    from coordinator_core.telemetry import op_latency as _op_latency
+
+    original = _op_latency._append_line
+    live_hub = os.path.normcase(os.path.abspath(_LIVE_HUB)) + os.sep
+
+    def _guarded(sink, encoded):
+        if os.path.normcase(os.path.abspath(sink)).startswith(live_hub):
+            return
+        return original(sink, encoded)
+
+    monkeypatch.setattr(_op_latency, "_append_line", _guarded)
+    yield
+
+
 _HUB_WRITE_EVENTS = ("os.remove", "os.rename", "os.link", "os.symlink", "shutil.copyfile")
 _hub_watch_active = False
 _hub_written: "set[str]" = set()

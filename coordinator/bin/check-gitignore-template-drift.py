@@ -270,8 +270,14 @@ def _apply(live_path: Path, live_text: str, live_lines: set[str], missing: list[
 
     live_path.parent.mkdir(parents=True, exist_ok=True)
     # `Path.write_text(newline=...)` is likewise a 3.13+ signature — see the read-side note above.
-    with open(live_path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(text)
+    tmp = live_path.with_name(f".{live_path.name}.tmp{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp, live_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 if __name__ == "__main__":

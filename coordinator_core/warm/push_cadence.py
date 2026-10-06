@@ -36,10 +36,11 @@ including superseded-generation retirement, so the predecessor's
 unpushed-at-handoff state is swept before the predecessor actually exits.
 
 SWEEP COST BUDGET. Serial over every served repo -- N x push, not one push.
-Each repo's own push is bounded by `push_with_retry`'s existing
-`CADENCE_PUSH_RETRY_BUDGET_SECS` ladder deadline (its OWN budget, separate
-from the interactive `PUSH_RETRY_BUDGET_SECS` -- C5, 2026-08-30, see that
-constant's own docstring), reused here unmodified, not duplicated. The
+Each repo's own push is bounded by `push_with_retry`'s ladder deadline, which
+is that repo's resolved ceiling (`push_ceiling.resolve_push_ceiling`, default
+`CADENCE_PUSH_RETRY_BUDGET_SECS`, at most `PUSH_CEILING_MAX_SECS`). A repo
+whose ceiling exceeds the default is admitted only first in an idle tick (the
+exit sweep declines it), and the sweep stops after it. The
 whole sweep additionally REFUSES TO START a repo that cannot finish before
 `SWEEP_TOTAL_CEILING_SECS` elapses (`sweep_repos`'s own docstring), so
 `SWEEP_TOTAL_CEILING_SECS` is an enforced worst-case bound on the sweep's
@@ -116,6 +117,10 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.hooks.auto_push import log_failure
 from coordinator_core.ops.ceremony.push import CADENCE_PUSH_RETRY_BUDGET_SECS
+from coordinator_core.ops.ceremony.push_ceiling import (
+    PUSH_CEILING_MAX_SECS,
+    resolve_push_ceiling,
+)
 from coordinator_core.ops.push_outstanding import push_outstanding
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 
@@ -200,13 +205,9 @@ _last_sweep_monotonic: Optional[float] = None
 _resume_repo: Optional[Path] = None
 
 _SWEEP_LOCK_NAME = "coordinator-push-cadence-sweep.json"
-#: Generous headroom over one repo's own `push_with_retry` ladder deadline
-#: -- a live sweep should never be mistaken for stale mid-push. Keyed to
-#: `CADENCE_PUSH_RETRY_BUDGET_SECS` (this module's own cadence-path budget,
-#: C5, 2026-08-30), not the interactive `PUSH_RETRY_BUDGET_SECS` this sweep
-#: never uses -- that stale coupling held the lock ~4x the work it bounds
-#: (overengineering-reviewer finding 5).
-_SWEEP_LOCK_HOLD_SECS = CADENCE_PUSH_RETRY_BUDGET_SECS + 10.0
+#: Headroom over the longest per-repo ladder deadline any repo can resolve to
+#: (`PUSH_CEILING_MAX_SECS`) -- a live long push is never mistaken for stale.
+_SWEEP_LOCK_HOLD_SECS = PUSH_CEILING_MAX_SECS + 10.0
 
 
 def reset_cadence_for_test() -> None:
@@ -435,10 +436,10 @@ def _no_upstream_and_no_new_commits(root: Path, branch: str, sha: str) -> bool:
 def _sweep_one(repo_root: Union[str, Path]) -> None:
     """Push exactly one repo -- declining outright if another sweeper
     already holds this repo's lock. The per-repo bound is enforced by
-    `push_with_retry`'s own `CADENCE_PUSH_RETRY_BUDGET_SECS`-keyed ladder
-    deadline inside `push_outstanding` itself -- see the module docstring's
+    `push_with_retry`'s own ladder deadline inside `push_outstanding` itself,
+    keyed to the repo's resolved ceiling -- see the module docstring's
     SWEEP COST BUDGET section, not re-implemented here. Passes the
-    cadence's OWN, smaller budget (C5, 2026-08-30) -- never the interactive
+    cadence's OWN budget as the resolver default -- never the interactive
     `PUSH_RETRY_BUDGET_SECS` `push_outstanding` defaults to for every other
     caller. Passes `use_streamed_push=True` (P052-C3, 2026-09-10): the
     cadence sweep is the one sanctioned consumer of `push_with_retry`'s
@@ -458,7 +459,9 @@ def _sweep_one(repo_root: Union[str, Path]) -> None:
         try:
             outcome = push_outstanding(
                 root,
-                budget_secs=CADENCE_PUSH_RETRY_BUDGET_SECS,
+                budget_secs=resolve_push_ceiling(
+                    root, default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS
+                ),
                 use_streamed_push=True,
             )
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
@@ -473,7 +476,8 @@ def sweep_repos(
     repos: Iterable[Union[str, Path]],
     *,
     total_ceiling_secs: float = SWEEP_TOTAL_CEILING_SECS,
-    per_repo_budget_secs: float = CADENCE_PUSH_RETRY_BUDGET_SECS,
+    per_repo_budget_secs: Optional[float] = None,
+    allow_extended_first: bool = False,
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Sweep every repo in `repos`, serially, stopping (without pushing to
@@ -492,27 +496,24 @@ def sweep_repos(
     ever touches can push it past that ceiling -- for any positive budget
     this single check subsumes the plain `now >= deadline` case, so that
     clause is dropped rather than kept as unreachable dead weight
-    (overengineering-reviewer finding 3). `per_repo_budget_secs` defaults to
-    the cadence's own
-    `CADENCE_PUSH_RETRY_BUDGET_SECS` -- the same budget `_sweep_one` hands
-    `push_outstanding` -- so the admission guard and the actual per-repo
-    spend agree without a second number to keep in sync.
+    (overengineering-reviewer finding 3). Each repo is admitted against its
+    own resolved ceiling (`resolve_push_ceiling`, zero spawns, once per repo
+    per sweep here); `per_repo_budget_secs`, when given, is a test seam that
+    replaces the resolver for every repo.
 
-    ARM B (P052-C5, docs/plans/2026-09-10-push-cadence-hang-detection-over-
-    elapsed-timeout.md): `docs/research/2026-09-10-git-push-progress-stall-
-    measurement.md` selected layering, not replacement -- the fixed
-    `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s) stays the per-repo ladder
-    deadline this admission check reads, unchanged and un-widened by the
-    silence watchdog `git_native.push_streamed` adds. A push that keeps
-    progressing is still bounded by this same 16.0s per-repo budget (arm B
-    layers a *silence* detector under it; it does not raise the ladder's own
-    elapsed ceiling), so this admission check's worst case -- and the
-    guarantee that a repo admitted here always finishes inside
-    `total_ceiling_secs` -- is unchanged by this plan. No repo is left
-    unswept by a widened per-push worst case, because under arm B there is
-    none: only arm A (not selected) would have widened it, which is why
-    AC9/AC10's "read the widened worst case against the sweep-repos
-    admission check" concern does not apply here.
+    EXTENDED CEILINGS. A repo whose ceiling exceeds
+    `CADENCE_PUSH_RETRY_BUDGET_SECS` is admitted only as the FIRST repo of the
+    call and only with `allow_extended_first=True` (`on_idle_tick` passes it;
+    the exit sweep does not, so it declines such a repo). Its deadline is
+    `start + ceiling + (total_ceiling_secs - CADENCE_PUSH_RETRY_BUDGET_SECS)`,
+    and the sweep stops after it with the next repo as the resume cursor. A
+    declined or out-of-position extended repo becomes the cut, so the next
+    idle tick starts at it. A repo at or under the default is admitted
+    exactly as before, against the fixed `total_ceiling_secs` deadline.
+
+    ARM B (P052-C5): the silence watchdog `git_native.push_streamed` adds is
+    layered under the per-repo ladder deadline; every ceiling is capped at
+    `PUSH_CEILING_MAX_SECS`, so no push runs unbounded.
 
     ROTATION. A truncated sweep records the first repo it did not reach
     (`_resume_repo`) and the next sweep starts there, wrapping around, so a
@@ -522,19 +523,34 @@ def sweep_repos(
     shuffle).
     """
     global _resume_repo
-    deadline = clock() + total_ceiling_secs
+    start = clock()
+    deadline = start + total_ceiling_secs
+    extended_margin = total_ceiling_secs - CADENCE_PUSH_RETRY_BUDGET_SECS
     ordered = list(dict.fromkeys(Path(repo) for repo in repos))
     with _cadence_lock:
         resume = _resume_repo
     if resume in ordered:
-        start = ordered.index(resume)
-        ordered = ordered[start:] + ordered[:start]
+        offset = ordered.index(resume)
+        ordered = ordered[offset:] + ordered[:offset]
     cut: Optional[Path] = None
-    for root in ordered:
-        if clock() + per_repo_budget_secs > deadline:
+    for index, root in enumerate(ordered):
+        ceiling = (
+            per_repo_budget_secs
+            if per_repo_budget_secs is not None
+            else resolve_push_ceiling(root, default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS)
+        )
+        extended = ceiling > CADENCE_PUSH_RETRY_BUDGET_SECS
+        if extended and not (allow_extended_first and index == 0):
+            cut = root
+            break
+        repo_deadline = start + ceiling + extended_margin if extended else deadline
+        if clock() + ceiling > repo_deadline:
             cut = root
             break
         _sweep_one(root)
+        if extended:
+            cut = ordered[index + 1] if index + 1 < len(ordered) else None
+            break
     with _cadence_lock:
         _resume_repo = cut
 
@@ -557,5 +573,10 @@ def on_idle_tick(
     """
     if not _sweep_due(clock=clock, interval_secs=interval_secs):
         return False
-    sweep_fn(served_repos(), total_ceiling_secs=total_ceiling_secs, clock=clock)
+    sweep_fn(
+        served_repos(),
+        total_ceiling_secs=total_ceiling_secs,
+        allow_extended_first=True,
+        clock=clock,
+    )
     return True

@@ -83,21 +83,23 @@ def _delivery_block(record: dict) -> Optional[dict]:
     return None
 
 
-def load_delivery(
-    repo_root: Path, record: dict, prep: Optional[dict] = None
-) -> Optional[dict]:
-    """The one loader for a run record's frozen delivery: the record's own `delivery` block, else
-    the delivery sidecar named by `prep.whole_diff_sidecars.delivery` (`prep` inline in the record,
-    behind `prep_sidecar`, or passed in). Mint, the resolver and `prior_unbacked_claims` all read
-    delivery through here, so none sees a record as delivery-less that another reads."""
+def prep_of(repo_root: Path, record: dict) -> Optional[dict]:
+    """The run record's `prep` block: inline, else its `prep_sidecar` frontmatter."""
+    prep = record.get("prep")
+    if isinstance(prep, dict):
+        return prep
+    rel = record.get("prep_sidecar")
+    return _frontmatter(repo_root / rel) if rel else None
+
+
+def load_delivery(repo_root: Optional[Path], record: dict, prep: Optional[dict] = None) -> Optional[dict]:
+    """The one loader of a run record's frozen delivery block: the record's own frontmatter
+    first, else the sidecar `prep.whole_diff_sidecars.delivery` names. `prep` is a caller's
+    already-resolved prep block; `repo_root` None skips the sidecar fallback."""
     block = _delivery_block(record)
-    if block is not None:
+    if block is not None or repo_root is None:
         return block
-    if not isinstance(prep, dict):
-        prep = record.get("prep")
-    if not isinstance(prep, dict):
-        rel = record.get("prep_sidecar")
-        prep = _frontmatter(repo_root / rel) if rel else None
+    prep = prep if isinstance(prep, dict) else prep_of(repo_root, record)
     sidecars = prep.get("whole_diff_sidecars") if isinstance(prep, dict) else None
     rel = sidecars.get("delivery") if isinstance(sidecars, dict) else None
     return _frontmatter(repo_root / rel) if rel else None
@@ -133,7 +135,7 @@ def prior_unbacked_claims(
     are `fail`/`error`, returns `(record, [])`: there is
     nothing to re-check claim by claim, but the verdict and criterion are stale. Raises
     `ReverifyRefused` when the record is unreadable, or when delivery PASSed and nothing else
-    is stale (nothing to supersede)."""
+    is stale (nothing to supersede). `repo_root` enables the `whole_diff_sidecars` delivery fallback."""
     record = _frontmatter(record_path)
     if record is None:
         raise ReverifyRefused(f"reverify-delivery: cannot read run record {record_path}")
@@ -278,6 +280,7 @@ def compose_reverify_script(
     phases = [_js_string_literal(_PHASE)]
     tests_lines = ""
     tests_field = ""
+    tests_ident: dict[str, str] = {}
     if rerun_tests:
         phases.append(_js_string_literal(_TESTS_PHASE))
         tests_prompt = (
@@ -288,6 +291,7 @@ def compose_reverify_script(
             f"plan_path: {plan_path}"
         )
         tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
+        tests_ident["tests_agent_type"] = tests_type
         tests_call = _agent_call_literal(
             tests_type,
             tests_role + tests_prompt,
@@ -329,9 +333,8 @@ def compose_reverify_script(
         "plan_id": plan_id,
         "head_sha": head_sha,
         "plan_path": plan_path,
+        **tests_ident,
     }
-    if rerun_tests:
-        ident["tests_agent_type"] = tests_type
     return (
         "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
         f"{meta}\n"
@@ -598,10 +601,7 @@ def live_foreign_claims(repo_root: Path, frozen: List[Any], head_sha: str) -> Li
 
 
 def _frozen_foreign_claims(repo_root: Path, record: dict) -> Optional[List[Any]]:
-    prep = record.get("prep")
-    if not isinstance(prep, dict):
-        rel = record.get("prep_sidecar")
-        prep = _frontmatter(repo_root / rel) if rel else None
+    prep = prep_of(repo_root, record)
     claims = prep.get("foreign_claims") if isinstance(prep, dict) else None
     return claims if isinstance(claims, list) else None
 
@@ -684,7 +684,8 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
         fm = _frontmatter(path)
         if not fm or str(fm.get("plan_id")) != plan_id:
             continue
-        if _has_reverifiable(repo_root, fm):
+        block = load_delivery(repo_root, fm)
+        if block and (block.get("verdict") == "FAIL" or _unsettled(fm)):
             return path
     return None
 
@@ -714,8 +715,10 @@ def emit_reverify(
         record_file = found
     record, claims = prior_unbacked_claims(record_file, repo_root)
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
-    prep = record.get("prep") if isinstance(record.get("prep"), dict) else {}
-    commit_range = record.get("commit_range") if isinstance(record.get("commit_range"), dict) else {}
+    raw_prep = record.get("prep")
+    prep = raw_prep if isinstance(raw_prep, dict) else {}
+    raw_range = record.get("commit_range")
+    commit_range = raw_range if isinstance(raw_range, dict) else {}
     plan_id = record.get("plan_id")
     if not plan_id:
         split = split_frontmatter(Path(plan_path).read_text(encoding="utf-8", errors="replace"))

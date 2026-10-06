@@ -1,9 +1,10 @@
 # pipeline_structured fixture provenance
 
-`oracle/structured-research-fixture.workflow.mjs` is the output of coordinator-content-repo's
+`oracle/structured-research-fixture.oracle.mjs` is the output of coordinator-content-repo's
 `coordinator/pipelines/deep-research/emit-structured-fire.py`, run at coordinator-content-repo sha `6d7e4bada`
 (extracted with `git archive`, so no uncommitted DoE edit leaks in) with `--config
-oracle/config.json --subjects oracle/subjects.txt`.
+oracle/config.json --subjects oracle/subjects.txt`. The file is named `.oracle.mjs`, not
+`.workflow.mjs`: the latter suffix is gitignored and refused by the commit route as ephemeral emission.
 
 Two deliberate departures from a raw run:
 

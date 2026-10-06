@@ -980,7 +980,13 @@ except Exception:
 # a real defect (a hung stat/read on a bad filesystem) rather than a tight-cap
 # artifact, and a table row would just be a second, looser number to keep in sync
 # with the first.
-_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {}
+#
+# push.outstanding (docs/plans/2026-10-06-the-push-ceiling-resolves-per-repo.md C4):
+# 130.0 = PUSH_CEILING_MAX_SECS (120.0) + 10.0 for the outstanding-work decision and
+# the reporting tail. A literal, not an import: ipc.py must not import ops. The per-repo
+# ladder deadline inside the op is what stops the push; this row is only a backstop
+# above it (same shape as PUSH_RETRY_BUDGET_SECS vs the 30s guard).
+_OP_TIMEOUT_OVERRIDES: Dict[str, float] = {"push.outstanding": 130.0}
 
 
 # ---------------------------------------------------------------------------
@@ -1173,10 +1179,11 @@ def _timeout_for(method: str, msg: Any = None) -> float:
     a ceremony op is capped at 2s even where the global default is 30s, and lowering
     the global default is a distinct change that does not touch this function.
 
-    `_OP_TIMEOUT_OVERRIDES` is empty (DEC-2 retired its three rows; `coverage.gate`
-    removed by K-001, state/kill-ledger.md; `ceremony.scoped_git_commit`'s 150s row
-    revoked 2026-08-21 by the budget). It is kept as a live table so a genuinely
-    justified NON-ceremony widening has somewhere to land.
+    `_OP_TIMEOUT_OVERRIDES` holds one row, `push.outstanding` (DEC-2 retired its
+    three earlier rows; `coverage.gate` removed by K-001, state/kill-ledger.md;
+    `ceremony.scoped_git_commit`'s 150s row revoked 2026-08-21 by the budget). It
+    stays a live table so a genuinely justified NON-ceremony widening has somewhere
+    to land.
     """
     resolved = _dispatch_timeout_unclamped(method, msg)
     if is_ceremony_method(method):

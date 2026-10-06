@@ -445,28 +445,6 @@ def _reset_op_timeout_cache() -> None:
     _OP_TIMEOUTS_BREADCRUMB_SHOWN = False
 
 
-_MLIR_MODULE = None
-
-
-def _machine_local_impl_resolver():
-    """Lazily import machine_local_impl_resolve, self-locating its own
-    sys.path entry so this module stays standalone-invocable regardless of
-    whether a caller already inserted coordinator/bin/lib. Cached after first
-    call. Deliberately function-local (not a module-top import) — mirrors this
-    module's own documented "no non-stdlib import above the LAZY_OPS line"
-    discipline, even though machine_local_impl_resolve is not coordinator_core.
-    """
-    global _MLIR_MODULE
-    if _MLIR_MODULE is None:
-        _lib_dir = os.path.dirname(os.path.abspath(__file__))
-        if _lib_dir not in sys.path:
-            sys.path.insert(0, _lib_dir)
-        import machine_local_impl_resolve as _mlir
-
-        _MLIR_MODULE = _mlir
-    return _MLIR_MODULE
-
-
 def _claude_home() -> str:
     """Return the ~/.claude root, honoring CLAUDE_HOME for test isolation.
 
@@ -1667,9 +1645,9 @@ def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | No
 
     # _ENGINE_ROOT_NEW_VAR/_ENGINE_ROOT_OLD_VAR's module-level note above).
     _root = claude_klabauter_root if claude_klabauter_root is not None else os.environ.get(_ENGINE_ROOT_NEW_VAR)
-    _injected = bool(_root) and _root not in sys.path
-    if _injected:
-        sys.path.insert(0, _root)
+    _injected_root = _root if _root and _root not in sys.path else None
+    if _injected_root is not None:
+        sys.path.insert(0, _injected_root)
     try:
         from coordinator_core import _settings_home
 
@@ -1677,9 +1655,9 @@ def _settings_home_env(base_env: dict[str, str], claude_klabauter_root: str | No
     except Exception:
         return base_env
     finally:
-        if _injected:
+        if _injected_root is not None:
             try:
-                sys.path.remove(_root)
+                sys.path.remove(_injected_root)
             except ValueError:
                 pass
 

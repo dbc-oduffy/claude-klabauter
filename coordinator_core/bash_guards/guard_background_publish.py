@@ -7,8 +7,8 @@ A round takes minutes and is not governed by the process budget (CLAUDE.md
 session hostage and hits the harness's foreground timeout mid-round, which
 kills the shell but not the round or its destination lock.
 
-Matches on the CLI name alone, so it is dialect-independent (Bash and
-PowerShell alike). Rewrites `run_in_background` only; the command text is
+Matches on an executed CLI name, so it is dialect-independent (Bash and
+PowerShell alike); a `--help`/`-h` invocation is left in the foreground. Rewrites `run_in_background` only; the command text is
 untouched. Every other input field is carried over, because `updatedInput`
 replaces the tool input wholesale.
 """
@@ -34,7 +34,29 @@ _HEREDOC_BODY_RE = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?^\s*\1\s*$", re.MULTILINE | re.DOTALL
 )
 
+#: Separators inside a quoted span are text (`grep 'a|percolate-push' f`), not
+#: segment boundaries.
+_QUOTED_RE = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'")
+_SEPARATORS_RE = re.compile(r"[;&|()]")
+
+#: An executed publisher asked only for usage runs in milliseconds.
+_HELP_FLAG_RE = re.compile(r"(?:^|\s)(?:--help|-h)(?=\s|$)")
+_SEGMENT_END_RE = re.compile(r"[;&|)\n]")
+
 _NOTE = "Publish round moved to a background task; a notification arrives when it exits."
+
+
+def _mask_quoted_separators(cmd: str) -> str:
+    return _QUOTED_RE.sub(lambda m: _SEPARATORS_RE.sub(" ", m.group(0)), cmd)
+
+
+def _runs_a_round(cmd: str) -> bool:
+    for match in _PUBLISH_CLI_RE.finditer(cmd):
+        tail = cmd[match.end():]
+        end = _SEGMENT_END_RE.search(tail)
+        if not _HELP_FLAG_RE.search(tail[: end.start()] if end else tail):
+            return True
+    return False
 
 
 def check_background_publish(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -44,7 +66,9 @@ def check_background_publish(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
     if not isinstance(tool_input, dict) or tool_input.get("run_in_background"):
         return None
     cmd = tool_input.get("command")
-    if not isinstance(cmd, str) or not _PUBLISH_CLI_RE.search(_HEREDOC_BODY_RE.sub("", cmd)):
+    if not isinstance(cmd, str):
+        return None
+    if not _runs_a_round(_mask_quoted_separators(_HEREDOC_BODY_RE.sub("", cmd))):
         return None
     updated = dict(tool_input)
     updated["run_in_background"] = True

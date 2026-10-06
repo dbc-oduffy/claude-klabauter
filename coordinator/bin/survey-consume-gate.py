@@ -128,6 +128,7 @@ def _invoke_op(claude_klabauter_root: str, op: str, params: dict[str, Any]) -> t
             cwd=claude_klabauter_root,
             capture_output=True,
             text=True,
+            timeout=60,
             **_NO_CONSOLE,
         )
     except Exception as exc:

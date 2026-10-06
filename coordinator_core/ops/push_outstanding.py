@@ -192,6 +192,14 @@ from coordinator_core.ops.ceremony.push import (
     _remaining_or_none,
     push_with_retry,
 )
+from coordinator_core.ops.ceremony.push_ceiling import (
+    PUSH_CEILING_MAX_SECS,  # noqa: F401 -- re-exported for the ceiling pin
+    gitattributes_declares_lfs_filter,
+    resolve_push_ceiling,
+)
+
+#: Legacy name `test_push_outstanding.py` imports.
+_gitattributes_declares_lfs_filter = gitattributes_declares_lfs_filter
 from coordinator_core.hooks.auto_push import (
     _cockpit_publish_script,
     _maybe_publish_cockpit_contract,
@@ -397,23 +405,7 @@ def _p4_leg_execute(
 #: (a real `check-attr` call against the actual changed paths) is exactly
 #: the safety net that catches it -- arm 1 only ever short-circuits to
 #: "definitely nothing", never asserts "definitely something".
-_LFS_FILTER_MARKER = "filter=lfs"
-
-
-def _gitattributes_declares_lfs_filter(root: Path) -> bool:
-    """Zero-spawn arm 1: does this repo's root `.gitattributes` declare
-    `filter=lfs` anywhere (comments stripped)? `False` when the file is
-    absent, empty, or unreadable -- absence of the file means absence of
-    any LFS declaration, not an unknown."""
-    try:
-        text = (root / ".gitattributes").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    for line in text.splitlines():
-        code = line.split("#", 1)[0]
-        if _LFS_FILTER_MARKER in code:
-            return True
-    return False
+#: The predicate itself is `push_ceiling.gitattributes_declares_lfs_filter`.
 
 
 def _run_git(args: Sequence[str], cwd: Path, *, input_data: Optional[str] = None) -> Optional[str]:
@@ -455,7 +447,7 @@ def _range_touches_lfs_paths(root: Path, base_sha: str, head_sha_value: str) -> 
     path in the range) and on any arm that could not be evaluated
     (`_run_git` returning `None`) -- correctness first, never a silent
     skip on an inconclusive answer."""
-    if not _gitattributes_declares_lfs_filter(root):
+    if not gitattributes_declares_lfs_filter(root):
         return False
 
     diff_range = f"{base_sha}..{head_sha_value}"
@@ -530,7 +522,7 @@ def push_outstanding(
     *,
     allow_protected_branch: bool = False,
     protected_branch_override_reason: Optional[str] = None,
-    budget_secs: float = PUSH_RETRY_BUDGET_SECS,
+    budget_secs: Optional[float] = None,
     decide_only: bool = False,
     session_id: Optional[str] = None,
     use_streamed_push: bool = False,
@@ -543,11 +535,12 @@ def push_outstanding(
     through to `push_with_retry` -- see that function's own docstring; this
     module adds no new override surface of its own.
 
-    `budget_secs` (C5, 2026-08-30) -- defaults to the interactive
-    `PUSH_RETRY_BUDGET_SECS` so no existing caller changes behaviour. The
-    cadence sweep (`warm.push_cadence._sweep_one`) passes its own, smaller
-    `ops.ceremony.push.CADENCE_PUSH_RETRY_BUDGET_SECS` instead -- see that
-    constant's own docstring for why the cadence needs a shorter ladder.
+    `budget_secs` -- an explicit value (the cadence sweep passes its own) is
+    used as given. `None` resolves `resolve_push_ceiling(worktree_root,
+    default_secs=PUSH_RETRY_BUDGET_SECS)`: the interactive default unless the
+    repo configures or implies a higher ceiling. A resolved ceiling above
+    `PUSH_RETRY_BUDGET_SECS` forces `use_streamed_push=True`, so it is always
+    bounded by the stall watchdog.
 
     When HEAD itself is unresolvable (detached, or `.git/HEAD` unreadable),
     or the current branch name cannot be determined, the zero-spawn sha
@@ -658,6 +651,10 @@ def push_outstanding(
     if decide_only:
         return PushOutcome(exit_code=0, skipped=["push:decide-only", *lfs_note])
 
+    if budget_secs is None:
+        budget_secs = resolve_push_ceiling(root, default_secs=PUSH_RETRY_BUDGET_SECS)
+        if budget_secs > PUSH_RETRY_BUDGET_SECS:
+            use_streamed_push = True
     publish_deadline = time.monotonic() + budget_secs
     # `use_streamed_push` is omitted from the call entirely when it is the
     # default `False`, not passed as an explicit `False` -- keeps the

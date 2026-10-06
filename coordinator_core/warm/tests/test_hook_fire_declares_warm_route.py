@@ -45,7 +45,12 @@ from coordinator_core.warm.tests.test_supervisor_hook_serves_real_guard import (
 )
 
 
-def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path: Path):
+def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path: Path, monkeypatch):
+    # The op-latency row falls back to the process cwd's sink; a tmp repo keeps it
+    # off the live hub, which the autouse conftest guard drops rows for.
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.chdir(repo)
     prior_route = os.environ.get(op_latency.ROUTE_ENV)
     supervisor._declare_execution_route()
     own_pid = os.getpid()
