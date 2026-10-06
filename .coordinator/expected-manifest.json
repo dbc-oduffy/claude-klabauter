@@ -1969,8 +1969,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "64fd90c73d3f568c070e2d64134eab1767f3125e",
-    "coordinator_core/_engine_stamp": "73c9fa50976a17e415da2d53e07f3081d04e7668",
+    "coordinator_core/_engine_published_at": "56f2c746831e86f130762fcc70be8999f3066eb8",
+    "coordinator_core/_engine_stamp": "719ba9298026e92f9c37007dc707005eac655cd6",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3882,7 +3882,7 @@
     "coordinator_core/ops/discover_working_repos.py": "244553a1e34b68566739ac73db43bfdef0c8f0bc",
     "coordinator_core/ops/dispatch_emit/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/ops/dispatch_emit/admission.py": "0d1a88cd69598bd2ded7870f3f28cfbbdc44a93e",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "d0c04dd6d06defd4806c3006e19ba6641d81adf5",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "2ade2b05ebaf4af1c7c669ec82bb6d341524f04b",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "cb2fd9e9d898131f77fdcac7aed3c91992ce3b86",
     "coordinator_core/ops/dispatch_emit/ask_gate.py": "67f38f4a54b46aeffb61cc6b5921c65464569ee6",
     "coordinator_core/ops/dispatch_emit/ask_plan_blitz.py": "ce71647029df3be02c26a72616c4f24fb326ff14",
@@ -3898,7 +3898,7 @@
     "coordinator_core/ops/dispatch_emit/delivery_credit.py": "0dc72a41185509e0e34b237b2e2c371893e2998e",
     "coordinator_core/ops/dispatch_emit/dirty_write_set.py": "b465ee8039bf9447851cecb6563aba0997a63c0c",
     "coordinator_core/ops/dispatch_emit/emission_receipt.py": "5f22ef3145f62eb57fe77f6cb03b8c2382eeec17",
-    "coordinator_core/ops/dispatch_emit/emit.py": "dae2071147cc330ffe58b61a9b50e822d52a0821",
+    "coordinator_core/ops/dispatch_emit/emit.py": "efbf33004c8a695726ddde5dd897d4601445eb72",
     "coordinator_core/ops/dispatch_emit/falsifier_integrity_phase.py": "e24b4ee9332f304da981e8610fd5f79090b36eec",
     "coordinator_core/ops/dispatch_emit/grind_compose.py": "44c3fb05c4c4c5eb363b786ad524baa9d279df4c",
     "coordinator_core/ops/dispatch_emit/grind_profile.py": "3082921a52d85ca9b2200b4864933ab330b61eff",
@@ -4028,6 +4028,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_mint_rows_keeps_overlap_edges.py": "d4c005410c0a6f953c85e147d87092b632ff1632",
     "coordinator_core/ops/dispatch_emit/tests/test_new_module_importer_window.py": "fa5c00f30258d4d40aac9175240b171066b60f4f",
     "coordinator_core/ops/dispatch_emit/tests/test_no_tree_survey.py": "16ec787090d1835601be98fdb81ec28e9e86f875",
+    "coordinator_core/ops/dispatch_emit/tests/test_non_done_row_holds_dependents.py": "3d5441366ca3c4fb925db3d46aff328287b01441",
     "coordinator_core/ops/dispatch_emit/tests/test_op.py": "1fefdbd118752678092097e0a25610ef41eba7d5",
     "coordinator_core/ops/dispatch_emit/tests/test_op_emission_receipt.py": "29646ee8c7d45641bf023948418e83678e1ab5ea",
     "coordinator_core/ops/dispatch_emit/tests/test_op_lanes.py": "010d5f475222edf0d2e0891ed408e12b784fe2ec",
@@ -6317,7 +6318,7 @@
     "coordinator_core/warm/door/build_posix.py": "8a557d24645bbe89b4efb2a58d4f5be211bad4b4",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "47910737ef02e82d465b3df1d3c05c0122154735",
+    "coordinator_core/warm/door/door.exe.provenance.json": "c251e0fa650ebcd23e5cbab93880071309219140",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -6877,5 +6878,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "aa7c5a000ffcb90da2e5008d5ed3b40d35e18056"
+  "source_head": "ecf70cb0ff786273f2e579d4305873211ebab6ac"
 }
