@@ -552,6 +552,13 @@ def test_origin_stub_close_survives_rebase_retry_and_lands_the_rewritten_sha(
         return real_resolve_post_push_sha(worktree_root, pre_push_sha)
 
     monkeypatch.setattr(m, "resolve_post_push_sha", _spy_resolve_post_push_sha)
+    # The reject -> rebase -> re-push ladder needs two real pushes; under a
+    # parallel test run the production 1.2s ladder fits only one. This test
+    # pins the rebased sha, not the budget.
+    from coordinator_core.ops.ceremony import push as push_mod
+
+    monkeypatch.setattr(push_mod, "CEREMONY_PUSH_BUDGET_SECS", 30.0)
+    monkeypatch.setattr(push_mod, "CEREMONY_BUDGET_SECS", 30.8)
 
     follow_up_sha, pushed, push_status, error = m._commit_and_push_origin_stub_close(
         repo, ["docs/plans/some-stub.md"], "deadbeef", push_mode=PUSH_MODE_SYNC

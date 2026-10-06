@@ -3195,12 +3195,22 @@ _CHECKPOINT_PUSH_SCHEMA = {
 _CHECKPOINT_PROTECTED_BRANCHES = frozenset({"main", "master"})
 
 
+def _checkpoint_trailer(plan_path: Optional[str], run_base_sha: Optional[str]) -> str:
+    """The body lines `git.checkpoint_guard` reads to refuse re-landing a
+    closed or reverted row."""
+    if not plan_path or not run_base_sha:
+        return ""
+    return f"\n\nCheckpoint-Plan: {plan_path}\nCheckpoint-Base: {run_base_sha}"
+
+
 def _checkpoint_commit_js(
     agent_type_host: Optional[str],
     *,
     repo_root: Optional[str],
     session_id: Optional[str],
     push_branch: Optional[str],
+    plan_path: Optional[str] = None,
+    run_base_sha: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -3232,7 +3242,7 @@ def _checkpoint_commit_js(
     route = (
         "] -- then commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
-        "'{\"paths\":[...],\"message\":\"<subject>\"}'` -- the only committer route. "
+        "'{\"paths\":[...],\"message\":\"<message>\"}'` -- the only committer route. "
         "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
         "If every listed path already matches HEAD, commit nothing and report outcome "
         "committed without a sha. If the outcome is indeterminate, reconcile it against "
@@ -3263,11 +3273,14 @@ def _checkpoint_commit_js(
         "    const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];",
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
+        "    const message = subject + "
+        + _js_string_literal(_checkpoint_trailer(plan_path, run_base_sha)) + ";",
         "    let r = null;",
         "    try {",
         "      r = await agent(",
         f"        {_js(head)} + 'You are the committer for wave ' + n + ' (' + done.join(', ') + "
-        "'). Commit subject: `' + subject + '`.' + "
+        "'). Commit message, verbatim as the `message` param with its newlines "
+        "JSON-escaped: `' + message + '`.' + "
         f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
         f"{_js(route)},",
         f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
@@ -3781,6 +3794,8 @@ def compose_script(
             repo_root=repo_anchor,
             session_id=session_id,
             push_branch=push_branch,
+            plan_path=plan_path,
+            run_base_sha=run_base_sha,
         )
     )
     body_blocks.append(_run_row_helper_js(agent_type_host))

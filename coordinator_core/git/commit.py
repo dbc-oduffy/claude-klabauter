@@ -95,6 +95,7 @@ from coordinator_core.git.git_objects import (
 from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
+from coordinator_core.git import checkpoint_guard
 from coordinator_core.git.tree_spine import (
     _ABSENT,
     _rewrite_head_spine,
@@ -1042,6 +1043,12 @@ def commit_paths(
             f"refusing to commit emitted workflow output: {ephemeral[:3]} -- "
             "these are ephemeral and gitignored; drop them from the pathspec."
         )
+
+    checkpoint_refused = checkpoint_guard.checkpoint_refusal(
+        Path(root), resolve_git_common_dir(root), head_sha(root), message, path_list
+    )
+    if checkpoint_refused:
+        raise CommitRefused(checkpoint_refused)
 
     # MID-SEQUENCE REFUSAL, and it has to sit HERE -- before the index read,
     # before the first object write, before the CAS. This function builds a

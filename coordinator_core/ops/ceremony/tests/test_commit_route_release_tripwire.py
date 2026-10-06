@@ -377,6 +377,21 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    # Engine-op landings added 2026-10-04/05: the cascade terminal mirrors
+    # `_commit_mutated_paths` above; the two plan-frontmatter ops land through
+    # `commit_authored_content`. Accounted for, release coverage still open.
+    "ops/cascade_terminal_op.py::_commit": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/plan_gated_criteria_met.py::_handler": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/plan_narrow_criterion.py::_handler": {
+        "reason": "release",
+        "confirmed": False,
+    },
     # REMOVED 2026-09-06, both rows naming a site that no longer exists in
     # any form -- distinct from the DELIBERATELY-RETAINED-WHILE-STALE rows
     # above, which name LIVE functions that merely stopped matching this

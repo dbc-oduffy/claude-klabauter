@@ -268,8 +268,10 @@ def test_commit_semantics_unchanged_by_relay_step(tmp_path):
         "no_delta",
         "warnings",
         "guard_class_relay",
+        "index_stale",
     }
     assert result["committed"] is True
+    assert result["index_stale"] == []
     assert result["sha"] == _head_sha(repo)
     assert result["staged_preferred"] == []
     assert result["worktree_over_staged"] == []
