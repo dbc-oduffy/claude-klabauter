@@ -305,11 +305,6 @@ from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import (
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     check_cross_repo_writes,
 )
-from coordinator_core.ops.dispatch_emit.memo_row import (
-    MemoDelivery,
-    check_memo_rows,
-    memo_fence_clause,
-)
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEW_PHASE_TITLE
 from coordinator_core.ops.dispatch_emit.predispatch import (
     ALREADY_DONE_RULE,
@@ -2203,7 +2198,6 @@ def _row_return_contract(
     plan_path: str,
     *,
     shared: Optional[SharedBlocks] = None,
-    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
 ) -> str:
     """Render the executor return contract (``executor_return_contract``)
     for one wave row: the footprint constraint (when the row declares
@@ -2255,8 +2249,6 @@ def _row_return_contract(
     else:
         footprint = [report_path]
 
-    if memo_deliveries and row.id in memo_deliveries:
-        parts.append(memo_fence_clause(memo_deliveries[row.id]))
 
     parts.append(
         self_verify_constraint(
@@ -2342,7 +2334,6 @@ def _row_prompt(
     shared: Optional[SharedBlocks] = None,
     preamble: Optional[str] = None,
     new_module_paths: tuple = (),
-    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     predecessor_state: Optional[str] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
@@ -2410,7 +2401,7 @@ def _row_prompt(
         "dressed as compliance. Anything you do beyond your row, report under "
         "`Beyond brief:` with your reason. Never take another row (a peer "
         "holds it) and never edit the plan (it is every peer's instructions)."
-        f"\n\n{_row_return_contract(row, plan_path, shared=shared, memo_deliveries=memo_deliveries)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared)}"
     )
     if new_module_paths:
         body += (
@@ -2436,7 +2427,6 @@ def _row_agent_call_expr(
     agent_type_host: Optional[str] = None,
     preamble: Optional[str] = None,
     new_module_paths: tuple = (),
-    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     chatty_brief: Optional[str] = None,
     chatty_nonce_var: Optional[str] = None,
     predecessor_state: Optional[str] = None,
@@ -2460,7 +2450,6 @@ def _row_agent_call_expr(
         shared=shared,
         preamble=preamble,
         new_module_paths=new_module_paths,
-        memo_deliveries=memo_deliveries,
         predecessor_state=predecessor_state,
     )
     if shared is None:
@@ -3486,7 +3475,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
     caller's fixed bytes, not per row.
 
     ``compose_context`` keys: ``plan_path``, ``plan_context``, ``repo_root``,
-    ``agent_type_host``, ``preamble``, ``memo_deliveries``.
+    ``agent_type_host``, ``preamble``.
     """
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
@@ -3501,7 +3490,6 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
             agent_type_host=compose_context.get("agent_type_host"),
             preamble=compose_context.get("preamble"),
             new_module_paths=tuple(_new_module_paths(row, repo_root)),
-            memo_deliveries=compose_context.get("memo_deliveries"),
         )
         deps = ", ".join(f"_rows[{_js_string_literal(d)}]" for d in row.depends_on)
         text = (
@@ -3661,7 +3649,6 @@ def compose_script(
     preamble: Optional[str] = None,
     script_path: Optional[str] = None,
     expected_branch: Optional[str] = None,
-    memo_deliveries: Optional["dict[str, MemoDelivery]"] = None,
     chatty: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
@@ -3933,7 +3920,6 @@ def compose_script(
                 agent_type_host=agent_type_host,
                 preamble=preamble,
                 new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                memo_deliveries=memo_deliveries,
                 predecessor_state=predecessor_state,
                 chatty_brief=(
                     _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
@@ -4004,7 +3990,6 @@ def compose_script(
                     agent_type_host=agent_type_host,
                     preamble=preamble,
                     new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                    memo_deliveries=memo_deliveries,
                     predecessor_state=predecessor_state,
                     chatty_brief=_chatty.continuation_brief(row.id),
                     chatty_nonce_var="_n",
@@ -4868,7 +4853,6 @@ def emit_script(
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root)
-    memo_deliveries = check_memo_rows(rows, repo_root)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))
@@ -4923,7 +4907,6 @@ def emit_script(
         preamble=preamble,
         script_path=script_path,
         expected_branch=expected_branch,
-        memo_deliveries=memo_deliveries,
         chatty=chatty,
         predispatch=predispatch,
         review_specs=review_specs,
