@@ -13,7 +13,7 @@ if str(_LIB) not in sys.path:
 from coordinator_core.git.git_state import format_source_sha_suffix  # noqa: E402
 from percolate import published_engine_pin as pep  # noqa: E402
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 REF = "refs/remotes/origin/candidate"
 

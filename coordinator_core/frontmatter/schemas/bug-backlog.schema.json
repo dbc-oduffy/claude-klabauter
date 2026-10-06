@@ -36,7 +36,8 @@
         "open",
         "closed",
         "deferred",
-        "wontfix"
+        "wontfix",
+        "resolved"
       ],
       "description": "Bug lifecycle status."
     },

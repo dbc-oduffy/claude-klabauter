@@ -3938,7 +3938,10 @@ _QUEUE_SCHEMA_PINS = {
     # Pin moved 2026-10-02 to fd4a6410358cb567b8af5693a92246a8ef4aecd0 (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
     #   after merging keen-mayer: realign pinned schemas to DoE HEAD
-    'bug-backlog': "fd4a6410358cb567b8af5693a92246a8ef4aecd0",
+    # Pin moved 2026-10-06 to 3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322 (DoE
+    # origin/main) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   add 'resolved' to status enum (DoE PR #146, 3cdbd7b52)
+    'bug-backlog': "3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD

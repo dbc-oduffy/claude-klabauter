@@ -7,8 +7,8 @@ the modules only its call paths use (``row_spans`` -> ``ceremony.git_native``,
 ``git.commit``, ``ops.fleet._common``), and its min-of-5 cumulative
 ``-X importtime`` cost stays under a ceiling.
 
-Invariant: ``yaml`` and ``frontmatter.schema_validate`` are NOT pinned absent
--- ``commit_request`` (a top-level import the module executes) pulls both.
+Invariant: ``yaml`` and ``frontmatter.schema_validate`` are absent after the
+import -- ``commit_request`` loads both only at its call sites.
 
 Negative-spec:
     - Does NOT assert an exact figure: min-of-N under a ceiling, since ambient
@@ -40,6 +40,8 @@ _DEFERRED = (
     "coordinator_core.ops.fleet._common",
     "coordinator_core.execute_plan_assemble.row_spans",
     "coordinator_core.git.commit",
+    "yaml",
+    "coordinator_core.frontmatter.schema_validate",
 )
 _CUMULATIVE_CEILING_MS = 65.0
 _SAMPLES = 5

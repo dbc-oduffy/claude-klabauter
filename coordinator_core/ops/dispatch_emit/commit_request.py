@@ -34,10 +34,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
-import yaml
-
 from coordinator_core.frontmatter.primitives import split_frontmatter
-from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 
 # The scaffolded sentinel `plan.schema.json` excludes from `deliverable_id`
 # by negative lookahead -- a plan still carrying it has no id yet.
@@ -71,6 +68,8 @@ def plan_deliverable_id(plan_text: str) -> Optional[str]:
     split = split_frontmatter(plan_text)
     if split is None:
         return None
+    import yaml
+
     try:
         doc = yaml.safe_load(split.fm_text)
     except yaml.YAMLError:
@@ -149,6 +148,8 @@ def _bare_path(path: str) -> str:
     ``ChunkCommit.paths`` keys the filesystem or a tree with them, where a
     pathspec prefix reads as a missing file. Any other pathspec magic names
     no single file and is refused."""
+    from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
+
     bare = strip_literal_pathspec(path)
     if bare.startswith(":("):
         raise MalformedCommitRequestError(

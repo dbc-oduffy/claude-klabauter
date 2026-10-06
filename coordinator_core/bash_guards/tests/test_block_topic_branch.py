@@ -159,6 +159,36 @@ def test_push_head_denied_when_head_is_a_topic_branch(repo):
     assert _denied(_check(repo, "git push origin HEAD"))
 
 
+def test_git_tag_never_denied(repo):
+    assert not _denied(_check(repo, 'git tag -a v4.4.9 abc -m x'))
+
+
+def test_push_existing_local_tag_allowed(repo):
+    tags = repo / ".git" / "refs" / "tags"
+    tags.mkdir(parents=True)
+    (tags / "v4.4.9").write_text("abc\n", encoding="utf-8")
+    assert not _denied(_check(repo, "git push origin v4.4.9"))
+
+
+def test_push_packed_local_tag_allowed(repo):
+    (repo / ".git" / "packed-refs").write_text("abc123 refs/tags/v5.0\n", encoding="utf-8")
+    assert not _denied(_check(repo, "git push origin v5.0"))
+
+
+@pytest.mark.parametrize(
+    "cmd", ["git push origin refs/tags/v4.4.9", "git push origin --tags", "git push origin tag v1"]
+)
+def test_tag_pushes_allowed(repo, cmd):
+    assert not _denied(_check(repo, cmd))
+
+
+def test_push_unknown_topic_branch_still_denied_with_tags_present(repo):
+    tags = repo / ".git" / "refs" / "tags"
+    tags.mkdir(parents=True)
+    (tags / "v4.4.9").write_text("abc\n", encoding="utf-8")
+    assert _denied(_check(repo, "git push origin feature-x"))
+
+
 def test_configured_day_branch_is_allowed(repo):
     (repo / ".git" / "config").write_text(
         "[coordinator]\n\tdayBranch = harness/cloud-1\n", encoding="utf-8"

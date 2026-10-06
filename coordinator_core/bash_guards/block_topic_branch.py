@@ -136,6 +136,8 @@ def _push_targets(args: List[str]) -> List[str]:
         positional.append(tok)
         i += 1
     targets: List[str] = []
+    if positional[1:2] == ["tag"]:
+        return targets
     for spec in positional[1:]:
         spec = spec.lstrip("+")
         src, sep, dst = spec.partition(":")
@@ -157,6 +159,23 @@ def _head_branch(git_root: Optional[str]) -> Optional[str]:
         return None
     m = re.match(r"^ref:\s*refs/heads/(.+)$", text)
     return m.group(1) if m else None
+
+
+def _is_local_tag(git_root: Optional[str], name: str) -> bool:
+    """True when `name` is an existing local tag: loose ref or packed-refs line."""
+    if not git_root:
+        return False
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+
+        gd = str(resolve_git_common_dir(git_root))
+        if os.path.isfile(os.path.join(gd, "refs", "tags", *name.split("/"))):
+            return True
+        with open(os.path.join(gd, "packed-refs"), encoding="utf-8") as fh:
+            suffix = " refs/tags/" + name
+            return any(line.rstrip("\n").endswith(suffix) for line in fh)
+    except Exception:  # noqa: BLE001 -- unreadable tag state keeps the block
+        return False
 
 
 def _machine() -> str:
@@ -260,6 +279,8 @@ def _offending_ref(
             continue
         if ref == "main":
             continue
+        if sub == "push" and _is_local_tag(git_root, ref):
+            continue
         if _is_publish_push(sub, ref, git_root):
             continue
         if machine is None:
@@ -289,7 +310,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = cmd.replace("\r", "")
     cwd = payload.get("cwd")
 
-    for resolved in resolve_command_positions(cmd):
+    for resolved in resolve_command_positions(
+        cmd, preserve_windows_backslashes=True
+    ):
         ref = _offending_ref(resolved.tokens, cwd)
         if ref is None:
             continue

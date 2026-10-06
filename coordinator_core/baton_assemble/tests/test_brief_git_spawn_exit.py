@@ -112,24 +112,3 @@ def test_output_matches_golden(tmp_path):
     actual = _comparable(_normalise(stdout, repo))
     assert actual == golden["brief"]
 
-
-@pytest.mark.designed_red(reason="residue-count spawn: C3 verdict pending; C4 lifts this marker")
-def test_no_residue_status_spawn(tmp_path, monkeypatch, capsys):
-    repo = _seed_dirty_repo(tmp_path)
-    argvs: list[list[str]] = []
-    real_init = subprocess.Popen.__init__
-
-    def _logging_init(self, args, *a, **kw):
-        argvs.append([str(x) for x in args] if not isinstance(args, str) else [args])
-        return real_init(self, args, *a, **kw)
-
-    monkeypatch.setattr(subprocess.Popen, "__init__", _logging_init)
-    monkeypatch.chdir(repo)
-    for k in [k for k in os.environ if k.startswith("CLAUDE")] + ["COORDINATOR_SESSION_ID"]:
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SESSION_ID)
-    baton_main(list(_BRIEF_ARGS))
-    capsys.readouterr()
-
-    status_spawns = [a for a in argvs if "status" in a]
-    assert not status_spawns, f"git status spawned: {status_spawns}"

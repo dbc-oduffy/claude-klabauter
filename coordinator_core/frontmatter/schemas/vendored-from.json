@@ -8,8 +8,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "bug-backlog.schema.json": {
-    "blob": "71d9990ed137050fe7326698c17e133d1427aec2",
-    "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
+    "blob": "61447a2d0fc506366f41774c8ace8d00c1608edd",
+    "doe_commit": "3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322"
   },
   "capability-manifest.schema.json": {
     "blob": "3636d914df851a34734e23bbf21372a8211ca416",
