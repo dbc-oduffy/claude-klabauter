@@ -144,6 +144,9 @@ from coordinator_core.bash_guards import block_venv_creation
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_topic_branch
+from coordinator_core.bash_guards import block_editor_kill_by_name
+from coordinator_core.bash_guards import block_perforce_submit
+from coordinator_core.bash_guards import block_unreal_engine_resave
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
 from coordinator_core.bash_guards import block_subagent_grant_acquisition
@@ -624,6 +627,17 @@ def _trigger_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
         )
 
 
+def _trigger_block_perforce_submit() -> Optional[Dict[str, Any]]:
+    """``block_perforce_submit.check`` denies only on an armed box (machine
+    registry names a Perforce server); force ``_armed`` open for the probe."""
+    orig_armed = block_perforce_submit._armed
+    block_perforce_submit._armed = lambda: True
+    try:
+        return block_perforce_submit.check(_payload("p4 submit -c 1", agent_id=None))
+    finally:
+        block_perforce_submit._armed = orig_armed
+
+
 LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_no_verify": lambda: _dc.check_no_verify('git commit --no-verify -m "x"', "altlive-probe"),
     "check_runaway_find": lambda: _dc.check_runaway_find("find / -name '*.py'", "altlive-probe"),
@@ -679,6 +693,13 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_topic_branch": lambda: block_topic_branch.check(
         _payload("git checkout -b topic/altlive-probe", agent_id=None)
     ),
+    "block_editor_kill_by_name": lambda: block_editor_kill_by_name.check(
+        _payload("taskkill /IM UnrealEditor.exe", agent_id=None)
+    ),
+    "block_unreal_engine_resave": lambda: block_unreal_engine_resave.check(
+        _payload("UnrealEditor-Cmd Proj.uproject -run=ResavePackages", agent_id=None)
+    ),
+    "block_perforce_submit": _trigger_block_perforce_submit,
     "block_subagent_stash_creation": lambda: block_subagent_stash_creation.check(
         _payload(" ".join(["git", "stash", "push"]), agent_type="coordinator:executor")
     ),
@@ -862,19 +883,6 @@ INLINE_PREFIX_TRIGGERS: Dict[Tuple[str, str], Callable[[str], Optional[Dict[str,
 #: charter, never a silent gap. A future session closing one of these should
 #: DELETE the row here and add it to ``LIVE_TRIGGERS`` above, not leave both.
 UNTRIGGERED: Dict[str, str] = {
-    "block_editor_kill_by_name": (
-        "Offers no override: the alternative is a PID-targeted kill, which "
-        "its message names and which this guard never denies."
-    ),
-    "block_unreal_engine_resave": (
-        "Offers no override: an engine-content rewrite needs a launcher Verify "
-        "to undo, so the only alternative is the scoped form its message names."
-    ),
-    "block_perforce_submit": (
-        "Offers no override (PM hard rule), so there is no alternative to keep "
-        "live; it arms only on a box whose machine-local registry names a "
-        "Perforce server, which a context-free trigger cannot assume."
-    ),
     "check_destructive_git_orphan": (
         "Target shape (which git-orphan-adjacent command combination this "
         "check actually denies) was not identified within this dispatch's "

@@ -216,6 +216,7 @@ def _stub_throwaway_tree(monkeypatch) -> None:
 
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     _stub_throwaway_tree(monkeypatch)
+    monkeypatch.setattr(publish, "write_publish_provenance_record", lambda **kwargs: None)
     _stub_dest_refresh(monkeypatch)
     _stub_assembled_mirror_leg(monkeypatch)
     percolate_root = setup_dir.parent

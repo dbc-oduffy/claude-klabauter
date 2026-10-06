@@ -100,6 +100,12 @@ _CLOSE_OUT_FIELD_PREFIXES: tuple[str, ...] = (
     "gated_exit_criteria[",
 )
 
+_CLOSE_OUT_TOP_LEVEL_KEYS: tuple[str, ...] = ("prime_exit_criterion", "exit_criterion_met", "gated_exit_criteria")
+
+# Cheap pre-parse filter over the frontmatter head: a plan naming none of these cannot
+# carry a falsifier or a close-out ad-hoc key, so it is never YAML-parsed.
+_CLOSE_OUT_TEXT_MARKERS: tuple[str, ...] = ("falsifier", "exit_criterion_met", "gated_exit_criteria")
+
 _ADHOC_KEY_RE = re.compile(r'additional property "(.+)" not allowed')
 
 
@@ -216,8 +222,11 @@ def _close_out_adhoc_keys(frontmatter: dict[str, Any]) -> list[str]:
     record should not crash a read-only corpus scan; it is simply excluded
     from this measurement (present in `scanned_files`, absent from findings).
     """
+    if not any(k in frontmatter for k in _CLOSE_OUT_TOP_LEVEL_KEYS):
+        return []
     try:
-        errors = validate_frontmatter(frontmatter, _PLAN_SCHEMA_PATH)
+        projection = {k: v for k, v in frontmatter.items() if k in _CLOSE_OUT_TOP_LEVEL_KEYS or k == "schema_version"}
+        errors = validate_frontmatter(projection, _PLAN_SCHEMA_PATH)
     except SchemaVersionError:
         return []
     except Exception:
@@ -232,6 +241,12 @@ def _close_out_adhoc_keys(frontmatter: dict[str, Any]) -> list[str]:
         if match:
             keys.append(match.group(1))
     return keys
+
+
+def _names_close_out_content(text: str) -> bool:
+    head_end = text.find(chr(10) + "---", 3)
+    head = text if head_end < 0 else text[:head_end]
+    return any(k in head for k in _CLOSE_OUT_TEXT_MARKERS)
 
 
 def scan_plans(plans_dir: Path | str = _DEFAULT_PLANS_DIR) -> FalsifierRerunReport:
@@ -255,6 +270,9 @@ def scan_plans(plans_dir: Path | str = _DEFAULT_PLANS_DIR) -> FalsifierRerunRepo
         except OSError:
             continue
         scanned += 1
+
+        if not _names_close_out_content(text):
+            continue
 
         parsed = parse_frontmatter(text)
         frontmatter = parsed.get("frontmatter")

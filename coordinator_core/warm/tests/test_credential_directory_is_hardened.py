@@ -33,7 +33,6 @@ for "the door never holds a credential" becomes "the door holds one anywhere".
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 import sys
 import tempfile
@@ -41,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.warm import breadcrumb, door_credential
 from coordinator_core.warm.election import InsecureRuntimeDirError
 
@@ -57,7 +57,7 @@ def runtime_base(monkeypatch):
     try:
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="credential-runtime-base")
 
 
 def _mode(path: Path) -> int:

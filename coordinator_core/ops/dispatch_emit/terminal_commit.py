@@ -59,6 +59,7 @@ Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -673,6 +674,86 @@ def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     }
 
 
+def _entangled_chunks(
+    worktree_root: Path, request: CommitRequest, stranded_ids: set, report_cache: dict
+) -> dict:
+    """Committable chunks whose ``.py`` files import a file of a stranded chunk, transitively.
+
+    Committing such a chunk lands an importer whose target is absent from the
+    tree at that sha (``leak_gate`` / ``import_closure`` would refuse the whole
+    commit). Only stranded files that differ from HEAD count: an unchanged one
+    already resolves. Returns ``{chunk id: sorted ids of the stranded chunks it
+    needs}``; a chunk needing only another entangled chunk names that chain's root.
+    """
+    from coordinator_core.authoring_leaks.import_closure import _needed_paths
+    from coordinator_core.pyimports import collect_imports
+
+    by_id = {c.id: c for c in request.chunks}
+    declared: dict = {}
+    prefix_roots: list = []
+    for cid in stranded_ids:
+        chunk = by_id.get(cid)
+        if chunk is None:
+            continue
+        for path in chunk.paths:
+            declared[path] = cid
+        for prefix in chunk.prefixes:
+            prefix_roots.append((prefix.rstrip("/"), cid))
+    specs = [p for p in declared if p.endswith(".py")] + [root for root, _ in prefix_roots]
+    changed = _changed_paths(worktree_root, specs)
+    blocked_files: dict = {}
+    if changed is None:
+        blocked_files = {p: c for p, c in declared.items() if p.endswith(".py")}
+    else:
+        for path in changed:
+            if not path.endswith(".py"):
+                continue
+            if path in declared:
+                blocked_files[path] = declared[path]
+                continue
+            for root, cid in prefix_roots:
+                if path == root or path.startswith(root + "/"):
+                    blocked_files[path] = cid
+                    break
+    if not blocked_files:
+        return {}
+
+    files_of: dict = {}
+    imports_of: dict = {}
+    for chunk in request.chunks:
+        if chunk.id in stranded_ids:
+            continue
+        prefix_files = _own_prefix_files(worktree_root, chunk, report_cache) or []
+        needed: set = set()
+        for rel in list(chunk.paths) + list(prefix_files):
+            text = _read_rel(worktree_root, rel) if rel.endswith(".py") else None
+            if text is None:
+                continue
+            try:
+                records, _ = collect_imports(ast.parse(text))
+            except (SyntaxError, ValueError):
+                continue
+            needed |= _needed_paths((rel, rec) for rec in records)
+        imports_of[chunk.id] = needed
+        files_of[chunk.id] = set(chunk.paths) | set(prefix_files)
+
+    entangled: dict = {}
+    grew = True
+    while grew:
+        grew = False
+        for cid, needed in imports_of.items():
+            if cid in entangled:
+                continue
+            roots = {blocked_files[p] for p in needed if p in blocked_files}
+            for other, other_roots in entangled.items():
+                if files_of[other] & needed:
+                    roots |= set(other_roots)
+            if roots:
+                entangled[cid] = sorted(roots)
+                grew = True
+    return entangled
+
+
 def _subject(contributing: list, fallback: str) -> str:
     ids = ", ".join(c.id for c in contributing)
     titles = "; ".join(c.title for c in contributing if c.title.strip())
@@ -742,6 +823,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
     paths]}`` for each ``incomplete_chunks`` id the request marker names, the
     work the commit left uncommitted; ``{}`` when none, or when no marker was read.
+    ``entangled`` (present only when non-empty) maps each chunk held back from the commit to
+    the stranded chunk ids whose uncommitted ``.py`` files it imports (transitively): landing it
+    would leave an unresolvable import at that sha. It is stranded with them, its reason
+    ``entangled: ...``; land the pair by hand once the definer is finished.
     ``blockers`` (present only when non-empty) maps each executor-PARTIAL row, whose
     files stay uncommitted, to the undone work its report names.
     Once the run reaches its commit (every refusal and no-op before that omits it),
@@ -766,11 +851,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if landed and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed))
     if isinstance(incomplete, list) and isinstance(landed, list):
-        open_ids = set(incomplete) - set(landed)
+        entangled = reply.get("entangled") or {}
+        open_ids = (set(incomplete) - set(landed)) | set(entangled)
         reasons = {}
         for i in sorted(open_ids):
             if i in gated_ids:
                 reasons[i] = "external_gate"
+            elif i in entangled:
+                reasons[i] = "entangled: imports stranded " + ", ".join(entangled[i])
             elif i in blockers:
                 reasons[i] = f"executor_partial: {blockers[i]}" if blockers[i] else "executor_partial"
             else:
@@ -863,10 +951,10 @@ def _terminal_commit(
                 request = parse_marker(request_abs.read_text(encoding="utf-8"))
             except OSError as exc:
                 return _error(f"cannot read manifest marker_path {manifest.marker_path!r}: {exc}")
+        else:
+            request = parse_marker(script_text)
     except MalformedCommitRequestError as exc:
         return _error(f"malformed commit request: {exc}", refused="malformed-request")
-    if manifest_rel is None:
-        request = parse_marker(script_text)
     if request is None:
         request = _anchor_request(worktree_root, params, inline_review)
     if request is None:
@@ -1001,9 +1089,19 @@ def _terminal_commit(
         {c.id: list(c.paths) for c in request.chunks if c.id in incomplete_chunks}
     )
 
+    report_cache: dict = {}
+    withheld_partial: dict = {}
+    partial_chunks = _partial_chunks(worktree_root, request, incomplete_chunks, withheld_partial)
+    partial_ids = {c.id for c in partial_chunks}
+    entangled = _entangled_chunks(
+        worktree_root, request, incomplete_chunks - partial_ids, report_cache
+    )
+    if entangled:
+        incomplete_chunks = incomplete_chunks | set(entangled)
+        partial_chunks = [c for c in partial_chunks if c.id not in entangled]
+        stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in entangled})
     done_chunks = [c for c in request.chunks if c.id not in incomplete_chunks]
 
-    report_cache: dict = {}
     all_paths: list = []
     prefix_files: list = []
 
@@ -1019,8 +1117,6 @@ def _terminal_commit(
         all_paths.extend(chunk_paths)
         prefix_files.extend(own_prefix_files)
 
-    withheld_partial: dict = {}
-    partial_chunks = _partial_chunks(worktree_root, request, incomplete_chunks, withheld_partial)
     if withheld_partial and blockers is not None:
         blockers.update(withheld_partial)
     for chunk in partial_chunks:
@@ -1228,6 +1324,8 @@ def _terminal_commit(
     no_hunk = [c for c in done_chunks if c not in contributing_chunks and c.id not in reply.get("no_product_hunk", [])]
     if no_hunk:
         reply["no_product_hunk"] = sorted(set(reply.get("no_product_hunk", [])) | {c.id for c in no_hunk})
+    if entangled:
+        reply["entangled"] = entangled
     reply["partial_committed"] = [c.id for c in contributing_partial]
     reply["dropped_absent"] = dropped_absent
     reply["deleted_paths"] = deleted_paths

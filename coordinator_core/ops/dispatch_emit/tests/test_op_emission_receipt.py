@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import emission_receipt as emission_receipt_module
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.op import (
     _dispatch_emit,
@@ -188,6 +189,7 @@ def test_a_monkeypatched_receipt_failure_never_fails_the_emit(tmp_path, capsys):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(op_module, "_script_sha256", _explode)
+        mp.setattr(emission_receipt_module, "_script_sha256", _explode)
         result = _dispatch_emit(
             {"plan_path": str(plan_path), "output_path": str(output_path)}
         )

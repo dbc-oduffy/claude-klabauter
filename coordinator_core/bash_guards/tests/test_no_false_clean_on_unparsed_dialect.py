@@ -106,14 +106,8 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "block_disarm_marker_sentinel_creation": (
         lambda mod: f"New-Item {mod._TARGET_BASENAME}"
     ),
-    # `Remove-Item <sentinel>`, per this guard's own
-    # `TestPowerShellDialect.test_new_item_cmdlet_denies` sibling class
-    # (`test_block_dev_repo_sentinel_removal.py`) -- routed to
-    # `check_advisory`, NOT `check` (see `_ENTRY_OVERRIDE` below): `check`
-    # is a retired dead leg no longer registered in `dispatch.py`
-    # (module's own docstring, "not reachable through the live dispatch
-    # chain, only directly callable"); `check_advisory` is "the guard's
-    # sole registered leg."
+    # `Remove-Item <sentinel>`, per this guard's own PowerShell test class;
+    # routed to `check` (the registered CONFINEMENT_DENY leg).
     # Unquoted target, matching the guard's own PowerShell test class
     # exactly (`_payload("Remove-Item %s" % SENTINEL, ...)`) -- a quoted
     # target ("...") was confirmed (debug session, this chunk's rescope)
@@ -232,6 +226,12 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
     "block_venv_creation": lambda mod: "python -m venv .venv",
+    "block_editor_kill_by_name": lambda mod: "Stop-Process -Name UnrealEditor",
+    "block_unreal_engine_resave": (
+        lambda mod: "UnrealEditor-Cmd.exe Proj.uproject -run=ResavePackages"
+    ),
+    "block_perforce_submit": lambda mod: "p4.exe submit -d msg",
+    "block_topic_branch": lambda mod: "git checkout -b wip-nonstandard-name",
     # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
     "guard_headless_claude_plugin_dir": lambda mod: "claude -p hi",
     "guard_piped_pytest_exit": lambda mod: "python -m pytest x | tail -3",
@@ -252,9 +252,7 @@ def _discover_guard_modules() -> List[Any]:
     return modules
 
 
-_ENTRY_OVERRIDE: Dict[str, str] = {
-    "block_dev_repo_sentinel_removal": "check_advisory",
-}
+_ENTRY_OVERRIDE: Dict[str, str] = {}
 
 #: Per-guard extra payload fields merged over the base PowerShell payload.
 #: `block_reviewer_bash_outside_allowlist` fail-closes to allow (returns
@@ -333,6 +331,10 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
             "AGENTS.md",
         ]
     },
+    "block_perforce_submit": lambda mod, mp: (
+        mp.setattr(mod, "_armed", lambda: True),
+        {},
+    )[-1],
     "p4_verb_fence": lambda mod, mp: (
         mp.setattr(mod, "_is_p4_gated", lambda cwd: True),
         {},

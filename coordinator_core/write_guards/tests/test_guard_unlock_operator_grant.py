@@ -11,8 +11,8 @@ from coordinator_core.write_guards import engine
 
 SENTINEL_BASENAME = ".coordinator-override-worktree-guard"
 GUARD_NAME = "block_worktree_sentinel_write"
-ADVISORY_SENTINEL_BASENAME = ".coordinator-dev-repo"
-ADVISORY_GUARD_NAME = "block_dev_repo_sentinel_write"
+ADVISORY_TARGET = "scratch-nonexistent-dir/brand_new_script.sh"
+ADVISORY_GUARD_NAME = "nudge_new_sh_file_naked_python"
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +95,7 @@ class TestAdvisoryGuardNeverConsultsUnlock:
     def _advisory_payload(self, session_id):
         return _payload(
             session_id,
-            file_path="/repo/%s" % ADVISORY_SENTINEL_BASENAME,
+            file_path="/repo/%s" % ADVISORY_TARGET,
         )
 
     def test_fires_as_advisory_regardless_of_sentinel(self):

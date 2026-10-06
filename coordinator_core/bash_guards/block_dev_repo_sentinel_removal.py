@@ -108,13 +108,9 @@ def _deny_reason(
             "\n\n%s" % _note if _note else ""
         )
     return (
-        "[dev-repo guard] BLOCKED: instead, confirm this removal/relocation "
-        "is intentional and ask the EM/PM to run it -- this command would "
-        "remove or relocate a file whose mere presence is the dev-vs-OSS "
-        "discriminant this repo's tooling relies on; removing or moving it "
-        "away from the repo root breaks that discriminant fleet-wide with "
-        "no error at the moment of the move, only later, in an unrelated "
-        "session."
+        "[dev-repo guard] BLOCKED: instead, ask the EM/PM to run this if "
+        "intended -- removing or moving the dev-vs-OSS discriminant file "
+        "silently breaks tooling fleet-wide."
     ) + ("\n\n%s" % _note if _note else "")
 
 

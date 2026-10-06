@@ -5,9 +5,9 @@
     "a_and_b": 172,
     "a_only": 222,
     "b_blind_total": 430,
-    "b_observable_total": 1227,
+    "b_observable_total": 1226,
     "b_only": 340,
-    "neither": 493
+    "neither": 492
   },
   "per_proxy": {
     "proxy_a": {
@@ -18,27 +18,27 @@
           "sha_shaped_predecessor": 6
         },
         "flag_rate_among_negatives_upper_bound_on_fp": {
-          "denominator": 560,
-          "hi": 0.02557477593705959,
-          "lo": 0.006067911101262375,
+          "denominator": 559,
+          "hi": 0.025620117490009017,
+          "lo": 0.0060787890867681025,
           "numerator": 7,
-          "point": 0.0125
+          "point": 0.012522361359570662
         },
         "lift_p_flag_given_pos_over_p_flag_given_neg": {
           "contingency_2x2": {
             "flag_and_neg": 7,
             "flag_and_pos": 5,
-            "noflag_and_neg": 553,
+            "noflag_and_neg": 552,
             "noflag_and_pos": 708
           },
-          "fisher_exact_p": 0.3859390108772808,
-          "p_flag_given_neg": 0.0125,
+          "fisher_exact_p": 0.385680247497721,
+          "p_flag_given_neg": 0.012522361359570662,
           "p_flag_given_pos": 0.0070126227208976155,
-          "value": 0.5610098176718092
+          "value": 0.5600080144259667
         },
         "miss_rate_among_positives_lower_bound_on_fn": {
           "denominator": 713,
-          "hi": 0.997001015573628,
+          "hi": 0.9970010155736281,
           "lo": 0.9836900303328612,
           "numerator": 708,
           "point": 0.9929873772791024
@@ -46,7 +46,7 @@
         "raw_counts": {
           "flagged_negative": 7,
           "flagged_positive": 5,
-          "total_negative": 560,
+          "total_negative": 559,
           "total_positive": 713
         }
       },
@@ -58,7 +58,7 @@
         },
         "flag_rate_among_negatives_upper_bound_on_fp": {
           "denominator": 162,
-          "hi": 0.053024942818059174,
+          "hi": 0.05302494281805918,
           "lo": 0.006317629845478453,
           "numerator": 3,
           "point": 0.018518518518518517
@@ -96,35 +96,35 @@
           "sha_shaped_predecessor": 5
         },
         "flag_rate_among_negatives_upper_bound_on_fp": {
-          "denominator": 398,
-          "hi": 0.02555289389153859,
-          "lo": 0.003915092949455606,
+          "denominator": 397,
+          "hi": 0.025616530412386936,
+          "lo": 0.003924971745430246,
           "numerator": 4,
-          "point": 0.010050251256281407
+          "point": 0.010075566750629723
         },
         "lift_p_flag_given_pos_over_p_flag_given_neg": {
           "contingency_2x2": {
             "flag_and_neg": 4,
             "flag_and_pos": 3,
-            "noflag_and_neg": 394,
+            "noflag_and_neg": 393,
             "noflag_and_pos": 483
           },
-          "fisher_exact_p": 0.7070565552872843,
-          "p_flag_given_neg": 0.010050251256281407,
+          "fisher_exact_p": 0.7069440932576619,
+          "p_flag_given_neg": 0.010075566750629723,
           "p_flag_given_pos": 0.006172839506172839,
-          "value": 0.6141975308641975
+          "value": 0.6126543209876543
         },
         "miss_rate_among_positives_lower_bound_on_fn": {
           "denominator": 486,
-          "hi": 0.9978985024742756,
-          "lo": 0.9820103871399525,
+          "hi": 0.9978985024742757,
+          "lo": 0.9820103871399524,
           "numerator": 483,
           "point": 0.9938271604938271
         },
         "raw_counts": {
           "flagged_negative": 4,
           "flagged_positive": 3,
-          "total_negative": 398,
+          "total_negative": 397,
           "total_positive": 486
         }
       }
@@ -137,23 +137,23 @@
           "sha_shaped_predecessor": 0
         },
         "flag_rate_among_negatives_upper_bound_on_fp": {
-          "denominator": 953,
-          "hi": 0.05545385048900034,
-          "lo": 0.030079085052446233,
+          "denominator": 952,
+          "hi": 0.05551158872395736,
+          "lo": 0.030110831255260893,
           "numerator": 39,
-          "point": 0.040923399790136414
+          "point": 0.04096638655462185
         },
         "lift_p_flag_given_pos_over_p_flag_given_neg": {
           "contingency_2x2": {
             "flag_and_neg": 39,
             "flag_and_pos": 35,
-            "noflag_and_neg": 914,
+            "noflag_and_neg": 913,
             "noflag_and_pos": 655
           },
-          "fisher_exact_p": 0.39900678314718485,
-          "p_flag_given_neg": 0.040923399790136414,
+          "fisher_exact_p": 0.399055933945479,
+          "p_flag_given_neg": 0.04096638655462185,
           "p_flag_given_pos": 0.050724637681159424,
-          "value": 1.2395020438498698
+          "value": 1.2382014121144556
         },
         "miss_rate_among_positives_lower_bound_on_fn": {
           "denominator": 690,
@@ -165,7 +165,7 @@
         "raw_counts": {
           "flagged_negative": 39,
           "flagged_positive": 35,
-          "total_negative": 953,
+          "total_negative": 952,
           "total_positive": 690
         },
         "temporal_legs_blind_rows_included": 430
@@ -190,7 +190,7 @@
             "noflag_and_neg": 266,
             "noflag_and_pos": 209
           },
-          "fisher_exact_p": 0.7024201165947572,
+          "fisher_exact_p": 0.7024201165947571,
           "p_flag_given_neg": 0.05338078291814947,
           "p_flag_given_pos": 0.06278026905829596,
           "value": 1.176083707025411
@@ -217,23 +217,23 @@
           "sha_shaped_predecessor": 0
         },
         "flag_rate_among_negatives_upper_bound_on_fp": {
-          "denominator": 672,
-          "hi": 0.05259100109325479,
-          "lo": 0.024115537317624294,
+          "denominator": 671,
+          "hi": 0.052668554145197354,
+          "lo": 0.02415165027924427,
           "numerator": 24,
-          "point": 0.03571428571428571
+          "point": 0.03576751117734724
         },
         "lift_p_flag_given_pos_over_p_flag_given_neg": {
           "contingency_2x2": {
             "flag_and_neg": 24,
             "flag_and_pos": 21,
-            "noflag_and_neg": 648,
+            "noflag_and_neg": 647,
             "noflag_and_pos": 446
           },
-          "fisher_exact_p": 0.4428397534820227,
-          "p_flag_given_neg": 0.03571428571428571,
+          "fisher_exact_p": 0.44317152097644846,
+          "p_flag_given_neg": 0.03576751117734724,
           "p_flag_given_pos": 0.044967880085653104,
-          "value": 1.259100642398287
+          "value": 1.2572269807280514
         },
         "miss_rate_among_positives_lower_bound_on_fn": {
           "denominator": 467,
@@ -245,7 +245,7 @@
         "raw_counts": {
           "flagged_negative": 24,
           "flagged_positive": 21,
-          "total_negative": 672,
+          "total_negative": 671,
           "total_positive": 467
         },
         "temporal_legs_blind_rows_included": 305

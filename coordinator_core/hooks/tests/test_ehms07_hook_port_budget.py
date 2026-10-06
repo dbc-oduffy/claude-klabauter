@@ -59,7 +59,7 @@ CASES = [
     (
         "hooks.guard_config_change_hookstack_selfdefence",
         "guard_config_change_hookstack_selfdefence",
-        lambda tp: {"source": "project_settings", "file_path": "/x"},
+        lambda tp: {"source": "local_settings", "file_path": "/x"},
     ),
 ]
 

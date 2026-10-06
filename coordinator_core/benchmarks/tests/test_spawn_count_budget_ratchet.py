@@ -284,6 +284,68 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "session.reap": {
+        "dirty_touched_path_refusal": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: the dirty-touched-path refusal path pays one batched git status for the touched set."
+            ),
+        },
+    },
+    "roadmap.blitz_land": {
+        "shipped_in_reachability": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: one batched reachability check serves every shipped-in lookup."
+            ),
+        },
+    },
+    "roadmap.blitz_stage": {
+        "commit_stubs_and_report": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: staging stubs and reporting is filesystem-only with no git spawn."
+            ),
+        },
+    },
+    "hooks.postuse_advisory_dispatch": {
+        "ascii_write_touch": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: an ASCII write touch resolves in-process with no spawn."
+            ),
+        },
+        "non_ascii_write_touch": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: a non-ASCII write touch pays one spawn for the quoted-path resolution."
+            ),
+        },
+    },
+    "deliverable.cascade_terminal": {
+        "one_handoff_one_sizing_advanced": {
+            "ceiling": 0,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: advancing one sizing from one handoff is filesystem-only with no spawn."
+            ),
+        },
+    },
+    "dispatch.emit": {
+        "plan_route_gitignore_filter": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: the plan-route gitignore filter is one batched check-ignore for the whole path set."
+            ),
+        },
+    },
+    "hooks.stop_dispatch": {
+        "terminal_review_session_walk": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-06 at the value it entered with: the terminal-review session walk pays one spawn for the whole session set."
+            ),
+        },
+    },
 }
 
 _MIN_REASON_LEN = 40

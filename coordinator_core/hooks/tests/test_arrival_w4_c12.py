@@ -291,7 +291,8 @@ def test_offer_exploration_tier_dispatch_never_raises_on_malformed_payload():
 # ---------------------------------------------------------------------------
 
 
-def test_observe_config_change_never_raises_on_malformed_payload():
+def test_observe_config_change_never_raises_on_malformed_payload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     resp = occ._handler({"cwd": 12345})
     assert resp == {}
 
@@ -311,7 +312,8 @@ def test_observe_config_change_writes_a_record(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_observe_post_compact_never_raises_on_malformed_payload():
+def test_observe_post_compact_never_raises_on_malformed_payload(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     resp = opc._handler({"cwd": 12345})
     assert resp == {}
 

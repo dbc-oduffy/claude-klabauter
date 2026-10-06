@@ -244,6 +244,7 @@
     "coordinator/bin/percolate-sweep-scope-probe.py",
     "coordinator/bin/plan-capture-persist.py",
     "coordinator/bin/plan-reversibility-eligibility.py",
+    "coordinator/bin/plan-status-transition.py",
     "coordinator/bin/plan-tasks-grouping-digest.py",
     "coordinator/bin/pre_commit_corpus_artifact_guard.py",
     "coordinator/bin/priority-set.py",
@@ -1274,6 +1275,7 @@
     "coordinator_core/ops/deliverable_rollup.py",
     "coordinator_core/ops/detect_onboarding_offer.py",
     "coordinator_core/ops/dev_sync.py",
+    "coordinator_core/ops/dispatch_emit/ask_stage.py",
     "coordinator_core/ops/dispatch_emit/emit.py",
     "coordinator_core/ops/dispatch_emit/op.py",
     "coordinator_core/ops/dispatch_emit/plan_blitz_args.py",
@@ -1531,6 +1533,7 @@
     "coordinator_core/ops/tests/conftest.py",
     "coordinator_core/ops/tests/test_backfill_deliverable_spine.py",
     "coordinator_core/ops/tests/test_campaign_enumerate.py",
+    "coordinator_core/ops/tests/test_cascade_terminal_op.py",
     "coordinator_core/ops/tests/test_changelog_parity.py",
     "coordinator_core/ops/tests/test_check_native_door_interpreter_handoff.py",
     "coordinator_core/ops/tests/test_completion_nature.py",
@@ -2066,6 +2069,10 @@
       "line": 73
     },
     {
+      "file": "coordinator/bin/plan-status-transition.py",
+      "line": 51
+    },
+    {
       "file": "coordinator/bin/roadmap-blitz-stage.py",
       "line": 35
     },
@@ -2202,5 +2209,5 @@
       "line": 99
     }
   ],
-  "repo_sha": "c0baaa4203a4a1138d5f5017dbab54afde70ed69"
+  "repo_sha": "1e2c890c9ee4da811983e5b2d64005f731e5fa4f"
 }

@@ -68,10 +68,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from cc_invoke import ensure_engine_on_path  # noqa: E402
 
-ensure_engine_on_path(__file__)
 
 #: Populated by `_resolve_caller_context()`, deferred out of module scope so the non-stdlib
 #: import it performs is not a module-body-inertness violation
@@ -202,6 +199,10 @@ def manifest_path(repo_root: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--check", action="store_true", help="diff the manifest against a fresh render; write nothing"

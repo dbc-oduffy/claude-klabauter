@@ -609,7 +609,15 @@ def _run_pytest_child(target: str, mode: str) -> dict:
             part for part in (str(tmp_path), existing_pythonpath) if part
         )
 
-        args = [sys.executable, "-m", "pytest", target, "-q", "-p", _CHILD_PLUGIN_MODULE_NAME]
+        lib_dir = str(Path(__file__).resolve().parent / "lib")
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
+        from python_interp import resolve_console_python
+
+        args = [
+            resolve_console_python() or sys.executable,
+            "-m", "pytest", target, "-q", "-p", _CHILD_PLUGIN_MODULE_NAME,
+        ]
         if mode == "collect":
             args.append("--collect-only")
 

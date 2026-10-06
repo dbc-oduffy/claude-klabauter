@@ -308,12 +308,11 @@ def _disclose_peer_holds(message: str, peer_holds: list) -> str:
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None
 ) -> list:
-    """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant,
-    before ``commit_paths`` runs. Reports a live peer's hold; never refuses, never spawns, never raises:
-    a lookup failure or ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning.
-    For each live peer found, one further warning names (capped at 5) the files that peer holds which
-    are untracked and outside ``paths`` -- what this commit leaves behind; a failure there degrades to
-    a "companion state indeterminate" warning.
+    """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
+    Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
+    ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
+    gets one warning naming (capped at 5) its untracked files outside ``paths``; a failure there
+    degrades to a "companion state indeterminate" warning.
     """
     if not paths:
         return []

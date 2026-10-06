@@ -130,8 +130,10 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # `depends_on_plan` item shape, none of which a sample row carries.
         # 3.5.0 -> 3.6.0 (208c9d61e6) re-looked: `depends_on_plan` items may
         # take `status` instead of `chunk`; no row-level `required` delta.
+        # 3.6.0 -> 3.7.0 (708e50df4b) re-looked: optional `deferred_until`
+        # only, valid on an open row; no `required` delta.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.6.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.7.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

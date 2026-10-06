@@ -113,10 +113,11 @@ _HARDCODED_RULE_SPECS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("coordinator_core/ops/",), "ops-flat"),
 )
 
-#: Rule 13 — CI glue that gates the cockpit-contract release tag; appended
+#: Rules 13-14 — repo-root plugin file; CI glue that gates the cockpit-contract release tag; appended
 #: after rule 12 so it never shadows a lower-ordinal rule.
 _TRAILING_RULE_SPECS: tuple[tuple[tuple[str, ...], str], ...] = (
     ((".github/scripts/",), "contract-schemas"),
+    (("drive_root_write_guard.py",), "install-substrate"),
 )
 
 _ASSEMBLER_SUFFIXES = ("_assemble", "_complete")

@@ -37,6 +37,16 @@ if "__file__" in globals():
 
     ensure_engine_on_path(__file__)
 
+
+def _python() -> str:
+    """A console interpreter for a spawned child; `sys.executable` when the resolver is not importable."""
+    try:
+        from python_interp import resolve_console_python
+    except ImportError:
+        return sys.executable
+    return resolve_console_python() or sys.executable
+
+
 # Writes a refresh-status record under the gitignored .structural-index/.
 GENERATES = []
 
@@ -83,7 +93,7 @@ def run_and_record(rag: Path, root: Path) -> int:
     """
     stamp = "%Y-%m-%dT%H:%M:%SZ"
     started = time.strftime(stamp, time.gmtime())
-    cmd = [sys.executable, str(rag / ENSURE_SCRIPT), "ensure", "--root", str(root)]
+    cmd = [_python(), str(rag / ENSURE_SCRIPT), "ensure", "--root", str(root)]
     try:
         proc = subprocess.run(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -119,7 +129,7 @@ def spawn_ensure(rag: Path, root: Path) -> "subprocess.Popen":
 
     stdout/stderr go to DEVNULL: an inherited pipe would tie the child's life to ours.
     """
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--run-and-record",
+    cmd = [_python(), str(Path(__file__).resolve()), "--run-and-record",
            "--root", str(root), "--rag", str(rag)]
     kwargs: dict = {
         "stdin": subprocess.DEVNULL,

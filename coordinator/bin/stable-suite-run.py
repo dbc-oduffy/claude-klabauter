@@ -42,10 +42,7 @@ import subprocess
 import sys
 
 import os  # noqa: E402
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from cc_invoke import ensure_engine_on_path  # noqa: E402
 
-ensure_engine_on_path(__file__)
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -235,6 +232,10 @@ def _triage_isolation(command: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
     parser = argparse.ArgumentParser(
         description="Run a command and flag whether the repo corpus moved underneath it.",
     )

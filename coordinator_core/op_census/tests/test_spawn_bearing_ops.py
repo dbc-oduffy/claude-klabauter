@@ -170,6 +170,9 @@ def _synthetic_scope(monkeypatch, tmp_path):
     are plain module-level names imported by name into the gate module, so
     monkeypatching them there (not on `spawn_bearing_ops`, which never reads
     either) is what actually redirects `_build_corpus`."""
+    # `_CORPUS_CACHE` keys on the tmp path, and pytest recycles a passed test's numbered
+    # tmp dir for the next test -- a shared cache replays the previous fixture's corpus.
+    monkeypatch.setattr(_gate, "_CORPUS_CACHE", {})
     monkeypatch.setattr(_gate, "_REPO_ROOT", tmp_path)
     monkeypatch.setattr(_gate, "_GATE_SCOPE_ROOTS", ("coordinator_core",))
     # `_relpath` (in `test_no_unbatched_per_item_git_spawn.py`) tries its OWN

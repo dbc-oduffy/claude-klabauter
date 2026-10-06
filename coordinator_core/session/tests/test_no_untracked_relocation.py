@@ -171,6 +171,11 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "move does (A stays claimed, B reads 'untouched by this session'); "
         "allow-listing it is mandatory, not an oversight -- this guard must "
         "not break the test that proves why it exists",
+    ("coordinator_core", "tests/test_no_live_inbox_writes_from_suite.py", "test_a_test_originated_rename_into_a_live_root_is_flagged", "Path.rename", "src.rename(root / 'moved-memo.md')", 1):
+        "NOTHING TO STRAND: a raw rename ON PURPOSE between two tmp_path "
+        "locations, to prove the live-inbox suite guard flags a rename into "
+        "a live root; no session claim exists on either path and routing "
+        "through relocate_touched_path would defeat what the test exercises",
     ("coordinator_core", "baton_assemble/tests/test_plan_stamp_carry.py", "test_governing_plan_follows_a_plan_archived_out_from_under_the_session", "Path.rename", "(repo / plan_rel).rename(repo / archived_rel)", 1):
         "NOTHING TO STRAND: the moved path carries no T-claim. This fixture "
         "writes the plan with `_write_artifact` and claims it with "

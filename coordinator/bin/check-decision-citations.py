@@ -12,6 +12,7 @@ so its git reads stay on its own bounded `subprocess.run`.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -83,16 +84,18 @@ def _registry_repo_paths() -> dict[str, Path]:
     """Every `repos.*` registry key resolving to an existing directory on this machine."""
     name = "machine-local.cmd" if os.name == "nt" else "machine-local"
     ml = [str(_settings_home() / "bin" / name)]
-    listing = _run(ml + ["keys"])
-    if listing is None:
+    dumped = _run(ml + ["dump", "--prefix", "repos"])
+    if dumped is None:
+        return {}
+    try:
+        registry = json.loads(dumped)
+    except ValueError:
         return {}
     resolved: dict[str, Path] = {}
-    for line in listing.splitlines():
-        key = line.strip()
-        if not key.startswith("repos."):
+    for key, value in registry.items():
+        if not key.startswith("repos.") or not isinstance(value, str) or not value.strip():
             continue
-        value = _run(ml + ["get", key])
-        if value and value.strip() and Path(value.strip()).is_dir():
+        if Path(value.strip()).is_dir():
             resolved[key[len("repos.") :]] = Path(value.strip())
     return resolved
 

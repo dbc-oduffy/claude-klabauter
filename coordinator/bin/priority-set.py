@@ -64,10 +64,11 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from cc_invoke import ensure_engine_on_path  # noqa: E402
+def _ensure_engine() -> None:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    from cc_invoke import ensure_engine_on_path
 
-ensure_engine_on_path(__file__)
+    ensure_engine_on_path(__file__)
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -271,6 +272,7 @@ def __getattr__(name: str):
 
 
 def main(argv: list[str]) -> int:
+    _ensure_engine()
     _bootstrap_imports()
 
     params = _parse_args(argv)

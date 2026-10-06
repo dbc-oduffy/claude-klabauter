@@ -226,6 +226,8 @@ coordinator/bin/hollow-completion-record-sweep.py
 coordinator/bin/merge-gate-and-pr.py
 # merge-recovery-and-tag-cut.py: kind 3: git merge/tag operations through subprocess; no file-content write
 coordinator/bin/merge-recovery-and-tag-cut.py
+# plan-spine-check.py: kind 1: read-only plan-spine validator; imports spine_read/wave_map for width, writes nothing
+coordinator/bin/plan-spine-check.py
 # query-roadmap-serve.py: kind 1/2: read-only DAG query, already reaches the engine via cc_invoke.route
 coordinator/bin/query-roadmap-serve.py
 # recycle-check.py: kind 1: read-only slot_order recycle probe; writes nothing

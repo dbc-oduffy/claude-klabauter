@@ -45,10 +45,13 @@ def _payload(command, cwd="/repo", tool_name="Bash"):
 
 
 def _advisory_ctx(out):
-    assert out is not None, "expected an advisory envelope, got no-op"
+    """Message text of C1's verdict: C1 is a CONFINEMENT_DENY leg, so the
+    raw guard returns a deny; the policy point downgrades it to an advisory
+    on a consumer box."""
+    assert out is not None, "expected a verdict envelope, got no-op"
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    return hso["additionalContext"]
+    assert hso["permissionDecision"] == "deny"
+    return hso["permissionDecisionReason"]
 
 
 # ---------------------------------------------------------------------------
@@ -196,11 +199,8 @@ def _hazard_repo_by_default(monkeypatch):
 
 
 class TestAC3NoHatch:
-    # C1 flipped CONFINEMENT_DENY -> ADVISORY_REWRITE in 2ac049c5b (C14b,
-    # per DR-277 "guards are advisory by default"); these two tests still
-    # pin AC3's real guarantee -- the retired env-prefix hatch does not let
-    # a caller escape the guard's notice -- now expressed against the
-    # advisory envelope instead of a deny.
+    # AC3's guarantee: the retired env-prefix hatch does not let a caller
+    # escape the guard's verdict.
     def test_env_prefix_override_still_advises(self):
         out = c1.check(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
         _advisory_ctx(out)
@@ -382,8 +382,8 @@ class TestAC9NoDateComparisonInC1:
         monkeypatch.setattr(c1, "local_day", lambda: "2030-12-31")
         out_b = c1.check(_payload("git checkout -b fix/some-topic"))
         assert out_a is not None and out_b is not None
-        assert out_a["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert out_b["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert out_a["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert out_b["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_verdict_identical_across_different_todays_for_canonical_name(self, monkeypatch):
         monkeypatch.setattr(c1, "local_day", lambda: "2020-01-01")

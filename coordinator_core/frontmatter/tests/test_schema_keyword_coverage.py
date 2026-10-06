@@ -270,7 +270,7 @@ def _collect_format_values(node, json_path: str, found: list[tuple[str, str]]) -
 
 
 def _schema_files() -> list[Path]:
-    return sorted(SCHEMAS_DIR.glob("*.json"))
+    return sorted(SCHEMAS_DIR.glob("*.schema.json"))
 
 
 class TestSchemaKeywordCoverage:

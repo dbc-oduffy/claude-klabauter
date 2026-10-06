@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import re
 import secrets
+from pathlib import Path
 
 import yaml
 
-RECEIPTS_DIR = "state/completion-receipts"
+from coordinator_core.session import record_homes
+
+RECEIPTS_DIR = Path(record_homes.home_dir("", "completion-receipts")).as_posix()
 TSHIRTS = ("XS", "S", "M", "L", "XL", "XXL")
 
 _SCHEMA_NAME = "completion-receipt"

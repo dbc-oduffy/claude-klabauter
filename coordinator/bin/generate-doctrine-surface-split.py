@@ -76,10 +76,7 @@ import sys
 from pathlib import Path, PurePosixPath
 import os  # noqa: E402
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from cc_invoke import ensure_engine_on_path  # noqa: E402
 
-ensure_engine_on_path(__file__)
 
 #: Populated by `_repo_root()`/`_no_console_creationflags()`, deferred out of module scope so the
 #: non-stdlib imports they perform are not a module-body-inertness violation
@@ -656,6 +653,10 @@ def regenerate_split_dir(
 
 
 def main(argv: list[str]) -> int:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    from cc_invoke import ensure_engine_on_path
+
+    ensure_engine_on_path(__file__)
     if not argv or argv[0].startswith("--"):
         print(
             "usage: generate-doctrine-surface-split.py <source.md> [--check]\n"

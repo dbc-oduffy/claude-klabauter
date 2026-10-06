@@ -356,6 +356,41 @@ EXPECTED_READERS = (
     "coordinator_core.hooks.tests.test_stop_dispatch_spawn_count",
     # (c) `sizing_assemble`'s own write-back test.
     "coordinator_core.sizing_assemble.test_write_back",
+    # (d) Importers of an already-allowlisted dispatcher/sizing module, measured by
+    # `reader_closure`: `ops.dispatch_emit.ask_roadmap` (imported by `ask_compose`),
+    # `roadmap.blitz_stage` / `ops.roadmap_blitz_stage` (a `sizing_assemble` `route`/
+    # `write_back` import) -- advisory-class, computing a sizing/roadmap fold that no
+    # tool call gates on -- and the test modules that import `dispatch_emit.op`/`cli`,
+    # `ask_compose`/`ask_gate`, `sizing_assemble` or `blitz_stage`. Neither lives under
+    # `write_guards/`/`bash_guards/`; the one `bash_guards/tests` entry is a test.
+    "coordinator_core.bash_guards.tests.test_guard_message_corpus_no_process_control",
+    "coordinator_core.frontmatter.tests.test_approval_body_sha_engine_bookkeeping",
+    "coordinator_core.frontmatter.tests.test_approved_body_sha",
+    "coordinator_core.hooks.tests.test_block_workflow_foreign_emission_pipeline",
+    "coordinator_core.ops.dispatch_emit.ask_roadmap",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_gated_and_halt",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_scaffold_gate",
+    "coordinator_core.ops.dispatch_emit.tests.test_chatty_emit",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_lanes",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_pipeline",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_reverify_delivery_empty",
+    "coordinator_core.ops.dispatch_emit.tests.test_dirty_write_set_spawns",
+    "coordinator_core.ops.dispatch_emit.tests.test_inventory_split_cap_and_refusal",
+    "coordinator_core.ops.dispatch_emit.tests.test_landed_reconcile",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_lanes",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_pipeline_route",
+    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_doe_manifests",
+    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_route_budget",
+    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_route_parity",
+    "coordinator_core.ops.dispatch_emit.tests.test_resume_from_continuance",
+    "coordinator_core.ops.dispatch_emit.tests.test_review_only_emit",
+    "coordinator_core.ops.roadmap_blitz_stage",
+    "coordinator_core.ops.tests.test_roadmap_blitz_stage_spawn_count",
+    "coordinator_core.ops.tests.test_sizing_record_pm_resolution",
+    "coordinator_core.ops.tests.test_sizing_record_xl_exit",
+    "coordinator_core.roadmap.blitz_stage",
+    "coordinator_core.roadmap.tests.test_blitz_stage",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

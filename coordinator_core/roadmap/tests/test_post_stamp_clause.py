@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.post_stamp_clause import post_stamp_clause, post_stamp_refusal
 
@@ -70,9 +69,7 @@ def test_accept_op_refuses(tmp_path):
 
 
 def test_under_50ms():
-    t = time.perf_counter()
-    post_stamp_clause(FOLLOW_ONS)
-    assert time.perf_counter() - t < 0.05
+    assert in_process_time_ms(lambda: post_stamp_clause(FOLLOW_ONS))["process_time_ms"] < 50
 
 
 _BODY = """## Exit criteria — verification

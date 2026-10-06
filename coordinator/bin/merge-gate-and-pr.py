@@ -341,8 +341,10 @@ _QUIET_WINDOW_SECONDS = 300
 
 
 def _gh_pr_view_json(pr: str, jq_field: str) -> tuple[int, str]:
+    # `--json` takes the bare field name; a jq index (`commits[-1]`) is refused.
+    json_field = jq_field.split(".")[0].split("[")[0]
     proc = subprocess.run(
-        ["gh", "pr", "view", pr, "--json", jq_field.split(".")[0], "-q", f".{jq_field}"],
+        ["gh", "pr", "view", pr, "--json", json_field, "-q", f".{jq_field}"],
         capture_output=True,
         text=True,
         check=False,

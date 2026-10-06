@@ -954,12 +954,12 @@ def _looks_like_a_harness_session_id(name: str) -> bool:
         return False
 
 
-def _live_hub_session_dirs() -> set:
-    with os.scandir(_LIVE_HUB) as entries:
+def _live_hub_session_dirs(hub: "str | None" = None) -> set:
+    with os.scandir(hub or _LIVE_HUB) as entries:
         return {e.name for e in entries if e.is_dir()}
 
 
-def _dir_is_ours(name: str) -> bool:
+def _dir_is_ours(name: str, hub: "str | None" = None) -> bool:
     """`True` when this process's own harness session minted `name`, `False`
     when a DIFFERENT session did, and `True` (fail-closed — flag it) whenever
     ownership cannot be established.
@@ -980,7 +980,7 @@ def _dir_is_ours(name: str) -> bool:
     ours = os.environ.get("CLAUDE_PID")
     if not ours:
         return True
-    meta = os.path.join(_LIVE_HUB, name, "meta.json")
+    meta = os.path.join(hub or _LIVE_HUB, name, "meta.json")
     try:
         with open(meta, "r", encoding="utf-8") as fh:
             stamped = json.load(fh).get("stable_pid")
@@ -1166,16 +1166,17 @@ def _no_writes_into_live_hub_entries():
     shared infrastructure entries continuously, so a stat delta cannot tell their
     writes from this test's. Writes from a spawned child are not seen."""
     global _hub_watch_active
+    hub = _LIVE_HUB
     _hub_written.clear()
     _hub_watch_active = True
     try:
         yield
     finally:
         _hub_watch_active = False
-    leaked = _writes_into_hub_entries(list(_hub_written), _LIVE_HUB)
+    leaked = _writes_into_hub_entries(list(_hub_written), hub)
     _hub_written.clear()
     assert not leaked, (
-        f"test wrote into existing entries of the REAL session hub {_LIVE_HUB}: "
+        f"test wrote into existing entries of the REAL session hub {hub}: "
         f"{leaked!r} — the code under test resolved the hub from the process cwd "
         "while taking its session id from a fixture. Point it at a tmp_path repo."
     )
@@ -1183,14 +1184,15 @@ def _no_writes_into_live_hub_entries():
 
 @_pytest.fixture(autouse=True)
 def _no_new_live_session_hub_entries():
+    hub = _LIVE_HUB
     try:
-        before = _live_hub_session_dirs()
+        before = _live_hub_session_dirs(hub)
     except OSError:
         yield
         return
     yield
     try:
-        after = _live_hub_session_dirs()
+        after = _live_hub_session_dirs(hub)
     except OSError:
         return
     new_entries = after - before
@@ -1207,11 +1209,11 @@ def _no_new_live_session_hub_entries():
         for name in new_entries
         if name not in live
         and not _looks_like_a_harness_session_id(name)
-        and _dir_is_ours(name)
+        and _dir_is_ours(name, hub)
     )
     assert not leaked, (
         "test created entries in the REAL repo's session hub "
-        f"{_LIVE_HUB}: {leaked!r} — a guard or CLI under test resolved its "
+        f"{hub}: {leaked!r} — a guard or CLI under test resolved its "
         "repo root from the process cwd (the live repo) while taking its "
         "session id from a fixture. Point the code under test at a tmp_path "
         "repo, or pass the root explicitly. See this file's Live session-hub "

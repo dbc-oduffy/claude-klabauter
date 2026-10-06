@@ -18,7 +18,7 @@ import pytest
 from coordinator_core.housekeeping import cycle
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _OLD = time.time() - 7200.0
 

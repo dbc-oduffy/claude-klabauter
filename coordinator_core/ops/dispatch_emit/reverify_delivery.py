@@ -672,7 +672,7 @@ def emit_reverify(
     *, repo_root: Path, plan_path: str, run_record: str, out_path: str, agent_type_host: Optional[str] = None
 ) -> dict:
     from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
-    from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs
     from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 
@@ -714,7 +714,7 @@ def emit_reverify(
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
     )
     Path(out_path).write_text(script, encoding="utf-8", newline="\n")
-    from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
 
     receipt = _write_emission_receipt(
         Path(out_path), plan_path, {}, extras={"route": "reverify-delivery", "supersedes": rel}

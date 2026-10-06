@@ -178,14 +178,11 @@ def test_ledger_hand_edit_is_redirected_and_names_priority_set():
     result = ledger_guard.check(payload)
 
     assert result is not None
-    # a69586381 flipped this guard from a hard deny to an ADVISORY redirect (guard-class
-    # census, DR-27): it now emits `additionalContext` and no `permissionDecision` at all.
-    # That is the doctrine's ergonomics-over-enforcement default — the acceptance criterion
-    # here was never "deny", it was "the redirect names the op", which the advisory shape
-    # carries verbatim. Pin the message, not the enforcement class.
+    # 532dec2bfd restored the hard deny; the consumer-box downgrade to a warning lives in
+    # machine_profile.apply_guard_level, not in check().
     hook_output = result["hookSpecificOutput"]
-    assert "permissionDecision" not in hook_output
-    reason = hook_output["additionalContext"]
+    assert hook_output["permissionDecision"] == "deny"
+    reason = hook_output["permissionDecisionReason"]
 
     assert "priority-set" in reason
     assert "priority.set" in reason

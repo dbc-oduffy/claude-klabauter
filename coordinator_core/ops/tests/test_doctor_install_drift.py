@@ -18,7 +18,7 @@ def content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "content"
     (root / "coordinator" / "lib" / "install").mkdir(parents=True)
     (root / "coordinator" / "hooks").mkdir(parents=True)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
+    monkeypatch.setattr("coordinator_core.content_root.read_content_root", lambda: str(root))
     return root
 
 

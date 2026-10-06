@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -285,32 +286,71 @@ def _inner_command() -> str | None:
     return command
 
 
+#: Unquoted characters only a shell interprets (pipes, chaining, redirects, substitution). A
+#: command carrying one cannot be honoured as an argv list, so it degrades to "print less"
+#: rather than being handed to a shell.
+_SHELL_OPERATORS = set("|&;<>`")
+
+
+def _needs_shell(command: str) -> bool:
+    quote = None
+    for ch in command:
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in _SHELL_OPERATORS:
+            return True
+    return False
+
+
+def _argv_for(command: str) -> list:
+    """`command` as a resolved argv list: tokens split with shell-style quoting (backslash literal
+    on NT), `~` and `%VAR%`/`$VAR` expanded per token, the executable resolved on PATH. A `.sh` script on Windows runs
+    under Git Bash directly. Raises OSError when the command needs a shell or names nothing
+    runnable -- `_delegate` turns that into empty output."""
+    if _needs_shell(command):
+        raise OSError("statusLine command needs a shell; not delegated")
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    if os.name == "nt":
+        lexer.escape = ""  # backslash is a path separator, not an escape, on Windows
+    try:
+        tokens = [os.path.expandvars(os.path.expanduser(t)) for t in lexer]
+    except ValueError as exc:
+        raise OSError(f"unparseable statusLine command: {exc}") from None
+    if not tokens:
+        raise OSError("empty statusLine command")
+    exe = shutil.which(tokens[0]) or (tokens[0] if os.path.isfile(tokens[0]) else None)
+    if exe is None:
+        raise OSError(f"statusLine executable not found: {tokens[0]}")
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        # CreateProcess runs a batch file through cmd.exe -- a shell, which delegation never uses.
+        raise OSError(f"statusLine batch-file executable needs cmd.exe; not delegated: {exe}")
+    if os.name == "nt" and exe.lower().endswith(".sh"):
+        bash = shutil.which("bash")
+        if bash is None:
+            raise OSError("statusLine .sh script needs bash, none on PATH")
+        return [bash, exe, *tokens[1:]]
+    return [exe, *tokens[1:]]
+
+
 def _run_inner(command: str, raw: bytes) -> subprocess.CompletedProcess:
-    """Spawn `command` under the shell the harness uses to run a statusLine
-    command, feeding it `raw` on stdin and capturing its output unparsed.
+    """Spawn the operator's statusLine `command` as an argv list (no shell), feeding it `raw` on
+    stdin and capturing its output unparsed.
 
     Injectable -- `_delegate` takes this as a parameter, so a test can stub
     it and never actually spawn a process (this module's own test file is
-    zero-spawn by design).
-
-    On POSIX, `shell=True` -- the same invocation shape the harness itself
-    uses to run a `type: command` statusLine. On Windows, Git Bash
-    (`shutil.which("bash")`) when it resolves, invoked directly with no shell
-    indirection; `shell=True` only as the fallback when no `bash` is on
-    PATH. `no_console_creationflags()` suppresses the console-popup window
-    either way.
+    zero-spawn by design). `no_console_creationflags()` suppresses the console-popup window.
     """
-    kwargs = dict(
+    return subprocess.run(
+        _argv_for(command),
         input=raw,
         capture_output=True,
         timeout=_DELEGATE_TIMEOUT_SEC,
         **no_console_creationflags(),
     )
-    if os.name == "nt":
-        bash = shutil.which("bash")
-        if bash:
-            return subprocess.run([bash, "-c", command], **kwargs)
-    return subprocess.run(command, shell=True, **kwargs)
 
 
 def _delegate(raw: bytes, command: str, runner=None) -> int:

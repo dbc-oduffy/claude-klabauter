@@ -272,6 +272,10 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
         CARVE_OUT_INSTALL_PLANE,
         "regenerates claude-klabauter's own warm_entrypoint_allowlist.json inside its own tree",
     ),
+    "settings_env.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "spawns the plugin's settings-env checker, which rewrites the install's own settings.json env block",
+    ),
     "uninstall_legs.py": (
         CARVE_OUT_INSTALL_PLANE,
         "removes the install's own settings-home territory; its machine-state legs (rc blocks, cmd AutoRun) delegate to gated callees",

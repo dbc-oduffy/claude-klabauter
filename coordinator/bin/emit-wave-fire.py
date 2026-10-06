@@ -1060,7 +1060,7 @@ def _stamp_fire_hold(baton_path: Path, repo_root: Path, fire_script: Path) -> No
         try:
             cite = json.dumps(receipt.resolve().relative_to(repo_root.resolve()).as_posix())
         except ValueError:
-            cite = "null"
+            cite = None
 
         def _mutate(old: str) -> str:
             span = _frontmatter_span(old)
@@ -1070,7 +1070,8 @@ def _stamp_fire_hold(baton_path: Path, repo_root: Path, fire_script: Path) -> No
             for key in _HOLD_KEYS:
                 fm = remove_fm_field(fm, key)
             fm = insert_fm_field_raw(fm, "plan_blitz_hold_reason", json.dumps(FIRE_IN_FLIGHT_HOLD_REASON))
-            fm = insert_fm_field_raw(fm, "plan_blitz_hold_cite", cite, "plan_blitz_hold_reason")
+            if cite is not None:
+                fm = insert_fm_field_raw(fm, "plan_blitz_hold_cite", cite, "plan_blitz_hold_reason")
             return old[: span[0]] + fm + old[span[1]:]
 
         locked_rmw(baton_path, _mutate, repo_root=repo_root)

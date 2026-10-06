@@ -788,6 +788,17 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
             "_validate_pathspec",
             0,
         ),
+        # 2026-10-06 -- # class: structural-floor. N ROOTS, N SPAWNS.
+        # `publish.py::dispatch_end_of_run_plugin_version_stamp_gate` iterates distinct dest
+        # repo roots and runs one `git status` per root; no git invocation spans `-C` roots, so
+        # one spawn per root is the floor. Its per-file `HEAD:` reads are already one
+        # `git grep` per root. Same shape as the `_git_ls_tree_entries_files` precedent above.
+        (
+            "coordinator/bin/publish.py",
+            "dispatch_end_of_run_plugin_version_stamp_gate",
+            "_ro_git",
+            0,
+        ),
     }
 )
 

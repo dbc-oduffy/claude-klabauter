@@ -5112,8 +5112,7 @@ def validate_frontmatter(fm_dict: dict, schema_path: str | Path) -> list[ErrorDi
     Error dict shape: {"field": str, "error": str, "hint": str}
     """
     schema_path = Path(schema_path)
-    with schema_path.open('r', encoding='utf-8') as f:
-        schema = json.load(f)
+    schema, is_vendored = _load_schema_cached(schema_path)
 
     # Normalise datetime.date/datetime objects to ISO strings (PyYAML safe_load coercion).
     fm_dict = _coerce_dates_to_strings(fm_dict)
@@ -5164,13 +5163,30 @@ def validate_frontmatter(fm_dict: dict, schema_path: str | Path) -> list[ErrorDi
         _apply_cross_field_rules(
             fm_dict,
             schema_name,
-            local_queue_corpus=_is_claude_klabauter_vendored_schema(schema_path),
+            local_queue_corpus=is_vendored,
         )
         if schema_name
         else []
     )
 
     return shape_errors + cross_errors
+
+
+#: (path, mtime_ns, size) -> (schema, is_vendored). A corpus scan validates hundreds of records
+#: against one schema; re-reading it per record was most of a scan's process time. Keyed on the
+#: file's stat so an edited schema is re-read. Trap: callers must not mutate the returned schema.
+_SCHEMA_CACHE: dict[tuple[str, int, int], tuple[dict, bool]] = {}
+
+
+def _load_schema_cached(schema_path: Path) -> tuple[dict, bool]:
+    st = schema_path.stat()
+    key = (str(schema_path), st.st_mtime_ns, st.st_size)
+    hit = _SCHEMA_CACHE.get(key)
+    if hit is None:
+        with schema_path.open('r', encoding='utf-8') as f:
+            hit = (json.load(f), _is_claude_klabauter_vendored_schema(schema_path))
+        _SCHEMA_CACHE[key] = hit
+    return hit
 
 
 def _is_claude_klabauter_vendored_schema(schema_path: str | Path) -> bool:

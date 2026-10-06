@@ -66,3 +66,50 @@ def test_selftest_reports_the_sidecar_path(tmp_path):
     result = _run(b"", tmp_path, "--selftest")
     assert result.returncode == 0
     assert str(tmp_path / "state" / "context-window") in result.stdout.decode("utf-8")
+
+
+def _load_statusline():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("statusline_under_test", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("command", [
+    "mystatus | head -1", "a && b", "a; b", "a > out.txt", "echo `id`",
+])
+def test_a_command_needing_a_shell_is_not_delegated(command):
+    statusline = _load_statusline()
+    with pytest.raises(OSError):
+        statusline._argv_for(command)
+
+
+def test_shell_characters_inside_quotes_stay_an_argument():
+    statusline = _load_statusline()
+    argv = statusline._argv_for(f'"{sys.executable}" -c "print(\'a|b\')"')
+    assert argv[1:] == ["-c", "print('a|b')"]
+    assert os.path.samefile(argv[0], sys.executable)
+
+
+def test_an_unresolvable_executable_is_not_delegated():
+    statusline = _load_statusline()
+    with pytest.raises(OSError):
+        statusline._argv_for("no-such-statusline-binary-xyz --flag")
+
+
+def test_an_embedded_quoted_value_stays_one_argument():
+    statusline = _load_statusline()
+    path = r"C:\Users\o'neil\x.py" if os.name == "nt" else "o'neil/x.py"
+    argv = statusline._argv_for(f'"{sys.executable}" --arg="a b" "{path}"')
+    assert argv[1:] == ["--arg=a b", path]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="batch files are a Windows CreateProcess shape")
+def test_a_batch_file_executable_is_not_delegated(tmp_path):
+    shim = tmp_path / "status.cmd"
+    shim.write_text("@echo off\r\necho hi\r\n")
+    statusline = _load_statusline()
+    with pytest.raises(OSError):
+        statusline._argv_for(f'"{shim}"')

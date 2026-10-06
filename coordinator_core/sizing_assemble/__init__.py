@@ -1307,7 +1307,9 @@ def _scaffold_missing(
         doc_new = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordinator-doc-new.py"
     spec = importlib.util.spec_from_file_location("coordinator_doc_new_for_sizing_write", doc_new)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
+    exec_module_bin_bound(spec.loader, mod, str(doc_new.parent))
     recorded = premise_provenance not in (None, "unrecorded")
     text = mod._scaffold_sizing(
         title=intent,

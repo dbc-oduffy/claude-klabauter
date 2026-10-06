@@ -213,6 +213,7 @@ def _refresh_fingerprint(
             session_id,
             worktree_root,
             content_hashes={rel_posix: new_hash},
+            kind=touch_record.KIND_WRITE,
         )
     except Exception:  # noqa: BLE001 -- Stop path must never brick
         return

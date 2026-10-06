@@ -227,9 +227,8 @@ def _deny_reason_executor(
         )
     return (
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
-        "Status stamps go in your run-report sidecar (report_sidecar).\n\n"
-        "Body edit was your deliverable? Wrong agent — ask the EM to route to\n"
-        "enricher/review-integrator."
+        "Stamps go in your run-report sidecar. Body edit is your "
+        "deliverable? Ask the EM for an enricher."
         + ("\n\n" + _note if _note else "")
     )
 

@@ -67,6 +67,7 @@ dependencies = [
     # published-engine install provisions from.
     "tree-sitter>=0.21,<1",
     "tree-sitter-pwsh>=0.38,<1",
+    "tree-sitter-language-pack>=0.13.0,<0.14.0",
 ]
 
 [project.optional-dependencies]

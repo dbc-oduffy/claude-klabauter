@@ -227,6 +227,14 @@
       "undeclared_required": []
     },
     {
+      "module": "coordinator_core/contract/decision_object/reader_result.py",
+      "directive_id": "",
+      "cli": "",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
       "module": "coordinator_core/directive_cli_arity.py",
       "directive_id": "",
       "cli": "",
@@ -404,22 +412,6 @@
     },
     {
       "module": "coordinator_core/ops/dispatch_emit/queue_select.py",
-      "directive_id": "",
-      "cli": "",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_brief/_health.py",
-      "directive_id": "",
-      "cli": "",
-      "unresolved": true,
-      "unaccepted": [],
-      "undeclared_required": []
-    },
-    {
-      "module": "coordinator_core/orient_brief/_work.py",
       "directive_id": "",
       "cli": "",
       "unresolved": true,

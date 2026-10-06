@@ -13,6 +13,31 @@ import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="settings-env",
+    source_module="coordinator_core.install.settings_env",
+    clauses=(
+        ShapedClause(
+            discovered_by="apply_settings_env (settings_path param)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<caller-supplied-settings_path>",
+                reason=(
+                    "the spawned check-settings-env.py --apply rewrites the "
+                    "manifest's all_machines env values into this settings.json; "
+                    "this module itself writes nothing"
+                ),
+            ),
+        ),
+    ),
+)
+
 SETTINGS_ENV_CHECKER_REL = ("bin", "check-settings-env.py")
 
 

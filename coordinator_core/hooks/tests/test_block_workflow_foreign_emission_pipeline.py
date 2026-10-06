@@ -22,6 +22,7 @@ _SESSION = "sess-emitter"
 
 @pytest.fixture
 def emitted(monkeypatch, tmp_path) -> Path:
+    monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: _CONTENT_ROOT)
     out = tmp_path / "pipeline.workflow.mjs"

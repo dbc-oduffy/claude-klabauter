@@ -549,7 +549,7 @@ class TestDeleteBranchLocalLeg:
         detail = consolidate_apply._delete_branch("has-local", False, tmp_path)
 
         assert detail["local_deleted"] == "has-local"
-        assert ["branch", "-d", "has-local"] in calls
+        assert ["branch", "-D", "has-local"] in calls
 
 
 class TestMainBriefTransportFailure:

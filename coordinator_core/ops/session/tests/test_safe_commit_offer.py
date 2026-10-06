@@ -2920,7 +2920,7 @@ class TestSpawnBudget:
         return report, tally
 
     @pytest.mark.parametrize("n_files,n_groups", [(4, 4), (12, 3), (40, 8)])
-    def test_one_git_spawn_regardless_of_paths_or_groups(
+    def test_new_file_spawns_are_flat_in_paths_and_groups(
         self, tmp_path, monkeypatch, n_files, n_groups
     ):
         repo = _make_repo(tmp_path)
@@ -2932,7 +2932,29 @@ class TestSpawnBudget:
         assert report["outcome"]["status"] == "committed"
         assert len(report["outcome"]["committed_paths"]) == n_files
         assert report["failed_groups"] == []
-        assert len(tally) == 1, "spawn budget is ONE; got %r" % (tally,)
+        assert len(tally) == 2, "new-file budget is TWO; got %r" % (tally,)
+        assert any("check-ignore" in c for c in tally)
+
+    def test_a_modification_of_tracked_paths_spends_one_spawn(
+        self, tmp_path, monkeypatch
+    ):
+        """No path new to HEAD, so the ignore check has nothing to ask."""
+        repo = _make_repo(tmp_path)
+        for i in range(3):
+            (repo / ("f%02d.txt" % i)).write_text("seed\n", newline="")
+        subprocess.run(
+            ["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "seed files"], cwd=repo, check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        core.init("mine", cwd=str(repo))
+        report, tally = self._commit_with_tally(repo, "mine", 3, 1, monkeypatch)
+
+        assert report["outcome"]["status"] == "committed"
+        assert len(tally) == 1, "tracked-only budget is ONE; got %r" % (tally,)
+        assert "status" in tally[0]
 
     @pytest.mark.parametrize("n_files", [1, 3, 12])
     def test_an_eol_pinned_path_adds_exactly_one_more_spawn(
@@ -2971,7 +2993,7 @@ class TestSpawnBudget:
         )
 
         assert report["outcome"]["status"] == "committed"
-        assert len(tally) == 2, "budget ceiling is TWO; got %r" % (tally,)
+        assert len(tally) == 3, "budget ceiling is THREE; got %r" % (tally,)
         assert any("hash-object" in " ".join(str(a) for a in c) for c in tally)
 
     def test_an_unpinned_path_never_reaches_the_second_spawn(
@@ -2997,9 +3019,11 @@ class TestSpawnBudget:
         )
 
         assert report["outcome"]["status"] == "committed"
-        assert len(tally) == 1, "unpinned paths must not pay the fallback"
+        assert not any("hash-object" in c for c in tally), (
+            "unpinned paths must not pay the fallback"
+        )
 
-    def test_the_one_spawn_is_the_residue_read(self, tmp_path, monkeypatch):
+    def test_the_last_spawn_is_the_residue_read(self, tmp_path, monkeypatch):
         """Names WHICH spawn the budget is spent on.
 
         A count alone would stay green if `_current_dirty_paths`'s read were
@@ -3012,8 +3036,8 @@ class TestSpawnBudget:
         core.init("mine", cwd=str(repo))
         _report, tally = self._commit_with_tally(repo, "mine", 3, 1, monkeypatch)
 
-        assert len(tally) == 1
-        argv = tally[0]
+        assert len(tally) == 2
+        argv = tally[-1]
         assert argv[0] == "git"
         assert "status" in argv
         assert "--porcelain" in argv
@@ -3029,3 +3053,71 @@ def test_agent_touched_dotgit_entry_never_becomes_a_candidate():
         ".git/",
     ):
         assert safe_commit_offer._normalize_agent_touched_entry(e) is None
+
+
+class TestGitignoredPathsAreWithheld:
+    """content-root-em memo 2026-10-05-...-auto-commit-readds-ignored-ledger:
+    a claimed, gitignored, untracked ledger was committed back into its repo."""
+
+    def _repo_with_ignore_rule(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        (repo / ".gitignore").write_text("*.jsonl\n")
+        subprocess.run(
+            ["git", "add", ".gitignore"], cwd=repo, check=True, **no_console_creationflags()
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "ignore"], cwd=repo, check=True,
+            **no_console_creationflags(),
+        )
+        core.init("mine", cwd=str(repo))
+        return repo
+
+    def _head_files(self, repo):
+        return subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=repo,
+            capture_output=True, text=True, check=True, **no_console_creationflags(),
+        ).stdout.split()
+
+    def test_commit_leaves_an_ignored_untracked_claim_out(self, tmp_path):
+        repo = self._repo_with_ignore_rule(tmp_path)
+        (repo / "a.py").write_text("a")
+        (repo / "ledger.jsonl").write_text("{}\n")
+        scope.touch("mine", "a.py", cwd=str(repo))
+        scope.touch("mine", "ledger.jsonl", cwd=str(repo))
+
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
+
+        assert report["outcome"]["committed_paths"] == ["a.py"]
+        head = self._head_files(repo)
+        assert "a.py" in head and "ledger.jsonl" not in head
+        assert {"path": "ledger.jsonl", "reason": "gitignored and untracked"} in report["excluded"]
+
+    def test_commit_keeps_a_tracked_path_an_ignore_rule_matches(self, tmp_path):
+        repo = self._repo_with_ignore_rule(tmp_path)
+        (repo / "kept.jsonl").write_text("v1\n")
+        subprocess.run(
+            ["git", "add", "-f", "kept.jsonl"], cwd=repo, check=True,
+            **no_console_creationflags(),
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "kept"], cwd=repo, check=True,
+            **no_console_creationflags(),
+        )
+        (repo / "kept.jsonl").write_text("v2\n")
+        scope.touch("mine", "kept.jsonl", cwd=str(repo))
+
+        report = safe_commit_offer.commit_session_offer("mine", cwd=str(repo))
+
+        assert report["outcome"]["committed_paths"] == ["kept.jsonl"]
+
+    def test_dry_run_withholds_an_ignored_untracked_claim(self, tmp_path):
+        repo = self._repo_with_ignore_rule(tmp_path)
+        (repo / "ledger.jsonl").write_text("{}\n")
+        scope.touch("mine", "ledger.jsonl", cwd=str(repo))
+
+        out = safe_commit_offer._handler(
+            {"session_id": "mine", "cwd": str(repo), "dry_run": True}
+        )
+
+        assert "ledger.jsonl" not in out["safe_paths"]
+        assert {"path": "ledger.jsonl", "reason": "gitignored and untracked"} in out["excluded"]

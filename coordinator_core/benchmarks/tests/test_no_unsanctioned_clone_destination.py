@@ -94,6 +94,10 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "guard-message corpus fixtures; destination is `_neutral_scratch_parent()`, "
         "a deliberately repo-neutral parent the corpus needs to exercise guard text"
     ),
+    ("coordinator_core/bash_guards/tests/test_platform_conditioned_deny_reachability.py", "TemporaryDirectory"): (
+        "reuses the guard-message corpus's `_neutral_scratch_parent()` -- the same "
+        "deliberately repo-neutral parent, for the same corpus fire rows"
+    ),
     ("coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py", "mkdtemp"): (
         "macOS `_short_runtime_base` -- destination is chosen for the AF_UNIX "
         "sun_path byte budget, not for repo placement"

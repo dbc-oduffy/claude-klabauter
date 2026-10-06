@@ -127,7 +127,7 @@ def read_registry(machine_local_dir: Path, key: str) -> tuple[str | None, list[s
         except ImportError as e:
             errors.append(
                 f"{fname}: tomllib unavailable on Python {sys.version_info[0]}.{sys.version_info[1]} "
-                f"({sys.executable}); {type(e).__name__}: {e}"
+                f"({repr(sys.executable)}); {type(e).__name__}: {e}"
             )
             break  # no later file is readable either
         except Exception as e:  # noqa: BLE001 - unreadable or unparseable is a recorded error

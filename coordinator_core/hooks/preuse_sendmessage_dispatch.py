@@ -58,6 +58,7 @@ def _claim_once(run_dir: str, agent_id: str) -> bool:
         fd = os.open(
             os.path.join(advised, _AGENT_ID_SAFE_RE.sub("_", agent_id)),
             os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o644,
         )
     except FileExistsError:
         return False
@@ -67,8 +68,8 @@ def _claim_once(run_dir: str, agent_id: str) -> bool:
 
 @register_op("hooks.preuse_sendmessage_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
-        params = payload_of(params)
         if os.environ.get(_KILL_SWITCH) == "1":
             return no_advisory()
         if params.get("tool_name") != "SendMessage":

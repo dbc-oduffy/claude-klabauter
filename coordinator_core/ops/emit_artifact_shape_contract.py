@@ -908,6 +908,11 @@ _CROSS_SCHEMA_REF_PREFIX = "https://coordinator.local/schemas/"
 _CROSS_SCHEMA_REF_SUFFIX = ".schema.json"
 
 
+def _fragment_pointer(ref_value: str) -> str:
+    """JSON-pointer tail of a `...schema.json#/a/b` ref, relocated under the bundled def; "" when absent."""
+    return ref_value.partition("#")[2]
+
+
 def _rewrite_cross_schema_refs(defs: dict) -> str | None:
     """Walk every `$defs` entry and rewrite in place any `$ref` VALUE carrying the
     `https://coordinator.local/schemas/<name>.schema.json` convention to
@@ -932,7 +937,7 @@ def _rewrite_cross_schema_refs(defs: dict) -> str | None:
     """
 
     def _target_name(ref_value: str) -> str:
-        name = ref_value[len(_CROSS_SCHEMA_REF_PREFIX):]
+        name = ref_value[len(_CROSS_SCHEMA_REF_PREFIX):].partition("#")[0]
         if name.endswith(_CROSS_SCHEMA_REF_SUFFIX):
             name = name[: -len(_CROSS_SCHEMA_REF_SUFFIX)]
         return name
@@ -947,7 +952,7 @@ def _rewrite_cross_schema_refs(defs: dict) -> str | None:
                             f'cross-schema $ref "{value}" in $defs.{enclosing_def_name} '
                             f'names unregistered schema "{name}"'
                         )
-                    node[key] = f"#/$defs/{name}"
+                    node[key] = f"#/$defs/{name}{_fragment_pointer(value)}"
                 else:
                     err = _walk(value, enclosing_def_name)
                     if err is not None:

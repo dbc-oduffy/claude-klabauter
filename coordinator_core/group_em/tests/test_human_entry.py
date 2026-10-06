@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.group_em import human_entry, nomination
 from coordinator_core.ops import group_em_enter as gee
 
@@ -156,9 +157,9 @@ def test_scan_is_fast_on_a_large_transcript(home):
     filler = json.dumps({"type": "assistant", "message": {"content": "x" * 2000}})
     _write(home, *([filler] * 5000), _line())
 
-    start = time.perf_counter()
     assert human_entry.find_human_entry(SID, prompt_id=PID) is not None
-    assert time.perf_counter() - start < 0.5
+    scan = in_process_time_ms(lambda: human_entry.find_human_entry(SID, prompt_id=PID))
+    assert scan["process_time_ms"] < 500
 
 
 def _legacy_record(repo, session_id=SID, evidence=None):
