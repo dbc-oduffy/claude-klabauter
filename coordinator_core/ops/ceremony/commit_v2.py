@@ -72,6 +72,8 @@ from coordinator_core.git.commit_trailers import (
     apply_missing_trailers,
     message_missing_subject,
 )
+from coordinator_core.git.commit import partition_declared_deletions
+from coordinator_core.git.run import run_git
 from coordinator_core.git.git_index import IndexParseError
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
@@ -515,6 +517,41 @@ def _pre_commit_gates(
     return None
 
 
+def _expand_untracked_dirs(worktree_root: Path, untracked: list) -> list:
+    dirs = [
+        p for p in untracked
+        if p.endswith(("/", "\\")) or (worktree_root / p).is_dir()
+    ]
+    if not dirs:
+        return untracked
+    result = run_git(
+        ["-C", str(worktree_root), "--no-optional-locks", "ls-tree", "-r", "-z",
+         "--name-only", "HEAD", "--", *[d.replace("\\", "/") for d in dirs]]
+    )
+    if result.timed_out or result.returncode != 0:
+        return untracked
+    expanded = [p for p in result.stdout.split("\0") if p]
+    dir_set = set(dirs)
+    return [p for p in untracked if p not in dir_set] + expanded
+
+
+def _ignored_untracked(worktree_root: Path, paths: list) -> list:
+    present = [p for p in paths if (worktree_root / p).is_file()]
+    partition = partition_declared_deletions(worktree_root, present)
+    if partition is None or not partition[1]:
+        return []
+    candidates = partition[1]
+    result = run_git(
+        ["-C", str(worktree_root), "--no-optional-locks", "check-ignore", "-z", "--stdin"],
+        input=b"\0".join(p.replace("\\", "/").encode("utf-8") for p in candidates),
+        binary=True,
+    )
+    if result.timed_out or result.returncode not in (0, 1):
+        return []
+    ignored = {s.decode("utf-8", "surrogateescape") for s in result.stdout_bytes.split(b"\0") if s}
+    return [p for p in candidates if p.replace("\\", "/") in ignored]
+
+
 def _error(message: str, **extra: object) -> dict:
     """Build the structured-error result envelope for this op.
 
@@ -679,6 +716,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error("params.declared_reverts must be a list of strings")
 
     worktree_root = main_worktree_root(repo_root)
+
+    raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
+
+    ignored = _ignored_untracked(worktree_root, raw_paths)
+    if ignored:
+        shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
+        return _error(
+            f"{len(ignored)} path(s) are gitignored and untracked: {shown}. "
+            "Drop them from `paths`, or `git add -f` one deliberately."
+        )
 
     # An untracked path leaves HEAD like a deleted one: downstream consumers read the union.
     raw_removed = list(raw_deleted) + list(raw_untracked)

@@ -187,12 +187,56 @@ def test_failed_halt_on_fail_gate_is_never_already_satisfied(tmp_path: Path) -> 
     assert report["advisory_failures"][0]["directive_id"] == "d0"
 
 
-def test_absent_runner_is_skipped_not_already_satisfied(tmp_path: Path, capsys) -> None:
+def test_absent_runner_is_skipped_not_already_satisfied(tmp_path: Path, monkeypatch, capsys) -> None:
     from coordinator_core.merge_assemble.apply import _dispatch_node_ceremony_gate
+    from coordinator_core.subagent_sandbox import provision_report
 
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: str(plugin))
     d0 = next(d for d in build_directives(tmp_path, tag_prefix="v", proposed_tag="v1.0.0") if d["id"] == "d0")
     assert d0["already_satisfied"] is False
     detail = _dispatch_node_ceremony_gate([], tmp_path)
     assert detail["skipped"] == "runner_absent"
-    assert detail["path"] == str(tmp_path / "coordinator" / "tests" / "plugin-ecosystem" / "run.js")
+    assert detail["loud"] is True
+    assert detail["path"] == str(plugin / "tests" / "plugin-ecosystem" / "run.js")
     assert "runner_absent" in capsys.readouterr().err
+
+
+def test_d0_resolves_the_runner_under_the_plugin_root_not_the_merging_repo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from coordinator_core.merge_assemble import apply as apply_mod
+    from coordinator_core.subagent_sandbox import provision_report
+
+    plugin = tmp_path / "plugin"
+    runner = plugin / "tests" / "plugin-ecosystem" / "run.js"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("// stub", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: str(plugin))
+    seen = {}
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"], seen["cwd"] = cmd, kw["cwd"]
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(apply_mod.subprocess, "run", _fake_run)
+    detail = apply_mod._dispatch_node_ceremony_gate([], repo)
+    assert seen["cmd"] == ["node", "--test", str(runner)]
+    assert seen["cwd"] == str(repo)
+    assert "skipped" not in detail
+
+
+def test_unresolvable_plugin_root_is_reported_loudly(tmp_path: Path, monkeypatch, capsys) -> None:
+    from coordinator_core.merge_assemble.apply import _dispatch_node_ceremony_gate
+    from coordinator_core.subagent_sandbox import provision_report
+
+    monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: None)
+    detail = _dispatch_node_ceremony_gate([], tmp_path)
+    assert detail["skipped"] == "plugin_root_unresolved"
+    assert detail["loud"] is True and "unresolvable" in detail["message"]
+    assert "unresolvable" in capsys.readouterr().err

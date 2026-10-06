@@ -65,6 +65,17 @@ def feature_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def _load_tag_cut_script():
+    import importlib.util  # noqa: PLC0415
+
+    script = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "merge-recovery-and-tag-cut.py"
+    spec = importlib.util.spec_from_file_location("merge_recovery_and_tag_cut_e2e", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 _DECISIONS = {
     "ship_verdict": {"disposition": "ship"},
     "version_bump_final": {"disposition": "confirmed"},
@@ -84,6 +95,10 @@ def test_apply_runs_every_directive_to_completion(
     assert result["exit_code"] == 0, report
     assert _git(feature_repo, "status", "--porcelain") == ""
     assert report["release_tag_cut"] == "v0.1.1"
+    # d2 only plans the tag; the cut happens after the merge lands (Step 7: cut-tag).
+    assert "v0.1.1" not in _git(feature_repo, "tag", "--list")
+    cut, _ = _load_tag_cut_script().cut_tag(feature_repo, "v0.1.1")
+    assert cut
     merged_sha = _git(feature_repo, "rev-parse", "origin/main")
     assert _git(feature_repo, "rev-parse", "v0.1.1^{commit}") == merged_sha
     assert _git(feature_repo, "merge-base", "--is-ancestor", "feature/x", "main") == ""

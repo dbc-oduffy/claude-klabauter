@@ -15,7 +15,7 @@ class TestComputeBranchState:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=0, stdout="0\t0\n", stderr=""),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=0, stdout="0\t0\n", stderr=""),
         )
         assert merge_assemble.compute_branch_state(tmp_path) == merge_assemble.BRANCH_STATE_CLEAN
 
@@ -23,7 +23,7 @@ class TestComputeBranchState:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=0, stdout="3\t1\n", stderr=""),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=0, stdout="3\t1\n", stderr=""),
         )
         assert (
             merge_assemble.compute_branch_state(tmp_path)
@@ -34,7 +34,7 @@ class TestComputeBranchState:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=0, stdout="0\t2\n", stderr=""),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=0, stdout="0\t2\n", stderr=""),
         )
         assert (
             merge_assemble.compute_branch_state(tmp_path) == merge_assemble.BRANCH_STATE_DIVERGED
@@ -44,7 +44,7 @@ class TestComputeBranchState:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=1, stdout="", stderr="no origin/main"),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=1, stdout="", stderr="no origin/main"),
         )
         assert (
             merge_assemble.compute_branch_state(tmp_path) == merge_assemble.BRANCH_STATE_DIVERGED
@@ -56,7 +56,7 @@ class TestComputeVersionBumpProposal:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=0, stdout="v1.2.3\nv1.2.2\n", stderr=""),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=0, stdout="v1.2.3\nv1.2.2\n", stderr=""),
         )
         result = merge_assemble.compute_version_bump_proposal(tmp_path)
         assert result == {"current": "v1.2.3", "proposed": "v1.2.4", "bump": "patch"}
@@ -65,19 +65,51 @@ class TestComputeVersionBumpProposal:
         monkeypatch.setattr(
             merge_assemble,
             "_run_git",
-            lambda args, cwd: SimpleNamespace(returncode=0, stdout="", stderr=""),
+            lambda args, cwd, **_kw: SimpleNamespace(returncode=0, stdout="", stderr=""),
         )
         result = merge_assemble.compute_version_bump_proposal(tmp_path)
         assert result == {"current": None, "proposed": None, "bump": "patch"}
 
 
+class TestProposalReadsOrigin:
+    def _stub(self, monkeypatch, local, remote_refs):
+        def _fake(args, cwd, **_kw):
+            if args[0] == "tag":
+                return SimpleNamespace(returncode=0, stdout=local, stderr="")
+            assert args == ["ls-remote", "--tags", "origin"]
+            return SimpleNamespace(returncode=0, stdout=remote_refs, stderr="")
+
+        monkeypatch.setattr(merge_assemble, "_run_git", _fake)
+
+    def test_skips_tag_taken_on_origin_but_not_fetched(self, tmp_path, monkeypatch):
+        self._stub(monkeypatch, "v0.6.8\n", "a\trefs/tags/v0.6.9\nb\trefs/tags/v0.6.9^{}\n")
+        assert merge_assemble.compute_version_bump_proposal(tmp_path)["proposed"] == "v0.6.10"
+
+    def test_gap_yields_the_free_slot(self, tmp_path, monkeypatch):
+        self._stub(
+            monkeypatch, "v0.6.8\n", "a\trefs/tags/v0.6.9\nb\trefs/tags/v0.6.11\n"
+        )
+        assert merge_assemble.compute_version_bump_proposal(tmp_path)["proposed"] == "v0.6.10"
+
+    def test_unreachable_origin_falls_back_to_local(self, tmp_path, monkeypatch):
+        def _fake(args, cwd, **_kw):
+            if args[0] == "tag":
+                return SimpleNamespace(returncode=0, stdout="v1.2.3\n", stderr="")
+            return SimpleNamespace(returncode=128, stdout="", stderr="no remote")
+
+        monkeypatch.setattr(merge_assemble, "_run_git", _fake)
+        assert merge_assemble.compute_version_bump_proposal(tmp_path)["proposed"] == "v1.2.4"
+
+
 class TestBrief:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout=rev_list_out, stderr="")
             if args[0] == "tag":
                 return SimpleNamespace(returncode=0, stdout=tag_out, stderr="")
+            if args[0] == "ls-remote":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected git call: {args}")
 
         monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)
@@ -182,11 +214,13 @@ class TestBrief:
 
 class TestVersionBumpOverride:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout=rev_list_out, stderr="")
             if args[0] == "tag":
                 return SimpleNamespace(returncode=0, stdout=tag_out, stderr="")
+            if args[0] == "ls-remote":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected git call: {args}")
 
         monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)
@@ -300,11 +334,13 @@ class TestVersionBumpOverride:
         assert "d2" not in report.get("landed", [])
 
     def test_override_respects_a_non_default_tag_prefix(self, tmp_path, monkeypatch):
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout="0\t1\n", stderr="")
             if args[0] == "tag":
                 return SimpleNamespace(returncode=0, stdout="rel-1.0.0\n", stderr="")
+            if args[0] == "ls-remote":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected git call: {args}")
 
         monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)
@@ -329,11 +365,13 @@ class TestVersionBumpOverride:
 
 class TestVersionBumpDecline:
     def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout=rev_list_out, stderr="")
             if args[0] == "tag":
                 return SimpleNamespace(returncode=0, stdout=tag_out, stderr="")
+            if args[0] == "ls-remote":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected git call: {args}")
 
         monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)
@@ -433,7 +471,7 @@ class TestApplyForceBypass:
 
 class TestApplyDispatchTable:
     def test_every_directive_cli_resolves_in_the_closed_table(self, tmp_path, monkeypatch):
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout="0\t1\n", stderr="")
             if args[0] == "tag":
@@ -448,7 +486,7 @@ class TestApplyDispatchTable:
     def test_apply_runs_end_to_end_with_stubbed_handlers(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
 
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             if args[0] == "rev-list":
                 return SimpleNamespace(returncode=0, stdout="0\t0\n", stderr="")
             if args[0] == "tag":
@@ -476,7 +514,7 @@ class TestApplyDispatchTable:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
-        def _fake_run_git(args, cwd):
+        def _fake_run_git(args, cwd, **_kw):
             return SimpleNamespace(returncode=0, stdout="0\t0\n", stderr="")
 
         monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)

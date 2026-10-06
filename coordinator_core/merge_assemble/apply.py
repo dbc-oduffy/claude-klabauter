@@ -62,7 +62,7 @@ from coordinator_core.ceremony_common.cli_dispatch import (
 from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
     GATE_DIRECTIVE_IDS,
-    NODE_CEREMONY_TEST_RELPATH,
+    node_ceremony_gate_entrypoint,
     _CEREMONY_NAME,
     brief,
     build_gate_verdicts_scaffold,
@@ -151,14 +151,29 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str]) -> dict[st
 
 
 def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, Any]:
-    test_path = Path(*NODE_CEREMONY_TEST_RELPATH)
-    resolved = repo_root / test_path
-    if not resolved.is_file():
-        print(
-            f"[merge-assemble] d0 SKIPPED: runner_absent — looked for {resolved}",
-            file=sys.stderr,
+    from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root  # noqa: PLC0415
+
+    plugin_root = resolve_plugin_root()
+    if plugin_root is None:
+        message = (
+            "[merge-assemble] d0 NOT RUN: plugin root unresolvable — the plugin-ecosystem "
+            "runner was never located; set CLAUDE_PLUGIN_ROOT to the coordinator-claude "
+            "content root (<DoE clone>/coordinator)"
         )
-        return {"cli": "node-ceremony-gate", "skipped": "runner_absent", "path": str(resolved)}
+        print(message, file=sys.stderr)
+        return {"cli": "node-ceremony-gate", "skipped": "plugin_root_unresolved", "loud": True, "message": message}
+    resolved = node_ceremony_gate_entrypoint(Path(plugin_root))
+    if not resolved.is_file():
+        message = f"[merge-assemble] d0 NOT RUN: runner_absent — looked for {resolved}"
+        print(message, file=sys.stderr)
+        return {
+            "cli": "node-ceremony-gate",
+            "skipped": "runner_absent",
+            "path": str(resolved),
+            "loud": True,
+            "message": message,
+        }
+    test_path = resolved
     proc = subprocess.run(
         ["node", "--test", str(test_path)],
         cwd=str(repo_root),

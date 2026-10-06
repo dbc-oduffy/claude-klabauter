@@ -332,6 +332,28 @@ def test_cut_tag_refuses_when_remote_tag_points_elsewhere(tmp_path: Path) -> Non
     assert remote.split()[0] == first
 
 
+def test_cut_tag_refusal_names_next_free_patch_tag_across_a_gap(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    first, merge_sha = _land_second_commit(work)
+    monkeypatch.setattr(_mod, "_merge_commit_of_pr", lambda root, pr: merge_sha)
+    for t in ("v0.6.9", "v0.6.11"):
+        _git(["tag", "-a", t, first, "-m", t], cwd=work)
+        _git(["push", "origin", t], cwd=work)
+        _git(["tag", "-d", t], cwd=work)
+
+    with pytest.raises(SystemExit):
+        cut_tag(work, "v0.6.9", merge_ref=merge_sha, pr="7")
+
+    err = capsys.readouterr().err
+    assert "Next free patch tag: v0.6.10" in err
+    assert "cut-tag v0.6.10 --pr 7 --merge-ref " + merge_sha in err
+    assert "v0.6.10" not in _git(["ls-remote", "--tags", "origin"], cwd=work).stdout
+    remote = _git(["ls-remote", "origin", "refs/tags/v0.6.9^{}"], cwd=work).stdout
+    assert remote.split()[0] == first
+
+
 def test_cut_tag_pushes_when_local_tag_exists_but_remote_lacks_it(tmp_path: Path) -> None:
     work = _init_repo_with_origin(tmp_path)
     head = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()

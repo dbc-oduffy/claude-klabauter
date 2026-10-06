@@ -47,6 +47,10 @@ Negative-spec:
 from __future__ import annotations
 
 import dataclasses
+import os
+
+from coordinator_core.git.run import REMOTE_BUDGET_SECS
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -61,14 +65,13 @@ BRANCH_STATE_CLEAN = "clean"
 BRANCH_STATE_NEEDS_RECOVERY = "needs-recovery"
 BRANCH_STATE_DIVERGED = "diverged"
 
-NODE_CEREMONY_TEST_RELPATH = ("coordinator", "tests", "plugin-ecosystem", "run.js")
+NODE_CEREMONY_TEST_RELPATH = ("tests", "plugin-ecosystem", "run.js")
 
-def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:
-    """Resolves `NODE_CEREMONY_TEST_RELPATH` against `repo_root`. The suite it
-    names is coordinator-claude's plugin-ecosystem contract suite, which only
-    exists in a repo that owns discovery surfaces — so this path is present in
-    the coordinator clone and absent in every consumer repo."""
-    return repo_root.joinpath(*NODE_CEREMONY_TEST_RELPATH)
+def node_ceremony_gate_entrypoint(plugin_root: Path) -> Path:
+    """Resolves `NODE_CEREMONY_TEST_RELPATH` against the coordinator-claude
+    plugin CONTENT root (the `coordinator/` dir of a DoE clone), never the
+    merging repo: the plugin-ecosystem contract suite ships with the plugin."""
+    return plugin_root.joinpath(*NODE_CEREMONY_TEST_RELPATH)
 
 
 def portability_sweep_entrypoint() -> Path:
@@ -105,12 +108,16 @@ class _TransportFailure(Exception):
     pass
 
 
-def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _run_git(
+    args: list[str], cwd: Path, *, timeout: Optional[float] = None, env: Optional[dict] = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        timeout=timeout,
+        env=env,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
@@ -144,14 +151,59 @@ def compute_branch_state(repo_root: Path) -> str:
     return BRANCH_STATE_DIVERGED
 
 
+
+_SEMVER_TAG = re.compile(r"^(.*?)(\d+)\.(\d+)\.(\d+)$")
+
+
+def parse_ls_remote_tags(stdout: str) -> set[str]:
+    """Tag names from `git ls-remote --tags` output (peeled `^{}` lines folded in)."""
+    names: set[str] = set()
+    for line in stdout.splitlines():
+        _, _, ref = line.partition("\t")
+        ref = ref.strip()
+        if ref.startswith("refs/tags/"):
+            names.add(ref[len("refs/tags/"):].removesuffix("^{}"))
+    return names
+
+
+def next_free_patch_tag(tag: str, taken: set[str]) -> Optional[str]:
+    """First `X.Y.(Z+n)` for n >= 1 not in `taken`; `None` when `tag` is not
+    `<prefix>X.Y.Z`. A gap is honoured: taken {Z, Z+2} yields Z+1."""
+    m = _SEMVER_TAG.match(tag)
+    if not m:
+        return None
+    prefix, major, minor, patch = m.group(1), m.group(2), m.group(3), int(m.group(4))
+    candidate = f"{prefix}{major}.{minor}.{patch + 1}"
+    while candidate in taken:
+        patch += 1
+        candidate = f"{prefix}{major}.{minor}.{patch + 1}"
+    return candidate
+
+
+def _origin_tag_names(repo_root: Path) -> set[str]:
+    """One batched `git ls-remote --tags origin` — the only way to see tags a
+    peer pushed that this clone has not fetched; no per-tag spawns. Empty set
+    when origin is unreachable (the proposal then rests on local tags)."""
+    try:
+        proc = _run_git(
+            ["ls-remote", "--tags", "origin"],
+            repo_root,
+            timeout=REMOTE_BUDGET_SECS,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return parse_ls_remote_tags(proc.stdout) if proc.returncode == 0 else set()
+
+
 def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> dict[str, Any]:
     """Computes a PROPOSAL only (judgment residue `version_bump_final` is
     what the EM/PM confirms the final number on — see negative-spec in the
     module docstring: this function never claims to pick the real number).
     Reads the latest local `<tag_prefix>X.Y.Z` tag (`git tag --list
-    '<prefix>*' --sort=-v:refname`, first line) and proposes a patch bump;
-    `current`/`proposed` are both `None` when no matching tag exists yet
-    (first release)."""
+    '<prefix>*' --sort=-v:refname`, first line) and proposes the next patch
+    tag that is free both locally and on origin; `current`/`proposed` are both
+    `None` when no matching tag exists yet (first release)."""
     try:
         proc = _run_git(["tag", "--list", f"{tag_prefix}*", "--sort=-v:refname"], repo_root)
     except (OSError, subprocess.SubprocessError):
@@ -162,12 +214,9 @@ def compute_version_bump_proposal(repo_root: Path, *, tag_prefix: str = "v") -> 
     if not lines:
         return {"current": None, "proposed": None, "bump": "patch"}
     current = lines[0]
-    body = current[len(tag_prefix):] if current.startswith(tag_prefix) else current
-    segments = body.split(".")
-    if len(segments) != 3 or not all(seg.isdigit() for seg in segments):
+    if _parse_version_tag(current, tag_prefix) is None:
         return {"current": current, "proposed": None, "bump": "patch"}
-    major, minor, patch = (int(seg) for seg in segments)
-    proposed = f"{tag_prefix}{major}.{minor}.{patch + 1}"
+    proposed = next_free_patch_tag(current, set(lines) | _origin_tag_names(repo_root))
     return {"current": current, "proposed": proposed, "bump": "patch"}
 
 

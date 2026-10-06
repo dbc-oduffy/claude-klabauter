@@ -382,6 +382,36 @@ def _assert_is_ancestor(repo_root: Path, commit: str, must_contain: str) -> None
         )
 
 
+def _next_free_hint(
+    repo_root: Path,
+    tag: str,
+    pr: Optional[str],
+    fetch_ref: str,
+    merge_ref: Optional[str],
+    must_contain: Optional[str],
+) -> str:
+    """Refusal-path advice: one batched `git ls-remote --tags origin`, then the
+    first free patch tag and the exact rerun command."""
+    _require_engine_on_path()
+    from coordinator_core.merge_assemble import next_free_patch_tag, parse_ls_remote_tags
+
+    listing = _run(["git", "ls-remote", "--tags", "origin"], cwd=repo_root, check=False)
+    taken = parse_ls_remote_tags(listing.stdout) if listing.returncode == 0 else {tag}
+    free = next_free_patch_tag(tag, taken | {tag})
+    if free is None:
+        return "Pick a new version or resolve by hand."
+    parts = ["merge-recovery-and-tag-cut.py", "cut-tag", free]
+    if pr is not None:
+        parts += ["--pr", pr]
+    if merge_ref is not None:
+        parts += ["--merge-ref", merge_ref]
+    if must_contain is not None:
+        parts += ["--must-contain", must_contain]
+    if fetch_ref != "main":
+        parts += ["--fetch-ref", fetch_ref]
+    return f"Next free patch tag: {free}. Rerun: {' '.join(parts)}"
+
+
 def cut_tag(
     repo_root: Path,
     tag: str,
@@ -420,8 +450,8 @@ def cut_tag(
     if remote is not None and remote != merge_sha:
         _die(
             f"REFUSED: tag {tag} already exists on origin at {remote}, not "
-            f"{merge_sha} — a tag is never retargeted. Pick a new version or "
-            "resolve by hand."
+            f"{merge_sha} — a tag is never retargeted. "
+            + _next_free_hint(repo_root, tag, pr, fetch_ref, merge_ref, must_contain)
         )
 
     existing = _peeled_tag_sha(repo_root, tag)
