@@ -342,6 +342,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/hooks/support/bin_impl_drift.py': ('outside-repo', 'refreshes <settings-home>/bin files and the daily stamp file'),
     'coordinator_core/hooks/support/next_move_ledger.py': ('ignored-target', 'ledger under .coordinator-local/subagent-share (gitignored) plus drain/claim files beside it: append and drain use O_APPEND/O_EXCL on box-local bookkeeping'),
     'coordinator_core/ops/grind_ops.py': ('outside-repo', 'NamedTemporaryFile scratch json passed to a verifier subprocess'),
+    'coordinator_core/archive_stamp.py': ('outside-repo', 'NamedTemporaryFile holding the batch commit message handed to commit_scoped, unlinked after: cs_resolve_memos'),
     'coordinator_core/ops/session/emit_effective_delivery.py': ('in-repo-non-state', 'generated effective-delivery manifest under the plugin content root, temp file then replace; no state/ target'),
     'coordinator_core/warm/http_hook_forwarder.py': ('outside-repo', 'dial-count file and degrade log under CLAUDE_HOME, machine-global'),
     'coordinator_core/async_hook_status.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_failure'),

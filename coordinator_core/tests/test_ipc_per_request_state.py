@@ -224,7 +224,9 @@ def test_op_timeout_overrides_still_resolve_after_per_request_change(monkeypatch
     assert ipc._timeout_for("ping") == 5.0
 
 
-_TIMEOUT_HIGH_WATER_SECS: dict = {}
+#: push.outstanding: PUSH_CEILING_MAX_SECS (120.0) + 10.0, a transport backstop above the
+#: op's own per-repo ladder deadline. A remote round trip, not governed by the 500ms bar.
+_TIMEOUT_HIGH_WATER_SECS: dict = {"push.outstanding": 130.0}
 
 
 def test_op_timeout_overrides_never_ratchet_upward():
@@ -272,9 +274,9 @@ def test_timeout_high_water_table_covers_every_override():
 # ---------------------------------------------------------------------------
 # The global knob is narrow-only — the half of the ratchet that was vacuous.
 #
-# The two ratchet tests above sweep `_OP_TIMEOUT_OVERRIDES`, which is empty and
-# has been since DEC-2. They pass by iterating nothing. That is not a latent
-# guard waiting for a row: it is a guard aimed at the surface nobody uses, while
+# The two ratchet tests above sweep `_OP_TIMEOUT_OVERRIDES`, which holds one row
+# (`push.outstanding`) since DEC-2 retired the wsc_* rows. That is a guard aimed
+# at a one-row surface, while
 # the surface everybody uses -- `COORDINATOR_DISPATCH_TIMEOUT_SECS`, re-read live
 # on every request, effective with no restart, settable from any sibling repo --
 # carried no ceiling at all. `COORDINATOR_DISPATCH_TIMEOUT_SECS=420` was obeyed

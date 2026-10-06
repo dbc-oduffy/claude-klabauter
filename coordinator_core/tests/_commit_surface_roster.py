@@ -139,6 +139,9 @@ EXCLUDED_MODULES = {
     "coordinator_core/ops/ceremony/post_commit_tail.py":
         "39 marker lines; non-roster module under coordinator_core/ops/ceremony/; unsized by this "
         "plan's scope:.",
+    "coordinator_core/ops/ceremony/push_ceiling.py":
+        "172 lines, zero-spawn per-repo push ceiling resolver; non-roster module under "
+        "coordinator_core/ops/ceremony/; narration-free.",
     "coordinator_core/ops/ceremony/receipt_emit.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/receipt_render.py":

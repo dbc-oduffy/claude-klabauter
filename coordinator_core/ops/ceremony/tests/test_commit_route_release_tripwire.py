@@ -324,6 +324,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": True,
     },
+    "archive_stamp.py::cs_resolve_memos": {
+        "reason": "release",
+        "confirmed": True,
+    },
     "ops/session/safe_commit_offer.py::_commit_group": {
         "reason": "release",
         "confirmed": True,

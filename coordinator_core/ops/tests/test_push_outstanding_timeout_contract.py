@@ -1,24 +1,26 @@
-"""Pins the fix that stopped `push.outstanding` reporting a timeout on a landed push.
+"""Pins the timeout resolution of `push.outstanding`: a per-repo-ladder backstop, never the ceremony clamp.
 
 `push.outstanding` used to live under `coordinator_core.ops.ceremony`, so
 `ipc.is_ceremony_method` clamped its dispatch timeout to the 2.0s
 `CEREMONY_BUDGET_SECS` -- the sink's 9 `outcome: "timeout"` rows
 (`.git/coordinator-sessions/logs/op-latency*.jsonl`, all dated 2026-08-26,
 clustered at ~2000-2015ms) are that clamp firing on a push that landed. Moving
-the module out of the ceremony package (bd745a329b) fixed it: the op now
-resolves at the 30s `DISPATCH_TIMEOUT_SECS` default. Zero timeout rows since,
-through 2026-08-30.
+the module out of the ceremony package (bd745a329b) fixed it.
 
-This file pins that fix, it does not re-fix anything. The regression this
-guards against is a future refactor moving `push_outstanding.py` back under
-`coordinator_core.ops.ceremony` (or adding a `push.outstanding` row to
-`_OP_TIMEOUT_OVERRIDES`) -- either would silently reintroduce the 2.0s clamp.
+It now carries a documented row in `_OP_TIMEOUT_OVERRIDES`: 130.0 =
+`PUSH_CEILING_MAX_SECS` (120.0) + 10.0 for the decision and reporting tail
+(docs/plans/2026-10-06-the-push-ceiling-resolves-per-repo.md C4). The per-repo
+ladder deadline inside the op is what stops the push; the row is a backstop above it.
 
-Residual NOT closed by this fix or this test: `ipc._timeout_for`'s guard is
-`asyncio.wait_for`, which cancels the CALLER's wait, not server-side
-execution. A push that outran 30s would still report `timeout` to the caller
-while the git push itself keeps running and lands on the remote. Naming that
-gap is this file's job; closing it is out of scope for this chunk.
+The regression this file guards against is a future refactor moving
+`push_outstanding.py` back under `coordinator_core.ops.ceremony`, or dropping the
+row so the op falls to the 30s global guard under a 120s push ceiling -- either
+would report `timeout` to the caller on a push that lands.
+
+Residual NOT closed here: `ipc._timeout_for`'s guard is `asyncio.wait_for`, which
+cancels the CALLER's wait, not server-side execution. A push that outran the
+backstop would still report `timeout` to the caller while the git push keeps
+running and lands on the remote.
 """
 
 from __future__ import annotations
@@ -30,14 +32,14 @@ import pytest
 
 import coordinator_core.ipc as ipc
 
+_PUSH_OUTSTANDING_TIMEOUT_SECS = 130.0
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_push_outstanding_resolves_to_dispatch_timeout_not_ceremony_budget():
+def test_push_outstanding_resolves_to_its_override_not_ceremony_budget():
     resolved = ipc._timeout_for("push.outstanding")
-    assert resolved == ipc.DISPATCH_TIMEOUT_SECS
-    assert resolved != ipc.CEREMONY_BUDGET_SECS
-    assert resolved == 30.0
+    assert resolved == _PUSH_OUTSTANDING_TIMEOUT_SECS
 
 
 def test_push_outstanding_is_not_ceremony_membership():
@@ -48,11 +50,11 @@ def test_push_outstanding_is_not_ceremony_membership():
     `is_ceremony_method` cannot clamp it no matter what else has been imported.
     """
     assert not ipc.is_ceremony_method("push.outstanding")
-    assert "push.outstanding" not in ipc._OP_TIMEOUT_OVERRIDES
+    assert ipc._OP_TIMEOUT_OVERRIDES["push.outstanding"] == _PUSH_OUTSTANDING_TIMEOUT_SECS
 
 
 def test_push_outstanding_timeout_is_stable_regardless_of_ceremony_import_order():
-    """The 30s resolution does not depend on whether the ceremony package has been
+    """The 130s resolution does not depend on whether the ceremony package has been
     imported into the process.
 
     This is the exact shape of the original bug: `_owning_module_is_ceremony`
@@ -65,13 +67,13 @@ def test_push_outstanding_timeout_is_stable_regardless_of_ceremony_import_order(
     """
     script = (
         "import coordinator_core.ipc as ipc\n"
-        "assert ipc._timeout_for('push.outstanding') == ipc.DISPATCH_TIMEOUT_SECS, "
+        "assert ipc._timeout_for('push.outstanding') == 130.0, "
         "ipc._timeout_for('push.outstanding')\n"
         "assert not ipc.is_ceremony_method('push.outstanding')\n"
         "import coordinator_core.ops._registry_map as registry_map\n"
         "assert registry_map.OP_MODULE_MAP.get('push.outstanding') == "
         "'coordinator_core.ops.push_outstanding'\n"
-        "assert ipc._timeout_for('push.outstanding') == ipc.DISPATCH_TIMEOUT_SECS\n"
+        "assert ipc._timeout_for('push.outstanding') == 130.0\n"
         "assert not ipc.is_ceremony_method('push.outstanding')\n"
         "print('OK')\n"
     )

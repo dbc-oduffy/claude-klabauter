@@ -55,17 +55,33 @@ def test_the_reported_case_is_refused(cli, capsys):
     assert "usage: archive-stamp-cli repark-handoff" in err
 
 
-@pytest.mark.parametrize("subcmd", ["resolve-memo", "action-memo"])
-def test_a_second_memo_is_refused_rather_than_silently_dropped(cli, capsys, subcmd):
+def test_a_second_memo_is_refused_rather_than_silently_dropped(cli, capsys):
     """example-retrieval-repo-ue-addon, 2026-09-11: workday-start says to pass every routed
     memo to one call; the CLI resolved the first, exited 0, and left the second
     open with nothing said. Half a batch honoured in silence is the worst of the
     three available behaviours."""
-    rc = cli.main([subcmd, "state/cross-repo/inbox/a.md", "state/cross-repo/inbox/b.md"])
+    rc = cli.main(["action-memo", "state/cross-repo/inbox/a.md", "state/cross-repo/inbox/b.md"])
 
     assert rc == 2
     err = capsys.readouterr().err
     assert "b.md" in err and "once per memo" in err
+
+
+def test_resolve_memo_stamps_every_memo_in_one_batch(cli, monkeypatch):
+    """`resolve-memo` is the one verb that takes N memos: the extras are not
+    dropped, they reach `cs_resolve_memos` so the batch lands in one commit.
+    `action-memo` stays single-memo (test above)."""
+    seen = []
+
+    class _Engine:
+        @staticmethod
+        def cs_resolve_memos(paths, *disposition):
+            seen.append(list(paths))
+            return 0
+
+    monkeypatch.setattr(cli, "_import_module", lambda: _Engine)
+    assert cli.main(["resolve-memo", "a.md", "b.md"]) == 0
+    assert seen == [["a.md", "b.md"]]
 
 
 def test_a_free_standing_value_after_a_flag_is_still_forwarded(cli):

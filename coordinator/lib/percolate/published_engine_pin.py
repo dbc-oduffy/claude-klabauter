@@ -12,11 +12,11 @@ engine's working HEAD. At most two read-only git spawns per call.
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from coordinator_core.git.git_state import parse_source_sha_suffix
+from coordinator_core.git.run import GitResult, run_git
 
 _STAMP_WALK_LIMIT = 50
 
@@ -32,14 +32,8 @@ class PublishedEnginePinError(Exception):
     """One fact plus the remedy; the round refuses before any write."""
 
 
-def _git(repo: Path, *args: str) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(
-        ["git", "--no-optional-locks", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+def _git(repo: Path, *args: str) -> GitResult:
+    return run_git(["--no-optional-locks", "-C", str(repo), *args])
 
 
 def resolve_published_engine_pin(
@@ -59,7 +53,7 @@ def resolve_published_engine_pin(
         published_ref,
         "--",
     )
-    if log.returncode != 0:
+    if not log.ok:
         raise PublishedEnginePinError(
             f"{published_ref} does not resolve in mirror {mirror_root}; "
             "fetch or push the engine mirror's release channel."
@@ -80,11 +74,11 @@ def resolve_published_engine_pin(
             f"{hex_sha}^{{commit}}",
         )
         full = check.stdout.strip()
-        if check.returncode != 0 or not full:
+        if not check.ok or not full:
             raise PublishedEnginePinError(
                 f"stamped sha {hex_sha[:12]} (mirror {mirror_root} {published_ref} "
                 f"{commit[:12]}) is not a commit in {engine_toplevel}; "
-                f"fetch claude-klabauter so {hex_sha[:12]} resolves."
+                f"fetch the engine so {hex_sha[:12]} resolves."
             )
         return PublishedEnginePin(
             source_sha=full, mirror_commit=commit, engine_toplevel=engine_toplevel

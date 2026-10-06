@@ -1,7 +1,7 @@
 """A percolate commit subject stamps `[source-head <sha12>]` only when the sha is a pre-copy
 round pin AND every store row feeding that destination repo root published this round.
 
-Falsifiers: (a) an unpinned claude-klabauter toplevel never falls back to a live HEAD read; (b) a
+Falsifiers: (a) an unpinned engine toplevel never falls back to a live HEAD read; (b) a
 destination root fed by several rows stamps only when all of them succeeded; (c) real git: the
 mirror bytes come from the pinned commit, not the HEAD that moved mid-round.
 

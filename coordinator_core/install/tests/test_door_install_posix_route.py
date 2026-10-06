@@ -108,6 +108,14 @@ def test_install_door_on_windows_route_unchanged(tmp_path, monkeypatch):
 
     monkeypatch.setattr(door_install_posix_build, "build_or_advise", _fail_if_called)
 
+    def _no_compiler(*args, **kwargs):
+        raise SystemExit("no C compiler (stubbed)")
+
+    # With sys.platform forged to win32, shutil.which reaches into _winapi,
+    # which is None off Windows. Pinning "no compiler" also keeps the
+    # drifted-prebuilt branch on the copy-prebuilt path on every host.
+    monkeypatch.setattr(door_build, "_find_compiler", _no_compiler)
+
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed Windows prebuilt door in this checkout")
 

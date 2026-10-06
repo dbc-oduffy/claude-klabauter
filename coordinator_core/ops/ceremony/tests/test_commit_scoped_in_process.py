@@ -313,3 +313,48 @@ def test_a_reconcile_that_does_not_take_is_reported_not_swallowed(tmp_path, monk
     assert "gone.txt" in result.stderr
     assert "still staged in .git/index" in result.stderr
     assert "git update-index --force-remove -- gone.txt" in result.stderr
+
+
+def _fail_shared_index_refresh(monkeypatch) -> None:
+    """Make bound 6's batched `update-index --add --cacheinfo` exit non-zero,
+    as a peer holding `.git/index.lock` past the retry schedule would."""
+    real_git_fn = git_native._git
+
+    def _failing(args, **kwargs):
+        if args[:2] == ["update-index", "--add"] and "--cacheinfo" in args:
+            return git_native.GitResult(
+                returncode=128, stdout="", stderr="fatal: Unable to create '.git/index.lock'"
+            )
+        return real_git_fn(args, **kwargs)
+
+    monkeypatch.setattr(git_native, "_git", _failing)
+
+
+def test_failed_shared_index_refresh_warns_naming_paths_and_keeps_the_commit(
+    tmp_path, monkeypatch
+):
+    repo = real_git_repo(tmp_path)
+    make_diverged_path(repo, "a.txt", staged_content="STAGED A\n", worktree_content="WT A\n")
+    make_diverged_path(repo, "b.txt", staged_content="STAGED B\n", worktree_content="WT B\n")
+    msg_file = _write_msg(tmp_path)
+    _fail_shared_index_refresh(monkeypatch)
+
+    result = git_native.commit_scoped(["a.txt", "b.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert _committed_content_at_head(repo, "a.txt") == "STAGED A\n"
+    assert _committed_content_at_head(repo, "b.txt") == "STAGED B\n"
+    assert "shared .git/index refresh did not take" in result.stderr
+    assert "a.txt" in result.stderr and "b.txt" in result.stderr
+    assert "index.lock" in result.stderr
+
+
+def test_successful_shared_index_refresh_emits_no_refresh_warning(tmp_path):
+    repo = real_git_repo(tmp_path)
+    make_diverged_path(repo, "a.txt", staged_content="STAGED A\n", worktree_content="WT A\n")
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(["a.txt"], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert "refresh did not take" not in result.stderr

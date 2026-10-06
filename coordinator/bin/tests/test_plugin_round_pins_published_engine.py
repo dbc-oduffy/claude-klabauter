@@ -152,7 +152,6 @@ def _patch_registry(monkeypatch, world: _World, *, keys=frozenset({MIRROR_KEY}),
     monkeypatch.setattr(publish, "_REPO_ROOT", world.engine)
     monkeypatch.setattr(publish, "_engine_declaring_mirror_keys", lambda *a, **k: frozenset(keys))
     monkeypatch.setattr(machine_resolver, "registry_get", fake_registry_get)
-    monkeypatch.setattr(publish, "registry_get", fake_registry_get, raising=False)
     mirror_real = os.path.realpath(str(world.mirror))
     monkeypatch.setattr(
         publish,

@@ -589,10 +589,7 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     module import path with each other, so the only reach point common to all
     three is the engine they each already bootstrap.
 
-    Degrades to `""` rather than raising or blocking a publish: `head_sha`
-    returns `None` on an unborn/detached-nothing HEAD, and a subject without
-    the stamp is strictly what this function's absence produced. Zero-spawn
-    by construction -- `head_sha` reads `HEAD`/`packed-refs` directly.
+    Degrades to `""` on an unresolvable HEAD, never raising. Zero-spawn.
     """
     return format_source_sha_suffix(head_sha(repo))
 

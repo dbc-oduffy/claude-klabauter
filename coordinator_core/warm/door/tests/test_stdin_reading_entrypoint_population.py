@@ -74,6 +74,17 @@ _BIN_ROOT_REGISTRY_KEYS = ("repos.claude_klabauter", "repos.content_root")
 #: hand-maintained exclusion the derivation honours" even while unused.
 HAND_EXCLUDED_NAMES: frozenset = frozenset()
 
+#: Allowlisted entrypoints whose stdin read lives in the engine module the
+#: bin trampoline calls into, never in the bin body this scan reads. The
+#: textual scan cannot see such a read (a bin comment that merely names
+#: `sys.stdin` matches only on a tree that carries that comment, and the
+#: published sibling trees lag behind), so the name is enrolled here with
+#: the repo-relative engine file that holds the read. A test pins that the
+#: file still spells a stdin read.
+ENGINE_SIDE_STDIN_READERS: "dict[str, str]" = {
+    "backlog-grind-assemble": "coordinator_core/backlog_grind_assemble/grind_rows.py",
+}
+
 #: Per-spelling patterns this scan matches against a body's raw text, in
 #: report order. `sys.stdin` and `from sys import stdin` are Python's two
 #: import shapes for reaching the same stream; `argparse.FileType('-')` is
@@ -143,7 +154,11 @@ def derive_stdin_reading_entrypoints() -> "frozenset[str]":
     return frozenset(
         name
         for name in load_allowlisted_names()
-        if name not in HAND_EXCLUDED_NAMES and matched_spelling_for(name, bin_roots) is not None
+        if name not in HAND_EXCLUDED_NAMES
+        and (
+            name in ENGINE_SIDE_STDIN_READERS
+            or matched_spelling_for(name, bin_roots) is not None
+        )
     )
 
 
@@ -204,3 +219,17 @@ def test_a_known_spelling_is_diagnosable_independent_of_the_derived_set(tmp_path
     assert spelling == "sys.stdin"
     assert spelling in _STDIN_SPELLING_PATTERNS
     assert resolve_entrypoint_body("fixture-entrypoint", bin_roots) is not None
+
+
+def test_engine_side_stdin_readers_still_read_stdin_in_their_engine_file():
+    """Each `ENGINE_SIDE_STDIN_READERS` entry is allowlisted and its named
+    engine file still spells a stdin read -- otherwise the enrolment is a
+    stale claim that keeps a needless cold route in the door table."""
+    allowlisted = load_allowlisted_names()
+    for name, rel in ENGINE_SIDE_STDIN_READERS.items():
+        assert name in allowlisted, f"{name} is not in the warm allowlist"
+        text = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert any(p.search(text) for p in _STDIN_SPELLING_PATTERNS.values()), (
+            f"{rel} no longer reads stdin; drop {name} from ENGINE_SIDE_STDIN_READERS "
+            "and from door_core.c's tables together"
+        )

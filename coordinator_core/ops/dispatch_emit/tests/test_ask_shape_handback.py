@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import yaml
 
 from coordinator_core.ops.dispatch_emit import cli
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_gate import gate, handback_line
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.session import record_homes
 
-REL = "state/sizings/2026-10-06-shape.yaml"
+_BASENAME = "2026-10-06-shape.yaml"
+REL = Path(record_homes.record_path("", "sizings", _BASENAME)).as_posix()
 
 
 def _put(repo, **over):
-    (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+    Path(record_homes.home_dir(str(repo), "sizings")).mkdir(parents=True, exist_ok=True)
     doc = {
         "schema": "sizing-object",
         "name": "unclear job",

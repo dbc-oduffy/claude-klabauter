@@ -59,7 +59,7 @@ def test_mirror_bytes_equal_pinned_commit_after_head_moves(monkeypatch, tmp_path
     sha_a = _git(src, "rev-parse", "HEAD")
 
     monkeypatch.setattr(publish, "_REPO_ROOT", src)
-    publish._claude_klabauter_toplevel_key.cache_clear()
+    publish._engine_toplevel_key.cache_clear()
     pins: dict[str, str] = {}
     assert publish._round_pin_source_sha(src, pins) == sha_a
 
@@ -102,4 +102,4 @@ def test_mirror_bytes_equal_pinned_commit_after_head_moves(monkeypatch, tmp_path
     finally:
         publish._cleanup_shadow_roots((shadow,))
         publish._MATERIALIZED_REF_CACHE.clear()
-        publish._claude_klabauter_toplevel_key.cache_clear()
+        publish._engine_toplevel_key.cache_clear()

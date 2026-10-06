@@ -194,6 +194,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import (
@@ -202,6 +203,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled, guard_level
+from coordinator_core.session import record_homes
 from coordinator_core.write_guards._guard_level import (
     doctrine_surface_advisory,
     doctrine_surface_risk,
@@ -223,7 +225,7 @@ _WIKI_ANCHOR = "coordinator/docs/wiki/guards/guard-message-concision.md"
 
 #: Sizing records are schema-checked on Write/Edit only; the same sink
 #: predicate refuses a shell write into their home.
-_SIZING_RECORD_IDENTIFIERS = ("state/sizings/",)
+_SIZING_RECORD_IDENTIFIERS = (Path(record_homes.home_dir("", "sizings")).as_posix() + "/",)
 _SIZING_RECORD_DENY = (
     "Shell write into state/sizings bypasses the sizing-object schema check. "
     "New record: `sizing-assemble --write`. Amend: `sizing.record_pm_resolution` "

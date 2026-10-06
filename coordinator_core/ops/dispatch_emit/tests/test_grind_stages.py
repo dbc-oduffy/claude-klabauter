@@ -194,32 +194,6 @@ def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, ca
     assert "not valid JSON" not in err
 
 
-def test_run_record_reads_a_piped_record_through_the_bin_entry_and_the_door_routes_it_cold(tmp_path):
-    """The grind's op-runner pipes the record into the bin entry; the warm door
-    drops stdin for any basename absent from its stdin table, which surfaced as
-    "no record on stdin" on every run."""
-    import re
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parents[4]
-    door_src = (repo / "coordinator_core" / "warm" / "door" / "door_core.c").read_text(encoding="utf-8")
-    assert re.search(r'"backlog-grind-assemble"\s*,\s*"grind-row"', door_src)
-    assert re.search(r'door_stdin_reading_basenames\[\]\s*=\s*\{[^;]*"backlog-grind-assemble"', door_src)
-
-    proc = subprocess.run(
-        [sys.executable, str(repo / "coordinator" / "bin" / "backlog-grind-assemble.py"),
-         "grind-row", "run-record", "--profile", "p1", "--run-id", "r1",
-         "--record-file", "-", "--repo-root", str(tmp_path)],
-        input='{"run_id": "r1"}', capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert proc.returncode == 0, proc.stderr
-    written = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "r1.json"
-    assert json.loads(written.read_text(encoding="utf-8")) == {"run_id": "r1"}
-
-
 def test_ledger_sweep_without_queue_dirs_omits_the_sweep():
     call_text = _sweep_call(queue_dirs=[])
     assert "grind-row sweep" not in call_text

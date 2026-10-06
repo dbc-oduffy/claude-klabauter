@@ -1016,13 +1016,14 @@ def test_op_timeout_overrides_public_proxy_contents_and_immutability():
     The public export shipped with zero direct test
     coverage of its own contents or immutability, unlike OP_KEY_SCOPE's coverage test.
     DEC-2 emptied the table, and the `ceremony.scoped_git_commit` row DEC-2's
-    revert had readmitted was itself revoked 2026-08-21 (DR-348, ceremony budget) —
-    the table is now empty and stays that way for any ceremony op by construction
+    revert had readmitted was itself revoked 2026-08-21 (DR-348, ceremony budget).
+    The table now holds exactly one NON-ceremony row, `push.outstanding` (a remote
+    round trip whose dispatch guard must sit above PUSH_CEILING_MAX_SECS); it stays
+    free of any ceremony op by construction
     (test_ceremony_budget_ratchet.py::test_no_override_row_widens_a_ceremony_op).
-    A genuinely justified NON-ceremony override still has somewhere to land here.
     """
     assert dict(ipc.OP_TIMEOUT_OVERRIDES) == dict(ipc._OP_TIMEOUT_OVERRIDES)
-    assert dict(ipc.OP_TIMEOUT_OVERRIDES) == {}
+    assert dict(ipc.OP_TIMEOUT_OVERRIDES) == {"push.outstanding": 130.0}
     with pytest.raises(TypeError):
         ipc.OP_TIMEOUT_OVERRIDES["test.new"] = 1.0
 

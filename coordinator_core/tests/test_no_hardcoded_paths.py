@@ -234,6 +234,8 @@ _EXEMPT_SITES: set[str] = {
     "coordinator_core/git/commit.py::_gpgsign_config_files",
     # Git's POSIX `/etc/gitconfig` system rung; same class as above. 2026-10-02.
     "coordinator_core/git/commit_trailers.py::_host_trailer_config_files",
+    # Git's POSIX `/etc/gitconfig` system rung; same class as above. 2026-10-06.
+    "coordinator_core/ops/ceremony/push_ceiling.py::_global_candidates",
     # Cloud-sandbox mount points (`/root`, `/home/user`), the same in every
     # cloud container; no registry key resolves them. 2026-10-02.
     "coordinator_core/hooks/repin_cloud_engine_root.py::<module>",

@@ -653,9 +653,9 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
     Asserts the exact stable shape: {"<op>": <float>, ..., "__default__": <float>}.
     "__default__" must be present. DEC-2 (docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md,
     commit 827cb8c8) retired the three ceremony.wsc_* per-op 120.0 overrides that this test
-    used to assert -- _OP_TIMEOUT_OVERRIDES in coordinator_core/ipc.py is now an intentionally
-    empty table, so every op that is not otherwise projected falls to the single global
-    runaway guard.
+    used to assert. _OP_TIMEOUT_OVERRIDES in coordinator_core/ipc.py now holds only the
+    documented `push.outstanding` row (130.0); every other op that is not otherwise projected
+    falls to the single global runaway guard.
 
     THE OVERRIDE TABLE IS NOT THE WHOLE DUMP, and asserting it was is how this test spent
     three surface changes red. It read `parsed == {"__default__": ...}` -- exact equality
@@ -695,13 +695,20 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
         "__ceremony_mutation_read_deadline__",
         "__warm_miss_wait__",
     }
+    from coordinator_core.ipc import _OP_TIMEOUT_OVERRIDES
+
     for key, value in parsed.items():
         if key in reserved or key.startswith("__ceremony__"):
             continue
+        if key in _OP_TIMEOUT_OVERRIDES:
+            assert value == _OP_TIMEOUT_OVERRIDES[key], (
+                f"override row {key!r} must carry its table value, not {value!r}"
+            )
+            continue
         assert is_ceremony_method(key), (
-            "_OP_TIMEOUT_OVERRIDES is retired-empty (DEC-2), so the only per-op rows the dump "
-            f"may carry are the ceremony projection; {key!r} is neither reserved nor a ceremony "
-            f"op. Full payload: {parsed}"
+            "the only per-op rows the dump may carry are the ceremony projection and the "
+            f"documented _OP_TIMEOUT_OVERRIDES rows; {key!r} is neither reserved, an override, "
+            f"nor a ceremony op. Full payload: {parsed}"
         )
         assert value == CEREMONY_BUDGET_SECS, (
             f"projected ceremony op {key!r} must carry the ceremony budget, not {value!r}"

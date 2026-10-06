@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 
 from coordinator_core import baton_assemble
 from coordinator_core.baton_assemble import apply as baton_apply
+from coordinator_core.session import record_homes
 
+_H1_REL = Path(record_homes.record_path("", "handoffs", "h1.md")).as_posix()
 _SID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -22,7 +24,7 @@ def _completed(stdout: str = "") -> MagicMock:
 
 def test_brief_spawns_no_session_id_log(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
-    handoff = tmp_path / "state" / "handoffs" / "h1.md"
+    handoff = tmp_path / _H1_REL
     handoff.parent.mkdir(parents=True)
     handoff.write_text("---\ntitle: h1\n---\n\n# h1\n", encoding="utf-8")
     argvs: list[list[str]] = []
@@ -41,7 +43,7 @@ def test_brief_spawns_no_session_id_log(tmp_path: Path, monkeypatch) -> None:
         subprocess.Popen, "__init__", _record_popen
     ), patch.object(baton_assemble, "git_common_dir", return_value=tmp_path / ".git"):
         try:
-            baton_assemble.brief("handoff", "state/handoffs/h1.md", repo_root=tmp_path)
+            baton_assemble.brief("handoff", _H1_REL, repo_root=tmp_path)
         except Exception:  # noqa: BLE001 — only the spawned argv is under test
             pass
 

@@ -22,9 +22,11 @@ import pytest
 
 # Stable markers of live peer processes, measured in a claude-klabauter fast-suite run
 # (2026-10-03): Claude Code's atomic ~/.claude.json writes and a concurrent
-# publish round's sibling staging dir. Exact names or fixed-prefix globs only,
+# publish round's sibling staging dir, and (2026-10-06, six live sessions) the
+# harness's transient `~/.claude.lock`. Exact names or fixed-prefix globs only,
 # never a dot-prefix blanket -- a test could create `~/.foo`.
 _AMBIENT = (
+    ".claude.lock",
     ".claude.json.lock",
     ".claude.json.tmp.*",
     ".*.publish-staging-*",

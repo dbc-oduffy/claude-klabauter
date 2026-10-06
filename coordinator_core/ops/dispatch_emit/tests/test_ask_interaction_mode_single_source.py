@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.session import record_homes
 
-REL = "state/sizings/2026-10-01-gate.yaml"
+REL = Path(record_homes.record_path("", "sizings", "2026-10-01-gate.yaml")).as_posix()
 
 
 def test_size_prompt_names_no_mode_and_relays_the_returned_one():
@@ -37,7 +39,7 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
     monkeypatch.setattr(
         "coordinator_core.session.fleet_mode.fleet_mode_path", lambda: home / "fleet-mode.json"
     )
-    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)

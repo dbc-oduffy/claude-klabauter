@@ -82,7 +82,7 @@ def test_no_stamp_within_limit_raises(tmp_path, engine, monkeypatch):
 def test_stamp_sha_absent_from_engine_raises(tmp_path, engine):
     e, _ = engine
     m, _ = _mirror(tmp_path, ["round" + format_source_sha_suffix("ab" * 20)])
-    with pytest.raises(pep.PublishedEnginePinError, match="fetch claude-klabauter"):
+    with pytest.raises(pep.PublishedEnginePinError, match="fetch the engine"):
         pep.resolve_published_engine_pin(e, m, REF)
 
 
@@ -97,13 +97,13 @@ def test_success_path_is_exactly_two_git_spawns(tmp_path, engine, monkeypatch):
     e, a = engine
     m, _ = _mirror(tmp_path, ["round" + format_source_sha_suffix(a)])
     calls = []
-    real = subprocess.run
+    real = pep.run_git
 
-    def recording(*args, **kwargs):
-        calls.append(args[0])
-        return real(*args, **kwargs)
+    def recording(args, **kwargs):
+        calls.append(["git", *args])
+        return real(args, **kwargs)
 
-    monkeypatch.setattr(pep.subprocess, "run", recording)
+    monkeypatch.setattr(pep, "run_git", recording)
     pep.resolve_published_engine_pin(e, m, REF)
     assert len(calls) == 2
     assert all(c[0] == "git" and "--no-optional-locks" in c for c in calls)

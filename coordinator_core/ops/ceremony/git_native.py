@@ -3652,17 +3652,46 @@ def _commit_scoped_private_index(
     # failure must never be reported as this function's own failure --
     # that would discard a commit that genuinely succeeded and could send a
     # caller into a spurious retry/duplicate commit.
+    #
+    # Unverified is not silent. A refresh that did not take (a peer holding
+    # `.git/index.lock` past `_git()`'s whole retry schedule, a Windows
+    # sharing violation on the rename) leaves exactly the committed paths
+    # carrying their PRE-commit shared-index state -- `D` for a new file,
+    # `M` holding the old blob for an edit -- which the next bare commit by
+    # a peer lands as a reversion. The rc is checked chunk by chunk (free:
+    # the result is already in hand, no re-read) and the failed paths ride
+    # the same stderr channel as the other two notices; the commit itself is
+    # never failed for it.
+    refresh_warning = ""
     if tree_input:
         cacheinfo_values = [
             f"{mode},{sha},{path}" for path, (mode, sha) in tree_input.items()
         ]
+        refresh_failed: List[str] = []
+        refresh_rc_stderr = ""
         for chunk in _chunk_paths(cacheinfo_values):
             cacheinfo_args: List[str] = []
             for value in chunk:
                 cacheinfo_args += ["--cacheinfo", value]
-            _git(
+            refresh = _git(
                 ["update-index", "--add", *cacheinfo_args],
                 cwd=root,
+            )
+            if not refresh.ok:
+                # `mode,sha,path`: the path is everything past the second comma.
+                refresh_failed.extend(v.split(",", 2)[2] for v in chunk)
+                refresh_rc_stderr = refresh_rc_stderr or refresh.stderr.strip()
+        if refresh_failed:
+            _failed_str = ", ".join(refresh_failed[:5])
+            if refresh_failed[5:]:
+                _failed_str += ", ... (%d paths in all)" % len(refresh_failed)
+            refresh_warning = (
+                "commit_scoped: the commit landed but the shared .git/index "
+                "refresh did not take for %s -- the index still holds their "
+                "PRE-commit state and the next bare commit in this worktree "
+                "reverts them (git said: %s). Clear with: git reset -q -- "
+                "<those paths>"
+                % (_failed_str, (refresh_rc_stderr or "no stderr")[:200])
             )
 
     # Bound 7 (state/handoffs/2026-08-30-the-commit-path-scoped-commits-the-
@@ -3830,7 +3859,9 @@ def _commit_scoped_private_index(
     return GitResult(
         returncode=0,
         stdout=new_sha,
-        stderr="\n".join(m for m in (exclusion_notice, reconcile_warning) if m),
+        stderr="\n".join(
+            m for m in (exclusion_notice, refresh_warning, reconcile_warning) if m
+        ),
         worktree_excluded=tuple(excluded_paths),
     )
 

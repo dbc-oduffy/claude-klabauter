@@ -28,6 +28,7 @@ from coordinator_core.pickup_assemble.tests._git_harness import (
     git as _git,
     init_repo as _init_repo,
 )
+from coordinator_core.session import record_homes
 from coordinator_core.session.touch_record import append_event
 from coordinator_core.tests._stamped_engine_fixture import build_engine_copy, cold_cli_env
 
@@ -36,7 +37,8 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _GOLDEN = Path(__file__).parent / "fixtures" / "brief_git_spawn_exit_golden.json"
 _SESSION_ID = "7c31b25c-5312-4f9a-988f-17f95ffbf8c6"
 _CLAIMED = "README.md"
-_BRIEF_ARGS = ["brief", "handoff", "state/handoffs/h1.md"]
+_H1_REL = Path(record_homes.record_path("", "handoffs", "h1.md")).as_posix()
+_BRIEF_ARGS = ["brief", "handoff", _H1_REL]
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -44,11 +46,11 @@ def _seed_dirty_repo(tmp_path: Path) -> Path:
     """One committed handoff, one modified tracked file the session claims, one untracked file."""
     repo = tmp_path / "baton-repo"
     _init_repo(repo)
-    artifact = repo / "state" / "handoffs" / "h1.md"
+    artifact = repo / _H1_REL
     artifact.parent.mkdir(parents=True, exist_ok=True)
     fm = 'deliverable_id: "DEL-C2-1"\npredecessor: "none"\n'
     artifact.write_text(f"---\n{fm}---\n\n# Artifact\n\nBody.\n", encoding="utf-8")
-    _git(repo, "add", "state/handoffs/h1.md")
+    _git(repo, "add", _H1_REL)
     _git(repo, "commit", "-m", "add h1.md")
     (repo / _CLAIMED).write_text("modified\n", encoding="utf-8")
     (repo / "untracked.txt").write_text("untracked\n", encoding="utf-8")

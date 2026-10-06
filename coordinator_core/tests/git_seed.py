@@ -70,6 +70,7 @@ def _replace_copy(src: str, dst: str) -> str:
     """Git objects are mode 0444, so a re-seed over an existing repo cannot
     overwrite them in place; unlink first (directory-writable is enough)."""
     if os.path.lexists(dst):
+        os.chmod(dst, 0o600)  # Windows refuses to unlink a read-only file
         os.unlink(dst)
     return shutil.copy2(src, dst)
 

@@ -6503,7 +6503,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
     "baton_assemble.apply": 6,
-    "baton_assemble.brief": 5,
+    "baton_assemble.brief": 4,
     # --- Raised 2026-08-30, cause identified before the raise (this dict's own
     # rule: a raised pin is a budget increase and needs the same evidence any
     # other one does). Two peer changes, not five independent regressions:
