@@ -917,7 +917,8 @@ def _dispatch_emit(
             ask_baton = _read_baton_ids(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
-        run_id = f"ask-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         prompt = ask if isinstance(ask, str) and ask else None
         ask_ctx = {"root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id}
         if ask_baton is not None:
@@ -1718,6 +1719,30 @@ def _read_baton_ids(root: Path, baton: Optional[str], deliverable_id: Optional[s
     return {"path": rel, "deliverable_id": baton_dlv}
 
 
+_BATON_REQUIRED_SECTIONS = (
+    "## Specification",
+    "## Reference materials (read first)",
+    "## Acceptance criteria",
+)
+
+
+def _empty_baton_sections(path: Path) -> list:
+    """Required baton sections with no non-whitespace before the next ``## `` heading."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    bodies: dict = {}
+    current = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line.strip()
+            bodies.setdefault(current, [])
+        elif current is not None:
+            bodies[current].append(line)
+    return [h for h in _BATON_REQUIRED_SECTIONS if h in bodies and not "".join(bodies[h]).strip()]
+
+
 def _gate_sizing_at_emit(
     root: Path, sizing_rel: str, writes: list, baton: Optional[dict] = None
 ) -> dict:
@@ -1775,6 +1800,11 @@ def _gate_sizing_at_emit(
         if halt.get("touchpoint"):
             line += f" — run: {halt['touchpoint']}"
         raise SizingFireRefused([line])
+    minted = verdict.baton or baton
+    if minted:
+        empty = _empty_baton_sections(Path(root) / minted["path"])
+        if empty:
+            raise SizingFireRefused([f"baton {minted['path']} has empty sections: {', '.join(empty)}"])
     out: dict = {"writes": writes, "batons": [], "uncommitted": []}
     if baton:
         out["baton"] = baton

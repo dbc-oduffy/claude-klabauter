@@ -729,3 +729,11 @@ def test_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths():
         label="commit:rv", phase_title="Commit", touched_files_js="TOUCHED"
     )
     assert "drop_ignored" in review
+
+
+def test_fix_prompt_fences_the_published_mirror():
+    call_text = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"]
+    )
+    assert "published mirror" in call_text
+    assert "publish.mirrors.*" in call_text

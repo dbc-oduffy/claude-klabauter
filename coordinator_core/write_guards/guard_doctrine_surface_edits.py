@@ -166,7 +166,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
-from coordinator_core import machine_profile, machine_resolver
+from coordinator_core import env_locality, machine_profile, machine_resolver
 from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
@@ -512,7 +512,82 @@ _CLOUD_VENUE_ENV_TRUE = "true"
 
 
 def _in_cloud_session() -> bool:
-    return os.environ.get(_CLOUD_VENUE_ENV_VAR) == _CLOUD_VENUE_ENV_TRUE
+    try:
+        rung = env_locality.harness_rung()
+    except Exception:
+        return False
+    return rung is not None and rung.call == "cloud"
+
+
+_TRANSCRIPT_TAIL_BYTES = 512 * 1024
+_WRAPPER_RE = re.compile(
+    r"<(system-reminder|cross-session-message|task-notification)\b.*?</\1>",
+    re.DOTALL,
+)
+_UNCLOSED_WRAPPER_RE = re.compile(
+    r"<(?:system-reminder|cross-session-message|task-notification)\b.*", re.DOTALL
+)
+
+
+def _user_turn_text(entry: Any) -> str:
+    """Text a human typed in a transcript entry; "" for any non-genuine one."""
+    if not isinstance(entry, dict) or entry.get("type") != "user" or entry.get("isMeta"):
+        return ""
+    message = entry.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return ""
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "\n".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+        )
+    if not isinstance(content, str):
+        return ""
+    content = _UNCLOSED_WRAPPER_RE.sub("", _WRAPPER_RE.sub("", content))
+    return content.strip()
+
+
+def _last_pm_turn(transcript_path: Any) -> str:
+    """Most recent genuine user turn from the transcript tail; "" if none."""
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return ""
+    try:
+        with open(transcript_path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(0, size - _TRANSCRIPT_TAIL_BYTES)
+            fh.seek(start)
+            data = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    lines = data.split("\n")
+    if start:
+        lines = lines[1:]
+    for line in reversed(lines):
+        try:
+            text = _user_turn_text(json.loads(line))
+        except ValueError:
+            continue
+        if text:
+            return text
+    return ""
+
+
+def _pm_turn_names_target(payload: Dict[str, Any], target: str, repo_root: "str | None") -> bool:
+    """Cloud only: the latest PM turn names `target` by repo-relative path or basename."""
+    if not _in_cloud_session():
+        return False
+    text = _last_pm_turn(payload.get("transcript_path"))
+    if not text:
+        return False
+    names = {os.path.basename(target)}
+    if repo_root:
+        try:
+            names.add(os.path.relpath(target, repo_root).replace(os.sep, "/"))
+        except ValueError:
+            pass
+    return any(n and n in text for n in names)
 
 
 def _deny_reason(
@@ -552,8 +627,8 @@ def _deny_reason(
     if resolves_em_audience(payload, _git_root()):
         if _in_cloud_session():
             base += (
-                " Approval for this surface cannot be granted from a cloud "
-                "session — make the edit from a workstation session."
+                " Ask the PM to approve this edit to the named file in their "
+                "own words."
             )
         else:
             base += (
@@ -883,6 +958,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         owning_root = foreign_root
 
     state = _sentinel_state(owning_root or repo_root)
+    if state != "allow" and _pm_turn_names_target(payload, target, owning_root or repo_root):
+        state = "allow"
     if state == "allow":
         return _rot_token_advisory(
             payload.get("tool_name", ""), tool_input, target

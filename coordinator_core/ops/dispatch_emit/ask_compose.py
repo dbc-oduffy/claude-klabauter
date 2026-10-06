@@ -637,7 +637,11 @@ def compose_ask_script(
 
     meta = _emit._meta_block(
         "warp-ask",
-        "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review.",
+        (
+            f"Plan, stage, execute, review from accepted sizing {Path(sizing_rel).stem}."
+            if sizing_rel
+            else "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review."
+        ),
         _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=review_titles, judged=judge_expr is not None, with_accept=accept_pending or not sizing_rel),
     )
     script = (

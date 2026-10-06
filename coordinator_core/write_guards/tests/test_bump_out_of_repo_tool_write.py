@@ -2001,3 +2001,20 @@ def test_off_level_is_silent_and_strict_override_still_denies(tmp_path, monkeypa
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
     denied = guard.check(_payload("Write", str(foreign / "a.txt"), session_id, str(own)))
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_subagent_marker_does_not_clear_a_publish_destination(tmp_path, monkeypatch):
+    own = _init_repo(tmp_path, "own-repo")
+    mirror = _init_repo(tmp_path, "mirror-target")
+    reg_dir = tmp_path / "registry"
+    _write_publish_registry(reg_dir, str(mirror))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    session_id = "sess-sub-publish-marker"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    own_gitdir = marker.resolve_gitdir(str(own))
+    (own_gitdir / marker.marker_basename(session_id)).touch()
+
+    sub = _payload("Write", str(mirror / "p.txt"), session_id, str(own), agent_id="abcdef123456789012")
+    assert guard.check(sub) is not None
+    em = _payload("Write", str(mirror / "p.txt"), session_id, str(own))
+    assert guard.check(em) is None

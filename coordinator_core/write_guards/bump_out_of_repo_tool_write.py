@@ -1053,13 +1053,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         effective_sid = effective_session_id(
             session_id, own_git_root, canonical_agent_id or raw_agent_id
         )
-        if effective_sid and (
-            marker_present(marker_gitdir, effective_sid)
-            or marker_present(legacy_marker_gitdir, effective_sid)
+        agent_class = resolve_agent_class(payload, own_git_root)
+
+        # A subagent never clears a publish destination by marker: an inherited
+        # or pre-cleared marker must not open the published mirror to it.
+        subagent_at_publish = (
+            agent_class == AGENT_CLASS_SUBAGENT
+            and target_gitdir is not None
+            and target_is_publish_destination(
+                _resolve_git_root(target_dir) if target_dir is not None else file_path
+            )
+        )
+        if (
+            effective_sid
+            and not subagent_at_publish
+            and (
+                marker_present(marker_gitdir, effective_sid)
+                or marker_present(legacy_marker_gitdir, effective_sid)
+            )
         ):
             return None
-
-        agent_class = resolve_agent_class(payload, own_git_root)
 
         target_repo = (
             (_resolve_git_root(target_dir) if target_dir is not None else None)
