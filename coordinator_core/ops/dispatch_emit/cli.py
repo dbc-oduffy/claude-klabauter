@@ -105,7 +105,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
 )
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError
-from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
     PhaseNotFoundError,
@@ -1151,6 +1151,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             if not args.inventory or args.lanes:
                 raise
             return _emit_inventory_parts(params, repo_root, over, args.fire, admission_record)
+    except SizingHandBack as hand_back:
+        print(hand_back.line)
+        return EXIT_OK
     except PipelineEmitRefused as exc:
         for reason in exc.reasons:
             print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)

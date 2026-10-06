@@ -6796,9 +6796,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
-    raw_agent_id = payload.get("agent_id")
-    if not raw_agent_id:
+    from coordinator_core.bash_guards.check_test_suite_invocation import (
+        _caller_is_subagent,
+    )
+
+    if not _caller_is_subagent(payload):
         return None
+    raw_agent_id = payload.get("agent_id") or ""
 
     cwd = payload.get("cwd")
     git_root = resolve_git_root(cwd)

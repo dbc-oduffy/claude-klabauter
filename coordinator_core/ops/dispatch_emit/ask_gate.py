@@ -36,6 +36,15 @@ _PARAMS = (Field("sizing_path", "nonempty_str", required=True), Field("writes", 
 _DOC_NEW = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 
 
+def handback_line(sizing: dict) -> str:
+    """The one line a shape-routed sizing prints: topic from `name`, else a short slice of `intent`."""
+    topic = str(sizing.get("name") or "").strip() or " ".join(str(sizing.get("intent") or "").split())[:60].strip()
+    return (
+        f"Job unclear: {topic}. Needs a PM conversation (coordinator:shape room); "
+        "re-run --ask once the JTBD is stated."
+    )
+
+
 def _halt(kind: str, reason: str, **extra: str) -> GateVerdict:
     return GateVerdict(arm=None, halt={"kind": kind, "reason": reason, **extra})
 
@@ -61,6 +70,13 @@ def gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> Gat
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
 
     route = effective_route(sizing)
+    if route == "shape":  # DR-450 exemption: only the PM can state the JTBD, so no workflow fronts shape
+        return _halt(
+            HALT_ROOM,
+            f"route 'shape' is room-owned: {sa._ROOM_ENTRY['shape']}",
+            route=route,
+            handback=handback_line(sizing),
+        )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         return _halt(
             HALT_ROOM,

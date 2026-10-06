@@ -311,7 +311,8 @@ def compose_ask_script(
     if not sizing_rel:
         b.append("  phase('size');")
         size_prompt = prompt_of(
-            "Size this ask by following the sizing skill (`coordinator:sizing`) to a sizing the "
+            "Size this ask afresh, never reusing or editing an existing sizing routed `shape`, by "
+            "following the sizing skill (`coordinator:sizing`) to a sizing the "
             "gate can read, in this order: (1) run `sizing-assemble` for the estimate and route; "
             "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
             "--route, --name, --premise executed|read|not-applicable with --premise-evidence, --exit-criterion (one sentence "

@@ -41,6 +41,14 @@ class SizingFireRefused(ValueError):
         super().__init__("; ".join(self.fields))
 
 
+class SizingHandBack(Exception):
+    """A shape-routed sizing: a clean hand-back to the PM, not a refusal; `line` is the one printed line."""
+
+    def __init__(self, line: str):
+        self.line = line
+        super().__init__(line)
+
+
 def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     """Read a sizing YAML contained under `<repo_root>/state/sizings/`."""
     root = Path(repo_root)

@@ -1670,7 +1670,13 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
-    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_M_PLUS, ARM_ROADMAP, SizingFireRefused, load_sizing
+    from coordinator_core.ops.dispatch_emit.sizing_fire import (
+        ARM_M_PLUS,
+        ARM_ROADMAP,
+        SizingFireRefused,
+        SizingHandBack,
+        load_sizing,
+    )
     from coordinator_core.warm.caller_context import resolve_caller_context
 
     outside = paths_outside_repo_root(writes, root)
@@ -1684,7 +1690,9 @@ def _gate_sizing_at_emit(root: Path, sizing_rel: str, writes: list) -> dict:
     verdict = gate(root, sizing_rel, writes=writes or ["<footprint authored at run time>"])
     if verdict.halt is not None:
         halt = verdict.halt
-        line = f"{halt['kind']}: {halt['reason']}"
+        if halt.get("handback"):
+            raise SizingHandBack(halt["handback"])
+        line =f"{halt['kind']}: {halt['reason']}"
         if halt.get("touchpoint"):
             line += f" — run: {halt['touchpoint']}"
         raise SizingFireRefused([line])
