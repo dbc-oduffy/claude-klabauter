@@ -816,6 +816,7 @@ _KNOWN_LITERAL_SITES = frozenset({
     "write_guards/tests/test_ac5_flip_runtime_probes.py",
     "write_guards/tests/test_block_consumed_handoff_edit.py",
     "write_guards/tests/test_block_consumed_handoff_edit_claim_state.py",
+    "write_guards/tests/test_block_hand_authored_handoff_creation.py",
     "write_guards/tests/test_block_cutover_phase_hand_edit.py",
     "write_guards/tests/test_block_home_dir_memo_delivery.py",
     "write_guards/tests/test_block_oss_mirror_memo_delivery.py",

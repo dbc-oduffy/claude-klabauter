@@ -194,3 +194,43 @@ def test_real_mint_binds_and_holds(tmp_path, monkeypatch):
     assert yaml.safe_load((tmp_path / SIZING_REL).read_text(encoding="utf-8"))["baton"] == b["path"]
     assert _fire(tmp_path) == ewf.EXIT_OK
     assert _bound(tmp_path)["id"] == b["id"]
+
+
+def _real_fire_baton_text(tmp_path, monkeypatch, sizing):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path, sizing, baton=None)
+    assert ewf.main([
+        "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
+        "--plugin-root", str(_plugin(tmp_path)), "--live-engine-tree",
+        "--from-sizing", str(tmp_path / SIZING_REL),
+    ]) == ewf.EXIT_OK
+    return (tmp_path / _bound(tmp_path)["path"]).read_text(encoding="utf-8")
+
+
+def _full_sizing(tmp_path):
+    return _sizing(
+        "M", name="Complete baton case", plan="docs/plans/p.md",
+        intent=f"touch {tmp_path}/coordinator/x.py and {str(tmp_path).replace('/', chr(92))}\\y.py",
+        premise={"provenance": "unrecorded", "evidence": f"seen in {tmp_path}/a.py"},
+    )
+
+
+def test_emitted_baton_carries_no_absolute_paths(tmp_path, monkeypatch):
+    text = _real_fire_baton_text(tmp_path, monkeypatch, _full_sizing(tmp_path))
+    assert str(tmp_path) not in text
+    assert str(tmp_path).replace("\\", "/") not in text
+    assert "sizing_object: \"state/sizings/s1.yaml\"" in text
+
+
+def test_emitted_baton_is_complete_and_schema_valid(tmp_path, monkeypatch):
+    text = _real_fire_baton_text(tmp_path, monkeypatch, _full_sizing(tmp_path))
+    mod = ewf._load_mint.__globals__["sys"].modules["coordinator_doc_new_for_fire"]
+    mod._assert_scaffold_content_valid(text, str(tmp_path / "state/handoffs/x.md"), str(tmp_path))
+    assert 'governing_plan: "docs/plans/p.md"' in text
+    assert "- Estimate: M" in text
+    assert "- Interaction mode: hands-on" in text
+    assert "- Exit criterion: it works" in text
+    assert "- Plan: docs/plans/p.md" in text
+    assert "1. Read the plan at docs/plans/p.md." in text
+    assert "Verify the exit criterion: it works" in text
+    assert "3-7 numbered steps" not in text

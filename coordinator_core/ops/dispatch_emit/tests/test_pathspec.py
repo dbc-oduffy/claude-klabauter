@@ -539,3 +539,7 @@ def test_commit_pathspec_or_none_never_returns_an_empty_list():
     result = commit_pathspec_or_none(wave)
 
     assert result is not None and result != []
+
+
+def test_candidate_test_additions_skips_a_helper_already_under_tests():
+    assert candidate_test_additions(["tests/_libclang_host.py"]) == []

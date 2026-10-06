@@ -172,3 +172,24 @@ def test_second_root_row_does_not_revert_the_first(dest_repo: Path, tmp_path: Pa
         assert (tree / "other.txt").read_text() == "other\n"
     finally:
         discard_throwaway_tree(tree)
+
+
+def test_clone_checks_out_under_the_dest_line_ending_config(
+    dest_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A global autocrlf=true must not make the throwaway CRLF when the dest pins
+    autocrlf=false: dest-shaped LF staging would then never match pristine HEAD,
+    and a later root row's stale copy would revert an earlier row's version bump."""
+    global_cfg = tmp_path / "global.gitconfig"
+    global_cfg.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_cfg))
+    _git(dest_repo, "config", "core.autocrlf", "false")
+    _write(dest_repo / "lf.txt", "one\ntwo\n")
+    _git(dest_repo, "add", "lf.txt")
+    _git(dest_repo, "commit", "-q", "-m", "lf")
+
+    tree = build_throwaway_tree(dest_repo, overlays=[], deletions=[])
+    try:
+        assert (tree / "lf.txt").read_bytes() == b"one\ntwo\n"
+    finally:
+        discard_throwaway_tree(tree)

@@ -276,6 +276,7 @@ otherwise will refuse at runtime with nobody present to widen it.
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -567,7 +568,9 @@ def commit_pathspec_or_none(wave: list[WaveRow]) -> list[str] | None:
         return None
 
 
-def candidate_test_additions(pathspec: list[str]) -> list[str]:
+def candidate_test_additions(
+    pathspec: list[str], repo_root: Path | None = None
+) -> list[str]:
     """The co-located test-file path each ``.py`` entry in ``pathspec`` would
     be paired with, by this repo's own ``tests/test_<stem>.py`` convention —
     the same one ``_candidate_test_targets`` encodes for ``terminal_test_
@@ -605,14 +608,86 @@ def candidate_test_additions(pathspec: list[str]) -> list[str]:
     negative spec still holds: every candidate is stem-derived from a path
     the caller already declared, never a directory listing or a git query.
     """
+    declared_names = {
+        PurePosixPath(strip_literal_pathspec(p)).name for p in pathspec
+    }
     candidates: list[str] = []
     for path in pathspec:
         candidate = PurePosixPath(strip_literal_pathspec(path))
         if candidate.suffix != ".py" or _is_test_file(candidate):
             continue
-        nearest = _candidate_test_targets(candidate)[0]
-        candidates.append(as_git_pathspec(nearest.as_posix()))
+        if "tests" in candidate.parent.parts:
+            # A non-test helper already living under tests/ is its own file;
+            # pairing it would join tests/ onto itself (tests/tests/test_x.py).
+            continue
+        if _normalized_test_name(candidate.stem) in declared_names:
+            continue
+        target = _resolve_test_dir_target(candidate, repo_root)
+        candidates.append(as_git_pathspec(target.as_posix()))
     return _dedupe(candidates)
+
+
+def collapse_test_scope(scope: list[str], repo_root: Path | None) -> list[str]:
+    """One path per test file name: an entry present on disk beats an absent
+    twin, else the first named wins. Order preserved."""
+    chosen: dict[str, str] = {}
+    for path in scope:
+        name = PurePosixPath(path).name
+        held = chosen.get(name)
+        if held is None:
+            chosen[name] = path
+        elif repo_root is not None and not (Path(repo_root) / held).is_file() and (
+            Path(repo_root) / path
+        ).is_file():
+            chosen[name] = path
+    keep = set(chosen.values())
+    return [p for p in _dedupe(scope) if p in keep]
+
+
+@lru_cache(maxsize=8)
+def _pytest_testpaths(root: str) -> tuple[str, ...]:
+    try:
+        import tomllib
+
+        data = tomllib.loads((Path(root) / "pyproject.toml").read_text("utf-8"))
+    except (OSError, ValueError, ImportError):
+        return ()
+    paths = (
+        data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("testpaths")
+    )
+    if not isinstance(paths, list):
+        return ()
+    return tuple(p.strip("/") for p in paths if isinstance(p, str))
+
+
+def _resolve_test_dir_target(
+    candidate: PurePosixPath, repo_root: Path | None
+) -> PurePosixPath:
+    """The ONE test path for source ``candidate``, by the layout on disk.
+
+    Order: an existing stem-named test at any ancestor ``tests/``; the
+    nearest ancestor ``tests/`` directory that exists (an existing sibling
+    ``tests/`` first); a pytest ``testpaths`` entry containing the source;
+    else the nearest-rung convention. Without ``repo_root`` only the last
+    applies. Stats only; never lists a directory.
+    """
+    test_name = _normalized_test_name(candidate.stem)
+    nearest = candidate.parent / "tests" / test_name
+    if repo_root is None:
+        return nearest
+    root = Path(repo_root)
+    ancestors = (candidate.parent, *candidate.parent.parents)
+    for parent in ancestors:
+        if (root / parent / "tests" / test_name).is_file():
+            return parent / "tests" / test_name
+    for parent in ancestors:
+        if (root / parent / "tests").is_dir():
+            return parent / "tests" / test_name
+    for testpath in _pytest_testpaths(str(root)):
+        base = PurePosixPath(testpath)
+        if base.parent in ancestors and (root / base).is_dir():
+            return base / test_name
+    return nearest
 
 
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:

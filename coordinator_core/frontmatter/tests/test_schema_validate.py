@@ -3941,7 +3941,12 @@ _QUEUE_SCHEMA_PINS = {
     # Pin moved 2026-10-06 to 3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322 (DoE
     # origin/main) by bin/claude-klabauter-revendor-schema.py bug-backlog.
     #   add 'resolved' to status enum (DoE PR #146, 3cdbd7b52)
-    'bug-backlog': "3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322",
+    # Pin moved 2026-10-06 to 30608be2ab718471cb6ccb4ba4b856c246078684 (DoE
+    # 30608be2ab718471cb6ccb4ba4b856c246078684) by bin/claude-klabauter-revendor-
+    # schema.py bug-backlog.
+    #   DoE main: bug-backlog 1.2.0 -> 1.3.0 records the status enum gaining
+    #   resolved (shape already vendored at 3cdbd7b52)
+    'bug-backlog': "30608be2ab718471cb6ccb4ba4b856c246078684",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD

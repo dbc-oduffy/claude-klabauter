@@ -8,8 +8,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "bug-backlog.schema.json": {
-    "blob": "61447a2d0fc506366f41774c8ace8d00c1608edd",
-    "doe_commit": "3cdbd7b52750e004d949cbeb56c3ea0b4fd1e322"
+    "blob": "c0d2ea9803229efbb442ccbd39fbf3dec29f519a",
+    "doe_commit": "30608be2ab718471cb6ccb4ba4b856c246078684"
   },
   "capability-manifest.schema.json": {
     "blob": "3636d914df851a34734e23bbf21372a8211ca416",
@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "407bdfd4e30fbb87887b23113813fe72f69a001e",
-    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
+    "blob": "2e1ce549bde47af01e712b99de20f58e13d0d8e5",
+    "doe_commit": "afaa83edd46b66ea3af0be0a8c3729f2830a4e74"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",

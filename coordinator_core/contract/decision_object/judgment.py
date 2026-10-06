@@ -111,11 +111,13 @@ def _build_judgment_point_base(
         "question": question,
         "dispositions": [dict(d) for d in dispositions],
         "evidence": evidence,
-        "reason": reason,
         "recommendation": recommendation,
         "revalidate_at_dispatch": revalidate_at_dispatch,
         "round_trip": round_trip,
     }
+    # Absent, never null: the schema of record types `reason` as a string.
+    if reason is not None:
+        point["reason"] = reason
     if reportable is not None:
         point["reportable"] = reportable
     if resolves_computed:

@@ -287,6 +287,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_prefixes,
     terminal_test_scope,
     candidate_test_additions,
+    collapse_test_scope,
     _map_written_path_to_test_target,
     _declared_paths,
 )
@@ -1000,7 +1001,9 @@ def _dedupe_preserve_order(paths: list[str]) -> list[str]:
     return ordered
 
 
-def _widen_with_test_candidates(paths: list[str]) -> list[str]:
+def _widen_with_test_candidates(
+    paths: list[str], repo_root: Optional[Path] = None
+) -> list[str]:
     """``paths`` plus each entry's stem-derived test-file candidate
     (``pathspec.candidate_test_additions``), deduped, order preserved.
 
@@ -1015,7 +1018,7 @@ def _widen_with_test_candidates(paths: list[str]) -> list[str]:
     """
     if not paths:
         return paths
-    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths)])
+    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths, repo_root)])
 
 
 def _is_immutable_body_path(path: str) -> bool:
@@ -1510,8 +1513,24 @@ _WRITE_TOOL_ONLY_CLAUSE = (
 _ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}"
 
 
-def _prompt_head(preamble: Optional[str]) -> str:
-    """``_ROW_PROMPT_HEAD``, or ``preamble`` spliced ahead of it.
+#: A verification row produces CLI and binary outputs and runs commands, so
+#: the Write-tool-only rule does not bind it.
+_VERIFICATION_ROW_CLAUSE = (
+    "This is a verification row: run the commands it names through Bash and "
+    "keep the CLI or binary outputs they produce. The Write-tool-only rule "
+    "for file changes does not apply to this row."
+)
+_VERIFICATION_ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_VERIFICATION_ROW_CLAUSE}"
+_VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
+
+
+def _is_verification_row(row) -> bool:
+    return getattr(row, "change_kind", None) in _VERIFICATION_CHANGE_KINDS
+
+
+def _prompt_head(preamble: Optional[str], verification: bool = False) -> str:
+    """``_ROW_PROMPT_HEAD`` (``_VERIFICATION_ROW_PROMPT_HEAD`` for a
+    verification row), or ``preamble`` spliced ahead of it.
 
     ONE function so ``_row_prompt`` (the text it returns) and
     ``_row_agent_call_expr`` (the split point it hoists into
@@ -1520,9 +1539,10 @@ def _prompt_head(preamble: Optional[str]) -> str:
     dedupe in ``_prompt_literal`` silently stop matching and inline the
     preamble per row instead of once (the defect K2 exists to avoid).
     """
+    head = _VERIFICATION_ROW_PROMPT_HEAD if verification else _ROW_PROMPT_HEAD
     if not preamble:
-        return _ROW_PROMPT_HEAD
-    return f"{preamble}\n\n{_ROW_PROMPT_HEAD}"
+        return head
+    return f"{preamble}\n\n{head}"
 
 # The section-heading vocabulary this module reads out of a plan BODY.
 # `## Goal` is C3a's own scaffolded heading (out of C4's write scope --
@@ -2372,7 +2392,7 @@ def _row_prompt(
     rather than replacing one another. Both are no-ops when omitted.
     """
     head = f"Execute {row.id}: {row.title}"
-    prompt_head = _prompt_head(preamble)
+    prompt_head = _prompt_head(preamble, _is_verification_row(row))
     if not plan_path:
         return f"{prompt_head}\n\n{head}"
     body = (
@@ -2446,7 +2466,7 @@ def _row_agent_call_expr(
     if shared is None:
         prompt_literal = _resolve_markers_plus(prompt)
     else:
-        head = f"{_prompt_head(preamble)}\n\n"
+        head = f"{_prompt_head(preamble, _is_verification_row(row))}\n\n"
         if plan_context is not None:
             head += f"{_plan_context_head(plan_context)}\n\n"
         if not prompt.startswith(head):
@@ -2707,7 +2727,11 @@ def _never_stranding_criterion(call_expr: str, *, judge: bool = False) -> str:
     )
 
 
-def _test_agent_call_expr(scope: list[str], agent_type_host: Optional[str] = None) -> str:
+def _test_agent_call_expr(
+    scope: list[str],
+    agent_type_host: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
     assignment, alone or inside a ``parallel([...])`` alongside a falsifier
@@ -2716,6 +2740,7 @@ def _test_agent_call_expr(scope: list[str], agent_type_host: Optional[str] = Non
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
     copies verbatim).
     """
+    scope = collapse_test_scope(scope, repo_root)
     prompt = (
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"Run the scoped test targets: [{', '.join(scope)}]. Report raw evidence; "
@@ -3015,8 +3040,13 @@ def _excluded_rows_narration(excluded: list) -> str:
     acting (a credential, hardware), after this run.
     """
     lines = ["  // ROWS THIS SCRIPT DOES NOT RUN -- read before treating the plan as executed."]
-    operator_rows = [e for e in excluded if e.get("reason") == "operator"]
-    other_rows = [e for e in excluded if e.get("reason") != "operator"]
+    def _owed(e: dict) -> bool:
+        return e.get("reason") == "operator" or str(e.get("detail", "")).startswith(
+            "EM STEP"
+        )
+
+    operator_rows = [e for e in excluded if _owed(e)]
+    other_rows = [e for e in excluded if not _owed(e)]
     for e in other_rows:
         lines.append("  //   %s: %s" % (e.get("id"), e.get("detail")))
     for e in operator_rows:
@@ -3025,7 +3055,8 @@ def _excluded_rows_narration(excluded: list) -> str:
         lines.append(
             "  // ^ the operator row(s) above are OWED WORK, not skipped work: in "
             "scope, ready, and waiting on an action only a person can physically "
-            "do (a credential, hardware). This run completing is not that plan "
+            "do (a credential, hardware) or, for an EM STEP, the EM itself (a "
+            "cross-repo memo send). This run completing is not that plan "
             "completing."
         )
     return "\n".join(lines)
@@ -3700,7 +3731,7 @@ def compose_script(
     row_pathspecs: dict[str, list[str]] = {}
     for row in flat_rows:
         raw = commit_pathspec_or_none([row]) or []
-        row_pathspecs[row.id] = _widen_with_test_candidates(raw)
+        row_pathspecs[row.id] = _widen_with_test_candidates(raw, repo_root)
     gitignored, gitignore_filter_degraded = _gitignored_paths(
         _dedupe_preserve_order(
             path for paths in row_pathspecs.values() for path in paths
@@ -4142,7 +4173,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -4153,7 +4184,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root)};"
             )
             test_var = _TEST_RESULT_VAR
 

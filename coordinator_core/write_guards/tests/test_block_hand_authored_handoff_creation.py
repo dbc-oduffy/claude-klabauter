@@ -108,3 +108,14 @@ def test_bash_redirect_to_existing_handoff_passes(tmp_path):
 def test_bash_read_and_fd_dup_pass(tmp_path):
     assert bash_guard.check(_bash(tmp_path, "cat state/handoffs/x.md 2>&1")) is None
     assert bash_guard.check(_bash(tmp_path, "ls state/handoffs")) is None
+
+
+def test_edit_of_existing_emitted_baton_passes(tmp_path):
+    payload = _write(tmp_path, "state/handoffs/2026-10-06-emitted-baton.md", tool="Edit", existing=True)
+    target = tmp_path / "state/handoffs/2026-10-06-emitted-baton.md"
+    target.write_text(
+        '---\nkind: session-handoff\nplan_blitz_hold_reason: "plan-blitz fire in flight"\n'
+        'governing_plan: "docs/plans/p.md"\n---\n\n## What this covers\n',
+        encoding="utf-8",
+    )
+    assert guard.check(payload) is None

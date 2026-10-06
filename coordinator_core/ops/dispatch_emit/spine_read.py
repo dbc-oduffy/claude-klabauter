@@ -340,6 +340,28 @@ def _is_operator_row(raw: dict) -> bool:
     return raw.get("execution_mode") == "operator"
 
 
+_MEMO_SEND_BRIEF_RE = re.compile(r"\bcross-repo-memo(?:\.py)?\s+send\b|\bmemo\.send\b")
+
+
+def _is_memo_send_row(raw: dict) -> bool:
+    """True when the row's deliverable is a cross-repo memo send.
+
+    A subagent cannot send one (``block-subagent-destructive-action``), so
+    the row is an EM step. Decided by ``kind``, by a surface or write that is
+    a staged memo-outbox draft, or by the brief naming the send verb.
+    """
+    if raw.get("kind") in ("memo-send", "memo_send"):
+        return True
+    paths = [raw.get("surface"), *(raw.get("writes") or ())]
+    if any(isinstance(p, str) and "outbox" in p for p in paths):
+        from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
+
+        if any(isinstance(p, str) and memo_outbox_topic(p) for p in paths):
+            return True
+    brief = raw.get("brief") or raw.get("body")
+    return isinstance(brief, str) and _MEMO_SEND_BRIEF_RE.search(brief) is not None
+
+
 def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     """True if `raw`'s row-level ``external_gate`` (plus any ``extra_gates``
     resolved onto this row from plan frontmatter — see
@@ -949,7 +971,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
     for raw in raw_rows:
         disposition = raw.get("disposition")
         deferred = raw.get("deferred") is True or bool(raw.get("deferred_until"))
-        em_performed = raw.get("performer") == "em"
+        em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw)
         plan_hold = None
         if not (
             disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed
@@ -979,7 +1001,13 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     "deferred: true" if raw.get("deferred") is True else "deferred_until hold",
                 )
             elif em_performed:
-                _reason = ("em-performed", "performer: em")
+                _reason = (
+                    "em-performed",
+                    "performer: em"
+                    if raw.get("performer") == "em"
+                    else "EM STEP: cross-repo memo send -- a subagent cannot "
+                    "send it; the EM runs `cross-repo-memo send` after this run",
+                )
             elif _is_operator_row(raw):
                 _reason = (
                     "operator",

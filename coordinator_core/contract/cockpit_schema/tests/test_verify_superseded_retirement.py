@@ -87,7 +87,7 @@ def test_ac2_no_handoff_writer_surface_prescribes_status_superseded():
     guessed replacement.
     """
     cc = _coordinator_dir()
-    spinoff_handoffs = cc / "docs" / "wiki" / "spinoff-handoffs.md"
+    spinoff_handoffs = cc / "docs" / "wiki" / "baton-lifecycle" / "spinoff-handoffs.md"
     handoff_skill = cc / "skills" / "handoff" / "SKILL.md"
     handoff_schema = cc / "schemas" / "handoff.schema.json"
 
@@ -117,7 +117,7 @@ def test_ac2_no_handoff_writer_surface_prescribes_status_superseded():
 def test_ac3_shared_token_safety_protected_rows_preserved():
     """Shared-token safety: 3 protected rows (memo/plan/decision) preserved,
     handoff row removed."""
-    shapes_doc = _coordinator_dir() / "docs" / "wiki" / "canonical-artifact-shapes.md"
+    shapes_doc = _coordinator_dir() / "docs" / "wiki" / "schema-and-validation-contracts" / "canonical-artifact-shapes.md"
     assert shapes_doc.is_file(), f"missing file: {shapes_doc}"
 
     text = shapes_doc.read_text()

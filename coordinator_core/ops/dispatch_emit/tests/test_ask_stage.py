@@ -169,3 +169,9 @@ def test_xs_spine_and_manifest_carry_a_real_form_plan_id(repo):
 def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
     reply = _handler(params, repo_root=repo)
     assert set(reply) == {"error"} and "dispatch.ask_stage" in reply["error"]
+
+
+def test_stage_registers_declared_paths_as_the_sessions_review_targets(repo):
+    m = stage(repo, run_id="r1", plan_rel=PLAN_REL, session_id="sess-1")
+    targets = (repo / ".git" / "coordinator-sessions" / "sess-1" / "review-targets.txt").read_text(encoding="utf-8")
+    assert set(targets.split()) >= set(m.review_declared_paths)

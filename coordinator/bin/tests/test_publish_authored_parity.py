@@ -58,6 +58,21 @@ def test_missing_shipped_copy_refuses_the_row(tmp_path):
         publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
 
 
+_STUB = (b"# engine-owned statusline. Edit in claude-klabauter.\n"
+         b"from coordinator_core import _engine_forward\n")
+
+
+def test_engine_forward_stub_on_doe_side_passes(tmp_path):
+    doe, engine = _trees(tmp_path, _STUB, b"real engine statusline\n")
+    publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
+
+
+def test_real_divergent_doe_file_still_fails(tmp_path):
+    doe, engine = _trees(tmp_path, b"authored rich\n", b"real engine statusline\n")
+    with pytest.raises(publish.EngineUnavailableError, match="bin/statusline.py"):
+        publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
+
+
 def test_single_source_row_publishes_the_authored_file_itself(tmp_path):
     doe, _engine = _trees(tmp_path, b"rich\n", b"stripped\n")
     publish.assert_authored_parity(_target(doe, ""))

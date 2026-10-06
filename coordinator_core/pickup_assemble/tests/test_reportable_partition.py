@@ -153,7 +153,7 @@ class TestForkComposesFromSharedSeam:
             "jx", "question?", "gates.example", [{"value": "ok", "resolves": []}], recommendation,
         )
         assert jp["recommendation"] == recommendation
-        assert jp["reason"] is None
+        assert "reason" not in jp  # schema types reason as a string; absent, never null
 
     def test_build_untrusted_gate_judgment_point_still_has_no_recommendation_parameter(self):
         with pytest.raises(TypeError):

@@ -48,6 +48,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     derive_plan_context,
 )
 from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec_or_none
+from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
@@ -65,6 +66,7 @@ _PARAMS = (
     Field("sizing_path", "str"),
     Field("writes", "str_list"),
     Field("gated", "list"),
+    Field("session_id", "str"),
 )
 
 __all__ = ["AskStageError", "stage", "scaffold_markers"]
@@ -124,6 +126,7 @@ def stage(
     sizing_rel: Optional[str] = None,
     writes: Sequence[str] = (),
     gated: Sequence[Mapping] = (),
+    session_id: Optional[str] = None,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`)."""
     root = Path(repo_root)
@@ -192,7 +195,9 @@ def stage(
             if row.id in clauses:
                 text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
             _write(brief, text)
-            paths = _widen_with_test_candidates(commit_pathspec_or_none([row]) or [])
+            paths = _widen_with_test_candidates(
+                commit_pathspec_or_none([row]) or [], root
+            )
             declared.extend(paths)
             manifest_rows.append(
                 ManifestRow(
@@ -236,6 +241,14 @@ def stage(
         gated=tuple(gated),
     )
     _write(run_dir / "manifest.json", json.dumps(manifest.to_json(), indent=2) + "\n")
+    if session_id:
+        # Confined reviewers' Edits are admitted only for review-targets.txt
+        # paths; the plan route registers them at compose time, the ask route
+        # only learns them here.
+        try:
+            targets_add(root, session_id, list(manifest.review_declared_paths))
+        except LedgerError:
+            pass
     return manifest
 
 
@@ -260,6 +273,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             sizing_rel=params.get("sizing_path") or None,
             writes=writes,
             gated=[g for g in (params.get("gated") or []) if isinstance(g, dict)],
+            session_id=params.get("session_id") or None,
         )
     except (AskStageError, SizingFireRefused) as exc:
         return {"error": str(exc)}

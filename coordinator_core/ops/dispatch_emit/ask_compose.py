@@ -296,6 +296,7 @@ def compose_ask_script(
     b: list[str] = []
     b.append(f"  const REPO_ROOT = {_lit(repo_root)};")
     b.append(f"  const _runId = {_lit(run_id)};")
+    b.append(f"  const _SESSION_ID = {_lit(session_id or '')};")
     b.append(f"  let _sizingRel = {_lit(sizing_rel) if sizing_rel else 'null'};")
     writes_literal = json.dumps(list(writes))
     b.append(f"  let _writes = {writes_literal};")
@@ -356,8 +357,8 @@ def compose_ask_script(
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes } "
-        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated })",
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID } "
+        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, session_id: _SESSION_ID })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
         "empty -- never an empty manifest without the error.",
