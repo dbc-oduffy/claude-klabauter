@@ -7419,6 +7419,36 @@ def _lessons_archive_paired_paths(status_lines: Optional[List[str]]) -> Set[str]
     return paired
 
 
+_IMPLAUSIBLE_PROBE_GATE = 200
+
+
+def _implausible_deletion_note(
+    status_lines: Optional[List[str]], cwd: Optional[str]
+) -> Optional[str]:
+    """One terse line when the staged-deletion probe read an index that cannot
+    be the real one (every HEAD entry "deleted", or an empty index under a
+    populated HEAD); ``None`` when plausible. Spawns only past
+    ``_IMPLAUSIBLE_PROBE_GATE`` ``D`` records, so ordinary commits pay nothing.
+    """
+    if not status_lines:
+        return None
+    deleted = sum(1 for l in status_lines if l.startswith("D\t"))
+    if deleted < _IMPLAUSIBLE_PROBE_GATE:
+        return None
+    rc_h, head_out = _run_git(["ls-tree", "-r", "--name-only", "HEAD"], cwd, timeout=5.0)
+    if rc_h != 0:
+        return None
+    head_n = sum(1 for l in head_out.splitlines() if l)
+    rc_i, index_out = _run_git(["ls-files"], cwd, timeout=5.0)
+    index_n = sum(1 for l in index_out.splitlines() if l) if rc_i == 0 else None
+    if (head_n and deleted >= head_n) or (index_n == 0 and head_n > 0):
+        return (
+            "staged-deletion probe read an implausible index (%d of %d tracked "
+            "deleted); not checked" % (deleted, head_n)
+        )
+    return None
+
+
 def check_validate_commit(
     cmd: str,
     session_id: str = "",
@@ -7462,6 +7492,9 @@ def check_validate_commit(
     # must never fire on the archive path, which is a `git mv`.
     rc, staged_out = _run_git(["diff", "--cached", "--name-status", "-M"], _cwd)
     _status_lines: Optional[List[str]] = staged_out.splitlines() if rc == 0 else None
+    _probe_note = _implausible_deletion_note(_status_lines, _cwd)
+    if _probe_note:
+        return _advisory(_probe_note)
 
     # Reconstruct exactly what `--name-only` returned: the NEW path for a
     # rename/copy (fields 1,2,3 -> take 3), the single path otherwise.
@@ -8773,6 +8806,14 @@ def check_validate_commit(
     # warn-only check in this function a no-op -- there is no bash-style
     # stderr channel available to a plain function return).
     if warnings:
+        _scope_idx = [i for i, w in enumerate(warnings) if w.startswith("SCOPE: ")]
+        if len(_scope_idx) > _BULK_FOREIGN_INDEX_PATHS:
+            _drop = set(_scope_idx[_BULK_FOREIGN_INDEX_PATHS:])
+            warnings = [w for i, w in enumerate(warnings) if i not in _drop]
+            warnings.append(
+                "SCOPE: ... and %d more staged paths not in this session's "
+                "touch list (not listed)." % len(_drop)
+            )
         return _advisory("\n\n".join(warnings))
 
     return None

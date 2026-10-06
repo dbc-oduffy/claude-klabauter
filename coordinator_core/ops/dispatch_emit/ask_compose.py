@@ -124,6 +124,20 @@ _MANIFEST_SCHEMA = _obj(
 )
 
 
+_SCOPE_SLOT = "SCOPE_SLOT_X"
+
+
+def _scoped_test_call(agent_type_host: Optional[str]) -> str:
+    """The plan route's terminal test agent call, scoped at run time to the manifest's declared paths.
+
+    The plan is authored inside the run, so the scope cannot resolve at compose time; the
+    stage's `review_declared_paths` stand in. Trap: no falsifier leg -- the plan's falsifier
+    is unknown until the plan exists.
+    """
+    call = _emit._test_agent_call_expr([_SCOPE_SLOT], agent_type_host=agent_type_host)
+    return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
+
+
 def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
     """The arm of an existing sizing, or None when unreadable (the gate verb owns that refusal)."""
     if not sizing_rel:
@@ -148,7 +162,7 @@ def _phase_titles(*, with_size: bool, blitz_phases: list[str], review_titles: li
         titles.append(phase)
         if phase == "plan":
             titles.extend(t for t in blitz_phases if t not in titles)
-    for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles]:
+    for extra in [_emit._EXECUTE_PHASE_TITLE, *review_titles, _emit._TEST_PHASE_TITLE]:
         if extra not in titles:
             titles.append(extra)
     return titles
@@ -291,7 +305,7 @@ def compose_ask_script(
     if blitz_fn:
         b.append(blitz_fn)
     b.append(_row_runner_js())
-    for name in _REVIEW_RESULT_NAMES:
+    for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
 
     if not sizing_rel:
@@ -352,8 +366,9 @@ def compose_ask_script(
         "Author the plan for the sizing at ",
         "js:_sizingRel",
         ": scaffold `docs/plans/<sizing-stem>.md` with `scope_mode: spec-dispatch` through the plan "
-        "skill (never hand-write frontmatter), derive its spine from the sizing, and return its "
-        "repo-relative path as plan_rel."
+        "skill (never hand-write frontmatter), derive its spine from the sizing, then FILL the "
+        "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "
+        "plan -- stage refuses a plan that still carries one. Return its repo-relative path as plan_rel."
         + (
             " Read the sizing's `scout_evidence` entries before deriving the spine."
             if plan_blitz_args
@@ -435,6 +450,12 @@ def compose_ask_script(
     )
     b.append("  phase('review');")
     b.append("  if (!_halted) {\n" + review_text + "\n  }")
+    b.append(
+        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length) {{"
+    )
+    b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+    b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
+    b.append("  }")
     review_vars = _emit.review_stage_vars(
         review,
         bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
@@ -443,7 +464,7 @@ def compose_ask_script(
     na_kind, na_op, na_params = next_action_parts(
         has_commit_request=True,
         review_vars=review_vars,
-        test_var=None,
+        test_var=_emit._TEST_RESULT_VAR,
         falsifier_var=None,
         verification_var="_verifications",
         test_absent_status="not_run",

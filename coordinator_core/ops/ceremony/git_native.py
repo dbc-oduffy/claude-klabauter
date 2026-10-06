@@ -5862,37 +5862,8 @@ def fetch(
     return _git(["fetch", remote_name], cwd=cwd, timeout=timeout)
 
 
-def rebase_onto(
-    cwd: Union[str, Path], upstream_ref: str, merge_base: str, branch: str = "HEAD"
-) -> GitResult:
-    """`git rebase --onto <upstream_ref> <merge_base> [<branch>]` — push-retry rebase step.
-
-    Per git's own semantics, a `<branch>` positional argument, when
-    supplied, is checked out BEFORE the rebase runs -- and `git checkout
-    HEAD` detaches, since `HEAD` resolves to a commit, not a branch name.
-    Passing the literal `"HEAD"` default straight through as that
-    positional argument would therefore leave the worktree in
-    detached-HEAD state after a successful rebase, and the re-push that
-    follows would fail outright ("You are not currently on a branch").
-    `branch == "HEAD"` (the sentinel every existing
-    caller passes) now omits the positional argument, which is git's own
-    2-argument `--onto` form and operates on the current branch WITHOUT
-    checking anything out -- the behaviour every caller already assumed.
-    Any other explicit branch name still passes through unchanged.
-    """
-    args = ["rebase", "--onto", upstream_ref, merge_base]
-    if branch != "HEAD":
-        args.append(branch)
-    return _git(args, cwd=cwd)
-
-
-def rebase_abort(cwd: Union[str, Path]) -> GitResult:
-    """`git rebase --abort` — push-retry failure cleanup."""
-    return _git(["rebase", "--abort"], cwd=cwd)
-
-
 def merge_base(cwd: Union[str, Path], ref_a: str, ref_b: str) -> GitResult:
-    """`git merge-base <ref_a> <ref_b>` — push-retry rebase-onto preflight."""
+    """`git merge-base <ref_a> <ref_b>` — the common ancestor of two refs."""
     return _git(["merge-base", ref_a, ref_b], cwd=cwd)
 
 
@@ -5951,45 +5922,6 @@ def rev_list_count(cwd: Union[str, Path], range_spec: str) -> GitResult:
     return _git(["rev-list", "--count", range_spec], cwd=cwd)
 
 
-def replay_onto_print(
-    cwd: Union[str, Path], upstream_ref: str, merge_base_sha: str, branch_ref: str
-) -> GitResult:
-    """`git replay --ref-action=print --onto <upstream_ref> <merge_base>..<branch_ref>`
-    — the worktree-free half of the push ladder's diverged-branch recovery.
-
-    `git rebase --onto` needs a clean worktree because it checks the result
-    out; on this fleet's shared worktree a peer always has something
-    uncommitted, so that recovery could never run (see
-    `push._replay_onto_fetched_ref` for the full account). `git replay`
-    computes the replayed chain entirely in the object database — it reads
-    neither the index nor the working tree — so a dirty tree is not its
-    concern at all.
-
-    `--ref-action=print` is LOAD-BEARING, not cosmetic: git's own default for
-    `replay` is `update`, which writes the new tip straight into the branch
-    ref and leaves the index and working tree describing the OLD tip — a
-    silently desynchronized shared worktree, which on this fleet is the worst
-    outcome available. Printing hands the caller `update <ref> <new> <old>`
-    on stdout and updates nothing, so the caller can materialize the change
-    into the worktree first (`read_tree_merge_update`) and move the ref only
-    once that succeeded.
-
-    A git too old to know the subcommand exits non-zero with its own usage
-    diagnostic; the caller reads that as "recovery unavailable" and reports
-    the push failure it would have reported before this path existed.
-    """
-    return _git(
-        [
-            "replay",
-            "--ref-action=print",
-            "--onto",
-            upstream_ref,
-            f"{merge_base_sha}..{branch_ref}",
-        ],
-        cwd=cwd,
-    )
-
-
 def read_tree_merge_update(cwd: Union[str, Path], old_sha: str, new_sha: str) -> GitResult:
     """`git read-tree -m -u <old_sha> <new_sha>` — two-way merge of the
     index and working tree from one commit's tree to another's, WITHOUT the
@@ -6015,18 +5947,66 @@ def read_tree_merge_update(cwd: Union[str, Path], old_sha: str, new_sha: str) ->
     return _git(["read-tree", "-m", "-u", old_sha, new_sha], cwd=cwd)
 
 
-def update_ref(
-    cwd: Union[str, Path], ref: str, new_sha: str, old_sha: str
+def merge_tree_write_tree(cwd: Union[str, Path], ours: str, theirs: str) -> GitResult:
+    """`git merge-tree --write-tree <ours> <theirs>` -- worktree-free merge.
+
+    Reads neither index nor working tree. Exit 0: stdout's first line is the
+    merged tree sha. Exit 1: conflicts (nothing is written to any ref, index
+    or worktree). Anything else is a genuine failure.
+    """
+    return _git(["merge-tree", "--write-tree", ours, theirs], cwd=cwd)
+
+
+def commit_tree_merge(
+    cwd: Union[str, Path], tree_sha: str, parents: Sequence[str], message: str
 ) -> GitResult:
-    """`git update-ref <ref> <new_sha> <old_sha>` — compare-and-swap ref move.
+    """`git commit-tree [-S] <tree> -p <parent>... -m <message>` -- writes a
+    merge commit object; moves no ref. Signing follows the repo's own policy."""
+    args = ["commit-tree", *sign_flag_args(Path(cwd)), tree_sha]
+    for parent in parents:
+        args += ["-p", parent]
+    args += ["-m", message]
+    return _git(args, cwd=cwd)
+
+
+def update_ref(
+    cwd: Union[str, Path],
+    ref: str,
+    new_sha: str,
+    old_sha: str,
+    reason: str,
+    *,
+    old_is_ancestor: Optional[bool] = None,
+    allow_rewrite: bool = False,
+) -> GitResult:
+    """`git update-ref -m <reason> <ref> <new_sha> <old_sha>` -- compare-and-swap ref move.
 
     `old_sha` is git's own expected-current-value argument, never optional
-    here: on a shared worktree a peer can commit between the moment a caller
-    read the tip and the moment it writes one, and an unconditional ref write
-    would silently discard that commit. Supplying it makes git refuse the
-    update instead.
+    here: a peer can commit between the caller's tip read and this write, and
+    an unconditional write would silently discard that commit.
+
+    REWRITE GUARD: a `refs/heads/*` move whose `old_sha` is non-zero must be a
+    fast-forward (`old_sha` an ancestor of `new_sha`); anything else orphans
+    every artifact citing the old commits and is refused with a
+    `ValueError` (nothing written) unless `allow_rewrite=True`.
+    A caller that already knows the answer passes `old_is_ancestor` to skip
+    the `merge-base --is-ancestor` spawn.
     """
-    return _git(["update-ref", ref, new_sha, old_sha], cwd=cwd)
+    if not reason or not reason.strip():
+        raise ValueError("update_ref requires a non-empty reflog reason")
+    if ref.startswith("refs/heads/") and not allow_rewrite and set(old_sha) != {"0"}:
+        if old_is_ancestor is None:
+            probe = merge_base_is_ancestor(cwd, old_sha, new_sha)
+            if probe.returncode not in (0, 1):
+                return probe
+            old_is_ancestor = probe.returncode == 0
+        if not old_is_ancestor:
+            raise ValueError(
+                f"update_ref refused: {old_sha} is not an ancestor of {new_sha} on "
+                f"{ref} (history rewrite); pass allow_rewrite=True only for a "
+                "deliberate rewrite"
+            )
+    return _git(["update-ref", "-m", reason, ref, new_sha, old_sha], cwd=cwd)
 
 
 def update_refs_stdin(

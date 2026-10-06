@@ -592,6 +592,62 @@ def _plan_id_of(plan_path: str) -> Optional[str]:
     return str(fm["plan_id"]) if fm and fm.get("plan_id") else None
 
 
+def _is_run_record(fm: Optional[Dict[str, Any]]) -> bool:
+    """True for run-record frontmatter; a completion receipt carries plan keys but no delivery."""
+    if not fm or fm.get("schema") == "completion-receipt":
+        return False
+    return any(k in fm for k in ("delivery", "prep", "commit_range", "inline_review", "review"))
+
+
+def _has_reverifiable(fm: Dict[str, Any]) -> bool:
+    block = _delivery_block(fm)
+    return bool(block) and (block.get("verdict") == "FAIL" or _unsettled(fm))
+
+
+def _trailer_record(repo_root: Path, plan_id: str, plan_path: Optional[str]) -> Optional[Path]:
+    from coordinator_core.ops.review_stamp import MintRefusal, _resolve_terminal_commit
+
+    try:
+        _sha, path, _data = _resolve_terminal_commit(
+            repo_root, plan_id, Path(plan_path) if plan_path else None
+        )
+    except MintRefusal:
+        return None
+    return path
+
+
+def resolve_delivery_in_force(
+    repo_root: Path,
+    plan_id: Optional[str],
+    plan_path: Optional[str] = None,
+    run_record: Optional[str] = None,
+) -> tuple[Optional[Path], Optional[dict]]:
+    """`(run_record_path, delivery_block)` in force for a plan: the given run record when it is
+    one, else the `Inline-Review: applies <stem>` record carrying a re-verifiable delivery, else
+    the plan's review-wave bookkeeping record. The block is the newest superseding verdict's,
+    else the record's frozen one. `(None, None)` when nothing resolves."""
+    path: Optional[Path] = None
+    if run_record and run_record.strip():
+        given = Path(run_record)
+        given = given if given.is_absolute() else repo_root / given
+        if _is_run_record(_frontmatter(given)):
+            path = given
+    if path is None and plan_id:
+        cand = _trailer_record(repo_root, plan_id, plan_path)
+        fm = _frontmatter(cand) if cand else None
+        if cand is not None and fm and _has_reverifiable(fm):
+            path = cand
+    if path is None:
+        path = _bookkeeping_record(repo_root, plan_id)
+    if path is None:
+        return None, None
+    block = latest_delivery_supersession(repo_root, _run_rel(repo_root, path))
+    if block is None:
+        fm = _frontmatter(path)
+        block = _delivery_block(fm) if fm else None
+    return path, block
+
+
 def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Path]:
     """The newest review-wave bookkeeping record for `plan_id` carrying a delivery FAIL."""
     if not plan_id:
@@ -624,10 +680,10 @@ def emit_reverify(
     record_file = Path(run_record)
     if not blank and not record_file.is_absolute():
         record_file = repo_root / record_file
-    if blank or _frontmatter(record_file) is None:
-        # Blank, or not a run record (a task .output, say): resolve the plan's own bookkeeping.
+    if blank or not _is_run_record(_frontmatter(record_file)):
+        # Blank, or not a run record (a task .output or completion receipt): resolve from the plan.
         plan_id = _plan_id_of(plan_path)
-        found = _bookkeeping_record(repo_root, plan_id)
+        found = resolve_delivery_in_force(repo_root, plan_id, plan_path)[0]
         if found is None:
             glob = _BOOKKEEPING_GLOB.replace("<plan_id>", plan_id or "<plan_id>")
             what = "no run record given" if blank else f"cannot read run record {record_file}"

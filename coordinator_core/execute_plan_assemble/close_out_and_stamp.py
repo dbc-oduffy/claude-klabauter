@@ -1120,6 +1120,47 @@ def _disposition_ref_evidence(
     return verified, rejections
 
 
+def _rewrite_successors(
+    refs_by_row: dict[str, str], repo_root: Path
+) -> dict[str, tuple[str, str]]:
+    """Maps row id -> (old_sha, successor_sha) for each non-ancestor ref whose
+    exact subject appears on HEAD's history at or after the old commit's
+    committer time (a rewrite never predates its original). Two git spawns for
+    any row count. Advisory only: the caller names a re-resolve command and
+    never rebinds. Empty on any git failure or timeout."""
+    if not refs_by_row:
+        return {}
+    old = _run_git(
+        ["show", "-s", "--format=%H%x00%ct%x00%s", *sorted(set(refs_by_row.values()))],
+        repo_root,
+    )
+    if old.timed_out or old.returncode != 0:
+        return {}
+    meta: dict[str, tuple[int, str]] = {}
+    for line in (old.stdout or "").splitlines():
+        parts = line.split("\x00", 2)
+        if len(parts) == 3 and parts[1].isdigit():
+            meta[parts[0]] = (int(parts[1]), parts[2])
+    if not meta:
+        return {}
+    since = min(ts for ts, _ in meta.values())
+    log = _run_git(["log", "--format=%H%x00%s", f"--since={since}", "HEAD"], repo_root)
+    if log.timed_out or log.returncode != 0:
+        return {}
+    by_subject: dict[str, str] = {}
+    for line in (log.stdout or "").splitlines():
+        sha, _, subject = line.partition("\x00")
+        by_subject.setdefault(subject, sha)  # newest first
+    out: dict[str, tuple[str, str]] = {}
+    for row_id, ref in refs_by_row.items():
+        for old_sha, (_ts, subject) in meta.items():
+            if old_sha.startswith(ref) or ref.startswith(old_sha):
+                succ = by_subject.get(subject)
+                if succ and succ != old_sha:
+                    out[row_id] = (old_sha, succ)
+    return out
+
+
 def _foreign_session_disposition_refs(
     spine_rows: list, repo_root: Path, closing_sid: Optional[str]
 ) -> dict[str, str]:
@@ -3355,6 +3396,23 @@ def close_out_and_stamp(
                 f" -- NOTE: disposition_ref did not count as evidence for: "
                 f"{rejection_notes}."
             )
+            row_refs = {
+                str(r.get("id")): str(r.get("disposition_ref")).strip()
+                for r in rows
+                if isinstance(r, dict)
+                and disposition_ref_rejections.get(str(r.get("id")))
+                == DISPOSITION_REF_NOT_ANCESTOR
+            }
+            for row_id, (old_sha, new_sha) in sorted(
+                _rewrite_successors(row_refs, root).items()
+            ):
+                message += (
+                    f" {row_id}: {old_sha[:9]} is not a HEAD ancestor; same-subject "
+                    f"successor {new_sha[:9]}: `plan-tasks-resolve --plan "
+                    f"{plan_path_rel} --id {row_id} --coded {new_sha} "
+                    f"--disposition-detail \"history rewrite: {old_sha[:9]} -> "
+                    f"{new_sha[:9]}\"`."
+                )
 
     if disposition_ref_foreign_sessions:
         foreign_notes = ", ".join(

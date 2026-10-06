@@ -526,7 +526,7 @@ def group_em_moved(repo_root: str, group_em_session_id: Optional[str]) -> bool:
     The watcher watches on the Group-EM's standing, so a Group-EM that has moved
     invalidates the whole tick -- which is why this lives in the oracle rather
     than as a step the agent remembers to run first. Group-EM-holding is
-    established by the nomination record (`group_em.nomination.read_record`),
+    established by the nomination record (`group_em.nomination.read_authoritative`),
     the same record `group-em-enter` claims and the same one displacement is
     reported against; nothing here re-derives that from a roster.
 
@@ -540,7 +540,7 @@ def group_em_moved(repo_root: str, group_em_session_id: Optional[str]) -> bool:
         return False
     try:
         from coordinator_core.group_em import nomination
-        record = nomination.read_record(repo_root)
+        record = nomination.read_authoritative(repo_root)
     except Exception:
         return False
     holder = (record or {}).get("session_id")
@@ -563,11 +563,11 @@ def holder_liveness(repo_root: str, group_em_session_id: Optional[str]) -> Optio
     `None` -- "not established", never "dead". A live holder must never be reported dead for
     want of data.
 
-    `nomination.is_live` takes the RECORD `nomination.read_record` returns, never a bare
+    `nomination.is_live` takes the RECORD `nomination.read_authoritative` returns, never a bare
     session id -- passing a string raises `AttributeError: 'str' object has no attribute
     'get'`, silently swallowed by this function's own `except Exception` into the same
     fail-open `None`. The record read here is the SAME one `group_em_moved` reads (one
-    `nomination.read_record` call per site, matching this module's own no-second-read
+    `nomination.read_authoritative` call per site, matching this module's own no-second-read
     discipline elsewhere), so this field's verdict is about the exact session the tick rests
     on, never re-derived from `group_em_session_id` alone.
     """
@@ -575,7 +575,7 @@ def holder_liveness(repo_root: str, group_em_session_id: Optional[str]) -> Optio
         return None
     try:
         from coordinator_core.group_em import nomination
-        record = nomination.read_record(repo_root)
+        record = nomination.read_authoritative(repo_root)
     except Exception:
         return None
     if not record:

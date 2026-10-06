@@ -18,9 +18,9 @@ ADAPTATION (class 1): the PLUGIN-root manifest anchor
 under DoE's own `coordinator/hooks/scripts/` tree) is replaced with
 `CLAUDE_PLUGIN_ROOT`-anchored resolution — this op's own `__file__` never sits
 under the doctrine plugin tree, matching the convention every other displaced-
-doctrine-asset arrival in this row uses. The `group-em-nomination.py` loader
-resolves the SAME way: `<plugin_root>/bin/group-em-nomination.py`, a doctrine-
-plane sibling reached at runtime via the env var, never a hardcoded DoE path.
+doctrine-asset arrival in this row uses. The Group EM clause reads the engine's own
+`coordinator_core.group_em.nomination.read_authoritative` -- the bin CLI is a
+trampoline that exports no record readers.
 The REPO-slot manifest entry (`.claude/em-context.md`) and the peer-
 contention/session-registry reads are unchanged — both were already
 payload-cwd/`CLAUDE_PROJECT_DIR`-anchored, never `__file__`-anchored, in the
@@ -54,7 +54,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.bin_lib_binding import exec_module_bin_bound
 from coordinator_core.hooks._envelope import context_only, payload_of
 from coordinator_core.ipc import register_op
 
@@ -203,23 +202,6 @@ def _compute_contention(repo_root, session_id, timeout: float = 0.3):
     return box["result"]
 
 
-def _group_em_nomination_module(plugin_root: "Optional[Path]"):
-    if plugin_root is None:
-        return None
-    try:
-        import importlib.util
-
-        path = plugin_root / "bin" / "group-em-nomination.py"
-        spec = importlib.util.spec_from_file_location("_assert_em_gem_nomination", path)
-        if spec is None or spec.loader is None:
-            return None
-        module = importlib.util.module_from_spec(spec)
-        exec_module_bin_bound(spec.loader, module, str(path.parent))
-        return module
-    except Exception:
-        return None
-
-
 def _gem_display_name(repo_root, session_id: str, nominated_name) -> str:
     name = str(nominated_name or "").strip()
     if name:
@@ -239,7 +221,7 @@ def _gem_display_name(repo_root, session_id: str, nominated_name) -> str:
     return "name unrecorded"
 
 
-def _group_em_clause(repo_root, plugin_root, timeout: float = 0.3) -> str:
+def _group_em_clause(repo_root, timeout: float = 0.3) -> str:
     if repo_root is None:
         return ""
 
@@ -247,14 +229,10 @@ def _group_em_clause(repo_root, plugin_root, timeout: float = 0.3) -> str:
 
     def _work() -> None:
         try:
-            gem = _group_em_nomination_module(plugin_root)
-            if gem is None:
-                return
-            record = gem.read_record(str(repo_root))
-            if not isinstance(record, dict):
-                return
-            live, _row = gem.is_live(record)
-            if not live:
+            from coordinator_core.group_em import nomination
+
+            record = nomination.read_authoritative(str(repo_root))
+            if not isinstance(record, dict) or not nomination.is_live(record).live:
                 return
             holder = str(record.get("session_id") or "")
             name = _gem_display_name(repo_root, holder, record.get("peer_name"))
@@ -342,7 +320,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         except Exception:
             pass  # advisory text only; a formatting failure must not block SessionStart
         try:
-            gem_clause = _group_em_clause(consumer_repo_root, plugin_root)
+            gem_clause = _group_em_clause(consumer_repo_root)
             if gem_clause:
                 parts.append(gem_clause)
         except Exception:

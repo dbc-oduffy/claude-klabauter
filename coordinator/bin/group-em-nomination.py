@@ -24,7 +24,8 @@ Cold path — one process, one call. Direct in-process import
 Exit codes: 0 success | 2 usage error | 3 no nomination on record
 (`stand-down`/`who`) | 4 stand-down's own record unlink failed (record may
 still be on disk; never reported as success) | 5 refused — `stand-down`
-refuses when the given session id is not the current holder.
+refuses when the given session id is not the current holder | 8 refused —
+`nominate` when the claim carries no --prompt-id (or a malformed session id).
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C7.
 """
@@ -58,10 +59,15 @@ class NominationResult(NamedTuple):
 
 
 def _nominate(nomination, repo_root: str, session_id: str, *, note: Optional[str] = None,
-              operator: Optional[str] = None, peer_name: Optional[str] = None) -> NominationResult:
-    verdict = nomination.claim(
-        repo_root, session_id, peer_name=peer_name, nominated_by=operator, note=note
-    )
+              operator: Optional[str] = None, peer_name: Optional[str] = None,
+              prompt_id: Optional[str] = None) -> NominationResult:
+    try:
+        verdict = nomination.claim(
+            repo_root, session_id, peer_name=peer_name, nominated_by=operator, note=note,
+            prompt_id=prompt_id,
+        )
+    except nomination.NotHumanEnteredError as exc:
+        return NominationResult(False, str(exc), 8, None)
     displaced = verdict.get("displaced_holder")
     if verdict.get("already_held"):
         message = f"{session_id} already holds Group EM for {repo_root} (refreshed)"
@@ -118,7 +124,14 @@ def _who(nomination, repo_root: str) -> NominationResult:
     if annotated is None:
         return NominationResult(False, f"no nomination on record for {repo_root}", 3, None)
     live_state = _LIVE_STATE.get(annotated.get("live_reason"), "not live")
-    message = f"{annotated.get('session_id')} ({live_state}) holds Group EM for {repo_root}"
+    entry = annotated.get("entry_status")
+    if entry == "verified":
+        message = f"{annotated.get('session_id')} ({live_state}) holds Group EM for {repo_root}"
+    else:
+        message = (
+            f"{annotated.get('session_id')} is recorded for {repo_root} but entry is {entry} "
+            "-- no standing"
+        )
     return NominationResult(True, message, 0, annotated)
 
 
@@ -147,7 +160,7 @@ def _self_standing(nomination, repo_root: str, session_id: str) -> NominationRes
     ids only, never names. Verdict in `record["self_standing"]`: `holder` (exit 0, even when
     the holder's own liveness reads not live), `not_holder` or `no_record` (exit 5)."""
     record = nomination.who(repo_root)
-    if record is None:
+    if record is None or record.get("entry_status") != "verified":
         return NominationResult(
             False,
             f"I am {session_id}; no Group EM is on record for {repo_root}",
@@ -196,6 +209,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_nom.add_argument("--repo", help="repo root; default cwd")
     p_nom.add_argument("--note", help="free-form note")
     p_nom.add_argument("--operator", help="operator recorded as nominated_by")
+    p_nom.add_argument(
+        "--prompt-id",
+        help="required; recorded pending and verified at read time against the transcript, so "
+        "a CLI claim never verifies without a real human /group-em entry carrying it",
+    )
 
     p_down = sub.add_parser("stand-down", help="stand down the Group EM nomination for a repo")
     p_down.add_argument("--session-id", help="session id standing down; default any holder")
@@ -242,7 +260,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             parser.error("give --session-id or set $CLAUDE_SESSION_ID")
         peer_name = _resolve_peer_name(session_registry, session_id)
         result = _nominate(nomination, repo, session_id, note=args.note,
-                          operator=args.operator, peer_name=peer_name)
+                          operator=args.operator, peer_name=peer_name,
+                          prompt_id=args.prompt_id)
         print(result.message, file=sys.stdout if result.ok else sys.stderr)
         return result.exit_code
 

@@ -109,6 +109,7 @@ from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
+from coordinator_core.ops.fleet.prune_emitted import prune_emitted_output
 from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
@@ -166,7 +167,10 @@ def run(
     `archive_and_commit` could not land), `live_read_count` (C3's own
     read-count, asserted read-once by C7), and `scan_gaps` (C3's own
     directory-listing gaps, preserved rather than folded into an empty
-    result), and `invariant` (every run, close or not): `archive_nonterminal`
+    result), `emitted_pruned` (repo-relative paths of untracked emitted
+    workflow output deleted this cycle), `emitted_retained_count` (int) and
+    `emitted_prune_error` (str or None; the prune leg is non-fatal and never
+    changes `exit_code`), and `invariant` (every run, close or not): `archive_nonterminal`
     (`{id, deployment_state}` for archived records not in a terminal state,
     read after this cycle's own moves) and `gate_dead_blockers` (`{id,
     blocker_id, reason}` for gated records whose gate can never clear).
@@ -353,6 +357,16 @@ def run(
             len(archive_nonterminal), len(gate_dead_blockers),
         )
 
+    emitted_pruned: List[str] = []
+    emitted_retained_count = 0
+    emitted_prune_error: Optional[str] = None
+    try:
+        prune_result = prune_emitted_output(worktree_root, common_dir, dry_run=False)
+        emitted_pruned = list(prune_result["pruned"])
+        emitted_retained_count = len(prune_result["retained"])
+    except Exception as exc:  # noqa: BLE001 -- the prune leg never fails the cycle
+        emitted_prune_error = f"{type(exc).__name__}: {exc}"
+
     # Persist for the next cycle, ONLY when the on-disk cache would differ.
     # Best-effort by construction: a cache that cannot be written costs the
     # next cycle a rebuild, nothing else.
@@ -386,6 +400,9 @@ def run(
         "memos_failed": memos_failed,
         "memos_skipped": memos_skipped,
         "memo_scan_error": memo_scan_error,
+        "emitted_pruned": emitted_pruned,
+        "emitted_retained_count": emitted_retained_count,
+        "emitted_prune_error": emitted_prune_error,
         "live_read_count": live_result.read_count,
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,

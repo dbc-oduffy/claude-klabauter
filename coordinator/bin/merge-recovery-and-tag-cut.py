@@ -31,7 +31,7 @@ Subcommands (argv[1] selects):
       nothing, exits 0 (bare-`v*` default per DR-149).
 
   cut-tag TAG [--repo-root PATH] [--fetch-ref main] [--merge-ref REF]
-           [--must-contain SHA]
+           [--must-contain SHA] [--pr N]
       Idempotent annotated-tag cut + push: fetches `--fetch-ref` from origin,
       resolves `--merge-ref` (default: the just-fetched `--fetch-ref` tip, FETCH_HEAD) to a commit SHA, and only (re)creates + pushes
       the annotated tag when it does not already point at that commit.
@@ -46,6 +46,9 @@ Subcommands (argv[1] selects):
       SHA before cutting or skipping the tag — fails loud, no tag mutation,
       if it is not. The `--merge-ref origin/main` default is unaffected by
       whether `--must-contain` is passed.
+      Run it AFTER `gh pr merge`, with `--pr N` (target = that PR's merge
+      commit). Refuses (exit 1) when origin already has TAG at another
+      commit; never force-moves a tag.
       Prints `MERGE_SHA=<sha>` and either `TAG_CUT=<tag>` or
       `TAG_SKIPPED=<tag>` to stdout.
 
@@ -328,6 +331,42 @@ def _peeled_tag_sha(repo_root: Path, tag: str) -> Optional[str]:
     return result.stdout.strip()
 
 
+def _remote_tag_sha(repo_root: Path, tag: str) -> Optional[str]:
+    """Commit sha `origin` has for `tag` (peeled), or None when absent."""
+    result = _run(
+        ["git", "ls-remote", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        _die(f"git ls-remote origin {tag} failed: {result.stderr.strip()}")
+    shas: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        sha, _, ref = line.partition("	")
+        shas[ref.strip()] = sha.strip()
+    return shas.get(f"refs/tags/{tag}^{{}}") or shas.get(f"refs/tags/{tag}")
+
+
+def _merge_commit_of_pr(repo_root: Path, pr: str) -> str:
+    """Merge commit `gh` reports for PR `pr` (merge, squash, or rebase merge
+    all populate `mergeCommit.oid`). Dies when `gh` is absent or the PR is
+    not merged yet."""
+    try:
+        result = _run(
+            ["gh", "pr", "view", pr, "--json", "mergeCommit", "-q", ".mergeCommit.oid"],
+            cwd=repo_root,
+            check=False,
+        )
+    except FileNotFoundError:
+        _die("`gh` is not on PATH — cannot resolve the PR merge commit.")
+    sha = result.stdout.strip()
+    if result.returncode != 0:
+        _die(f"gh pr view {pr} failed: {result.stderr.strip()}")
+    if not sha or sha == "null":
+        _die(f"PR {pr} has no merge commit yet — cut the tag after the merge lands.")
+    return sha
+
+
 def _assert_is_ancestor(repo_root: Path, commit: str, must_contain: str) -> None:
     """Fail loud (no tag mutation) unless `commit` is an ancestor of
     `must_contain` — i.e. `must_contain` actually contains the merge."""
@@ -349,6 +388,7 @@ def cut_tag(
     fetch_ref: str = "main",
     merge_ref: Optional[str] = None,
     must_contain: Optional[str] = None,
+    pr: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Idempotent annotated-tag cut + push. Returns (cut, merge_sha).
 
@@ -362,6 +402,9 @@ def cut_tag(
     if fetch.returncode != 0:
         _die(f"git fetch origin {fetch_ref} failed: {fetch.stderr.strip()}")
 
+    if pr is not None:
+        merge_ref = _merge_commit_of_pr(repo_root, pr)
+
     # No explicit merge_ref: the tip just fetched, not a tracking ref that a
     # refspec-less or single-branch remote leaves stale.
     resolved_ref = merge_ref or "FETCH_HEAD"
@@ -373,17 +416,27 @@ def cut_tag(
     if must_contain is not None:
         _assert_is_ancestor(repo_root, merge_sha, must_contain)
 
-    existing = _peeled_tag_sha(repo_root, tag)
-    if existing == merge_sha:
-        return False, merge_sha
+    remote = _remote_tag_sha(repo_root, tag)
+    if remote is not None and remote != merge_sha:
+        _die(
+            f"REFUSED: tag {tag} already exists on origin at {remote}, not "
+            f"{merge_sha} — a tag is never retargeted. Pick a new version or "
+            "resolve by hand."
+        )
 
-    tag_create = _run(
-        ["git", "tag", "-a", tag, merge_sha, "-m", tag],
-        cwd=repo_root,
-        check=False,
-    )
-    if tag_create.returncode != 0:
-        _die(f"git tag -a {tag} {merge_sha} failed: {tag_create.stderr.strip()}")
+    existing = _peeled_tag_sha(repo_root, tag)
+    if existing is not None and existing != merge_sha:
+        _die(f"REFUSED: local tag {tag} points at {existing}, not {merge_sha}.")
+    if existing is None:
+        tag_create = _run(
+            ["git", "tag", "-a", tag, merge_sha, "-m", tag],
+            cwd=repo_root,
+            check=False,
+        )
+        if tag_create.returncode != 0:
+            _die(f"git tag -a {tag} {merge_sha} failed: {tag_create.stderr.strip()}")
+    elif remote == merge_sha:
+        return False, merge_sha
 
     tag_push = _run(["git", "push", "origin", tag], cwd=repo_root, check=False)
     if tag_push.returncode != 0:
@@ -400,6 +453,7 @@ def cmd_cut_tag(args: argparse.Namespace) -> int:
         fetch_ref=args.fetch_ref,
         merge_ref=args.merge_ref,
         must_contain=args.must_contain,
+        pr=args.pr,
     )
     print(f"MERGE_SHA={merge_sha}")
     print(f"TAG_CUT={args.tag}" if cut else f"TAG_SKIPPED={args.tag}")
@@ -492,6 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cut.add_argument("--fetch-ref", default="main")
     p_cut.add_argument("--merge-ref", default=None)
     p_cut.add_argument("--must-contain", default=None)
+    p_cut.add_argument("--pr", default=None)
     p_cut.set_defaults(func=cmd_cut_tag)
 
     p_release = sub.add_parser(

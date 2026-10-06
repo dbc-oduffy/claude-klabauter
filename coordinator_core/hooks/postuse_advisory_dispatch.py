@@ -1469,9 +1469,11 @@ def _capture_workflow_run_record_sync(session_id: str, transcript_path: str, too
 # fail-open-to-silence contract, same _portable_arg quoting reuse) per this
 # chunk's own spec (plan § C10) rather than a second composition path.
 #
-# GROUP-EM CHECK is a real, current fact: `group_em.nomination.read_record`
-# read fresh against this tool call, joined on this session's own id -- never
-# cached, never inferred from a prior tick.
+# GROUP-EM CHECK is a real, current fact: `group_em.nomination.read_authoritative`
+# read fresh against this tool call, joined on this session's own id -- the
+# record is never cached or inferred from a prior tick. Only its transcript-
+# derived entry verdict is cached (per session + prompt_id, beside the record),
+# so a verified standing never re-scans a transcript here.
 #
 # NEVER-ARMED DETECTION IS A NAMED, BOUNDED STOPGAP, NOT THE C10 SPEC'S FULL
 # ASK. The C10 brief's late-added constraint is explicit that "is a watch
@@ -1658,7 +1660,7 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     try:
         from coordinator_core.group_em import nomination as _group_em_nomination
 
-        record = _group_em_nomination.read_record(git_root)
+        record = _group_em_nomination.read_authoritative(git_root)
     except Exception:
         return ""  # transient I/O error -- do not cache; retry next call
     if not isinstance(record, dict) or record.get("session_id") != session_id:

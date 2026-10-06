@@ -21,6 +21,9 @@ from coordinator_core.group_em import nomination as group_em_nomination  # noqa:
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(
+        group_em_nomination, "entry_status", lambda *a, **k: {"status": "verified"}
+    )
     yield
 
 
@@ -30,7 +33,9 @@ def _group_em_repo(tmp_path, monkeypatch):
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
     nomination_dir.mkdir()
-    group_em_nomination.claim(repo_root, SESSION, directory=nomination_dir)
+    group_em_nomination.claim(
+        repo_root, SESSION, directory=nomination_dir, prompt_id="p-1"
+    )
     monkeypatch.setattr(
         "coordinator_core.git.repo_root.show_toplevel", lambda: repo_root
     )
@@ -106,7 +111,9 @@ def test_silent_when_group_em_held_by_another_session(tmp_path, monkeypatch, _in
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
     nomination_dir.mkdir()
-    group_em_nomination.claim(repo_root, "someone-else-session", directory=nomination_dir)
+    group_em_nomination.claim(
+        repo_root, "someone-else-session", directory=nomination_dir, prompt_id="p-1"
+    )
     monkeypatch.setattr(
         "coordinator_core.git.repo_root.show_toplevel", lambda: repo_root
     )
@@ -275,7 +282,9 @@ def test_unformattable_repo_root_emits_nothing_rather_than_a_wrong_command(
     os.makedirs(repo_root, exist_ok=True)
     nomination_dir = tmp_path / "group-em-records"
     nomination_dir.mkdir()
-    group_em_nomination.claim(repo_root, SESSION, directory=nomination_dir)
+    group_em_nomination.claim(
+        repo_root, SESSION, directory=nomination_dir, prompt_id="p-1"
+    )
     monkeypatch.setattr(
         "coordinator_core.git.repo_root.show_toplevel", lambda: repo_root
     )

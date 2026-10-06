@@ -10,6 +10,7 @@ gitignore-filtered, because that filter spawns git.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -66,7 +67,27 @@ _PARAMS = (
     Field("gated", "list"),
 )
 
-__all__ = ["AskStageError", "stage"]
+__all__ = ["AskStageError", "stage", "scaffold_markers"]
+
+# Mirrors DoE's coordinator/lib/plan_scaffold_markers.py; claude-klabauter never imports DoE's tree.
+_SCAFFOLD_MARKERS = (
+    ("PLACEHOLDER", re.compile(r"\bPLACEHOLDER\b")),
+    ("<REPLACE:", re.compile(r"<REPLACE:")),
+    ("path/to/file", re.compile(r"path/to/file")),
+)
+
+
+def scaffold_markers(text: str) -> dict[str, int]:
+    """Marker -> first 1-based line carrying it; `#` YAML comment lines are template docs, skipped."""
+    found: dict[str, int] = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        if stripped.startswith("#") and not stripped.startswith("##"):
+            continue
+        for name, rx in _SCAFFOLD_MARKERS:
+            if name not in found and rx.search(line):
+                found[name] = n
+    return found
 
 
 class AskStageError(ValueError):
@@ -129,6 +150,11 @@ def stage(
     plan_posix = _rel(root, plan_path)
 
     plan_text = plan_path.read_text(encoding="utf-8")
+    if plan_rel:
+        unfilled = scaffold_markers(plan_text)
+        if unfilled:
+            named = ", ".join(f"{k} (line {v})" for k, v in sorted(unfilled.items()))
+            raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
     exclusions: list = []
     rows = read_spine(plan_path, exclusions=exclusions)
     raw_by_id = {

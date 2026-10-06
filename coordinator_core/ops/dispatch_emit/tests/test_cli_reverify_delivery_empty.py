@@ -57,3 +57,24 @@ def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_pat
     assert rc == cli_module.EXIT_OK, capsys.readouterr().err
     text = out.read_text(encoding="utf-8")
     assert f"supersedes: .coordinator-local/subagent-share/sid-1/{_PLAN_ID}.review-wave-bookkeeping.md" in text
+
+
+def test_completion_receipt_path_resolves_from_the_plan(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)
+    share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
+    share.mkdir(parents=True)
+    (share / f"{_PLAN_ID}.review-wave-bookkeeping.md").write_bytes(record.read_bytes())
+    receipt = repo / "state" / "completion-receipts" / "r.md"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        f"---\nschema: completion-receipt\nplan_id: {_PLAN_ID}\nverdict: null\n---\n", encoding="utf-8"
+    )
+    plan = _plan(repo)
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    argv = _argv(repo, plan, out)
+    argv[-1] = str(receipt)
+    rc = cli_module.main(argv)
+    assert rc == cli_module.EXIT_OK, capsys.readouterr().err
+    assert "review-wave-bookkeeping.md" in out.read_text(encoding="utf-8")

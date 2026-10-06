@@ -188,12 +188,17 @@ from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.group_em import baseline as group_em_baseline
+from coordinator_core.group_em import human_entry as group_em_human_entry
 from coordinator_core.group_em import nomination as group_em_nomination
 from coordinator_core.group_em import read_pass as group_em_read_pass
 from coordinator_core.group_em import send_pass as group_em_send_pass
 from coordinator_core.group_em import teammates as group_em_teammates
 from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbeat
 from coordinator_core.hooks.support import next_move_ledger
+
+
+#: Exit code `group-em-enter.py` returns for a refusal with reason GROUP-EM-NOT-HUMAN-ENTERED.
+EXIT_NOT_HUMAN_ENTERED = 8
 
 
 def _str_param(params: Any, key: str) -> Optional[str]:
@@ -213,12 +218,17 @@ def _leg(result: dict[str, Any], key: str, outcome: tuple[Any, Optional[str]]) -
 
 
 def _run_nomination(
-    repo_root: str, caller_session_id: str, note: Optional[str] = None, operator: Optional[str] = None
+    repo_root: str,
+    caller_session_id: str,
+    note: Optional[str] = None,
+    operator: Optional[str] = None,
+    prompt_id: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     try:
         return (
             group_em_nomination.claim(
-                repo_root, caller_session_id, note=note, nominated_by=operator
+                repo_root, caller_session_id, note=note, nominated_by=operator,
+                prompt_id=prompt_id,
             ),
             None,
         )
@@ -470,6 +480,8 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
             Defaults to the CALLING process's own `os.getcwd()` when
             omitted, matching `session.peer_roster`'s own convention.
         note, operator (str, optional) -- recorded on the nomination (`note`, `nominated_by`).
+        prompt_id (str, required) -- the UserPromptExpansion payload's `prompt_id`; without it
+            the op refuses (exit 8). Verified at read time against the transcript `promptId`.
         caller_session_id (str, optional) -- defaults to
             `read_pass.caller_session_id()` (the `CLAUDE_CODE_SESSION_ID`
             env var) when omitted.
@@ -524,8 +536,28 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     now_epoch = time.time()
     result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
+    prompt_id = _str_param(params, "prompt_id")
+    if caller_session_id and not (
+        prompt_id and group_em_human_entry.valid_session_id(caller_session_id)
+    ):
+        result["nomination"] = None
+        result["refusal"] = group_em_human_entry.REFUSAL
+        result["exit_code"] = EXIT_NOT_HUMAN_ENTERED
+        result["standing"] = {
+            "claimed": False,
+            "message": group_em_human_entry.REFUSAL_MESSAGE,
+            "session_id": caller_session_id,
+            "record": None,
+            "source": "engine",
+            "refusal": group_em_human_entry.REFUSAL,
+        }
+        return result
+
     nomination_outcome = (
-        _run_nomination(target_root, caller_session_id, _str_param(params, "note"), _str_param(params, "operator"))
+        _run_nomination(
+            target_root, caller_session_id, _str_param(params, "note"), _str_param(params, "operator"),
+            prompt_id,
+        )
         if caller_session_id
         else (None, "no-caller-session-id")
     )

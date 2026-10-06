@@ -17,10 +17,10 @@ that did not involve committing or stashing a peer's files.
 
 Negative-spec: these tests do NOT assert that a genuinely diverged HEAD is
 papered over. The counterweights are the two `..._divergence...` tests below:
-when our commits are NOT on the remote the recovery must actually rebase them
+when our commits are NOT on the remote the recovery must actually integrate them
 (2026-08-30 PM ruling: publishing does not require a pristine tree, so the
 dirty case replays rather than refusing), and when a peer's uncommitted edit
-sits on a path that replay would have to overwrite, the recovery must DECLINE
+sits on a path that the merge would have to overwrite, the recovery must DECLINE
 having touched nothing -- never overwrite it, never stash it.
 """
 
@@ -35,31 +35,6 @@ from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.git_native import GitResult
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-
-def _git_replay_supports_ref_action() -> bool:
-    """`git replay --ref-action` landed after git 2.44; an older git answers
-    "'replay' is not a git command" and the push ladder correctly reports the
-    push failure instead of recovering, so the replay tests cannot observe a
-    landing there."""
-    probe = subprocess.run(
-        ["git", "replay", "-h"],
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    return "--ref-action" in (probe.stdout + probe.stderr)
-
-
-@pytest.fixture
-def _requires_git_replay():
-    # Probed at test time, never at import: a module-level spawn fires during
-    # collection, before -k or --collect-only can skip it.
-    if not _git_replay_supports_ref_action():
-        pytest.skip("installed git has no `git replay --ref-action`; replay recovery is unavailable")
-
-
-_REQUIRES_GIT_REPLAY = pytest.mark.usefixtures("_requires_git_replay")
 
 
 _NON_FAST_FORWARD_STDERR = (
@@ -204,8 +179,7 @@ def _advance_the_remote(tmp_path: Path, repo: Path, filename: str, body: str) ->
     _git(["push", "-q", "origin", "work/x"], other)
 
 
-@_REQUIRES_GIT_REPLAY
-def test_genuine_divergence_on_a_dirty_tree_replays_and_lands(tmp_path):
+def test_genuine_divergence_on_a_dirty_tree_merges_and_lands(tmp_path):
     """The 2026-08-30 ruling, pinned: our commit is NOT on the remote, the
     remote has moved, and the tree is dirty with a peer's uncommitted file.
     The push must LAND -- a dirty tree is the standing state of this box, not
@@ -231,9 +205,8 @@ def test_genuine_divergence_on_a_dirty_tree_replays_and_lands(tmp_path):
     assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"
 
 
-@_REQUIRES_GIT_REPLAY
 def test_divergence_over_a_peers_uncommitted_edit_declines_touching_nothing(tmp_path):
-    """The counterweight to the ruling: when the replay would have to
+    """The counterweight to the ruling: when the merge would have to
     overwrite a path a peer is mid-edit on, it must DECLINE -- reporting the
     failure, leaving that peer's bytes, the index and the branch ref exactly
     as it found them. Never a stash, never an overwrite."""
@@ -271,3 +244,132 @@ def test_head_already_reached_upstream_is_false_when_is_ancestor_cannot_answer(
     )
 
     assert push_mod._head_already_reached_upstream(repo, "origin/work/x", None) is False
+
+
+def _commits(repo: Path, n: int) -> None:
+    for i in range(n):
+        (repo / f"ours-{i}.txt").write_text(f"unpublished {i}", encoding="utf-8")
+        _git(["add", "--", f"ours-{i}.txt"], repo)
+        _git(["commit", "-q", "-m", f"ours {i}"], repo)
+
+
+def test_replay_never_rewrites_unpushed(tmp_path):
+    """Five unpushed commits, a moved remote and a dirty tree: recovery keeps
+    every old sha reachable from the new tip, stamps a reflog message, and
+    leaves the peer's uncommitted file alone."""
+    repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "upstream-only.txt", "landed elsewhere")
+    _commits(repo, 5)
+    old_shas = _git(["rev-list", "origin/work/x..HEAD"], repo).split()
+    assert len(old_shas) == 5
+    _dirty_the_tree_with_a_peers_file(repo)
+
+    outcome = push_mod.push_with_retry(repo)
+
+    assert outcome.failed == [], outcome.failed
+    new_tip = _git(["rev-parse", "HEAD"], repo).strip()
+    for sha in old_shas:
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, new_tip],
+            cwd=str(repo), check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    reflog = _git(["reflog", "show", "--format=%gs", "refs/heads/work/x"], repo).splitlines()
+    assert reflog[0].strip() and "merge" in reflog[0]
+    assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"
+    assert (repo / "upstream-only.txt").read_text(encoding="utf-8") == "landed elsewhere"
+
+
+def test_merge_conflict_declines_touching_nothing(tmp_path):
+    repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "README.md", "remote version")
+    (repo / "README.md").write_text("local version", encoding="utf-8")
+    _git(["commit", "-q", "-am", "local conflicting"], repo)
+    _dirty_the_tree_with_a_peers_file(repo)
+    head_before = _git(["rev-parse", "HEAD"], repo).strip()
+    index_before = _git(["ls-files", "-s"], repo)
+
+    outcome = push_mod.push_with_retry(repo)
+
+    assert outcome.exit_code != 0
+    assert outcome.failed
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head_before
+    assert _git(["ls-files", "-s"], repo) == index_before
+    assert (repo / "README.md").read_text(encoding="utf-8") == "local version"
+    assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"
+
+
+def test_update_ref_refuses_non_descendant(tmp_path):
+    repo = _init_repo_with_upstream(tmp_path)
+    base = _git(["rev-parse", "HEAD"], repo).strip()
+    _commits(repo, 1)
+    tip = _git(["rev-parse", "HEAD"], repo).strip()
+    _git(["checkout", "-q", "-b", "side", base], repo)
+    (repo / "sibling.txt").write_text("sibling", encoding="utf-8")
+    _git(["add", "--", "sibling.txt"], repo)
+    _git(["commit", "-q", "-m", "sibling"], repo)
+    sibling = _git(["rev-parse", "HEAD"], repo).strip()
+    _git(["checkout", "-q", "work/x"], repo)
+
+    with pytest.raises(ValueError, match="not an ancestor"):
+        git_native.update_ref(repo, "refs/heads/work/x", sibling, tip, "rewrite")
+    assert _git(["rev-parse", "refs/heads/work/x"], repo).strip() == tip
+
+    assert git_native.update_ref(
+        repo, "refs/heads/work/x", sibling, tip, "deliberate", allow_rewrite=True
+    ).ok
+
+
+def test_update_ref_carries_reflog_message(tmp_path):
+    repo = _init_repo_with_upstream(tmp_path)
+    _commits(repo, 1)
+    tip = _git(["rev-parse", "HEAD"], repo).strip()
+
+    assert git_native.update_ref(repo, "refs/heads/side", tip, "0" * 40, "made side").ok
+    reflog = _git(["reflog", "show", "--format=%gs", "refs/heads/side"], repo)
+    assert "made side" in reflog
+    with pytest.raises(ValueError):
+        git_native.update_ref(repo, "refs/heads/side", tip, "0" * 40, "")
+
+
+def test_merge_keeps_a_peers_staged_entry_on_an_untouched_path(tmp_path):
+    """A peer's STAGED (not just modified) entry on a path upstream did not
+    touch must survive the two-tree read-tree exactly: index blob and bytes."""
+    repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "upstream-only.txt", "landed elsewhere")
+    _commits(repo, 1)
+    (repo / "peer-staged.txt").write_text("staged by a peer", encoding="utf-8")
+    _git(["add", "--", "peer-staged.txt"], repo)
+    staged_before = _git(["ls-files", "-s", "--", "peer-staged.txt"], repo)
+
+    outcome = push_mod.push_with_retry(repo)
+
+    assert outcome.failed == [], outcome.failed
+    assert _git(["ls-files", "-s", "--", "peer-staged.txt"], repo) == staged_before
+    assert "peer-staged.txt" in _git(["diff", "--cached", "--name-only"], repo)
+
+
+def test_cas_failure_rolls_index_and_worktree_back(tmp_path, monkeypatch):
+    """update-ref losing its CAS must leave refs, index and worktree exactly
+    as found -- the reverse read-tree is the only thing standing between a
+    refused ref move and a staged diff nobody authored."""
+    repo = _init_repo_with_upstream(tmp_path)
+    _advance_the_remote(tmp_path, repo, "upstream-only.txt", "landed elsewhere")
+    _commits(repo, 1)
+    _dirty_the_tree_with_a_peers_file(repo)
+    _git(["fetch", "-q", "origin"], repo)
+    head_before = _git(["rev-parse", "HEAD"], repo).strip()
+    index_before = _git(["ls-files", "-s"], repo)
+    monkeypatch.setattr(
+        git_native,
+        "update_ref",
+        lambda *a, **k: GitResult(returncode=1, stdout="", stderr="fatal: cannot lock ref"),
+    )
+
+    code, reason = push_mod._rebase_onto_fetched_ref(repo, "origin/work/x", "work/x")
+
+    assert code != 0 and "update-ref" in reason and "rollback failed" not in reason
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head_before
+    assert _git(["ls-files", "-s"], repo) == index_before
+    assert not (repo / "upstream-only.txt").exists()
+    assert (repo / "peer-scratch.txt").read_text(encoding="utf-8") == "a peer is mid-edit"

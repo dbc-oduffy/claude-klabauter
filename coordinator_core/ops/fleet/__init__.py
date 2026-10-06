@@ -8,6 +8,7 @@ Ops registered by handler modules (imported by coordinator_core/ops/__init__.py)
     fleet.archive_completed_plans    — archive_plans.py
     fleet.archive_completed_handoffs — archive_terminal_handoffs.py
     fleet.prune_closed_bugs          — prune_bugs.py
+    fleet.prune_emitted_output       — prune_emitted.py
 
 Shared substrate: _common.py (param validation, envelope builders, D3 check,
 main_worktree_root helper, async archive_and_commit git helper).

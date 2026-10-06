@@ -726,8 +726,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``rows_coded`` (``{plan path: [row ids]}`` flipped ``open`` -> ``coded``)
     and ``coded_sha`` (the second, plan-only commit), or ``coded_stamp_error``
     when that second step failed -- the product commit stands regardless.
-    ``incomplete_reasons`` maps each incomplete id the ask manifest withheld to
-    ``external_gate`` (such a row carries no paths, so nothing is stranded);
+    ``incomplete_reasons`` maps every incomplete id to its reason: ``external_gate``
+    (a row the ask manifest withheld; it carries no paths, so nothing is stranded),
+    ``executor_partial: <Not-done lines>`` or ``incomplete_unreported``;
     ``index_stale`` lists committed paths whose index entry could not be
     spliced to the landed blob (``[]`` when every entry equals it); a
     non-empty list means the run is not clean.
@@ -764,10 +765,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     if landed and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed))
-    if gated_ids and isinstance(incomplete, list):
-        reply["incomplete_reasons"] = {
-            i: "external_gate" for i in sorted(gated_ids & (set(incomplete) - set(landed)))
-        }
+    if isinstance(incomplete, list) and isinstance(landed, list):
+        open_ids = set(incomplete) - set(landed)
+        reasons = {}
+        for i in sorted(open_ids):
+            if i in gated_ids:
+                reasons[i] = "external_gate"
+            elif i in blockers:
+                reasons[i] = f"executor_partial: {blockers[i]}" if blockers[i] else "executor_partial"
+            else:
+                reasons[i] = "incomplete_unreported"
+        if reasons:
+            reply["incomplete_reasons"] = reasons
     return reply
 
 

@@ -194,7 +194,11 @@ def compute_context(payload: dict) -> Optional[str]:
     try:
         entered = reentrant_dispatch(
             "groupem.enter",
-            {"repo_root": repo_root, "caller_session_id": session_id},
+            {
+                "repo_root": repo_root,
+                "caller_session_id": session_id,
+                "prompt_id": payload.get("prompt_id"),
+            },
             repo_root=Path(repo_root),
         )
     except Exception:  # includes OpUnavailableError

@@ -54,13 +54,14 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.group_em import session_registry
+from coordinator_core.group_em import human_entry, session_registry
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.liveness import session_live
 
@@ -170,8 +171,9 @@ def _build_record(
     peer_name: Optional[str],
     nominated_by: Optional[str],
     note: Optional[str] = None,
+    entry_evidence: Optional[dict] = None,
 ) -> dict:
-    return {
+    record = {
         "version": SCHEMA_VERSION,
         "repo_root": repo_root,
         "session_id": session_id,
@@ -180,6 +182,61 @@ def _build_record(
         "nominated_by": nominated_by,
         "note": note,
     }
+    if entry_evidence:
+        record["entered_via"] = "human-slash-command"
+        record["entry_evidence"] = entry_evidence
+    return record
+
+
+class NotHumanEnteredError(RuntimeError):
+    """The claim carries no prompt_id or a malformed session id; no record was written."""
+
+
+def pending_evidence(session_id: str, prompt_id: Optional[str], now: Optional[float] = None) -> dict:
+    """The claim-time evidence stub, or `NotHumanEnteredError`. Verification is deferred to
+    read time (`entry_status`): the hook fires before the harness writes the transcript entry."""
+    if not human_entry.valid_session_id(session_id) or not isinstance(prompt_id, str) or not prompt_id:
+        raise NotHumanEnteredError(human_entry.REFUSAL_MESSAGE)
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, timezone.utc)
+    return {
+        "status": "pending",
+        "prompt_id": prompt_id,
+        "claimed_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _verdict_cache_path(record: dict, directory: Optional[Path] = None) -> Optional[Path]:
+    """Per-repo entry-verdict cache beside the record (own subdirectory, so nothing that lists
+    records ever reads it as one). Keyed inside by (session_id, prompt_id); a new claim simply
+    misses and overwrites it."""
+    repo_root = record.get("repo_root")
+    if not isinstance(repo_root, str) or not repo_root:
+        return None
+    record_path = _record_path(repo_root, directory)
+    return record_path.parent / "entry-verdicts" / record_path.name
+
+
+def entry_status(
+    record: dict, now: Optional[float] = None, directory: Optional[Path] = None
+) -> dict:
+    """`human_entry.resolve_entry_evidence` for `record` at `now` (default: the wall clock),
+    through the verdict cache: a verified or rejected standing costs one small file read."""
+    return human_entry.resolve_entry_evidence(
+        record,
+        time.time() if now is None else now,
+        cache_path=_verdict_cache_path(record, directory),
+    )
+
+
+def read_authoritative(
+    repo_root: str, directory: Optional[Path] = None, now: Optional[float] = None
+) -> Optional[dict]:
+    """The nomination record only when its entry evidence is verified; None for no record, a
+    pending claim or a rejected one. Every authority read of the standing goes through here."""
+    record = read_record(repo_root, directory)
+    if record is None or entry_status(record, now, directory)["status"] != "verified":
+        return None
+    return record
 
 
 def claim(
@@ -190,11 +247,18 @@ def claim(
     nominated_by: Optional[str] = None,
     note: Optional[str] = None,
     directory: Optional[Path] = None,
+    prompt_id: Optional[str] = None,
+    now: Optional[float] = None,
 ) -> dict:
     """Read the nomination record for `repo_root_str` and return a verdict -- never a unilateral
     supersede of a LIVE holder, or one merely UNACCOUNTED FOR.
 
-    NEVER REFUSES. Group EM standing is taken, not requested: the last claimant holds it. A
+    The one refusal: a claim with no `prompt_id` (or a non-token session id) raises
+    ``NotHumanEnteredError`` before any write. The record stores `entry_evidence`
+    `{status: pending, prompt_id, claimed_at}`; `entry_status` verifies it at read time against
+    the claimant's own transcript. Release paths (stand-down) do not go through here.
+
+    Otherwise NEVER REFUSES. Group EM standing is taken, not requested: the last claimant holds it. A
     record naming another session is overwritten whether that holder is live, dead or
     unaccounted for, and the takeover is reported in ``displaced_holder`` /
     ``displaced_holder_live`` / ``displaced`` (who was taken from, and whether still running --
@@ -214,11 +278,12 @@ def claim(
     dropping them would desync the two writers' record shape even though this reader never
     consumes them. Do not "clean them up" as unused.
     """
+    entry_evidence = pending_evidence(session_id, prompt_id, now)
     repo_root = str(Path(repo_root_str).resolve())
     existing = read_record(repo_root, directory)
 
     if existing is None:
-        record = _build_record(repo_root, session_id, peer_name, nominated_by, note)
+        record = _build_record(repo_root, session_id, peer_name, nominated_by, note, entry_evidence)
         _write_json_atomic(_record_path(repo_root, directory), record)
         return {
             "claimed": True,
@@ -230,7 +295,7 @@ def claim(
 
     incumbent_sid = str(existing.get("session_id") or "")
     if incumbent_sid == session_id:
-        record = _build_record(repo_root, session_id, peer_name, nominated_by, note)
+        record = _build_record(repo_root, session_id, peer_name, nominated_by, note, entry_evidence)
         _write_json_atomic(_record_path(repo_root, directory), record)
         return {
             "claimed": True,
@@ -249,7 +314,7 @@ def claim(
         "live": liveness.live,
         "live_reason": liveness.live_reason,
     }
-    record = _build_record(repo_root, session_id, peer_name, nominated_by, note)
+    record = _build_record(repo_root, session_id, peer_name, nominated_by, note, entry_evidence)
     record["displaced_holder"] = incumbent_sid
     record["displaced_holder_live"] = liveness.live
     replaced_holder = None
@@ -283,6 +348,7 @@ def who(repo_root: str, directory: Optional[Path] = None) -> Optional[dict]:
     annotated = dict(record)
     annotated["live"] = liveness.live
     annotated["live_reason"] = liveness.live_reason
+    annotated["entry_status"] = entry_status(record, directory=directory)["status"]
     return annotated
 
 
@@ -308,7 +374,7 @@ def standing(
         return None
     holder = str(record.get("session_id") or "")
     matches = bool(peer) and (peer == holder or _session_id_for_name(peer) == holder)
-    if not matches:
+    if not matches or record["entry_status"] != "verified":
         record["standing"] = "no_match"
     elif record["live"]:
         record["standing"] = "live"

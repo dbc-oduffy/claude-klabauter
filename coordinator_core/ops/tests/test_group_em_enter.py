@@ -8,12 +8,25 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core import ipc
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.session import machinery_paths
+
+
+@pytest.fixture(autouse=True)
+def _human_entered(monkeypatch):
+    """Legs under test assume the hook supplied a prompt_id; the claim gate has its own tests."""
+    real = gee._group_em_enter
+
+    def _with_prompt_id(params, repo_root=None):
+        return real({"prompt_id": "p-1", **params}, repo_root)
+
+    monkeypatch.setattr(gee, "_group_em_enter", _with_prompt_id)
 
 
 def test_payload_has_exactly_ten_keys(tmp_path, monkeypatch):

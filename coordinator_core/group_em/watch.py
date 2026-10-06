@@ -1164,6 +1164,72 @@ def main(
         sleep_fn(interval)
 
 
+def box_census(repo_root: str, liveness: dict) -> Optional[dict]:
+    """Live sessions on the whole box, by repo, against what the watch subscribes.
+
+    Reads `<claude config>/sessions/*.json` (the census assert-em-role counts);
+    None when unreadable. The holder is excluded. A watch subscribes only its
+    own repo, so everything outside it is unwatched.
+    """
+    from pathlib import Path
+
+    from coordinator_core.hooks.assert_em_role import _resolve_claude_config_dir
+
+    try:
+        config_dir = _resolve_claude_config_dir()
+        sessions_dir = config_dir / "sessions" if config_dir else None
+        if sessions_dir is None or not sessions_dir.is_dir():
+            return None
+        holder = liveness.get("holder_session_id")
+        here = Path(repo_root).resolve()
+        total = 0
+        in_repo = 0
+        others: dict[str, int] = {}
+        for entry in sessions_dir.glob("*.json"):
+            try:
+                record = json.loads(entry.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(record, dict) or (holder and record.get("sessionId") == holder):
+                continue
+            total += 1
+            raw = record.get("cwd")
+            top = None
+            if isinstance(raw, str) and raw:
+                cwd = Path(raw).resolve()
+                for directory in (cwd, *cwd.parents):
+                    if directory == here or (directory / ".git").exists():
+                        top = directory
+                        break
+            if top == here:
+                in_repo += 1
+            else:
+                name = top.name if top else "unknown"
+                others[name] = others.get(name, 0) + 1
+        subscribed = liveness.get("subscribed_peers") or 0
+        return {
+            "live": total,
+            "repo_live": in_repo,
+            "repo_subscribed": subscribed,
+            "other_repos": others,
+            "unwatched": max(total - subscribed, 0),
+        }
+    except Exception:
+        return None
+
+
+def box_line(census: Optional[dict]) -> str:
+    """One status line putting the box population beside the repo's."""
+    if census is None:
+        return "  Box population: unreadable -- unwatched sessions unknown."
+    others = census["other_repos"]
+    return (
+        f"  Subscribed {census['repo_subscribed']}/{census['repo_live']} in this repo; "
+        f"box: {census['live']} live sessions ({sum(others.values())} in "
+        f"{len(others)} other repos), {census['unwatched']} unwatched."
+    )
+
+
 def _cli(argv: "list[str] | None" = None) -> int:
     """Command-line entrypoint, so the watch can actually be ARMED.
 
@@ -1241,6 +1307,11 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "confirmed running) -- unknown is never reported as healthy.",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="With --status: emit liveness plus the box population as one JSON object.",
+    )
+    parser.add_argument(
         "--once",
         action="store_true",
         help="Run ONE tick against the carried parked map and exit, instead of holding a poll "
@@ -1274,7 +1345,12 @@ def _cli(argv: "list[str] | None" = None) -> int:
 
     if args.status:
         liveness = watch_heartbeat.read_liveness(args.repo_root)
-        print(watch_heartbeat.human_verdict(liveness))
+        census = box_census(args.repo_root, liveness)
+        if args.json:
+            print(json.dumps({"liveness": liveness, "box": census}, default=str))
+        else:
+            print(watch_heartbeat.human_verdict(liveness))
+            print(box_line(census))
         if liveness["verdict"] == watch_heartbeat.VERDICT_ARMED:
             # ITEM 2 (`--status` false-alive with no process check). A fresh
             # deadline is STALENESS evidence only -- it says the record's

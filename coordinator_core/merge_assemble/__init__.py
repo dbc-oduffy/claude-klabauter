@@ -530,7 +530,7 @@ def build_directives(
         {
             "id": "d2",
             "cli": "merge-recovery-and-tag-cut",
-            "args": ["cut-tag", cut_tag],
+            "args": ["plan-tag", cut_tag],
             "depends_on": ["version_bump_final", "ship_verdict"],
             "already_satisfied": False,
         },

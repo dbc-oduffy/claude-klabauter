@@ -621,9 +621,19 @@ def mint(
     refusal = mint_refusal(gate_integration, prep_data, build_test_data)
     if refusal is not None:
         if delivery_verdict == "FAIL":
+            from coordinator_core.ops.dispatch_emit.reverify_delivery import resolve_delivery_in_force
+
+            hint_path, _ = resolve_delivery_in_force(
+                repo_root, plan_id, str(plan_path) if plan_path else None,
+                str(integration_path) if integration_path is not None else None,
+            )
+            try:
+                hint = hint_path.relative_to(repo_root).as_posix() if hint_path is not None else '""'
+            except ValueError:
+                hint = hint_path.as_posix()
             refusal += (
                 "; a fix-forward clears this by re-verifying delivery at HEAD: "
-                "emit-dispatch-workflow --plan <plan> --reverify-delivery <run-record>, "
+                f"emit-dispatch-workflow --plan <plan> --reverify-delivery {hint}, "
                 "then reverify-delivery record"
             )
         raise MintRefusal(refusal)

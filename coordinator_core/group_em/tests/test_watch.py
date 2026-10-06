@@ -1638,6 +1638,36 @@ def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path, ca
     assert capsys.readouterr().out.startswith("ALIVE")
 
 
+def test_cli_status_reports_unwatched_box_sessions_with_zero_repo_peers(
+    tmp_path, monkeypatch, capsys
+):
+    from coordinator_core.group_em import watch_heartbeat
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    cfg = tmp_path / "cfg"
+    (cfg / "sessions").mkdir(parents=True)
+    for i, name in enumerate(["a", "a", "b"]):
+        other = tmp_path / name
+        (other / ".git").mkdir(parents=True, exist_ok=True)
+        (cfg / "sessions" / f"{i}.json").write_text(
+            json.dumps({"sessionId": f"s{i}", "cwd": str(other)}), encoding="utf-8"
+        )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    watch_heartbeat.stamp(
+        str(repo), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, holder_name="gem", writer_session_id="w1",
+        subscribed_peers=0,
+    )
+    watch._cli(["--repo-root", str(repo), "--status"])
+    out = capsys.readouterr().out
+    assert "Subscribed 0/0 in this repo" in out
+    assert "box: 3 live sessions (3 in 2 other repos), 3 unwatched" in out
+    watch._cli(["--repo-root", str(repo), "--status", "--json"])
+    box = json.loads(capsys.readouterr().out)["box"]
+    assert box["unwatched"] == 3 and box["other_repos"] == {"a": 2, "b": 1}
+
+
 def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_running(tmp_path, capsys):
     """Item 2 (2026-09-19 memo): staleness arithmetic alone must not read
     ALIVE. A fresh, well-formed record whose writer process is CONFIRMED

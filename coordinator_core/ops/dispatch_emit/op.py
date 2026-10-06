@@ -813,6 +813,8 @@ _PARAM_FIELDS = (
     Field("queue", "list"),
     Field("overrides", "dict"),
     Field("writes", "str_list"),
+    Field("review_only_rows", "str_list"),
+    Field("run_base_sha", "str"),
     Field("flags", "dict"),
     Field("lists", "dict"),
 )
@@ -1304,6 +1306,8 @@ def _dispatch_emit(
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
             landed_rows=frozenset(params.get("landed_rows") or ()),
+            review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
+            run_base_sha=params.get("run_base_sha"),
             chatty=bool(params.get("chatty")),
             predispatch=bool(inventory_path),
             review_specs=inventory_review_specs,

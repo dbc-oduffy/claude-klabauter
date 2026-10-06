@@ -103,8 +103,6 @@ _WRAPPER_INVOCATIONS = [
         {},
     ),
     (git_native.fetch, ("/tmp/repo", "origin"), {}),
-    (git_native.rebase_onto, ("/tmp/repo", "origin/main", "abc123"), {}),
-    (git_native.rebase_abort, ("/tmp/repo",), {}),
     (git_native.merge_base, ("/tmp/repo", "HEAD", "origin/main"), {}),
     (git_native.merge_base_is_ancestor, ("/tmp/repo", "HEAD", "origin/main"), {}),
     (git_native.rev_parse_upstream, ("/tmp/repo",), {}),
@@ -119,13 +117,18 @@ _WRAPPER_INVOCATIONS = [
     # recovery path (`push._replay_onto_fetched_ref`), which is why they
     # landed together and, plausibly, why they were added together without
     # this table being touched.
+    (git_native.merge_tree_write_tree, ("/tmp/repo", "abc123", "origin/main"), {}),
     (
-        git_native.replay_onto_print,
-        ("/tmp/repo", "origin/main", "abc123", "refs/heads/work"),
+        git_native.commit_tree_merge,
+        ("/tmp/repo", "tree123", ["abc123", "origin/main"], "merge"),
         {},
     ),
     (git_native.read_tree_merge_update, ("/tmp/repo", "abc123", "def456"), {}),
-    (git_native.update_ref, ("/tmp/repo", "refs/heads/work", "def456", "abc123"), {}),
+    (
+        git_native.update_ref,
+        ("/tmp/repo", "refs/heads/work", "def456", "abc123", "why"),
+        {"old_is_ancestor": True},
+    ),
     # rev_list_not (C5, memo.heal_inbox's two-stage reachability probe) --
     # argv-only, no stdin data, so it is a plain thin wrapper like every
     # other entry in this table.

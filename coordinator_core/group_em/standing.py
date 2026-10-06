@@ -23,6 +23,7 @@ def who(repo_root: str) -> Optional[dict]:
     annotated["live"] = live
     annotated["live_reason"] = live_reason
     annotated["live_state"] = live_state
+    annotated["entry_status"] = nomination.entry_status(record)["status"]
     return annotated
 
 
@@ -44,7 +45,7 @@ def standing(repo_root: str, peer: str) -> Optional[dict]:
         return None
     holder = str(record.get("session_id") or "")
     matches = bool(peer) and (peer == holder or _session_id_for_name(peer) == holder)
-    if not matches:
+    if not matches or record["entry_status"] != "verified":
         record["standing"] = "no_match"
     elif record.get("live"):
         record["standing"] = "live"

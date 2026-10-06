@@ -112,3 +112,17 @@ def test_subject_without_chunks_names_the_review_stem():
     assert terminal_commit._subject([], "review trail: s") == "review trail: s"
     chunk = ChunkCommit(id="C1", title=" ", paths=("a.py",))
     assert terminal_commit._subject([chunk], "x") == "C1"
+
+
+def test_every_incomplete_id_carries_a_reason(repo):
+    out = _call(
+        repo,
+        _run(repo, "PARTIAL: edits done\nNot done: `rebuild-plugin` rc=0 AC, EM must run it\n"),
+    )
+    assert out["incomplete_reasons"]["C1"].startswith("executor_partial: ")
+    assert "rebuild-plugin" in out["incomplete_reasons"]["C1"]
+
+
+def test_blocked_row_reason_is_incomplete_unreported(repo):
+    out = _call(repo, _run(repo, "BLOCKED: no runtime\n"))
+    assert out["incomplete_reasons"] == {"C1": "incomplete_unreported"}

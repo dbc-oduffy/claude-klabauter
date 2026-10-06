@@ -27,6 +27,7 @@ Exit codes:
       unregistered holder is displaced and reported in `standing.displaced_holder*`.
   6 — StaleEngineError: a digest arrived under an unclaimed standing.
   7 — engine unresolvable or the op raised; never falls back.
+  8 — GROUP-EM-NOT-HUMAN-ENTERED: the session transcript holds no human-typed /group-em.
 
 Negative spec: no send, no nudge, no transport — this assembles the digest
 and stops, exactly as the DoE reference's own negative spec states. No
@@ -136,6 +137,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--session-id", help="entering session; default $CLAUDE_SESSION_ID")
     parser.add_argument("--note", help="free-form note recorded on the nomination")
     parser.add_argument("--operator", help="operator recorded as nominated_by")
+    parser.add_argument(
+        "--prompt-id",
+        help="the human prompt's id; required, and verified later against the transcript -- "
+        "a forged one never verifies",
+    )
     parser.add_argument("--json", action="store_true", help="emit the payload as JSON")
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
@@ -168,6 +174,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "caller_session_id": session_id,
                 "note": args.note,
                 "operator": args.operator,
+                "prompt_id": args.prompt_id,
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -176,6 +183,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
         return EXIT_ENGINE_FAILED
+
+    if payload.get("refusal"):
+        print(f"group-em-enter: {(payload.get('standing') or {}).get('message')}", file=sys.stderr)
+        return int(payload.get("exit_code") or 8)
 
     if not (payload.get("standing") or {}).get("claimed") and payload.get("digest") is not None:
         print(

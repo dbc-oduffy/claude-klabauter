@@ -18,6 +18,18 @@ from coordinator_core.session import harness_registry
 from coordinator_core.session import liveness as _liveness
 
 
+_REAL_CLAIM = nomination.claim
+
+
+@pytest.fixture(autouse=True)
+def _human_entered(monkeypatch):
+    """Verdict tests assume a verified human-typed /group-em; the gate is tested below."""
+    monkeypatch.setattr(
+        nomination, "claim", lambda *a, **k: _REAL_CLAIM(*a, **{"prompt_id": "p-1", **k})
+    )
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+
+
 @pytest.fixture
 def repo_root(tmp_path):
     root = tmp_path / "repo"
@@ -365,3 +377,34 @@ def test_standing_not_live_when_is_live_says_pid_not_running(repo_root, record_d
 
 def test_standing_none_without_record(repo_root, record_dir):
     assert nomination.standing(repo_root, "sid-h", record_dir) is None
+
+
+def test_claim_without_prompt_id_refuses_and_writes_nothing(repo_root, record_dir):
+    with pytest.raises(nomination.NotHumanEnteredError):
+        _REAL_CLAIM(repo_root, "sid-new", directory=record_dir)
+    assert nomination.read_record(repo_root, record_dir) is None
+
+
+def test_claim_records_pending_entry_evidence(repo_root, record_dir):
+    _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, prompt_id="p-9", now=1_700_000_000.0)
+    record = nomination.read_record(repo_root, record_dir)
+    assert record["entered_via"] == "human-slash-command"
+    assert record["entry_evidence"] == {
+        "status": "pending", "prompt_id": "p-9", "claimed_at": "2023-11-14T22:13:20Z",
+    }
+
+
+@pytest.mark.parametrize("sid", ["*", "a?c", "[ab]", "../x", "a/b", "a\\b", "", "a b"])
+def test_claim_rejects_non_token_session_ids(sid, repo_root, record_dir):
+    with pytest.raises(nomination.NotHumanEnteredError):
+        _REAL_CLAIM(repo_root, sid, directory=record_dir, prompt_id="p-1")
+    assert nomination.read_record(repo_root, record_dir) is None
+
+
+def test_rejected_standing_is_no_standing(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
+    _stub_live(monkeypatch, True, "live")
+    assert nomination.who(repo_root, record_dir)["entry_status"] == "rejected"
+    assert nomination.standing(repo_root, "sid-h", record_dir)["standing"] == "no_match"
+    assert nomination.read_authoritative(repo_root, record_dir) is None

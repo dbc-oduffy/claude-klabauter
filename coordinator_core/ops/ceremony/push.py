@@ -7,7 +7,7 @@ no renames, no behaviour change from the code as it stood in
 `commit_pipeline.py`.
 
 Hosts: the `PUSH_MODE_*` / `PUSH_STATUS_*` vocabularies, `PushOutcome`,
-`push_with_retry` (reject-detect -> fetch -> rebase --onto -> re-push,
+`push_with_retry` (reject-detect -> fetch -> merge -> re-push,
 bounded, never `--force`), `derive_push_status` / `derive_pushed_tristate`,
 `resolve_post_push_sha`, and the GH013 push-protection sub-classification
 (`_is_push_reject` and its secret-scanning / rule-violation sub-checks --
@@ -96,7 +96,7 @@ _PUSH_MODES_SUPPRESSING_POST_COMMIT_HOOK = frozenset({PUSH_MODE_SYNC, PUSH_MODE_
 from coordinator_core.hooks.auto_push import branch_gate, classify_error, resolve_branch
 
 #: Retry-worthy `auto_push.classify_error()` classifications for THIS
-#: pipeline's specific recovery shape (fetch + `git rebase --onto` +
+#: pipeline's specific recovery shape (fetch + worktree-safe merge +
 #: re-push) -- deliberately NOT the same set `auto_push.run_push_with_retry`
 #: treats as retryable (`_RETRYABLE_CLASSES = {"ref-lock", "network",
 #: "gh-transient"}`), because that retry is a bare re-send with backoff,
@@ -796,16 +796,16 @@ def _head_already_reached_upstream(
     an edge case. Every session on this box drives the SAME worktree and the
     SAME branch, so a peer's push carries our commits with it. Our own push
     then rejects non-fast-forward for a range that is already on the remote,
-    and the ladder below would answer that with a rebase -- object-database
-    work plus an index/worktree update this branch does not need at all, for
-    a range the remote already carries. Checked HERE, before either rebase
-    route, so the cheap answer is reached first: a peer's push carrying our
-    commits is the DOMINANT shape on this box, not an edge case, and two
-    reads beat a replay that would land a no-op. (Until 2026-08-30 this was
+    and the ladder below would answer that with a merge -- object-database
+    work, a merge commit nobody needs, and an index/worktree update, for a
+    range the remote already carries. Checked HERE, before the merge, so the
+    cheap answer is reached first: a peer's push carrying our commits is the
+    DOMINANT shape on this box, not an edge case, and two reads beat a merge
+    that would land a no-op. (Until 2026-08-30 this was
     also the ONLY correct answer available on a dirty tree, because
-    `_rebase_onto_fetched_ref` refused outright there; it now routes the
-    dirty case to `_replay_onto_fetched_ref`, so this check is a cost
-    optimisation rather than the last exit before a dead end.)
+    `_rebase_onto_fetched_ref` refused outright there; it now merges, so
+    this check is a cost optimisation rather than the last exit before a
+    dead end.)
 
     Cost order, cheapest arm first:
       1. ZERO SPAWNS -- HEAD's sha (read off `.git/HEAD` plus the loose ref
@@ -833,101 +833,82 @@ def _head_already_reached_upstream(
     return False
 
 
-_REPLAY_UPDATE_RE = re.compile(r"^update\s+(\S+)\s+([0-9a-f]{7,64})\s+([0-9a-f]{7,64})\s*$")
-
-
-def _replay_onto_fetched_ref(
-    worktree_root: Path, upstream_ref: str, branch: Optional[str]
+def _rebase_onto_fetched_ref(
+    worktree_root: Path, upstream_ref: str, branch: Optional[str] = None
 ) -> Tuple[int, str]:
-    """Replay THIS session's own commit range onto `upstream_ref` on a DIRTY
-    shared worktree -- the recovery `git rebase --onto` cannot perform,
-    because it insists on checking the result out and the tree on this box is
-    essentially never clean.
+    """Integrate the freshly-fetched `upstream_ref` into the branch by MERGE,
+    never by rewriting: every existing local commit stays an ancestor of the
+    new tip, so artifacts citing those shas stay valid.
 
-    WHY A REBASE IS NOT AVAILABLE HERE, and why "just push anyway" is not the
-    answer either. A non-fast-forward reject means the remote carries commits
-    this branch does not. Publishing ours without taking theirs would either
-    drop their work (a force push) or republish our commits under fresh shas
-    on every subsequent attempt (pushing a locally-computed tip while leaving
-    local refs behind) -- the second quietly accumulates duplicates on the
-    remote. The only correct answer is the rebase; what has to change is the
-    part of it that demands a pristine tree.
-
-    Three steps, three spawns, paid only on a reject that already cost a
-    network leg:
-
-      1. `git replay --ref-action=print --onto <upstream> <merge-base>..
-         <branch-ref>` computes the replayed chain entirely in the object
-         database. It reads neither index nor working tree, so peer edits are
-         not its concern; it writes no ref either (see
-         `git_native.replay_onto_print` for why `--ref-action=print` is
-         load-bearing rather than cosmetic).
-      2. `git read-tree -m -u <old> <new>` materializes the difference into
-         the shared index and worktree. Only paths that differ between the
-         two trees are touched; a path that differs AND is locally modified,
-         staged, or shadowed by an untracked file makes git refuse the whole
-         operation and write nothing. So the outcomes are exactly two: the
-         replay lands with no peer's work disturbed, or it declines having
-         disturbed nothing -- never a peer's file overwritten, never a
+    Steps (paid only on a reject that already cost a network leg):
+      1. `git merge-tree --write-tree HEAD <upstream>` -- object-database
+         only. Conflicts decline with nothing written.
+      2. `git commit-tree <tree> -p HEAD -p <upstream>` -- the merge commit.
+      3. `git read-tree -m -u <old> <new>` -- materializes the difference
+         into index/worktree. Only paths that differ between the two trees
+         are touched; a path that differs AND is locally modified, staged, or
+         shadowed by an untracked file makes git refuse the whole operation
+         and write nothing -- never a peer's file overwritten, never a
          `git stash`.
-      3. `git update-ref <branch-ref> <new> <old>` moves the branch, with
-         git's own compare-and-swap against the tip step 1 read, so a peer
-         committing in the gap makes git refuse rather than silently discard
-         that commit.
+      4. `git update-ref -m ... <branch-ref> <new> <old>` -- CAS against the
+         tip step 1 merged, so a peer committing in the gap makes git refuse
+         rather than silently discard that commit.
 
-    ROLLBACK between 2 and 3 is mandatory, not defensive garnish: a
+    NEVER a rebase or `git replay` here: either rewrites every unpushed
+    commit on a shared branch, orphaning every artifact that cites those
+    shas. Merge keeps them all reachable; linear history is not worth it.
+
+    ROLLBACK between 3 and 4 is mandatory, not defensive garnish: a
     successful read-tree with a failed ref move leaves the index describing
     `new` while HEAD still names `old`, which every reader of this tree --
     a peer's scoped commit included -- sees as a large staged diff it did not
     make. The reverse read-tree restores the status quo ante; a rollback that
     itself fails is reported in the returned reason, because at that point
-    the tree needs a human, and saying so is the only honest move.
+    the tree needs a human.
 
-    Returns `(exit_code, reason)` on the same contract as
-    `_rebase_onto_fetched_ref`: `0` means the branch now sits on top of the
-    fetched upstream and the caller may re-push. Every failure arm leaves
-    index, worktree and refs exactly as it found them.
+    The function name predates the merge; callers and test seams patch it by
+    name, so it is kept.
+
+    Returns `(exit_code, reason)`; `0` means the branch now contains the
+    upstream and the caller may re-push. Every failure leaves refs, index and
+    worktree as found.
     """
     if not branch:
-        return 1, "replay recovery cannot run: no branch resolved to move (detached HEAD)"
+        return 1, "merge recovery cannot run: no branch resolved to move (detached HEAD)"
     branch_ref = f"refs/heads/{branch}"
 
-    mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
-    if not mb_result.ok or not mb_result.stdout.strip():
-        reason = condense_git_diagnostic(mb_result.stderr) or "merge-base failed"
-        return mb_result.returncode or 1, f"git merge-base: {reason}"
-    merge_base_sha = mb_result.stdout.strip()
+    old_sha = head_sha_local(worktree_root)
+    if not old_sha:
+        return 1, "merge recovery cannot run: HEAD unresolvable"
 
-    replay_result = git_native.replay_onto_print(
-        worktree_root, upstream_ref, merge_base_sha, branch_ref
+    merge_result = git_native.merge_tree_write_tree(worktree_root, old_sha, upstream_ref)
+    if merge_result.returncode == 1:
+        return 1, "merge recovery declined, nothing touched: merge conflicts with " + upstream_ref
+    first_line = merge_result.stdout.strip().splitlines()[0] if merge_result.stdout.strip() else ""
+    if not merge_result.ok or not first_line:
+        reason = condense_git_diagnostic(merge_result.stderr) or "empty output"
+        return merge_result.returncode or 1, f"git merge-tree: {reason}"
+    tree_sha = first_line
+
+    message = f"merge {upstream_ref} into {branch} (push ladder)"
+    commit_result = git_native.commit_tree_merge(
+        worktree_root, tree_sha, [old_sha, upstream_ref], message
     )
-    if not replay_result.ok:
-        reason = (
-            condense_git_diagnostic(replay_result.stderr)
-            or condense_git_diagnostic(replay_result.stdout)
-            or f"exit_code={replay_result.returncode}"
-        )
-        return replay_result.returncode or 1, f"git replay: {reason}"
-
-    match = _REPLAY_UPDATE_RE.match(replay_result.stdout.strip())
-    if match is None or match.group(1) != branch_ref:
-        # An empty or unparseable plan is INDETERMINATE, never "nothing to
-        # do": reporting success here would send the caller into a re-push of
-        # a range the remote already rejected, which loops.
-        return 1, (
-            "git replay: no usable ref-update plan for "
-            f"{branch_ref} ({replay_result.stdout.strip()!r})"
-        )
-    new_sha, old_sha = match.group(2), match.group(3)
+    new_sha = commit_result.stdout.strip()
+    if not commit_result.ok or not new_sha:
+        reason = condense_git_diagnostic(commit_result.stderr) or "commit-tree failed"
+        return commit_result.returncode or 1, f"git commit-tree: {reason}"
 
     read_tree_result = git_native.read_tree_merge_update(worktree_root, old_sha, new_sha)
     if not read_tree_result.ok:
         reason = condense_git_diagnostic(read_tree_result.stderr) or "read-tree refused"
         return read_tree_result.returncode or 1, (
-            f"replay recovery declined, nothing touched: {reason}"
+            f"merge recovery declined, nothing touched: {reason}"
         )
 
-    update_result = git_native.update_ref(worktree_root, branch_ref, new_sha, old_sha)
+    update_result = git_native.update_ref(
+        worktree_root, branch_ref, new_sha, old_sha, message, old_is_ancestor=True
+    )
     if not update_result.ok:
         reason = condense_git_diagnostic(update_result.stderr) or "update-ref refused"
         rollback = git_native.read_tree_merge_update(worktree_root, new_sha, old_sha)
@@ -943,67 +924,6 @@ def _replay_onto_fetched_ref(
         return update_result.returncode or 1, f"git update-ref: {reason}"
 
     return 0, ""
-
-
-def _rebase_onto_fetched_ref(
-    worktree_root: Path, upstream_ref: str, branch: Optional[str] = None
-) -> Tuple[int, str]:
-    """Rebase THIS session's own commit range onto the freshly-fetched `upstream_ref`.
-
-    Scoping is load-bearing: computes `merge-base(HEAD, upstream_ref)` BEFORE
-    the rebase and passes it as the exclusive lower bound to
-    `git rebase --onto <upstream_ref> <merge-base> HEAD` -- replays only the
-    commits unique to HEAD since it diverged from upstream. Never a bare
-    `git pull --rebase` / bare `git rebase` on the shared branch.
-
-    Returns `(exit_code, reason)`. `exit_code == 0` -> rebase landed cleanly.
-    On a rebase failure, aborts the half-applied rebase so the working tree
-    is left clean for the caller.
-
-    Dirty-worktree route (2026-08-30, superseding the 2026-08-07 refusal):
-    `git rebase --onto` refuses outright on a dirty worktree, and on a
-    shared-fleet box the worktree is essentially never clean (peer sessions
-    churn state ledgers continuously). The 2026-08-07 fix detected that here
-    and returned a distinctly-diagnosable refusal -- accurate, and still a
-    push that never happened, for the ordinary state of this box rather than
-    an edge case. PM ruling 2026-08-30: publishing must not require a
-    pristine tree. So the dirty case now ROUTES to
-    `_replay_onto_fetched_ref` (a worktree-free replay plus a two-way
-    read-tree that touches no peer's file), and only the clean case takes
-    the `git rebase --onto` path below. Detection is unchanged --
-    `git_native.status_porcelain()`, the native porcelain seam, never a raw
-    `git status` shell-out. A porcelain check that itself fails
-    to run (indeterminate) still falls through to the ordinary rebase
-    attempt below rather than guessing dirty/clean.
-
-    `branch` is the caller's ALREADY-RESOLVED branch name (`auto_push.
-    resolve_branch`, zero spawns in the ordinary case) -- passed down rather
-    than re-resolved so the replay route names the same ref the push leg
-    itself will name. `None` reaches the replay route as "no branch to move",
-    which it reports rather than guesses.
-    """
-    status_result = git_native.status_porcelain(worktree_root)
-    if status_result.ok and status_result.stdout.strip():
-        return _replay_onto_fetched_ref(worktree_root, upstream_ref, branch)
-
-    mb_result = git_native.merge_base(worktree_root, "HEAD", upstream_ref)
-    if not mb_result.ok:
-        reason = condense_git_diagnostic(mb_result.stderr) or "merge-base failed"
-        return mb_result.returncode or 1, f"git merge-base: {reason}"
-    merge_base_sha = mb_result.stdout.strip()
-    if not merge_base_sha:
-        return 1, "git merge-base: empty output"
-
-    rebase_result = git_native.rebase_onto(worktree_root, upstream_ref, merge_base_sha)
-    if rebase_result.ok:
-        return 0, ""
-    reason = (
-        condense_git_diagnostic(rebase_result.stderr)
-        or condense_git_diagnostic(rebase_result.stdout)
-        or f"exit_code={rebase_result.returncode}"
-    )
-    git_native.rebase_abort(worktree_root)
-    return rebase_result.returncode or 1, f"git rebase: {reason}"
 
 
 def _emit_push_policy_line(
@@ -1432,7 +1352,7 @@ def push_with_retry(
     budget_secs: Optional[float] = None,
     use_streamed_push: bool = False,
 ) -> PushOutcome:
-    """Push with reject-detect -> fetch -> rebase --onto -> re-push, bounded.
+    """Push with reject-detect -> fetch -> merge -> re-push, bounded.
 
     No `--force` at any point. Bounded to `_PUSH_MAX_RETRIES` attempts. When
     no remote is configured, the push is skipped (`exit_code == 0`, nothing
@@ -1444,9 +1364,9 @@ def push_with_retry(
     gate's own message; an unresolvable branch (detached HEAD, or the git
     call failed) is declined too, under a distinct `push:branch-unresolvable`
     marker, rather than silently proceeding to push a branch it cannot name.
-    On a rejected push, fetches the remote, rebases this session's own
-    commit range onto the updated ref (never a bare rebase on the shared
-    branch), and re-pushes. If the rebase itself refuses, or retries are
+    On a rejected push, fetches the remote, merges the updated ref into the
+    branch without rewriting any local commit (`_rebase_onto_fetched_ref`),
+    and re-pushes. If the merge itself declines, or retries are
     exhausted while still rejected, returns a hard non-zero failure (in
     `PushOutcome.failed`) -- never a silent skip that lets the caller believe
     the push landed. FIX-I (2026-08-19): a push subprocess TIMEOUT is
@@ -1479,11 +1399,11 @@ def push_with_retry(
     `budget_secs` -- an END-TO-END deadline for this whole
     ladder, stamped at entry, with each REMOTE leg (`push`, `fetch`) sized
     from the remainder and the deadline re-checked BETWEEN attempts. The
-    local `rebase --onto` between them is deliberately NOT bounded by it:
-    it spawns no network call, and cutting a rebase mid-flight would leave
-    the worktree mid-rebase -- a worse state than the overrun it would
-    prevent. The between-attempts check is what catches a ladder whose
-    rebase ran long. `None` (the
+    local merge between them is deliberately NOT bounded by it: it spawns
+    no network call, and cutting it between read-tree and update-ref would
+    leave the index describing a tip HEAD does not name -- a worse state
+    than the overrun it would prevent. The between-attempts check is what
+    catches a ladder whose merge ran long. `None` (the
     default) keeps the pre-existing unbudgeted behaviour for every caller
     that has not opted in, so this parameter changes nothing it is not
     passed to. See `PUSH_RETRY_BUDGET_SECS` for why the ladder must own a
@@ -1773,11 +1693,11 @@ def push_with_retry(
         if refetched_sha:
             pre_push_upstream_sha = refetched_sha
 
-        # Before reaching for a rebase, ask whether one is needed at all: on a
+        # Before reaching for a merge, ask whether one is needed at all: on a
         # shared worktree a peer's push routinely carries THIS session's
         # commits to the remote, so the reject we just took can be for a range
-        # that is already published. Answering that here keeps the recovery
-        # working on a dirty tree, which `_rebase_onto_fetched_ref` cannot.
+        # that is already published -- merging there would mint an empty
+        # merge commit for nothing.
         if _head_already_reached_upstream(root, upstream_info.abbrev, refetched_sha):
             return PushOutcome(
                 exit_code=0,

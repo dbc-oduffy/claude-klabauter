@@ -292,3 +292,78 @@ def test_cut_tag_tags_fetched_tip_when_tracking_ref_is_stale(tmp_path: Path) -> 
     assert cut is True
     assert merge_sha == new_tip
     assert _git(["rev-parse", "v2.0.0^{}"], cwd=work).stdout.strip() == new_tip
+
+
+def _land_second_commit(work: Path) -> tuple[str, str]:
+    first = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+    (work / "g.txt").write_text("merge\n", encoding="utf-8")
+    _git(["add", "g.txt"], cwd=work)
+    _git(["commit", "-m", "merge commit"], cwd=work)
+    _git(["push", "origin", "main"], cwd=work)
+    return first, _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+
+
+def test_cut_tag_targets_pr_merge_commit_not_local_head(tmp_path: Path, monkeypatch) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _, merge_sha = _land_second_commit(work)
+    (work / "h.txt").write_text("later\n", encoding="utf-8")
+    _git(["add", "h.txt"], cwd=work)
+    _git(["commit", "-m", "later"], cwd=work)
+    _git(["push", "origin", "main"], cwd=work)
+    monkeypatch.setattr(_mod, "_merge_commit_of_pr", lambda root, pr: merge_sha)
+
+    cut, sha = cut_tag(work, "v1.0.0", pr="7")
+
+    assert cut is True and sha == merge_sha
+    assert _git(["rev-parse", "v1.0.0^{}"], cwd=work).stdout.strip() == merge_sha
+
+
+def test_cut_tag_refuses_when_remote_tag_points_elsewhere(tmp_path: Path) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    first, merge_sha = _land_second_commit(work)
+    _git(["tag", "-a", "v1.0.0", first, "-m", "v1.0.0"], cwd=work)
+    _git(["push", "origin", "v1.0.0"], cwd=work)
+    _git(["tag", "-d", "v1.0.0"], cwd=work)
+
+    with pytest.raises(SystemExit):
+        cut_tag(work, "v1.0.0", merge_ref=merge_sha)
+
+    remote = _git(["ls-remote", "origin", "refs/tags/v1.0.0^{}"], cwd=work).stdout
+    assert remote.split()[0] == first
+
+
+def test_cut_tag_pushes_when_local_tag_exists_but_remote_lacks_it(tmp_path: Path) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    head = _git(["rev-parse", "HEAD"], cwd=work).stdout.strip()
+    _git(["tag", "-a", "v1.0.0", head, "-m", "v1.0.0"], cwd=work)
+
+    cut, _ = cut_tag(work, "v1.0.0")
+
+    assert cut is True
+    assert "refs/tags/v1.0.0" in _git(["ls-remote", "--tags", "origin"], cwd=work).stdout
+
+
+def test_merge_commit_of_pr_dies_loudly_when_gh_is_missing(tmp_path: Path, monkeypatch) -> None:
+    def _no_gh(cmd, **kwargs):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(_mod, "_run", _no_gh)
+    with pytest.raises(SystemExit):
+        _mod._merge_commit_of_pr(tmp_path, "7")
+
+
+@pytest.mark.parametrize("stdout", ["", "null\n"])
+def test_merge_commit_of_pr_dies_when_pr_not_merged(tmp_path: Path, monkeypatch, stdout: str) -> None:
+    monkeypatch.setattr(
+        _mod,
+        "_run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr=""),
+    )
+    with pytest.raises(SystemExit):
+        _mod._merge_commit_of_pr(tmp_path, "7")
+
+
+def test_cut_tag_never_force_pushes() -> None:
+    src = (_BIN_DIR / "merge-recovery-and-tag-cut.py").read_text(encoding="utf-8")
+    for flag in ("--force", "-f\"", "+refs", "--force-with-lease"):
+        assert flag not in src

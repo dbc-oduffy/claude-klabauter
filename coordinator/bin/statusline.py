@@ -549,16 +549,6 @@ def _workspace_root(payload: dict) -> str | None:
     return candidate
 
 
-def _group_em_nomination_module():
-    """Load ``group-em-nomination.py`` by path -- its filename is not
-    import-safe as a package module (hyphens). Best-effort: any failure here
-    means no standing, never a raise."""
-    try:
-        return _load_by_path("_statusline_gem_nomination", Path(__file__).with_name("group-em-nomination.py"))
-    except Exception:
-        return None
-
-
 def _tree_carries_helpers() -> bool:
     """True in the authoring tree, whose `bin/lib` carries the group-em helpers and whose
     sibling CLIs read records by `repo_root` alone. A published plugin root carries neither:
@@ -567,10 +557,9 @@ def _tree_carries_helpers() -> bool:
 
 
 def _nomination_record(repo_root: str):
-    if _tree_carries_helpers():
-        gem = _group_em_nomination_module()
-        return None if gem is None else gem.read_record(repo_root)
-    return _group_em_helper("nomination").read_record(repo_root)
+    """The verified standing only (`read_authoritative`); `group-em-nomination.py` is a CLI
+    trampoline with no module-level readers, so the engine module is the one source."""
+    return _group_em_helper("nomination").read_authoritative(repo_root)
 
 
 def _uhura_record(repo_root: str):

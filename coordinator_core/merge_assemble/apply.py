@@ -210,6 +210,10 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
     if that ever stops being true (module docstring's own negative-spec:
     a non-`SystemExit` import-time exception propagates uncaught)."""
     subcommand = args[0] if args else None
+    if subcommand == "plan-tag":
+        # Pre-merge: records the computed version only. The cut is post-merge
+        # (`cut-tag TAG --pr N`), so nothing is created or pushed here.
+        return {"tag_planned": args[1] if len(args) > 1 else None, "cut": False}
     if subcommand == "resolve-tag-prefix":
         resolved_args = _anchor_merge_recovery_config_path(args, repo_root)
     elif subcommand == "cut-tag":
@@ -217,7 +221,7 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
     else:
         raise UnrecognizedDirective(
             "merge-recovery-and-tag-cut: unrecognized subcommand "
-            f"{subcommand!r} — only 'resolve-tag-prefix' and 'cut-tag' are "
+            f"{subcommand!r} — only 'plan-tag', 'resolve-tag-prefix' and 'cut-tag' are "
             "routed through this cli key ('recovery-branch' exists on the "
             "script but is never dispatched here)"
         )

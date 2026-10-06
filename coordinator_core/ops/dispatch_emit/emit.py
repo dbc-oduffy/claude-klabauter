@@ -3607,6 +3607,7 @@ def compose_script(
     review_specs: Sequence[AgentSpec] = (),
     predecessor_state: Optional[str] = None,
     precredited_rows: Optional[Sequence[str]] = None,
+    review_only: bool = False,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3778,27 +3779,44 @@ def compose_script(
         f"{stage_schema_literal('row_verification_result')};"
     )
 
-    push_branch = (
-        expected_branch
-        if expected_branch and expected_branch not in _CHECKPOINT_PROTECTED_BRANCHES
-        else None
-    )
-    if push_branch is None:
+    if review_only:
+        landed_seed = ", ".join(
+            "{id}: {{ paths: [{paths}] }}".format(
+                id=_js_string_literal(row.id),
+                paths=", ".join(_js_string_literal(p) for p in row_pathspecs.get(row.id, ())),
+            )
+            for row in flat_rows
+        )
+        body_blocks.append(f"  const _landed = {{ {landed_seed} }};")
         body_blocks.append(
-            "  log('No checkpoint push: the run is not on a non-protected work branch "
-            "(detached HEAD, main or master); checkpoint commits stay local.');"
+            "  log("
+            + _js_string_literal(
+                f"Review-only: rows {', '.join(r.id for r in flat_rows)}, base {run_base_sha}"
+            )
+            + ");"
         )
-    body_blocks.append(
-        _checkpoint_commit_js(
-            agent_type_host,
-            repo_root=repo_anchor,
-            session_id=session_id,
-            push_branch=push_branch,
-            plan_path=plan_path,
-            run_base_sha=run_base_sha,
+    else:
+        push_branch = (
+            expected_branch
+            if expected_branch and expected_branch not in _CHECKPOINT_PROTECTED_BRANCHES
+            else None
         )
-    )
-    body_blocks.append(_run_row_helper_js(agent_type_host))
+        if push_branch is None:
+            body_blocks.append(
+                "  log('No checkpoint push: the run is not on a non-protected work branch "
+                "(detached HEAD, main or master); checkpoint commits stay local.');"
+            )
+        body_blocks.append(
+            _checkpoint_commit_js(
+                agent_type_host,
+                repo_root=repo_anchor,
+                session_id=session_id,
+                push_branch=push_branch,
+                plan_path=plan_path,
+                run_base_sha=run_base_sha,
+            )
+        )
+        body_blocks.append(_run_row_helper_js(agent_type_host))
 
     pre_check_specs: list[AgentSpec] = []
     if predispatch:
@@ -3810,114 +3828,44 @@ def compose_script(
             _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host)
         )
 
-    phase_titles.append(_EXECUTE_PHASE_TITLE)
-    body_blocks.append(f"  phase({_js_string_literal(_EXECUTE_PHASE_TITLE)});")
     runtime_cap = _runtime_cap_on_host()
-    body_blocks.append(
-        f"  log({_js_string_literal(_dag_width_narration(dag, len(flat_rows), runtime_cap))});"
-    )
-
-    body_blocks.append("  const _rows = {};")
-    roster = None
-    if chatty:
-        roster = _chatty.build_roster(name, [row.id for row in flat_rows])
-        overseer_type = _EXECUTOR_AGENT_TYPE
+    if not review_only:
+        phase_titles.append(_EXECUTE_PHASE_TITLE)
+        body_blocks.append(f"  phase({_js_string_literal(_EXECUTE_PHASE_TITLE)});")
         body_blocks.append(
-            "  await agent("
-            f"{_js_string_literal(_chatty.overseer_prompt(roster))}, "
-            "{ "
-            f"label: {_js_string_literal('chatty-overseer')}, "
-            f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
-            f"agentType: {_js_string_literal(_degrade_agent_type(overseer_type, agent_type_host))}, "
-            f"{_model_opt(overseer_type)}, "
-            f"stallMs: {_EXECUTOR_STALL_MS} "
-            "});"
-        )
-    unchecked_rows: list[str] = []
-    committable_rows: set[str] = set()
-    for node in dag.nodes:
-        row = node.row
-        deps_expr = (
-            "[" + ", ".join(f"_rows[{_js_string_literal(rid)}]" for rid in node.after) + "]"
-        )
-        verify_scope = row_verify_scopes[row.id]
-        verify_expr = (
-            "[" + ", ".join(_js_string_literal(t) for t in verify_scope) + "]"
-            if verify_scope
-            else "null"
-        )
-        call_expr = _row_agent_call_expr(
-            row,
-            plan_path,
-            plan_context,
-            shared,
-            agent_type_host=agent_type_host,
-            preamble=preamble,
-            new_module_paths=tuple(_new_module_paths(row, repo_root)),
-            memo_deliveries=memo_deliveries,
-            predecessor_state=predecessor_state,
-            chatty_brief=(
-                _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
-                if roster is not None
-                else None
-            ),
-        )
-        row_paths = row_pathspecs.get(row.id) or []
-        if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
-            unchecked_rows.append(row.id)
-            row_paths = []
-        if row_paths:
-            committable_rows.add(row.id)
-        commit_expr = (
-            "{ title: "
-            + _js_string_literal(row.title)
-            + ", paths: ["
-            + ", ".join(_js_string_literal(p) for p in row_paths)
-            + "] }"
-            if row_paths
-            else "null"
-        )
-        body_blocks.append(
-            f"  _rows[{_js_string_literal(row.id)}] = _runRow("
-            f"{_js_string_literal(row.id)}, {deps_expr}, "
-            f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
+            f"  log({_js_string_literal(_dag_width_narration(dag, len(flat_rows), runtime_cap))});"
         )
 
-    for n, wave in enumerate(waves, start=1):
-        ids = [r.id for r in wave if r.id in committable_rows]
-        if ids:
+        body_blocks.append("  const _rows = {};")
+        roster = None
+        if chatty:
+            roster = _chatty.build_roster(name, [row.id for row in flat_rows])
+            overseer_type = _EXECUTOR_AGENT_TYPE
             body_blocks.append(
-                f"  _waveCommit({n}, [" + ", ".join(_js_string_literal(i) for i in ids) + "]);"
+                "  await agent("
+                f"{_js_string_literal(_chatty.overseer_prompt(roster))}, "
+                "{ "
+                f"label: {_js_string_literal('chatty-overseer')}, "
+                f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
+                f"agentType: {_js_string_literal(_degrade_agent_type(overseer_type, agent_type_host))}, "
+                f"{_model_opt(overseer_type)}, "
+                f"stallMs: {_EXECUTOR_STALL_MS} "
+                "});"
             )
-
-    if unchecked_rows:
-        body_blocks.append(
-            "  log("
-            + _js_string_literal(
-                f"No checkpoint commit for rows declaring more than "
-                f"{_SHARED_PATH_ARRAY_THRESHOLD} paths (the terminal commit covers them): "
-                + ", ".join(unchecked_rows)
+        unchecked_rows: list[str] = []
+        committable_rows: set[str] = set()
+        for node in dag.nodes:
+            row = node.row
+            deps_expr = (
+                "[" + ", ".join(f"_rows[{_js_string_literal(rid)}]" for rid in node.after) + "]"
             )
-            + ");"
-        )
-    body_blocks.append("  await Promise.all(Object.values(_rows));")
-    if roster is not None:
-        overseer_opts = (
-            "{ "
-            f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
-            f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
-            f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, "
-            f"stallMs: {_EXECUTOR_STALL_MS}"
-        )
-        body_blocks.append(
-            "  const _survey = await agent("
-            f"{_js_string_literal(_chatty.survey_prompt(_chatty.new_nonce()))}, "
-            f"{overseer_opts}, label: 'chatty-survey', schema: {json.dumps(_CHATTY_SURVEY_SCHEMA)} "
-            "});"
-        )
-        body_blocks.append("  const _continue = {};")
-        for row in flat_rows:
-            cont_call = _row_agent_call_expr(
+            verify_scope = row_verify_scopes[row.id]
+            verify_expr = (
+                "[" + ", ".join(_js_string_literal(t) for t in verify_scope) + "]"
+                if verify_scope
+                else "null"
+            )
+            call_expr = _row_agent_call_expr(
                 row,
                 plan_path,
                 plan_context,
@@ -3927,34 +3875,106 @@ def compose_script(
                 new_module_paths=tuple(_new_module_paths(row, repo_root)),
                 memo_deliveries=memo_deliveries,
                 predecessor_state=predecessor_state,
-                chatty_brief=_chatty.continuation_brief(row.id),
-                chatty_nonce_var="_n",
-            ).replace("label: ", "label: 'continue:' + ", 1)
-            body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
-        body_blocks.append(
-            "  await Promise.all(((_survey && _survey.continuations) || [])"
-            ".filter((c) => _continue[c.role])"
-            ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
-            "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
-        )
-        body_blocks.append(
-            "  await agent("
-            f"{_js_string_literal(_chatty.summary_prompt(_chatty.new_nonce()))}, "
-            f"{overseer_opts}, label: 'chatty-summary' "
-            "});"
-        )
+                chatty_brief=(
+                    _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
+                    if roster is not None
+                    else None
+                ),
+            )
+            row_paths = row_pathspecs.get(row.id) or []
+            if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
+                unchecked_rows.append(row.id)
+                row_paths = []
+            if row_paths:
+                committable_rows.add(row.id)
+            commit_expr = (
+                "{ title: "
+                + _js_string_literal(row.title)
+                + ", paths: ["
+                + ", ".join(_js_string_literal(p) for p in row_paths)
+                + "] }"
+                if row_paths
+                else "null"
+            )
+            body_blocks.append(
+                f"  _rows[{_js_string_literal(row.id)}] = _runRow("
+                f"{_js_string_literal(row.id)}, {deps_expr}, "
+                f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
+            )
+
+        for n, wave in enumerate(waves, start=1):
+            ids = [r.id for r in wave if r.id in committable_rows]
+            if ids:
+                body_blocks.append(
+                    f"  _waveCommit({n}, [" + ", ".join(_js_string_literal(i) for i in ids) + "]);"
+                )
+
+        if unchecked_rows:
+            body_blocks.append(
+                "  log("
+                + _js_string_literal(
+                    f"No checkpoint commit for rows declaring more than "
+                    f"{_SHARED_PATH_ARRAY_THRESHOLD} paths (the terminal commit covers them): "
+                    + ", ".join(unchecked_rows)
+                )
+                + ");"
+            )
+        body_blocks.append("  await Promise.all(Object.values(_rows));")
+        if roster is not None:
+            overseer_opts = (
+                "{ "
+                f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
+                f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
+                f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, "
+                f"stallMs: {_EXECUTOR_STALL_MS}"
+            )
+            body_blocks.append(
+                "  const _survey = await agent("
+                f"{_js_string_literal(_chatty.survey_prompt(_chatty.new_nonce()))}, "
+                f"{overseer_opts}, label: 'chatty-survey', schema: {json.dumps(_CHATTY_SURVEY_SCHEMA)} "
+                "});"
+            )
+            body_blocks.append("  const _continue = {};")
+            for row in flat_rows:
+                cont_call = _row_agent_call_expr(
+                    row,
+                    plan_path,
+                    plan_context,
+                    shared,
+                    agent_type_host=agent_type_host,
+                    preamble=preamble,
+                    new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                    memo_deliveries=memo_deliveries,
+                    predecessor_state=predecessor_state,
+                    chatty_brief=_chatty.continuation_brief(row.id),
+                    chatty_nonce_var="_n",
+                ).replace("label: ", "label: 'continue:' + ", 1)
+                body_blocks.append(f"  _continue[{_js_string_literal(row.id)}] = (_n) => {cont_call};")
+            body_blocks.append(
+                "  await Promise.all(((_survey && _survey.continuations) || [])"
+                ".filter((c) => _continue[c.role])"
+                ".map((c) => _continue[c.role](Array.from({ length: 16 }, "
+                "() => Math.floor(Math.random() * 16).toString(16)).join(''))));"
+            )
+            body_blocks.append(
+                "  await agent("
+                f"{_js_string_literal(_chatty.summary_prompt(_chatty.new_nonce()))}, "
+                f"{overseer_opts}, label: 'chatty-summary' "
+                "});"
+            )
     body_blocks.append("  await Promise.all(_verifications);")
-    body_blocks.append("  await Promise.all(_waveTriggers);")
-    body_blocks.append("  await _commitChain;")
-    body_blocks.append("  await Promise.all(_checkpointPushes);")
-    body_blocks.append(
-        "  if (_commitFailures.length) log('Checkpoint commits that did not land (the "
-        "terminal commit still covers their paths): ' + _commitFailures.join('; '));"
-    )
-    body_blocks.append(
-        "  if (_pushFailures.length) log('Checkpoint pushes that failed (the commits are "
-        "local only): ' + _pushFailures.join('; '));"
-    )
+    if not review_only:
+        body_blocks.append("  await Promise.all(_waveTriggers);")
+        body_blocks.append("  await _commitChain;")
+        body_blocks.append("  await Promise.all(_checkpointPushes);")
+        body_blocks.append(
+            "  if (_commitFailures.length) log('Checkpoint commits that did not land (the "
+            "terminal commit still covers their paths): ' + _commitFailures.join('; '));"
+        )
+        body_blocks.append(
+            "  if (_pushFailures.length) log('Checkpoint pushes that failed (the commits are "
+            "local only): ' + _pushFailures.join('; '));"
+        )
 
     marker = _terminal_commit_marker(
         flat_rows,
@@ -4606,6 +4626,27 @@ def _drop_landed_rows(rows: list, landed: frozenset) -> list:
     return kept
 
 
+def _keep_landed_rows(rows: list, landed: frozenset) -> list:
+    """The inverse of ``_drop_landed_rows``: only the named rows, with edges
+    onto every dropped row stripped."""
+    unknown = set(landed) - {r.id for r in rows}
+    if unknown:
+        raise ValueError(f"review-only row id(s) not dispatchable in this spine: {sorted(unknown)}")
+    kept = []
+    for row in rows:
+        if row.id not in landed:
+            continue
+        edges = [
+            e for e in row.depends_on
+            if not (isinstance(e, dict) and e.get("chunk") not in landed)
+        ]
+        kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
+    return kept
+
+
+_RUN_BASE_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
 _CHECKPOINT_SUBJECT_RE = re.compile(r"checkpoint\(wave \d+\): \d+ rows \u2014 ([^\n]*)")
 
 
@@ -4632,6 +4673,8 @@ def emit_script(
     script_path: Optional[str] = None,
     findings_out: Optional[list] = None,
     landed_rows: Optional[frozenset] = None,
+    review_only_rows: Optional[frozenset] = None,
+    run_base_sha: Optional[str] = None,
     chatty: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
@@ -4643,6 +4686,10 @@ def emit_script(
     onto them as satisfied, so the remaining rows are re-waved by file overlap
     and run at full parallelism (recovery of a run that ended incomplete).
     A named id absent from the spine raises ``ValueError``.
+
+    ``review_only_rows`` with ``run_base_sha`` composes the review wave and
+    terminal test over exactly those landed rows, reviewing the diff from the
+    given base: no row, checkpoint-commit or push machinery is emitted.
 
     ``findings_out``, when given, receives the emit-time WARN findings that
     are about the plan rather than the composed script (see
@@ -4718,6 +4765,15 @@ def emit_script(
     # nobody performed.
     exclusions: list = []
     rows = read_spine(plan_path, exclusions=exclusions)
+    review_only = bool(review_only_rows)
+    if review_only:
+        if landed_rows:
+            raise ValueError("review_only_rows and landed_rows are mutually exclusive")
+        if not run_base_sha or not _RUN_BASE_RE.fullmatch(run_base_sha):
+            raise ValueError("review-only requires run_base_sha matching ^[0-9a-f]{7,40}$")
+        rows = _keep_landed_rows(rows, review_only_rows)
+    elif run_base_sha is not None or review_only_rows is not None:
+        raise ValueError("run_base_sha and review_only_rows are accepted only together")
     if landed_rows:
         rows = _drop_landed_rows(rows, landed_rows)
         if not rows:
@@ -4777,7 +4833,8 @@ def emit_script(
     # compose_script's run_base_sha narration). `None` when repo_root is
     # unresolvable or HEAD cannot be read; compose_script degrades to no
     # narration line rather than guessing a sha.
-    run_base_sha = head_sha(repo_root) if repo_root is not None else None
+    if not review_only:
+        run_base_sha = head_sha(repo_root) if repo_root is not None else None
     observed_branch = head_branch(repo_root) if repo_root is not None else None
     expected_branch = None if observed_branch in (None, "HEAD") else observed_branch
 
@@ -4814,6 +4871,7 @@ def emit_script(
             predecessor_state_section(plan_text, repo_root), run_base_sha
         ),
         precredited_rows=precredited_rows,
+        review_only=review_only,
     )
 
 

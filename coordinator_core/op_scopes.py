@@ -572,6 +572,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.archive_completed_plans":          "common_dir",
     "fleet.delete_superseded_decisions":     "common_dir",
     "fleet.prune_closed_bugs":               "common_dir",
+    "fleet.prune_emitted_output":            "common_dir",
     "fleet.archive_sweep_status":            "common_dir",
     "fleet.migrate_handoff_vocabulary":       "common_dir",
     "fleet.archive_terminal_sizings":         "common_dir",

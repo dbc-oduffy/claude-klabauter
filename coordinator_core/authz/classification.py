@@ -4182,6 +4182,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   classified by its most mutating path.
     # Spec backlink: docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md (C5)
     "fleet.prune_closed_bugs": OpClass.MUTATING,
+    # fleet.prune_emitted_output — MUTATING: deletes untracked emitted
+    #   workflow scripts and receipts under docs/plans; makes no commit and is
+    #   not a DR-211 archival writer.
+    # Spec backlink: docs/plans/2026-10-06-emitted-output-prune-op.md (C2)
+    "fleet.prune_emitted_output": OpClass.MUTATING,
     # fleet.archive_sweep_status — COMPUTE_ONLY despite the "archive" in the name:
     # it reports on the sweeps, it does not run one. `_handler` (ops/fleet/
     # sweep_status.py) reads _sweep_receipt.receipt_path and summarizes the rows;

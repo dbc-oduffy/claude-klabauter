@@ -123,26 +123,24 @@ class TestBrief:
         assert do["directives"][0]["already_satisfied"] is False
         assert "skipped_reason" not in do["directives"][0]
 
-    def test_node_ceremony_gate_self_satisfies_when_the_suite_is_absent(
+    def test_node_ceremony_gate_is_never_pre_satisfied_when_the_suite_is_absent(
         self, tmp_path, monkeypatch
     ):
-        # A repo that carries no plugin-ecosystem suite has nothing for this
-        # gate to run; dispatching anyway is a MODULE_NOT_FOUND abort on the
-        # ceremony's FIRST hard gate, which wedges the whole run.
+        # An absent runner must not silently satisfy the gate.
         self._stub_git(monkeypatch)
         assert not merge_assemble.node_ceremony_gate_entrypoint(tmp_path).exists()
         gate = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"][0]
         assert gate["id"] == "d0"
-        assert gate["already_satisfied"] is True
-        assert "coordinator/tests/plugin-ecosystem/run.js" in gate["skipped_reason"]
+        assert gate["already_satisfied"] is False
+        assert "skipped_reason" not in gate
 
-    def test_node_ceremony_gate_is_not_satisfied_by_a_directory_at_the_entrypoint(
+    def test_node_ceremony_gate_is_never_pre_satisfied_by_a_directory_at_the_entrypoint(
         self, tmp_path, monkeypatch
     ):
         self._stub_git(monkeypatch)
         merge_assemble.node_ceremony_gate_entrypoint(tmp_path).mkdir(parents=True)
         gate = merge_assemble.brief(repo_root=tmp_path).decision_object["directives"][0]
-        assert gate["already_satisfied"] is True
+        assert gate["already_satisfied"] is False
 
     def test_every_directive_cli_is_in_the_expected_closed_set(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
@@ -198,7 +196,7 @@ class TestVersionBumpOverride:
         do = merge_assemble.brief(repo_root=tmp_path).decision_object
         assert do["artifact"]["release_tag_cut"] == "v1.0.1"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v1.0.1"]
+        assert d2["args"] == ["plan-tag", "v1.0.1"]
 
     def test_confirmed_disposition_still_cuts_the_proposed_patch_tag(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
@@ -206,7 +204,7 @@ class TestVersionBumpOverride:
         do = merge_assemble.brief(repo_root=tmp_path, decisions=decisions).decision_object
         assert do["artifact"]["release_tag_cut"] == "v1.0.1"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v1.0.1"]
+        assert d2["args"] == ["plan-tag", "v1.0.1"]
 
     def test_override_with_explicit_version_wins_over_proposal(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
@@ -220,7 +218,7 @@ class TestVersionBumpOverride:
         assert do["artifact"]["version_bump"]["override"] == "v0.16.0"
         assert do["artifact"]["version_bump"]["proposed"] == "v1.0.1"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v0.16.0"]
+        assert d2["args"] == ["plan-tag", "v0.16.0"]
 
     def test_bare_string_decisions_entry_normalizes_to_override(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
@@ -232,7 +230,7 @@ class TestVersionBumpOverride:
             "value": "v0.16.0",
         }
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v0.16.0"]
+        assert d2["args"] == ["plan-tag", "v0.16.0"]
 
     @pytest.mark.parametrize(
         "bad_value",
@@ -264,7 +262,7 @@ class TestVersionBumpOverride:
         do = merge_assemble.brief(repo_root=tmp_path, decisions=decisions).decision_object
         assert do["artifact"]["release_tag_cut"] == "v1.2.3"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v1.2.3"]
+        assert d2["args"] == ["plan-tag", "v1.2.3"]
 
     @pytest.mark.parametrize(
         "bad_entry",
@@ -289,7 +287,7 @@ class TestVersionBumpOverride:
         do = merge_assemble.brief(repo_root=tmp_path, decisions=decisions).decision_object
         assert do["artifact"]["release_tag_cut"] == "v1.0.1"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "v1.0.1"]
+        assert d2["args"] == ["plan-tag", "v1.0.1"]
 
     def test_malformed_override_via_apply_does_not_fire_d2(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
@@ -318,7 +316,7 @@ class TestVersionBumpOverride:
         ).decision_object
         assert do["artifact"]["release_tag_cut"] == "rel-2.5.0"
         d2 = next(d for d in do["directives"] if d["id"] == "d2")
-        assert d2["args"] == ["cut-tag", "rel-2.5.0"]
+        assert d2["args"] == ["plan-tag", "rel-2.5.0"]
 
         bad_decisions = {
             "version_bump_final": {"disposition": "override", "value": "v2.5.0"}
@@ -359,13 +357,35 @@ class TestVersionBumpDecline:
         decisions = {"version_bump_final": {"disposition": "decline"}}
         exit_code, report = merge_apply.apply(repo_root=tmp_path, decisions=decisions, force=True)
         assert exit_code == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
-        assert "d2" not in report.get("landed", [])
         assert report.get("release_tag_cut") is None
         assert "version_bump_final" in report.get("declined_judgment_points", [])
         assert "version_bump_final" not in report.get("unresolved_judgment_points", [])
         # ship_verdict was never answered at all — it stays UNANSWERED, not
         # conflated with the declined point.
         assert "ship_verdict" in report.get("unresolved_judgment_points", [])
+
+    def test_apply_never_dispatches_cut_tag_before_merge(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
+        self._stub_git(monkeypatch)
+        calls = []
+        for name in merge_apply._CLI_DISPATCH:
+            monkeypatch.setitem(
+                merge_apply._CLI_DISPATCH,
+                name,
+                lambda args, repo_root, _n=name: calls.append((_n, list(args))) or {"cli": _n},
+            )
+        decisions = {
+            "version_bump_final": {"disposition": "confirmed"},
+            "ship_verdict": {"disposition": "ship"},
+        }
+        merge_apply.apply(repo_root=tmp_path, decisions=decisions, force=True)
+        assert not [c for c in calls if c[1][:1] == ["cut-tag"]]
+        do = merge_assemble.brief(repo_root=tmp_path, decisions=decisions).decision_object
+        d2 = next(d for d in do["directives"] if d["id"] == "d2")
+        assert d2["args"][0] == "plan-tag"
+        assert merge_apply._dispatch_merge_recovery_and_tag_cut(
+            d2["args"], tmp_path
+        ) == {"tag_planned": d2["args"][1], "cut": False}
 
     def test_bare_string_decline_normalizes_to_disposition_not_override(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
@@ -392,13 +412,15 @@ class TestVersionBumpDecline:
 
 
 class TestApplyForceBypass:
-    def test_force_marks_node_gate_already_satisfied(self):
+    def test_force_marks_node_gate_advisory(self):
         directives = [
             {"id": "d0", "cli": "node-ceremony-gate", "args": [], "depends_on": None, "already_satisfied": False},
             {"id": "d1", "cli": "merge-recovery-and-tag-cut", "args": [], "depends_on": None, "already_satisfied": False},
         ]
         out = merge_apply._apply_force_bypass(directives, force=True)
-        assert out[0]["already_satisfied"] is True
+        assert out[0]["advisory"] is True
+        assert out[0]["already_satisfied"] is False
+        assert "advisory" not in out[1]
         assert out[1]["already_satisfied"] is False
 
     def test_no_force_leaves_directives_unchanged(self):

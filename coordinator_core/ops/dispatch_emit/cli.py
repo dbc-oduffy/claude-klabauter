@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -227,6 +228,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="with --plan: re-emit only the rows no `checkpoint(wave N): ... \u2014 ids` "
         "commit subject in RUN_TEXT (a git log dump or run output) names as landed; "
         "edges onto landed rows count as satisfied",
+    )
+    parser.add_argument(
+        "--review-only",
+        default=None,
+        metavar="RUN_TEXT",
+        help="with --plan and --run-base: emit a script that only reviews and tests the rows "
+        "RUN_TEXT's `checkpoint(wave N): ... — ids` subjects name as landed, over the "
+        "diff from --run-base to the worktree; no row, commit or push step is emitted",
+    )
+    parser.add_argument(
+        "--run-base",
+        default=None,
+        metavar="SHA",
+        help="with --review-only: the run's base commit (7-40 lowercase hex digits)",
     )
     parser.add_argument(
         "--reverify-delivery",
@@ -662,9 +677,45 @@ def _do_resume(args: argparse.Namespace) -> int:
     return EXIT_OK if all(r.get("ok", True) for r in results) else EXIT_DATA_ERROR
 
 
+def _review_only_refusal(args) -> "Optional[str]":
+    """The usage error for a bad ``--review-only``/``--run-base`` combination, or None."""
+    if args.review_only is None and args.run_base is None:
+        return None
+    if args.review_only is None or args.run_base is None:
+        return "--review-only and --run-base are required together"
+    if not args.plan:
+        return "--review-only is accepted only with --plan"
+    if not re.fullmatch(r"[0-9a-f]{7,40}", args.run_base):
+        return f"--run-base {args.run_base!r} is not 7-40 lowercase hex digits"
+    conflicts = [
+        flag
+        for flag, value in (
+            ("--only-incomplete", args.only_incomplete),
+            ("--resume-from", args.resume_from),
+            ("--reverify-delivery", args.reverify_delivery is not None),
+            ("--chatty", args.chatty),
+            ("--inventory", args.inventory),
+            ("--queue", args.queue),
+            ("--profile", args.profile),
+            ("--ask", args.ask is not None),
+            ("--sizing", args.sizing),
+            ("--pipeline", args.pipeline is not None),
+        )
+        if value
+    ]
+    if conflicts:
+        return f"--review-only is exclusive of {', '.join(conflicts)}"
+    return None
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+
+    review_only_error = _review_only_refusal(args)
+    if review_only_error:
+        print(f"emit-dispatch-workflow: ERROR — {review_only_error}", file=sys.stderr)
+        return EXIT_USAGE
 
     if args.mark_landed_phase:
         if args.plan or args.inventory or args.out_path or args.fire or args.restamp:
@@ -998,6 +1049,28 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["landed_rows"] = sorted(
                 landed_rows_from_text(Path(args.only_incomplete).read_text(encoding="utf-8"))
             )
+        if args.review_only:
+            from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
+
+            try:
+                text = Path(args.review_only).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(
+                    f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
+                    f"unreadable: {exc}",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            review_rows = sorted(landed_rows_from_text(text))
+            if not review_rows:
+                print(
+                    f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
+                    "names no landed row",
+                    file=sys.stderr,
+                )
+                return EXIT_DATA_ERROR
+            params["review_only_rows"] = review_rows
+            params["run_base_sha"] = args.run_base
     if args.inventory:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:
