@@ -31,6 +31,7 @@ def _patch_holder(monkeypatch, *, live):
         "is_live",
         lambda record: nomination.LivenessResult(live, "live" if live else "pid_not_running"),
     )
+    monkeypatch.setattr(nomination, "entry_status", lambda record, *a, **k: {"status": "verified"})
     row = type("Row", (), {"session_id": "sid-1", "name": "crown"})()
     monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: [row])
 

@@ -197,7 +197,7 @@ def test_an_exited_row_dates_itself_and_carries_no_nudge_content(
 
 def _nomination(monkeypatch, holder):
     from coordinator_core.group_em import nomination
-    monkeypatch.setattr(nomination, "read_record",
+    monkeypatch.setattr(nomination, "read_authoritative",
                         lambda *a, **k: None if holder is None else {"session_id": holder})
 
 

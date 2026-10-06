@@ -503,6 +503,11 @@ def publish_gh_release(tag: str, repo: str, notes_file: Path) -> None:
         )
 
 
+def cmd_plan_tag(args: argparse.Namespace) -> int:
+    print(f"TAG_PLANNED={args.tag}")
+    return 0
+
+
 def cmd_publish_gh_release(args: argparse.Namespace) -> int:
     publish_gh_release(args.tag, args.repo, Path(args.notes_file))
     return 0
@@ -548,6 +553,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_cut.add_argument("--must-contain", default=None)
     p_cut.add_argument("--pr", default=None)
     p_cut.set_defaults(func=cmd_cut_tag)
+
+    p_plan = sub.add_parser(
+        "plan-tag",
+        help="pre-merge: record the computed tag; creates and pushes nothing",
+    )
+    p_plan.add_argument("tag")
+    p_plan.set_defaults(func=cmd_plan_tag)
 
     p_release = sub.add_parser(
         "publish-gh-release",

@@ -256,3 +256,49 @@ def test_from_share_without_a_prep_stage_writes_the_range_prep(repo):
     assert fm["product_files"] == 2
     record = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
     assert record["prep_sidecar"] == prep
+
+
+def _reverify_share(root, s, *, verdict="PASS", head_sha=None, criterion=True):
+    """A share with reviewer + prep only; the delivery/criterion/tests live in a delivery-verdicts record."""
+    share = root / ".coordinator-local" / "subagent-share" / "sess-1"
+    _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
+    _sc(share, f"{PLAN}.review-wave-bookkeeping.md", plan_id=PLAN, delivery={"verdict": "FAIL"})
+    rec = {
+        "kind": "delivery-verdict",
+        "supersedes": f".coordinator-local/subagent-share/sess-1/{PLAN}.review-wave-bookkeeping.md",
+        "plan_id": PLAN, "head_sha": head_sha or s[2], "recorded_at": "2026-10-06T01:00:00Z",
+        "delivery": {"verdict": verdict, "unbacked": []},
+        "tests": {"status": "pass", "run": 3, "failed": 0, "sidecar": None},
+    }
+    if criterion:
+        rec["criterion"] = {"status": "met", "observation": "holds at head", "sidecar": None}
+    out = root / "state" / "delivery-verdicts" / "2026-10" / f"{PLAN}.review-wave-bookkeeping.t.md"
+    out.parent.mkdir(parents=True)
+    out.write_text("---\n" + yaml.safe_dump(rec, sort_keys=False) + "---\n", encoding="utf-8")
+
+
+def test_from_share_falls_back_to_the_delivery_verdicts_record(repo):
+    root, s = repo
+    _reverify_share(root, s)
+    res = _share_call(root, s)
+    fm = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
+    assert fm["delivery"]["verdict"] == "PASS"
+    assert fm["criterion"]["observation"] == "holds at head"
+    assert fm["tests"]["status"] == "pass"
+
+
+def test_from_share_fallback_fail_verdict_still_flows_through(repo):
+    root, s = repo
+    _reverify_share(root, s, verdict="FAIL")
+    res = _share_call(root, s)
+    fm = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
+    assert fm["delivery"]["verdict"] == "FAIL"
+
+
+def test_from_share_ignores_a_verdict_record_not_an_ancestor_of_head(repo):
+    root, s = repo
+    _reverify_share(root, s, head_sha="f" * 40)
+    with pytest.raises(SupersedeRefused, match="no criterion sidecar|no delivery sidecar"):
+        _share_call(root, s)
+    _reverify_share_old = root / "state" / "delivery-verdicts"
+    assert _reverify_share_old.exists()

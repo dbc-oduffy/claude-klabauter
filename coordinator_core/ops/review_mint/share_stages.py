@@ -96,6 +96,28 @@ def _head_commit_time(repo_root: Path, head: str) -> float:
         raise ValueError(f"could not read the commit time of {head}: {proc.stderr.strip()}")
 
 
+def _reverify_record(repo_root: Path, share: Path, plan_id: str, head: str) -> Optional[Dict[str, Any]]:
+    """Newest delivery-verdict record superseding this plan's run record in ``share``, usable only
+    when its ``head_sha`` is an ancestor-or-equal of ``head`` and its delivery verdict is explicit."""
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import _newest_supersession, _run_rel
+
+    best: Optional[Dict[str, Any]] = None
+    for path in sorted(share.glob("*.review-wave-bookkeeping.md")):
+        fm = _load_sidecar_fm(path)
+        if not fm or str(fm.get("plan_id")) != plan_id:
+            continue
+        rec = _newest_supersession(repo_root, _run_rel(repo_root, path))
+        if rec and str(rec.get("recorded_at") or "") >= str((best or {}).get("recorded_at") or ""):
+            best = rec
+    if best is None or (best.get("delivery") or {}).get("verdict") not in ("PASS", "FAIL"):
+        return None
+    sha = str(best.get("head_sha") or "")
+    if not sha:
+        return None
+    proc = run_git(["merge-base", "--is-ancestor", sha, head], cwd=str(repo_root), timeout=_GIT_TIMEOUT_SECS)
+    return best if proc.returncode == 0 else None
+
+
 def _newest(items: List[Tuple[Path, Any]]) -> Optional[Tuple[Path, Any]]:
     return max(items, key=lambda it: (it[0].stat().st_mtime, it[0].name)) if items else None
 
@@ -132,12 +154,21 @@ def assemble_from_share(
     def kind(fm: Dict[str, Any]) -> str:
         return str(fm.get("agent_type") or "")
 
+    reverify = _reverify_record(repo_root, share, plan_id, head)
+
     prep = _newest([(p, fm) for p, fm in bound if "run_base_sha" in fm and _int_or_none(fm.get("product_files")) is not None])
     if prep is None:
         raise ShareStageMissing("prep", "no plan-scoped sidecar carries run_base_sha and product_files")
 
     # The judge is provisioned no sidecar (it cannot write, by design); its verdict is the
     # terminal-judge-result it returned, passed here. A transcribed sidecar is the fallback.
+    judge_cands = [
+        (p, fm) for p, fm in bound
+        if "exit-criterion-judge" in kind(fm) and fm.get("status") in _JUDGE_STATUSES
+    ]
+    criterion_rec = (reverify or {}).get("criterion")
+    if judge_result is None and not judge_cands and isinstance(criterion_rec, dict) and criterion_rec.get("status"):
+        judge_result = criterion_rec
     if judge_result is not None:
         judge_path = None
         if judge_result.get("status") != "met":
@@ -149,10 +180,6 @@ def assemble_from_share(
         if not observation:
             raise ShareStageMissing("criterion", "the judge result records no observation")
     else:
-        judge_cands = [
-            (p, fm) for p, fm in bound
-            if "exit-criterion-judge" in kind(fm) and fm.get("status") in _JUDGE_STATUSES
-        ]
         if not judge_cands:
             raise ShareStageMissing("criterion", "no plan-scoped judge sidecar carries a met/not_met/indeterminate status")
         head_time = _head_commit_time(repo_root, head)
@@ -185,6 +212,10 @@ def assemble_from_share(
         if verdict:
             delivery_cands.append((p, {**fm, "verdict": verdict}))
     delivery = _newest(delivery_cands)
+    if delivery is None and reverify is not None:
+        block = reverify["delivery"]
+        rec_path = Path(str(reverify.get("supersedes") or ""))
+        delivery = (rec_path, {"verdict": block["verdict"], "claims_unbacked": block.get("unbacked") or []})
     if delivery is None:
         raise ShareStageMissing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
 
@@ -192,6 +223,9 @@ def assemble_from_share(
         (p, fm) for p, fm in bound
         if "test-runner" in kind(fm) and fm.get("status") in _TESTS_STATUSES
     ])
+    if tests is None and isinstance((reverify or {}).get("tests"), dict) and reverify["tests"].get("status") in _TESTS_STATUSES:
+        t = reverify["tests"]
+        tests = (Path(str(t.get("sidecar") or reverify.get("supersedes") or "")), t)
     if tests is None:
         raise ShareStageMissing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status")
 

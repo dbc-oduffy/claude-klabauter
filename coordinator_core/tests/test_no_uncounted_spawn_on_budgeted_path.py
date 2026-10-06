@@ -322,6 +322,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/stop_dispatch.py",
         ("_handler",),
     ),
+    "fleet.prune_emitted_output": (
+        "coordinator_core/ops/fleet/prune_emitted.py",
+        ("_handler",),
+    ),
     "roadmap.blitz_land": (
         "coordinator_core/ops/roadmap_blitz_land.py",
         ("_handler",),

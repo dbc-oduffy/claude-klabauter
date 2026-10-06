@@ -32,6 +32,9 @@ def test_read_only_over_fixture_record_and_heartbeat(tmp_path, monkeypatch):
     monkeypatch.setattr(
         nomination, "is_live", lambda record: nomination.LivenessResult(True, "live")
     )
+    monkeypatch.setattr(
+        nomination, "entry_status", lambda record, *a, **k: {"status": "verified"}
+    )
     repo = tmp_path / "repo"
     repo.mkdir()
     repo_root = str(repo.resolve())

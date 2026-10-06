@@ -13,6 +13,7 @@ or a file inside the fresh-emission grace window; never recurses; commits nothin
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -209,4 +210,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
         _LOG.error("%s: repo_root is None — keying-table misconfiguration", OP_KEY)
         return {"error": "repo_root is None; cannot derive worktree root", "exit_code": 1}
     common_dir = Path(repo_root)
-    return prune_emitted_output(main_worktree_root(common_dir), common_dir, dry_run=dry_run)
+    return await asyncio.to_thread(
+        prune_emitted_output, main_worktree_root(common_dir), common_dir, dry_run=dry_run
+    )

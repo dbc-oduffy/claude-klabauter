@@ -15,9 +15,15 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from coordinator_core.atomic_replace import atomic_write_bytes
+
+#: Generator-provenance declaration (coordinator_core/ops/generator_census). The verdict cache lands
+#: beside the nomination record (`nomination._verdict_cache_path`), under `settings_home()`: an
+#: operator-home cache, never a repo artifact. Same disposition as `nomination.py`.
+GENERATES = []
 
 REFUSAL = "GROUP-EM-NOT-HUMAN-ENTERED"
 REFUSAL_MESSAGE = f"{REFUSAL}: no human-typed /group-em in this session's transcript; type /group-em yourself"
@@ -97,17 +103,7 @@ def _write_cache(
     payload = {"session_id": key[0], "offsets": offsets, **verdict, "prompt_id": key[1]}
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        handle, tmp = tempfile.mkstemp(dir=str(cache_path.parent), suffix=".tmp")
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp, cache_path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        atomic_write_bytes(cache_path, json.dumps(payload).encode("utf-8"), preserve_mode=False)
     except OSError:
         pass
 
