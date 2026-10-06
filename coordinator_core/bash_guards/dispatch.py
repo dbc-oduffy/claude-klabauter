@@ -438,6 +438,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
     "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
     "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
+    "block-hand-authored-handoff-creation": ("handoffs",),
     "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
@@ -2275,6 +2276,10 @@ def _build_guard_chain(
         check as _check_fleet_delegation_creation,
         MATCHERS as _matchers_fleet_delegation_creation,
     )
+    from coordinator_core.bash_guards.block_hand_authored_handoff_creation import (
+        check as _check_hand_authored_handoff_creation,
+        MATCHERS as _matchers_hand_authored_handoff_creation,
+    )
     # block_dev_repo_sentinel_removal.py DOES declare a module-level MATCHERS,
     # but on the module whose registered leg here is `check_advisory` -- the
     # `check()` leg that pairs with the declaration was RETIRED from guard_chain
@@ -2558,6 +2563,14 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_fleet_delegation_creation),
+        ),
+        GuardEntry(
+            "block-hand-authored-handoff-creation",
+            lambda: _check_hand_authored_handoff_creation(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_hand_authored_handoff_creation),
         ),
         # Deny leg of `block-dev-repo-sentinel-removal` (direct match); its
         # advisory leg (indirection) is registered in ADVISORY_REWRITE below.

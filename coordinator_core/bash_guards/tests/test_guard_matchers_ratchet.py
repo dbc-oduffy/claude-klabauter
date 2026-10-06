@@ -280,6 +280,12 @@ EXPECTED: Dict[str, _Expected] = {
     "block-fleet-delegation-creation": _Expected(
         ("Bash", "PowerShell"),
     ),
+    "block-hand-authored-handoff-creation": _Expected(
+        ("Bash",),
+        NOT_YET_CONVERTED,
+        "Lexical redirect/tee classifier over POSIX shell text; PowerShell "
+        "Out-File/Set-Content shapes are not audited.",
+    ),
     "head-tail-plumbing-rewrite": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -463,7 +469,7 @@ def test_discovery_found_the_expected_scope():
     declaring, PM directive 2026-09-29), and 29 -> 30 with
     `guard_headless_claude_plugin_dir`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 35, sorted(stems)
+    assert len(stems) == 36, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -486,7 +492,7 @@ def test_every_registered_guard_is_classified():
     54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
     with `background-publish`."""
     actual = _actual_matchers()
-    assert len(actual) == 63, sorted(actual)
+    assert len(actual) == 64, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -527,7 +533,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 63
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 64
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
@@ -562,7 +568,7 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
     assert len(by_construction) == 11
-    assert len(not_yet_converted) == 0
+    assert len(not_yet_converted) == 1
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)
     assert HELD_PENDING_TOKENIZER_FIX != BASH_ONLY_BY_CONSTRUCTION != NOT_YET_CONVERTED

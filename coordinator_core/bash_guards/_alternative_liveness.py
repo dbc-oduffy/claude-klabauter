@@ -161,6 +161,7 @@ from coordinator_core.bash_guards import guard_multiprobe_banner
 from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
 from coordinator_core.bash_guards import block_fleet_delegation_creation
+from coordinator_core.bash_guards import block_hand_authored_handoff_creation
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.bash_guards import guard_repo_setup_claude_home_refusal
 from coordinator_core.bash_guards import guard_host_subagent_bash_ban
@@ -725,6 +726,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     # guard before being written here.
     "block_fleet_delegation_creation": lambda: block_fleet_delegation_creation.check(
         _payload("touch fleet-delegation.json", agent_id=None)
+    ),
+    "block_hand_authored_handoff_creation": lambda: block_hand_authored_handoff_creation.check(
+        _payload("echo x > state/handoffs/hand-authored.md", agent_id=None)
     ),
     "guard_repo_setup_claude_home_refusal": lambda: guard_repo_setup_claude_home_refusal.check(
         _payload(

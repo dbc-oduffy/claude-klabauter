@@ -27,6 +27,7 @@ from coordinator_core.bash_guards import (
     block_approval_sentinel_creation,
     block_disarm_marker_sentinel_creation,
     block_fleet_delegation_creation,
+    block_hand_authored_handoff_creation,
     block_stash_destruction,
     block_topic_branch,
     block_perforce_submit,
@@ -269,6 +270,15 @@ for _guard, _target, _module, _entry in (
             (_guard, "ls . | xargs touch", _sentinel(_module, _entry)),
         ]
     )
+
+
+_DENIED.append(
+    (
+        "block-hand-authored-handoff-creation",
+        "echo x > state/handoffs/hand-authored.md",
+        _sentinel(block_hand_authored_handoff_creation, "check"),
+    )
+)
 
 
 def _decision(result: Optional[Dict[str, Any]]) -> Optional[str]:

@@ -1369,6 +1369,22 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-hand-authored-handoff-creation",
+        "block-hand-authored-handoff-creation-fire",
+        "echo x > state/handoffs/hand-authored.md",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-hand-authored-handoff-creation",
+        "block-hand-authored-handoff-creation-control",
+        "echo x > normal_file.txt",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "p4-verb-fence",
         "p4-verb-fence-fire",
         "p4.exe -p ssl:host:1666 -c client submit",
@@ -2416,6 +2432,21 @@ def _wg_hand_authored_sidecar_creation_fire(
     }
 
 
+def _wg_hand_authored_handoff_creation_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `block_hand_authored_handoff_creation.check`: a Write CREATING a
+    new file under `state/handoffs/`."""
+    return {
+        "tool_name": "Write",
+        "cwd": str(scratch_dir),
+        "tool_input": {
+            "file_path": str(scratch_dir / "state" / "handoffs" / "hand-made.md"),
+            "content": "hand-authored body",
+        },
+    }
+
+
 def _wg_home_dir_memo_delivery_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
@@ -3080,6 +3111,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_foreign_family_sidecar_write", "control", False, _wg_benign),
     WriteGuardRow("block_goals_log_hand_write", "fire", True, _wg_goals_log_fire),
     WriteGuardRow("block_goals_log_hand_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_hand_authored_handoff_creation",
+        "fire",
+        True,
+        _wg_hand_authored_handoff_creation_fire,
+    ),
+    WriteGuardRow("block_hand_authored_handoff_creation", "control", False, _wg_benign),
     WriteGuardRow(
         "block_hand_authored_sidecar_creation",
         "fire",
