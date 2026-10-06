@@ -316,6 +316,18 @@ def test_path_served_indicator_engine_spawn_is_not_warm(monkeypatch, capsys):
     assert "path=warm" not in err
 
 
+def test_path_served_indicator_in_process_is_not_warm(monkeypatch, capsys):
+    def _route(op, params, repo_root, legacy_fn, **_kw):
+        cc_invoke.last_rung = "in-process"
+        return {"exit_code": 0, "report": {}}
+
+    monkeypatch.setattr(cc_invoke, "route", _route)
+    entry_point_shim._merge_assemble_entry(["apply"])
+    err = capsys.readouterr().err
+    assert "path=in-process" in err
+    assert "path=warm" not in err
+
+
 def test_path_served_indicator_cold(monkeypatch, capsys):
     _spy_cold_call(monkeypatch, {"exit_code": 0, "report": {}})
     monkeypatch.setattr(

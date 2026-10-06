@@ -2542,10 +2542,128 @@ def _apply_warm_envelope(
     return envelope["result"]
 
 
+#: Test-only: "1" makes rung 3 decline so a falsifier can measure the spawn path on a stamped tree.
+_NO_IN_PROCESS_RUNG_ENV = "COORDINATOR_TEST_NO_IN_PROCESS_RUNG"
+
+#: Bounded join the exit guard gives executor workers still winding down after
+#: `loop.close()`'s non-waiting default-executor shutdown, so only a genuinely stuck
+#: handler turns the exit into os._exit(1).
+_EXIT_GUARD_GRACE_SECS = 1.0
+
+
+def _try_stamped_in_process_dispatch(
+    op: str,
+    params: dict[str, Any],
+    repo_root: str,
+    claude_klabauter_root: str,
+) -> dict[str, Any] | None:
+    """Rung 3: serve a warm miss inside this interpreter on a stamped tree.
+
+    Preconditions, all required (any failure returns None before dispatch):
+      (a) `claude_klabauter_root` carries a non-empty `coordinator_core/_engine_stamp`;
+      (b) the imported `coordinator_core.ipc` resolves under `claude_klabauter_root`;
+      (c) `ipc._is_dispatch_engine_stamped()` holds.
+    An unstamped root, an empty stamp, or a provenance mismatch never takes
+    this rung and never calls an unstamped allowance.
+
+    Calls `warm_miss.settle_warm_miss` first; a response it serves is returned
+    as-is. Otherwise runs `ipc.dispatch_message` in-process.
+
+    Return contract: None strictly BEFORE dispatch (caller continues to the
+    spawn); once dispatch has begun, a failure raises RuntimeError with the
+    reconcile sentence and NEVER returns None, because a retry could re-run a
+    mutation that already landed. Returns the JSON-RPC response envelope.
+
+    Teardown: a manual event loop closed without executor shutdown, plus an
+    exit guard armed only when a non-daemon thread outlived a timed-out
+    handler, so the shim exits within the dispatch timeout plus ~1s.
+    """
+    if os.environ.get(_NO_IN_PROCESS_RUNG_ENV) == "1":
+        return None
+    path_before = list(sys.path)
+    try:
+        _front_insert_on_path(claude_klabauter_root)
+        from coordinator_core import ipc
+
+        if os.path.realpath(str(ipc._DISPATCH_ENGINE_ROOT)) != os.path.realpath(claude_klabauter_root):
+            sys.path[:] = path_before
+            return None
+        if not ipc._is_dispatch_engine_stamped():
+            sys.path[:] = path_before
+            return None
+
+        import asyncio
+        import threading
+
+        from coordinator_core.invoke.warm_miss import settle_warm_miss
+        from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+    except Exception:  # noqa: BLE001 -- pre-dispatch: decline, see docstring
+        sys.path[:] = path_before
+        return None
+
+    msg: dict[str, Any] = {"jsonrpc": "2.0", "id": f"stamped-{os.getpid()}", "method": op, "params": params}
+    if op in WORKTREE_SCOPED_OPS:
+        msg["_origin_worktree"] = repo_root
+    msg["_caller_cwd"] = os.getcwd()
+
+    try:
+        served = settle_warm_miss(msg)
+    except Exception:  # noqa: BLE001 -- wait policy is pre-dispatch: decline
+        return None
+    if served is not None:
+        return served
+
+    threads_before = set(threading.enumerate())
+    loop = None
+    try:
+        loop = asyncio.new_event_loop()
+        response = loop.run_until_complete(
+            ipc.dispatch_message(msg, caller="coordinator.bin.lib.cc_invoke._try_stamped_in_process_dispatch")
+        )
+    except Exception as exc:  # noqa: BLE001 -- post-dispatch: surface, never retry
+        raise RuntimeError(
+            f"cc_invoke: in-process dispatch raised (op={op}): {exc!r}. The op may "
+            "have run; reconcile against real state before re-running."
+        ) from exc
+    finally:
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:  # noqa: BLE001 -- teardown must not mask the result
+                pass
+        # Orphans are the executor workers this dispatch started: interpreter exit joins
+        # every one in `_threads_queues` (daemon or not), and nothing else may turn a
+        # host's exit into os._exit(1).
+        from concurrent.futures import thread as _cf_thread
+
+        orphans = [
+            t for t in threading.enumerate()
+            if t not in threads_before and t.is_alive() and t in _cf_thread._threads_queues
+        ]
+        if orphans:
+            def _exit_guard() -> None:
+                import time as _time
+
+                grace_end = _time.monotonic() + _EXIT_GUARD_GRACE_SECS
+                for t in orphans:
+                    t.join(max(0.0, grace_end - _time.monotonic()))
+                if not any(t.is_alive() for t in orphans):
+                    return
+                for stream in (sys.stdout, sys.stderr):
+                    try:
+                        stream.flush()
+                    except Exception:  # noqa: BLE001
+                        pass
+                os._exit(1)
+
+            threading._register_atexit(_exit_guard)
+    return response
+
+
 last_rung: str | None = None
 """Rung the most recent `cc_invoke()`/`cc_invoke_bare()` call was served on: "warm"
-(in-engine or warm pipe hit) or "spawn" (interpreter spawn after a warm miss); None
-before any call."""
+(in-engine or warm pipe hit), "in-process" (stamped-tree dispatch_message in this
+interpreter), or "spawn" (interpreter spawn after a warm miss); None before any call."""
 
 
 def cc_invoke(
@@ -2619,6 +2737,11 @@ def cc_invoke(
     if _warm_response is not None:
         last_rung = "warm"
         return _apply_warm_envelope(op, _warm_response, _warm_stderr, _stderr_sink)
+
+    _stamped = _try_stamped_in_process_dispatch(op, params, repo_root, claude_klabauter_root)
+    if _stamped is not None:
+        last_rung = "in-process"
+        return _apply_warm_envelope(op, _stamped, "", _stderr_sink)
 
     last_rung = "spawn"
     try:

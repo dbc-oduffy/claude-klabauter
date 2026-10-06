@@ -139,6 +139,7 @@ def build_roster(
     *,
     raise_on_failure: bool = False,
     raise_on_empty_snapshot: bool = False,
+    box_wide: bool = False,
 ) -> List[PeerRow]:
     """Return every live session whose `cwd` is within `repo_root`.
 
@@ -257,6 +258,9 @@ def build_roster(
     `raise_on_failure`; full incident and rationale at `EmptySnapshotError`,
     the fact's home. The check runs BEFORE the cwd filter, so a repo with no
     peers still returns a quiet `[]` under this flag, exactly as before.
+
+    `box_wide` (default `False`) skips the cwd filter: every live session on
+    the box, `repo_root` ignored. Self marking and ref widening are unchanged.
     """
     try:
         snapshot = harness_registry.snapshot()
@@ -312,7 +316,7 @@ def build_roster(
     now = time.time()
     rows: List[PeerRow] = []
     for sid, record in snapshot.items():
-        if not _cwd_within_repo(record.cwd, effective_root):
+        if not box_wide and not _cwd_within_repo(record.cwd, effective_root):
             continue
 
         candidate = candidates_by_sid.get(sid)

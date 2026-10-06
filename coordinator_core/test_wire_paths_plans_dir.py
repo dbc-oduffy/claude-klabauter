@@ -71,3 +71,10 @@ def test_workstream_complete_leg_a_calls_the_shared_emitter() -> None:
     from coordinator_core.wire_paths import plans_dir as canonical
 
     assert _plans_dir is canonical
+
+
+def test_plan_dir_prefixes_match_governing_plan_glob_dirs() -> None:
+    from coordinator_core import wire_paths
+    from coordinator_core.workstream_complete.directives_lessons_plan import _GOVERNING_PLAN_GLOB_DIRS
+
+    assert wire_paths._PLAN_DIR_PREFIXES == tuple(f"{d}/" for d in _GOVERNING_PLAN_GLOB_DIRS)

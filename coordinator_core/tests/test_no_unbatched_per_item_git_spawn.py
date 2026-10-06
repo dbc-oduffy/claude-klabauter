@@ -340,6 +340,13 @@ KNOWN BLIND SPOTS (false-negative-biased, matching every sibling gate's stated p
     high-precision-stratum restriction this module states under SCOPE, the same restriction the
     transitive-deep-tail bullet above names; the same bug row above names this as the audit's
     other silently undischarged site.
+
+SCAN CACHE. The standing gate's live-tree scan (`_gate_violations`) runs through
+`_amp_scan_incremental.scan_incremental`, which reuses per-file results keyed by content hash.
+The cache lives under pytest's cache provider (`<rootdir>/.pytest_cache/d/amp-scan/`, which
+self-ignores); with `-p no:cacheprovider` the gate runs the uncached collector. A cold run
+costs what the uncached scan costs; an unchanged tree rescans without parsing. The cache
+changes cost only, never a verdict.
 """
 
 from __future__ import annotations
@@ -348,9 +355,10 @@ import ast
 import dataclasses
 import functools
 import gc
+import hashlib
 import pathlib
 import re
-from typing import Callable
+from typing import Callable, Mapping
 
 import pytest
 
@@ -2101,99 +2109,224 @@ def _import_resolves_to(
     return False
 
 
-def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
-    """One pass over the scoped corpus, building the repo-wide name index routes b/c/d/e/f
-    resolve against, single-hop only for those five. Route g's `spawn_bearing_params` is the
-    exception: `_compute_spawn_bearing_params`, called at the end of this function once
-    `func_defs`/`funcs_by_name`/`same_module_direct_spawn`/`direct_spawn_funcs` are populated,
-    runs a bidirectional FIXED POINT over forwarded parameters -- see module docstring's
-    route-g section for the algorithm.
+#: One call's route-g-relevant shape: `(callee name, positional argument Name-ids with None for a
+#: non-Name argument, keyword (parameter, Name-id) pairs)`.
+_CallShape = tuple[str, tuple["str | None", ...], tuple[tuple[str, str], ...]]
 
-    It terminates: both of its taint sets (`invoked`, `tainted`) grow MONOTONICALLY -- an
-    element, once added, is never removed -- over a FINITE domain, `(relpath, func_name,
-    param_name)` triples bounded by the scoped corpus's own function and parameter count. Each
-    fixed-point loop can therefore add a new element at most that many times before a round
-    adds nothing and its `changed` flag stays `False`, so both loops halt.
 
-    Consumes pre-computed `_FileRecord`s (G3) rather than re-reading/re-parsing/re-detecting
-    each file itself -- see `_load_file_records`'s docstring.
+@dataclasses.dataclass(frozen=True)
+class _FlowFacts:
+    """Everything route g's fixed point reads off one top-level function, with no AST: its
+    parameter lists, the parameters it invokes directly, and the calls that carry a bare `Name`
+    argument (a call with none can neither forward nor taint a parameter, so it is not
+    recorded). Core types only, so a summary holding it is marshal-able."""
 
-    `resolved_imports_by_file` (route c's resolver, AC1/AC2) is populated in two passes over
-    this SAME `ast.ImportFrom` walk's raw output, not a second parse: the walk below collects
-    each file's raw `(original_name, module-as-written)` pairs into `raw_imports_by_file` as it
-    already visits every file once for `imported_names_by_file`; `_resolve_imports_by_file`
-    then runs ONCE, after this loop completes, over that in-memory dict -- a re-export hop
-    needs the TARGET file's own raw import data, which may not exist yet mid-loop."""
+    params: tuple[str, ...]
+    positional: tuple[str, ...]
+    invoked: tuple[str, ...]
+    calls: tuple[_CallShape, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class _FuncSummary:
+    """One top-level function's cross-file facts. `direct_spawner`, `verb_gated` (sorted verbs,
+    None when ungated), and `runner_param` are the per-function results `_build_func_index`
+    derives from the function's AST and its file's spawn sites. `digest` fingerprints the
+    function's source slice (decorators included) with its start line and column."""
+
+    name: str
+    direct_spawner: bool
+    verb_gated: tuple[str, ...] | None
+    runner_param: str | None
+    digest: str
+    flow: _FlowFacts
+
+
+@dataclasses.dataclass(frozen=True)
+class _FileSummary:
+    """Everything the cross-file layer needs from one file, with no AST and only marshal-able
+    core types: `_merge_summaries` builds the same `_FuncIndex` (minus `func_defs`) from a list
+    of these as `_build_func_index` builds from parsed records.
+
+    `spawn_linenos` is `((enclosing, sorted linenos), ...)` by the spawn's own dotted
+    enclosing; `imported` the names bound by `from X import name`; `raw_imports`
+    `((local binding, sorted (original name, module-as-written) pairs), ...)`;
+    `param_defaults` `((dotted scope, ((param, default Name-id), ...)), ...)`; `funcs` the
+    top-level functions in source order."""
+
+    relpath: str
+    spawn_linenos: tuple[tuple[str, tuple[int, ...]], ...]
+    imported: tuple[str, ...]
+    raw_imports: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    param_defaults: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    funcs: tuple[_FuncSummary, ...]
+
+
+def _flow_facts(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> _FlowFacts:
+    params = tuple(_func_params(fn))
+    param_set = set(params)
+    invoked: dict[str, None] = {}
+    calls: dict[_CallShape, None] = {}
+    for node in _walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in param_set:
+            invoked[node.func.id] = None
+        callee = _call_callee_name(node)
+        if callee is None:
+            continue
+        positional_names = tuple(a.id if isinstance(a, ast.Name) else None for a in node.args)
+        keyword_names = tuple(
+            (kw.arg, kw.value.id)
+            for kw in node.keywords
+            if kw.arg and isinstance(kw.value, ast.Name)
+        )
+        if keyword_names or any(n is not None for n in positional_names):
+            calls[(callee, positional_names, keyword_names)] = None
+    return _FlowFacts(
+        params=params,
+        positional=tuple(_func_positional_params(fn)),
+        invoked=tuple(invoked),
+        calls=tuple(calls),
+    )
+
+
+def _function_digest(lines: list[str], fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    start = min([fn.lineno, *(d.lineno for d in fn.decorator_list)])
+    segment = lines[start - 1 : fn.end_lineno]
+    segment[-1] = segment[-1].encode("utf-8")[: fn.end_col_offset].decode("utf-8", "replace")
+    return hashlib.sha1(
+        f"{start}:{fn.col_offset}\n".encode() + "\n".join(segment).encode("utf-8", "replace")
+    ).hexdigest()
+
+
+def _summarise(record: _FileRecord) -> _FileSummary:
+    """Reduces one parsed file to its `_FileSummary`: the per-file half of what
+    `_build_func_index` used to compute inline. Pure in `(record.relpath, record.text)`."""
+    relpath, tree, spawn_sites = record.relpath, record.tree, record.spawn_sites
+    spawning_enclosing = {s.enclosing for s in spawn_sites}
+    # Keyed by the spawn's OWN dotted enclosing scope (e.g. "outer._forward"), not the bare
+    # top-level function name: a runner candidate's forwarding call can sit inside a nested
+    # closure, so `own_spawn_linenos` below matches `name` itself AND any dotted scope under it.
+    spawn_linenos_by_func: dict[str, set[int]] = {}
+    for site in spawn_sites:
+        spawn_linenos_by_func.setdefault(site.enclosing, set()).add(site.lineno)
+    set_members = _module_level_str_set_members(tree)
+
+    defaults: dict[tuple[str, str], dict[str, str]] = {}
+    _ParamDefaultTracker(relpath, defaults).visit(tree)
+
+    imported: set[str] = set()
+    raw_imports: dict[str, set[tuple[str, str]]] = {}
+    for node in _iter_stmts(tree):
+        if isinstance(node, ast.ImportFrom):
+            abs_module = _absolute_import_module(relpath, node)
+            for alias in node.names:
+                local_binding = alias.asname or alias.name
+                imported.add(local_binding)
+                raw_imports.setdefault(local_binding, set()).add((alias.name, abs_module))
+
+    lines: list[str] | None = None
+    funcs: list[_FuncSummary] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        name = node.name
+        own_spawn_linenos: set[int] = set()
+        for enclosing_key, linenos in spawn_linenos_by_func.items():
+            if enclosing_key == name or enclosing_key.startswith(name + "."):
+                own_spawn_linenos |= linenos
+        direct_spawner = name in spawning_enclosing
+        gated = (
+            _verb_gated_spawn_verbs(node, own_spawn_linenos, set_members)
+            if direct_spawner
+            else None
+        )
+        if lines is None:
+            lines = record.text.split("\n")
+        funcs.append(
+            _FuncSummary(
+                name=name,
+                direct_spawner=direct_spawner,
+                verb_gated=tuple(sorted(gated)) if gated is not None else None,
+                runner_param=_generic_runner_param(node, own_spawn_linenos),
+                digest=_function_digest(lines, node),
+                flow=_flow_facts(node),
+            )
+        )
+    return _FileSummary(
+        relpath=relpath,
+        spawn_linenos=tuple(
+            (enclosing, tuple(sorted(linenos)))
+            for enclosing, linenos in spawn_linenos_by_func.items()
+        ),
+        imported=tuple(sorted(imported)),
+        raw_imports=tuple(
+            (binding, tuple(sorted(pairs))) for binding, pairs in raw_imports.items()
+        ),
+        param_defaults=tuple(
+            (scope, tuple(bound.items())) for (_rp, scope), bound in defaults.items()
+        ),
+        funcs=tuple(funcs),
+    )
+
+
+def _merge_summaries(summaries: list[_FileSummary]) -> _FuncIndex:
+    """The cross-file half of the old `_build_func_index`: merges `summaries` IN DISCOVERY ORDER
+    (which is what keeps `runner_shaped_funcs` first-writer-wins by bare name), resolves
+    re-export chains, and runs route g's fixed point over the summaries. Returns an index whose
+    `func_defs` is empty; `_build_func_index` attaches the AST values.
+
+    The fixed point terminates: both of its taint sets (`invoked`, `tainted`) grow
+    MONOTONICALLY over a FINITE domain, `(relpath, func_name, param_name)` triples bounded by
+    the corpus's own function and parameter count, so each loop halts once a round adds nothing.
+
+    `resolved_imports_by_file` is resolved ONCE, after every file's raw imports are merged: a
+    re-export hop needs the TARGET file's own raw import data."""
     index = _FuncIndex()
     raw_imports_by_file: dict[str, dict[str, set[tuple[str, str]]]] = {}
+    flows: dict[tuple[str, str], _FlowFacts] = {}
 
-    for record in records:
-        relpath = record.relpath
-        tree = record.tree
-        spawn_sites = record.spawn_sites
+    for summary in summaries:
+        relpath = summary.relpath
+        for scope, bound in summary.param_defaults:
+            index.param_runner_defaults.setdefault((relpath, scope), {}).update(dict(bound))
+        index.imported_names_by_file[relpath] = set(summary.imported)
+        raw_imports_by_file[relpath] = {b: set(pairs) for b, pairs in summary.raw_imports}
 
-        spawning_enclosing = {s.enclosing for s in spawn_sites}
-        # Keyed by the spawn's OWN dotted enclosing scope (e.g.
-        # "outer._forward"), not the bare top-level function name a lookup by `name` alone
-        # would use. A runner candidate's forwarding call can sit inside a nested closure
-        # (own_spawn_linenos below matches `name` itself AND any dotted scope nested under
-        # it), so this dict is built keyed on the raw dotted `enclosing` strings and matched
-        # by prefix at lookup time, not collapsed to bare names here.
-        spawn_linenos_by_func: dict[str, set[int]] = {}
-        for site in spawn_sites:
-            spawn_linenos_by_func.setdefault(site.enclosing, set()).add(site.lineno)
-        set_members = _module_level_str_set_members(tree)
-
-        _ParamDefaultTracker(relpath, index.param_runner_defaults).visit(tree)
-
-        imported: set[str] = set()
-        raw_imports: dict[str, set[tuple[str, str]]] = {}
-        for node in _iter_stmts(tree):
-            if isinstance(node, ast.ImportFrom):
-                abs_module = _absolute_import_module(relpath, node)
-                for alias in node.names:
-                    imported.add(alias.asname or alias.name)
-                    local_binding = alias.asname or alias.name
-                    raw_imports.setdefault(local_binding, set()).add((alias.name, abs_module))
-        index.imported_names_by_file[relpath] = imported
-        raw_imports_by_file[relpath] = raw_imports
-
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            name = node.name
-
-            # Route g's substrate: every top-level function's own node, plus a bare-name ->
-            # defining-sites index for cross-module resolution (`_resolve_callee_def`).
-            index.func_defs[(relpath, name)] = node
+        for func in summary.funcs:
+            name = func.name
+            flows[(relpath, name)] = func.flow
             index.funcs_by_name.setdefault(name, []).append((relpath, name))
-
-            # `name` is this function's own bare (top-level) name, but a
-            # spawn the function reaches only through a nested closure is filed under a
-            # DOTTED scope ("name.inner"), not bare "name" -- matching `spawn_linenos_by_func`
-            # by exact key alone would miss it (`_generic_runner_param` walks into nested
-            # defs, so it can see that lineno). Own linenos are every spawn whose recorded
-            # enclosing is this function itself OR nested under it.
-            own_spawn_linenos: set[int] = set()
-            for enclosing_key, linenos in spawn_linenos_by_func.items():
-                if enclosing_key == name or enclosing_key.startswith(name + "."):
-                    own_spawn_linenos |= linenos
-
-            if name in spawning_enclosing:
+            if func.direct_spawner:
                 index.direct_spawn_funcs.setdefault(name, []).append((relpath, name))
                 index.same_module_direct_spawn[(relpath, name)] = True
-                gated = _verb_gated_spawn_verbs(node, own_spawn_linenos, set_members)
-                if gated is not None:
-                    index.verb_gated_spawn_verbs[(relpath, name)] = gated
+                if func.verb_gated is not None:
+                    index.verb_gated_spawn_verbs[(relpath, name)] = frozenset(func.verb_gated)
+            if func.runner_param is not None and name not in index.runner_shaped_funcs:
+                index.runner_shaped_funcs[name] = func.runner_param
 
-            runner_param = _generic_runner_param(node, own_spawn_linenos)
-            if runner_param is not None and name not in index.runner_shaped_funcs:
-                index.runner_shaped_funcs[name] = runner_param
-
-    module_to_relpath = {_relpath_to_module(r.relpath): r.relpath for r in records}
+    module_to_relpath = {_relpath_to_module(s.relpath): s.relpath for s in summaries}
     index.resolved_imports_by_file = _resolve_imports_by_file(raw_imports_by_file, module_to_relpath)
+    index.spawn_bearing_params = _spawn_bearing_params_core(
+        flows,
+        lambda rp, callee: _resolve_callee_keys(index, flows, rp, callee),
+        lambda rp, ident: _is_direct_spawner_name(index, rp, ident),
+    )
+    return index
 
-    index.spawn_bearing_params = _compute_spawn_bearing_params(index)
+
+def _build_func_index(records: list[_FileRecord]) -> _FuncIndex:
+    """The repo-wide name index routes b/c/d/e/f resolve against, single-hop only for those
+    five, built from pre-computed `_FileRecord`s (G3 -- see `_load_file_records`). Summarises
+    each record, merges (`_merge_summaries`, which also runs route g's fixed point), then
+    attaches each top-level function's own AST node as `func_defs`, route g's and the
+    discriminators' substrate for reading functions OTHER than the one being visited."""
+    index = _merge_summaries([_summarise(record) for record in records])
+    for record in records:
+        for node in record.tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                index.func_defs[(record.relpath, node.name)] = node
     return index
 
 
@@ -3645,7 +3778,15 @@ def _resolve_callee_def(
     merely the local binding). Kept local rather than shared with those routes because route g
     is the only one that needs the resolved function's own NODE (to read its parameter list and
     walk its body), not merely a yes/no "does it spawn"."""
-    if (relpath, callee) in index.func_defs:
+    return _resolve_callee_keys(index, index.func_defs, relpath, callee)
+
+
+def _resolve_callee_keys(
+    index: _FuncIndex, defined: Mapping[tuple[str, str], object], relpath: str, callee: str
+) -> list[tuple[str, str]]:
+    """`_resolve_callee_def` against any container of defined `(relpath, name)` keys, so the
+    summary-form fixed point resolves before any AST is attached to the index."""
+    if (relpath, callee) in defined:
         return [(relpath, callee)]
     if callee in index.imported_names_by_file.get(relpath, set()):
         return _resolve_imported_defs(index, relpath, callee)
@@ -3701,9 +3842,26 @@ def _is_direct_spawner_name(index: _FuncIndex, relpath: str, ident: str) -> bool
 
 
 def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str, str]]:
-    """Route g's bidirectional fixed point over `(relpath, func_name, param_name)` triples.
-    See module docstring's route-g section for the algorithm in prose; termination is argued
-    in `_build_func_index`'s docstring, which is where this is called from.
+    """Route g's fixed point over an AST index: projects `index.func_defs` (widened ones
+    included) into summary form and runs `_spawn_bearing_params_core` on it."""
+    flows = {key: _flow_facts(fn) for key, fn in index.func_defs.items()}
+    return _spawn_bearing_params_core(
+        flows,
+        lambda rp, callee: _resolve_callee_def(index, rp, callee),
+        lambda rp, ident: _is_direct_spawner_name(index, rp, ident),
+    )
+
+
+def _spawn_bearing_params_core(
+    flows: Mapping[tuple[str, str], _FlowFacts],
+    resolve: Callable[[str, str], list[tuple[str, str]]],
+    is_direct_spawner: Callable[[str, str], bool],
+) -> frozenset[tuple[str, str, str]]:
+    """Route g's bidirectional fixed point over `(relpath, func_name, param_name)` triples,
+    the one implementation both the AST and the summary paths share. See module docstring's
+    route-g section for the algorithm in prose; termination is argued in `_merge_summaries`'s
+    docstring. `flows` maps every defined function to its `_FlowFacts`; `resolve` and
+    `is_direct_spawner` are the index-bound callee resolution and leg-2 seed.
 
     LEG 1 -- invoked: the parameter is called directly in its own function's body, plus the
     forwarding closure (forwarding a parameter into another function's invoked parameter makes
@@ -3717,65 +3875,82 @@ def _compute_spawn_bearing_params(index: _FuncIndex) -> frozenset[tuple[str, str
     alone would flag every dependency-injection seam regardless of whether the loop body ever
     calls it."""
     #: Resolved once: neither the call sites nor their resolution depend on the fixed point's
-    #: state, so each round below iterates only the calls that reach an indexed definition.
-    edges: dict[tuple[str, str], list[tuple[ast.Call, list[tuple[tuple[str, str], ast.AST]]]]] = {}
-    for (rp, name), fn in index.func_defs.items():
+    #: state, so each round below iterates only the calls that reach a defined function. Each
+    #: edge carries the call's Name-ids and its targets' positional parameter lists.
+    edges: dict[
+        tuple[str, str],
+        list[
+            tuple[
+                frozenset[str],
+                tuple["str | None", ...],
+                tuple[tuple[str, str], ...],
+                list[tuple[tuple[str, str], tuple[str, ...]]],
+            ]
+        ],
+    ] = {}
+    for (rp, name), flow in flows.items():
         fn_edges = []
-        for node in _walk(fn):
-            if not isinstance(node, ast.Call):
-                continue
-            callee = _call_callee_name(node)
-            if callee is None:
-                continue
-            targets = [(tgt, index.func_defs[tgt]) for tgt in _resolve_callee_def(index, rp, callee)]
+        for callee, positional_names, keyword_names in flow.calls:
+            targets = [(tgt, flows[tgt].positional) for tgt in resolve(rp, callee)]
             if targets:
-                fn_edges.append((node, targets))
+                names = frozenset(n for n in positional_names if n is not None) | frozenset(
+                    v for _, v in keyword_names
+                )
+                fn_edges.append((names, positional_names, keyword_names, targets))
         edges[(rp, name)] = fn_edges
 
+    def slots(
+        positional_names: tuple["str | None", ...],
+        keyword_names: tuple[tuple[str, str], ...],
+        tgt_positional: tuple[str, ...],
+        param: str,
+    ) -> list[str]:
+        out = [
+            tgt_positional[i]
+            for i, arg in enumerate(positional_names)
+            if arg == param and i < len(tgt_positional)
+        ]
+        out.extend(kw for kw, value in keyword_names if value == param)
+        return out
+
     invoked: set[tuple[str, str, str]] = set()
-    for (rp, name), fn in index.func_defs.items():
-        params = set(_func_params(fn))
-        for node in _walk(fn):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in params
-            ):
-                invoked.add((rp, name, node.func.id))
+    for (rp, name), flow in flows.items():
+        for p in flow.invoked:
+            invoked.add((rp, name, p))
 
     changed = True
     while changed:
         changed = False
-        for (rp, name), fn in index.func_defs.items():
-            params = set(_func_params(fn))
-            for node, targets in edges[(rp, name)]:
-                for tgt, tgt_fn in targets:
-                    for p in params:
-                        for slot in _forwarded_arg_slots(node, tgt_fn, p):
+        for (rp, name), flow in flows.items():
+            params = set(flow.params)
+            for names, positional_names, keyword_names, targets in edges[(rp, name)]:
+                for tgt, tgt_positional in targets:
+                    for p in names & params:
+                        for slot in slots(positional_names, keyword_names, tgt_positional, p):
                             if (tgt[0], tgt[1], slot) in invoked and (rp, name, p) not in invoked:
                                 invoked.add((rp, name, p))
                                 changed = True
 
     tainted: set[tuple[str, str, str]] = set()
-    for (rp, name), _fn in index.func_defs.items():
-        for node, targets in edges[(rp, name)]:
-            for tgt, tgt_fn in targets:
-                for arg in (*node.args, *[kw.value for kw in node.keywords]):
-                    if isinstance(arg, ast.Name) and _is_direct_spawner_name(index, rp, arg.id):
-                        for slot in _forwarded_arg_slots(node, tgt_fn, arg.id):
+    for (rp, name), _flow in flows.items():
+        for names, positional_names, keyword_names, targets in edges[(rp, name)]:
+            for tgt, tgt_positional in targets:
+                for arg_name in names:
+                    if is_direct_spawner(rp, arg_name):
+                        for slot in slots(positional_names, keyword_names, tgt_positional, arg_name):
                             tainted.add((tgt[0], tgt[1], slot))
 
     changed = True
     while changed:
         changed = False
-        for (rp, name), fn in index.func_defs.items():
-            params = {p for p in _func_params(fn) if (rp, name, p) in tainted}
+        for (rp, name), flow in flows.items():
+            params = {p for p in flow.params if (rp, name, p) in tainted}
             if not params:
                 continue
-            for node, targets in edges[(rp, name)]:
-                for tgt, tgt_fn in targets:
-                    for p in params:
-                        for slot in _forwarded_arg_slots(node, tgt_fn, p):
+            for names, positional_names, keyword_names, targets in edges[(rp, name)]:
+                for tgt, tgt_positional in targets:
+                    for p in names & params:
+                        for slot in slots(positional_names, keyword_names, tgt_positional, p):
                             if (tgt[0], tgt[1], slot) not in tainted:
                                 tainted.add((tgt[0], tgt[1], slot))
                                 changed = True
@@ -4426,357 +4601,368 @@ def find_unbatched_per_item_spawns(
     }
 
     violations: list[AmpSite] = []
-
     for record in records:
-        relpath = record.relpath
-        tree = record.tree
-        spawn_sites = record.spawn_sites
+        violations.extend(_file_verdicts(record, index, spawn_linenos_by_file))
+    # The registers are applied after the per-file pass, never inside it: `_file_verdicts` is
+    # register-independent, so its results are cacheable. An oracle claim IS an exemption,
+    # differing only in that a test measures it; when `_ORACLE_CLAIMS` holds every claim and
+    # `_EXEMPT_SITES` is empty, the register is gone.
+    return [
+        site
+        for site in violations
+        if site.key not in _EXEMPT_SITES and site.key not in _ORACLE_CLAIMS
+    ]
 
-        spawn_linenos = _spawn_linenos(spawn_sites)
-        literal_names = _module_level_literal_names(tree)
 
-        loop_visitor = _QualifyingLoopVisitor(literal_names)
-        loop_visitor.visit(tree)
-        if not loop_visitor.marked_calls:
+def _file_verdicts(
+    record: _FileRecord,
+    index: _FuncIndex,
+    spawn_linenos_by_file: Mapping[str, set[int]],
+) -> list[AmpSite]:
+    """One file's pre-suppression verdicts, in walk order: every marked call that survives the
+    discriminators and resolves to a route. Reads cross-file state only through `index` and
+    `spawn_linenos_by_file`, which is what lets a caller pass recording views over them."""
+    violations: list[AmpSite] = []
+    relpath = record.relpath
+    tree = record.tree
+    spawn_sites = record.spawn_sites
+
+    spawn_linenos = _spawn_linenos(spawn_sites)
+    literal_names = _module_level_literal_names(tree)
+
+    loop_visitor = _QualifyingLoopVisitor(literal_names)
+    loop_visitor.visit(tree)
+    if not loop_visitor.marked_calls:
+        return violations
+
+    enclosing_by_call: dict[tuple[int, int], str] = {}
+    _EnclosingTracker(enclosing_by_call).visit(tree)
+
+    imported_here = index.imported_names_by_file.get(relpath, set())
+
+    # AC1/AC10: the ordinal is assigned in its OWN pass, over every marked call in this
+    # file, before any discriminator runs -- see `_assign_call_ordinals`'s docstring for why
+    # this must not be inline below.
+    marked_call_descriptors: list[tuple[ast.Call, tuple[int, int], str, str | None]] = []
+    for node in _walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        position = (node.lineno, node.col_offset)
+        if position not in loop_visitor.marked_calls:
+            continue
+        marked_call_descriptors.append(
+            (
+                node,
+                position,
+                enclosing_by_call.get(position, "<module>"),
+                _call_callee_name(node),
+            )
+        )
+    ordinal_by_call = _assign_call_ordinals(marked_call_descriptors)
+
+    for node in _walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        key = (node.lineno, node.col_offset)
+        if key not in loop_visitor.marked_calls:
             continue
 
-        enclosing_by_call: dict[tuple[int, int], str] = {}
-        _EnclosingTracker(enclosing_by_call).visit(tree)
-
-        imported_here = index.imported_names_by_file.get(relpath, set())
-
-        # AC1/AC10: the ordinal is assigned in its OWN pass, over every marked call in this
-        # file, before any suppression-registry lookup or discriminator runs -- see
-        # `_assign_call_ordinals`'s docstring for why this must not be inline below.
-        marked_call_descriptors: list[tuple[ast.Call, tuple[int, int], str, str | None]] = []
-        for node in _walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            position = (node.lineno, node.col_offset)
-            if position not in loop_visitor.marked_calls:
-                continue
-            marked_call_descriptors.append(
-                (
-                    node,
-                    position,
-                    enclosing_by_call.get(position, "<module>"),
-                    _call_callee_name(node),
-                )
-            )
-        ordinal_by_call = _assign_call_ordinals(marked_call_descriptors)
-
-        for node in _walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            key = (node.lineno, node.col_offset)
-            if key not in loop_visitor.marked_calls:
-                continue
-
-            enclosing = enclosing_by_call.get(key, "<module>")
-            callee = _call_callee_name(node)
-            ordinal = ordinal_by_call[id(node)]
-            if (relpath, enclosing, callee, ordinal) in _EXEMPT_SITES:
-                continue
-            # Same suppression point as `_EXEMPT_SITES`, and deliberately adjacent to it: an
-            # oracle claim IS an exemption, differing only in that a test measures it. When this
-            # dict holds every claim and that set is empty, the register is gone.
-            if (relpath, enclosing, callee, ordinal) in _ORACLE_CLAIMS:
-                continue
-            is_direct_spawn_call = node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES
-            # Discriminator 6: argv0 derives from this call's own enclosing loop target (or an
-            # in-loop assignment hop off it) -- unbatchable by construction, same suppression
-            # point as `_EXEMPT_SITES` above so it applies to both the standing gate and the
-            # `designed_red` burn-down worklist that share this collector. Restricted to a call
-            # that IS ITSELF the recognized spawn syscall (route a's own condition): `args[0]`
-            # at a b/c/d/e/f-route call site is a wrapper's own parameter, not an OS-level argv
-            # -- see `_argv0_varies_with_loop_target`'s docstring for the false-suppression this
-            # guard exists to prevent.
-            if is_direct_spawn_call and _argv0_varies_with_loop_target(
-                node,
-                loop_visitor.call_loop_taint.get(key, frozenset()),
-                loop_visitor.call_argv0_bindings.get(key),
-            ):
-                continue
-            # Discriminator 11: the PROGRAM varies per iteration, read at the slot that names
-            # the program rather than at argv[0]. `[sys.executable, str(SCRIPT), ...]` is the
-            # dominant spawn shape in this tree, and discriminator 6 sees only the constant
-            # interpreter there. Same route-a restriction as 6, for the same reason.
-            if is_direct_spawn_call and _program_identity_varies_with_loop_target(
-                node,
-                loop_visitor.call_loop_taint.get(key, frozenset()),
-                loop_visitor.call_argv0_bindings.get(key),
-            ):
-                continue
-            # Discriminator 8: argv0 varies with the loop target ACROSS ONE HELPER HOP -- the
-            # same "different program each iteration" fact discriminator 6 decides, reached
-            # through a wrapper instead of read off the syscall. Applies where 6 is deliberately
-            # forbidden (routes b/c), and is NOT the relaxation 6's guard exists to prevent: it
-            # resolves the callee and requires the helper's OWN argv0 to be one of its
-            # parameters before looking at what this call site supplies for it, so a verb-gated
-            # `_run_git([verb, ...], root)` -- whose argv0 is the literal "git" in its own body
-            # -- is never reached. See `_argv0_varies_through_helper` for the measurement that
-            # motivated it (41 of 65 exempt call sites were route b, invisible to 6).
-            if (
-                not is_direct_spawn_call
-                and callee is not None
-                and _argv0_varies_through_helper(
-                    node,
-                    callee,
-                    index,
-                    relpath,
-                    loop_visitor.call_loop_taint.get(key, frozenset()),
-                    spawn_linenos_by_file,
-                )
-            ):
-                continue
-            # Discriminators 14 and 15 both need the enclosing loop NODE rather than the taint
-            # set the visitor already carries, so it is resolved once here and shared.
-            _enclosing_fn = index.func_defs.get((relpath, enclosing))
-            _loop_node = (
-                _enclosing_loop_of(_enclosing_fn, node) if _enclosing_fn is not None else None
-            )
-            # Discriminator 15: the spawn fires only behind a test on a value the OPERATOR typed
-            # during this iteration -- bounded by keypresses, zero on the modal path.
-            if _is_operator_gated_spawn(node, _loop_node):
-                continue
-            # Discriminator 16: the call is memoized behind a single-slot lazy cache bound
-            # before the loop, so it resolves once per scan however long the loop runs. The
-            # batching this gate asks for is already there.
-            if _is_lazily_memoized_resolution(node, _loop_node, _enclosing_fn):
-                continue
-            # Discriminator 14: the loop is a linear search for WHICH iteration perturbed some
-            # out-of-band state, so collapsing it destroys the attribution that IS the output.
-            if _is_attribution_search(
-                node, _loop_node, loop_visitor.call_loop_taint.get(key, frozenset())
-            ):
-                continue
-            # Discriminator 17: the call sits on a path that `break`s or `return`s in the same
-            # iteration, so it executes at most once per invocation regardless of collection
-            # size -- an early-exit search, not per-item amplification. A `break` only exits the
-            # loop it lexically sits inside, so when `_loop_node` is itself nested inside a
-            # further enclosing loop, only `return` still proves single-shot -- see
-            # `_has_enclosing_loop` and `_is_single_shot_terminal`'s `has_outer_loop` gate.
-            if _is_single_shot_terminal(
-                node,
-                _loop_node,
-                _enclosing_fn is not None
-                and _loop_node is not None
-                and _has_enclosing_loop(_enclosing_fn, _loop_node),
-            ):
-                continue
-            # Discriminator 13: the loop is the RETAINED PER-ITEM FALLBACK behind a batched
-            # primary -- it runs only when the batch failed, recovering per-item attribution
-            # instead of collapsing the set to one degraded verdict. Deleting it to clear a key
-            # would trade a degrade-on-failure posture for a metric.
-            if _is_batched_primary_fallback(
+        enclosing = enclosing_by_call.get(key, "<module>")
+        callee = _call_callee_name(node)
+        ordinal = ordinal_by_call[id(node)]
+        is_direct_spawn_call = node.lineno in spawn_linenos and callee in _SPAWN_API_NAMES
+        # Discriminator 6: argv0 derives from this call's own enclosing loop target (or an
+        # in-loop assignment hop off it) -- unbatchable by construction, so it applies to both
+        # the standing gate and the `designed_red` burn-down worklist that share this
+        # collector. Restricted to a call that IS ITSELF the recognized spawn syscall (route
+        # a's own condition): `args[0]` at a b/c/d/e/f-route call site is a wrapper's own
+        # parameter, not an OS-level argv -- see `_argv0_varies_with_loop_target`'s docstring
+        # for the false-suppression this guard exists to prevent.
+        if is_direct_spawn_call and _argv0_varies_with_loop_target(
+            node,
+            loop_visitor.call_loop_taint.get(key, frozenset()),
+            loop_visitor.call_argv0_bindings.get(key),
+        ):
+            continue
+        # Discriminator 11: the PROGRAM varies per iteration, read at the slot that names
+        # the program rather than at argv[0]. `[sys.executable, str(SCRIPT), ...]` is the
+        # dominant spawn shape in this tree, and discriminator 6 sees only the constant
+        # interpreter there. Same route-a restriction as 6, for the same reason.
+        if is_direct_spawn_call and _program_identity_varies_with_loop_target(
+            node,
+            loop_visitor.call_loop_taint.get(key, frozenset()),
+            loop_visitor.call_argv0_bindings.get(key),
+        ):
+            continue
+        # Discriminator 8: argv0 varies with the loop target ACROSS ONE HELPER HOP -- the
+        # same "different program each iteration" fact discriminator 6 decides, reached
+        # through a wrapper instead of read off the syscall. Applies where 6 is deliberately
+        # forbidden (routes b/c), and is NOT the relaxation 6's guard exists to prevent: it
+        # resolves the callee and requires the helper's OWN argv0 to be one of its
+        # parameters before looking at what this call site supplies for it, so a verb-gated
+        # `_run_git([verb, ...], root)` -- whose argv0 is the literal "git" in its own body
+        # -- is never reached. See `_argv0_varies_through_helper` for the measurement that
+        # motivated it (41 of 65 exempt call sites were route b, invisible to 6).
+        if (
+            not is_direct_spawn_call
+            and callee is not None
+            and _argv0_varies_through_helper(
                 node,
                 callee,
-                index.func_defs.get((relpath, enclosing)),
-                spawn_linenos,
-            ):
-                continue
-            # Discriminator 12: the spawn is SCOPED to a tree that varies per iteration -- argv0
-            # is the constant `git` and the loop target reaches only the `-C`/`--git-dir`/
-            # `--work-tree` operand (or `cwd=`). One process cannot serve two roots, so N roots
-            # is N spawns however the loop is arranged. Both legs carry the precision constraint
-            # that the tainted name appears in NO other argument: without it a per-item fan-out
-            # that merely carries a root with it would be silenced, and this SUPPRESSES, so that
-            # is the dangerous direction (see `_tainted_names_for_loop`'s inversion warning).
-            if is_direct_spawn_call and _root_scoped_direct(
-                node,
+                index,
+                relpath,
                 loop_visitor.call_loop_taint.get(key, frozenset()),
-                loop_visitor.call_expr_bindings.get(key),
-            ):
-                continue
+                spawn_linenos_by_file,
+            )
+        ):
+            continue
+        # Discriminators 14 and 15 both need the enclosing loop NODE rather than the taint
+        # set the visitor already carries, so it is resolved once here and shared.
+        _enclosing_fn = index.func_defs.get((relpath, enclosing))
+        _loop_node = (
+            _enclosing_loop_of(_enclosing_fn, node) if _enclosing_fn is not None else None
+        )
+        # Discriminator 15: the spawn fires only behind a test on a value the OPERATOR typed
+        # during this iteration -- bounded by keypresses, zero on the modal path.
+        if _is_operator_gated_spawn(node, _loop_node):
+            continue
+        # Discriminator 16: the call is memoized behind a single-slot lazy cache bound
+        # before the loop, so it resolves once per scan however long the loop runs. The
+        # batching this gate asks for is already there.
+        if _is_lazily_memoized_resolution(node, _loop_node, _enclosing_fn):
+            continue
+        # Discriminator 14: the loop is a linear search for WHICH iteration perturbed some
+        # out-of-band state, so collapsing it destroys the attribution that IS the output.
+        if _is_attribution_search(
+            node, _loop_node, loop_visitor.call_loop_taint.get(key, frozenset())
+        ):
+            continue
+        # Discriminator 17: the call sits on a path that `break`s or `return`s in the same
+        # iteration, so it executes at most once per invocation regardless of collection
+        # size -- an early-exit search, not per-item amplification. A `break` only exits the
+        # loop it lexically sits inside, so when `_loop_node` is itself nested inside a
+        # further enclosing loop, only `return` still proves single-shot -- see
+        # `_has_enclosing_loop` and `_is_single_shot_terminal`'s `has_outer_loop` gate.
+        if _is_single_shot_terminal(
+            node,
+            _loop_node,
+            _enclosing_fn is not None
+            and _loop_node is not None
+            and _has_enclosing_loop(_enclosing_fn, _loop_node),
+        ):
+            continue
+        # Discriminator 13: the loop is the RETAINED PER-ITEM FALLBACK behind a batched
+        # primary -- it runs only when the batch failed, recovering per-item attribution
+        # instead of collapsing the set to one degraded verdict. Deleting it to clear a key
+        # would trade a degrade-on-failure posture for a metric.
+        if _is_batched_primary_fallback(
+            node,
+            callee,
+            index.func_defs.get((relpath, enclosing)),
+            spawn_linenos,
+        ):
+            continue
+        # Discriminator 12: the spawn is SCOPED to a tree that varies per iteration -- argv0
+        # is the constant `git` and the loop target reaches only the `-C`/`--git-dir`/
+        # `--work-tree` operand (or `cwd=`). One process cannot serve two roots, so N roots
+        # is N spawns however the loop is arranged. Both legs carry the precision constraint
+        # that the tainted name appears in NO other argument: without it a per-item fan-out
+        # that merely carries a root with it would be silenced, and this SUPPRESSES, so that
+        # is the dangerous direction (see `_tainted_names_for_loop`'s inversion warning).
+        if is_direct_spawn_call and _root_scoped_direct(
+            node,
+            loop_visitor.call_loop_taint.get(key, frozenset()),
+            loop_visitor.call_expr_bindings.get(key),
+        ):
+            continue
+        if (
+            not is_direct_spawn_call
+            and callee is not None
+            and _root_scoped_through_helper(
+                node,
+                callee,
+                index,
+                relpath,
+                loop_visitor.call_loop_taint.get(key, frozenset()),
+                spawn_linenos_by_file,
+                _enclosing_fn,
+            )
+        ):
+            continue
+        # Discriminator 10 (retry loop): the enclosing loop is a bounded retry with an early
+        # exit, AND none of its tainted names reach this call's own arguments -- so every
+        # iteration issues an IDENTICAL spawn and there is no set for a batch to carry. Both
+        # halves are required: the loop half alone would suppress `for _ in range(3):
+        # run([..., item])` nested inside a per-item loop, where the argv genuinely varies.
+        if loop_visitor.call_loop_is_retry.get(key) and not (
+            _names_in_call_args(node)
+            & loop_visitor.call_loop_taint.get(key, frozenset())
+        ):
+            continue
+        # Discriminator 7: this call's argv splices its enclosing loop's target in as a
+        # SEQUENCE, so one call carries the whole group -- the byte-budget chunking shape
+        # discriminator 4's literal-`range` stride test cannot see. Applies to both the
+        # standing gate and the `designed_red` worklist. NOT gated on `is_direct_spawn_call`:
+        # it reads how many items one call carries, not what program argv0 names, and that
+        # holds at a wrapper route too -- see `_argv_splices_loop_target`'s docstring.
+        if _argv_splices_loop_target(
+            node,
+            loop_visitor.call_loop_targets.get(key, set()),
+            loop_visitor.call_expr_bindings.get(key),
+        ):
+            continue
+        # Discriminator 7, accumulation leg: the same "one call carries the whole group"
+        # property, spelled as mutation of a locally-built argv inside a nested loop over
+        # the outer target rather than as a concatenation at the call. Separate predicate,
+        # so it is discovered and pinned like every other.
+        if _argv_accumulates_loop_target(
+            loop_visitor.call_loop_node.get(key),
+            node,
+            loop_visitor.call_loop_targets.get(key, set()),
+            loop_visitor.call_expr_bindings.get(key),
+        ):
+            continue
+        route: str | None = None
+
+        # route a-direct: the call itself is a recognized spawn. Both halves are
+        # required -- the line carries a detected spawn AND this call is the spawn on it,
+        # not a helper sharing the line (see `_SPAWN_API_NAMES`).
+        if is_direct_spawn_call:
+            route = "a-direct"
+
+        if route is None and callee is not None:
+            # route b-local-helper: same-module function directly spawns.
+            if (relpath, callee) in index.same_module_direct_spawn:
+                # Discriminator 5: a verb-dispatching chokepoint spawns only for the
+                # verbs in its own statically-resolvable allowlist. This call site's
+                # literal verb is not one, so it creates no process.
+                gated = index.verb_gated_spawn_verbs.get((relpath, callee))
+                verb = _call_literal_verb(node)
+                if not (gated is not None and verb is not None and verb not in gated):
+                    route = "b-local-helper"
+
+            # route c-cross-module: the local binding RESOLVES -- via
+            # `_resolve_imported_defs`, by the ORIGINAL imported name constrained to its
+            # resolved source module -- to a function elsewhere that directly spawns. The
+            # candidate pool comes from the original name, never from `callee` itself:
+            # `direct_spawn_funcs` is keyed by DEFINITION names, so gating on
+            # `callee in index.direct_spawn_funcs` would ask whether a spawner is named
+            # after the ALIAS and miss every aliased import. See module docstring's route-c
+            # section and `_resolve_imported_defs`.
+            if route is None and callee in imported_here:
+                _resolved_defs = _resolve_imported_defs(index, relpath, callee)
+                _reaches_spawner = any(
+                    any(
+                        spawner_relpath == def_relpath
+                        for spawner_relpath, _ in index.direct_spawn_funcs.get(def_name, [])
+                    )
+                    for def_relpath, def_name in _resolved_defs
+                )
+            else:
+                _reaches_spawner = False
+            if _reaches_spawner:
+                route = "c-cross-module"
+
+            # route e-generic-runner: callee is runner-shaped (a single-parameter
+            # `_run(argv)`-style wrapper forwarding into a recognized spawn --
+            # `_generic_runner_param` always resolves to that sole parameter, i.e.
+            # argument position 0) and THIS call passes an argv-shaped argument.
             if (
-                not is_direct_spawn_call
-                and callee is not None
-                and _root_scoped_through_helper(
-                    node,
-                    callee,
-                    index,
-                    relpath,
-                    loop_visitor.call_loop_taint.get(key, frozenset()),
-                    spawn_linenos_by_file,
-                    _enclosing_fn,
+                route is None
+                and callee in index.runner_shaped_funcs
+                and _call_arg_is_argv_shaped(node, 0)
+            ):
+                route = "e-generic-runner"
+
+        if route is None:
+            # route d-injected: a runner-shaped argument resolves to ANY direct spawner.
+            runner_name = _find_injected_runner_name(node)
+            # `_name_is_locally_bound_data`: route d's own scoping leg, the counterpart of
+            # route f's import check below. The repo-wide `direct_spawn_funcs` lookup is
+            # load-bearing and stays (see `_write_route_d_injected_runner_bare_name_
+            # collision`), so the collision is refused at the identifier instead: a name
+            # bound HERE to a loop item or a literal is not the runner it collides with.
+            if (
+                runner_name is not None
+                and runner_name in index.direct_spawn_funcs
+                and not _name_is_locally_bound_data(
+                    index.func_defs.get((relpath, enclosing.split(".")[0])), runner_name
                 )
             ):
-                continue
-            # Discriminator 10 (retry loop): the enclosing loop is a bounded retry with an early
-            # exit, AND none of its tainted names reach this call's own arguments -- so every
-            # iteration issues an IDENTICAL spawn and there is no set for a batch to carry. Both
-            # halves are required: the loop half alone would suppress `for _ in range(3):
-            # run([..., item])` nested inside a per-item loop, where the argv genuinely varies.
-            if loop_visitor.call_loop_is_retry.get(key) and not (
-                _names_in_call_args(node)
-                & loop_visitor.call_loop_taint.get(key, frozenset())
-            ):
-                continue
-            # Discriminator 7: this call's argv splices its enclosing loop's target in as a
-            # SEQUENCE, so one call carries the whole group -- the byte-budget chunking shape
-            # discriminator 4's literal-`range` stride test cannot see. Same suppression point
-            # as `_EXEMPT_SITES` and discriminator 6 above, so it applies to both the standing
-            # gate and the `designed_red` worklist. NOT gated on `is_direct_spawn_call`: it
-            # reads how many items one call carries, not what program argv0 names, and that
-            # holds at a wrapper route too -- see `_argv_splices_loop_target`'s docstring.
-            if _argv_splices_loop_target(
-                node,
-                loop_visitor.call_loop_targets.get(key, set()),
-                loop_visitor.call_expr_bindings.get(key),
-            ):
-                continue
-            # Discriminator 7, accumulation leg: the same "one call carries the whole group"
-            # property, spelled as mutation of a locally-built argv inside a nested loop over
-            # the outer target rather than as a concatenation at the call. Separate predicate,
-            # same suppression point, so it is discovered and pinned like every other.
-            if _argv_accumulates_loop_target(
-                loop_visitor.call_loop_node.get(key),
-                node,
-                loop_visitor.call_loop_targets.get(key, set()),
-                loop_visitor.call_expr_bindings.get(key),
-            ):
-                continue
-            route: str | None = None
+                route = "d-injected"
 
-            # route a-direct: the call itself is a recognized spawn. Both halves are
-            # required -- the line carries a detected spawn AND this call is the spawn on it,
-            # not a helper sharing the line (see `_SPAWN_API_NAMES`).
-            if is_direct_spawn_call:
-                route = "a-direct"
+        if route is None and callee is not None:
+            # route f-default-runner: the callee is a PARAMETER of the enclosing function
+            # whose default binds a module-level direct spawner -- the injectable-seam
+            # idiom (`def resync(..., *, run_git=_update_index_with_retry)`), where the
+            # loop body calls the parameter, not the function. Route d reads a runner
+            # passed AT the call site; this reads one bound one hop up as a default, the
+            # gap route d's own docstring names.
+            default_name = index.param_runner_defaults.get((relpath, enclosing), {}).get(
+                callee
+            )
+            # A parameter default can only bind a name resolvable in
+            # the DEFINING MODULE's own scope: either a same-module function, or a name
+            # imported into this file. The prior unscoped `default_name in
+            # index.direct_spawn_funcs` fallback was a repo-wide bare-name lookup with no
+            # import check (unlike route c's `callee in imported_here` gate), so a
+            # same-named but unrelated, unimported spawner defined elsewhere would
+            # false-positive -- the exact "true site on a false route" collision route f
+            # exists to correctly resolve.
+            if default_name is not None and (
+                (relpath, default_name) in index.same_module_direct_spawn
+                or (
+                    default_name in imported_here
+                    and default_name in index.direct_spawn_funcs
+                )
+            ):
+                route = "f-default-runner"
 
-            if route is None and callee is not None:
-                # route b-local-helper: same-module function directly spawns.
-                if (relpath, callee) in index.same_module_direct_spawn:
-                    # Discriminator 5: a verb-dispatching chokepoint spawns only for the
-                    # verbs in its own statically-resolvable allowlist. This call site's
-                    # literal verb is not one, so it creates no process.
-                    gated = index.verb_gated_spawn_verbs.get((relpath, callee))
-                    verb = _call_literal_verb(node)
-                    if not (gated is not None and verb is not None and verb not in gated):
-                        route = "b-local-helper"
-
-                # route c-cross-module: the local binding RESOLVES -- via
-                # `_resolve_imported_defs`, by the ORIGINAL imported name constrained to its
-                # resolved source module -- to a function elsewhere that directly spawns. The
-                # candidate pool comes from the original name, never from `callee` itself:
-                # `direct_spawn_funcs` is keyed by DEFINITION names, so gating on
-                # `callee in index.direct_spawn_funcs` would ask whether a spawner is named
-                # after the ALIAS and miss every aliased import. See module docstring's route-c
-                # section and `_resolve_imported_defs`.
-                if route is None and callee in imported_here:
-                    _resolved_defs = _resolve_imported_defs(index, relpath, callee)
-                    _reaches_spawner = any(
-                        any(
-                            spawner_relpath == def_relpath
-                            for spawner_relpath, _ in index.direct_spawn_funcs.get(def_name, [])
-                        )
-                        for def_relpath, def_name in _resolved_defs
-                    )
+        if route is None and callee is not None:
+            # route g-forwarded-runner: bidirectional fixed-point taint over parameters --
+            # resolves an injected runner by where it actually FLOWS, not by what it is
+            # called or what it is named at its own definition. Ordered after route f (per
+            # this route's own spec) so an existing route still wins the key where both
+            # match -- `AmpSite.key` dedup ignores `route`. See module docstring's route-g
+            # section and `_compute_spawn_bearing_params`.
+            top_level_enclosing = enclosing.split(".")[0]
+            enclosing_fn = index.func_defs.get((relpath, top_level_enclosing))
+            if enclosing_fn is not None:
+                if (relpath, top_level_enclosing, callee) in index.spawn_bearing_params:
+                    # (a) the loop body calls a spawn-bearing parameter directly.
+                    route = "g-forwarded-runner"
                 else:
-                    _reaches_spawner = False
-                if _reaches_spawner:
-                    route = "c-cross-module"
-
-                # route e-generic-runner: callee is runner-shaped (a single-parameter
-                # `_run(argv)`-style wrapper forwarding into a recognized spawn --
-                # `_generic_runner_param` always resolves to that sole parameter, i.e.
-                # argument position 0) and THIS call passes an argv-shaped argument.
-                if (
-                    route is None
-                    and callee in index.runner_shaped_funcs
-                    and _call_arg_is_argv_shaped(node, 0)
-                ):
-                    route = "e-generic-runner"
-
-            if route is None:
-                # route d-injected: a runner-shaped argument resolves to ANY direct spawner.
-                runner_name = _find_injected_runner_name(node)
-                # `_name_is_locally_bound_data`: route d's own scoping leg, the counterpart of
-                # route f's import check below. The repo-wide `direct_spawn_funcs` lookup is
-                # load-bearing and stays (see `_write_route_d_injected_runner_bare_name_
-                # collision`), so the collision is refused at the identifier instead: a name
-                # bound HERE to a loop item or a literal is not the runner it collides with.
-                if (
-                    runner_name is not None
-                    and runner_name in index.direct_spawn_funcs
-                    and not _name_is_locally_bound_data(
-                        index.func_defs.get((relpath, enclosing.split(".")[0])), runner_name
-                    )
-                ):
-                    route = "d-injected"
-
-            if route is None and callee is not None:
-                # route f-default-runner: the callee is a PARAMETER of the enclosing function
-                # whose default binds a module-level direct spawner -- the injectable-seam
-                # idiom (`def resync(..., *, run_git=_update_index_with_retry)`), where the
-                # loop body calls the parameter, not the function. Route d reads a runner
-                # passed AT the call site; this reads one bound one hop up as a default, the
-                # gap route d's own docstring names.
-                default_name = index.param_runner_defaults.get((relpath, enclosing), {}).get(
-                    callee
-                )
-                # A parameter default can only bind a name resolvable in
-                # the DEFINING MODULE's own scope: either a same-module function, or a name
-                # imported into this file. The prior unscoped `default_name in
-                # index.direct_spawn_funcs` fallback was a repo-wide bare-name lookup with no
-                # import check (unlike route c's `callee in imported_here` gate), so a
-                # same-named but unrelated, unimported spawner defined elsewhere would
-                # false-positive -- the exact "true site on a false route" collision route f
-                # exists to correctly resolve.
-                if default_name is not None and (
-                    (relpath, default_name) in index.same_module_direct_spawn
-                    or (
-                        default_name in imported_here
-                        and default_name in index.direct_spawn_funcs
-                    )
-                ):
-                    route = "f-default-runner"
-
-            if route is None and callee is not None:
-                # route g-forwarded-runner: bidirectional fixed-point taint over parameters --
-                # resolves an injected runner by where it actually FLOWS, not by what it is
-                # called or what it is named at its own definition. Ordered after route f (per
-                # this route's own spec) so an existing route still wins the key where both
-                # match -- `AmpSite.key` dedup ignores `route`. See module docstring's route-g
-                # section and `_compute_spawn_bearing_params`.
-                top_level_enclosing = enclosing.split(".")[0]
-                enclosing_fn = index.func_defs.get((relpath, top_level_enclosing))
-                if enclosing_fn is not None:
-                    if (relpath, top_level_enclosing, callee) in index.spawn_bearing_params:
-                        # (a) the loop body calls a spawn-bearing parameter directly.
-                        route = "g-forwarded-runner"
-                    else:
-                        # (b) the loop body forwards a spawn-bearing parameter into a callee
-                        # at a position that is itself spawn-bearing.
-                        for tgt in _resolve_callee_def(index, relpath, callee):
-                            tgt_fn = index.func_defs.get(tgt)
-                            if tgt_fn is None:
+                    # (b) the loop body forwards a spawn-bearing parameter into a callee
+                    # at a position that is itself spawn-bearing.
+                    for tgt in _resolve_callee_def(index, relpath, callee):
+                        tgt_fn = index.func_defs.get(tgt)
+                        if tgt_fn is None:
+                            continue
+                        found = False
+                        for p in _func_params(enclosing_fn):
+                            if (relpath, top_level_enclosing, p) not in index.spawn_bearing_params:
                                 continue
-                            found = False
-                            for p in _func_params(enclosing_fn):
-                                if (relpath, top_level_enclosing, p) not in index.spawn_bearing_params:
-                                    continue
-                                for slot in _forwarded_arg_slots(node, tgt_fn, p):
-                                    if (tgt[0], tgt[1], slot) in index.spawn_bearing_params:
-                                        route = "g-forwarded-runner"
-                                        found = True
-                                        break
-                                if found:
+                            for slot in _forwarded_arg_slots(node, tgt_fn, p):
+                                if (tgt[0], tgt[1], slot) in index.spawn_bearing_params:
+                                    route = "g-forwarded-runner"
+                                    found = True
                                     break
                             if found:
                                 break
+                        if found:
+                            break
 
-            if route is not None:
-                violations.append(
-                    AmpSite(
-                        path=relpath,
-                        lineno=node.lineno,
-                        enclosing=enclosing,
-                        route=route,
-                        callee=callee or "<unknown>",
-                        ordinal=ordinal,
-                    )
+        if route is not None:
+            violations.append(
+                AmpSite(
+                    path=relpath,
+                    lineno=node.lineno,
+                    enclosing=enclosing,
+                    route=route,
+                    callee=callee or "<unknown>",
+                    ordinal=ordinal,
                 )
+            )
 
     return violations
 
@@ -5468,6 +5654,19 @@ def _gate_scope_paths() -> tuple[pathlib.Path, ...]:
 
 
 _GATE_SCAN_RAW: list[AmpSite] | None = None
+_GATE_CACHE_DIR: pathlib.Path | None = None
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _bind_gate_cache_dir(pytestconfig):
+    """Binds the scan cache directory for this module's tests; None when the cache provider
+    is disabled, which makes `_gate_violations` run the uncached collector."""
+    global _GATE_CACHE_DIR
+    from coordinator_core.tests._amp_scan_incremental import gate_cache_dir
+
+    _GATE_CACHE_DIR = gate_cache_dir(pytestconfig)
+    yield
+    _GATE_CACHE_DIR = None
 
 
 def _gate_violations() -> list[AmpSite]:
@@ -5480,7 +5679,12 @@ def _gate_violations() -> list[AmpSite]:
         saved = (globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"])
         globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"] = frozenset(), {}
         try:
-            _GATE_SCAN_RAW = find_unbatched_per_item_spawns(_gate_scope_paths())
+            if _GATE_CACHE_DIR is None:
+                _GATE_SCAN_RAW = find_unbatched_per_item_spawns(_gate_scope_paths())
+            else:
+                from coordinator_core.tests._amp_scan_incremental import scan_incremental
+
+                _GATE_SCAN_RAW, _ = scan_incremental(_gate_scope_paths(), _GATE_CACHE_DIR)
         finally:
             globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"] = saved
     exempt, claims = globals()["_EXEMPT_SITES"], globals()["_ORACLE_CLAIMS"]
@@ -5835,7 +6039,7 @@ def _suppressing_predicate_names() -> set[str]:
     found: set[str] = set()
 
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "find_unbatched_per_item_spawns":
+        if isinstance(node, ast.FunctionDef) and node.name == "_file_verdicts":
             for sub in _walk(node):
                 if (
                     isinstance(sub, ast.If)
@@ -8939,6 +9143,58 @@ def test_ordinal_assignment_independent_of_registration(tmp_path, monkeypatch):
         "suppressing the first anchored call changed the second call's ordinal/key -- the "
         "ordinal pass is not independent of suppression-registry membership (AC10)"
     )
+
+
+_SUMMARY_FIXTURE = (
+    "import subprocess\n"
+    "\n"
+    "@decorated\n"
+    "def _resolve(sha):\n"
+    "    subprocess.run(['git', 'rev-list', sha])\n"
+    "\n"
+    "def _record(sha, get_range, *, extra=None):\n"
+    "    get_range(sha)\n"
+    "\n"
+    "def _collect(shas, resolver):\n"
+    "    for sha in shas:\n"
+    "        _record(sha, resolver)\n"
+    "\n"
+    "def entry(shas):\n"
+    "    _collect(shas, resolver=_resolve)\n"
+)
+
+
+def test_summary_fixed_point_equals_the_ast_projection_and_marshals(tmp_path):
+    """The summary-form fixed point (`_merge_summaries`) and the AST projection
+    (`_compute_spawn_bearing_params`) are one core over two inputs: they agree, and a summary
+    survives marshal as plain tuples."""
+    import marshal
+
+    (tmp_path / "hop.py").write_text(_SUMMARY_FIXTURE, encoding="utf-8")
+    records = _load_file_records(_discover_scope_files((tmp_path,)))
+    summaries = [_summarise(r) for r in records]
+    merged = _merge_summaries(summaries)
+    assert merged.spawn_bearing_params == {("hop.py", "_collect", "resolver"), ("hop.py", "_record", "get_range")}
+    attached = _build_func_index(records)
+    assert attached.spawn_bearing_params == _compute_spawn_bearing_params(attached)
+    assert attached.spawn_bearing_params == merged.spawn_bearing_params
+    assert not merged.func_defs and attached.func_defs
+    assert marshal.loads(marshal.dumps([dataclasses.astuple(s) for s in summaries]))
+
+
+def test_function_digest_covers_decorators_and_tracks_position(tmp_path):
+    (tmp_path / "hop.py").write_text(_SUMMARY_FIXTURE, encoding="utf-8")
+    (tmp_path / "shifted.py").write_text("\n" + _SUMMARY_FIXTURE, encoding="utf-8")
+    (tmp_path / "plain.py").write_text(
+        _SUMMARY_FIXTURE.replace("@decorated\n", ""), encoding="utf-8"
+    )
+    by_file = {
+        r.relpath: {f.name: f.digest for f in _summarise(r).funcs}
+        for r in _load_file_records(_discover_scope_files((tmp_path,)))
+    }
+    assert by_file["hop.py"]["_resolve"] != by_file["plain.py"]["_resolve"]
+    assert by_file["hop.py"]["_resolve"] != by_file["shifted.py"]["_resolve"]
+    assert by_file["hop.py"]["entry"] != by_file["shifted.py"]["entry"]
 
 
 if __name__ == "__main__":

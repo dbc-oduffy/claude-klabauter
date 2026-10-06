@@ -78,6 +78,8 @@ Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
 
 from __future__ import annotations
 
+import os
+
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
@@ -92,7 +94,7 @@ def _run_sensor(
     delegation_evidence: bool,
     repo_root: "str | None",
 ) -> None:
-    cwd = repo_root or None
+    cwd = os.fspath(repo_root) if repo_root else None
     now_epoch = _session_core.now_epoch()
     stamp_iso = _session_core.now_iso()
 

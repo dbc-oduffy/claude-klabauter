@@ -548,8 +548,10 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
     assert "error" not in out or out["committed"] is False
 
 
-# Two git processes via run_git; a third means a new spawn joined the hot path.
-_EXPECTED_SPAWNS = 2
+# Three git processes via run_git: two for the commit, plus commit_v2's one batched
+# check-ignore over the paths new to HEAD (example-stats-repo b7d67aa385ac). A fourth means a
+# new spawn joined the hot path.
+_EXPECTED_SPAWNS = 3
 
 
 def test_process_time_and_spawns_on_a_40_path_request(repo):

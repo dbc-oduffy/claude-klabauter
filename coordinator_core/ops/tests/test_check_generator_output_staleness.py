@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import check_generator_output_staleness as cgos
-from coordinator_core.ops.generator_provenance import Pair
+from coordinator_core.ops.generator_census import Pair
 from coordinator_core.ops.staleness_git import Verdict
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -215,34 +215,12 @@ def test_compute_repo_staleness_keys_undeclared_by_generator_name(tmp_path):
     repo = _init_repo(tmp_path)
     (repo / "coordinator_core").mkdir()
     generator = repo / "coordinator_core" / "undeclared_writer.py"
-    generator.write_text(
-        "from pathlib import Path\n"
-        "Path('out.json').write_text('{}')\n",
-        encoding="utf-8",
-    )
-    (repo / "out.json").write_text("{}", encoding="utf-8")
+    generator.write_text("UNSTAMPED_BY_DESIGN = []\n",encoding="utf-8")
     _commit_all(repo, "initial")
 
     results = cgos.compute_repo_staleness(repo)
     assert "coordinator_core/undeclared_writer.py" in results
     assert results["coordinator_core/undeclared_writer.py"]["verdict"] == Verdict.UNDECLARED
-
-
-def test_compute_repo_staleness_keys_write_target_unresolved_by_generator_name(tmp_path):
-    repo = _init_repo(tmp_path)
-    (repo / "coordinator_core").mkdir()
-    generator = repo / "coordinator_core" / "write_target_unresolved.py"
-    generator.write_text(
-        "from pathlib import Path\n"
-        "def run(target):\n"
-        "    Path(target).write_text('{}')\n",
-        encoding="utf-8",
-    )
-    _commit_all(repo, "initial")
-
-    results = cgos.compute_repo_staleness(repo)
-    assert "coordinator_core/write_target_unresolved.py" in results
-    assert results["coordinator_core/write_target_unresolved.py"]["verdict"] == Verdict.WRITE_TARGET_UNRESOLVED
 
 
 def test_compute_repo_staleness_unresolvable_root_is_indeterminate(tmp_path):
@@ -594,34 +572,33 @@ def test_tested_platforms_write_splices_stamp_without_reflowing(tmp_path):
 @pytest.mark.designed_red
 def test_prime_exit_criterion_five_named_modules_classify_clean():
     """Per-module readers over the live files; the five are named, never swept."""
-    import ast
-
-    from coordinator_core.ops import generator_provenance as gp
+    from coordinator_core.ops.generator_census.declarations import extract
+    from coordinator_core.ops.generator_census.globs import has_wildcard, is_catch_all
 
     root = Path(__file__).resolve().parents[3]
 
-    def tree_of(rel: str) -> ast.Module:
-        return ast.parse((root / rel).read_text(encoding="utf-8"))
+    def declared(rel: str) -> dict:
+        return extract((root / rel).read_text(encoding="utf-8"))
 
     for rel in ("coordinator/bin/regenerate-known-red-registry.py", "coordinator/bin/generate-tested-platforms.py"):
-        generates = gp._extract_generates(tree_of(rel))
+        generates = declared(rel).get("GENERATES")
         assert isinstance(generates, list) and generates, rel
         for entry in generates:
             stamp, detail = cgos.extract_stamp(root / entry["artifact"], entry["stamp_key"])
             assert isinstance(stamp, str) and stamp, (rel, entry["artifact"], detail)
 
-    assert gp._extract_generates(tree_of("coordinator_core/contract/cockpit_schema/emit_schema.py")) == []
+    assert "GENERATES" not in declared("coordinator_core/contract/cockpit_schema/emit_schema.py")
 
     for rel in ("coordinator_core/ops/distill_apply_disposal.py", "coordinator_core/ops/workday_complete_step2_5_dirty_tree.py"):
-        tree = tree_of(rel)
-        generates = gp._extract_generates(tree)
+        decls = declared(rel)
+        generates = decls.get("GENERATES")
         if isinstance(generates, list) and generates and all(g.get("stamp_key") for g in generates):
             continue
         # AC2 reasoned-at-site path: still UNDECLARED by the checker, asserted as that outcome.
-        assert generates is None, rel
-        mutates = gp._extract_mutates(tree)
-        assert gp._valid_mutates_shape(mutates), rel
-        assert gp._mutates_concrete_patterns(mutates), rel
+        assert not generates, rel
+        mutates = decls.get("MUTATES")
+        assert isinstance(mutates, list) and mutates and all(isinstance(m, str) for m in mutates), rel
+        assert any(has_wildcard(m) and not is_catch_all(m) for m in mutates), rel
         lines = (root / rel).read_text(encoding="utf-8").splitlines()
         (idx,) = [i for i, ln in enumerate(lines) if ln.startswith("MUTATES")]
         assert lines[idx - 1].lstrip().startswith("#"), f"{rel}: no site-reason comment above MUTATES"

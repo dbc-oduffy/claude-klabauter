@@ -290,9 +290,33 @@ _CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
 #: should not have to reconcile two renderings of the same instant.
 _GONE_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
-def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
+def _roster_kwargs(box_wide: bool) -> dict[str, bool]:
+    return {"box_wide": True} if box_wide else {}
+
+
+def _peer_repo_root(peer: dict[str, Any], default: str, box_wide: bool) -> str:
+    """The repo holding this peer's receiver-state and ledger.
+
+    Box-wide, a peer's own state lives in ITS repo, not the watch's: walk up
+    from its cwd to the first `.git` entry (no spawn). Repo-scoped, every peer
+    is under `default` already.
+    """
+    cwd = peer.get("cwd")
+    if not box_wide or not isinstance(cwd, str) or not cwd:
+        return default
+    here = os.path.abspath(cwd)
+    while True:
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            return default
+        here = parent
+
+
+def _measure_snapshot_ms(repo_root: str, box_wide: bool = False) -> tuple[float, list]:
     started = time.monotonic()
-    agents = read_pass.fetch_live_agents(repo_root)
+    agents = read_pass.fetch_live_agents(repo_root, **_roster_kwargs(box_wide))
     elapsed_ms = (time.monotonic() - started) * 1000.0
     return elapsed_ms, list(agents)
 
@@ -317,8 +341,9 @@ def _current_agents(
     repo_root: str,
     caller_session_id: Optional[str],
     group_em_session_id: Optional[str] = None,
+    box_wide: bool = False,
 ) -> list[dict[str, Any]]:
-    """This tick's repo-filtered peer set, with the watch's own side excluded.
+    """This tick's repo-filtered (or, `box_wide`, whole-box) peer set, with the watch's own side excluded.
 
     Sourced from `read_pass.fetch_live_agents` (-> `peer_roster.build_roster`,
     already case-folded `cwd` containment -- see that module's `_normalize_path`)
@@ -344,7 +369,10 @@ def _current_agents(
     set, why the second is the one that fires: `peer_roster.EmptySnapshotError`.
     """
     agents = read_pass.fetch_live_agents(
-        repo_root, raise_on_failure=True, raise_on_empty_snapshot=True
+        repo_root,
+        raise_on_failure=True,
+        raise_on_empty_snapshot=True,
+        **_roster_kwargs(box_wide),
     )
     peers = read_pass.enumerate_repo_peers(agents, caller_session_id)
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
@@ -356,13 +384,16 @@ def _classify_all(
     repo_root: str,
     agents: Iterable[dict[str, Any]],
     now: Optional[datetime] = None,
+    box_wide: bool = False,
 ) -> dict[str, dict[str, Any]]:
     verdicts: dict[str, dict[str, Any]] = {}
     for peer in agents:
         session_id = peer.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             continue
-        verdicts[session_id] = read_pass.classify_peer(repo_root, peer, now=now)
+        verdicts[session_id] = read_pass.classify_peer(
+            _peer_repo_root(peer, repo_root, box_wide), peer, now=now
+        )
     return verdicts
 
 
@@ -637,6 +668,7 @@ def poll_once(
     group_em_session_id: Optional[str] = None,
     prev_names: Optional[dict[str, dict[str, Any]]] = None,
     prev_inbox_open: Optional[int] = None,
+    box_wide: bool = False,
 ) -> tuple[dict[str, bool], list[dict[str, Any]], dict[str, dict[str, Any]], int]:
     """One poll: classify, diff against `prev_parked`, emit PARKED and GONE lines.
 
@@ -688,18 +720,24 @@ def poll_once(
     if group_em_session_id is None:
         group_em_session_id = caller_session_id
 
-    agents = _current_agents(repo_root, caller_session_id, group_em_session_id)
+    agents = _current_agents(
+        repo_root, caller_session_id, group_em_session_id, box_wide=box_wide
+    )
     agents_by_id = {
         a.get("sessionId"): a for a in agents if isinstance(a.get("sessionId"), str)
     }
-    verdicts = _classify_all(repo_root, agents, now=now)
+    verdicts = _classify_all(repo_root, agents, now=now, box_wide=box_wide)
     cur_parked = {sid: bool(v.get("candidate")) for sid, v in verdicts.items()}
     peer_notes = {
         sid: {"name": agents_by_id.get(sid, {}).get("name"), "last_seen": now_epoch}
         for sid in cur_parked
     }
 
-    watched_repo = os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
+    watched_repo = (
+        "the box"
+        if box_wide
+        else os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
+    )
     for session_id in gone(prev_parked, cur_parked):
         if session_id in (caller_session_id, group_em_session_id):
             continue
@@ -725,7 +763,7 @@ def poll_once(
             continue
         peer = agents_by_id.get(session_id, {})
         line = _parked_line(
-            repo_root,
+            _peer_repo_root(peer, repo_root, box_wide),
             session_id,
             verdicts[session_id],
             peer.get("cwd"),
@@ -880,6 +918,7 @@ def tick_once(
     stream: Optional[TextIO] = None,
     tick_interval_seconds: float = _CRON_FLOOR_INTERVAL_SECONDS,
     now: Optional[datetime] = None,
+    box_wide: bool = False,
 ) -> int:
     """One wake: poll once against the carried prior map, then exit.
 
@@ -937,6 +976,7 @@ def tick_once(
             emit=emit,
             group_em_session_id=group_em_session_id,
             prev_names=load_prev_peers(repo_root),
+            box_wide=box_wide,
         )
     except Exception:
         try:
@@ -982,6 +1022,7 @@ def main(
     max_iterations: Optional[int] = None,
     group_em_session_id: Optional[str] = None,
     now_epoch: Optional[float] = None,
+    box_wide: bool = False,
 ) -> None:
     """Arm the watch: print `ARMED`, then poll forever (or `max_iterations`
     times, for tests), emitting one line per PARKED transition and one per
@@ -1041,7 +1082,7 @@ def main(
     out = sys.stdout if stream is None else stream
     emit = _emit_for(out)
 
-    snapshot_ms, agents = _measure_snapshot_ms(repo_root)
+    snapshot_ms, agents = _measure_snapshot_ms(repo_root, box_wide=box_wide)
     peer_count = len(agents)
     # SAME EXCLUSION AS `_current_agents`, applied to the enumeration already in
     # hand -- no second registry read. This is the number the heartbeat's
@@ -1079,7 +1120,7 @@ def main(
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
     armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
-        f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
+        f"ARMED peer_count={peer_count} {'box-wide' if box_wide else watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s, "
         f"roster=(peers seen including this caller), "
         f"peer_count_excluding_caller={peer_count_excluding_caller} "
@@ -1103,6 +1144,7 @@ def main(
                 group_em_session_id=group_em_session_id,
                 prev_names=prev_names,
                 prev_inbox_open=prev_inbox_open,
+                box_wide=box_wide,
             )
             stamped = watch_heartbeat.stamp(
                 repo_root,
@@ -1299,6 +1341,14 @@ def _cli(argv: "list[str] | None" = None) -> int:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--scope",
+        choices=("box", "repo"),
+        default="box",
+        help="Which peers to watch: every live session on the box (default -- Group EM "
+             "standing is box-wide) or only those under --repo-root. State files "
+             "(heartbeat, parked map) stay under --repo-root either way.",
+    )
+    parser.add_argument(
         "--status",
         action="store_true",
         help="Answer 'is a watch alive for this repo?' in plain words and exit, watching "
@@ -1376,6 +1426,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
             caller_session_id=args.caller_session_id,
             group_em_session_id=args.group_em_session_id,
             tick_interval_seconds=args.tick_interval_seconds,
+            box_wide=args.scope == "box",
         )
 
     try:
@@ -1384,6 +1435,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
             caller_session_id=args.caller_session_id,
             max_iterations=args.max_iterations,
             group_em_session_id=args.group_em_session_id,
+            box_wide=args.scope == "box",
         )
     except KeyboardInterrupt:
         return 0

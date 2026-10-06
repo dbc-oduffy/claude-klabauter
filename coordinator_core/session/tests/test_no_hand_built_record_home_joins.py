@@ -513,8 +513,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/tests/test_gate_dimension_review.py",
     "ops/tests/test_gate_recheck_cleared_readiness.py",
     "ops/tests/test_gate_recheck_retires_blocked_by.py",
-    "ops/tests/test_generator_provenance_ratchet.py",
-    "ops/tests/test_generator_provenance_seam_vocabulary.py",
     "ops/tests/test_goal_kr_status.py",
     "ops/tests/test_goals_match.py",
     "ops/tests/test_grind_ops.py",

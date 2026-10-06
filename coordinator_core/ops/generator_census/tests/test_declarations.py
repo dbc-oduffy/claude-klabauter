@@ -69,7 +69,7 @@ def test_name_and_fstring_folding_over_own_constants():
 
 def test_memo_modules_fold_over_machinery_paths():
     oracle = json.loads(
-        (_ROOT / "coordinator_core/ops/tests/fixtures/generator_discovery_oracle.json").read_text(
+        (_ROOT / "coordinator_core/ops/generator_census/tests/fixtures/census_oracle.json").read_text(
             encoding="utf-8"
         )
     )

@@ -7001,11 +7001,9 @@ def _plan_dirs() -> tuple[str, ...]:
     """The trailing-slash directory prefixes a plan document lives under."""
     global _PLAN_DIRS_CACHE
     if not _PLAN_DIRS_CACHE:
-        from coordinator_core.workstream_complete.directives_lessons_plan import (
-            _GOVERNING_PLAN_GLOB_DIRS,
-        )
+        from coordinator_core.wire_paths import _PLAN_DIR_PREFIXES  # noqa: SLF001 - avoids the workstream_complete package import
 
-        _PLAN_DIRS_CACHE = tuple(f"{d}/" for d in _GOVERNING_PLAN_GLOB_DIRS)
+        _PLAN_DIRS_CACHE = _PLAN_DIR_PREFIXES
     return _PLAN_DIRS_CACHE
 
 

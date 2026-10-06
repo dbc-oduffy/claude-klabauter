@@ -124,6 +124,10 @@ def _isolate_op_timeout_state(monkeypatch):
     """
     for dial in _RETIRED_TIMEOUT_DIALS:
         monkeypatch.delenv(dial, raising=False)
+    # `_IN_PROCESS_REGISTRY_MEMO` memoizes the locator read once per process, a failed read
+    # included; a miss sends every later `cc_invoke` through an extra `_machine_local.py`
+    # spawn and breaks the one-spawn counts. Seeding pins the read off the machine registry.
+    monkeypatch.setitem(_mod._IN_PROCESS_REGISTRY_MEMO, "repos.claude_klabauter", "/fake/src")
     _mod._reset_op_timeout_cache()
     yield
     _mod._reset_op_timeout_cache()

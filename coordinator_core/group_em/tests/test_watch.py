@@ -424,7 +424,7 @@ def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys):
 
 def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys):
     """End to end through the entrypoint an operator would actually type."""
-    monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root: (4.6, [{"sessionId": f"p{i}"} for i in range(3)]))
+    monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root, **_kw: (4.6, [{"sessionId": f"p{i}"} for i in range(3)]))
     monkeypatch.setattr(watch, "_current_agents", lambda repo_root, sid: [])
     rc = watch._cli(
         ["--repo-root", str(tmp_path), "--caller-session-id", "sid-cli", "--max-iterations", "1"]
@@ -2214,3 +2214,66 @@ def test_the_held_poller_prunes_the_spool_too(tmp_path):
             max_iterations=1,
         )
     assert _spool_contents(tmp_path) == []
+
+
+def test_box_wide_roster_reads_peers_outside_repo_root(tmp_path, monkeypatch):
+    from coordinator_core.session import harness_registry, peer_roster
+
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    for d in (repo, other):
+        (d / ".git").mkdir(parents=True)
+
+    def _rec(cwd):
+        return harness_registry.RegistryRecord(
+            pid=1, start_epoch=time.time(), cwd=str(cwd), name="n",
+            messaging_socket_path=None, status="idle", waiting_for=None,
+            stable_pid_capture=None,
+        )
+
+    monkeypatch.setattr(
+        harness_registry, "snapshot", lambda: {"in": _rec(repo), "out": _rec(other)}
+    )
+    scoped = {r.session_id for r in peer_roster.build_roster(repo_root=str(repo))}
+    wide = {r.session_id for r in peer_roster.build_roster(repo_root=str(repo), box_wide=True)}
+    assert scoped == {"in"} and wide == {"in", "out"}
+
+
+def test_poll_once_box_wide_classifies_each_peer_against_its_own_repo(tmp_path):
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    for d in (repo, other):
+        (d / ".git").mkdir(parents=True)
+    (other / "sub").mkdir()
+    agents = [
+        {"sessionId": "p1", "cwd": str(other / "sub"), "name": "peer", "status": "idle"},
+    ]
+    seen = []
+
+    def _classify(root, peer, now=None):
+        seen.append(root)
+        return {"candidate": False, "reason": "x"}
+
+    kwargs_seen = []
+
+    def _fetch(root, **kw):
+        kwargs_seen.append(kw)
+        return agents
+
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", side_effect=_fetch), \
+            mock.patch.object(watch.read_pass, "classify_peer", side_effect=_classify):
+        parked, _decl, _notes, _inbox = watch.poll_once(
+            str(repo), "caller", {}, box_wide=True, emit=lambda line: None
+        )
+    assert parked == {"p1": False}
+    assert kwargs_seen[0]["box_wide"] is True
+    assert seen == [str(other)]
+
+
+def test_cli_defaults_to_box_scope_and_repo_flag_narrows(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for argv, expected in (([], True), (["--scope", "repo"], False)):
+        with mock.patch.object(watch, "tick_once", return_value=0) as tick:
+            watch._cli(["--repo-root", str(repo), "--once", *argv])
+        assert tick.call_args.kwargs["box_wide"] is expected

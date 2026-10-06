@@ -232,8 +232,6 @@ coordinator/bin/plan-spine-check.py
 coordinator/bin/query-roadmap-serve.py
 # recycle-check.py: kind 1: read-only slot_order recycle probe; writes nothing
 coordinator/bin/recycle-check.py
-# regenerate-generator-content-cache.py: deferred: writes the shipped generator content cache through generator_scan_cache.save_content_cache, a library call with no main(argv) to route
-coordinator/bin/regenerate-generator-content-cache.py
 # triage-plan-candidates.py: kind 1: read-only plan-candidate triage over git and spine reads
 coordinator/bin/triage-plan-candidates.py
 # waste-signal.py: deferred: dynamic instrument; its only write is an operator-named --out JSON report

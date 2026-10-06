@@ -1237,6 +1237,9 @@ def _terminal_commit(
         return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
     commit_params: dict = {"paths": all_paths, "message": message}
+    if bookkeeping_record_path is not None and bookkeeping_record_path in all_paths:
+        # The review record lives under the gitignored subagent-share dir and is tracked by design.
+        commit_params["force_ignored"] = [bookkeeping_record_path]
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
         # A DONE chunk's own declared write that is now absent is a planned

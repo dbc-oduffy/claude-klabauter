@@ -415,7 +415,10 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
     # would break silently if a future edit flipped a default and turned every
     # existing caller's quiet `[]` into a raise.
     fake_build_roster.assert_called_once_with(
-        repo_root=REPO_ROOT, raise_on_failure=False, raise_on_empty_snapshot=False
+        repo_root=REPO_ROOT,
+        raise_on_failure=False,
+        raise_on_empty_snapshot=False,
+        box_wide=False,
     )
     assert agents == [
         {"sessionId": "peer-1", "status": "busy", "cwd": REPO_ROOT, "name": None}

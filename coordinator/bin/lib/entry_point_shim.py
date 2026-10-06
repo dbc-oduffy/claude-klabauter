@@ -417,6 +417,8 @@ def _merge_assemble_dispatch(op: str, params: dict, print_fn, result_key: str, *
         path_label = "cold"
     elif getattr(cc_invoke, "last_rung", None) == "spawn":
         path_label = "engine-spawn"
+    elif getattr(cc_invoke, "last_rung", None) == "in-process":
+        path_label = "in-process"
     else:
         path_label = "warm"
     print(f"{op}: path={path_label}", file=sys.stderr)

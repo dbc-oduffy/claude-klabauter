@@ -11,7 +11,7 @@ inputs here are whole generator source trees, not a hand-listed
 move since its artifact was last emitted?" per pair, never once for the
 whole repo, using C0's shared since-range comparison
 (`coordinator_core.ops.staleness_git`) and C1's discovery
-(`coordinator_core.ops.generator_provenance`).
+(`coordinator_core.ops.generator_census`).
 
 ## ONE LEG, DELIBERATELY (AC2)
 
@@ -132,7 +132,7 @@ from typing import Any, Optional
 import yaml
 
 from coordinator_core.content_root import read_content_root
-from coordinator_core.ops.generator_provenance import GeneratorRecord, Pair, discover_generators
+from coordinator_core.ops.generator_census import GeneratorRecord, Pair, census
 from coordinator_core.ops.staleness_git import (
     SinceRange,
     Verdict,
@@ -264,7 +264,7 @@ def compute_repo_staleness(repo_root: Optional[Path] = None) -> dict[str, dict[s
             }
         }
 
-    records: list[GeneratorRecord] = discover_generators(root)
+    records: list[GeneratorRecord] = census(root)
 
     results: dict[str, dict[str, Any]] = {}
     for record in records:

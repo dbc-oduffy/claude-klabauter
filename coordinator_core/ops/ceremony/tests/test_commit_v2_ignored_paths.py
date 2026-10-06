@@ -74,6 +74,21 @@ def test_a_force_added_ignored_path_still_commits(repo):
     assert "secret.env" in _tracked(repo)
 
 
+def test_a_path_named_in_force_ignored_commits(repo):
+    _w(repo / ".local/share/new-record.md")
+    out = _call(repo, paths=[".local/share/new-record.md"], force_ignored=[".local/share/new-record.md"], message="record")
+    assert out["committed"] is True, out
+    assert ".local/share/new-record.md" in _tracked(repo)
+
+
+def test_force_ignored_exempts_only_the_paths_it_names(repo):
+    _w(repo / ".local/share/new-record.md")
+    _w(repo / "secret.env", "k=v\n")
+    out = _call(repo, paths=[".local/share/new-record.md", "secret.env"], force_ignored=[".local/share/new-record.md"], message="m")
+    assert out["committed"] is False
+    assert "secret.env" in out["error"] and "new-record" not in out["error"]
+
+
 def test_an_already_tracked_ignored_path_still_commits_its_edit(repo):
     _w(repo / ".local/share/a.md", "edited\n")
     out = _call(repo, paths=[".local/share/a.md"], message="edit tracked")

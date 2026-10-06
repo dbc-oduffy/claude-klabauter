@@ -216,3 +216,44 @@ class TestTranscriptClockIsNotFileMtime:
         assert record is not None
         assert record["verdict"] == "PAUSED"
         assert record["reason"].startswith("tool-unanswered")
+
+
+class TestPathLikeRepoRoot:
+    def test_a_path_repo_root_still_writes_the_record(self, tmp_path: Path) -> None:
+        """The engine hands common_dir-scoped ops a `Path`; a swallowed TypeError
+        there left every Stop without a receiver-state record, so the park spool
+        never saw a PAUSED verdict."""
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "turn_duration", "timestamp": "2026-10-06T10:00:00Z"})],
+        )
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "s-path", "transcript_path": transcript, "delegation_evidence": "false"},
+                repo_root=repo / ".git",
+            )
+        )
+        record = rs.read_receiver_state("s-path", str(repo))
+        assert record is not None and record["verdict"] == "PAUSED"
+
+    def test_the_spool_producer_appends_after_a_path_scoped_sensor_run(self, tmp_path: Path) -> None:
+        from coordinator_core.hooks import group_em_park_spool as spool
+
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "state").mkdir()
+        transcript = _write_transcript(
+            tmp_path,
+            [json.dumps({"type": "system", "subtype": "turn_duration", "timestamp": "2026-10-06T10:00:00Z"})],
+        )
+        asyncio.run(
+            sensor._handler(
+                {"session_id": "s-spool", "transcript_path": transcript, "delegation_evidence": "false"},
+                repo_root=repo / ".git",
+            )
+        )
+        spool._handler({"payload": {"session_id": "s-spool", "cwd": str(repo)}})
+        lines = (repo / "state" / "group-em-watch-spool.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1 and json.loads(lines[0])["session_id"] == "s-spool"

@@ -719,7 +719,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
 
-    ignored = _ignored_untracked(worktree_root, raw_paths)
+    force_ignored = params.get("force_ignored") or []
+    if not isinstance(force_ignored, list) or not all(isinstance(p, str) for p in force_ignored):
+        return _error("params.force_ignored must be a list of strings")
+    exempt = {p.replace("\\", "/") for p in force_ignored}
+    ignored = [p for p in _ignored_untracked(worktree_root, raw_paths) if p not in exempt]
     if ignored:
         shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
         return _error(

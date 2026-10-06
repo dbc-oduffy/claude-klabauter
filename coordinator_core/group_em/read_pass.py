@@ -218,9 +218,11 @@ def fetch_live_agents(
     *,
     raise_on_failure: bool = False,
     raise_on_empty_snapshot: bool = False,
+    box_wide: bool = False,
 ) -> list[dict[str, Any]]:
     rows = peer_roster.build_roster(
         repo_root=repo_root,
+        box_wide=box_wide,
         raise_on_failure=raise_on_failure,
         raise_on_empty_snapshot=raise_on_empty_snapshot,
     )

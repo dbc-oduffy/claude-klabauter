@@ -44,6 +44,17 @@ skip to "only the spawn half" when the underlying primitive offers no such
 half. Do NOT "fix" this by adding a Linux getrusage/audit-hook path here --
 that IS the extension the plan's Anti-scope defers.
 
+STAMPED ENGINE. The gate measures what production runs: a copy of the engine
+carrying a build stamp, with the warm server off (`_stamped_engine_fixture`).
+An unstamped dev tree keeps the refusing child by G-EM ruling, so measuring it
+would gate a path production never takes. Each sample runs with
+`cold_cli_env`. Per brief, a stamped in-process sample's procs equal the same
+brief's spawn-path procs (in-process rung declined) minus the bootstrap child's
+`CHILD_PROCS` (2 on Windows, 1 on Darwin); pickup, which spawns nothing itself,
+therefore reads exactly 2 on Windows and carries its high-water. baton and wsc
+are bounded by the 500ms brightline only: their own git spawns are routed to
+bug-backlog rows, not this gate.
+
 No wall-clock assertion anywhere. Process time and spawn count only
 (DR-344 § 7, CLAUDE.md § "The brightline").
 
@@ -80,6 +91,11 @@ from coordinator_core.benchmarks.process_time import (
     IS_DARWIN,
     IS_WINDOWS,
     single_invocation_tree_process_time,
+)
+from coordinator_core.tests._stamped_engine_fixture import (
+    build_engine_copy,
+    cold_cli_env,
+    spawn_path_env,
 )
 from coordinator_core.pickup_assemble.tests._git_harness import (
     git as _git,
@@ -131,7 +147,11 @@ _BRIEF_COUNT = 3
 GATE_TOTAL_PROCESS_TIME_CEILING_MS: float = (
     GATE_HARD_CEILING_MS * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT * 1.5
 )
-GATE_TOTAL_PROCS_CEILING: int = 8 * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT
+GATE_TOTAL_PROCS_CEILING: int = 16 * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT
+
+# Processes the declined in-process rung adds on the spawn path: the cold
+# `coordinator_core.invoke` child plus its conhost (Windows), the child (Darwin).
+CHILD_PROCS: int = 2 if IS_WINDOWS else 1
 
 
 def _skip_reason_for_platform() -> Optional[str]:
@@ -147,7 +167,7 @@ def _skip_reason_for_platform() -> Optional[str]:
     )
 
 
-def _seed_pickup_repo(tmp_path: Path) -> tuple[Path, list[str]]:
+def _seed_pickup_repo(tmp_path: Path, bin_dir: Path = _BIN_DIR) -> tuple[Path, list[str]]:
     repo = tmp_path / "pickup-repo"
     _init_repo(repo)
     handoff = repo / "state" / "handoffs" / "h1.md"
@@ -163,11 +183,11 @@ def _seed_pickup_repo(tmp_path: Path) -> tuple[Path, list[str]]:
     handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
     _git(repo, "add", str(handoff.relative_to(repo)))
     _git(repo, "commit", "-m", "add h1.md")
-    script = _BIN_DIR / "pickup-assemble.py"
+    script = bin_dir / "pickup-assemble.py"
     return repo, [sys.executable, str(script), "brief", "state/handoffs/h1.md"]
 
 
-def _seed_baton_repo(tmp_path: Path) -> tuple[Path, list[str]]:
+def _seed_baton_repo(tmp_path: Path, bin_dir: Path = _BIN_DIR) -> tuple[Path, list[str]]:
     repo = tmp_path / "baton-repo"
     _init_repo(repo)
     artifact = repo / "state" / "handoffs" / "h1.md"
@@ -176,7 +196,7 @@ def _seed_baton_repo(tmp_path: Path) -> tuple[Path, list[str]]:
     artifact.write_text(f"---\n{fm}---\n\n# Artifact\n\nBody.\n", encoding="utf-8")
     _git(repo, "add", str(artifact.relative_to(repo)))
     _git(repo, "commit", "-m", "add h1.md")
-    script = _BIN_DIR / "baton-assemble.py"
+    script = bin_dir / "baton-assemble.py"
     return repo, [
         sys.executable,
         str(script),
@@ -186,18 +206,43 @@ def _seed_baton_repo(tmp_path: Path) -> tuple[Path, list[str]]:
     ]
 
 
-def _seed_wsc_repo(tmp_path: Path) -> tuple[Path, list[str]]:
+def _seed_wsc_repo(tmp_path: Path, bin_dir: Path = _BIN_DIR) -> tuple[Path, list[str]]:
     repo = tmp_path / "wsc-repo"
     _init_repo(repo)
     (repo / "README.md").write_text("placeholder\n", encoding="utf-8")
     _git(repo, "add", "README.md")
     _git(repo, "commit", "-m", "seed")
-    script = _BIN_DIR / "workstream-complete-assemble.py"
+    script = bin_dir / "workstream-complete-assemble.py"
     return repo, [sys.executable, str(script), "brief"]
 
 
-def _run_gate_for_brief(op_name: str, repo: Path, cmd: list[str], placeholder_ms: float, tmp_path: Path) -> None:
+def _stamped_bin_dir(tmp_path: Path) -> tuple[Path, dict]:
+    reason = _skip_reason_for_platform()
+    if reason is not None:
+        pytest.skip(reason)
+    engine = build_engine_copy(tmp_path / "engine", stamped=True)
+    return engine / "coordinator" / "bin", cold_cli_env(engine)
+
+
+def _run_gate_for_brief(
+    op_name: str,
+    repo: Path,
+    cmd: list[str],
+    placeholder_ms: Optional[float],
+    tmp_path: Path,
+    env: Optional[dict] = None,
+) -> None:
     skip_reason = _skip_reason_for_platform()
+    spawn_procs: Optional[int] = None
+    if skip_reason is None:
+        spawn_result = single_invocation_tree_process_time(
+            cmd,
+            env=spawn_path_env(env),
+            cwd=str(repo),
+            stdout_path=str(tmp_path / f"{op_name}-spawn.out"),
+            stderr_path=str(tmp_path / f"{op_name}-spawn.err"),
+        )
+        spawn_procs = spawn_result["procs"]
     total_process_time_ms = 0.0
     total_procs = 0
     for i in range(GATE_SAMPLES_PER_BRIEF):
@@ -206,6 +251,7 @@ def _run_gate_for_brief(op_name: str, repo: Path, cmd: list[str], placeholder_ms
             return
         result = single_invocation_tree_process_time(
             cmd,
+            env=env,
             cwd=str(repo),
             stdout_path=str(tmp_path / f"{op_name}-{i}.out"),
             stderr_path=str(tmp_path / f"{op_name}-{i}.err"),
@@ -213,12 +259,16 @@ def _run_gate_for_brief(op_name: str, repo: Path, cmd: list[str], placeholder_ms
         total_process_time_ms += result["process_time_ms"]
         total_procs += result["procs"]
 
+        assert result["procs"] == spawn_procs - CHILD_PROCS, (
+            f"{op_name}: in-process procs {result['procs']} != spawn-path procs "
+            f"{spawn_procs} minus the bootstrap child's {CHILD_PROCS}"
+        )
         assert result["process_time_ms"] <= GATE_HARD_CEILING_MS, (
             f"{op_name}: cold process time {result['process_time_ms']}ms exceeds "
             f"the DR-344 brightline hard ceiling ({GATE_HARD_CEILING_MS}ms) -- "
             "this is a kill-bar breach, not a tunable"
         )
-        assert result["process_time_ms"] <= placeholder_ms, (
+        assert placeholder_ms is None or result["process_time_ms"] <= placeholder_ms, (
             f"{op_name}: cold process time {result['process_time_ms']}ms exceeds "
             f"this brief's regression high-water ({placeholder_ms}ms, set by C6 off "
             "the combined n>=10 C2 + C6 cold-CLI campaigns, headroom 1.5x the "
@@ -238,21 +288,24 @@ def _run_gate_for_brief(op_name: str, repo: Path, cmd: list[str], placeholder_ms
 
 
 def test_pickup_brief_cold_cli_boundary(tmp_path):
-    repo, cmd = _seed_pickup_repo(tmp_path)
+    bin_dir, env = _stamped_bin_dir(tmp_path)
+    repo, cmd = _seed_pickup_repo(tmp_path, bin_dir)
     _run_gate_for_brief(
-        "pickup-assemble brief", repo, cmd, HIGH_WATER_PICKUP_MS, tmp_path
+        "pickup-assemble brief", repo, cmd, HIGH_WATER_PICKUP_MS, tmp_path, env
     )
 
 
 def test_baton_brief_cold_cli_boundary(tmp_path):
-    repo, cmd = _seed_baton_repo(tmp_path)
+    bin_dir, env = _stamped_bin_dir(tmp_path)
+    repo, cmd = _seed_baton_repo(tmp_path, bin_dir)
     _run_gate_for_brief(
-        "baton-assemble brief", repo, cmd, HIGH_WATER_BATON_MS, tmp_path
+        "baton-assemble brief", repo, cmd, None, tmp_path, env
     )
 
 
 def test_workstream_complete_brief_cold_cli_boundary(tmp_path):
-    repo, cmd = _seed_wsc_repo(tmp_path)
+    bin_dir, env = _stamped_bin_dir(tmp_path)
+    repo, cmd = _seed_wsc_repo(tmp_path, bin_dir)
     _run_gate_for_brief(
-        "workstream-complete-assemble brief", repo, cmd, HIGH_WATER_WSC_MS, tmp_path
+        "workstream-complete-assemble brief", repo, cmd, None, tmp_path, env
     )

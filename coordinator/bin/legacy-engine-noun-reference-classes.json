@@ -283,9 +283,7 @@
     "coordinator/bin/refresh-queries.py",
     "coordinator/bin/refresh-roadmap-callout.py",
     "coordinator/bin/regen-cockpit-schema.py",
-    "coordinator/bin/regenerate-generator-content-cache.py",
     "coordinator/bin/regenerate-orientation-cache.py",
-    "coordinator/bin/regenerate-unresolved-writers.py",
     "coordinator/bin/remove-claude-klabauter-precommit-hook.py",
     "coordinator/bin/render-posture-overlay.py",
     "coordinator/bin/render-template-tree.py",
@@ -370,6 +368,7 @@
     "coordinator/bin/tests/test_cc_invoke_py.py",
     "coordinator/bin/tests/test_cc_invoke_rung_parity.py",
     "coordinator/bin/tests/test_cc_invoke_self_location_rung.py",
+    "coordinator/bin/tests/test_cc_invoke_stamped_in_process.py",
     "coordinator/bin/tests/test_cc_invoke_timeout_remedy.py",
     "coordinator/bin/tests/test_check_persona_names_escape_adjacent.py",
     "coordinator/bin/tests/test_check_persona_names_protected_literals_parity.py",
@@ -1563,8 +1562,6 @@
     "coordinator_core/ops/tests/test_gate_cascade_clear_terminal_states.py",
     "coordinator_core/ops/tests/test_gate_recheck_cleared_readiness.py",
     "coordinator_core/ops/tests/test_gate_recheck_retires_blocked_by.py",
-    "coordinator_core/ops/tests/test_generator_provenance.py",
-    "coordinator_core/ops/tests/test_generator_provenance_ratchet.py",
     "coordinator_core/ops/tests/test_goal_close_day.py",
     "coordinator_core/ops/tests/test_goal_kr_status.py",
     "coordinator_core/ops/tests/test_goals_match.py",
@@ -2209,5 +2206,5 @@
       "line": 99
     }
   ],
-  "repo_sha": "1e2c890c9ee4da811983e5b2d64005f731e5fa4f"
+  "repo_sha": "4905cac858d926031099f9e866679977a68705d9"
 }

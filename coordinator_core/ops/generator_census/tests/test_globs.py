@@ -18,7 +18,7 @@ from coordinator_core.ops.generator_census.globs import (
 )
 
 _REPO = Path(__file__).resolve().parents[4]
-_ORACLE = _REPO / "coordinator_core/ops/tests/fixtures/generator_discovery_oracle.json"
+_ORACLE = _REPO / "coordinator_core/ops/generator_census/tests/fixtures/census_oracle.json"
 
 _PATHS = [
     "a.py",

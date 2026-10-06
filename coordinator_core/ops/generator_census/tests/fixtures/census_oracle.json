@@ -272,23 +272,6 @@
     "verdict": null
   },
   {
-    "detail": "coordinator/bin/regenerate-unresolved-writers.py declares 1 pair(s)",
-    "generator": "coordinator/bin/regenerate-unresolved-writers.py",
-    "mutates": [],
-    "pairs": [
-      {
-        "artifact": "state/generator-provenance/unresolved-writers.json",
-        "generator": "coordinator/bin/regenerate-unresolved-writers.py",
-        "sources": [
-          "coordinator/bin/regenerate-unresolved-writers.py",
-          "coordinator_core/ops/generator_provenance.py"
-        ],
-        "stamp_key": "verified_at"
-      }
-    ],
-    "verdict": null
-  },
-  {
     "detail": "coordinator/bin/repomap/generate-repomap.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator/bin/repomap/generate-repomap.py",
     "mutates": [],
@@ -573,6 +556,13 @@
     ],
     "pairs": [],
     "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/group_em/human_entry.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/group_em/human_entry.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
   },
   {
     "detail": "coordinator_core/group_em/nomination.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -975,6 +965,13 @@
   {
     "detail": "coordinator_core/ops/dispatch_emit/ask_stage.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/dispatch_emit/ask_stage.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/dispatch_emit/emission_receipt.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/dispatch_emit/emission_receipt.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

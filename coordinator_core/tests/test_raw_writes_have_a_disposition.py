@@ -480,8 +480,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/gen_claude_author_launcher.py': ('claims-explicitly', 'claim token in main'),
     'coordinator_core/ops/gen_claude_author_shim.py': ('claims-explicitly', 'claim token in main'),
     'coordinator_core/ops/generate_exec_summary.py': ('claims-explicitly', "claim token in main [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
-    'coordinator_core/ops/generator_provenance.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _call_is_write, _is_excluded_base, _is_fdopen_of_scratch_fd, _promoted_tmp_names, _replace_destination_exprs, _scratch_mkstemp_fds, _tmp_var_info, _write_target_expr'),
-    'coordinator_core/ops/generator_scan_cache.py': ('to-fix', "raw-write site(s): save, save_content_cache; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/guard_message_audit.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: main'),
     'coordinator_core/ops/handoff_archive_transition.py': ('outside-repo', "raw-write site(s) near tempdir/home/settings-home construct: _commit_retained_supersede_flip [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/handoff_repoint_origin.py': ('to-fix', "raw-write site(s): _handler; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
@@ -621,7 +619,6 @@ _TO_FIX_CEILING: FrozenSet[str] = frozenset({
     'coordinator_core/ops/fleet/archive_terminal_handoffs.py',
     'coordinator_core/ops/fleet/migrate_handoff_vocabulary.py',
     'coordinator_core/ops/fleet_machinery_sweep.py',
-    'coordinator_core/ops/generator_scan_cache.py',
     'coordinator_core/ops/handoff_repoint_origin.py',
     'coordinator_core/ops/peer_notice_send.py',
     'coordinator_core/ops/propagate_body.py',
@@ -802,10 +799,10 @@ def test_at_close_out_the_ceiling_is_empty():
     recategorized eight more to-fix members that held no actual `state/`
     write to the category their real write target names (53 to 35 -- see
     the register's C7 comment block for the full per-module breakdown); retiring the
-    backlog-history shard deleted one to-fix module outright (35 to 34)), so
+    backlog-history shard deleted one to-fix module outright (35 to 34); deleting generator_scan_cache.py took it 34 to 33), so
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
-    assert len(_TO_FIX_CEILING) == 34
+    assert len(_TO_FIX_CEILING) == 33
 
 
 @pytest.mark.parametrize(
