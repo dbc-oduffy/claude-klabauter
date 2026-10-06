@@ -50,9 +50,30 @@ def test_compound_command_with_two_scoped_files_does_not_fire(tmp_path):
     )
 
 
+def test_inherited_git_index_file_is_scrubbed_from_the_probe(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, 250)
+    (repo / "a.py").write_text("2")
+    _git(repo, "add", "a.py")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "no-such-index"))
+    out = _text(
+        dc.check_validate_commit('git commit -q -m "m" -- a.py', cwd=str(repo))
+    )
+    assert "implausible index" not in out
+    assert "UNDECLARED STAGED DELETION" not in out
+
+
 def test_empty_index_read_fails_open_with_one_line(tmp_path, monkeypatch):
     repo = _repo(tmp_path, 250)
-    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "no-such-index"))
+    real_run_git = dc._run_git
+
+    def empty_index(args, cwd=None, timeout=2.0, extra_env=None):
+        if args[:2] == ["diff", "--cached"]:
+            return 0, "".join("D\tf%03d.txt\n" % i for i in range(250))
+        if args[0] == "ls-files":
+            return 0, ""
+        return real_run_git(args, cwd, timeout, extra_env)
+
+    monkeypatch.setattr(dc, "_run_git", empty_index)
     out = _text(
         dc.check_validate_commit('git commit -q -m "m" -- a.py b.py', cwd=str(repo))
     )

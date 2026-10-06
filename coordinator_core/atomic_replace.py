@@ -39,10 +39,30 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Union
 
 __all__ = ["atomic_write_bytes"]
+
+
+def _replace_with_retry(src: str, dst: str) -> None:
+    """os.replace with a bounded (~1s) backoff on Windows PermissionError.
+
+    Trap: replacing onto a file another process holds open without
+    FILE_SHARE_DELETE fails with WinError 5/32; readers hold it for
+    microseconds, so a short retry lands the write. POSIX never retries.
+    """
+    delay = 0.01
+    for attempt in range(11):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 10:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.16)
 
 
 def atomic_write_bytes(
@@ -83,7 +103,7 @@ def atomic_write_bytes(
             f.write(data)
         if prior_mode is not None:
             os.chmod(tmp_name, prior_mode)
-        os.replace(tmp_name, str(target))
+        _replace_with_retry(tmp_name, str(target))
     except Exception:
         try:
             os.remove(tmp_name)

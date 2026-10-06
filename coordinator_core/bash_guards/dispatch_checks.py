@@ -1359,8 +1359,9 @@ def _git_probe_budget_spent() -> bool:
 
 
 def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
-             extra_env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
+             extra_env: Optional[Dict[str, Optional[str]]] = None) -> Tuple[int, str]:
     """Run `git <args>`, optionally `-C <cwd>`-scoped via subprocess `cwd=`.
+    An `extra_env` value of `None` removes that variable from the child env.
     Returns (returncode, stdout). rc == -1 signals a timeout (mirrors bash's
     `rc=124` convention used by the oracle-timeout deny branches).
 
@@ -1387,7 +1388,11 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
     env = None
     if extra_env:
         env = dict(os.environ)
-        env.update(extra_env)
+        for _k, _v in extra_env.items():
+            if _v is None:
+                env.pop(_k, None)
+            else:
+                env[_k] = _v
     try:
         result = subprocess.run(
             ["git", *args],
@@ -7460,10 +7465,16 @@ def check_validate_commit(
     # already reporting only the rename's NEW path. Spelling it out keeps that
     # true if a repo or a future default turns rename detection off -- Check 14
     # must never fire on the archive path, which is a `git mv`.
-    rc, staged_out = _run_git(["diff", "--cached", "--name-status", "-M"], _cwd)
+    # The hook process's own GIT_INDEX_FILE is not the index the commit will
+    # use; inheriting it made this probe read an empty/alternate index.
+    _probe_env = {"GIT_INDEX_FILE": None}
+    rc, staged_out = _run_git(["diff", "--cached", "--name-status", "-M"], _cwd, extra_env=_probe_env)
     _status_lines: Optional[List[str]] = staged_out.splitlines() if rc == 0 else None
     from coordinator_core.bash_guards._implausible_index import implausible_deletion_note
-    _probe_note = implausible_deletion_note(_status_lines, _cwd, _run_git)
+    _probe_note = implausible_deletion_note(
+        _status_lines, _cwd,
+        lambda a, c, **kw: _run_git(a, c, extra_env=_probe_env, **kw),
+    )
     if _probe_note:
         return _advisory(_probe_note)
 

@@ -514,11 +514,12 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
     """
 
     def _run(self, cmd):
+        # The commands are bash grammar (single-quote escapes); cmd.exe via
+        # shell=True cannot parse them.
         return subprocess.run(
-            # popup-intentional-last-resort: shell=True spawns a
-            # cmd.exe intermediary that CREATE_NO_WINDOW does not suppress; the
-            # STARTUPINFO route is a separate, wider fix (review: code-reviewer).
-            cmd, shell=True, capture_output=True, text=True, check=True
+            ["bash", "-c", cmd],
+            capture_output=True, text=True, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
 
     def _alternative_stdout(self, original_cmd):
@@ -530,25 +531,22 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
         )
         return self._run(alt_cmd)
 
-    @pytest.mark.pending_fix
     def test_unrecognized_generator_head(self, tmp_path):
         f = tmp_path / "lines.txt"
         f.write_text("a\nb\nc\nd\ne\n")
-        cmd = "cat %s | head -n 3" % f
+        cmd = "cat %s | head -n 3" % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
-    @pytest.mark.pending_fix
     def test_unrecognized_generator_tail(self, tmp_path):
         f = tmp_path / "lines2.txt"
         f.write_text("1\n2\n3\n4\n5\n6\n")
-        cmd = "cat %s | tail -n 2" % f
+        cmd = "cat %s | tail -n 2" % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
-    @pytest.mark.pending_fix
     def test_quoting_hazard_apostrophe_in_filename(self, tmp_path):
         f = tmp_path / "it's a file.txt"
         f.write_text("alpha\nbeta\ngamma\ndelta\n")
-        cmd = 'cat "%s" | tail -n 2' % f
+        cmd = 'cat "%s" | tail -n 2' % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
     def test_no_alternative_for_long_chain(self):

@@ -65,25 +65,6 @@ import re
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
-from coordinator_core.execute_plan_assemble.row_spans import (
-    _find_row_spans,
-    _line_ending,
-    _row_disposition,
-    _stamp_rows_in_body,
-)
-from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-from coordinator_core.frontmatter.schema_validate import (
-    _PLAN_TASKS_GROUPING_ORDER,
-    _PLAN_TASKS_SUBORDER_BY_DISPOSITION,
-    _plan_tasks_row_disposition,
-    _plan_tasks_row_grouping,
-    check_plan_tasks_source,
-)
-from coordinator_core.git.commit import partition_declared_deletions
-from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -101,15 +82,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     plan_deliverable_id,
     valid_deliverable_id,
 )
-from coordinator_core.ops.dispatch_emit.inventory_mint import (
-    InventoryMintError,
-    _bare_plan_row_id,
-    _resolve_spec_plan_path,
-    parse_chunk_table,
-)
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.fleet._common import main_worktree_root
-from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
 
 
 _PARAM_FIELDS = (
@@ -188,6 +161,10 @@ def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
 
 
 def _spine_row_ids(plan_text: str) -> Optional[set]:
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
     located = locate_fenced_block(plan_text)
     if located.status != LocateStatus.LOCATED:
         return None
@@ -217,6 +194,14 @@ def _source_rows_by_plan(
     """
     if not plan_path or not chunk_ids:
         return {}
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.inventory_mint import (
+        InventoryMintError,
+        _bare_plan_row_id,
+        _resolve_spec_plan_path,
+        parse_chunk_table,
+    )
+
     marker_text = _read_rel(worktree_root, plan_path)
     if marker_text is None:
         return {}
@@ -272,6 +257,13 @@ def _source_rows_by_plan(
 
 
 def _row_rank(row: dict) -> tuple:
+    from coordinator_core.frontmatter.schema_validate import (
+        _PLAN_TASKS_GROUPING_ORDER,
+        _PLAN_TASKS_SUBORDER_BY_DISPOSITION,
+        _plan_tasks_row_disposition,
+        _plan_tasks_row_grouping,
+    )
+
     return (
         _PLAN_TASKS_GROUPING_ORDER.index(_plan_tasks_row_grouping(row)),
         _PLAN_TASKS_SUBORDER_BY_DISPOSITION.get(_plan_tasks_row_disposition(row), 0),
@@ -287,11 +279,22 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
     Only rows currently ``open`` flip; any other disposition is left alone.
     Returns ``(new_text, flipped_ids)``; ``flipped_ids`` empty means no edit.
     """
+    import yaml
+
+    from coordinator_core.execute_plan_assemble.row_spans import (
+        _find_row_spans,
+        _line_ending,
+        _row_disposition,
+        _stamp_rows_in_body,
+    )
+
     # The row-span stamper matches LF lines only; a uniformly CRLF plan (any
     # Windows checkout) matched nothing and silently flipped no row.
     if "\r\n" in plan_text and "\n" not in plan_text.replace("\r\n", ""):
         new_text, flipped = _flip_rows_coded(plan_text.replace("\r\n", "\n"), row_ids, sha)
         return (new_text.replace("\n", "\r\n"), flipped) if flipped else (plan_text, [])
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
     located = locate_fenced_block(plan_text)
     if located.status != LocateStatus.LOCATED or located.span is None:
         return plan_text, []
@@ -350,6 +353,8 @@ def _stamp_coded_commit(
     is refused before any write; on any failure every plan edit is restored.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
+    from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+
     originals: dict = {}
     rows_coded: dict = {}
 
@@ -514,11 +519,15 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
     import contextlib
     import io
 
+    import yaml
+
     from coordinator_core.archive_stamp import cs_stamp_plan_implemented
     from coordinator_core.ops.plan_status_transition import _FALSIFIER_OUTPUT_MAX
 
     plan_abs = worktree_root / plan_rel
     text = _read_rel(worktree_root, plan_rel)
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
     split = split_frontmatter(text.replace("\r\n", "\n")) if text is not None else None
     try:
         fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
@@ -893,11 +902,15 @@ def _terminal_commit(
     incomplete_chunks = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
     inline_review = params.get("inline_review")
 
+    from coordinator_core.git.commit_trailers import _UUID_RE
+
     session_id = params.get("session_id")
     if session_id is not None and (
         not isinstance(session_id, str) or not _UUID_RE.fullmatch(session_id)
     ):
         session_id = None
+
+    from coordinator_core.ops.fleet._common import main_worktree_root
 
     worktree_root = main_worktree_root(repo_root)
 
@@ -1057,6 +1070,8 @@ def _terminal_commit(
                 "plan_id present) but params.session_id is missing or "
                 "not canonical-UUID-shaped -- bookkeep_wave needs it to place the record"
             )
+        from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
+
         wave_sidecar_paths = [
             worktree_root / p for p in inline_review["wave_sidecar_paths"] if isinstance(p, str)
         ]
@@ -1135,6 +1150,8 @@ def _terminal_commit(
     dropped_absent: list = []
     deleted_paths: list = []
     if absent:
+        from coordinator_core.git.commit import partition_declared_deletions
+
         partition = partition_declared_deletions(worktree_root, absent)
         if partition is None:
             return _error(

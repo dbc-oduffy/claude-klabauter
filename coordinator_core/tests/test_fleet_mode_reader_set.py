@@ -315,6 +315,7 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_blitz_args",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_single_exit",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_gate",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_interaction_mode_single_source",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_zero_headless",
     "coordinator_core.ops.dispatch_emit.tests.test_cli",
     "coordinator_core.ops.dispatch_emit.tests.test_cli_admission",

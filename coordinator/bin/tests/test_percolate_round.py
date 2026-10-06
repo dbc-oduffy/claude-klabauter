@@ -2706,6 +2706,10 @@ def _wire_lock_test_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[s
         def enumerate_gate_entrypoints(self, repo_root):
             return ()
 
+    # A green `main` writes the machine-local publish-provenance record under
+    # the settings home; redirect it so the run never touches the real one.
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+
     monkeypatch.setattr(publish_mod, "_import_claude_klabauter_percolate", lambda: _FakeClaudeKlabauter())
     monkeypatch.setattr(publish_mod, "assert_percolate_store_ready", lambda engine_claude_klabauter, path: {})
     monkeypatch.setattr(publish_mod, "locate_percolate_store", lambda setup_dir: tmp_path / "store.yaml")

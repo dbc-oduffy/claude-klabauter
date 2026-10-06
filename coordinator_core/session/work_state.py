@@ -104,7 +104,7 @@ def _parse_fm_dict(fm_text: str) -> dict[str, Any]:
             fm[matched_list_key] = _extract_scope_paths(fm_text, key=matched_list_key)
             i += 1
             continue
-        if ":" in line and not line.startswith((" ", "\t", "-")):
+        if ":" in line and not line.startswith((" ", "\t", "-", "#")):
             key, _, _rest = line.partition(":")
             key = key.strip()
             if key:

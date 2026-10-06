@@ -3,9 +3,9 @@ coordinator_core.invoke.warm_miss -- the one warm-miss policy for the op/CLI doo
 
 Purpose: after `try_warm_dispatch` returns None, `settle_warm_miss` waits once,
 bounded, for the respawned warm server, and otherwise announces the cold run on
-stderr. Both the cold `_dispatch_argv_body` and cc_invoke's in-process rung call
-it, so the bounded wait and the "ENGINE UNREACHABLE ... COLD" line have exactly
-one implementation.
+stderr. Only the cold `_dispatch_argv_body` calls it; cc_invoke's stamped
+in-process rung serves the op itself, so neither the wait nor the defect line
+applies there.
 
 Import safety: module-level imports are stdlib only; every coordinator_core
 import is deferred into the function that needs it.

@@ -536,10 +536,9 @@ def mint(
             raise MintRefusal(f"review-stamp: could not read prep sidecar {prep_path}")
 
     run_base_sha = prep_data.get("run_base_sha")
-    delivery_data = integration_data.get("delivery")
-    if not isinstance(delivery_data, dict):
-        delivery_rel = (prep_data.get("whole_diff_sidecars") or {}).get("delivery")
-        delivery_data = (_load_sidecar(repo_root / delivery_rel) or {}) if delivery_rel else {}
+    from coordinator_core.ops.dispatch_emit.reverify_delivery import load_delivery
+
+    delivery_data = load_delivery(repo_root, integration_data, prep_data) or {}
     if superseding_record is not None:
         delivery_data = superseding_delivery(integration_data, delivery_data)
     if integration_path is not None:

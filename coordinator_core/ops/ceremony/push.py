@@ -923,6 +923,12 @@ def _rebase_onto_fetched_ref(
             )
         return update_result.returncode or 1, f"git update-ref: {reason}"
 
+    # Local import: apply_base imports back into ops.ceremony (module cycle).
+    # Last step, after the branch moved; the writer never fails the merge.
+    from coordinator_core.contract.apply_base import record_ledger_entry
+
+    record_ledger_entry(Path(worktree_root), [], new_sha)
+
     return 0, ""
 
 

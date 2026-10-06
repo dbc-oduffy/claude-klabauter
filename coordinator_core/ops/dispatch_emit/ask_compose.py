@@ -315,7 +315,7 @@ def compose_ask_script(
             "gate can read, in this order: (1) run `sizing-assemble` for the estimate and route; "
             "(2) scaffold with `coordinator-doc-new --type sizing-object`, passing --tshirt, "
             "--route, --name, --premise executed|read|not-applicable with --premise-evidence, --exit-criterion (one sentence "
-            "stating what done means) and --interaction-mode (the mode this session runs under); "
+            "stating what done means) and --interaction-mode (the `interaction_mode` step (1)'s sizing-assemble returned, verbatim; never choose one); "
             "(3) edit the scaffolded file's `status` from `draft` to `sized`. Leave "
             "`exit_criterion.accepted` null: never accept it yourself; the gate halts at the "
             "touchpoint when the mode asks the PM. Return the sizing's repo-relative path as "

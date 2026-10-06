@@ -239,3 +239,21 @@ def test_a_handler_that_overruns_its_timeout_does_not_hang_the_caller(env, monke
     exits.clear()
     registered[0]()
     assert exits == [], "once the orphan finished the exit guard must not force an exit"
+
+
+def test_in_process_serve_neither_waits_for_the_warm_boot_nor_prints_the_defect_line(env, monkeypatch, capsys):
+    from coordinator_core.invoke import warm_miss
+
+    def _must_not_run(msg):
+        raise AssertionError("rung 3 consulted settle_warm_miss")
+
+    monkeypatch.setattr(warm_miss, "settle_warm_miss", _must_not_run)
+    root = _root(env["tmp"], "stamped", b"build-1\n")
+    env["point"](root)
+    env["fake_dispatch"]()
+
+    result = cc_invoke.cc_invoke(_OP, _PARAMS, str(env["tmp"]), _claude_klabauter_root=str(root))
+
+    assert result == _OK["result"]
+    assert cc_invoke.last_rung == "in-process"
+    assert capsys.readouterr().err == ""

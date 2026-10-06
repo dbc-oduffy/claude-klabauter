@@ -297,3 +297,13 @@ def test_the_fall_through_line_names_the_jsonrpc_code_the_server_rejected_with()
     assert "g_fall_reason" in source, (
         "pre-delivery fall-throughs no longer name the gate that fired"
     )
+
+
+def test_the_fall_through_line_is_silent_unless_the_debug_env_is_set():
+    source = read(DOOR_WINDOWS_C)
+    assert 'int debug = GetEnvironmentVariableW(L"COORDINATOR_DOOR_DEBUG"' in source
+    for marker in ("if (debug && g_fall_code != 0)", "} else if (debug) {"):
+        assert marker in source, (
+            "the cold fall-through line is no longer gated on COORDINATOR_DOOR_DEBUG: "
+            "an expected -32007 route would print on every warm-door call"
+        )

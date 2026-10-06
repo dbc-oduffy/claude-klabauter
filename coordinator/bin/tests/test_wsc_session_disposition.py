@@ -80,7 +80,7 @@ class TestSessionIdResolution(unittest.TestCase):
     def tearDown(self):
         import os
 
-        for var in ("em_sid", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             os.environ.pop(var, None)
 
     def test_em_sid_wins_over_everything(self, tmp_path_factory=None):
@@ -89,7 +89,7 @@ class TestSessionIdResolution(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            os.environ["em_sid"] = "em-priority"
+            os.environ["COORDINATOR_SESSION_ID"] = "em-priority"
             os.environ["CLAUDE_SESSION_ID"] = "claude-session"
             os.environ["CLAUDE_CODE_SESSION_ID"] = "claude-code-session"
             self.assertEqual(wsc.resolve_session_id(repo), "em-priority")
@@ -334,7 +334,7 @@ class TestDetectorA(unittest.TestCase):
             archive = repo / "archive" / "handoffs"
             archive.mkdir(parents=True)
             (archive / "no-predecessor.md").write_text("claimed_by: sid-a\n")
-            (archive / "valid.md").write_text("claimed_by: sid-a\npredecessor: some-sha\n")
+            (archive / "valid.md").write_text("---\nclaimed_by: sid-a\npredecessor: some-sha\n---\nbody\n")
             result = wsc.detector_a(repo, "sid-a")
             self.assertEqual(result, "archive/handoffs/valid.md")
 
@@ -577,7 +577,7 @@ class TestResolveCrashRecovery(unittest.TestCase):
         wsc._bootstrap_engine_imports()
         h1 = self.repo_root / "h1.md"
         h1.write_text(
-            "claimed_by: this-session\npredecessor: none\nscope:\n  - coordinator/bin/foo.py\n"
+            "---\nclaimed_by: this-session\npredecessor: none\nscope:\n  - coordinator/bin/foo.py\n---\nbody\n"
         )
         h2 = self.repo_root / "h2.md"
         h2.write_text("predecessor: none\nscope:\n  - coordinator/bin/bar.py\n")
@@ -844,7 +844,7 @@ class TestResolveDispositionIntegration(unittest.TestCase):
             archive_dir = repo / "archive" / "handoffs"
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-07-01_predecessor.md"
-            handoff.write_text("claimed_by: sid-shipper\npredecessor: some-sha\n")
+            handoff.write_text("---\nclaimed_by: sid-shipper\npredecessor: some-sha\n---\nbody\n")
             _git(repo, "add", "archive/handoffs/2026-07-01_predecessor.md")
             _commit_with_session_trailer(repo, "sid-shipper", "archive handoff")
 
@@ -1356,7 +1356,7 @@ class TestResolveDispositionDetectorCLegWiring(unittest.TestCase):
             archive_dir = repo / "archive" / "handoffs"
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-07-01_predecessor.md"
-            handoff.write_text("claimed_by: sid-shipper\npredecessor: some-sha\n")
+            handoff.write_text("---\nclaimed_by: sid-shipper\npredecessor: some-sha\n---\nbody\n")
             _git(repo, "add", "archive/handoffs/2026-07-01_predecessor.md")
             _commit_with_session_trailer(repo, "sid-shipper", "archive handoff")
 
@@ -1524,7 +1524,7 @@ class TestMemoPredecessorLeg(unittest.TestCase):
             archive_dir = repo / "archive" / "handoffs"
             archive_dir.mkdir(parents=True)
             handoff = archive_dir / "2026-07-01_predecessor.md"
-            handoff.write_text("claimed_by: sid-shipper\npredecessor: some-sha\n")
+            handoff.write_text("---\nclaimed_by: sid-shipper\npredecessor: some-sha\n---\nbody\n")
             _git(repo, "add", "archive/handoffs/2026-07-01_predecessor.md")
             _commit_with_session_trailer(repo, "sid-shipper", "archive handoff")
 

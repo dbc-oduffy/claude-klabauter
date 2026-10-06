@@ -638,17 +638,14 @@ def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
             pass
 
     for base in ("@{upstream}", "origin/main", "origin/master", "main", "master"):
-        proc = _run_git(repo_root, ["merge-base", "HEAD", base])
-        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
-            merge_base = proc.stdout.strip()
-            log_proc = _run_git(
-                repo_root, ["log", "--reverse", "--format=%cI", f"{merge_base}..HEAD"]
-            )
-            if log_proc is not None and log_proc.returncode == 0 and log_proc.stdout.strip():
-                first_line = log_proc.stdout.strip().splitlines()[0]
-                parsed = _parse_iso(first_line)
-                if parsed is not None:
-                    return parsed
+        # `base..HEAD` is the same commit set as `merge-base(HEAD, base)..HEAD`;
+        # a missing ref fails this one spawn, so no separate merge-base probe.
+        log_proc = _run_git(repo_root, ["log", "--reverse", "--format=%cI", f"{base}..HEAD"])
+        if log_proc is not None and log_proc.returncode == 0 and log_proc.stdout.strip():
+            first_line = log_proc.stdout.strip().splitlines()[0]
+            parsed = _parse_iso(first_line)
+            if parsed is not None:
+                return parsed
 
     log_proc = _run_git(repo_root, ["log", "--reverse", "--format=%cI"])
     if log_proc is not None and log_proc.returncode == 0 and log_proc.stdout.strip():

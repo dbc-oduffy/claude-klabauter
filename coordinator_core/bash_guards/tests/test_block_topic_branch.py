@@ -168,3 +168,35 @@ def test_main_and_nonbranch_git_skip_machine_lookup(repo, monkeypatch):
 
 def test_non_bash_tool_allows(repo):
     assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+
+
+def _registry(tmp_path, monkeypatch, mirror_path, track_ref="origin/candidate"):
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    (reg / "registry.local.toml").write_text(
+        f'"publish.mirrors.mirror_x.path" = "{mirror_path.as_posix()}"\n'
+        f'"publish.mirrors.mirror_x.track_ref" = "{track_ref}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+
+
+def test_publish_mirror_declared_branch_push_allowed(repo, tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    (mirror / ".git").mkdir(parents=True)
+    _registry(tmp_path, monkeypatch, mirror)
+    assert _check(repo, f"git -C {mirror.as_posix()} push origin candidate") is None
+
+
+def test_publish_mirror_other_branch_still_denied(repo, tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    (mirror / ".git").mkdir(parents=True)
+    _registry(tmp_path, monkeypatch, mirror)
+    assert _denied(_check(repo, f"git -C {mirror.as_posix()} push origin topic-x"))
+
+
+def test_non_mirror_repo_candidate_push_denied(repo, tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    (mirror / ".git").mkdir(parents=True)
+    _registry(tmp_path, monkeypatch, mirror)
+    assert _denied(_check(repo, "git push origin candidate"))

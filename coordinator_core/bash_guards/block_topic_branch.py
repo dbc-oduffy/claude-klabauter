@@ -18,6 +18,9 @@ branch, so any `work/<this-machine>/<YYYY-MM-DD[toDD]>[-N]` ref is a day
 branch. `git push <remote> HEAD` resolves HEAD from `.git/HEAD` (no spawn);
 an unresolvable HEAD or ref name allows.
 
+A push of a registered `publish.mirrors.<key>` repo's declared `track_ref`
+branch (the command publish.py prints) is allowed.
+
 Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
 env prefix on the git segment only; the hook environment never overrides.
 An empty value never overrides.
@@ -167,6 +170,37 @@ def _is_day_branch(name: str, configured: Optional[str], machine: str) -> bool:
     return bool(m) and m.group(1) == machine
 
 
+def _is_publish_mirror_branch(git_root: Optional[str], ref: str) -> bool:
+    """True when `git_root` is a registered `publish.mirrors.<key>` repo and
+    `ref` is that mirror's declared `track_ref` branch (the command publish.py
+    prints). Registry TOML reads only; runs on the deny path alone."""
+    if not git_root:
+        return False
+    try:
+        from coordinator_core.machine_resolver import _flatten, _load_toml, registry_dir
+
+        merged: Dict[str, Any] = {}
+        for fname in ("registry.toml", "registry.local.toml"):
+            merged.update(_flatten(_load_toml(registry_dir() / fname)))
+        root = os.path.normcase(os.path.realpath(git_root))
+        prefix, suffix = "publish.mirrors.", ".path"
+        for key, value in merged.items():
+            if not (key.startswith(prefix) and key.endswith(suffix)) or not value:
+                continue
+            if os.path.normcase(os.path.realpath(str(value))) != root:
+                continue
+            track = merged.get(key[: -len(suffix)] + ".track_ref")
+            if not isinstance(track, str):
+                continue
+            if track.startswith("origin/"):
+                track = track[len("origin/"):]
+            if track and track == ref:
+                return True
+    except Exception:  # noqa: BLE001 -- an unreadable registry keeps the block
+        return False
+    return False
+
+
 def _inline_reason(raw_tokens: List[str]) -> str:
     prefix = OVERRIDE_KEY + "="
     for tok in raw_tokens:
@@ -218,6 +252,8 @@ def _offending_ref(
             continue
         if machine is None:
             machine = _machine()
+        if sub == "push" and _is_publish_mirror_branch(git_root, ref):
+            continue
         if not _is_day_branch(ref, configured, machine):
             return ref
     return None

@@ -1,0 +1,165 @@
+{
+  "_captured_at": "3ecdfb7156c83ab30ffc13ec569f571dd9d0cc3c",
+  "brief": {
+    "artifact": {
+      "kind": "handoff",
+      "lineage": {
+        "additional_predecessors": null,
+        "adopted_mint_path": null,
+        "adopted_scaffold": null,
+        "artifact_path": "state/handoffs/h1.md",
+        "carried_items": null,
+        "deliverable_collision": null,
+        "deliverable_id": "DEL-C2-1",
+        "deliverable_ids": null,
+        "discovery": "artifact",
+        "foreign_repo_artifact": false,
+        "governing_plan": null,
+        "initiative": "",
+        "kind": "handoff",
+        "output_path": "state/handoffs/<DATE>-h1.md",
+        "plan_ids": null,
+        "plan_ledger_no_claim": null,
+        "predecessor": null,
+        "predecessor_handoff": null,
+        "predecessor_id": null,
+        "predecessor_is_live": false,
+        "predecessor_ordering_degraded": false,
+        "resumed_successor": null,
+        "standalone_no_predecessor_reason": null
+      },
+      "path": "state/handoffs/h1.md"
+    },
+    "decisions": {},
+    "directives": [
+      {
+        "already_satisfied": false,
+        "args": [
+          "--type=handoff",
+          "--deliverable-id=DEL-C2-1",
+          "--out=state/handoffs/<DATE>-h1.md"
+        ],
+        "cli": "coordinator-doc-new",
+        "depends_on": null,
+        "id": "d1"
+      },
+      {
+        "already_satisfied": false,
+        "args": [
+          "--file",
+          "state/handoffs/<DATE>-h1.md"
+        ],
+        "cli": "lint-frontmatter",
+        "depends_on": [
+          "d1"
+        ],
+        "id": "d2"
+      },
+      {
+        "already_satisfied": false,
+        "args": [
+          "release-or-relinquish",
+          "plan",
+          "h1"
+        ],
+        "cli": "session-claim-cli",
+        "depends_on": [
+          "d1"
+        ],
+        "id": "d5"
+      }
+    ],
+    "gates": {
+      "repo_identity": {
+        "message": "repo-identity: sid=7c31b25c-5312-4f9a-988f-17f95ffbf8c6 session_root=None resolved_root=<ROOT> verdict=UNRESOLVED — no registry record for this session",
+        "resolved_root": "<ROOT>",
+        "session_root": null,
+        "sid": "7c31b25c-5312-4f9a-988f-17f95ffbf8c6",
+        "verdict": "UNRESOLVED"
+      }
+    },
+    "judgment_points": [
+      {
+        "dispositions": [
+          {
+            "guidance": "Check this baton against the trigger gate before authoring anything: auto-compaction imminent, an unavoidable restart, a hard blocker acting right now, a literal PM `/handoff` invocation, the review-owed close trampoline, or the plan→execute stamp (`execution_authorized_at`). \"Feels like a good pause point\" is the trap the gate exists to catch, not a trigger -- if none of the gate conditions actually hold, stop and take the next action in this session instead of proceeding here.",
+            "resolves": [
+              "d1"
+            ],
+            "value": "proceed"
+          }
+        ],
+        "evidence": "Left to the caller SKILL.md's own Step 0 prose (C4/C5).",
+        "id": "j-self-honesty",
+        "question": "Step 0 self-honesty gate: is the branch/artifact state actually what it claims?",
+        "reason": "insufficient-evidence",
+        "recommendation": null,
+        "revalidate_at_dispatch": true,
+        "round_trip": "terminal"
+      },
+      {
+        "dispositions": [
+          {
+            "guidance": "Authorization is an act, never a stamp to go looking for. It is a literal invocation -- the PM typing `/handoff` (or the skill name) for this workstream by name, not an intent-shaped remark like \"you can hand that off\" -- or, on an execution baton, the handover itself: being handed the baton via `/pickup` IS the PM's authorization for the plan it carries, as invoking `/execute-plan` is for that plan. Do not treat `execution_authorized_at` as a precondition -- it is minted AT execute time, so its absence on a not-yet-executed plan is by design and is not a gap. Absent an authorizing act, this disposition does not apply -- surface the gap rather than assuming consent from context.",
+            "resolves": [
+              "d5"
+            ],
+            "value": "authorized"
+          }
+        ],
+        "evidence": "PM authorization is a conversational fact, not a disk artifact.",
+        "id": "j-pm-auth",
+        "question": "Has the PM authorized this baton's dispatch/continuation?",
+        "reason": "insufficient-evidence",
+        "recommendation": null,
+        "revalidate_at_dispatch": true,
+        "round_trip": "terminal"
+      },
+      {
+        "dispositions": [
+          {
+            "guidance": "This is a continuation, not a fork, when the work resumes THIS session's own thread -- including the next phase of the same multi-phase workstream (research → goal-setting → plan → execute → verify), even when the phase boundary reads like a new topic. That boundary is illusory; the workstream is one arc. Keeps the resolved predecessor edge intact.",
+            "resolves": [
+              "d1"
+            ],
+            "value": "continue"
+          },
+          {
+            "guidance": "Break-glass predecessor removal: author the handoff but discard the resolved predecessor edge deliberately -- `deliverable_id`/`initiative` still carry from `artifact_path`, only the predecessor link is cut. Distinct from a genuinely different mid-session topic someone picks up cold, which is `/spinoff` (outside this judgment point's scope) rather than a disposition of this one. Requires a non-empty `decision_note` explaining why the predecessor edge was cut.",
+            "resolves": [
+              "d1"
+            ],
+            "value": "excise"
+          }
+        ],
+        "evidence": "Requires reading the predecessor's actual content, not just its frontmatter.",
+        "id": "j-continuation-vs-fork",
+        "question": "Is this a continuation of the predecessor, or should it fork instead?",
+        "reason": "insufficient-evidence",
+        "recommendation": null,
+        "revalidate_at_dispatch": true,
+        "round_trip": "terminal"
+      },
+      {
+        "dispositions": [
+          {
+            "resolves": [
+              "d1"
+            ],
+            "value": "mine"
+          }
+        ],
+        "evidence": "coordinator_core.ops.dirty_tree_gate's porcelain read found 1 dirty path(s) matching this session's own touch record: README.md. 2 additional dirty path(s) are NOT in this session's touch record (unattributed residue -- not this ask; see coordinator_core.ops.dirty_tree_gate for that classification).",
+        "id": "j-dirty-tree-case-c",
+        "question": "Dirty-tree case-c: are the uncommitted changes this baton's own, or a sibling session's?",
+        "reason": "insufficient-evidence",
+        "recommendation": null,
+        "revalidate_at_dispatch": true,
+        "round_trip": "terminal"
+      }
+    ],
+    "narration": "Computed the 3-directive baton brief: 4 judgment point(s) open.",
+    "next_move": "Resolve the open judgment point(s) before dispatching the ready directives.",
+    "preflight": {}
+  }
+}

@@ -2566,8 +2566,9 @@ def _try_stamped_in_process_dispatch(
     An unstamped root, an empty stamp, or a provenance mismatch never takes
     this rung and never calls an unstamped allowance.
 
-    Calls `warm_miss.settle_warm_miss` first; a response it serves is returned
-    as-is. Otherwise runs `ipc.dispatch_message` in-process.
+    Runs `ipc.dispatch_message` in-process at once: no boot wait and no
+    "ENGINE UNREACHABLE" line, since serving here is the success path. The warm
+    respawn was already triggered by the missed `try_warm_dispatch` in rung 2.
 
     Return contract: None strictly BEFORE dispatch (caller continues to the
     spawn); once dispatch has begun, a failure raises RuntimeError with the
@@ -2595,7 +2596,6 @@ def _try_stamped_in_process_dispatch(
         import asyncio
         import threading
 
-        from coordinator_core.invoke.warm_miss import settle_warm_miss
         from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
     except Exception:  # noqa: BLE001 -- pre-dispatch: decline, see docstring
         sys.path[:] = path_before
@@ -2605,13 +2605,6 @@ def _try_stamped_in_process_dispatch(
     if op in WORKTREE_SCOPED_OPS:
         msg["_origin_worktree"] = repo_root
     msg["_caller_cwd"] = os.getcwd()
-
-    try:
-        served = settle_warm_miss(msg)
-    except Exception:  # noqa: BLE001 -- wait policy is pre-dispatch: decline
-        return None
-    if served is not None:
-        return served
 
     threads_before = set(threading.enumerate())
     loop = None

@@ -416,6 +416,11 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "retry on the Windows destination-open transient). Every caller still "
         "passes a freshly-written `.tmp<pid>` sibling as src, so the "
         "classification is unchanged -- only the number of call sites is.",
+    ("coordinator_core", "atomic_replace.py", "_replace_with_retry", "os.replace", "os.replace(src, dst)", 1):
+        "atomic tmp->final publish primitive (mkstemp sibling as src, never a "
+        "claimable work path), same C3 classification as git/git_objects.py's "
+        "helper above; gained a bounded Windows PermissionError retry, which "
+        "moved the os.replace call into this helper.",
     ("coordinator_core", "ops/fleet/archive_actioned_memos.py", "apply_sweep", "os.replace", "os.replace(str(move.src), str(move.dst))", 1):
         "same F-5 archival-mover shape as archive_terminal_handoffs."
         "apply_sweep's own entry above, which this function's docstring "

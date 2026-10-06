@@ -83,6 +83,26 @@ def _delivery_block(record: dict) -> Optional[dict]:
     return None
 
 
+def load_delivery(
+    repo_root: Path, record: dict, prep: Optional[dict] = None
+) -> Optional[dict]:
+    """The one loader for a run record's frozen delivery: the record's own `delivery` block, else
+    the delivery sidecar named by `prep.whole_diff_sidecars.delivery` (`prep` inline in the record,
+    behind `prep_sidecar`, or passed in). Mint, the resolver and `prior_unbacked_claims` all read
+    delivery through here, so none sees a record as delivery-less that another reads."""
+    block = _delivery_block(record)
+    if block is not None:
+        return block
+    if not isinstance(prep, dict):
+        prep = record.get("prep")
+    if not isinstance(prep, dict):
+        rel = record.get("prep_sidecar")
+        prep = _frontmatter(repo_root / rel) if rel else None
+    sidecars = prep.get("whole_diff_sidecars") if isinstance(prep, dict) else None
+    rel = sidecars.get("delivery") if isinstance(sidecars, dict) else None
+    return _frontmatter(repo_root / rel) if rel else None
+
+
 def _criterion_unsettled(record: dict) -> bool:
     """True when the run record's frozen criterion status is `not_met`, `indeterminate` or `not_run`."""
     for holder in (record, record.get("inline_review"), record.get("review")):
@@ -105,7 +125,9 @@ def _unsettled(record: dict) -> bool:
     return _criterion_unsettled(record) or _tests_stale(record)
 
 
-def prior_unbacked_claims(record_path: Path) -> tuple[Dict[str, Any], List[dict]]:
+def prior_unbacked_claims(
+    record_path: Path, repo_root: Optional[Path] = None
+) -> tuple[Dict[str, Any], List[dict]]:
     """`(record, claims)` of a run record's frozen delivery FAIL, each claim `{claim, anchor}`.
     A delivery PASS whose criterion is `not_met`/`indeterminate`, or whose tests
     are `fail`/`error`, returns `(record, [])`: there is
@@ -115,7 +137,7 @@ def prior_unbacked_claims(record_path: Path) -> tuple[Dict[str, Any], List[dict]
     record = _frontmatter(record_path)
     if record is None:
         raise ReverifyRefused(f"reverify-delivery: cannot read run record {record_path}")
-    delivery = _delivery_block(record)
+    delivery = load_delivery(repo_root or _repo_of_record(record_path), record)
     if delivery is not None and delivery.get("verdict") != "FAIL" and _unsettled(record):
         return record, []
     if delivery is None or delivery.get("verdict") != "FAIL":
@@ -599,8 +621,8 @@ def _is_run_record(fm: Optional[Dict[str, Any]]) -> bool:
     return any(k in fm for k in ("delivery", "prep", "commit_range", "inline_review", "review"))
 
 
-def _has_reverifiable(fm: Dict[str, Any]) -> bool:
-    block = _delivery_block(fm)
+def _has_reverifiable(repo_root: Path, fm: Dict[str, Any]) -> bool:
+    block = load_delivery(repo_root, fm)
     return bool(block) and (block.get("verdict") == "FAIL" or _unsettled(fm))
 
 
@@ -635,7 +657,7 @@ def resolve_delivery_in_force(
     if path is None and plan_id:
         cand = _trailer_record(repo_root, plan_id, plan_path)
         fm = _frontmatter(cand) if cand else None
-        if cand is not None and fm and _has_reverifiable(fm):
+        if cand is not None and fm and _has_reverifiable(repo_root, fm):
             path = cand
     if path is None:
         path = _bookkeeping_record(repo_root, plan_id)
@@ -644,7 +666,7 @@ def resolve_delivery_in_force(
     block = latest_delivery_supersession(repo_root, _run_rel(repo_root, path))
     if block is None:
         fm = _frontmatter(path)
-        block = _delivery_block(fm) if fm else None
+        block = load_delivery(repo_root, fm) if fm else None
     return path, block
 
 
@@ -662,8 +684,7 @@ def _bookkeeping_record(repo_root: Path, plan_id: Optional[str]) -> Optional[Pat
         fm = _frontmatter(path)
         if not fm or str(fm.get("plan_id")) != plan_id:
             continue
-        block = _delivery_block(fm)
-        if block and (block.get("verdict") == "FAIL" or _unsettled(fm)):
+        if _has_reverifiable(repo_root, fm):
             return path
     return None
 
@@ -691,7 +712,7 @@ def emit_reverify(
                 f"reverify-delivery: {what}, and no {glob} carries this plan's delivery FAIL"
             )
         record_file = found
-    record, claims = prior_unbacked_claims(record_file)
+    record, claims = prior_unbacked_claims(record_file, repo_root)
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     prep = record.get("prep") if isinstance(record.get("prep"), dict) else {}
     commit_range = record.get("commit_range") if isinstance(record.get("commit_range"), dict) else {}
