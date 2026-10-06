@@ -1,6 +1,6 @@
 {
   "builder": "3ab8450e-aad5-40c1-a35a-c20c714dc7ac",
-  "built_at": "2026-10-06T19:13:36+00:00",
+  "built_at": "2026-10-06T19:37:06+00:00",
   "command": [
     "python.exe",
     "-m",
@@ -9,11 +9,11 @@
   ],
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
-  "door_c_sha256": "f9ae4fcfe3b4bf16ef7c7d59a84e061a4fdb5e6c94c37316bea024ada8c7e680",
+  "door_c_sha256": "9baca48adbd7b1c82f414dcfb40db7fb5dd6dd77f7f3d8f743a4c343339e5f0b",
   "engine_root": "X:\\claude-klabauter",
-  "image_sha256": "5bf3c3f5782a86c20a59f595cc6a889c9c8b99bbe218d911fe77707e2417559b",
+  "image_sha256": "ff0a185b71cc4c068205c97b87677c9f58f4a48ced51510cb3205b309cc17f75",
   "sources": {
-    "door.c": "f9ae4fcfe3b4bf16ef7c7d59a84e061a4fdb5e6c94c37316bea024ada8c7e680",
+    "door.c": "9baca48adbd7b1c82f414dcfb40db7fb5dd6dd77f7f3d8f743a4c343339e5f0b",
     "door_core.c": "ca2551d383b77e2c7a2c12f9f4785527a7cc272d262f33b33819ca4c7a94d3c3",
     "door_core.h": "9c28732b0e846e1614e3ea29b8771d1dda37946acfaa16d5e8e2da1121e53f32",
     "door_env_set.h": "d96010dbe02144b44eceea1ddf4513c8c079b27fbacd3952b067246e543480d8"
