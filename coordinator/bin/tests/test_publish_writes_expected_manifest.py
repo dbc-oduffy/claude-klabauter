@@ -37,6 +37,10 @@ def _run(monkeypatch, tmp_path, *, rows_feeding):
     (dest_dir / "a.py").write_bytes(b"print(1)\n")
     (dest_dir / "sub").mkdir()
     (dest_dir / "sub" / "b.txt").write_bytes(b"")
+    monkeypatch.setattr(
+        publish, "_dirty_paths_under",
+        lambda _root, _dirs: ["coordinator_core/a.py", "coordinator_core/sub/b.txt"],
+    )
     ok = publish._commit_published_dests(
         {repo_root: {dest_dir}},
         succeeded_row_names=["row-a"],
@@ -125,6 +129,31 @@ def test_dr445_round_commits_the_manifest(tmp_path):
 def test_dr445_partial_root_commits_no_manifest(tmp_path):
     dest = _dr445_round(tmp_path, rows_feeding=frozenset({"row-a", "row-b"}))
     assert ".coordinator/expected-manifest.json" not in _git(dest, "ls-files").split()
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_dr445_manifest_is_the_committed_tree_with_written_byte_shas(tmp_path):
+    dest = _dr445_round(tmp_path, rows_feeding=frozenset({"row-a"}))
+    doc = json.loads(_git(dest, "show", "HEAD:.coordinator/expected-manifest.json"))
+    committed = {
+        row.partition("\t")[2]: row.split()[2]
+        for row in _git(dest, "ls-tree", "-r", "HEAD").splitlines()
+    }
+    committed.pop(".coordinator/expected-manifest.json")
+    assert doc["paths"] == committed
+    assert doc["paths"]["seed.txt"] == _blob(b"seed\n")
+
+
+def test_manifest_omits_unpublished_source_and_hashes_written_bytes(monkeypatch, tmp_path):
+    root = tmp_path / "mirror"
+    root.mkdir()
+    (root / "t.txt").write_bytes(b"transformed\n")
+    (tmp_path / "source-only.txt").write_bytes(b"source\n")
+    assert publish._write_expected_manifest(root, ["t.txt"], [], "f" * 40)
+    doc = json.loads((root / ".coordinator" / "expected-manifest.json").read_bytes())
+    assert doc["paths"] == {"t.txt": _blob(b"transformed\n")}
+    assert doc["paths"]["t.txt"] != _blob(b"source\n")
 
 
 if __name__ == "__main__":
