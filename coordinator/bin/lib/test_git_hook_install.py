@@ -1306,7 +1306,7 @@ def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tm
     other = tmp_path / "fleet" / "unregistered"
     for r in (reg, other):
         (r / ".git" / "hooks").mkdir(parents=True)
-    stale = '#!/bin/sh\nexec "$HOME/.claude/plugins/coordinator-claude/coordinator/bin/coordinator-prepare-commit-msg" "$@"\n'
+    stale = '#!/bin/sh\nexec "$HOME/.claude/plugins/coordinator/bin/coordinator-prepare-commit-msg" "$@"\n'
     (other / ".git" / "hooks" / "prepare-commit-msg").write_text(stale, encoding="utf-8")
     monkeypatch.setattr(ghi, "_merged_flat_registry", lambda: {"repos.registered": str(reg)})
     ghi.ensure_hooks_fleet(str(tmp_path))

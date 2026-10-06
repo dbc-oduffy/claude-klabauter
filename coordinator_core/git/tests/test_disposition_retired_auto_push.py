@@ -23,7 +23,7 @@ OLDER = """#!/bin/sh
 # installed by an earlier generation
 #
 # always exits 0
-exec bash "$HOME/.claude/plugins/coordinator-claude/coordinator/bin/coordinator-auto-push" "$@"
+exec bash "$HOME/.claude/plugins/coordinator/bin/coordinator-auto-push" "$@"
 """
 
 START = entry._START_MARKER

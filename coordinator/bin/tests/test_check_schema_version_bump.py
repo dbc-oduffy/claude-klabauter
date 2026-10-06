@@ -153,8 +153,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
-            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
+            "plugins/coordinator/canonical-structure.yaml",
+            "plugins/coordinator/coordinator-schema-version",
         )
         _git(repo, "commit", "-q", "-m", "initial nested")
 
@@ -164,7 +164,7 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
+            "plugins/coordinator/canonical-structure.yaml",
         )
 
         rc = _run_tripwire(nested, "--staged")
@@ -183,8 +183,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
-            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
+            "plugins/coordinator/canonical-structure.yaml",
+            "plugins/coordinator/coordinator-schema-version",
         )
         _git(repo, "commit", "-q", "-m", "initial nested")
 
@@ -196,8 +196,8 @@ class CheckSchemaVersionBumpTest(unittest.TestCase):
             repo,
             "add",
             "--",
-            "plugins/coordinator-claude/coordinator/canonical-structure.yaml",
-            "plugins/coordinator-claude/coordinator/coordinator-schema-version",
+            "plugins/coordinator/canonical-structure.yaml",
+            "plugins/coordinator/coordinator-schema-version",
         )
 
         rc = _run_tripwire(nested, "--staged")
