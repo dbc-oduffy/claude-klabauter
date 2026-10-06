@@ -301,3 +301,23 @@ def test_publish_mirror_push_from_msys_cwd(repo, tmp_path, monkeypatch):
         "cwd": _msys(mirror),
     }
     assert guard.check(payload) is None
+
+
+CLOUD = {"CLAUDE_CODE_REMOTE": "true"}
+
+
+def test_cloud_session_may_push_its_harness_claude_branch(repo):
+    assert not _denied(_check(repo, "git push -u origin claude/fix-abc123", env=CLOUD))
+
+
+def test_cloud_session_still_denies_a_non_claude_topic_branch(repo):
+    assert _denied(_check(repo, "git push origin fix/foo", env=CLOUD))
+
+
+def test_claude_branch_denied_outside_cloud(repo):
+    assert _denied(_check(repo, "git push origin claude/fix-abc123", env={}))
+
+
+def test_deny_says_the_whole_command_did_not_run(repo):
+    out = _check(repo, "echo hi > f.txt && git push origin fix/foo")
+    assert "whole command did not run" in out["hookSpecificOutput"]["permissionDecisionReason"]

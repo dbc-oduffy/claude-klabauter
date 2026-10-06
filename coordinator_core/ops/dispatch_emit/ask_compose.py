@@ -35,7 +35,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import next_action_parts
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
-from coordinator_core.ops.review_mint.execute_review import compose_execute_review
+from coordinator_core.ops.review_mint.execute_review import (
+    CRITERION_JUDGE_PHASE_TITLE,
+    compose_criterion_judge,
+    compose_execute_review,
+)
 from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execute_review
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -136,6 +140,28 @@ def _scoped_test_call(agent_type_host: Optional[str]) -> str:
     """
     call = _emit._test_agent_call_expr([_SCOPE_SLOT], agent_type_host=agent_type_host)
     return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
+
+
+_USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
+HALT_USAGE_LIMIT = "usage_limit"
+
+
+def _usage_limit_helper_js() -> str:
+    """`_haltOnUsageLimit(e)`: a limit-shaped agent failure becomes a resumable `_halted`; any other error rethrows.
+
+    The run id the harness resumes from is not visible to the script, so the halt carries a hint to
+    read it from the Workflow result.
+    """
+    return (
+        f"  const _USAGE_LIMIT_RE = {_USAGE_LIMIT_RE};\n"
+        "  function _haltOnUsageLimit(e) {\n"
+        "    const msg = String((e && (e.message ?? e)) ?? '');\n"
+        "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
+        f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
+        "resume_from_run_id: 'this Workflow run id (wf_...)', "
+        "next_action: 'After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id.' };\n"
+        "  }"
+    )
 
 
 def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
@@ -306,7 +332,8 @@ def compose_ask_script(
     if blitz_fn:
         b.append(blitz_fn)
     b.append(_row_runner_js())
-    for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
+    b.append(_usage_limit_helper_js())
+    for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR, _emit._FALSIFIER_RESULT_VAR):
         b.append(f"  let {name} = null;")
 
     if not sizing_rel:
@@ -357,7 +384,7 @@ def compose_ask_script(
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID } "
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID, ...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
         ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, session_id: _SESSION_ID })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
@@ -456,8 +483,28 @@ def compose_ask_script(
         f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && (_manifest.review_declared_paths ?? []).length) {{"
     )
     b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+    b.append("    try {")
     b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
+    b.append("    } catch (e) { _haltOnUsageLimit(e); }")
     b.append("  }")
+    judge_expr = compose_criterion_judge(
+        review,
+        stage_schemas=review_stage_schemas,
+        plan_path=manifest_rel,
+        run_base_sha=head_sha(repo_root) or "",
+        falsifier=None,
+        prompt_head=review_head,
+        host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
+        prompt_suffix_js="'\nplan: ' + (_planRel ?? _sizingRel) + ' (a sizing: its exit_criterion is the criterion)'",
+    )
+    if judge_expr:
+        b.append(f"  if (!_halted && _manifest && !_manifest.error) {{")
+        b.append(f"    phase({_lit(CRITERION_JUDGE_PHASE_TITLE)});")
+        b.append(
+            f"    {_emit._FALSIFIER_RESULT_VAR} = await "
+            f"{_emit._never_stranding_criterion(judge_expr, judge=True)};"
+        )
+        b.append("  }")
     review_vars = _emit.review_stage_vars(
         review,
         bookkeeping_stem_literal=_lit(review_wave_bookkeeping_stem(run_id, None)),
@@ -467,7 +514,7 @@ def compose_ask_script(
         has_commit_request=True,
         review_vars=review_vars,
         test_var=_emit._TEST_RESULT_VAR,
-        falsifier_var=None,
+        falsifier_var=_emit._FALSIFIER_RESULT_VAR if judge_expr else None,
         verification_var="_verifications",
         test_absent_status="not_run",
         script_path=script_path,
@@ -489,7 +536,7 @@ def compose_ask_script(
     meta = _emit._meta_block(
         "warp-ask",
         "One in-session run from an ask to a reviewed result: size, gate, plan, stage, execute, review.",
-        _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=review_titles),
+        _phase_titles(with_size=not sizing_rel, blitz_phases=blitz_phases, review_titles=[*review_titles, *([CRITERION_JUDGE_PHASE_TITLE] if judge_expr else [])]),
     )
     script = (
         f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n"

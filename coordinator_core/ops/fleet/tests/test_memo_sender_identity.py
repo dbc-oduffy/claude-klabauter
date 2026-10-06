@@ -142,3 +142,17 @@ class TestComposeTimeAssertionWarnsOnUnacceptedSender:
             resolve_and_assert_sender_id("some-unregistered-em", root=str(tmp_path))
             == "some-unregistered-em"
         )
+
+
+class TestDefaultedSenderIsNotRecanonicalized:
+    def test_engine_resolved_identity_survives_central_fan_in(self, monkeypatch):
+        from coordinator_core.ops.fleet import _memo_compose
+
+        monkeypatch.setattr(
+            _memo_compose, "_resolve_engine_sender_id", lambda root=None: "coordinator-content-repo-em"
+        )
+        monkeypatch.setattr(
+            _memo_compose, "_canonical_receiver_id", lambda raw: "content-root-em"
+        )
+
+        assert _memo_compose.resolve_sender_id(None, "C:/any") == "coordinator-content-repo-em"

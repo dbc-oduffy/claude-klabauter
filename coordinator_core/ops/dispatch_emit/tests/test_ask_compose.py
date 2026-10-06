@@ -185,3 +185,19 @@ def test_degraded_host_ask_review_stages_emit_no_coordinator_review_type_and_kee
     assert review_types <= types(normal)
     assert not review_types & types(degraded)
     assert _titles(degraded) == _titles(normal)
+
+
+def test_criterion_judge_runs_and_feeds_the_digest_when_the_roster_declares_one():
+    import copy
+
+    fragment = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
+    fragment["execute_review"]["stages"].append(
+        {"kind": "judge", "agents": [{"agentType": "coordinator:criterion-judge", "model": "opus",
+                                      "effort": "low", "schema": "judge-result"}]}
+    )
+    schemas = {**REVIEW_KW["review_stage_schemas"], "judge-result": {"type": "object"}}
+    script = _compose(review_roster_fragment=fragment, review_stage_schemas=schemas)
+    assert "Criterion judge" in _titles(script)
+    assert "_falsifierResult = await" in script
+    assert "(_planRel ?? _sizingRel)" in script
+    assert "Criterion judge" not in _titles(_compose())

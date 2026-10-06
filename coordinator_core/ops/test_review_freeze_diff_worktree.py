@@ -363,3 +363,30 @@ def test_two_runs_in_one_repo_freeze_disjoint_artifacts_and_exclude_pre_base_row
     assert "b/a.py" in text_a and "b/b.py" not in text_a
     assert "b/b.py" in text_b and "b/a.py" not in text_b
     assert "pre.py" not in text_a + text_b
+
+
+def test_worktree_freeze_registers_diff_files_as_review_targets_and_nothing_else(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A directory pathspec registers the files the frozen diff holds, never the
+    directory, and a file outside the diff stays unregistered (guard equality)."""
+    from coordinator_core.write_guards import block_confined_agent_write as guard
+
+    _init_repo(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    _commit(tmp_path, "pkg/b.py", "b = 1\n", "add b")
+    base = _commit(tmp_path, "pkg/a.py", "a = 1\n", "add a")
+    _commit(tmp_path, "other.py", "o = 1\n", "add other")
+    (tmp_path / "pkg" / "a.py").write_text("a = 2\n")
+    (tmp_path / "pkg" / "b.py").write_text("b = 2\n")
+    (tmp_path / "other.py").write_text("o = 2\n")
+    monkeypatch.setattr(review_freeze_diff, "resolve_session_id", lambda: "sess-freeze-1")
+
+    result = freeze_diff(tmp_path, base, "w-reg", paths=["pkg"], worktree=True)
+
+    assert result["error"] is None, result["error"]
+    targets = tmp_path / ".git" / "coordinator-sessions" / "sess-freeze-1" / "review-targets.txt"
+    assert set(targets.read_text().split()) == {"pkg/a.py", "pkg/b.py"}
+    for rel, admitted in (("pkg/b.py", True), ("other.py", False)):
+        candidate = Path(guard.casefold_path(str(tmp_path / rel)))
+        assert guard._is_registered_review_target(str(tmp_path), "sess-freeze-1", candidate) is admitted

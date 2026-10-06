@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import os
 import random
+import re
 import sys
 import time
 from typing import List, Optional, Tuple
@@ -74,6 +75,25 @@ def _id_body(raw: str) -> str:
     return raw.strip("-")
 
 
+def slug_from_title(title: str) -> str:
+    """Filesystem-safe slug, <=40 chars, cut back to a whole word, no edge dashes."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if len(slug) > 40:
+        truncated = slug[:40]
+        boundary = truncated.rfind("-")
+        slug = truncated[:boundary] if boundary > 0 else truncated
+    return slug.strip("-")
+
+
+def mint_artifact_id(prefix: str, slug: str, *, clamp: Optional[int] = 30) -> str:
+    """`<prefix>-<slug>-<6hex>`. The hash keeps the full slug; the id's slug part is
+    clamped to `clamp` chars (None = no clamp) and re-stripped so no `--` forms."""
+    body = slug if clamp is None else slug[:clamp]
+    hash_input = f"{slug}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
+    six_hex = _sha1_hex(hash_input)[:6]
+    return f"{prefix}-{_id_body(body)}-{six_hex}"
+
+
 def mint(
     deliverable_id: Optional[str] = None,
     stub_id: Optional[str] = None,
@@ -89,13 +109,9 @@ def mint(
         return deliverable_id, "carry"
 
     if stub_id:
-        hash_input = f"{stub_id}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
-        six_hex = _sha1_hex(hash_input)[:6]
-        return f"dlv-{_id_body(stub_id)}-{six_hex}", "mint-from-stub"
+        return mint_artifact_id("dlv", stub_id, clamp=None), "mint-from-stub"
 
-    hash_input = f"{slug}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
-    six_hex = _sha1_hex(hash_input)[:6]
-    return f"dlv-{_id_body(slug)}-{six_hex}", "mint-from-slug"
+    return mint_artifact_id("dlv", slug, clamp=None), "mint-from-slug"
 
 
 _HELP_TEXT = """\

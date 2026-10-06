@@ -21,6 +21,9 @@ an unresolvable HEAD or ref name allows.
 A push of a registered `publish.mirrors.<key>` repo's declared `track_ref`
 branch (the command publish.py prints) is allowed.
 
+A cloud session (`CLAUDE_CODE_REMOTE=true`) may use its harness-assigned
+`claude/...` branch.
+
 Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
 env prefix on the git segment only; the hook environment never overrides.
 An empty value never overrides.
@@ -41,6 +44,10 @@ from coordinator_core.bash_guards._command_tokenizer import (
 from coordinator_core.bash_guards._rewrite_support import _GIT_GLOBAL_OPT_WITH_ARG
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.daily_branch import read_configured_day_branch
+from coordinator_core.hooks.day_branch_assert import (
+    _CLOUD_SESSION_BRANCH_PREFIX,
+    is_cloud_session,
+)
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -241,7 +248,7 @@ def _inline_reason(raw_tokens: List[str]) -> str:
 
 
 def _offending_ref(
-    tokens: List[str], cwd: Optional[str]
+    tokens: List[str], cwd: Optional[str], env: Optional[Dict[str, str]] = None
 ) -> Optional[str]:
     parsed = _git_argv(tokens)
     if parsed is None:
@@ -290,6 +297,8 @@ def _offending_ref(
             continue
         if _is_publish_push(sub, ref, git_root):
             continue
+        if is_cloud_session(env) and ref.startswith(_CLOUD_SESSION_BRANCH_PREFIX):
+            continue
         if machine is None:
             machine = _machine()
         if sub == "push" and _is_publish_mirror_branch(git_root, ref):
@@ -302,7 +311,9 @@ def _offending_ref(
 def _deny_reason(ref: str) -> str:
     return (
         f"BLOCKED: topic branch `{ref}` -- commit to the day branch "
-        "(work/<machine>/<date>); the Group EM grants exceptions.\n\n"
+        "(work/<machine>/<date>); the Group EM grants exceptions. "
+        "The whole command did not run: file writes chained before the "
+        "blocked segment did not happen either.\n\n"
         f"Exception: {OVERRIDE_KEY} with a non-empty reason, prefixed on the command."
     )
 
@@ -317,10 +328,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = cmd.replace("\r", "")
     cwd = payload.get("cwd")
 
+    env = payload.get("env")
+    if not isinstance(env, dict):
+        env = None
+
     for resolved in resolve_command_positions(
         cmd, preserve_windows_backslashes=True
     ):
-        ref = _offending_ref(resolved.tokens, cwd)
+        ref = _offending_ref(resolved.tokens, cwd, env)
         if ref is None:
             continue
         if _inline_reason(resolved.raw_tokens):

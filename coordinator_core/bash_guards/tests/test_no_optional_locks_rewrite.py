@@ -222,3 +222,17 @@ def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it():
     ctx_a = a["hookSpecificOutput"]["additionalContext"]
     ctx_b = b["hookSpecificOutput"]["additionalContext"]
     assert ctx_a == ctx_b
+
+
+def test_rewrite_note_fires_once_per_session_even_without_a_gitdir(tmp_path, monkeypatch):
+    import tempfile
+
+    from coordinator_core.bash_guards import dispatch
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    cwd = tmp_path / "container"
+    cwd.mkdir()
+    env = _check("git status")
+    args = ("git-no-optional-locks", env, "sess-gitless-1", str(cwd))
+    assert dispatch._session_advisory_already_fired(*args) is False
+    assert dispatch._session_advisory_already_fired(*args) is True

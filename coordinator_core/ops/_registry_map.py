@@ -194,6 +194,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.backfill_claim_stamp":           "coordinator_core.ops.handoff_backfill_claim_stamp",
     "handoff.repoint_origin":                 "coordinator_core.ops.handoff_repoint_origin",
     "handoff.normalize":                      "coordinator_core.ops.handoff_normalize",
+    "artifact.adopt":                         "coordinator_core.ops.artifact_adopt",
     "handoff.correct_body":                   "coordinator_core.ops.handoff_correct_body",
     "handoff.discharge_criteria":             "coordinator_core.ops.handoff_discharge_criteria",
     "handoff.author_lint":                     "coordinator_core.ops.handoff_author_lint",

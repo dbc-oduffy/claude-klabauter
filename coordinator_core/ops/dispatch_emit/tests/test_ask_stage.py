@@ -175,3 +175,11 @@ def test_stage_registers_declared_paths_as_the_sessions_review_targets(repo):
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL, session_id="sess-1")
     targets = (repo / ".git" / "coordinator-sessions" / "sess-1" / "review-targets.txt").read_text(encoding="utf-8")
     assert set(targets.split()) >= set(m.review_declared_paths)
+
+
+def test_marker_carries_the_sizing_record_so_the_terminal_commit_lands_it(repo):
+    m = stage(repo, run_id="r2", plan_rel=PLAN_REL, commit_sizing_rel=SIZING_REL)
+    req = parse_marker((repo / m.marker_path).read_text(encoding="utf-8"))
+    sizing = [c for c in req.chunks if c.id == "sizing"]
+    assert [c.paths for c in sizing] == [(SIZING_REL,)]
+    assert SIZING_REL not in m.review_declared_paths
