@@ -805,8 +805,12 @@ def _advance_one(
     repo_root: Path,
     source_path: str = "",
     source_kind: str = "",
+    fallback_sha: str = "",
 ) -> tuple[bool, Optional[str]]:
     """Attempt to advance a single candidate that has already cleared the AC6h predicate.
+
+    `fallback_sha`: the caller's terminal-transition commit; stamped as `ship-commit`
+    only when no better evidence resolved.
 
     Returns (advanced, refusal_reason). Never raises — every failure mode is folded into
     a named refusal reason instead.
@@ -826,10 +830,11 @@ def _advance_one(
     `advanced_at`). So the plan trigger skips Position 1 entirely and goes straight to
     Position A — scope-derived self-derivation from the CANDIDATE's own `scope:` paths
     (`kind="scope-derived"`, `allow_branch_tip_fallback=False`, `not_after=advanced_at`).
-    A genuine no-commit-found result from either position is NOT an error (established
-    contract) — it REFUSES this candidate (named: "no commit evidence resolvable for
-    shipped_in") rather than flipping a handoff to `shipped` with no `shipped_in` or with
-    a proxy commit that never actually shipped it.
+    When neither position resolves and the caller passed its own terminal-transition
+    commit (`fallback_sha`, e.g. stamp-implemented's stamp commit, reached only on a
+    met judge), that sha is stamped as `ship-commit`: every shipped change is its
+    ancestor. With no `fallback_sha`, a no-commit-found result is NOT an error — it
+    REFUSES this candidate (named: "no commit evidence resolvable for shipped_in").
 
     Negative spec — res-1 is retracted, not repaired (see
     docs/plans/2026-09-07-baton-lifecycle-refusal-drain-authz.md): a resolved-looking
@@ -863,6 +868,13 @@ def _advance_one(
         )
     if outcome.exit_code != 0:
         return False, f"stamp_shipped_in failed: {outcome.error}"
+
+    # Last resort: the caller's own terminal-transition commit, already held (no git
+    # spawn). Reached only when neither the source nor the scope resolved evidence.
+    if fallback_sha and not _current_shipped_in(candidate_path):
+        outcome = stamp_shipped_in(str(candidate_path), kind="ship-commit", sha=fallback_sha)
+        if outcome.exit_code != 0:
+            return False, f"stamp_shipped_in failed: {outcome.error}"
 
     # Position A: a genuine no-commit-found result is an honest non-error that still
     # leaves shipped_in unset — the schema's post-cutoff cross-field rule
@@ -1189,6 +1201,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     deliverable_id: str = (params.get("deliverable_id") or "").strip()
     source_kind: str = (params.get("source_kind") or "").strip()
     source_path: str = (params.get("source_path") or "").strip()
+    fallback_sha: str = (params.get("ship_sha") or "").strip().lower()
     at: str = (params.get("at") or "").strip() or _iso_now()
     target_kind_name: str = (params.get("target_kind") or "").strip() or "handoff"
     # Fail-loud on an unregistered kind (AC5) — never caught here, propagates
@@ -1385,7 +1398,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 )
             else:
                 did_advance, write_refusal = await asyncio.to_thread(
-                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path, source_kind
+                    _advance_one, candidate_path, deliverable_id, at, repo_root, source_path,
+                    source_kind, fallback_sha,
                 )
             if did_advance:
                 entry = {

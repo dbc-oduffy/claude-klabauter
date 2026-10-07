@@ -522,7 +522,7 @@ def _parse_args(argv: List[str]) -> _Opts:
 _CASCADE_TARGET_KINDS = ("handoff", "sizing")
 
 
-def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
+def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = "") -> int:
     """Fire the shared terminal-state cascade (deliverable.cascade_terminal, C6) once
     per target kind in `_CASCADE_TARGET_KINDS`, after a successful NON-no-op flip to
     status:implemented.
@@ -607,6 +607,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
                     "source_kind": "plan",
                     "source_path": plan_path,
                     "target_kind": target_kind,
+                    "ship_sha": ship_sha,
                 },
                 repo_root=git_common_dir,
             )
@@ -680,6 +681,7 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
                 "source_kind": "plan",
                 "source_path": plan_path,
                 "target_kind": target_kind,
+                **({"ship_sha": ship_sha} if ship_sha else {}),
             })
             print(
                 f"{_PROG}: retry once the refusal clears: "
@@ -1882,6 +1884,7 @@ def _stamp_implemented(opts: _Opts) -> int:
         print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is terminal/deferred — no-op")
         return 0
 
+    stamp_sha = ""
     # Commit ownership (see module docstring "Commit ownership" section): a real
     # flip just landed on disk -- commit it now, scoped to exactly this plan path.
     if worktree_root is not None and relpath is not None:
@@ -1917,6 +1920,7 @@ def _stamp_implemented(opts: _Opts) -> int:
                     file=sys.stderr,
                 )
                 return 1
+            stamp_sha = commit_result.stdout.strip() if isinstance(commit_result.stdout, str) else ""
 
     if written_text is not None:
         _ac_open_rows_warning(opts.plan, written_text)
@@ -1934,7 +1938,7 @@ def _stamp_implemented(opts: _Opts) -> int:
 
     print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → implemented")
 
-    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"])
+    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"], stamp_sha)
 
     # Archival occasion (see _archive_stamped_plan docstring): only attempted
     # when the flip itself was actually committed (worktree resolved, not

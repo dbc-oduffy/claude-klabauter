@@ -89,10 +89,19 @@ def exit_criteria_items(plan_text: str) -> list[str]:
     return items
 
 
-def post_stamp_body_refusal(plan_text: str) -> Optional[str]:
-    """Refusal for the first body exit-criteria item naming a post-stamp state, else None."""
+def _body_refusal(plan_text: str, check) -> Optional[str]:
     for n, item in enumerate(exit_criteria_items(plan_text), 1):
-        refusal = post_stamp_refusal(item)
+        refusal = check(item)
         if refusal is not None:
             return f"body exit criterion {n}: {refusal}"
     return None
+
+
+def post_stamp_body_refusal(plan_text: str) -> Optional[str]:
+    """Refusal for the first body exit-criteria item naming a post-stamp state, else None."""
+    return _body_refusal(plan_text, post_stamp_refusal)
+
+
+def suite_tier_body_refusal(plan_text: str) -> Optional[str]:
+    """Refusal for the first body exit-criteria item naming a suite tier, else None."""
+    return _body_refusal(plan_text, suite_tier_refusal)

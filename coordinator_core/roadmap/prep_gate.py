@@ -111,7 +111,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
-from coordinator_core.roadmap.post_stamp_clause import post_stamp_body_refusal, post_stamp_refusal
+from coordinator_core.roadmap.post_stamp_clause import (
+    post_stamp_body_refusal,
+    post_stamp_refusal,
+    suite_tier_body_refusal,
+    suite_tier_refusal,
+)
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -1600,6 +1605,9 @@ def _prime_exit(
     body_post_stamp = post_stamp_body_refusal(text) if text else None
     if body_post_stamp is not None:
         return _defect("prime-exit-post-stamp", body_post_stamp)
+    suite_tier = suite_tier_refusal(statement) or (suite_tier_body_refusal(text) if text else None)
+    if suite_tier is not None:
+        return _defect("prime-exit-suite-tier", suite_tier)
     derived_from = criterion.get("derived_from")
     if not str(derived_from or "").strip():
         return _defect(

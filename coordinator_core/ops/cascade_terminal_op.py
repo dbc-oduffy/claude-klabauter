@@ -79,6 +79,7 @@ from coordinator_core.ops.deliverable_cascade import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_SOURCE_KINDS = ("plan", "handoff")
 
 _NO_SHIP_SHA_REASON = (
     "no ship evidence: 'ship_sha' was not supplied — the commit that landed the source's "
@@ -301,10 +302,23 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """deliverable.cascade_terminal — advance the handoffs and sizings joined to one deliverable.
 
     `repo_root` is the git COMMON dir (the directory ending in `.git`), never the worktree
-    root. Raises `ValueError` on a missing or malformed required param, or no `repo_root`.
+    root. An unaccepted `source_kind` returns a named refusal (`exit_code` 1, `error`). Raises
+    `ValueError` on any other missing or malformed required param, or no `repo_root`.
     A candidate that clears no predicate leg or has no ship evidence is named in `refused`,
     never flipped. See the module docstring for the reply shape.
     """
+    source_kind_given = str(params.get("source_kind") or "").strip()
+    if source_kind_given not in _SOURCE_KINDS:
+        return {
+            "exit_code": 1,
+            "deliverable_id": str(params.get("deliverable_id") or "").strip(),
+            "by_kind": {"handoff": _kind_result(0, False, []), "sizing": _kind_result(0, False, [])},
+            "commit_sha": None,
+            "error": (
+                f"deliverable.cascade_terminal: 'source_kind' {source_kind_given!r} is not accepted; "
+                f"accepted: {', '.join(repr(k) for k in _SOURCE_KINDS)}"
+            ),
+        }
     deliverable_id, source_kind, source_path, ship_sha = _require_params(params)
     if repo_root is None:
         raise ValueError("deliverable.cascade_terminal: repo_root is required (no founding root available)")

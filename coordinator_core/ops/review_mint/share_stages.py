@@ -120,6 +120,23 @@ def _reverify_record(repo_root: Path, share: Path, plan_id: str, head: str) -> O
     return best if proc.returncode == 0 else None
 
 
+def _bookkeeping_delivery(
+    share: Path, plan_id: str, plan_stem: Optional[str]
+) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """The newest of this plan's run bookkeeping sidecars in ``share`` whose ``delivery.verdict``
+    is PASS/FAIL, as a delivery candidate. Bound by the sidecar's own ``plan_id``, never by name."""
+    found: List[Tuple[Path, Dict[str, Any]]] = []
+    for path in share.glob("*.review-wave-bookkeeping.md"):
+        fm = _load_sidecar_fm(path)
+        if not fm or _claimed_plan(fm) is None or not _binds(path, fm, plan_id, plan_stem):
+            continue
+        block = fm.get("delivery")
+        if isinstance(block, dict) and block.get("verdict") in ("PASS", "FAIL"):
+            unbacked = block.get("unbacked")
+            found.append((path, {"verdict": block["verdict"], "claims_unbacked": unbacked if isinstance(unbacked, list) else []}))
+    return _newest(found)
+
+
 def _newest(items: List[Tuple[Path, Any]]) -> Optional[Tuple[Path, Any]]:
     return max(items, key=lambda it: (it[0].stat().st_mtime, it[0].name)) if items else None
 
@@ -218,6 +235,8 @@ def assemble_from_share(
         block = reverify["delivery"]
         rec_path = Path(str(reverify.get("supersedes") or ""))
         delivery = (rec_path, {"verdict": block["verdict"], "claims_unbacked": block.get("unbacked") or []})
+    if delivery is None:
+        delivery = _bookkeeping_delivery(share, plan_id, plan_stem)
     if delivery is None:
         raise ShareStageMissing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
 

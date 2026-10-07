@@ -205,7 +205,6 @@ def test_claimed_candidate_is_refused_by_leg_a(tmp_path):
     "overrides",
     [
         {"deliverable_id": ""},
-        {"source_kind": "bogus"},
         {"source_path": ""},
         {"ship_sha": "not-a-sha"},
     ],
@@ -215,6 +214,19 @@ def test_missing_or_malformed_required_param_raises(tmp_path, overrides):
     _init_repo(repo)
     with pytest.raises(ValueError):
         _run(_params("abcdef1", **overrides), repo)
+
+
+@pytest.mark.parametrize("value", ["bogus", ""])
+def test_unaccepted_source_kind_is_a_named_refusal_listing_accepted_values(tmp_path, value):
+    repo, handoff, sizing, base = _seed_run(tmp_path, pad=2)
+    before = handoff.read_text(encoding="utf-8")
+
+    result = _run(_params(base, source_kind=value), repo)
+
+    assert result["exit_code"] == 1
+    assert result["commit_sha"] is None
+    assert "'source_kind'" in result["error"] and "'plan', 'handoff'" in result["error"]
+    assert handoff.read_text(encoding="utf-8") == before
 
 
 def test_second_call_is_a_noop(tmp_path):

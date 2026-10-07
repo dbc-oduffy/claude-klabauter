@@ -1075,6 +1075,79 @@ def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_without_shipped_in(t
     assert read_fm_field(split.fm_text, "deployment_state") == "ready_to_fire"
 
 
+def _seed_scoped_handoff(repo, scope_path: str, did: str, trailer: str = ""):
+    handoff = repo / "state" / "handoffs" / "20260101-h.md"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Handoff 20260101-h.md"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: open\n"
+        'predecessor: "none"\n'
+        "deployment_state: ready_to_fire\n"
+        f"deliverable_id: {did}\n"
+        "scope:\n"
+        f"  - {scope_path}\n"
+    )
+    handoff.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(handoff.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add handoff{trailer}")
+    return handoff
+
+
+def test_plan_trigger_ship_sha_is_the_fallback_when_nothing_else_resolves(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_scoped_handoff(repo, "never-committed.txt", "dlv-fb-000000")
+    stamp_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-fb-000000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+            "ship_sha": stamp_sha,
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert len(result["advanced"]) == 1
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in") == stamp_sha[:8]
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in_kind") == "ship-commit"
+    assert read_fm_field(split.fm_text, "deployment_state") == "shipped"
+
+
+def test_plan_trigger_ship_sha_never_outranks_scope_derived_evidence(tmp_path, monkeypatch):
+    session_id = "88888888-8888-8888-8888-888888888888"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "feature.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-m", f"feature\n\nSession-Id: {session_id}")
+    feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    handoff = _seed_scoped_handoff(
+        repo, "feature.txt", "dlv-fb-000001", trailer=f"\n\nSession-Id: {session_id}"
+    )
+    stamp_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert stamp_sha != feature_sha
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-fb-000001",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+            "ship_sha": stamp_sha,
+        },
+        repo_root=repo / ".git",
+    )
+
+    split = split_frontmatter(handoff.read_text(encoding="utf-8"))
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in") == feature_sha[:8]
+
+
 def test_ac4_handoff_trigger_still_resolves_source_ship_sha_first(tmp_path, monkeypatch):
     """AC4: on the handoff trigger, Position 1 (`resolve_source_ship_sha`
     against `source_path`) must still run and still take priority over

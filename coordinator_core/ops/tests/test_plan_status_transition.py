@@ -379,7 +379,7 @@ def _capture_cascade_key(monkeypatch):
 
     seen: list = []
 
-    def _fake_run_cascade(plan_path, deliverable_id):
+    def _fake_run_cascade(plan_path, deliverable_id, ship_sha=""):
         seen.append(deliverable_id)
         return 0
 
@@ -1092,12 +1092,9 @@ def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_pat
     assert shipped_in == feature_sha[:8]
 
 
-def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_e2e(tmp_path, capsys):
-    """AC3, end-to-end: when the governing handoff's own `scope:` resolves no
-    commit, the plan trigger must leave `shipped_in` unset rather than fall
-    back to (or invent) any other evidence -- including the plan's own flip
-    commit, which is real, committed, and would resolve cleanly if Position 1
-    ran on this trigger."""
+def test_ac3_plan_trigger_no_scope_derived_evidence_falls_back_to_the_stamp_commit_e2e(tmp_path, capsys):
+    """When the governing handoff's own `scope:` resolves no commit, the plan's own
+    `implemented` stamp commit lands as `shipped_in` (kind ship-commit)."""
     deliverable_id = "dlv-ac3-e2e-000000"
     (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
@@ -1130,13 +1127,17 @@ def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_e2e(tmp_path, capsys
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     out, err = capsys.readouterr()
-    assert rc == 2, (out, err)
-    assert "no commit evidence resolvable" in err
+    assert rc == 0, (out, err)
+    stamp_sha = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--grep", "-> implemented"],
+        cwd=str(tmp_path), capture_output=True, text=True,
+    ).stdout.strip()
 
     split = split_frontmatter(handoff.read_text(encoding="utf-8"))
     assert split is not None
-    assert read_fm_field_unquoted(split.fm_text, "shipped_in") is None
-    assert read_fm_field_unquoted(split.fm_text, "deployment_state") == "ready_to_fire"
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in") == stamp_sha[:8]
+    assert read_fm_field_unquoted(split.fm_text, "shipped_in_kind") == "ship-commit"
+    assert read_fm_field_unquoted(split.fm_text, "deployment_state") == "shipped"
 
 
 # ---------------------------------------------------------------------------

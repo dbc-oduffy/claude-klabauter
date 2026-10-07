@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.completion_receipts.verdict import _count
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -119,6 +120,28 @@ def _write_range_prep(repo_root: Path, session_id: str, plan: str, base: str, he
     return target
 
 
+def _refuse_empty_prep(repo_root: Path, prep_sidecar: Optional[str]) -> None:
+    """Refuse a readable prep sidecar that reviews zero files; ``review_stamp.mint`` would refuse it later."""
+    if not prep_sidecar:
+        return
+    path = Path(prep_sidecar)
+    if not path.is_absolute():
+        path = repo_root / path
+    if not path.is_file():
+        return
+    split = split_frontmatter(path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n"))
+    try:
+        fm = (yaml.safe_load(split.fm_text) or {}) if split is not None else {}
+    except yaml.YAMLError:
+        fm = {}
+    fm = fm if isinstance(fm, dict) else {}
+    if max(_count(fm.get("slice_files")), _count(fm.get("product_files"))) == 0:
+        raise SupersedeRefused(
+            f"prep sidecar {prep_sidecar} records no product_files: the review covers zero files; "
+            "restamp the prep with product_files (count or list) for the reviewed range"
+        )
+
+
 def record_superseding_review(
     *,
     repo_root: Path,
@@ -175,6 +198,8 @@ def record_superseding_review(
         wave_sidecar_paths = assembled["wave_sidecar_paths"]
         stage_returns = assembled["stage_returns"]
         used = assembled["used"]
+
+    _refuse_empty_prep(repo_root, prep_sidecar)
 
     record_stem = review_wave_bookkeeping_stem(plan, session_id) + ".superseding"
     month = datetime.now(timezone.utc).strftime("%Y-%m")

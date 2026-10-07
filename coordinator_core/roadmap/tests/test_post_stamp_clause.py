@@ -95,6 +95,17 @@ def test_prime_exit_refuses_body_item():
     assert pg._prime_exit(fm, None, None)["status"] == "PASS"
 
 
+def test_prime_exit_refuses_suite_tier():
+    fm = {"prime_exit_criterion": {"statement": "fast tier green", "derived_from": "state/sizings/x.yaml"}}
+    v = pg._prime_exit(fm)
+    assert v["kind"] == "prime-exit-suite-tier" and "tests covering touched files pass" in v["detail"]
+    body = "## Exit criteria\n\n1. The gate refuses X.\n2. The full suite passes.\n"
+    fm["prime_exit_criterion"]["statement"] = "the gate refuses X"
+    v = pg._prime_exit(fm, None, body)
+    assert v["kind"] == "prime-exit-suite-tier" and "body exit criterion 2" in v["detail"]
+    assert pg._prime_exit(fm, None, body.replace("The full suite", "Tests covering touched files"))["status"] == "PASS"
+
+
 SUITE_TIER_PHRASES = (
     "fast tier green",
     "the fast suite passes",

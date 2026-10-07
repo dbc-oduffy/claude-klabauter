@@ -938,6 +938,16 @@ def test_parse_keep_cluster_ids_reads_first_column_of_bolded_keep_rows() -> None
     assert parse_keep_cluster_ids(text) == ["cl-01", "cl-02", "cl-04"]
 
 
+def test_parse_keep_cluster_ids_reduces_id_plus_title_cell_to_the_id() -> None:
+    text = _NL.join([
+        "| Cluster | Verdict | Rationale |",
+        "|---|---|---|",
+        "| FSJ-01 2026-10-14 contract memo | **KEEP** | x |",
+        "| `FSJ-02` handoff | **KEEP** | y |",
+    ]) + _NL
+    assert parse_keep_cluster_ids(text) == ["FSJ-01", "FSJ-02"]
+
+
 def test_parse_keep_cluster_ids_honours_column_3_verdict_shape() -> None:
     """Regression for overengineering-reviewer (major): `_KEEP_ROW_RE` used to
     match column 2 ONLY while `_VERDICT_TABLE_RE["KEEP"]` (the count this

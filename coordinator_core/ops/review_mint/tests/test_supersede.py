@@ -302,3 +302,48 @@ def test_from_share_ignores_a_verdict_record_not_an_ancestor_of_head(repo):
         _share_call(root, s)
     _reverify_share_old = root / "state" / "delivery-verdicts"
     assert _reverify_share_old.exists()
+
+
+def test_from_share_binds_the_run_bookkeeping_delivery_when_the_delivery_file_has_no_frontmatter(repo):
+    root, s = repo
+    share = _full_share(root)
+    (share / "coordinator-delivery-verifier.d1.md").unlink()
+    (share / "x-123456-abc1234-prep.delivery.md").write_text("# Delivery verdict: PASS\n", encoding="utf-8")
+    _sc(share, f"{PLAN}.review-wave-bookkeeping.md", plan_id=PLAN, delivery={"verdict": "PASS", "unbacked": []})
+    _sc(share, "pln-other-654321.review-wave-bookkeeping.md", plan_id="pln-other-654321", delivery={"verdict": "FAIL"})
+    res = _share_call(root, s)
+    fm = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
+    assert fm["delivery"]["verdict"] == "PASS"
+    assert res["used"]["delivery"] == [f".coordinator-local/subagent-share/sess-1/{PLAN}.review-wave-bookkeeping.md"]
+
+
+def test_from_share_ignores_another_plans_bookkeeping_delivery(repo):
+    root, s = repo
+    share = _full_share(root)
+    (share / "coordinator-delivery-verifier.d1.md").unlink()
+    _sc(share, "pln-other-654321.review-wave-bookkeeping.md", plan_id="pln-other-654321", delivery={"verdict": "PASS"})
+    with pytest.raises(SupersedeRefused, match="no delivery sidecar"):
+        _share_call(root, s)
+
+
+@pytest.mark.parametrize("fields", [{}, {"product_files": 0}, {"product_files": []}])
+def test_hand_supplied_prep_with_no_product_files_is_refused(repo, fields):
+    root, s = repo
+    prep = root / "prep.md"
+    prep.write_text("---\n" + yaml.safe_dump({"run_base_sha": s[0], **fields}) + "---\n", encoding="utf-8")
+    with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
+        record_superseding_review(
+            repo_root=root, plan=PLAN, commit_range={"base": s[0], "head": s[2]},
+            wave_sidecar_paths=[], prep_sidecar="prep.md", stage_returns=None, session_id="sess-1",
+        )
+    assert not (root / "state" / "superseding-reviews").exists()
+
+
+def test_hand_supplied_prep_with_product_files_is_accepted(repo):
+    root, s = repo
+    (root / "prep.md").write_text("---\nproduct_files: 2\n---\n", encoding="utf-8")
+    res = record_superseding_review(
+        repo_root=root, plan=PLAN, commit_range={"base": s[0], "head": s[2]},
+        wave_sidecar_paths=[], prep_sidecar="prep.md", stage_returns=None, session_id="sess-1",
+    )
+    assert res["record_path"]
