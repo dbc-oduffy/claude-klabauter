@@ -2995,3 +2995,16 @@ class TestGateIndexBuiltOnceForSweep:
         assert len(gate_eval_mod._index_by_id_memo) == maxsize
         assert id(corpora[0]) not in gate_eval_mod._index_by_id_memo
         assert id(corpora[-1]) in gate_eval_mod._index_by_id_memo
+
+
+def test_probe_command_leg_is_indeterminate_and_not_an_unrecognized_kind() -> None:
+    from coordinator_core.reconcile.gate_eval import reduce_gate_evidence
+
+    status, _, results = reduce_gate_evidence(
+        {"legs": [{"leg_id": "p1", "kind": "probe-command", "repo": "r", "ref": "x.py", "note": "n"}]}
+    )
+
+    assert status == "indeterminate"
+    assert results[0]["status"] == "indeterminate"
+    assert "unrecognized" not in results[0]["reason"]
+    assert "not run" in results[0]["reason"]

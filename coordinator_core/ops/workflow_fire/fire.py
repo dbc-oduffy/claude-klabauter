@@ -171,7 +171,9 @@ _PROMPT_TEMPLATE = (
     "<json> is the digest's next_action.params object, verbatim, with a \"script_path\" "
     "key added set to {script_path!r}, serialized as compact JSON with no extra keys. "
     "Otherwise call no other tool. Never call more than these two tools, and never call "
-    "either one more than once."
+    "either one more than once. Your final answer is that command's JSON reply, led by a "
+    "line of its top-level criterion_status, plan_status and plan_status_reason values "
+    "(whichever are present)."
 )
 
 #: Windows console-subprocess discipline: guards a bare CREATE_NO_WINDOW

@@ -299,12 +299,19 @@ def _row_rank(row: dict) -> tuple:
     )
 
 
-def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
+_NOOP_DETAIL = (
+    "resolved as a no-op: the row's files carry no change from this run "
+    "(already landed, or a conditional no-change outcome); closed against the run's commit"
+)
+
+
+def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[dict] = None) -> tuple:
     """Line-level ``open`` -> ``coded`` + ``disposition_ref: <sha>`` on
     ``row_ids`` (``row_spans._stamp_rows_in_body``), then a stable D5 re-sort
     of row spans (an open row may not follow a coded one).
 
     Never a YAML round-trip: every untouched line survives byte-identical.
+    ``details`` (row id -> ``disposition_detail`` prose) rides the same stamp.
     Only rows currently ``open`` flip; any other disposition is left alone.
     Returns ``(new_text, flipped_ids)``; ``flipped_ids`` empty means no edit.
     """
@@ -320,7 +327,7 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
     # The row-span stamper matches LF lines only; a uniformly CRLF plan (any
     # Windows checkout) matched nothing and silently flipped no row.
     if "\r\n" in plan_text and "\n" not in plan_text.replace("\r\n", ""):
-        new_text, flipped = _flip_rows_coded(plan_text.replace("\r\n", "\n"), row_ids, sha)
+        new_text, flipped = _flip_rows_coded(plan_text.replace("\r\n", "\n"), row_ids, sha, details)
         return (new_text.replace("\n", "\r\n"), flipped) if flipped else (plan_text, [])
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 
@@ -343,7 +350,10 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
 
     start, end = located.span
     body = plan_text[start:end]
-    stamped, err = _stamp_rows_in_body(body, {rid: sha for rid in targets})
+    stamped, err = _stamp_rows_in_body(
+        body, {rid: sha for rid in targets},
+        {rid: d for rid, d in (details or {}).items() if rid in targets},
+    )
     if stamped is None:
         return plan_text, []
     ended_with_newline = stamped.endswith(("\n", "\r"))
@@ -371,14 +381,65 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str) -> tuple:
     return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
 
 
+_CHECKPOINT_SUBJECT = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
+_CHECKPOINT_PLAN_LINE = re.compile(r"^Checkpoint-Plan: (?P<v>\S.*?)\s*$", re.M)
+
+
+def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list) -> dict:
+    """Chunk id -> sha of the run's own ``checkpoint(wave N)`` commit that landed its writes.
+
+    Walks first-parent history in-process (zero spawns) from the terminal commit's
+    parent while the subject is a checkpoint of this plan (``Checkpoint-Plan:``
+    trailer), so the walk is bounded by the run. A commit lands a chunk's file when
+    its blob differs from its parent's. Among the commits touching a chunk, one whose
+    subject names the chunk id wins; otherwise the earliest. A chunk no checkpoint
+    touched is absent: it stays a no-op row.
+    """
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import _blob_at_commit
+
+    common_dir = resolve_git_common_dir(worktree_root)
+    meta = commit_meta(common_dir, terminal_sha)
+    parents = (meta or {}).get("parents") or []
+    sha = parents[0] if parents else None
+    checkpoints: list = []  # newest first: (sha, parent, named ids)
+    for _ in range(500):
+        meta = commit_meta(common_dir, sha) if sha else None
+        if meta is None:
+            break
+        message = meta.get("message") or ""
+        subject = _CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
+        plan = _CHECKPOINT_PLAN_LINE.search(message)
+        if not subject or not meta.get("parents") or (plan_path and (not plan or plan.group("v") != plan_path)):
+            break
+        named = {i.strip() for i in subject.group("ids").split(",") if i.strip()}
+        checkpoints.append((sha, meta["parents"][0], named))
+        sha = meta["parents"][0]
+    out: dict = {}
+    for chunk in chunks:
+        hits = [
+            (csha, named) for csha, parent, named in reversed(checkpoints)
+            if any(_blob_at_commit(common_dir, csha, p) != _blob_at_commit(common_dir, parent, p) for p in chunk.paths)
+        ]
+        if hits:
+            out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])
+    return out
+
+
 def _stamp_coded_commit(
     commit_v2, worktree_root: Path, repo_root: Path, source_rows: dict,
     sha: str, session_id: Optional[str], also_commit: tuple = (),
+    noop_rows: Optional[dict] = None, checkpoint_rows: Optional[dict] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
     the product commit has landed, so this cannot ride in it. One call per
-    run, never per row. An edit that would make a schema-valid plan invalid
+    run, never per row. ``noop_rows`` (same shape as ``source_rows``) are done rows
+    with no hunk in the commit: they close ``coded`` against the run's sha with a
+    no-change ``disposition_detail``, so none stays ``open`` beneath a met run.
+    ``checkpoint_rows`` (``{checkpoint sha: {plan: {row id}}}``) are done rows the run's
+    own checkpoint commits landed: they close ``coded`` at that checkpoint's sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
     Returns ``{"rows_coded", "coded_sha"}`` or ``{"coded_stamp_error"}``.
     """
@@ -391,11 +452,24 @@ def _stamp_coded_commit(
         for rel, text in originals.items():
             replace_text(worktree_root / rel, text)
 
-    for plan_rel in sorted(source_rows):
+    noop_rows = noop_rows or {}
+    checkpoint_rows = checkpoint_rows or {}
+    plans = set(source_rows) | set(noop_rows)
+    for by_plan in checkpoint_rows.values():
+        plans |= set(by_plan)
+    for plan_rel in sorted(plans):
         original = _read_rel(worktree_root, plan_rel)
         if original is None:
             continue
-        updated, flipped = _flip_rows_coded(original, source_rows[plan_rel], sha)
+        noop_ids = set(noop_rows.get(plan_rel, ())) - set(source_rows.get(plan_rel, ()))
+        updated, flipped = _flip_rows_coded(
+            original, set(source_rows.get(plan_rel, ())) | noop_ids, sha,
+            {rid: _NOOP_DETAIL for rid in noop_ids},
+        )
+        for csha, by_plan in sorted(checkpoint_rows.items()):
+            if plan_rel in by_plan:
+                updated, more = _flip_rows_coded(updated, set(by_plan[plan_rel]), csha)
+                flipped = sorted(set(flipped) | set(more))
         if not flipped:
             continue
         invalid = check_plan_tasks_source(updated)
@@ -580,7 +654,8 @@ def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dic
             refuse_open_spine_rows=True,
         )
     if rc != 0:
-        return {"plan_status": "refused", "plan_status_refusal": err.getvalue().strip()[-600:]}
+        reason = err.getvalue().strip()[-600:]
+        return {"plan_status": "refused", "plan_status_refusal": reason, "plan_status_reason": reason}
     return {"plan_status": "implemented"}
 
 
@@ -853,7 +928,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     non-empty list means the run is not clean.
     ``review_stamp`` (``minted``/``refused``) reports the stamp, and on a
     minted stamp with no incomplete chunk ``plan_status`` reports the
-    ``implemented`` flip (``implemented``/``refused``/``not-stamped``), which
+    ``implemented`` flip (``implemented``/``refused``/``not-stamped``; every
+    non-``implemented`` value carries ``plan_status_reason``, beside the top-level
+    ``criterion_status`` the digest's criterion leg reported), which
     ``plan_status_transition`` commits on its own. A
     script with no marker returns ``{"committed": False, "nothing_to_commit":
     True}`` without error. ``commit_v2``'s own ``nothing_to_commit: True``
@@ -1331,6 +1408,22 @@ def _terminal_commit(
         if len(coded_chunks) != len(contributing_chunks):
             kept = {c.id for c in coded_chunks}
             reply["no_product_hunk"] = [c.id for c in contributing_chunks if c.id not in kept]
+        noop_chunks = [c for c in done_chunks if c not in coded_chunks]
+        checkpoint_of = (
+            {} if anchor_only or not noop_chunks
+            else _checkpoint_attribution(worktree_root, str(reply["sha"]), request.plan_path, noop_chunks)
+        )
+        checkpoint_rows: dict = {}
+        for chunk_id, csha in checkpoint_of.items():
+            for plan_rel, ids in _source_rows_by_plan(worktree_root, request.plan_path, [chunk_id]).items():
+                checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
+        noop_rows = (
+            {} if anchor_only
+            else _source_rows_by_plan(
+                worktree_root, request.plan_path,
+                [c.id for c in noop_chunks if c.id not in checkpoint_of],
+            )
+        )
         source_rows = (
             {request.plan_path: set()}
             if anchor_only
@@ -1340,7 +1433,10 @@ def _terminal_commit(
         )
         # Before the coded stamp: that commit carries the plan, so a stamp
         # minted here lands in it and costs no commit of its own.
-        if record_abs is not None and record is not None and request.plan_path in source_rows:
+        if record_abs is not None and record is not None and (
+            request.plan_path in source_rows or request.plan_path in noop_rows
+            or any(request.plan_path in by_plan for by_plan in checkpoint_rows.values())
+        ):
             reply.update(
                 _mint_review_stamp(
                     worktree_root, request.plan_path, str(reply["sha"]), record_abs, record
@@ -1351,6 +1447,7 @@ def _terminal_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
                 str(reply["sha"]), session_id,
                 also_commit=(request.plan_path,) if reply.get("review_stamp") == "minted" else (),
+                noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
             )
         )
         coded_stale = reply.pop("coded_index_stale", [])
@@ -1363,6 +1460,16 @@ def _terminal_commit(
             and reply.get("coded_sha")
         ):
             reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
+        elif request.plan_path and reply.get("review_stamp") == "minted":
+            reply["plan_status"] = "not-stamped"
+            reply["plan_status_reason"] = (
+                f"incomplete chunks remain: {sorted(incomplete_chunks)}"
+                if incomplete_chunks
+                else "coded-stamp commit did not land"
+            )
+        criterion = inline_review.get("criterion")
+        if isinstance(criterion, dict) and criterion.get("status"):
+            reply["criterion_status"] = criterion["status"]
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (

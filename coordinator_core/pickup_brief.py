@@ -2623,21 +2623,28 @@ _JGATE_NOT_CLEARED_GUIDANCE = (
 
 
 def build_gate_check_judgment_point(
-    evidence_pointer: str, resolves: list[str], recommendation: Optional[dict[str, str]] = None
+    evidence_pointer: str, resolves: list[str], recommendation: Optional[dict[str, str]] = None,
+    clearer: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Ported verbatim (HEAD's own `build_gate_check_judgment_point`)."""
+    """The `jgate` point. Both dispositions are always emitted, never an
+    empty list; with a `clearer` the question names its class and each
+    disposition's guidance is specific to it."""
+    question = "Has this awaiting_gate handoff's gate actually cleared?"
+    cleared_guidance, not_cleared_guidance = _JGATE_CLEARED_GUIDANCE, _JGATE_NOT_CLEARED_GUIDANCE
+    if clearer is not None:
+        from coordinator_core import pickup_gate_brief as _gate_brief
+
+        question = _gate_brief.jgate_question(clearer)
+        cleared_extra, not_cleared_guidance = _gate_brief.jgate_guidance(clearer)
+        cleared_guidance = f"{cleared_extra} {_JGATE_CLEARED_GUIDANCE}"
     dispositions = [
-        {"value": "cleared", "resolves": resolves, "guidance": _JGATE_CLEARED_GUIDANCE},
-        {"value": "not-cleared", "resolves": [], "guidance": _JGATE_NOT_CLEARED_GUIDANCE},
+        {"value": "cleared", "resolves": resolves, "guidance": cleared_guidance},
+        {"value": "not-cleared", "resolves": [], "guidance": not_cleared_guidance},
     ]
     if recommendation is not None:
-        return build_judgment_point(
-            "jgate", "Has this awaiting_gate handoff's gate actually cleared?",
-            evidence_pointer, dispositions, recommendation,
-        )
+        return build_judgment_point("jgate", question, evidence_pointer, dispositions, recommendation)
     return build_judgment_point(
-        "jgate", "Has this awaiting_gate handoff's gate actually cleared?",
-        evidence_pointer, dispositions, None, reason="insufficient-evidence",
+        "jgate", question, evidence_pointer, dispositions, None, reason="insufficient-evidence",
     )
 
 
@@ -4189,6 +4196,11 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
                 f"_emit: judgment_points entry {jp.get('id', '<no id>')!r} missing "
                 "required 'recommendation' key"
             )
+        if not jp.get("dispositions"):
+            raise ValueError(
+                f"_emit: judgment_points entry {jp.get('id', '<no id>')!r} has no "
+                "dispositions — a point with nothing to choose is not a question"
+            )
 
     return BriefResult(decision_object, exit_code)
 
@@ -4516,6 +4528,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             "gate_dependency": fm.get("gate_dependency"),
             "blocked_by": blocked_by,
             "blocking_notes": fm.get("blocking_notes"),
+            "gate_notes": fm.get("gate_notes"),
             "gate_evidence": typed_meta.get("gate_evidence"),
         }
         gate_check["blockers"] = [
@@ -4530,8 +4543,17 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             }
             for entry in compute_gate_blocker_evidence(root, blocked_by)
         ]
+        from coordinator_core import pickup_gate_brief as _gate_brief
+
+        clearer = _gate_brief.compute_clearer(root, fm, gate_check["blockers"], gate_check["gate_evidence"])
+        gate_check["clearer"] = clearer
+        gate_check["evidence_probes"] = _gate_brief.compute_evidence_probes(gate_check["gate_evidence"])
         gate_recommendation = compute_gate_check_recommendation(gate_check["blockers"])
-        gate_jp = build_gate_check_judgment_point("gates.gate_check", ["d2", "d-gate-recheck"], recommendation=gate_recommendation)
+        if gate_recommendation["disposition"] == "unresolved" and (fm.get("gate_notes") or fm.get("blocking_notes")):
+            gate_recommendation = _gate_brief.fail_closed_recommendation(clearer, gate_check["evidence_probes"])
+        gate_jp = build_gate_check_judgment_point(
+            "gates.gate_check", ["d2", "d-gate-recheck"], recommendation=gate_recommendation, clearer=clearer,
+        )
         judgment_points.append(gate_jp)
         directives.append(build_gate_recheck_directive(display_path))
 
@@ -4644,6 +4666,14 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             "tree_quiescence": tree_quiescence,
         },
     }
+    if is_handoff_like:
+        from coordinator_core import pickup_gate_brief as _gate_brief
+
+        try:
+            baton_text = abs_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            baton_text = ""
+        decision_object["preflight"]["premise_drift"] = _gate_brief.compute_premise_drift(root, abs_path, baton_text)
     if classification == "memo":
         decision_object["preflight"]["reply_obligation"] = reply_obligation
 

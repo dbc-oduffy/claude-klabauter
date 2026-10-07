@@ -1027,6 +1027,9 @@ def _dispatch_emit(
         if sizing_path:
             ask_ctx.update(ask_sizing)
             receipt_extras = {"batons": ask_sizing["batons"], "uncommitted": ask_sizing["uncommitted"]}
+        else:
+            # The size phase picks the arm in-run, so M+ args are resolved for every prompt ask.
+            ask_ctx["plan_blitz_args"] = _resolve_blitz_args(None)
         if not aliased_param(params, "output_path", "out_path"):
             default_out = ask_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
             default_out.parent.mkdir(parents=True, exist_ok=True)
@@ -1861,6 +1864,18 @@ def _empty_baton_sections(path: Path) -> list:
     return [h for h in _BATON_REQUIRED_SECTIONS if h in bodies and not "".join(bodies[h]).strip()]
 
 
+def _resolve_blitz_args(sizing_abs: Optional[str]) -> dict:
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+    from coordinator_core.warm.caller_context import resolve_caller_context
+
+    plugin_root = resolve_caller_context().plugin_root
+    return plan_blitz_args.resolve(
+        plugin_root=Path(plugin_root) if plugin_root else None,
+        engine_root=Path(__file__).resolve().parents[3],
+        sizing_abs=sizing_abs,
+    )
+
+
 def _gate_sizing_at_emit(
     root: Path, sizing_rel: str, writes: list, baton: Optional[dict] = None
 ) -> dict:
@@ -1872,7 +1887,6 @@ def _gate_sizing_at_emit(
     the script embeds the accept phase and re-gates in-run. In-process only; ``uncommitted``
     is derived from whether the sizing already named a baton, never from git.
     """
-    from coordinator_core.ops.dispatch_emit import plan_blitz_args
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_TOUCHPOINT
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
@@ -1885,7 +1899,6 @@ def _gate_sizing_at_emit(
         resolve_arm,
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES
-    from coordinator_core.warm.caller_context import resolve_caller_context
 
     outside = paths_outside_repo_root(writes, root)
     if outside:
@@ -1929,12 +1942,7 @@ def _gate_sizing_at_emit(
     if accept_pending:
         out["accept_pending"] = True
     if verdict.arm in (ARM_M_PLUS, ARM_ROADMAP):
-        plugin_root = resolve_caller_context().plugin_root
-        out["plan_blitz_args"] = plan_blitz_args.resolve(
-            plugin_root=Path(plugin_root) if plugin_root else None,
-            engine_root=Path(__file__).resolve().parents[3],
-            sizing_abs=(Path(root) / sizing_rel).as_posix(),
-        )
+        out["plan_blitz_args"] = _resolve_blitz_args((Path(root) / sizing_rel).as_posix())
         if not out["plan_blitz_args"].get("provisionSidecarCli"):
             # plan-blitz refuses every baton without it, so a script emitted here would halt
             # every run with "no ready plan". Fail at emit, never later.

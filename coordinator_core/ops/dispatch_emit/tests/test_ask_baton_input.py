@@ -180,3 +180,17 @@ def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch):
         f"---\nhandoff_id: hnd-x-abc123\ndeliverable_id: dlv-x-abc123\n---\n{_FILLED}", encoding="utf-8", newline="\n"
     )
     assert _gate_sizing_at_emit(repo, REL, [], baton=b)["batons"] == [BATON]
+
+
+def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+
+    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
+    assert cli.main(["--ask", "do a thing", "--repo-root", str(repo)]) == 0
+    out = capsys.readouterr().out
+    reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
+    text = Path(reply["path"]).read_text(encoding="utf-8")
+    call = text.split("await planBlitz(", 1)[1].split("\n", 1)[0]
+    assert '"provisionSidecarCli": "/x/provision-sidecar"' in call
+    assert '"pluginAgentsAvailable"' in call
+    assert "gateReportPath" not in call

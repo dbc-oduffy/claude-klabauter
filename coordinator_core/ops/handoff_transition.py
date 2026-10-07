@@ -2146,7 +2146,7 @@ def _reresolve_gate_evidence_leg(leg: Dict[str, Any], at: str) -> Dict[str, Any]
     leg = dict(leg)
     kind = leg.get("kind")
 
-    if kind == "human":
+    if kind in ("human", "probe-command"):
         return leg
 
     if kind == "deadline":

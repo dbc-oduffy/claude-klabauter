@@ -22,6 +22,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
+
 import json
 import subprocess
 import sys
@@ -440,7 +442,7 @@ def test_fire_status_leaves_live_pid_running(repo, script, monkeypatch):
 def test_build_fire_env_uncaps_background_wait():
     env = fire.build_fire_env({"PATH": "/usr/bin"})
     assert env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "0"
-    assert env["PATH"].endswith(":/usr/bin")
+    assert env["PATH"].endswith(os.pathsep + "/usr/bin")
 
 
 def test_build_fire_env_respects_an_explicit_operator_ceiling():

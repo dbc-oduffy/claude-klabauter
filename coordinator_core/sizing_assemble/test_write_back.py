@@ -247,3 +247,13 @@ def test_cli_write_persists_default_resolved_mode(
     # Default is ceo per docs/plans/2026-10-06-warp-one-pass-fire.md (§ Problem: "The default mode becomes ceo").
     assert "ceo" in capsys.readouterr().out
     assert _load(path)["interaction_mode"] == "ceo"
+
+
+def test_write_mints_a_deliverable_id_when_the_sizing_has_none(repo: Path) -> None:
+    path = _sizing(repo)
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    sizing_assemble.write_back(repo, rel, _decision("M"))
+    minted = _load(path)["deliverable_id"]
+    assert minted.startswith("dlv-ship-the-thing-")
+    sizing_assemble.write_back(repo, rel, _decision("M"))
+    assert _load(path)["deliverable_id"] == minted

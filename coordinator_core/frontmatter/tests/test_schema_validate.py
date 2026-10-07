@@ -7058,6 +7058,34 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
+    def test_valid_probe_command_leg_ok(self):
+        fm = _valid_handoff(gate_evidence={
+            'covers_prose': False,
+            'legs': [{
+                'leg_id': 'l1', 'kind': 'probe-command', 'repo': 'project_rag',
+                'ref': 'scratch/balance.py --json', 'note': 'prints the RunPod balance in dollars',
+            }],
+        })
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'].startswith('gate_evidence') for e in errors)
+
+    @pytest.mark.parametrize('ref', ['/abs/probe.py', 'C:/probe.py', '../probe.py', 'a/../probe.py'])
+    def test_probe_command_leg_rejects_non_repo_relative_ref(self, ref):
+        fm = _valid_handoff(gate_evidence={
+            'covers_prose': False,
+            'legs': [{'leg_id': 'l1', 'kind': 'probe-command', 'repo': 'project_rag', 'ref': ref, 'note': 'n'}],
+        })
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'].startswith('gate_evidence') for e in errors)
+
+    def test_probe_command_leg_requires_note(self):
+        fm = _valid_handoff(gate_evidence={
+            'covers_prose': False,
+            'legs': [{'leg_id': 'l1', 'kind': 'probe-command', 'repo': 'project_rag', 'ref': 'p.py'}],
+        })
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any(e['field'].startswith('gate_evidence') for e in errors)
+
     def test_valid_deadline_leg_ok(self):
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,

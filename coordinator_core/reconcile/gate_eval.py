@@ -2160,6 +2160,16 @@ def _evaluate_gate_evidence_leg(leg: Dict[str, Any]) -> Dict[str, Any]:
             "reason": f"deadline leg {leg_id!r} has not yet elapsed",
         }
 
+    if kind == "probe-command":
+        # Declared-runnable, never run here: indeterminate like `human`, but a
+        # different fact from an unrecognized kind (a probe exists; nobody ran it).
+        return {
+            "leg_id": leg_id,
+            "kind": kind,
+            "status": "indeterminate",
+            "reason": f"probe-command leg {leg_id!r}: declared, not run (operator-confirm) — evidence only, never a clear",
+        }
+
     if kind not in _EVIDENCE_IO_KINDS:
         return {
             "leg_id": leg_id,

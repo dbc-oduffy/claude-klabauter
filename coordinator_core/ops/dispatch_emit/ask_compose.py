@@ -534,7 +534,7 @@ def compose_ask_script(
         "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "
         "plan -- stage refuses a plan that still carries one. Return its repo-relative path as plan_rel."
         + (
-            " Read the sizing's `scout_evidence` entries before deriving the spine."
+            " Read the sizing's `scout_evidence` entries, if it has any, before deriving the spine."
             if plan_blitz_args
             else ""
         ),

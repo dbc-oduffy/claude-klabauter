@@ -1400,6 +1400,16 @@ def write_back(
                 )
             if not current:
                 text = _set_scalar(text, "deliverable_id", json.dumps(deliverable_id))
+        elif not doc.get("deliverable_id"):
+            # The plan authored from this sizing carries its id verbatim
+            # (doc-new's cited-sizing carry), so the spine join key is minted
+            # once, here, by the shared minter, never again on the plan side.
+            from coordinator_core.ops.mint_deliverable_id import mint, slug_from_title
+
+            slug = slug_from_title(str(decision.get("intent") or doc.get("intent") or "")) or slug_from_title(
+                target.stem
+            )
+            text = _set_scalar(text, "deliverable_id", json.dumps(mint(slug=slug)[0]))
 
         estimate = dict(doc.get("estimate") or {})
         estimate["tshirt"] = decision["resolved_estimate"]["tshirt"]

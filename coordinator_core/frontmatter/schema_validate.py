@@ -2623,10 +2623,12 @@ def _cf_carried_items_shape(fm: dict) -> ErrorDict | None:
 _GATE_EVIDENCE_LEG_KINDS = frozenset({
     'test-node-id', 'probe-op-key', 'commit-sha', 'sibling-commitment-ref',
     'commit-ancestor', 'file-exists', 'frontmatter-field', 'deadline', 'human',
+    'probe-command',
 })
 _GATE_EVIDENCE_REPO_EXEMPT_KINDS = frozenset({'human', 'deadline'})
 _GATE_EVIDENCE_COMMIT_ANCESTOR_REF_RE = re.compile(r'^[^@\s]+@[^@\s]+$')
 _GATE_EVIDENCE_FRONTMATTER_FIELD_REF_RE = re.compile(r'^[^#\s]+#[^#\s]+$')
+_GATE_EVIDENCE_PROBE_COMMAND_REF_RE = re.compile(r'^(?![/\\]|[A-Za-z]:)(?!\.\.[/\\])(?!\S*[/\\]\.\.[/\\])\S')
 _GATE_EVIDENCE_DEADLINE_REF_RE = re.compile(
     r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$'
 )
@@ -2761,6 +2763,20 @@ def _cf_gate_evidence_legs_shape(fm: dict) -> ErrorDict | None:
                     'field': f'gate_evidence.legs[{i}].repo',
                     'error': 'repo is not permitted on kind: deadline',
                     'hint': 'deadline has no sibling I/O — remove repo.',
+                }
+        elif kind == 'probe-command':
+            if not isinstance(ref, str) or not _GATE_EVIDENCE_PROBE_COMMAND_REF_RE.match(ref):
+                return {
+                    'field': f'gate_evidence.legs[{i}].ref',
+                    'error': f'ref "{ref}" is not a repo-relative script path plus arguments',
+                    'hint': 'kind: probe-command rejects an absolute path and a ".." segment in the script path.',
+                }
+            note = leg.get('note')
+            if not isinstance(note, str) or not note:
+                return {
+                    'field': f'gate_evidence.legs[{i}].note',
+                    'error': 'required non-empty on kind: probe-command',
+                    'hint': 'note states what the probe output reads; the engine never runs the probe.',
                 }
         elif kind == 'human':
             reason = leg.get('reason')

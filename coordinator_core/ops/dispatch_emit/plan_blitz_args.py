@@ -162,17 +162,19 @@ def resolve(
     *,
     plugin_root: Path | None,
     engine_root: Path | None,
-    sizing_abs: str,
+    sizing_abs: str | None,
 ) -> dict:
     """planBlitz args for a single-mode ask. A key with no resolvable value is omitted,
-    except `pluginAgentsAvailable`, which is always present."""
+    except `pluginAgentsAvailable`, which is always present. `sizing_abs` is None for a prompt
+    ask, whose sizing is authored in-run: single mode takes the baton's own `sizingObject`."""
     available, _why = _plugin_agents_available(plugin_root, "")
     out: dict = {}
     sidecar = _default_sidecar_cli(engine_root, plugin_root)
     if sidecar:
         out["provisionSidecarCli"] = sidecar
     out["pluginAgentsAvailable"] = available
-    out["gateReportPath"] = sizing_abs
+    if sizing_abs:
+        out["gateReportPath"] = sizing_abs
     spine = _default_spine_check_cli(plugin_root)
     if spine:
         out["spineCheckCli"] = spine
