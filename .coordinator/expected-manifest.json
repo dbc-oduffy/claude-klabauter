@@ -1980,8 +1980,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "8bc16711e3022424d5e2b27152bdc94974c73ee3",
-    "coordinator_core/_engine_stamp": "501858fd986312ac8697f529eac0b9a9e5ffebe6",
+    "coordinator_core/_engine_published_at": "dc5a688768b6fa08043bca296256440fc3c1d420",
+    "coordinator_core/_engine_stamp": "0a2dd302933ead9a8d7127179e2581f134e78749",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3928,7 +3928,7 @@
     "coordinator_core/ops/dispatch_emit/delivery_credit.py": "0dc72a41185509e0e34b237b2e2c371893e2998e",
     "coordinator_core/ops/dispatch_emit/dirty_write_set.py": "6ddac74ab1d6d95872242646ba0d0226bd42e87b",
     "coordinator_core/ops/dispatch_emit/emission_receipt.py": "5f22ef3145f62eb57fe77f6cb03b8c2382eeec17",
-    "coordinator_core/ops/dispatch_emit/emit.py": "7006030dfad5afae97884b0eb1d326eabd95617f",
+    "coordinator_core/ops/dispatch_emit/emit.py": "2e62ecdbb8075ae9016d912840ceaf647dbb7791",
     "coordinator_core/ops/dispatch_emit/falsifier_integrity_phase.py": "d02847469bf20831e11551f8d6df6d71c7bbd20e",
     "coordinator_core/ops/dispatch_emit/grind_admission.py": "fd5328295fef90d20592376626c8cb169898dfee",
     "coordinator_core/ops/dispatch_emit/grind_compose.py": "37a014458f4e37c7c1030cafdd1948dcc6973b21",
@@ -4034,7 +4034,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_emit_script_opens_plan_once.py": "ed4130c8869b1afcec146ab9ac3c411512dc6b31",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_script_size_cap.py": "e4b3804d20fc027824f4e05c4f03cdfd76907f69",
     "coordinator_core/ops/dispatch_emit/tests/test_emit_spawn_count.py": "2dd7ba58131124e0f5e68b81f3640a44ed4d91f2",
-    "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py": "371771e01ce25e7d31ede4ae338e503563eabe35",
+    "coordinator_core/ops/dispatch_emit/tests/test_emit_wake_digest.py": "34b5dc91b9d9d50e1d6173c59d2fb86f1fe58494",
     "coordinator_core/ops/dispatch_emit/tests/test_emitted_prompts_anchor_their_repo.py": "8c14af35d699e4aa904980a980becfa7cb5a801a",
     "coordinator_core/ops/dispatch_emit/tests/test_emitted_script_carries_no_host_path.py": "d5f05763b6cbd45a2951bd4387d4293e97b23719",
     "coordinator_core/ops/dispatch_emit/tests/test_emitted_script_states_node_check_does_not_apply.py": "8c1f15b8378bee895f3a6915c8afb6bebe6877ba",
@@ -6401,7 +6401,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "8ab5a3e80625576616e4b721b13f39a04c7b439d",
+    "coordinator_core/warm/door/door.exe.provenance.json": "fb6d60cdcb5a7d0b79491d3a84c15255633268cf",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -6967,5 +6967,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "9d8ce30cd89c7b9a023daa08e02285b2e057ec43"
+  "source_head": "033061fd00f80072b36e488fa75a45b9d9caac37"
 }

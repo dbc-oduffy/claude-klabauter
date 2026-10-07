@@ -2705,7 +2705,7 @@ _TEST_RESULT_VAR = "_testResult"
 
 #: A skip is not a pass: the test agent must surface skips in its structured result.
 _SKIP_REPORT_CLAUSE = (
-    "Run pytest with -rs (or read its short test summary) so every skip is listed. "
+    "Every skip must be visible in your read of the run: the `-rs` flag or the short test summary lists them. "
     "If the run passes but any test was skipped, set status `pass-with-skips` (never `pass`) "
     "and list each skip in `skipped` as {test, reason} -- the test id and its skip reason, "
     "at most 20; an import-skip means the code under test never ran."

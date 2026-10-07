@@ -659,3 +659,14 @@ def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_
     assert "'pass-with-skips'" in script  # the digest's tests.status route
     assert "-rs" in script and "pass-with-skips" in script.split("test:terminal")[0]
     assert "verify:" in script and "skipped" in script
+
+
+def test_composed_script_passes_the_dispatch_suite_guard():
+    # A scriptPath fire cannot carry the override marker, so an engine template that
+    # reads as a suite command strands the run (example-stats-repo C12, 2026-10-07).
+    from coordinator_core.hooks.block_dispatch_suite_invocation import _classify
+
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    script = compose_script(waves, name="wf", description="guard", **REVIEW_KW)
+
+    assert [h for h in _classify(script, None) if h.position == "imperative"] == []
