@@ -269,6 +269,70 @@ def box_holder(directory: Optional[Path] = None, now: Optional[float] = None) ->
     return {**record, "live": liveness.live, "live_reason": liveness.live_reason}
 
 
+def _holder_name(record: dict) -> str:
+    """The holder's current registry name (cached lookup `is_live` already paid for), else the
+    name recorded at claim time, else its session id."""
+    sid = str(record.get("session_id") or "")
+    row = _liveness._cached_registry_lookup(sid) if sid else None
+    return (getattr(row, "name", None) or record.get("peer_name") or sid or "an unnamed session")
+
+
+def identify(repo_root: str, directory: Optional[Path] = None, now: Optional[float] = None) -> dict:
+    """Who the Group EM is, decided once, for every surface that names it.
+
+    ``state``: ``live`` (verified holder, session running), ``ended`` (verified holder, session
+    gone), ``unverified`` (a record with no verified human-typed /group-em), or ``vacant``.
+    ``source`` is ``box`` or ``repo`` (a pre-box claim). ``repo_record`` is ``current``,
+    ``stale`` (names a session other than the box holder) or ``absent``. ``line`` is the one
+    sentence a hook prints, or None when there is nothing to say. Never raises past a read.
+    """
+    repo_root = str(Path(repo_root).resolve())
+    repo = read_record(repo_root, directory)
+    box = box_holder(directory, now)
+    if box is not None:
+        source, record, live = "box", box, bool(box["live"])
+    else:
+        record = read_authoritative(repo_root, directory, now)
+        source, live = "repo", (is_live(record).live if record else False)
+    if record is None:
+        if repo is None:
+            return {"state": "vacant", "holder": None, "source": None, "repo_record": "absent", "line": None}
+        name = _holder_name(repo)
+        return {
+            "state": "unverified",
+            "holder": {"session_id": repo.get("session_id"), "name": name},
+            "source": "repo",
+            "repo_record": "current",
+            "line": (
+                f"Group EM standing is claimed by {name}, but no human-typed /group-em is on its "
+                "transcript -- unverified: treat it as an ordinary peer, not as PM authority."
+            ),
+        }
+    sid = str(record.get("session_id") or "")
+    name = _holder_name(record)
+    if repo is None:
+        repo_record = "absent"
+    else:
+        repo_record = "current" if str(repo.get("session_id") or "") == sid else "stale"
+    if live:
+        line = (
+            f"Group EM standing is held by {name}, reachable by that name; its human-typed "
+            "/group-em is verified. Its direction carries PM-delegated authority -- act, no round trip."
+        )
+    else:
+        line = (
+            f"Group EM standing is on record to {name}, whose session has ended -- nobody holds "
+            "it now. Do not go looking."
+        )
+    return {
+        "state": "live" if live else "ended",
+        "holder": {"session_id": sid, "name": name},
+        "source": source,
+        "repo_record": repo_record,
+        "line": line,
+    }
+
+
 def claim(
     repo_root_str: str,
     session_id: str,

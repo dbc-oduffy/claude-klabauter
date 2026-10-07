@@ -435,3 +435,72 @@ def test_box_holder_none_without_record_or_unverified(repo_root, record_dir, mon
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "pending"})
     assert nomination.box_holder(record_dir) is None
+
+
+def _no_registry_name(monkeypatch):
+    monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
+
+
+def test_identify_vacant(repo_root, record_dir):
+    out = nomination.identify(repo_root, record_dir)
+    assert out == {"state": "vacant", "holder": None, "source": None, "repo_record": "absent", "line": None}
+
+
+def test_identify_box_holder_live_marks_another_repos_record_stale(tmp_path, record_dir, monkeypatch):
+    repo_a, repo_b = tmp_path / "a", tmp_path / "b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, True, "live")
+    nomination.claim(str(repo_a), "sid-old", peer_name="old-em", directory=record_dir)
+    nomination.claim(str(repo_b), "sid-gem", peer_name="gem-1", directory=record_dir)
+
+    out = nomination.identify(str(repo_a), record_dir)
+    assert out["state"] == "live" and out["source"] == "box"
+    assert out["holder"] == {"session_id": "sid-gem", "name": "gem-1"}
+    assert out["repo_record"] == "stale"
+    assert "gem-1" in out["line"] and "old-em" not in out["line"]
+    assert nomination.identify(str(repo_b), record_dir)["repo_record"] == "current"
+
+
+def test_identify_ended_holder(repo_root, record_dir, monkeypatch):
+    _no_registry_name(monkeypatch)
+    nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
+    _stub_live(monkeypatch, False, "pid_not_running")
+    out = nomination.identify(repo_root, record_dir)
+    assert out["state"] == "ended" and "has ended" in out["line"]
+
+
+def test_identify_unverified_record(repo_root, record_dir, monkeypatch):
+    _no_registry_name(monkeypatch)
+    nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
+    out = nomination.identify(repo_root, record_dir)
+    assert out["state"] == "unverified" and "unverified" in out["line"]
+
+
+def test_identify_falls_back_to_a_verified_pre_box_repo_record(repo_root, record_dir, monkeypatch):
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, True, "live")
+    nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
+    nomination._box_record_path(record_dir).unlink()
+    out = nomination.identify(repo_root, record_dir)
+    assert out["source"] == "repo" and out["state"] == "live" and out["repo_record"] == "current"
+
+
+def test_every_identify_line_fits_the_doe_head_leg_budget(tmp_path, record_dir, monkeypatch):
+    # DoE's SessionStart head-leg byte budget assumes <= 250 bytes for a 64-char holder name.
+    name = "n" * 64
+    monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
+    repo = tmp_path / "r"
+    repo.mkdir()
+    lines = []
+    for status, live in (("verified", True), ("verified", False), ("rejected", True)):
+        monkeypatch.setattr(nomination, "entry_status", lambda *a, _s=status, **k: {"status": _s})
+        _stub_live(monkeypatch, live, "live" if live else "pid_not_running")
+        nomination.claim(str(repo), "sid-h", peer_name=name, directory=record_dir)
+        lines.append(nomination.identify(str(repo), record_dir)["line"])
+    assert len({line for line in lines}) == 3
+    assert all(name in line and len(line.encode("utf-8")) <= 250 for line in lines), [
+        len(line.encode("utf-8")) for line in lines
+    ]

@@ -44,7 +44,8 @@ def _groupem_standing(params: dict, repo_root: Optional[Path] = None) -> dict:
             non-empty str the nomination leg is `nomination.standing`.
 
     Returns:
-        {"nomination": dict | None, "watch_liveness": dict | None}
+        {"nomination": dict | None, "identity": dict | None, "watch_liveness": dict | None}
+        `identity` is `nomination.identify`: who the Group EM is, its state, and the line to show.
         plus `nomination_error` / `watch_liveness_error` when a leg raised.
         `nomination` is None when no record is on file.
 
@@ -65,6 +66,11 @@ def _groupem_standing(params: dict, repo_root: Optional[Path] = None) -> dict:
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         result["nomination"] = None
         result["nomination_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        result["identity"] = nomination.identify(target_root)
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        result["identity"] = None
+        result["identity_error"] = f"{type(exc).__name__}: {exc}"
     try:
         result["watch_liveness"] = watch_heartbeat.read_liveness(target_root, time.time())
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise

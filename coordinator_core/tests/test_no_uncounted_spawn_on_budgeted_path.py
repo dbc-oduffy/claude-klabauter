@@ -365,6 +365,19 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_cross_plan_gate.py",
         ("_handler",),
     ),
+    # Enrolled 2026-10-08: each measures an EMPTY function-granular reachable spawn set.
+    "artifact.adopt": (
+        "coordinator_core/ops/artifact_adopt.py",
+        ("_handler",),
+    ),
+    "fleet.scratch_hygiene": (
+        "coordinator_core/ops/fleet/scratch_hygiene.py",
+        ("_handler",),
+    ),
+    "review_stamp.rejudge": (
+        "coordinator_core/ops/review_stamp.py",
+        ("_rejudge_handler",),
+    ),
     # Enrolled 2026-10-01, EM-adjudication step 2: each measured an EMPTY
     # function-granular reachable spawn set, so none needs legitimization.
     "engine.registration_completeness": (
@@ -1886,6 +1899,34 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "len(spawns) == budget`, read from the manifest's hooks.postuse_advisory_dispatch "
         "`non_ascii_write_touch`); the attribution is itself asserted on every run. "
         "Natural precondition: a non-ASCII Write path, which the zero-spawn normalizer declines.",
+    ),
+    (
+        "plan.prep_gate",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_plan_prep_spawn_count.py",
+        executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
+        "`test_prep_gate_spawns_exactly_the_budgeted_ls_files` (`assert len(spawns) == budget`, "
+        "read from the manifest's plan.prep_gate `census_python_target_tracking`); the attribution is "
+        "itself asserted on every run.",
+    ),
+    (
+        "plan.stamp_prepped",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_plan_prep_spawn_count.py",
+        executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
+        "`test_stamp_prepped_spawns_exactly_the_budgeted_ls_files` (`assert len(spawns) == budget`, "
+        "read from the manifest's plan.stamp_prepped `census_python_target_tracking`); the attribution is "
+        "itself asserted on every run.",
     ),
 }
 

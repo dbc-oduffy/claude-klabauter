@@ -330,6 +330,22 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "plan.prep_gate": {
+        "census_python_target_tracking": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-08 at the value it entered with: the census python-target tracking check is one batched ls-files for the whole census."
+            ),
+        },
+    },
+    "plan.stamp_prepped": {
+        "census_python_target_tracking": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-08 at the value it entered with: the census python-target tracking check is one batched ls-files for the whole census."
+            ),
+        },
+    },
     "dispatch.emit": {
         "plan_route_gitignore_filter": {
             "ceiling": 1,

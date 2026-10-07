@@ -48,7 +48,21 @@
         "kind": "relative",
         "value": 0.2
       },
-      "_rationale": "The COMPUTE_ONLY default (70ms) is wrong for this op, not generous. The bar runs the engine's own spine reader over the plan and `read_spine`'s YAML parse is the cost: measured over this repo's real docs/plans/ corpus (422 plans, process time, warm interpreter) one plan costs 1.4ms at the median and 171-182ms on the heaviest -- under DR-344's 500ms brightline and over the tier default. Target set from the measured worst case. The cost lives in a module this op consumes and does not own, so there is no local fix; the brightline itself is asserted by coordinator_core/roadmap/tests/test_prep_gate.py::test_every_real_plan_holds_the_brightline. plan.stamp_prepped needs no override -- the same read plus one locked write, measured at ~175ms against the MUTATING default of 300ms."
+      "spawn_count_budget": {
+        "census_python_target_tracking": 1
+      },
+      "_rationale": "The COMPUTE_ONLY default (70ms) is wrong for this op, not generous. The bar runs the engine's own spine reader over the plan and `read_spine`'s YAML parse is the cost: measured over this repo's real docs/plans/ corpus (422 plans, process time, warm interpreter) one plan costs 1.4ms at the median and 171-182ms on the heaviest -- under DR-344's 500ms brightline and over the tier default. Target set from the measured worst case. The cost lives in a module this op consumes and does not own, so there is no local fix; the brightline itself is asserted by coordinator_core/roadmap/tests/test_prep_gate.py::test_every_real_plan_holds_the_brightline. plan.stamp_prepped carries its own override only for the spawn budget -- the same read plus one locked write, measured at ~175ms against the MUTATING default of 300ms. Census python targets are resolved by ONE batched `git ls-files` (census.py::tracked_targets via git/run.py::run_git), so the count does not grow with the number of census entries. Counted by coordinator_core/ops/tests/test_plan_prep_spawn_count.py with exact equality."
+    },
+    "plan.stamp_prepped": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "census_python_target_tracking": 1
+      },
+      "_rationale": "Copies the MUTATING tier default verbatim; the override exists to carry the spawn budget. The stamp runs the same gate as plan.prep_gate, so a plan's python census targets cost the same ONE batched `git ls-files` (census.py::tracked_targets via git/run.py::run_git). Counted by coordinator_core/ops/tests/test_plan_prep_spawn_count.py with exact equality."
     },
     "ceremony.session_instructions": {
       "target_ms": 86,

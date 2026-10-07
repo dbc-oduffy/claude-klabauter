@@ -159,13 +159,11 @@ def test_python_without_repo_context_stays_pure_string_screened():
 
 
 def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypatch):
-    import subprocess
+    from coordinator_core.git import run as git_run
 
     calls = []
-    real = subprocess.run
-    monkeypatch.setattr(
-        census.subprocess, "run", lambda *a, **k: calls.append(a[0]) or real(*a, **k)
-    )
+    real = git_run.run_git
+    monkeypatch.setattr(git_run, "run_git", lambda args, **k: calls.append(args) or real(args, **k))
     entries = [{"question": "q", "command": "python tool.py", "result": "1"}] * 5 + [
         {"question": "q", "command": "python -m pkg", "result": "1"},
         {"question": "q", "command": "grep -c x f", "result": "1"},

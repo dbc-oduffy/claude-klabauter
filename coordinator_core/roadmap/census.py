@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import re
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -170,19 +169,15 @@ def tracked_targets(repo_root: Path, candidates: list[str]) -> frozenset:
     unique = sorted(set(candidates))
     if not unique:
         return frozenset()
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.git.run import run_git
 
-    try:
-        proc = subprocess.run(
-            ["git", "--literal-pathspecs", "ls-files", "-z", "--", *unique],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=30,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    result = run_git(
+        ["-C", str(repo_root), "--literal-pathspecs", "ls-files", "-z", "--", *unique],
+        timeout=30,
+    )
+    if not result.ok:
         return frozenset()
-    if proc.returncode != 0:
-        return frozenset()
-    return frozenset(p for p in proc.stdout.split("\0") if p)
+    return frozenset(p for p in result.stdout.split("\0") if p)
 
 
 def _python_refusal(
