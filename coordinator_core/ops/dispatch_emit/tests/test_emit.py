@@ -802,7 +802,8 @@ def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
     script = compose_script(waves, name="wf", description="mixed wave", **REVIEW_KW)
     request = parse_marker(script)
     assert request is not None
-    assert [c.id for c in request.chunks] == ["C2"]
+    assert [c.id for c in request.chunks] == ["C1", "C2"]
+    assert request.chunks[0].paths == ()
 
 
 def test_compose_script_threads_expected_branch_into_the_marker():
@@ -1655,10 +1656,9 @@ def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
     assert not rx.search(f"{emit._STOP_RULE_TOKEN}:")
 
 
-def test_a_solitary_writes_empty_row_contributes_nothing_to_the_marker():
-    """A `change_kind: verification` row alone still dispatches; it wrote
-    nothing, so it contributes no chunk to the terminal-commit-request
-    marker."""
+def test_a_solitary_writes_empty_row_rides_the_marker_as_a_pathless_chunk():
+    """A `change_kind: verification` row still dispatches; it wrote nothing, so
+    its chunk carries no path and the terminal commit closes the row no-change."""
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [
@@ -1670,11 +1670,11 @@ def test_a_solitary_writes_empty_row_contributes_nothing_to_the_marker():
     assert "_rows['C1'] = _runRow('C1', []," in script, "the verdict row must still dispatch"
     request = parse_marker(script)
     assert request is not None
-    assert [c.id for c in request.chunks] == ["C2"]
+    assert [c.id for c in request.chunks] == ["C1", "C2"]
 
 
 def test_the_verdict_rows_paths_are_absent_from_the_marker():
-    """A row that writes nothing contributes nothing to the terminal-
+    """A row that writes nothing carries no path in the terminal-
     commit-request marker."""
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
@@ -1685,8 +1685,8 @@ def test_the_verdict_rows_paths_are_absent_from_the_marker():
     script = compose_script(waves, name="wf", description="verdict then write", **REVIEW_KW)
     request = parse_marker(script)
     assert request is not None
-    assert [c.id for c in request.chunks] == ["C2"]
-    assert list(request.chunks[0].paths) == ["docs/wiki/dispatch-emit.md"]
+    assert [c.id for c in request.chunks] == ["C1", "C2"]
+    assert list(request.chunks[1].paths) == ["docs/wiki/dispatch-emit.md"]
 
 
 def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate():

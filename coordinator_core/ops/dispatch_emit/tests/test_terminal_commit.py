@@ -1105,3 +1105,55 @@ def test_a_zero_file_run_that_is_not_a_pass_commits_nothing(repo):
                        "inline_review": {"delivery": {"verdict": "FAIL", "product_files": 0},
                                          "integration_stem": "s", "slices": 0}})
     assert out == {"committed": False, "nothing_to_commit": True, "stranded": {}}
+
+
+def _unmet_criterion_review(status: str) -> dict:
+    return {
+        "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+        "tests": {"status": "not_run", "run": None, "failed": None, "sidecar": None},
+        "criterion": {"status": status, "observation": "leg 4 not observed", "sidecar": None},
+    }
+
+
+def test_a_delivery_pass_with_an_unmet_criterion_still_mints_the_stamp_carrying_that_status(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": [],
+                       "session_id": "11111111-2222-3333-4444-555555555555",
+                       "inline_review": _unmet_criterion_review("not_met")})
+    assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
+    committed = _show(repo, "HEAD:docs/plan.md")
+    assert "review_stamp:" in committed
+    assert "status: not_met" in committed
+    assert out["plan_status"] == "not-stamped"
+    assert "status: implemented" not in committed
+
+
+def test_a_done_row_that_declares_no_writes_closes_coded_beside_a_row_that_does(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(_PLAN, encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    from coordinator_core.ops.dispatch_emit.commit_request import render_marker
+
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="C4", title="verify only", paths=()),
+        ),
+        plan_path="docs/plan.md",
+    )
+    script = _write_script(repo, request)
+    assert '"id":"C4"' in render_marker(request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["rows_coded"] == {"docs/plan.md": ["C3", "C4"]}
+    assert "resolved as a no-op" in _show(repo, "HEAD:docs/plan.md")

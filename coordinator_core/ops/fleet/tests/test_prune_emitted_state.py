@@ -223,3 +223,81 @@ def test_bare_non_fire_script_untouched(env):
     os.utime(s, (OLD, OLD))
     res = run(root)
     assert s.exists() and res["pruned"] == [] and res["retained"] == []
+
+
+def _landing(root, rel_dir, name, age):
+    f = root / rel_dir / name
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{}")
+    os.utime(f, (age, age))
+
+
+def _paths(res, key):
+    return {r["path"] for r in res[key]}
+
+
+def test_blitz_fire_closed_by_its_waves_landing(env):
+    root, _ = env
+    fire(root, BLITZ, "fire-2-1", None)
+    fire(root, BLITZ, "fire-3-1", None)
+    _landing(root, BLITZ, "wave-2.landing.json", OLD)
+    res = run(root)
+    assert _paths(res, "candidates") == {f"{BLITZ}/fire-2-1.mjs", f"{BLITZ}/fire-2-1.mjs.emitted.json"}
+    assert {r["reason"] for r in res["candidates"]} == {"landed"}
+    assert {r["reason"] for r in res["retained"]} == {"owner-unresolved"}
+    assert len(res["retained"]) == 2
+
+
+def test_blitz_closed_fire_without_receipt_is_deleted(env):
+    root, _ = env
+    d = root / BLITZ
+    d.mkdir(parents=True)
+    (d / "fire-1-1.mjs").write_text("x")
+    os.utime(d / "fire-1-1.mjs", (OLD, OLD))
+    _landing(root, BLITZ, "wave-1.landing.json", OLD)
+    assert _paths(run(root, dry=True), "candidates") == {f"{BLITZ}/fire-1-1.mjs"}
+
+
+def test_blitz_young_closed_fire_kept(env):
+    root, _ = env
+    fire(root, BLITZ, "fire-1-1", None, age=time.time())
+    _landing(root, BLITZ, "wave-1.landing.json", OLD)
+    res = run(root)
+    assert not res["candidates"]
+    assert {r["reason"] for r in res["retained"]} == {"too-young"}
+
+
+def test_blitz_hash_suffixed_landing_does_not_close(env):
+    root, _ = env
+    fire(root, BLITZ, "fire-1-1", None)
+    _landing(root, BLITZ, "wave-1.landing.abc123.json", OLD)
+    assert not run(root)["candidates"]
+
+
+def test_blitz_repair_fire_with_newer_landing_deleted(env):
+    root, _ = env
+    fire(root, BLITZ, "repair-fire-1", None, age=OLD)
+    _landing(root, BLITZ, "wave-4.landing.json", OLD + 3600)
+    res = run(root)
+    assert len(res["candidates"]) == 2
+    assert {r["reason"] for r in res["candidates"]} == {"landed"}
+
+
+def test_blitz_repair_fire_with_older_landing_kept(env):
+    root, _ = env
+    fire(root, BLITZ, "repair-fire-1", None, age=OLD)
+    _landing(root, BLITZ, "wave-4.landing.json", OLD - 3600)
+    res = run(root)
+    assert not res["candidates"]
+    assert {r["reason"] for r in res["retained"]} == {"owner-unresolved"}
+
+
+def test_blitz_landing_does_not_override_live_claim(env):
+    root, state = env
+    plan(root, "p.md", "executing")
+    state["live"].add("p.md")
+    fire(root, BLITZ, "fire-1-1", "p.md")
+    _landing(root, BLITZ, "wave-1.landing.json", OLD)
+    res = run(root)
+    assert not res["candidates"]
+    assert {r["reason"] for r in res["retained"]} == {"live-claim"}

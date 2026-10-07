@@ -606,7 +606,10 @@ def _mint_review_stamp(
     from coordinator_core.ops.review_stamp import MintRefusal, mint
 
     try:
-        mint(guarded, worktree_root, build_test_path=None, resolved=(sha, record_abs, record))
+        mint(
+            guarded, worktree_root, build_test_path=None, resolved=(sha, record_abs, record),
+            criterion_open_ok=True,
+        )
     except MintRefusal as exc:
         return {"review_stamp": "refused", "review_stamp_refusal": str(exc)}
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
@@ -1447,10 +1450,14 @@ def _terminal_commit(
                 worktree_root, request.plan_path, [c.id for c in coded_chunks]
             )
         )
+        partial_rows = _source_rows_by_plan(
+            worktree_root, request.plan_path, [c.id for c in contributing_partial]
+        )
         # Before the coded stamp: that commit carries the plan, so a stamp
         # minted here lands in it and costs no commit of its own.
         if record_abs is not None and record is not None and (
             request.plan_path in source_rows or request.plan_path in noop_rows
+            or request.plan_path in partial_rows
             or any(request.plan_path in by_plan for by_plan in checkpoint_rows.values())
         ):
             reply.update(

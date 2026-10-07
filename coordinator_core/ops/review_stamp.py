@@ -464,6 +464,7 @@ def mint(
     repair: bool = False,
     resolved: Optional[tuple] = None,
     superseding_record: Optional[Path] = None,
+    criterion_open_ok: bool = False,
 ) -> Dict[str, Any]:
     """Assemble and write `review_stamp:` into `plan_path`'s frontmatter.
     Returns the written stamp dict. Raises `MintRefusal` on any refusal
@@ -475,7 +476,9 @@ def mint(
     `stage_returns`) and falls back to the prep/delivery sidecars' frontmatter
     only for a record that predates them. `resolved` is `(terminal_sha,
     record_path, record)` from a caller that just landed the terminal commit
-    itself (`dispatch.terminal_commit`): the trailer walk is skipped."""
+    itself (`dispatch.terminal_commit`): the trailer walk is skipped.
+    `criterion_open_ok` mints over a `not_met`/`indeterminate` criterion, recording its
+    status on the stamp (see `verdict.mint_refusal`)."""
     if not repo_root.exists():
         raise MintRefusal(f"review-stamp: repo root does not exist: {repo_root}")
 
@@ -611,7 +614,7 @@ def mint(
         attestation_receipt, attestation_problem = attested(
             split.fm_text, run_git=lambda args: _run_git(args, cwd=str(repo_root))
         )
-        if attestation_problem:
+        if attestation_problem and not criterion_open_ok:
             raise MintRefusal(
                 f"review-stamp: refusing to mint: exit criterion is indeterminate; {attestation_problem}"
             )
@@ -620,7 +623,9 @@ def mint(
         gate_integration["criterion"] = {**criterion, "status": "not_run"}
     if attestation_receipt:
         gate_integration["criterion"] = {**criterion, "status": "met"}
-    refusal = mint_refusal(gate_integration, prep_data, build_test_data)
+    refusal = mint_refusal(
+        gate_integration, prep_data, build_test_data, criterion_open_ok=criterion_open_ok
+    )
     if refusal is not None:
         if delivery_verdict == "FAIL":
             from coordinator_core.ops.dispatch_emit.reverify_delivery import resolve_delivery_in_force

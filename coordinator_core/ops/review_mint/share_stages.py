@@ -50,7 +50,7 @@ _DISPATCH = {
     "prep": "the review prep stage (coordinator:test-runner, review-prep-result) with a frontmatter-bearing sidecar",
     "reviewer": "a coordinator:code-reviewer (or other review-wave lens) dispatch with plan_path set",
     "delivery": "coordinator:delivery-verifier (delivery-verdict) over the frozen diff",
-    "tests": "coordinator:test-runner for the plan's tests, recording status pass|fail|not_run",
+    "tests": "coordinator:test-runner for the plan's tests, recording status pass|fail|not_run and target_plan: <plan id>",
     "criterion": "coordinator:exit-criterion-judge (terminal-judge-result) against HEAD",
 }
 
@@ -137,6 +137,31 @@ def _bookkeeping_delivery(
     return _newest(found)
 
 
+def _bookkeeping_tests(
+    share: Path, plan_id: str, plan_stem: Optional[str]
+) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """The newest of this plan's run bookkeeping sidecars whose ``tests.status`` is ``not_run``:
+    the run itself recorded that no test target resolved. A recorded pass/fail is never reused here."""
+    found: List[Tuple[Path, Dict[str, Any]]] = []
+    for path in share.glob("*.review-wave-bookkeeping.md"):
+        fm = _load_sidecar_fm(path)
+        if not fm or _claimed_plan(fm) is None or not _binds(path, fm, plan_id, plan_stem):
+            continue
+        block = fm.get("tests")
+        if isinstance(block, dict) and test_verdict_of(block) == "not_run":
+            found.append((path, {"status": "not_run"}))
+    return _newest(found)
+
+
+_NEAR_MISS_KIND = {
+    "prep": lambda fm: "run_base_sha" in fm,
+    "reviewer": lambda fm: "review" in str(fm.get("agent_type") or "") and "exit-criterion" not in str(fm.get("agent_type") or ""),
+    "delivery": lambda fm: "delivery" in str(fm.get("agent_type") or ""),
+    "tests": lambda fm: "test-runner" in str(fm.get("agent_type") or ""),
+    "criterion": lambda fm: "exit-criterion-judge" in str(fm.get("agent_type") or ""),
+}
+
+
 def _newest(items: List[Tuple[Path, Any]]) -> Optional[Tuple[Path, Any]]:
     return max(items, key=lambda it: (it[0].stat().st_mtime, it[0].name)) if items else None
 
@@ -159,6 +184,7 @@ def assemble_from_share(
         raise ShareStageMissing("prep", f"share dir {_rel(share, repo_root)} does not exist")
 
     bound: List[Tuple[Path, Dict[str, Any]]] = []
+    unbound: List[Tuple[Path, Dict[str, Any]]] = []
     for path in sorted(share.glob("*.md")):
         if path.name.endswith(".blocks.md") or not path.is_file():
             continue
@@ -169,6 +195,18 @@ def assemble_from_share(
             continue
         if _binds(path, fm, plan_id, plan_stem):
             bound.append((path, fm))
+        elif _claimed_plan(fm) is None and not _stem(path).endswith(_DELIVERY_SUFFIX):
+            unbound.append((path, fm))
+
+    def missing(stage: str, detail: str) -> ShareStageMissing:
+        """``ShareStageMissing`` whose detail also names this stage's sidecars dropped for want of a plan binding."""
+        near = [_rel(p, repo_root) for p, fm in unbound if _NEAR_MISS_KIND[stage](fm)]
+        if near:
+            detail += (
+                f"; found {len(near)} {stage} sidecar(s) with no plan binding: {', '.join(near)}; "
+                f"set target_plan: {plan_id}"
+            )
+        return ShareStageMissing(stage, detail)
 
     def kind(fm: Dict[str, Any]) -> str:
         return str(fm.get("agent_type") or "")
@@ -177,7 +215,7 @@ def assemble_from_share(
 
     prep = _newest([(p, fm) for p, fm in bound if "run_base_sha" in fm and _int_or_none(fm.get("product_files")) is not None])
     if prep is None:
-        raise ShareStageMissing("prep", "no plan-scoped sidecar carries run_base_sha and product_files")
+        raise missing("prep", "no plan-scoped sidecar carries run_base_sha and product_files")
 
     # The judge is provisioned no sidecar (it cannot write, by design); its verdict is the
     # terminal-judge-result it returned, passed here. A transcribed sidecar is the fallback.
@@ -197,15 +235,15 @@ def assemble_from_share(
             )
         observation = str(judge_result.get("observation") or "").strip()
         if not observation:
-            raise ShareStageMissing("criterion", "the judge result records no observation")
+            raise missing("criterion", "the judge result records no observation")
     else:
         if not judge_cands:
-            raise ShareStageMissing("criterion", "no plan-scoped judge sidecar carries a met/not_met/indeterminate status")
+            raise missing("criterion", "no plan-scoped judge sidecar carries a met/not_met/indeterminate status")
         head_time = _head_commit_time(repo_root, head)
         fresh = [(p, fm) for p, fm in judge_cands if p.stat().st_mtime >= head_time]
         judge = _newest(fresh)
         if judge is None:
-            raise ShareStageMissing("criterion", f"the newest judge verdict predates HEAD commit {head[:10]}")
+            raise missing("criterion", f"the newest judge verdict predates HEAD commit {head[:10]}")
         judge_path, judge_fm = judge
         if judge_fm["status"] != "met":
             raise ValueError(
@@ -218,7 +256,7 @@ def assemble_from_share(
             split_at = text.split("\n---\n", 1)
             observation = (split_at[1] if len(split_at) == 2 else "").strip()
         if not observation:
-            raise ShareStageMissing("criterion", f"{_rel(judge_path, repo_root)} records no observation")
+            raise missing("criterion", f"{_rel(judge_path, repo_root)} records no observation")
 
     delivery_cands: List[Tuple[Path, Dict[str, Any]]] = []
     for p, fm in bound:
@@ -238,7 +276,7 @@ def assemble_from_share(
     if delivery is None:
         delivery = _bookkeeping_delivery(share, plan_id, plan_stem)
     if delivery is None:
-        raise ShareStageMissing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
+        raise missing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
 
     tests = _newest([
         (p, fm) for p, fm in bound
@@ -248,12 +286,14 @@ def assemble_from_share(
         t = reverify["tests"]
         tests = (Path(str(t.get("sidecar") or reverify.get("supersedes") or "")), t)
     if tests is None:
-        raise ShareStageMissing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status")
+        tests = _bookkeeping_tests(share, plan_id, plan_stem)
+    if tests is None:
+        raise missing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status")
 
     taken = {prep[0], judge_path, delivery[0], tests[0]} - {None}
     waves = [p for p, fm in bound if p not in taken and "review" in kind(fm) and "exit-criterion" not in kind(fm)]
     if not waves:
-        raise ShareStageMissing("reviewer", "no plan-scoped reviewer sidecar")
+        raise missing("reviewer", "no plan-scoped reviewer sidecar")
 
     d_path, d_fm = delivery
     delivery_ret: Dict[str, Any] = {"verdict": d_fm["verdict"], "sidecar": _rel(d_path, repo_root)}

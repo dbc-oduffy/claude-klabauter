@@ -134,3 +134,20 @@ def test_absent_test_verdict_falls_back_to_status():
     assert _refusal(rec) is None
     rec["tests"] = {"status": "open"}
     assert "build/test verdict is 'open'" in _refusal(rec)
+
+
+def test_criterion_open_ok_lets_an_unmet_criterion_stamp_and_never_a_failed_delivery():
+    for status in ("not_met", "indeterminate"):
+        rec = _record()
+        rec["criterion"]["status"] = status
+        rec["tests"]["status"] = "not_run"
+        assert mint_refusal(rec, rec["prep"], rec["tests"], criterion_open_ok=True) is None
+        assert judge_verdict(rec, all_rows_landed=True, now=NOW) == (None, None)
+    rec = _record()
+    rec["criterion"]["status"] = "not_met"
+    rec["delivery"]["verdict"] = "FAIL"
+    assert "delivery verdict is 'FAIL'" in mint_refusal(rec, rec["prep"], rec["tests"], criterion_open_ok=True)
+    rec = _record()
+    rec["criterion"]["status"] = "not_met"
+    rec["tests"]["status"] = "fail"
+    assert "build/test verdict is 'fail'" in mint_refusal(rec, rec["prep"], rec["tests"], criterion_open_ok=True)

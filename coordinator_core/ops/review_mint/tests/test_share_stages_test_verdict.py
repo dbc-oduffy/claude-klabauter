@@ -59,3 +59,38 @@ def test_errored_verdict_not_selected(tmp_path):
     _share(tmp_path, status="complete", test_verdict="errored")
     with pytest.raises(ShareStageMissing):
         _assemble(tmp_path)
+
+
+def test_a_test_runner_sidecar_with_no_plan_binding_is_named_in_the_refusal(tmp_path):
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    _share(tmp_path, status="complete")
+    (share / "coordinator-test-runner.t1.md").unlink()
+    _sc(share, "coordinator-test-runner.t2.md", agent_type="coordinator:test-runner",
+        target_plan=None, status="complete", test_verdict="pass")
+    with pytest.raises(ShareStageMissing) as exc:
+        _assemble(tmp_path)
+    msg = str(exc.value)
+    assert exc.value.stage == "tests"
+    assert "found 1 tests sidecar(s) with no plan binding: " in msg
+    assert "coordinator-test-runner.t2.md" in msg
+    assert f"set target_plan: {PLAN}" in msg
+
+
+def test_a_run_that_recorded_tests_not_run_supplies_the_tests_stage(tmp_path):
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    _share(tmp_path, status="complete")
+    (share / "coordinator-test-runner.t1.md").unlink()
+    _sc(share, "pln-x-123456.review-wave-bookkeeping.md", agent_type="engine:review-wave-bookkeeping",
+        plan_id=PLAN, tests={"status": "not_run", "run": None, "failed": None, "sidecar": None})
+    tests = _assemble(tmp_path)["stage_returns"]["tests"]
+    assert tests["status"] == "not_run"
+
+
+def test_a_run_that_recorded_tests_pass_is_not_reused(tmp_path):
+    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    _share(tmp_path, status="complete")
+    (share / "coordinator-test-runner.t1.md").unlink()
+    _sc(share, "pln-x-123456.review-wave-bookkeeping.md", agent_type="engine:review-wave-bookkeeping",
+        plan_id=PLAN, tests={"status": "pass"})
+    with pytest.raises(ShareStageMissing):
+        _assemble(tmp_path)

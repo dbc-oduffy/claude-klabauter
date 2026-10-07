@@ -139,7 +139,7 @@ def test_no_marker_returns_none():
     assert parse_marker("just some js\nconsole.log(1);\n") is None
 
 
-def test_chunk_with_no_paths_and_no_prefixes_is_omitted():
+def test_chunk_with_no_paths_and_no_prefixes_rides_beside_a_chunk_with_paths():
     req = CommitRequest(
         chunks=(
             ChunkCommit(id="C1", title="Contributes", paths=("a.py",), prefixes=()),
@@ -148,7 +148,8 @@ def test_chunk_with_no_paths_and_no_prefixes_is_omitted():
     )
     marker = render_marker(req)
     parsed = parse_marker(marker)
-    assert [c.id for c in parsed.chunks] == ["C1"]
+    assert [c.id for c in parsed.chunks] == ["C1", "C2"]
+    assert parsed.chunks[1].paths == ()
 
 
 def test_no_chunk_left_means_no_marker():

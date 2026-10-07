@@ -53,8 +53,14 @@ def test_verdict_of(build_test: dict) -> Any:
     return verdict if verdict is not None else build_test.get("status")
 
 
-def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
-    """The first mint refusal message that applies to this record, else `None`."""
+def mint_refusal(
+    integration: dict, prep: dict, build_test: dict, *, criterion_open_ok: bool = False
+) -> str | None:
+    """The first mint refusal message that applies to this record, else `None`.
+
+    ``criterion_open_ok`` lets a ``not_met``/``indeterminate`` criterion through: the stamp
+    attests review and delivery and carries the criterion status, so the plan's close stays
+    a separate act. A build/test verdict of ``not_run`` is then accepted under any criterion."""
     footprint = prep.get("slice_files")
     foreign_claims = [
         c for c in prep.get("foreign_claims") or []
@@ -75,9 +81,11 @@ def mint_refusal(integration: dict, prep: dict, build_test: dict) -> str | None:
             f"review-stamp: refusing to mint: delivery verdict is {delivery_verdict!r}, not PASS"
             + _unbacked_suffix(delivery)
         )
-    if criterion_status in ("not_met", "indeterminate"):
+    if criterion_status in ("not_met", "indeterminate") and not criterion_open_ok:
         return f"review-stamp: refusing to mint: exit criterion is {criterion_status}"
-    if tests_status != "pass" and not (tests_status == "not_run" and criterion_status == "met"):
+    if tests_status != "pass" and not (
+        tests_status == "not_run" and (criterion_status == "met" or criterion_open_ok)
+    ):
         return (
             f"review-stamp: refusing to mint: build/test verdict is {tests_status!r}, not pass"
             + (f" (exit criterion {criterion_status})" if tests_status == "not_run" else "")

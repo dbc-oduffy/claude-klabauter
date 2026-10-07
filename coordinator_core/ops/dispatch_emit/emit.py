@@ -3583,9 +3583,9 @@ def _terminal_commit_marker(
     Per row, never per wave: ``row_pathspecs`` is already gitignore-filtered
     and test-candidate-widened (``compose_script``'s own per-row pathspec
     derivation, mirroring the old per-wave union this replaces). A row
-    contributing neither paths nor a ``writes_under:`` prefix renders
-    nothing (``render_marker`` drops it); if every row does, this returns
-    ``None`` and ``compose_script`` emits no marker line at all.
+    contributing neither paths nor a ``writes_under:`` prefix rides as a
+    pathless chunk (its row closes no-change); if every row is pathless, this
+    returns ``None`` and ``compose_script`` emits no marker line at all.
     """
     chunks = tuple(
         ChunkCommit(

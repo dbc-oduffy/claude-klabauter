@@ -177,13 +177,14 @@ def render_marker(req: CommitRequest) -> Optional[str]:
     """Render ``req`` as one marker line, or ``None`` if it has no chunk
     worth committing.
 
-    A chunk with neither ``paths`` nor ``prefixes`` contributes nothing to
-    the terminal commit and is omitted; if every chunk is omitted this way,
-    there is nothing to commit and the caller emits no marker at all.
+    A chunk with neither ``paths`` nor ``prefixes`` contributes no file but is
+    kept beside a chunk that does: the terminal commit closes its row coded as a
+    no-change row. If no chunk declares a path, there is nothing to commit and
+    the caller emits no marker at all.
     """
-    kept = tuple(c for c in req.chunks if c.paths or c.prefixes)
-    if not kept:
+    if not any(c.paths or c.prefixes for c in req.chunks):
         return None
+    kept = req.chunks
     payload = {
         "version": req.version,
         "chunks": [_chunk_to_dict(c) for c in kept],

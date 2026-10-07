@@ -5,7 +5,8 @@ Purpose: delete untracked `<plan>[.<variant>].workflow.mjs` scripts and their
 `.emitted.json` receipts from docs/plans/ when their plan is missing or not
 `executing`. Also sweeps `state/**/fire-*.mjs` and `state/**/*.mjs.emitted.json`
 older than 24h whose owning plan (the receipt's `plan` field, resolved in
-docs/plans/) is implemented or abandoned; an unresolvable owner is kept. Zero
+docs/plans/) is implemented or abandoned; an unresolvable owner is kept.
+A plan-blitz fire/repair-fire unit is also closed by a landing file in its dir. Zero
 spawns, no YAML parse; tracked-at-HEAD comes from one `read_tree_spine` call
 (object store). Fails closed: an unreadable HEAD tree deletes nothing.
 
@@ -19,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -43,6 +45,10 @@ _STATE_REL = "state"
 _STATE_AGE_S = 24 * 3600.0
 _STATE_CLOSED_STATUSES = frozenset({"implemented", "abandoned"})
 _STATE_RECEIPT_SUFFIX = ".mjs.emitted.json"
+_BLITZ_DIR_PREFIX = f"{_STATE_REL}/plan-blitz/"
+_FIRE_RE = re.compile(r"^fire-(\d+)-\d+\.mjs$")
+_REPAIR_RE = re.compile(r"^repair-fire-\d+\.mjs$")
+_LANDING_RE = re.compile(r"^wave-(\d+)\.landing\.json$")
 
 
 def _is_state_member(name: str) -> bool:
@@ -72,6 +78,33 @@ def _scan_state(root: Path) -> Dict[str, Dict[str, os.DirEntry]]:
         except OSError:
             continue
     return found
+
+
+def _blitz_landings(path: Path) -> Dict[int, float]:
+    """{wave number: mtime} of `wave-<N>.landing.json` in one blitz dir; one listing, no per-unit stat."""
+    out: Dict[int, float] = {}
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                m = _LANDING_RE.match(entry.name)
+                if m:
+                    try:
+                        out[int(m.group(1))] = entry.stat().st_mtime
+                    except OSError:
+                        continue
+    except OSError:
+        pass
+    return out
+
+
+def _blitz_closed(script: str, script_mtime: float, landings: Dict[int, float]) -> bool:
+    """A fire is closed by its wave's landing; a repair fire by any landing newer than itself."""
+    m = _FIRE_RE.match(script)
+    if m:
+        return int(m.group(1)) in landings
+    if _REPAIR_RE.match(script):
+        return any(t > script_mtime for t in landings.values())
+    return False
 
 
 def _unit_key(name: str) -> str:
@@ -278,10 +311,12 @@ def _classify_state_dir(
     units: Dict[str, List[str]] = {}
     for name in sorted(entries):
         units.setdefault(_unit_key_state(name), []).append(name)
+    landings: Optional[Dict[int, float]] = None
 
-    for names in units.values():
+    for key, names in units.items():
         if not (
-            any(n.endswith(_STATE_RECEIPT_SUFFIX) for n in names) or names[0].startswith("fire-")
+            any(n.endswith(_STATE_RECEIPT_SUFFIX) for n in names)
+            or names[0].startswith(("fire-", "repair-fire-"))
         ):
             continue  # a bare non-fire script is outside both globs
         paths = [f"{rel_dir}/{n}" for n in names]
@@ -298,27 +333,37 @@ def _classify_state_dir(
             if n.endswith(_STATE_RECEIPT_SUFFIX):
                 plan_name = _receipt_plan(Path(entries[n].path))
                 break
-        if plan_name is None:
-            retain("owner-unresolved")
+        facts: Optional[_PlanFacts] = None
+        if plan_name is not None:
+            if plan_name not in plan_cache:
+                plan_path = plans_dir / plan_name
+                plan_cache[plan_name] = _read_plan(plan_path) if os.path.lexists(plan_path) else None
+            facts = plan_cache[plan_name]
+            if facts is not None and facts.unreadable:
+                retain("plan-unreadable")
+                continue
+        closed_reason: Optional[str] = None
+        if facts is not None and facts.status in _STATE_CLOSED_STATUSES:
+            closed_reason = f"plan-{facts.status}"
+        elif rel_dir.startswith(_BLITZ_DIR_PREFIX):
+            if landings is None:
+                landings = _blitz_landings(plans_dir.parent.parent / rel_dir)
+            try:
+                mtime = entries[names[0]].stat().st_mtime
+            except OSError:
+                retain("stat-failed")
+                continue
+            if _blitz_closed(key, mtime, landings):
+                closed_reason = "landed"
+        if closed_reason is None:
+            retain("owner-unresolved" if facts is None else "owner-open")
             continue
-        if plan_name not in plan_cache:
-            plan_path = plans_dir / plan_name
-            plan_cache[plan_name] = _read_plan(plan_path) if os.path.lexists(plan_path) else None
-        facts = plan_cache[plan_name]
-        if facts is None:
-            retain("owner-unresolved")
-            continue
-        if facts.unreadable:
-            retain("plan-unreadable")
-            continue
-        if facts.status not in _STATE_CLOSED_STATUSES:
-            retain("owner-open")
-            continue
-        if plan_name not in live_cache:
-            live_cache[plan_name] = _is_claim_live(common_dir, plans_dir / plan_name)
-        if live_cache[plan_name]:
-            retain("live-claim")
-            continue
+        if plan_name is not None and facts is not None:
+            if plan_name not in live_cache:
+                live_cache[plan_name] = _is_claim_live(common_dir, plans_dir / plan_name)
+            if live_cache[plan_name]:
+                retain("live-claim")
+                continue
         try:
             young = any(now - entries[n].stat().st_mtime < _STATE_AGE_S for n in names)
         except OSError:
@@ -328,7 +373,7 @@ def _classify_state_dir(
             retain("too-young")
             continue
         for p in paths:
-            result["candidates"].append({"path": p, "plan": plan_name, "reason": f"plan-{facts.status}"})
+            result["candidates"].append({"path": p, "plan": plan_name, "reason": closed_reason})
             to_delete.append(p)
 
 

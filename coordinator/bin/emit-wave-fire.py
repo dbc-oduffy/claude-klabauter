@@ -666,7 +666,14 @@ def _trail_provenance(trail_dir: Path, fresh_ref: dict) -> list[str]:
     return lines
 
 
-def _write_fire_receipt(script_path: Path) -> None:
+def _sole_plan(plan_paths) -> str | None:
+    """The one plan every baton of a fire links, else None: a fire spanning several plans or
+    an unplanned baton has no single owner to stamp on its receipt."""
+    distinct = {p for p in plan_paths}
+    return next(iter(distinct)) if len(distinct) == 1 and None not in distinct else None
+
+
+def _write_fire_receipt(script_path: Path, plan_path: str | None = None) -> None:
     """Write `<script_path>.emitted.json` beside a just-written fire, via the
     engine's own `dispatch_emit.op._write_emission_receipt` — the ONE writer,
     so this CLI's receipt and `dispatch.emit`'s can never drift in shape
@@ -691,7 +698,7 @@ def _write_fire_receipt(script_path: Path) -> None:
         require_colocated_engine_on_path(__file__)
         from coordinator_core.ops.dispatch_emit.op import _write_emission_receipt
 
-        _write_emission_receipt(script_path, None, {})
+        _write_emission_receipt(script_path, plan_path, {})
     except Exception as exc:  # noqa: BLE001 -- best-effort; must never fail the emit
         print(f"  WARNING: could not write emission receipt for {script_path.name}: {exc}", file=sys.stderr)
 
