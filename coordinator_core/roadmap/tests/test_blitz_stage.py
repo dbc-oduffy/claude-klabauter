@@ -184,8 +184,7 @@ def test_small_stops_folding_once_weight_reaches_m(tmp_path, roadmap):
     assert [s["loe"] for s in reply["stubs"]] == ["M", "L"]
 
 
-def test_small_with_several_dependents_is_flagged_not_moved(tmp_path, roadmap):
-    _write_clusters(roadmap, """## C1 — a
+SEVERAL_DEPENDENTS = """## C1 — a
 **loe:** XS
 **blocks:** C2, C3.
 
@@ -196,10 +195,52 @@ def test_small_with_several_dependents_is_flagged_not_moved(tmp_path, roadmap):
 ## C3 — c
 **loe:** M
 **blocked_by:** C1.
-""")
+"""
+
+
+def test_tie_break_folds_into_earliest_candidate_and_records_the_key(tmp_path, roadmap):
+    _write_clusters(roadmap, SEVERAL_DEPENDENTS)
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
-    assert len(reply["stubs"]) == 3
-    assert reply["folds"]["flagged"][0]["reason"] == "unfoldable-small: several candidates"
+    assert len(reply["stubs"]) == 2 and reply["folds"]["flagged"] == []
+    (tie,) = reply["folds"]["tie_breaks"]
+    assert (tie["absorbed"], tie["into"], tie["candidates"]) == ("C1", "C2", ["C2", "C3"])
+    assert tie["key"] == bs.TIE_BREAK_KEY
+    assert {s["cluster"]: s["covers"] for s in reply["stubs"]}["C2"] == ["C1", "C2"]
+
+
+def test_tie_break_is_deterministic(tmp_path):
+    order = ["C1", "C2", "C3"]
+    edges = [{"from": "C2", "to": "C1"}, {"from": "C3", "to": "C1"}]
+    runs = [
+        bs.fold_units(order, {"C1": "XS", "C2": "M", "C3": "M"}, edges, tie_break=True)
+        for _ in range(3)
+    ]
+    assert all(r["tie_breaks"] == runs[0]["tie_breaks"] for r in runs)
+    assert runs[0]["tie_breaks"][0]["into"] == "C2"
+
+
+def test_without_tie_break_several_candidates_stay_flagged():
+    edges = [{"from": "C2", "to": "C1"}, {"from": "C3", "to": "C1"}]
+    fold = bs.fold_units(["C1", "C2", "C3"], {"C1": "XS", "C2": "M", "C3": "M"}, edges)
+    assert fold["flagged"] == [{"cluster": "C1", "reason": "unfoldable-small: several candidates"}]
+    assert fold["tie_breaks"] == []
+
+
+def test_resume_does_not_refold_with_the_tie_break(tmp_path, roadmap):
+    _write_clusters(roadmap, SEVERAL_DEPENDENTS)
+    handoffs = tmp_path / "state" / "handoffs"
+    bs_fold = bs.fold_units
+    try:
+        bs.fold_units = lambda *a, **k: bs_fold(*a, **{**k, "tie_break": False})
+        legacy = bs.stage_roadmap(tmp_path, str(roadmap))
+    finally:
+        bs.fold_units = bs_fold
+    assert len(legacy["stubs"]) == 3
+    before = sorted((p.name, p.read_bytes()) for p in handoffs.glob("*.md"))
+    again = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert len(again["stubs"]) == 3 and all(s["created"] is False for s in again["stubs"])
+    assert again["folds"]["tie_breaks"] == []
+    assert sorted((p.name, p.read_bytes()) for p in handoffs.glob("*.md")) == before
 
 
 def test_merge_that_would_reach_xl_is_refused(tmp_path, roadmap):
@@ -293,28 +334,35 @@ def test_audit_result_is_surfaced(tmp_path, roadmap):
     audit = reply["audit"]
     assert set(audit) == {"exit_code", "passed", "stdout", "stderr"}
     assert any("Stub-coverage: all 4 KEEP cluster(s) named exactly once" in line for line in audit["stdout"])
-    assert audit["passed"] is False and audit["exit_code"] == 1
-    assert any("Audit 7" in line and "XS" in line for line in audit["stderr"])
+    assert audit["passed"] is True and audit["stderr"] == []
 
 
-def test_failed_audit_does_not_freeze_the_gate_report(tmp_path, roadmap):
+def test_unfoldable_small_stub_is_exempt_from_audit7_and_named(tmp_path, roadmap):
     (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
-    assert reply["audit"]["passed"] is False
-    assert reply["gate_report_state"] == "deferred-audit-failed"
-    assert reply["gate_report_path"] is None
-    assert not (tmp_path / "state" / "plan-blitz").exists()
-    assert len(reply["commits"]) == 1
+    c4 = {s["cluster"]: s["stub_id"] for s in reply["stubs"]}["C4"]
+    assert reply["unfoldable_small"] == [c4]
+    assert any("Audit 7" in line and "unfoldable_small" in line and c4 in line for line in reply["audit"]["stdout"])
+    assert reply["gate_report_state"] == "frozen-now"
+    report = json.loads((tmp_path / reply["gate_report_path"]).read_text(encoding="utf-8"))
+    assert report["unfoldable_small"] == [c4]
+    (baton,) = (tmp_path / "state" / "handoffs").glob(f"*roadmap-{c4}.md")
+    assert "fold_flag: unfoldable-small" in baton.read_text(encoding="utf-8")
 
 
-def test_passing_audit_after_a_failed_one_freezes_on_rerun(tmp_path, roadmap):
-    (roadmap / "clusters.md").write_text(CLUSTERS_WITH_XS, encoding="utf-8")
-    assert bs.stage_roadmap(tmp_path, str(roadmap))["gate_report_state"] == "deferred-audit-failed"
-    (roadmap / "clusters.md").write_text(CLUSTERS, encoding="utf-8")
-    for stub in (tmp_path / "state" / "handoffs").glob("*rmt-04.md"):
-        stub.write_text(stub.read_text(encoding="utf-8").replace("loe: XS", "loe: M"), encoding="utf-8")
+def test_unflagged_small_stub_still_fails_audit7(tmp_path, roadmap):
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["audit"]["passed"] is True
+    victim = next(s for s in reply["stubs"] if s["cluster"] == "C3")
+    path = tmp_path / victim["path"]
+    path.write_text(path.read_text(encoding="utf-8").replace("loe: M", "loe: S"), encoding="utf-8")
+    (tmp_path / reply["gate_report_path"]).chmod(0o644)
+    (tmp_path / reply["gate_report_path"]).unlink()
     again = bs.stage_roadmap(tmp_path, str(roadmap))
-    assert again["audit"]["passed"] is True and again["gate_report_state"] == "frozen-now"
+    assert again["audit"]["passed"] is False
+    assert any("Audit 7" in line and victim["stub_id"] in line for line in again["audit"]["stderr"])
+    assert again["gate_report_state"] == "deferred-audit-failed"
+    assert again["gate_report_path"] is None
 
 
 def test_gate_report_frozen_in_plan_gate_shape(tmp_path, roadmap):

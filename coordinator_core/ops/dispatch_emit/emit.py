@@ -4695,8 +4695,10 @@ def find_new_module_with_importer(rows, repo_root: Optional[Path]) -> list:
     return findings
 
 
-def _drop_landed_rows(rows: list, landed: frozenset) -> list:
-    unknown = set(landed) - {r.id for r in rows}
+def _drop_landed_rows(rows: list, landed: frozenset, closed: frozenset = frozenset()) -> list:
+    """Drop ``landed`` rows; an id in ``closed`` (non-dispatchable in the spine) is
+    consistent with a landed row and skipped, an id the spine lacks raises."""
+    unknown = set(landed) - {r.id for r in rows} - set(closed)
     if unknown:
         raise ValueError(f"landed row id(s) not dispatchable in this spine: {sorted(unknown)}")
     kept = []
@@ -4860,7 +4862,10 @@ def emit_script(
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
     if landed_rows:
-        rows = _drop_landed_rows(rows, landed_rows)
+        closed_ids = frozenset(
+            e["id"] for e in exclusions if e.get("reason") == "disposition"
+        )
+        rows = _drop_landed_rows(rows, landed_rows, closed_ids)
         if not rows:
             raise ValueError("every dispatchable row is already landed; nothing to re-emit")
 

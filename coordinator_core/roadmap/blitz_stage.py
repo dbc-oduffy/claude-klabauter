@@ -189,8 +189,25 @@ def _find_staged(repo_root: Path, stub_id: str) -> Optional[Path]:
     return None
 
 
+def _has_staged(repo_root: Path, prefix: str, roadmap_id: str) -> bool:
+    """True when any baton of this roadmap is already staged: a resume must reproduce the first
+    staging's fold, so first-staging-only rules are off."""
+    for base in (Path(record_homes.home_dir(str(repo_root), "handoffs")), repo_root / "archive" / "handoffs"):
+        if base.is_dir():
+            for hit in base.rglob(f"*roadmap-{prefix}-[0-9]*.md"):
+                if roadmap_id in hit.read_text(encoding="utf-8", errors="replace")[:2000]:
+                    return True
+    return False
+
+
 def _patch_frontmatter(
-    content: str, *, sprint: int, wave: int, loe: Optional[str], blocked_by: List[str]
+    content: str,
+    *,
+    sprint: int,
+    wave: int,
+    loe: Optional[str],
+    blocked_by: List[str],
+    fold_flag: Optional[str] = None,
 ) -> str:
     out: List[str] = []
     fences = 0
@@ -206,6 +223,9 @@ def _patch_frontmatter(
                 if loe is None:
                     continue
                 line = f"loe: {loe}"
+                if fold_flag:
+                    out.append(line)
+                    line = f"fold_flag: {fold_flag}"
             elif line == "blocked_by: []" and blocked_by:
                 out.append("blocked_by:")
                 out.extend(f"  - {b}" for b in blocked_by)
@@ -219,6 +239,7 @@ def _patch_frontmatter(
 _M_WEIGHT = TSHIRT_WEIGHT["M"]
 _XL_WEIGHT = TSHIRT_WEIGHT["XL"]
 
+UNFOLDABLE_SMALL = "unfoldable-small"
 FOLD_RULE = (
     "roadmap-planning Step 2.1.6 as ruled by the APM: XS/S never ship alone. A stub under M folds "
     "only along a declared edge, into its sole direct dependent, else its sole direct dependency, "
@@ -235,12 +256,21 @@ def _tshirt_for_weight(weight: int) -> str:
     return fit[-1] if fit else TSHIRT_ORDER[0]
 
 
+TIE_BREAK_KEY = "earliest in dependency order, then lowest cluster id"
+
+
 def fold_units(
-    order: List[str], sizes: Dict[str, Optional[str]], edges: List[Dict[str, str]]
+    order: List[str],
+    sizes: Dict[str, Optional[str]],
+    edges: List[Dict[str, str]],
+    *,
+    tie_break: bool = False,
 ) -> Dict[str, Any]:
     """Fold sub-M clusters along a declared edge. ``order`` is dependency order (blockers first);
     every cluster is sized. Returns ``{"units": {label: {sources, weight, loe}}, "blocked_by":
-    {...}, "merged": [...], "flagged": [...]}``; the unit label is the absorbing cluster's."""
+    {...}, "merged": [...], "flagged": [...], "tie_breaks": [...]}``; the unit label is the absorbing
+    cluster's. With ``tie_break`` a stub with several candidates folds into the earliest one in
+    ``order`` (then lowest label) and the choice lands in ``tie_breaks``; the XL refusal still applies."""
     units: Dict[str, Dict[str, Any]] = {}
     for label in order:
         tshirt = sizes.get(label)
@@ -256,6 +286,7 @@ def fold_units(
 
     merged: List[Dict[str, Any]] = []
     flagged: List[Dict[str, Any]] = []
+    tie_breaks: List[Dict[str, Any]] = []
     for label in order:
         unit = units.get(label)
         if unit is None or unit["weight"] >= _M_WEIGHT:
@@ -264,13 +295,19 @@ def fold_units(
             target = next(iter(dependents[label]))
         elif len(blockers[label]) == 1:
             target = next(iter(blockers[label]))
+        elif tie_break and (dependents[label] or blockers[label]):
+            candidates = sorted(dependents[label] | blockers[label], key=lambda c: (order.index(c), c))
+            target = candidates[0]
+            tie_breaks.append(
+                {"absorbed": label, "into": target, "candidates": candidates, "key": TIE_BREAK_KEY}
+            )
         else:
             reason = "no edge" if not dependents[label] and not blockers[label] else "several candidates"
-            flagged.append({"cluster": label, "reason": f"unfoldable-small: {reason}"})
+            flagged.append({"cluster": label, "reason": f"{UNFOLDABLE_SMALL}: {reason}"})
             continue
         host = units[target]
         if host["weight"] + unit["weight"] >= _XL_WEIGHT:
-            flagged.append({"cluster": label, "reason": "unfoldable-small: merge would reach XL"})
+            flagged.append({"cluster": label, "reason": f"{UNFOLDABLE_SMALL}: merge would reach XL"})
             continue
         into_dependent = target in dependents[label]
         host["sources"] = (
@@ -299,7 +336,7 @@ def fold_units(
             flagged.append({"cluster": label, "reason": "mis-made: XXL"})
         elif unit["weight"] >= _XL_WEIGHT:
             flagged.append({"cluster": label, "reason": "xl-review"})
-    return {"units": units, "blocked_by": blockers, "merged": merged, "flagged": flagged}
+    return {"units": units, "blocked_by": blockers, "merged": merged, "flagged": flagged, "tie_breaks": tie_breaks}
 
 
 def _fold_report(stubs: List[Dict[str, Any]], fold: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,6 +350,18 @@ def _fold_report(stubs: List[Dict[str, Any]], fold: Dict[str, Any]) -> Dict[str,
             if len(s["covers"]) > 1
         ],
         "split": [],
+        "tie_breaks": [
+            {
+                "stub_id": by_label[t["absorbed"]]["stub_id"] if t["absorbed"] in by_label else None,
+                "absorbed": t["absorbed"],
+                "into": t["into"],
+                "into_stub_id": by_label[t["into"]]["stub_id"] if t["into"] in by_label else None,
+                "candidates": t["candidates"],
+                "key": t["key"],
+            }
+            for t in fold["tie_breaks"]
+            if t["into"] in fold["units"] or t["into"] in by_label
+        ],
         "flagged": [
             {"stub_id": by_label[f["cluster"]]["stub_id"], "cluster": f["cluster"], "reason": f["reason"]}
             for f in fold["flagged"]
@@ -372,7 +421,11 @@ def _commit(repo_root: Path, paths: List[str], message: str) -> Tuple[Optional[s
 
 
 def _freeze_gate_report(
-    repo_root: Path, roadmap_id: str, stub_paths: List[str], audit_passed: bool
+    repo_root: Path,
+    roadmap_id: str,
+    stub_paths: List[str],
+    audit_passed: bool,
+    unfoldable_small: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """The report is write-once (0444), so a failed audit defers it: freezing over stubs the
     audit could not find would pin a report no rerun can correct."""
@@ -385,6 +438,8 @@ def _freeze_gate_report(
     from coordinator_core.ops.roadmap_plan_gate import _handler as plan_gate_op, bare_text
 
     report = plan_gate_op({"roadmap_id": roadmap_id}, repo_root=repo_root)
+    if unfoldable_small:
+        report["unfoldable_small"] = sorted(unfoldable_small)
     staged = set(stub_paths)
     untracked = [row["path"] for row in report.get("untracked") or [] if row.get("path") in staged]
     if untracked:
@@ -459,13 +514,6 @@ def stage_roadmap(
         )
     cluster_numbering = number_clusters(nodes, edges, author_sprints)
     cluster_order = sorted(cluster_numbering, key=lambda c: cluster_numbering[c]["number"])
-    fold = fold_units(cluster_order, {c: by_id[c]["loe"] for c in cluster_order}, edges)
-    unit_labels = [c for c in cluster_order if c in fold["units"]]
-    unit_edges = [
-        {"from": a, "to": b} for a in unit_labels for b in sorted(fold["blocked_by"][a], key=cluster_order.index)
-    ]
-    numbering = number_clusters(unit_labels, unit_edges, {})
-    width = max(2, len(str(max(v["number"] for v in numbering.values()))))
     prefix_match = _PREFIX_RE.search(clusters_text)
     if prefix_match:
         prefix = prefix_match.group(1)
@@ -476,6 +524,16 @@ def stage_roadmap(
         )
     else:
         prefix = roadmap_id.split("-")[0]
+    first_staging = not _has_staged(repo_root, prefix, roadmap_id)
+    fold = fold_units(
+        cluster_order, {c: by_id[c]["loe"] for c in cluster_order}, edges, tie_break=first_staging
+    )
+    unit_labels = [c for c in cluster_order if c in fold["units"]]
+    unit_edges = [
+        {"from": a, "to": b} for a in unit_labels for b in sorted(fold["blocked_by"][a], key=cluster_order.index)
+    ]
+    numbering = number_clusters(unit_labels, unit_edges, {})
+    width = max(2, len(str(max(v["number"] for v in numbering.values()))))
     for label, info in numbering.items():
         info["stub_id"] = f"{prefix}-{str(info['number']).zfill(width)}"
         info["covers"] = fold["units"][label]["sources"]
@@ -491,6 +549,7 @@ def stage_roadmap(
     doc_new = _load_doc_new()
     from coordinator_core.ops.mint_deliverable_id import mint
 
+    unfoldable_labels = {f["cluster"] for f in fold["flagged"] if f["reason"].startswith(UNFOLDABLE_SMALL)}
     handoffs = Path(record_homes.home_dir(str(repo_root), "handoffs"))
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     stubs: List[Dict[str, Any]] = []
@@ -530,7 +589,12 @@ def stage_roadmap(
             covers=unit["sources"],
         )
         content = _patch_frontmatter(
-            content, sprint=info["sprint"], wave=info["wave"], loe=unit["loe"], blocked_by=row["blocked_by"]
+            content,
+            sprint=info["sprint"],
+            wave=info["wave"],
+            loe=unit["loe"],
+            blocked_by=row["blocked_by"],
+            fold_flag=UNFOLDABLE_SMALL if label in unfoldable_labels else None,
         )
         handoffs.mkdir(parents=True, exist_ok=True)
         written = create_exclusive(handoffs / f"{stamp}_roadmap-{stub_id}.md", content + "\n")
@@ -542,7 +606,10 @@ def stage_roadmap(
         )
         stubs.append(row)
 
-    exit_code, out_lines, err_lines = run_audit(roadmap_id, repo_root, repo_root / "state")
+    unfoldable_small = sorted(s["stub_id"] for s in stubs if s["label"] in unfoldable_labels)
+    exit_code, out_lines, err_lines = run_audit(
+        roadmap_id, repo_root, repo_root / "state", unfoldable_small=unfoldable_small
+    )
     audit = {"exit_code": exit_code, "passed": exit_code == 0, "stdout": out_lines, "stderr": err_lines}
 
     commits: List[Dict[str, Any]] = []
@@ -556,7 +623,7 @@ def stage_roadmap(
             commits.append({"sha": sha, "paths": new_paths})
 
     frozen = _freeze_gate_report(
-        repo_root, roadmap_id, [s["path"] for s in stubs], audit["passed"]
+        repo_root, roadmap_id, [s["path"] for s in stubs], audit["passed"], unfoldable_small
     )
     if commit and frozen["gate_report_state"] == "frozen-now":
         sha, err = _commit(
@@ -574,6 +641,7 @@ def stage_roadmap(
         "stubs": stubs,
         "numbering": numbering,
         "cluster_numbering": cluster_numbering,
+        "unfoldable_small": unfoldable_small,
         "folds": _fold_report(stubs, fold),
         "audit": audit,
         "commits": commits,

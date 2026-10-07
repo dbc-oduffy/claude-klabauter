@@ -158,7 +158,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Collection, Dict, List, Optional, Set, Tuple
 
 from coordinator_core._claude_klabauter_root import _machine_local_get
 from coordinator_core.engine_root import coordinator_engine_root_env
@@ -1647,6 +1647,7 @@ def _audit6_write_set_disjointness(
 #: `_cf_cost_enum`'s T0-T3 list and any future audit-side mirror of it would
 #: have to be.
 _LOE_BAND = frozenset({"M", "L", "XL"})
+_UNFOLDABLE_LOE = frozenset({"XS", "S"})
 
 
 def _audit7_loe_band(
@@ -1655,6 +1656,7 @@ def _audit7_loe_band(
     data_root: Path,
     stub_filter: Optional[set] = None,
     scope_label: Optional[str] = None,
+    unfoldable_small: Optional[Collection[str]] = None,
 ) -> None:
     """Audit 7 — M-XL `loe:` band. Any stub whose `loe:` is PRESENT and
     outside `{M, L, XL}` fails. ABSENT `loe:` is NOT a failure (census rows
@@ -1669,11 +1671,17 @@ def _audit7_loe_band(
     *stub_filter*/*scope_label* are the C4 sprint-scoped mode's hook, same
     contract as `_audit1_stub_coverage`'s: when *stub_filter* is given (a
     set of stub_ids), the band check runs against that subset only.
+
+    A sub-M stub the stage step flagged `unfoldable-small` (baton
+    `fold_flag:` or *unfoldable_small*, the stage run's own set) is exempt
+    and named in a pass line; any other out-of-band stub still fails.
     """
     where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
     live = query_records("handoff", data_root, where=where)
     arch = query_records("handoff-archived", data_root, where=where)
     all_records = live + arch
+    passed_in = set(unfoldable_small or ())
+    exempt: List[str] = []
 
     if stub_filter is not None:
         all_records = [
@@ -1699,10 +1707,21 @@ def _audit7_loe_band(
             absent_count += 1
             continue
         if str(loe) not in _LOE_BAND:
+            if str(loe) in _UNFOLDABLE_LOE and (
+                fm.get("fold_flag") == "unfoldable-small" or str(stub_id) in passed_in
+            ):
+                exempt.append(str(stub_id))
+                continue
             r.fail(
                 f"Audit 7{label}: stub {stub_id} carries loe={loe!r}, outside the "
                 f"M-XL band {sorted(_LOE_BAND)}"
             )
+
+    if exempt:
+        r.passed(
+            f"Audit 7{label}: unfoldable_small: {sorted(exempt)} — sub-M stub(s) the "
+            f"stage fold flagged unfoldable-small, exempt from the M-XL band."
+        )
 
     if absent_count:
         r.passed(
@@ -1715,8 +1734,8 @@ def _audit7_loe_band(
         )
     else:
         r.passed(
-            f"Audit 7{label}: all {len(all_records)} stub(s) for roadmap_id={run_id} "
-            f"carry an in-band loe: value."
+            f"Audit 7{label}: all {len(all_records) - len(exempt)} non-exempt stub(s) for "
+            f"roadmap_id={run_id} carry an in-band loe: value."
         )
 
 
@@ -1925,7 +1944,11 @@ def _run_audit_sprint_scoped(
 
 
 def run_audit(
-    run_id: str, data_root: Path, state_root: Path, sprint_id: Optional[str] = None
+    run_id: str,
+    data_root: Path,
+    state_root: Path,
+    sprint_id: Optional[str] = None,
+    unfoldable_small: Optional[Collection[str]] = None,
 ) -> Tuple[int, List[str], List[str]]:
     """Run the audits for *run_id*, accumulating failures. Never raises for
     an expected audit-fail — only an unexpected query error propagates.
@@ -1957,7 +1980,7 @@ def run_audit(
     # called. Whole-roadmap only, per the plan's C1 body: the C4 sprint-scoped
     # mode runs Audits 1/3/5 by name and is deliberately not extended here.
     _audit6_write_set_disjointness(r, run_id, data_root, data_root)
-    _audit7_loe_band(r, run_id, data_root)
+    _audit7_loe_band(r, run_id, data_root, unfoldable_small=unfoldable_small)
 
     r.stdout_lines.append("")
     if r.exit_code == 0:

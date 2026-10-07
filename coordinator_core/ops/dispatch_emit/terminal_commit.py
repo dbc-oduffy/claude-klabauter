@@ -980,7 +980,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 reasons[i] = "incomplete_unreported"
         if reasons:
             reply["incomplete_reasons"] = reasons
+    if stranded or reply.get("incomplete_reasons"):
+        reply["next"] = _resume_hint(stranded, scope, params)
     return reply
+
+
+def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
+    request = scope.get("request")
+    plan = getattr(request, "plan_path", None) or (
+        params.get("plan_path") if isinstance(params, dict) else None
+    ) or "<plan>"
+    command = f"emit-dispatch-workflow --plan {plan}"
+    if stranded:
+        return (
+            f"stranded files for {', '.join(sorted(stranded))}: commit or discard them, "
+            f"then re-emit with {command}"
+        )
+    return f"re-emit the incomplete rows with {command}"
 
 
 def _terminal_commit(

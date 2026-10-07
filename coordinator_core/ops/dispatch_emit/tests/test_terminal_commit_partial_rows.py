@@ -126,3 +126,21 @@ def test_every_incomplete_id_carries_a_reason(repo):
 def test_blocked_row_reason_is_incomplete_unreported(repo):
     out = _call(repo, _run(repo, "BLOCKED: no runtime\n"))
     assert out["incomplete_reasons"] == {"C1": "incomplete_unreported"}
+
+
+def test_stranded_row_reply_names_the_next_command(repo):
+    out = _call(repo, _run(repo, "BLOCKED: no runtime\n"))
+    assert out["next"] == (
+        "stranded files for C1: commit or discard them, "
+        "then re-emit with emit-dispatch-workflow --plan <plan>"
+    )
+
+
+def test_resume_hint_names_the_plan_and_every_stranded_row():
+    hint = terminal_commit._resume_hint(
+        {"P1": ["a.py"], "X1": ["b.py"]}, {}, {"plan_path": "docs/plans/p.md"}
+    )
+    assert hint == (
+        "stranded files for P1, X1: commit or discard them, "
+        "then re-emit with emit-dispatch-workflow --plan docs/plans/p.md"
+    )

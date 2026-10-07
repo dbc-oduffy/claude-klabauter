@@ -31,3 +31,13 @@ def test_drop_landed_strips_edges_and_keeps_rest():
 def test_unknown_landed_id_refused():
     with pytest.raises(ValueError):
         _drop_landed_rows([_row("A")], frozenset({"Z"}))
+
+
+def test_landed_id_closed_in_the_spine_is_skipped_not_refused():
+    kept = _drop_landed_rows([_row("B")], frozenset({"A", "B"}), frozenset({"A"}))
+    assert kept == []
+
+
+def test_landed_id_absent_from_rows_and_closed_set_still_refused():
+    with pytest.raises(ValueError):
+        _drop_landed_rows([_row("B")], frozenset({"A", "Z"}), frozenset({"A"}))
