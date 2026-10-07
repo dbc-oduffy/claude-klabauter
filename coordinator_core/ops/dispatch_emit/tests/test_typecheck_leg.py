@@ -80,3 +80,36 @@ def test_compose_script_folds_the_leg_into_the_terminal_test_prompt(tmp_path):
     script = compose_script(waves, name="wf", description="ts", repo_root=tmp_path, **REVIEW_KW)
     assert "node_modules/.bin/tsc --noEmit -p ." in script
     assert "test:terminal" in script
+
+
+def test_row_build_gate_rows_are_skipped_by_the_default_tsc_leg(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.emit import compose_script, derive_plan_context
+    from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+    from coordinator_core.ops.dispatch_emit.tests.test_emit import REVIEW_KW, _wave_row
+
+    _touch(tmp_path, "tsconfig.json")
+    _touch(tmp_path, "node_modules/.bin/tsc")
+    _touch(tmp_path, "web/tsconfig.json")
+    plan = (
+        "---\ntitle: P\nrow_build_gate:\n"
+        "  - when: {change_kind: gated-kind}\n    command: 'echo k'\n"
+        "  - when: {surface_glob: 'web/**/*.ts'}\n    command: 'echo g'\n"
+        "---\n\n# P\n\n## Goal\n\nG.\n\n## Tasks\n\nx\n"
+    )
+    monkeypatch.setattr(mod.shutil, "which", lambda name, path=None: None)
+    ctx = derive_plan_context(plan, fallback_title="p")
+    by_kind = WaveRow(
+        id="C1", title="t", surface="gated_kind.ts", writes=["gated_kind.ts"],
+        reads=[], depends_on=[], change_kind="gated-kind",
+    )
+    by_glob = _wave_row("C2", ["web/g.ts"])
+    open_row = _wave_row("C3", ["open.ts"])
+
+    def script(rows):
+        return compose_script(
+            [rows], name="wf", description="ts", repo_root=tmp_path,
+            plan_context=ctx, **REVIEW_KW,
+        )
+
+    assert "tsc --noEmit" not in script([by_kind, by_glob])
+    assert "node_modules/.bin/tsc --noEmit -p ." in script([by_kind, by_glob, open_row])

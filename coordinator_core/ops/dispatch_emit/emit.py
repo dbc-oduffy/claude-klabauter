@@ -292,6 +292,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.ops.dispatch_emit.typecheck_leg import (
     TypecheckLeg,
     typecheck_leg,
@@ -2270,7 +2271,9 @@ def _row_return_contract(
         )
     )
 
-    porcelain_paths = _shared_pathspec_text(footprint, shared, " ")
+    porcelain_paths = _shared_pathspec_text(
+        [_shell_pathspec(p) for p in footprint], shared, " "
+    )
     extra_fields = [
         "the output of `git status --porcelain -- "
         f"{porcelain_paths} | cut -c4-`"
@@ -2287,6 +2290,14 @@ def _row_return_contract(
     parts.append(_SCRATCH_HYGIENE_CLAUSE)
     parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
+
+
+def _shell_pathspec(path: str) -> str:
+    """``path`` as an argument of a prompt-embedded git command: a bracketed
+    path becomes a single-quoted ``:(literal)`` pathspec (quoting is identical
+    in bash and PowerShell); every other path stays byte-identical."""
+    spec = git_pathspec(path)
+    return path if spec == path else "'" + spec.replace("'", "''") + "'"
 
 
 def _fenced_paths(footprint, writes_under, surface) -> list:

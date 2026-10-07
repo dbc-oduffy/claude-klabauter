@@ -76,3 +76,20 @@ def test_malformed_gate_is_tolerated():
     assert ctx.row_build_gates == ()
     ctx = _ctx("row_build_gate: not-a-list\n")
     assert ctx.row_build_gates == ()
+
+
+def test_bracketed_footprint_paths_are_literal_quoted_in_the_porcelain_command():
+    from coordinator_core.ops.dispatch_emit.emit import _row_return_contract
+
+    contract = _row_return_contract(
+        _row("C1", ["src/app/[entityId]/route.ts", "plain/a.py"]), _PLAN
+    )
+    assert "git status --porcelain -- ':(literal)src/app/[entityId]/route.ts' plain/a.py" in contract
+
+
+def test_row_without_brackets_keeps_a_bare_porcelain_pathspec():
+    from coordinator_core.ops.dispatch_emit.emit import _row_return_contract
+
+    contract = _row_return_contract(_row("C1", ["a.py", "b/c.py"]), _PLAN)
+    assert "git status --porcelain -- a.py b/c.py" in contract
+    assert ":(literal)" not in contract
