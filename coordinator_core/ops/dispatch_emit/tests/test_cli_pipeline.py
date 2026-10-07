@@ -91,6 +91,32 @@ def test_pipeline_only_flag_without_pipeline_exit_2(captured):
     assert cli_module.main(["--brief", "x", "--plan", "p.md"]) == cli_module.EXIT_USAGE
 
 
+def test_resume_missing_flag_reaches_params(captured, tmp_path):
+    argv = [
+        "--pipeline", "p", "--brief", "x", "--list", "a=1,2",
+        "--scratch-dir", "scratch/run", "--resume-missing",
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_OK
+    params, _ = captured[0]
+    assert params["resume_missing"] is True
+    assert params["scratch_dir"] == "scratch/run"
+
+
+def test_resume_missing_absent_leaves_params_clean(captured):
+    assert cli_module.main(["--pipeline", "p", "--brief", "x"]) == cli_module.EXIT_OK
+    assert "resume_missing" not in captured[0][0]
+
+
+def test_resume_missing_requires_scratch_dir(captured):
+    assert cli_module.main(["--pipeline", "p", "--brief", "x", "--resume-missing"]) == cli_module.EXIT_USAGE
+    assert not captured
+
+
+def test_resume_missing_requires_pipeline(captured):
+    assert cli_module.main(["--brief", "x", "--resume-missing"]) == cli_module.EXIT_USAGE
+    assert not captured
+
+
 def test_malformed_flag_exit_1(captured):
     assert cli_module.main(
         ["--pipeline", "p", "--brief", "x", "--flag", "nodepth"]

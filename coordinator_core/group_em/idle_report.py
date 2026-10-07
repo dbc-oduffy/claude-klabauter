@@ -184,6 +184,7 @@ from typing import Optional
 from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
+from coordinator_core.quota_limits import rejected_resets_at
 
 FLOOR_MINUTES = 5.0
 THRESHOLD_MINUTES = 30.0
@@ -202,19 +203,6 @@ _TIMESTAMP = re.compile(r'(?<!\\)"timestamp"\s*:\s*"([^"\\]+)"')
 _ASSISTANT_SCAN_LINES = 400
 
 _SELF_ID = re.compile(r"(claude-klabauter-[0-9a-z]{2})\s*\[([0-9a-f]{6,8})\]", re.IGNORECASE)
-
-#: The harness's own refusal record: `quotaLimits`, its verdict, and the epoch
-#: the window lifts at. Structured spellings only -- a session quoting the
-#: user-facing "You've hit your session limit" sentence in prose is talking
-#: ABOUT a limit, not sitting behind one, and must never be read as refused.
-#: `[^{}]*` holds because `quotaLimits` carries no nested object; a nested one
-#: appearing later fails the match, which reads as "no refusal" -- toward
-#: reporting, the safe direction. Each pattern requires an UNESCAPED quote
-#: before its key, exactly like `_TIMESTAMP`, so a transcript quoting a JSON
-#: blob inside a message body cannot inject one.
-_QUOTA_LIMITS = re.compile(r'(?<!\\)"quotaLimits"\s*:\s*\{([^{}]*)\}')
-_QUOTA_REJECTED = re.compile(r'(?<!\\)"status"\s*:\s*"rejected"')
-_QUOTA_RESETS_AT = re.compile(r'(?<!\\)"resetsAt"\s*:\s*(\d{9,12})')
 
 _NEXT_MOVE = re.compile(
     r"(next (?:is|step|up|I)|I'?ll (?:now|next|run|dispatch|start)|about to|"
@@ -489,12 +477,9 @@ def rate_limited(raw_text: str, newest: Optional[float], now: float) -> bool:
     for line in raw_text.split("\n"):
         if '"quotaLimits"' not in line:
             continue
-        body = _QUOTA_LIMITS.search(line)
+        resets_at = rejected_resets_at(line)
         stamp = _TIMESTAMP.search(line)
-        if not body or not stamp or not _QUOTA_REJECTED.search(body.group(1)):
-            continue
-        resets = _QUOTA_RESETS_AT.search(body.group(1))
-        if not resets:
+        if resets_at is None or not stamp:
             continue
         try:
             refused_at = datetime.datetime.fromisoformat(
@@ -502,7 +487,7 @@ def rate_limited(raw_text: str, newest: Optional[float], now: float) -> bool:
         except ValueError:
             continue
         if latest is None or refused_at > latest[0]:
-            latest = (refused_at, float(resets.group(1)))
+            latest = (refused_at, resets_at)
     if latest is None:
         return False
     refused_at, resets_at = latest

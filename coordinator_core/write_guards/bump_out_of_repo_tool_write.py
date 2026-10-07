@@ -175,6 +175,17 @@ module. That asymmetry, not the stand-down, was the defect. Consulted at the
 deny site only, after the marker check and after every exemption; it returns
 `None` and never an envelope, per that module's own negative-spec.
 
+DECLARED RUN OUTPUT ROOTS ARE NOT A MISWRITE. A dispatched reader fan-out
+(`dispatch.emit` pipeline route) writes one result file per batch under its
+run's scratch dir, which sits in the pipeline's repo -- foreign to a reader
+whose session anchor is another repo. `dispatch.emit` declares that dir through
+`_write_bump_applicability.declare_run_output_root` when it emits;
+`check()` exempts a target under a live declaration
+(`target_is_under_declared_run_output_root`: TTL-bound, never a git top level).
+The exemption never reaches a publish destination -- a declared root inside a
+published mirror still bumps. Forgeable by design, like every hatch here: a
+declaration is an ordinary file in the machine-local registry dir.
+
 VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
 `check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
 anchor` gate the Bash siblings use (see "ONE CLEAR, ONE SET OF HATCHES"
@@ -510,6 +521,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     target_is_publish_destination,
     target_is_registered_repo,
     target_is_under_claude_home,
+    target_is_under_declared_run_output_root,
     target_is_under_settings_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
@@ -1010,6 +1022,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         if target_is_under_claude_home(translated_file_path or ""):
+            return None
+
+        if target_is_under_declared_run_output_root(
+            translated_file_path or ""
+        ) and not (
+            target_gitdir is not None
+            and target_is_publish_destination(
+                _resolve_git_root(target_dir) if target_dir is not None else file_path
+            )
+        ):
             return None
 
         if _target_is_under_settings_home(translated_file_path or "", target_gitdir):

@@ -512,6 +512,42 @@ def _reconcile_sizing_object(
     return {"sizing_path": cited, "reconciled": _state["applied"]}
 
 
+def prep_gate_refusal(worktree_root: Path, plan_path: str) -> Tuple[Optional[str], str]:
+    """Run `plan.prep_gate`'s library bar on `plan_path`; return `(refusal, verdict)`.
+
+    A `ready` verdict is only landable if the gate RAN and found nothing the EM's own
+    rule calls `pulled`: a SPINE `body-absent` class (rows with nothing to execute) or
+    an engine error (the gate did not complete). The wave's EM is asked to run the gate
+    by hand, and an EM whose call was denied returned `ready` anyway — so the landing
+    runs it in-process (`gate_plan`, ~1ms, no spawn) rather than trusting the report.
+
+    Other NOT-PREPPED classes stay advisory: planning gates precede mise-prep, and
+    rows withheld behind an `external_gate` are a schedule fact, not a pull reason.
+    """
+    from coordinator_core.roadmap.prep_gate import ENGINE_ERROR, gate_plan
+
+    plan_abs = worktree_root / plan_path
+    try:
+        report = gate_plan(worktree_root, plan_abs)
+    except OSError as exc:
+        return f"plan.prep_gate could not read {plan_path}: {exc}", "UNREAD"
+    verdict = report["verdict"]
+    if verdict == ENGINE_ERROR:
+        return (
+            f"plan.prep_gate did not complete on {plan_path} (engine error); "
+            "refusing to stamp a plan the gate never evaluated",
+            verdict,
+        )
+    spine = report["classes"].get("SPINE") or {}
+    if spine.get("kind") == "body-absent" and spine.get("withheld"):
+        return (
+            f"plan.prep_gate SPINE body-absent: rows with nothing to execute: "
+            f"{', '.join(spine['withheld'])}; refusing to stamp {APPROVED_STATUS}",
+            verdict,
+        )
+    return None, verdict
+
+
 def approve_ready(
     worktree_root: Path,
     baton_path: str,
@@ -1199,6 +1235,14 @@ def land_wave(
                 if plan_path
                 else None
             )
+            # The gate runs HERE, for every plan-carrying lane, because a wave that
+            # reports `ready` without its prep_gate having run is what let two plans
+            # land unchecked. A missing plan file is left to the lanes' own refusal.
+            gate_verdict = None
+            if plan_path and (worktree_root / plan_path).is_file():
+                gate_refusal, gate_verdict = prep_gate_refusal(worktree_root, plan_path)
+                if gate_refusal:
+                    raise LandingRefused(gate_refusal)
             # The S lane parks its spec onto the baton and marks it execution-ready,
             # so `/execute-plan` resolves it as a straight dispatch instead of
             # handing back an un-actioned baton. Everything else takes the ordinary
@@ -1232,6 +1276,7 @@ def land_wave(
                     f"kind {baton_kind!r} is not one "
                     f"H-CROSS-EXEC-2 admits ({', '.join(sorted(_EXECUTION_PHASE_KINDS))})"
                 )
+                row["prep_gate"] = gate_verdict
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
                 approved.append(row)
@@ -1246,6 +1291,7 @@ def land_wave(
                         f"S-lane spec parked, execution-ready"
                     ),
                 )
+                row["prep_gate"] = gate_verdict
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
                 if row.get("execution_ready"):
@@ -1260,6 +1306,7 @@ def land_wave(
                     )
             else:
                 row = approve_ready(worktree_root, baton_path, plan_path, report)
+                row["prep_gate"] = gate_verdict
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
                 approved.append(row)

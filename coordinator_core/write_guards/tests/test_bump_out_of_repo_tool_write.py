@@ -2018,3 +2018,68 @@ def test_subagent_marker_does_not_clear_a_publish_destination(tmp_path, monkeypa
     assert guard.check(sub) is not None
     em = _payload("Write", str(mirror / "p.txt"), session_id, str(own))
     assert guard.check(em) is None
+
+
+def _declared_root_session(tmp_path, monkeypatch, sid):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_start.write_session_start_record(sid, launch_cwd=str(own))
+    return own, foreign
+
+
+def test_declared_run_output_root_in_foreign_repo_never_bumps(tmp_path, monkeypatch):
+    own, foreign = _declared_root_session(tmp_path, monkeypatch, "sess-run-root")
+    out = foreign / "scratch" / "warp" / "run-1"
+    out.mkdir(parents=True)
+    undeclared = _payload("Write", str(out / "batch-b1.json"), "sess-run-root", str(own))
+    assert guard.check(undeclared) is not None
+
+    applicability.declare_run_output_root("run-1", str(out))
+
+    for tool_name in ("Write", "Edit", "MultiEdit"):
+        assert guard.check(_payload(tool_name, str(out / "batch-b1.json"), "sess-run-root", str(own))) is None
+    sibling = foreign / "scratch" / "warp" / "run-2" / "x.json"
+    assert guard.check(_payload("Write", str(sibling), "sess-run-root", str(own))) is not None
+    assert guard.check(_payload("Write", str(foreign / "notes.txt"), "sess-run-root", str(own))) is not None
+
+
+def test_expired_run_output_root_declaration_stops_exempting(tmp_path, monkeypatch):
+    own, foreign = _declared_root_session(tmp_path, monkeypatch, "sess-run-root-ttl")
+    out = foreign / "scratch" / "run-1"
+    out.mkdir(parents=True)
+    declaration = applicability.declare_run_output_root("run-1", str(out))
+    old = declaration.stat().st_mtime - applicability.RUN_OUTPUT_ROOT_TTL_SECONDS - 60
+    os.utime(declaration, (old, old))
+
+    assert guard.check(_payload("Write", str(out / "f.json"), "sess-run-root-ttl", str(own))) is not None
+
+
+def test_run_output_root_that_is_a_repo_top_level_never_exempts(tmp_path, monkeypatch):
+    own, foreign = _declared_root_session(tmp_path, monkeypatch, "sess-run-root-toplevel")
+    applicability.declare_run_output_root("run-1", str(foreign))
+
+    assert guard.check(_payload("Write", str(foreign / "notes.txt"), "sess-run-root-toplevel", str(own))) is not None
+
+
+def test_declared_run_output_root_inside_a_publish_destination_still_bumps(tmp_path, monkeypatch):
+    own, foreign = _declared_root_session(tmp_path, monkeypatch, "sess-run-root-publish")
+    out = foreign / "scratch" / "run-1"
+    out.mkdir(parents=True)
+    applicability.declare_run_output_root("run-1", str(out))
+    monkeypatch.setattr(guard, "target_is_publish_destination", lambda _root: True)
+
+    assert guard.check(_payload("Write", str(out / "f.json"), "sess-run-root-publish", str(own))) is not None
+
+
+@pytest.mark.parametrize("run_id", ["", "../x", "a/b", "..", ".hidden"])
+def test_declare_run_output_root_refuses_unsafe_run_id(tmp_path, monkeypatch, run_id):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
+    with pytest.raises(ValueError):
+        applicability.declare_run_output_root(run_id, str(tmp_path / "out"))
+
+
+def test_declare_run_output_root_refuses_relative_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
+    with pytest.raises(ValueError):
+        applicability.declare_run_output_root("run-1", "scratch/run-1")

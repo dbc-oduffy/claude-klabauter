@@ -56,6 +56,7 @@ Negative-spec (hard-won, restated for this row):
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable, Optional, cast
 
@@ -562,6 +563,47 @@ def _error(message: str, **extra: object) -> dict:
     return result
 
 
+_RETRY_LANDED_WINDOW_COMMITS = 20
+_RETRY_LANDED_WINDOW_SECS = 900  # a retry follows its timeout within seconds; bounds adopting an old commit
+
+
+def _message_identity(text: str) -> list:
+    return [
+        ln.rstrip()
+        for ln in text.splitlines()
+        if ln.strip() and not ln.startswith(ABSORBED_PEER_CLAIM_PREFIX)
+    ]
+
+
+def _landed_by_predecessor(worktree_root: Path, message: str) -> Optional[str]:
+    """Sha of a recent commit whose message equals `message`, else None; never raises."""
+    want = _message_identity(message)
+    try:
+        result = run_git(
+            ["log", f"-n{_RETRY_LANDED_WINDOW_COMMITS}", "--format=%x1e%H%x1f%ct%x1f%B", "HEAD"],
+            cwd=str(worktree_root),
+        )
+    except Exception:  # noqa: BLE001 -- the plain refusal is the fallback
+        return None
+    if result.returncode != 0:
+        return None
+    now = time.time()
+    for record in result.stdout.split("\x1e"):
+        parts = record.split("\x1f", 2)
+        if len(parts) != 3:
+            continue
+        sha, committed_at, body = parts
+        try:
+            age = now - int(committed_at)
+        except ValueError:
+            continue
+        if age > _RETRY_LANDED_WINDOW_SECS:
+            return None
+        if _message_identity(body) == want:
+            return sha.strip()
+    return None
+
+
 @register_op("ceremony.commit_v2")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "ceremony.commit_v2" handler -- mutating, sync.
@@ -826,12 +868,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             declared_reverts=raw_declared_reverts,
         )
     except NothingToCommit as exc:
-        # Distinguished from the other refusals in the SAME envelope, not a
-        # new one: `committed: False` plus the message is what makes it
-        # legible to a human reading one line, and the flag is what lets a
-        # caller that legitimately expects a possible no-op (a follow-up
-        # commit after `memo.send` already committed its own receipt) tell
-        # "already done" from "failed" without parsing prose.
+        # `nothing_to_commit` lets a caller expecting a possible no-op tell "already done" from
+        # "failed". `already_landed_sha` names the commit when a recent one carries this exact
+        # message, Session-Id trailer included, so a peer's commit cannot match: the retry of a
+        # call that landed before its reply was read.
+        landed = _landed_by_predecessor(worktree_root, message)
+        if landed is not None:
+            return _error(
+                f"{exc} The same message already landed as {landed}; an earlier call of "
+                "this op committed it.",
+                nothing_to_commit=True,
+                already_landed_sha=landed,
+            )
         return _error(str(exc), nothing_to_commit=True)
     except IndexStaleAfterCommit as exc:
         # THE COMMIT LANDED. Reporting an error here (`committed: False`) makes the caller retry and

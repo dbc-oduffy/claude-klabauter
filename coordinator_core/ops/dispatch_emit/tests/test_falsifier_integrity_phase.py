@@ -55,6 +55,18 @@ def test_py_instrument_yields_report(tmp_path):
     assert inp.criterion == "the gate can fail"
 
 
+def test_report_has_no_line_a_capped_reader_would_truncate(tmp_path, monkeypatch):
+    a = _repo(tmp_path, "run tools/inst.py")
+    findings = [{"code": "NO_EXIT_PATH", "line": i, "detail": "x" * 120} for i in range(40)]
+    monkeypatch.setattr(
+        fip, "_load_verdict_reaches_exit",
+        lambda: lambda source, name: {"filename": name, "verdict": "NO_EXIT_PATH", "findings": findings},
+    )
+    [inp] = fip.review_inputs([a], repo_root=tmp_path, report_dir=Path("reports"))
+    assert len(inp.report_json) > 1500
+    assert max(len(line) for line in inp.report_json.splitlines()) <= 1500
+
+
 def test_command_shaped_how_yields_none(tmp_path):
     a = _repo(tmp_path, "run pytest -q")
     [inp] = fip.review_inputs([a], repo_root=tmp_path, report_dir=Path("r"))
@@ -83,3 +95,11 @@ def test_prompt_is_blinded_and_labels_are_ordinal_and_stable(tmp_path):
         assert s.agent_type == fip.REVIEWER_AGENT_TYPE
         assert s.model == fip.REVIEWER_AGENT_MODEL
         assert s.schema == "falsifier_integrity_result"
+
+
+def test_sh_instrument_yields_report(tmp_path):
+    a = _repo(tmp_path, "run tools/probe.sh")
+    (tmp_path / "tools" / "probe.sh").write_text("#!/bin/sh\ngrep x y || true\n", encoding="utf-8")
+    [inp] = fip.review_inputs([a], repo_root=tmp_path, report_dir=Path("reports"))
+    assert json.loads(inp.report_json)["verdict"] == "NO_EXIT_PATH"
+    assert inp.report_path == "reports/p1.json"

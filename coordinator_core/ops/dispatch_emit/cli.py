@@ -413,6 +413,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scratch-dir", default=None, metavar="PATH", help="pipeline route: repo-relative scratch dir"
     )
     parser.add_argument(
+        "--resume-missing",
+        action="store_true",
+        help="pipeline route: re-emit only the fan-out elements whose expected output is missing or empty "
+        "under --scratch-dir (resume after a usage-limit stop)",
+    )
+    parser.add_argument(
+        "--validator",
+        default=None,
+        metavar="CMD",
+        help="pipeline route: a one-line validator command; every manifest stage naming {{validator}} "
+        "is emitted (per batch when it fans over a list) and filled with it; refused when no stage names it",
+    )
+    parser.add_argument(
         "--flag",
         action="append",
         default=None,
@@ -814,8 +827,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             ("--brief", args.brief),
             ("--subjects", args.subjects),
             ("--scratch-dir", args.scratch_dir),
+            ("--resume-missing", args.resume_missing),
             ("--flag", args.flag),
             ("--list", args.list),
+            ("--validator", args.validator),
         )
         if value
     ]
@@ -1079,6 +1094,17 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_DATA_ERROR
         if args.scratch_dir:
             params["scratch_dir"] = args.scratch_dir
+        if args.validator is not None:
+            params["validator"] = args.validator
+        if args.resume_missing:
+            if not args.scratch_dir:
+                print(
+                    "emit-dispatch-workflow: ERROR — --resume-missing requires --scratch-dir "
+                    "(the interrupted run's scratch dir)",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            params["resume_missing"] = True
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if args.plan:

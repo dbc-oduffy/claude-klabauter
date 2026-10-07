@@ -20,8 +20,8 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_NONE, FAN_OUT_OVER, FAN_OUT_PER_SUBJECT, MANIFEST_SUFFIX, PIPELINES_DIR,
     PLACEHOLDER_RE, SCHEMA_VERSION, SCOPE_POST, SCOPE_PRE,
     SCOPE_SUBJECT, SUBJECTS_MODE_SEQUENTIAL, WHEN_FLAG, WHEN_NONEMPTY, WHEN_RETURN, FanOut,
-    FlagSpec, Manifest, PipelineEmitRefused, PipelineInputs, Schedule, Stage, When, subject_key,
-    subject_slug,
+    FlagSpec, Manifest, PipelineEmitRefused, PipelineInputs, Schedule, Stage, VALIDATOR_TOKEN, When,
+    subject_key, subject_slug, validator_bound,
 )
 
 __all__ = ["load_manifest", "validate"]
@@ -459,6 +459,8 @@ def _skipped(
     for sid in order:
         stage = by_id[sid]
         when = stage.when
+        if inputs.validator is None and validator_bound(stage, manifest):
+            skipped.add(sid)
         if when is not None and when.kind == WHEN_FLAG:
             value = _flag_value(manifest, inputs, when.ref)
             if value is _MISSING:
@@ -482,6 +484,13 @@ def _check_inputs(manifest: Manifest, inputs: PipelineInputs, reasons: list[str]
             reasons.append(f"unknown flag {name!r}; declared: {', '.join(sorted(manifest.flags)) or 'none'}")
         elif _coerce_flag(spec, value) not in spec.allowed:
             reasons.append(f"flag {name!r} value {value!r} is not in allowed {list(spec.allowed)}")
+    if inputs.validator is not None:
+        if not inputs.validator.strip() or "\n" in inputs.validator:
+            reasons.append("validator must be a non-empty single-line command")
+        elif not any(validator_bound(s, manifest) for s in manifest.stages):
+            reasons.append(
+                f"validator given, but no stage of {manifest.pipeline!r} names {{{{{VALIDATOR_TOKEN}}}}}"
+            )
     for name in inputs.lists:
         if name not in manifest.lists:
             reasons.append(f"unknown list {name!r}; declared: {', '.join(sorted(manifest.lists)) or 'none'}")
@@ -663,7 +672,7 @@ def _token_problem(
     token: str, manifest: Manifest, inputs: PipelineInputs, scope: str | None,
     closure: frozenset[str] | None, by_id: dict[str, Stage], fan_out: FanOut | None = None,
 ) -> str | None:
-    if token in ("brief", "scratch_dir"):
+    if token in ("brief", "scratch_dir", VALIDATOR_TOKEN):
         return None
     if token == "item":
         return None if fan_out is not None and fan_out.kind == FAN_OUT_OVER else "is out of scope: the stage does not fan out over a list"
@@ -704,7 +713,7 @@ def _fill_for_containment(text: str, inputs: PipelineInputs, by_id: dict[str, St
             return inputs.scratch_dir
         if token == "subject":
             return "subject"
-        if token in ("brief", "item") or _FLAG_TOKEN_RE.match(token) or _ITEM_TOKEN_RE.match(token):
+        if token in ("brief", "item", VALIDATOR_TOKEN) or _FLAG_TOKEN_RE.match(token) or _ITEM_TOKEN_RE.match(token):
             return "x"
         out = _STAGE_OUT_RE.match(token)
         if out and out.group(1) in by_id:

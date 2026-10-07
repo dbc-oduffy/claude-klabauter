@@ -25,7 +25,7 @@ __all__ = [
     "SCOPE_PRE", "SCOPE_SUBJECT", "SCOPE_POST", "RUN_ID_PREFIX", "RUN_DIR_ROOT",
     "FlagSpec", "FanOut", "When", "Stage", "Manifest", "PipelineInputs", "Schedule",
     "PipelineEmitRefused", "SUBJECTS_MODE_SEQUENTIAL", "WHEN_FLAG", "WHEN_RETURN", "WHEN_NONEMPTY",
-    "ITEM_MARK", "subject_slug", "stage_phase",
+    "ITEM_MARK", "subject_slug", "stage_phase", "VALIDATOR_TOKEN", "validator_bound",
 ]
 
 SCHEMA_VERSION = 1
@@ -38,6 +38,7 @@ RUN_ID_PREFIX = "pipeline-"
 SUBJECTS_MODE_SEQUENTIAL = "sequential"
 WHEN_FLAG, WHEN_RETURN, WHEN_NONEMPTY = "flag", "return", "nonempty"
 ITEM_MARK = "\x01item\x01"
+VALIDATOR_TOKEN = "validator"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -144,6 +145,9 @@ class PipelineInputs:
 
     A subject is a string key, or an object whose `subject` field is the key and whose other
     fields (list fields feed `fan_out: {over: subject.<field>}`) ride along.
+
+    `validator` is a command line the caller wants run as a step; `{{validator}}` substitutes it, and
+    a stage that names that token is emitted only when it is given (see `validator_bound`).
     """
 
     brief: str
@@ -151,6 +155,7 @@ class PipelineInputs:
     scratch_dir: str
     flags: Mapping[str, str | bool]
     lists: Mapping[str, tuple] = field(default_factory=dict)
+    validator: str | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +176,12 @@ def subject_key(subject: str | dict) -> str:
 def subject_slug(key: str) -> str:
     """A filesystem-safe lowercase slug of a subject key."""
     return _SLUG_RE.sub("-", key.lower()).strip("-") or "subject"
+
+
+def validator_bound(stage: Stage, manifest: Manifest) -> bool:
+    """True when the stage's template or output names `{{validator}}`: the stage runs only under a caller validator."""
+    texts = (manifest.templates.get(stage.template, ""), stage.output)
+    return any(VALIDATOR_TOKEN == tok for text in texts for tok in PLACEHOLDER_RE.findall(text))
 
 
 def stage_phase(stage: Stage) -> str:

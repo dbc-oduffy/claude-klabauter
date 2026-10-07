@@ -403,8 +403,9 @@ def _plan(tmp_path, extra=""):
     return p
 
 
-def test_plan_targets_is_the_deduped_union_of_row_writes(tmp_path):
-    assert m.plan_targets(_plan(tmp_path)) == ["x/a.py", "x/b.py", "y/c.py"]
+def test_plan_targets_is_the_plan_then_the_deduped_union_of_row_writes(tmp_path):
+    plan = _plan(tmp_path)
+    assert m.plan_targets(plan) == [plan.as_posix(), "x/a.py", "x/b.py", "y/c.py"]
 
 
 def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path):
@@ -415,8 +416,10 @@ def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path):
 
 def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
     (tmp_path / ".git").mkdir()
-    rc = m.main(["--root", str(tmp_path), "targets", "--from-plan", str(_plan(tmp_path)),
+    plan = _plan(tmp_path)
+    rc = m.main(["--root", str(tmp_path), "targets", "--from-plan", str(plan),
                  "--add", "z.py", "--session-id", "s1"])
     assert rc == 0
     f = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
-    assert f.read_text(encoding="utf-8").split() == ["z.py", "x/a.py", "x/b.py", "y/c.py"]
+    assert f.read_text(encoding="utf-8").split() == [
+        "z.py", "plan.md", "x/a.py", "x/b.py", "y/c.py"]

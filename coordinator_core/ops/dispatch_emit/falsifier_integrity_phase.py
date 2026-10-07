@@ -28,7 +28,7 @@ REVIEWER_AGENT_MODEL = "sonnet"
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 _INSTRUMENT_REL = "coordinator/bin/instrument-can-report-red.py"
-_PY_TOKEN = re.compile(r"[\w./\\-]+\.py\b")
+_PY_TOKEN = re.compile(r"[\w./\\-]+\.(?:py|sh)\b")
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def plans_with_falsifier(plan_paths: Iterable[str], *, repo_root: Path) -> froze
 
 
 def _instrument_path(how: str, repo_root: Path) -> Optional[str]:
-    """Repo-relative POSIX path of the first existing ``.py`` file named in ``how``."""
+    """Repo-relative POSIX path of the first existing ``.py`` or ``.sh`` file named in ``how``."""
     root = repo_root.resolve()
     for token in _PY_TOKEN.findall(how):
         rel = token.replace("\\", "/")
@@ -117,7 +117,8 @@ def review_inputs(
             if verdict is None:
                 verdict = _load_verdict_reaches_exit()
             source = (repo_root / instrument).read_text(encoding="utf-8")
-            report_json = json.dumps(verdict(source, instrument), sort_keys=True)
+            # Indented, not one line: a dispatched reader reads this file with a line-capped Read.
+            report_json = json.dumps(verdict(source, instrument), indent=2, sort_keys=True) + "\n"
             report_path = (report_dir / f"{Path(plan_path).stem}.json").as_posix()
         out.append(
             ReviewInput(

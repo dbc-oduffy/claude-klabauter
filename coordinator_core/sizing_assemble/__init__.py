@@ -889,7 +889,10 @@ def route(
             `exit_criterion_pending` detent regardless of whether a
             statement was passed — this module never sees PM acceptance
             (that is `sizing.accept_exit_criterion`, C4).
-        interaction_mode: "hands-on" (default) | "pm" | "ceo" — which human
+        interaction_mode: "hands-on" | "pm" | "ceo" — which human
+            touchpoints apply. The engine default is "ceo", resolved by the CLI
+            through `mode_resolution`. This parameter's own "hands-on" default
+            covers only direct library calls that pass no mode. Which human
             touchpoints this sizing's size commits to (Design § Engine).
             Validated against `mode_resolution.INTERACTION_MODES`. Never
             alters `route`, `fork`, or `xl_exit` — it selects which

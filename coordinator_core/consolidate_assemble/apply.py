@@ -8,7 +8,7 @@ per-directive judgment gating, session-identity propagation, and in-repo
 path safety all live in `apply_base`; this module supplies only its own
 closed `_CLI_DISPATCH` table (one handler per `cli` name
 `consolidate_assemble.brief` names: `delete-only`, `cherry-pick-and-delete`,
-`merge-and-delete`, `worktree-remove`, `worktree-prune`, `fetch-prune`) and
+`merge-and-delete`, `cherry-pick-only`, `merge-only`, `worktree-remove`, `worktree-prune`, `fetch-prune`) and
 the git plumbing those handlers invoke.
 
 Every handler shells out to `git` via an explicit argv list through the
@@ -213,9 +213,7 @@ def _clean_cherry_pick_conflict(repo_root: Path) -> None:
         )
 
 
-def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
-    name, ref = args[0], args[1]
-    remote = len(args) > 2 and args[2] == "origin"
+def _cherry_pick_unique(ref: str, repo_root: Path) -> list[str]:
     current = _current_branch(repo_root)
     shas = _unique_commit_shas(repo_root, current, ref)
     if shas:
@@ -223,8 +221,20 @@ def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[s
         if proc.returncode != 0:
             _clean_cherry_pick_conflict(repo_root)
         _fail("cherry-pick", proc)
+    return shas
+
+
+def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
+    name, ref = args[0], args[1]
+    remote = len(args) > 2 and args[2] == "origin"
+    shas = _cherry_pick_unique(ref, repo_root)
     delete_detail = _delete_branch(name, remote, repo_root)
     return {"cli": "cherry-pick-and-delete", "commits": shas, **delete_detail}
+
+
+def _dispatch_cherry_pick_only(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Absorb without deleting: the verb for a branch the recency floor keeps."""
+    return {"cli": "cherry-pick-only", "commits": _cherry_pick_unique(args[1], repo_root)}
 
 
 #: Append-only ledgers a merge conflict may be resolved on by union. Closed,
@@ -282,9 +292,7 @@ def _union_resolve_ledgers(repo_root: Path) -> bool:
     return _run_git(["-c", "core.editor=true", "merge", "--continue"], repo_root).returncode == 0
 
 
-def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
-    name, ref = args[0], args[1]
-    remote = len(args) > 2 and args[2] == "origin"
+def _merge_ref(ref: str, repo_root: Path) -> None:
     # `--no-edit`: with no terminal the message editor fails AFTER the merge
     # result is staged, stranding MERGE_HEAD in a shared tree for the next
     # committer to consume. Any failure aborts, so no in-progress merge is left.
@@ -295,8 +303,20 @@ def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, An
         else:
             _run_git(["merge", "--abort"], repo_root)
     _fail("merge", merge_proc)
+
+
+def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
+    name, ref = args[0], args[1]
+    remote = len(args) > 2 and args[2] == "origin"
+    _merge_ref(ref, repo_root)
     delete_detail = _delete_branch(name, remote, repo_root)
     return {"cli": "merge-and-delete", **delete_detail}
+
+
+def _dispatch_merge_only(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Absorb without deleting: the verb for a branch the recency floor keeps."""
+    _merge_ref(args[1], repo_root)
+    return {"cli": "merge-only"}
 
 
 def _dispatch_worktree_remove(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -322,8 +342,8 @@ def _dispatch_fetch_prune(args: list[str], repo_root: Path) -> dict[str, Any]:
 #: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
 #: this chunk: NONE of consolidate's six verbs (`delete-only`,
-#: `cherry-pick-and-delete`, `merge-and-delete`, `worktree-remove`,
-#: `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL SIX
+#: `cherry-pick-and-delete`, `merge-and-delete`, `cherry-pick-only`,
+#: `merge-only`, `worktree-remove`, `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL SIX
 #: stay `cli`-named — none migrate to `op`. No new op is minted to force a
 #: migration (out of scope by name). Every one of the six is a `git`
 #: plumbing call the module's own `_run_git` makes directly off a
@@ -342,6 +362,8 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "delete-only": _dispatch_delete_only,
     "cherry-pick-and-delete": _dispatch_cherry_pick_and_delete,
     "merge-and-delete": _dispatch_merge_and_delete,
+    "cherry-pick-only": _dispatch_cherry_pick_only,
+    "merge-only": _dispatch_merge_only,
     "worktree-remove": _dispatch_worktree_remove,
     "worktree-prune": _dispatch_worktree_prune,
     "fetch-prune": _dispatch_fetch_prune,
@@ -400,18 +422,31 @@ def apply(
         return exit_code, report
 
 
+_APPLY_HELP = """usage: {prog} apply [--session-id <id>] [--decisions <json> | --decisions-file <path>]
+
+Recomputes the brief and executes its directives.
+
+  --session-id <id>         session identity; falls back to the session env vars
+  --decisions <json>        judgment-point answers, inline JSON
+  --decisions-file <path>   judgment-point answers read from a JSON file
+                            (exclusive with --decisions)
+  -h, --help                print this help and exit 0
+
+A directive behind an unanswered judgment point does not run. A branch whose tip is
+younger than 24h is never deleted: absorbing it keeps it."""
+
+
 def _usage(prog: str) -> int:
-    print(
-        f"usage: {prog} apply [--session-id <id>] "
-        "[--decisions <json> | --decisions-file <path>]",
-        file=sys.stderr,
-    )
+    print(_APPLY_HELP.format(prog=prog), file=sys.stderr)
     return APPLY_EXIT_TRANSPORT_FAIL
 
 
 def main_apply(argv: list[str]) -> int:
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
+    if any(tok in ("--help", "-h") for tok in argv):
+        print(_APPLY_HELP.format(prog="consolidate-assemble"))
+        return APPLY_EXIT_OK
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         print(f"consolidate-assemble apply: {conflict}", file=sys.stderr)

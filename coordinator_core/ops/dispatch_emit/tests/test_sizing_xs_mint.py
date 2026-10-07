@@ -82,3 +82,37 @@ def test_declared_gated_row_is_minted_withheld_never_dropped(tmp_path):
     raw = {r["id"]: r for r in load_rows(text).rows}
     withheld = gated_rows(exclusions, raw)
     assert [(g.id, g.reason, g.owner_repo) for g in withheld] == [("X2", "external_gate", "coordinator-content-repo")]
+
+
+def _gate_of(text: str, row_id: str) -> dict:
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    raw = {r["id"]: r for r in load_rows(text).rows}
+    return raw[row_id]["external_gate"][0]
+
+
+def test_landed_work_gate_is_minted_with_a_deterministic_closure_key(tmp_path):
+    gated = [{"title": "peer lands", "owner_repo": "coordinator-content-repo", "requires": "landed-work"}]
+    text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=gated)
+    again, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=gated)
+    key = _gate_of(text, "X2")["closure_key"]
+    assert key == {"kind": "deliverable", "id": "dlv-xs-thing-abc123-x2"}
+    assert _gate_of(again, "X2")["closure_key"] == key
+
+
+def test_declared_closure_key_is_kept_and_malformed_one_is_replaced(tmp_path):
+    good = {"title": "t", "owner_repo": "r", "closure_key": {"kind": "memo-thread", "id": "m.md"}}
+    bad = {"title": "t", "owner_repo": "r", "closure_key": {"kind": "bogus", "id": "m"}}
+    text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=[good, bad])
+    assert _gate_of(text, "X2")["closure_key"] == {"kind": "memo-thread", "id": "m.md"}
+    assert _gate_of(text, "X3")["closure_key"]["kind"] == "deliverable"
+
+
+def test_closure_key_falls_back_to_plan_id_without_a_deliverable_id():
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import _landed_work_closure_key, xs_spine_plan_id
+
+    stem = "2026-10-01-xs-thing"
+    assert _landed_work_closure_key({}, {}, stem, "X2") == {
+        "kind": "deliverable",
+        "id": f"{xs_spine_plan_id(stem)}-x2",
+    }

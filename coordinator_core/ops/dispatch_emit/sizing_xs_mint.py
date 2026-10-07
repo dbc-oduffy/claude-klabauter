@@ -14,6 +14,7 @@ from typing import Mapping, Sequence
 
 import yaml
 
+from coordinator_core.ops.gate_liveness.emit_discharge import CLOSURE_KEY_KINDS
 from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _dump_rows,
     _infer_change_kind,
@@ -29,6 +30,20 @@ def xs_spine_plan_id(stem: str) -> str:
     same sizing keeps its id."""
     slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")[:30].rstrip("-") or "xs"
     return f"pln-{slug}-{hashlib.sha1(stem.encode('utf-8')).hexdigest()[:6]}"
+
+
+def _landed_work_closure_key(gate: Mapping, sizing: Mapping, stem: str, gid: str) -> dict:
+    """The `closure_key` for a minted `landed-work` gate: the ask's own well-formed key, else a
+    deterministic `deliverable` key so the discharging repo has an id to stamp and a re-mint keeps it.
+
+    A gate with no key has no clearance path (`gate_liveness.resolve` -> `no-closure-key`)."""
+    given = gate.get("closure_key")
+    if isinstance(given, Mapping):
+        kind, ident = given.get("kind"), str(given.get("id") or "").strip()
+        if kind in CLOSURE_KEY_KINDS and ident:
+            return {"kind": kind, "id": ident}
+    base = str(sizing.get("deliverable_id") or "").strip() or xs_spine_plan_id(stem)
+    return {"kind": "deliverable", "id": f"{base}-{gid.lower()}"}
 
 
 def mint_xs_spine(
@@ -88,6 +103,8 @@ def mint_xs_spine(
         if gid == XS_ROW_ID or any(r["id"] == gid for r in rows):
             gid = f"G{n}"
         gate = {"owner_repo": str(g.get("owner_repo") or "external"), "requires": str(g.get("requires") or "landed-work")}
+        if gate["requires"] == "landed-work":
+            gate["closure_key"] = _landed_work_closure_key(g, sizing, stem, gid)
         rows.append(
             {
                 "id": gid,

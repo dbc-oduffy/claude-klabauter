@@ -72,6 +72,7 @@ Negative-spec:
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -89,6 +90,11 @@ EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
 
 _CHERRY_PICK_MAX_COMMITS = 3
+
+#: A stale branch whose tip is younger than this is never deleted by the brief's
+#: directives: a delete cannot be declined at apply, so the floor lives where the
+#: directive is emitted. Absorbing such a branch keeps it (`*-only` verbs).
+RECENCY_FLOOR_SECONDS = 24 * 3600
 
 
 def default_run_git(args: list[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
@@ -157,7 +163,7 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
         [
             "for-each-ref",
             "--format=%(refname)\t%(refname:short)\t%(authoremail:trim)"
-            "\t%(trailers:key=Operator,valueonly,separator=%x2C)",
+            "\t%(trailers:key=Operator,valueonly,separator=%x2C)\t%(committerdate:unix)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -174,7 +180,8 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
         refname, short = parts[0], parts[1]
         email = parts[2] if len(parts) > 2 else ""
         operator = parts[3].split(",", 1)[0].strip() if len(parts) > 3 else ""
-        rows.append((refname, short, email, operator))
+        tip_time = parts[4].strip() if len(parts) > 4 else ""
+        rows.append((refname, short, email, operator, tip_time))
     return rows
 
 
@@ -192,6 +199,16 @@ def tip_operators_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
     prepare-commit-msg from `coordinator.operator`, so a cloud-session tip
     (authored by `CLOUD_SESSION_EMAIL`) can still name its human."""
     return {row[1]: (row[3] if len(row) > 3 else "") for row in rows}
+
+
+def tip_times_from(rows: list[tuple[str, ...]]) -> dict[str, int]:
+    """`{ref: tip committer unix time}` over already-fetched `ref_rows`; a ref
+    whose time is absent or unparseable is omitted (age unknown, no floor)."""
+    times: dict[str, int] = {}
+    for row in rows:
+        if len(row) > 4 and row[4].isdigit():
+            times[row[1]] = int(row[4])
+    return times
 
 
 _BACKUP_BRANCH_SEGMENT_PREFIXES = ("backup", "pre-")
@@ -313,16 +330,19 @@ def _drop_batch_separator(block: str) -> str:
     return block[:-1] if block.endswith("\n\n") else block
 
 
-def _cherry_pick_or_merge_cli(commit_count: int) -> str:
-    return "cherry-pick-and-delete" if commit_count <= _CHERRY_PICK_MAX_COMMITS else "merge-and-delete"
+def _cherry_pick_or_merge_cli(commit_count: int, keep: bool = False) -> str:
+    verb = "cherry-pick" if commit_count <= _CHERRY_PICK_MAX_COMMITS else "merge"
+    return f"{verb}-only" if keep else f"{verb}-and-delete"
 
 
 def brief(
     repo_root: Optional[Path] = None,
     my_email: Optional[str] = None,
     run_git: Optional[RunGit] = None,
+    now: Optional[float] = None,
 ) -> dict[str, Any]:
     run_git = run_git or default_run_git
+    now = time.time() if now is None else now
     repo_root = repo_root or Path.cwd()
 
     my_email = my_email or current_user_email(run_git, repo_root)
@@ -332,6 +352,7 @@ def brief(
     ref_listing = ref_rows(run_git, repo_root)
     all_tip_authors = tip_authors_from(ref_listing)
     all_tip_operators = tip_operators_from(ref_listing)
+    all_tip_times = tip_times_from(ref_listing)
     branch_entries = list_branches_from(ref_listing)
     branches_report: list[dict[str, Any]] = []
     directives: list[dict[str, Any]] = []
@@ -356,6 +377,7 @@ def brief(
         # Counted against main, not the checked-out branch: a `current` behind main would
         # report every main-only commit as unique to each stale branch.
         commits = unique_commits(run_git, repo_root, main_branch or current, ref)
+        recent = ref in all_tip_times and now - all_tip_times[ref] < RECENCY_FLOOR_SECONDS
         branches_report.append(
             {
                 **entry,
@@ -363,11 +385,14 @@ def brief(
                 "operator": operator,
                 "category": category,
                 "unique_commit_count": len(commits),
+                **({"recent": True} if recent else {}),
             }
         )
 
         shas = [line.split(" ", 1)[0] for line in commits]
-        stale_branches.append({"entry": entry, "name": name, "category": category, "commits": commits, "shas": shas})
+        stale_branches.append(
+            {"entry": entry, "name": name, "category": category, "commits": commits, "shas": shas, "recent": recent}
+        )
         all_shas.extend(shas)
 
     global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
@@ -377,6 +402,9 @@ def brief(
         ref = entry["ref"]
 
         delete_directive_id = f"d-delete-{name}"
+        recent = stale["recent"]
+        if not commits and recent:
+            continue
         if not commits:
             is_cloud = stale["category"] == "cloud-session"
             delete_jp_id = f"j-delete-{name}"
@@ -409,33 +437,37 @@ def brief(
         inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]
         jp_id = f"j-absorb-{name}"
         absorb_directive_id = f"d-absorb-{name}"
-        absorb_cli = _cherry_pick_or_merge_cli(len(commits))
+        absorb_cli = _cherry_pick_or_merge_cli(len(commits), keep=recent)
         directives.append(
             {
                 "id": absorb_directive_id,
                 "cli": absorb_cli,
-                "args": [name, ref] + (["origin"] if entry["is_remote"] else []),
+                "args": [name, ref] + ([] if recent or not entry["is_remote"] else ["origin"]),
                 "depends_on": jp_id,
                 "already_satisfied": False,
             }
         )
-        directives.append(
-            {
-                "id": delete_directive_id,
-                "cli": "delete-only",
-                "args": [name] + (["origin"] if entry["is_remote"] else []),
-                "depends_on": jp_id,
-                "already_satisfied": False,
-            }
-        )
+        if not recent:
+            directives.append(
+                {
+                    "id": delete_directive_id,
+                    "cli": "delete-only",
+                    "args": [name] + (["origin"] if entry["is_remote"] else []),
+                    "depends_on": jp_id,
+                    "already_satisfied": False,
+                }
+            )
         judgment_points.append(
             build_judgment_point(
                 None,
                 id=jp_id,
-                question=f"Branch {name!r} has {len(commits)} unique commit(s) — absorb or skip?",
+                question=(
+                    f"Branch {name!r} has {len(commits)} unique commit(s) — absorb or skip?"
+                    + (" (tip is recent: absorb keeps the branch)" if recent else "")
+                ),
                 dispositions=[
                     build_disposition("absorb", resolves=[absorb_directive_id]),
-                    build_disposition("skip", resolves=[delete_directive_id]),
+                    build_disposition("skip", resolves=[] if recent else [delete_directive_id]),
                 ],
                 evidence={"commits": commits, "inspections": inspections},
                 reason="insufficient-evidence",

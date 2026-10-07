@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     SCOPE_POST,
     SCOPE_PRE,
     SCOPE_SUBJECT,
+    VALIDATOR_TOKEN,
     Manifest,
     PipelineEmitRefused,
     PipelineInputs,
@@ -90,6 +91,8 @@ def _fill(
         token = match.group(1)
         if token == "brief":
             return inputs.brief
+        if token == VALIDATOR_TOKEN:
+            return inputs.validator
         if token == "scratch_dir":
             return scratch if scratch is not None else inputs.scratch_dir
         if token == "item":
@@ -327,8 +330,12 @@ def compose_pipeline_script(
     """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
     stages = {stage.id: stage for stage in manifest.stages}
     errors: list[str] = []
-    if ITEM_MARK in inputs.brief or any(ITEM_MARK in json.dumps(sub) for sub in inputs.subjects):
-        errors.append("the brief or a subject carries the reserved item marker")
+    if (
+        ITEM_MARK in inputs.brief
+        or ITEM_MARK in (inputs.validator or "")
+        or any(ITEM_MARK in json.dumps(sub) for sub in inputs.subjects)
+    ):
+        errors.append("the brief, the validator or a subject carries the reserved item marker")
 
     def fill_stage(stage: Stage, subject: str | None, item: Mapping | str | None = None) -> tuple[str, str]:
         template = manifest.templates[stage.template]

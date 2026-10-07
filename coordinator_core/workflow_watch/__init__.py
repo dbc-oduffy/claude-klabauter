@@ -6,11 +6,13 @@ import sys
 import time
 
 from coordinator_core.workflow_watch.render import JournalRenderer
+from coordinator_core.workflow_watch.stall import EXIT_HALTED_USAGE_LIMIT, scan_for_usage_limit
 from coordinator_core.workflow_watch.stamp import reconcile as _reconcile_run
 from coordinator_core.workflow_watch.stamp import stamp_terminal
 from coordinator_core.workflow_watch.terminal import TerminalWatcher
 
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+STALL_SCAN_INTERVAL_SECONDS = 5.0
 
 # The wall-clock cap this watcher enforces on itself, independent of any
 # timeout_ms a model may have retyped into the Monitor call that launched
@@ -82,8 +84,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=(
             "Render each journal event line as it arrives, in addition to "
             "the terminal line. Default is silent-until-terminal: exactly "
-            "one `terminal: <status>` line on stdout, and the exit-code "
-            "contract is unchanged either way."
+            "one `terminal: <status>` line on stdout, and the exit "
+            "codes are the same either way (0 terminal, 1 cap, 2 usage, 3 usage-limit halt)."
+        ),
+    )
+    parser.add_argument(
+        "--script-path",
+        help=(
+            "The Workflow script the run was launched from. Named in the usage-limit "
+            "halt's resume command; a placeholder is printed when absent."
         ),
     )
     parser.add_argument(
@@ -108,6 +117,7 @@ def _watch(
     poll_interval: float,
     cap_seconds: float,
     follow: bool = False,
+    script_path: str | None = None,
 ) -> int:
     watcher = TerminalWatcher(transcript_path, task_id)
     # No per-event Monitor invitation left to serve here (see the module's
@@ -118,6 +128,7 @@ def _watch(
     # nothing to say" without a follow flag threaded through every site.
     renderer = _make_renderer(journal_path) if follow else None
     deadline = time.monotonic() + cap_seconds
+    next_stall_scan = 0.0
 
     while True:
         if renderer is not None:
@@ -134,6 +145,14 @@ def _watch(
             print(f"terminal: {record.status}")
             sys.stdout.flush()
             return 0
+
+        if time.monotonic() >= next_stall_scan:
+            next_stall_scan = time.monotonic() + STALL_SCAN_INTERVAL_SECONDS
+            halt = scan_for_usage_limit(journal_path, time.time())
+            if halt is not None:
+                print(halt.line(script_path) if script_path else halt.line())
+                sys.stdout.flush()
+                return EXIT_HALTED_USAGE_LIMIT
 
         if time.monotonic() >= deadline:
             print(
@@ -166,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         poll_interval=args.poll_interval,
         cap_seconds=args.cap,
         follow=args.follow,
+        script_path=args.script_path,
     )
 
 

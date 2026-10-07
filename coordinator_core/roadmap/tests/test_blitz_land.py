@@ -1519,3 +1519,101 @@ class TestReadFieldStopsAtTheLineEnd:
     def test_a_crlf_present_but_empty_key_is_still_empty(self):
         text = self._fm("handoff_id:\nstatus: open\n").replace("\n", "\r\n")
         assert bl._read_field(text, "handoff_id") is None
+
+
+# ---------------------------------------------------------------------------
+# A `ready` verdict is only landable if plan.prep_gate ran and passed the EM's pull rule
+# ---------------------------------------------------------------------------
+
+
+def _spined_plan(root: Path, slug: str, body_line: str) -> str:
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = (
+        "- id: C1\n  title: Ship the thing\n" + body_line +
+        "  change_kind: code-edit\n  surface: coordinator_core/x.py\n"
+        "  writes: [coordinator_core/x.py]\n  queue_scope: project\n  disposition: open\n"
+    )
+    p = root / "docs" / "plans" / f"{slug}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        f"---\ntitle: {slug}\nstatus: draft\n---\n\n## Tasks\n\n```yaml plan-tasks\n{spine}```\n",
+        encoding="utf-8",
+    )
+    return f"docs/plans/{slug}.md"
+
+
+def test_a_ready_plan_whose_spine_row_has_no_body_is_refused_not_stamped(tmp_path):
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+    plan = _spined_plan(root, "bodyless", "")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert out["approved"] == []
+    assert "body-absent" in out["refused"][0]["reason"]
+    assert "C1" in out["refused"][0]["reason"]
+    assert _status(root, plan) == "draft"
+
+
+def test_a_ready_plan_with_an_executable_spine_lands_and_records_the_gate_verdict(tmp_path):
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+    plan = _spined_plan(root, "bodied", "  body: Add the predicate and pin it with a failing-first test.\n")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert out["refused"] == []
+    assert out["approved"][0]["prep_gate"]
+    assert _status(root, plan) == "approved"
+
+
+def test_an_engine_error_from_the_gate_refuses_the_landing(tmp_path, monkeypatch):
+    from coordinator_core.roadmap import prep_gate as pgate
+
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+    plan = _plan(root, "the-plan", "draft")
+    monkeypatch.setattr(
+        pgate, "gate_plan", lambda *a, **k: {"verdict": pgate.ENGINE_ERROR, "classes": {}}
+    )
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert "did not complete" in out["refused"][0]["reason"]
+    assert _status(root, plan) == "draft"
+
+
+# ---------------------------------------------------------------------------
+# The sanctioned `plan.prep_gate` call the blitz-em makes is not denied for its spelling
+# ---------------------------------------------------------------------------
+
+
+def _blitz_em_bash(command: str) -> dict:
+    return {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "session_id": "sess1",
+        "cwd": None,
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:blitz-em",
+    }
+
+
+@pytest.mark.parametrize("home", ["${CLAUDE_HOME:-$HOME}", "${CLAUDE_HOME:-${HOME}}", "$HOME"])
+def test_the_canonical_settings_home_spelling_of_prep_gate_is_not_flagged(home):
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+
+    command = (
+        f'"${{COORDINATOR_SETTINGS_HOME:-{home}/.coordinator-claude-settings}}/bin/coordinator-invoke" '
+        "plan.prep_gate '{\"repo_root\":\"/r\",\"plan\":\"docs/plans/p.md\"}'"
+    )
+    assert guard.check(_blitz_em_bash(command)) is None
+
+
+def test_a_claude_home_fallback_outside_the_documented_default_is_still_flagged():
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+
+    command = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-/tmp/evil}/.coordinator-claude-settings}/bin/x" a'
+    result = guard.check(_blitz_em_bash(command))
+    assert result is not None
+    assert "unresolved" in result["hookSpecificOutput"]["additionalContext"]

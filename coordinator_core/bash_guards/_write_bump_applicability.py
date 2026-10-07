@@ -159,9 +159,12 @@ Negative-spec:
 
 from __future__ import annotations
 
+import json
 import ntpath
 import os
+import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -640,6 +643,88 @@ def target_is_under_settings_home(
         return False
     root_cf = _resolve_path(str(target_gitdir.parent))
     return root_cf is not None and not _is_under(root_cf, home_cf)
+
+
+#: Per-run output roots a dispatched fan-out declares for its readers to write
+#: (`ops/dispatch_emit/op.py :: _dispatch_emit`, pipeline route). One JSON file
+#: per run, `{run_id}.json`, under the machine-local registry dir -- disjoint
+#: from the session repo, so a sibling-repo pipeline root is reachable from any
+#: reader's guard without knowing which repo the EM sits in.
+RUN_OUTPUT_ROOTS_DIRNAME = "run-output-roots"
+
+#: A declaration older than this stops exempting (checked by mtime at read; the
+#: declaring op also prunes past it). A run's readers write within hours, so the
+#: bound only retires roots nobody is writing to.
+RUN_OUTPUT_ROOT_TTL_SECONDS = 3 * 24 * 3600
+
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def run_output_roots_dir() -> Path:
+    return registry_dir() / RUN_OUTPUT_ROOTS_DIRNAME
+
+
+def declare_run_output_root(run_id: str, root: str) -> Path:
+    """Record `root` as the output root readers of run `run_id` may write, and
+    return the declaration path.
+
+    Raises `ValueError` for a `run_id` that is not one safe path segment or a
+    `root` that is not absolute. Also prunes declarations past
+    `RUN_OUTPUT_ROOT_TTL_SECONDS`, best-effort. The guard honours only roots
+    declared here; this is the one writer."""
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    if not isinstance(run_id, str) or not _RUN_ID_RE.match(run_id) or ".." in run_id:
+        raise ValueError(f"run output root: run_id must be one safe path segment, got {run_id!r}")
+    if not (isinstance(root, str) and (os.path.isabs(root) or ntpath.isabs(root))):
+        raise ValueError(f"run output root: root must be an absolute path, got {root!r}")
+    directory = run_output_roots_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{run_id}.json"
+    record = {"run_id": run_id, "root": str(root), "declared_at": now_iso()}
+    atomic_write_bytes(target, (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"))
+    cutoff = time.time() - RUN_OUTPUT_ROOT_TTL_SECONDS
+    try:
+        for entry in os.scandir(directory):
+            if entry.name.endswith(".json") and entry.name != target.name and entry.stat().st_mtime < cutoff:
+                os.unlink(entry.path)
+    except OSError:
+        pass
+    return target
+
+
+def target_is_under_declared_run_output_root(path: str) -> bool:
+    """True iff `path` resolves under a root some live run declared through
+    `declare_run_output_root`. Callers treat `True` as "never bump".
+
+    A declaration stops counting past `RUN_OUTPUT_ROOT_TTL_SECONDS`, when it is
+    unreadable, or when its root is itself a git checkout's top level -- a run's
+    output root is a directory inside a tree, never the tree. Fails closed on the
+    exemption only (`False`: the ordinary bump decides), never raises."""
+    try:
+        target_cf = _resolve_path(path) if path else None
+        if target_cf is None:
+            return False
+        cutoff = time.time() - RUN_OUTPUT_ROOT_TTL_SECONDS
+        for entry in os.scandir(run_output_roots_dir()):
+            if not entry.name.endswith(".json"):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    continue
+                with open(entry.path, encoding="utf-8") as fh:
+                    root = json.load(fh).get("root")
+            except (OSError, ValueError, AttributeError):
+                continue
+            root_cf = _resolve_path(root) if isinstance(root, str) and root else None
+            if root_cf is None or not _is_under(target_cf, root_cf):
+                continue
+            if os.path.exists(os.path.join(root, ".git")):
+                continue
+            return True
+        return False
+    except Exception:
+        return False
 
 
 def anchor_subtree_contains(anchor: str, target: str) -> bool:

@@ -6103,9 +6103,9 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/liveness.py:78` | - | `logger.debug("coordinator_core.liveness: _lib_path: CLAUDE_KLABAUTER_ROOT unresolvable: %s", exc)` |
 | `coordinator_core/message_register/_codename_classes.py:106` | - | `"COORDINATOR_CLAUDE_KLABAUTER_DENY_AUTHORITATIVE": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:107` | - | `"COORDINATOR_CLAUDE_KLABAUTER_DOCTOR_STALE_SEC": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:130` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:146` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
-| `coordinator_core/message_register/_codename_classes.py:147` | - | `"coordinator-content-repo-Klabauter": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:130` | - | `"DOE-CLAUDE-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:146` | - | `"Doe-CLAUDE-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:147` | - | `"Doe-Claude-Klabauter": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:162` | - | `"MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER_REPO": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:163` | - | `"CLAUDE-KLABAUTER": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:164` | - | `"CLAUDE_KLABAUTER_ROOT": RENAME,` |
@@ -6119,7 +6119,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/message_register/_codename_classes.py:202` | - | `"check-claude-klabauter-doctor-sentinel.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:208` | - | `"coordinator-claude-klabauter-root.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:209` | - | `"coordinator_claude_klabauter_root": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:220` | - | `"COORDINATOR-CONTENT-REPO-KLABAUTER": REDACTION,` |
+| `coordinator_core/message_register/_codename_classes.py:220` | - | `"doe-CLAUDE-KLABAUTER": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:222` | - | `"content-engine": REDACTION,` |
 | `coordinator_core/message_register/_codename_classes.py:240` | - | `"gen-claude-klabauter-live-root-pointer": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:248` | - | `"claude-klabauter": RENAME,` |
@@ -6127,7 +6127,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/message_register/_codename_classes.py:250` | - | `"claude-klabauter-live-root": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:261` | - | `"migrate-state-to-claude-klabauter.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:277` | - | `"claude_klabauter": RENAME,` |
-| `coordinator_core/message_register/_codename_classes.py:313` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "contentroot_klabauter", "projectclaude_klabauter"})` |
+| `coordinator_core/message_register/_codename_classes.py:313` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "doeclaude_klabauter", "projectclaude_klabauter"})` |
 | `coordinator_core/message_register/_codename_classes.py:535` | - | `ids = ("content_root", "claude_klabauter", "project_rag", "example_game_workbench_repo")` |
 | `coordinator_core/message_register/tests/test_codename_classes.py:71` | - | `"""`content-engine` glues a REDACTION half (`coordinator-content-repo`) and a RENAME half` |
 | `coordinator_core/op_budget_suspension.py:664` | - | `"SUPERSEDED 2026-09-02 -- claude-klabauter owns the v2 and is building it. "` |

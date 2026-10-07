@@ -649,7 +649,14 @@ _ARGV0_UNRESOLVED_RE = re.compile(r"^\$")
 # Any command-substitution shape (`$(...)`, backticks) anywhere in argv0
 # still fails to match this pattern (it requires the literal `$VAR`/`${VAR}`
 # token forms only) and falls through to the existing unresolved-argv0 deny.
-_SETTINGS_HOME_DEFAULT_RE = r"\$(?:HOME|\{HOME\})/\.coordinator-claude-settings"
+# The `${CLAUDE_HOME:-$HOME}` rung is the form `resolve-coordinator-bin.md`
+# prescribes as the canonical fence; without it the doctrine spelling itself
+# was the denied one. `CLAUDE_HOME` is accepted only with a `$HOME` fallback.
+_SETTINGS_HOME_DEFAULT_RE = (
+    r"(?:\$(?:HOME|\{HOME\})"
+    r"|\$\{CLAUDE_HOME:-\$(?:HOME|\{HOME\})\})"
+    r"/\.coordinator-claude-settings"
+)
 _SETTINGS_HOME_BIN_EXEMPT_RE = re.compile(
     r"^\$(?:"
     r"COORDINATOR_SETTINGS_HOME"

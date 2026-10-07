@@ -1,0 +1,13 @@
+{
+  "error": "rate_limit",
+  "apiErrorStatus": 429,
+  "quotaLimits": {
+    "status": "rejected",
+    "resetsAt": 1791312000,
+    "unifiedRateLimitFallbackAvailable": false,
+    "rateLimitType": "five_hour",
+    "overageStatus": "rejected",
+    "overageDisabledReason": "org_level_disabled",
+    "isUsingOverage": false
+  }
+}

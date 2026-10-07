@@ -78,13 +78,33 @@ Wire params:
                                      and ``topics``), ``lists`` (name -> list; a roster
                                      entry is ``{slug, agent_type}`` or ``slug=agent_type``),
                                      ``scratch_dir`` (repo-relative,
-                                     guarded) and ``flags`` (str->str|bool). Exclusive of
+                                     guarded), ``flags`` (str->str|bool) and ``validator``
+                                     (a one-line command; ``{{validator}}`` fills it, and a
+                                     stage naming that token is emitted only when it is
+                                     given, so a manifest fans it per batch with
+                                     ``over: inputs.<list>``). Exclusive of
                                      every other route selector
                                      (``PipelineParamConflictError``). Output
                                      defaults to
                                      ``scratch/warp/<run-id>.workflow.mjs``;
                                      receipt extras add pipeline/run_id/
-                                     manifest_sha256/subjects. Emit-only.
+                                     manifest_sha256/subjects. Emit-only. Every
+                                     emit declares the run's scratch dir as a
+                                     per-run output root readers may write
+                                     across a repo boundary
+                                     (``bump_out_of_repo_tool_write`` honours
+                                     it); the reply carries ``run_output_root``
+                                     (absolute).
+    resume_missing (bool, optional) — pipeline route: re-emit only what an
+                                     interrupted run did not finish. Needs the
+                                     interrupted run's ``scratch_dir``. Each
+                                     element of an ``over: inputs.<list>`` stage
+                                     whose filled ``output`` is already a
+                                     non-empty file is dropped from the emitted
+                                     script; the reply and receipt carry
+                                     ``resume_missing: {list: {expected,
+                                     present, missing}}``. Refused when no stage
+                                     fans over an input list or nothing is missing.
     cloud_spawn (dict, optional)  — the CLOUD-SPAWN route: ``{kind: probe|worker,
                                      source_repo, parent_session_id,
                                      channel_pr, question}``. Replies
@@ -210,6 +230,7 @@ import hashlib
 import json
 from coordinator_core.atomic_replace import atomic_write_bytes
 import os
+import stat
 import sys
 import uuid
 from dataclasses import replace
@@ -656,7 +677,7 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
-            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "part", "baton", "deliverable_id",
+            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "validator", "part", "baton", "deliverable_id",
         )
     ),
     Field("inventory_part", "list"),
@@ -694,6 +715,73 @@ def _pipeline_scratch_rel(root: Path, scratch_dir: Optional[str], run_id: str) -
     if guarded is None:
         raise PathEscapeError(f"scratch_dir escapes repo root: {scratch_dir!r} not under {Path(root).as_posix()!r}")
     return guarded.relative_to(Path(root).resolve()).as_posix()
+
+
+def _output_landed(root: Path, rel: str) -> bool:
+    """True when ``rel`` (repo-relative) is a non-empty regular file under ``root``.
+
+    One ``stat``, no listing. A directory never counts: a half-written
+    per-item directory would read as done, and re-reading is the safe error.
+    """
+    guarded = contained_path(Path(root) / rel, [Path(root)])
+    if guarded is None:
+        return False
+    try:
+        st = os.stat(guarded)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_size > 0
+
+
+def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Path):
+    """Drop every input-list element whose output file already landed.
+
+    An element is done only when, for every active stage fanned ``over:
+    inputs.<list>``, the stage's filled ``output`` exists for it (for every
+    subject when the stage is per-subject); a list shared by two stages
+    re-emits an element either stage still lacks. Returns ``(inputs, report)``
+    with ``report[list] = {expected, present, missing}``; refuses when no
+    stage fans over an input list or nothing is missing.
+    """
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import _element_value, _fill
+    from coordinator_core.ops.dispatch_emit.pipeline_contract import SCOPE_SUBJECT, subject_slug
+
+    stages = {s.id: s for s in manifest.stages}
+    done: dict[str, list[bool]] = {}
+    for stage in manifest.stages:
+        if stage.id in schedule.skipped or not stage.fan_out.over_inputs:
+            continue
+        name = stage.fan_out.inputs
+        elements = inputs.lists[name]
+        flags = done.setdefault(name, [True] * len(elements))
+        subjects = (
+            [subject_key(s) for s in inputs.subjects] if schedule.scope[stage.id] == SCOPE_SUBJECT else [None]
+        )
+        for subject in subjects:
+            scratch = (
+                f"{inputs.scratch_dir.rstrip('/')}/{subject_slug(subject)}"
+                if manifest.subjects_mode and subject is not None else None
+            )
+            for index, element in enumerate(elements):
+                errors: list[str] = []
+                rel = _fill(
+                    stage.output, manifest=manifest, inputs=inputs, stages=stages, subject=subject,
+                    errors=errors, item=_element_value(element), scratch=scratch,
+                )
+                flags[index] = flags[index] and not errors and _output_landed(root, rel)
+    if not done:
+        raise PipelineEmitRefused(["resume_missing needs a stage fanned over an input list (over: inputs.<list>)"])
+    report = {
+        name: {"expected": len(flags), "present": sum(flags), "missing": len(flags) - sum(flags)}
+        for name, flags in done.items()
+    }
+    if all(entry["missing"] == 0 for entry in report.values()):
+        raise PipelineEmitRefused(["resume_missing: every expected output already exists; nothing to re-emit"])
+    lists = {
+        name: tuple(e for e, ok in zip(inputs.lists[name], done[name]) if not ok) if name in done else inputs.lists[name]
+        for name in inputs.lists
+    }
+    return replace(inputs, lists=lists), report
 
 
 def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
@@ -852,6 +940,9 @@ def _dispatch_emit(
             "dispatch.emit lanes derives each part's script path; output_path is not accepted"
         )
 
+    if params.get("resume_missing") and not pipeline_name:
+        raise ValueError("dispatch.emit resume_missing is a pipeline-route option and needs pipeline")
+
     if pipeline_name:
         if plan_path or inventory_path or queue or profile_name or ask or sizing_path or params.get("cloud_spawn") is not None:
             raise PipelineParamConflictError(
@@ -874,17 +965,27 @@ def _dispatch_emit(
         run_id = (
             f"{RUN_ID_PREFIX}{pipeline_name}-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         )
+        resume_missing = params.get("resume_missing", False)
+        if not isinstance(resume_missing, bool):
+            raise ValueError("dispatch.emit resume_missing must be a boolean")
+        if resume_missing and not params.get("scratch_dir"):
+            raise ValueError(
+                "dispatch.emit resume_missing needs the interrupted run's scratch_dir; "
+                "the per-run default is fresh and holds no outputs"
+            )
         raw_subjects = params.get("subjects")
         subjects = () if raw_subjects is None else tuple(subjects_from_value(raw_subjects, base=pipeline_root))
         pipeline_ctx = {
             "root": pipeline_root,
             "run_id": run_id,
+            "resume_missing": resume_missing,
             "inputs": PipelineInputs(
                 brief=brief,
                 subjects=subjects,
                 scratch_dir=_pipeline_scratch_rel(pipeline_root, params.get("scratch_dir"), run_id),
                 flags=dict(params.get("flags") or {}),
                 lists=dict(params.get("lists") or {}),
+                validator=params.get("validator"),
             ),
         }
         if not aliased_param(params, "output_path", "out_path"):
@@ -1114,6 +1215,12 @@ def _dispatch_emit(
         )
         pipeline_ctx["inputs"] = pipeline_inputs
         schedule = validate(manifest, pipeline_inputs)
+        if pipeline_ctx["resume_missing"]:
+            pipeline_inputs, resume_report = _resume_missing_inputs(
+                manifest, schedule, pipeline_inputs, pipeline_ctx["root"]
+            )
+            pipeline_ctx["inputs"] = pipeline_inputs
+            pipeline_ctx["resume_report"] = resume_report
         script = compose_pipeline_script(
             manifest,
             pipeline_inputs,
@@ -1128,6 +1235,8 @@ def _dispatch_emit(
             "brief": pipeline_ctx["inputs"].brief,
             "manifest_sha256": manifest.sha256,
             "subjects": [subject_key(s) for s in pipeline_ctx["inputs"].subjects],
+            **({"validator": pipeline_ctx["inputs"].validator} if pipeline_ctx["inputs"].validator else {}),
+            **({"resume_missing": pipeline_ctx["resume_report"]} if pipeline_ctx["resume_missing"] else {}),
         }
         receipt_plan_path = None
     elif ask_ctx is not None:
@@ -1196,6 +1305,12 @@ def _dispatch_emit(
     # script unfireable on the platform this repo treats as first-class.
     if not params.get("force"):
         _refuse_foreign_emission(guarded_path, script, emitting_session_id)
+
+    if pipeline_ctx is not None:
+        from coordinator_core.bash_guards._write_bump_applicability import declare_run_output_root
+
+        pipeline_output_root = (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).resolve()
+        declare_run_output_root(pipeline_ctx["run_id"], str(pipeline_output_root))
 
     guarded_path.parent.mkdir(parents=True, exist_ok=True)
     guarded_path.write_text(script, encoding="utf-8", newline="")
@@ -1270,6 +1385,9 @@ def _dispatch_emit(
         reply["run_id"] = pipeline_ctx["run_id"]
         reply["brief"] = pipeline_ctx["inputs"].brief
         reply["scratch_dir"] = pipeline_ctx["inputs"].scratch_dir
+        reply["run_output_root"] = pipeline_output_root.as_posix()
+        if pipeline_ctx["resume_missing"]:
+            reply["resume_missing"] = pipeline_ctx["resume_report"]
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

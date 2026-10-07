@@ -1300,6 +1300,63 @@ def test_fully_failed_real_run_keeps_existing_exit_code(tmp_path, monkeypatch):
     assert "Rows succeeded: 0/2" in out
 
 
+def test_failed_real_run_verdict_block_carries_one_line_cause(tmp_path, monkeypatch):
+    """The cause of a failed row sits among `[timing]` lines far above the
+    verdict; the verdict block itself must carry a one-line `cause:`."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+
+    spy = _SubprocessSpy(
+        dryrun_stdout=_dryrun_stdout(),
+        real_stdout=_real_stdout(),
+        parse2_stdout=_parse2_stdout(),
+    )
+    _install_manifest_stub(monkeypatch, spy)
+
+    def _real_failed(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if str(_mod._PUBLISH) in joined and "--dry-run" not in cmd:
+            return _completed(
+                1,
+                "Rows succeeded: 0/1\n",
+                "  [timing]   a: run_percolate: 0.100s wall / 0.010s cpu (x)\n"
+                "  Error: payload parity gate FAILED for a: 2 file(s) differ\n"
+                "  Skipping a.\n"
+                "  Error: downstream fallout\n"
+                "Rows FAILED:    1 (a)\n",
+            )
+        return spy(cmd, **kwargs)
+
+    monkeypatch.setattr(_mod.subprocess, "run", _real_failed)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
+    monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
+
+    args = _mod._build_parser().parse_args(
+        ["alpha", "--percolate-root", str(percolate_root), "--yes"]
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _mod._cmd_round(args)
+    out = buf.getvalue()
+
+    assert rc == _mod._EXIT_FAIL
+    verdict = out[out.index("percolate-round alpha — FAIL"):]
+    assert "  cause:     Error: payload parity gate FAILED for a: 2 file(s) differ\n" in verdict
+    assert "downstream fallout" not in verdict
+
+
+def test_extract_failure_cause_fallbacks():
+    assert _mod._extract_failure_cause("", "") is None
+    refused = "  [timing]   row-a: REFUSED: pre-sync gate declined: 0.000s wall / 0.000s cpu (d)\n"
+    assert _mod._extract_failure_cause(refused, "") == "row-a: REFUSED: pre-sync gate declined"
+    assert _mod._extract_failure_cause("", "  Error: " + "x" * 500).__len__() == _mod._CAUSE_MAX_CHARS
+
+
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
     """RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
     then-the-pipeline-can-go.md): the commit leg used to run through

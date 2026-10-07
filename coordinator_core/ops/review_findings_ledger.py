@@ -739,8 +739,8 @@ def targets_add(
     return merged
 
 
-def plan_targets(plan_path: Path) -> List[str]:
-    """Union of the plan spine's declared `writes`, in row order, de-duplicated.
+def plan_targets(plan_path: Path, root: Optional[Path] = None) -> List[str]:
+    """The plan file (repo-relative to `root` when given), then the union of its spine's declared `writes`, in row order, de-duplicated.
     A row whose `writes` is UNDECLARED raises LedgerError naming the row."""
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, SpineReadError, read_spine
 
@@ -754,7 +754,14 @@ def plan_targets(plan_path: Path) -> List[str]:
             f"--from-plan {plan_path}: row(s) {', '.join(undeclared)} declare no `writes:` — "
             "declare it (`writes: []` for none) or pass explicit --add paths"
         )
-    merged: List[str] = []
+    # The plan file itself is a target: a reviewer applies plan findings in place.
+    plan_rel = plan_path
+    if root is not None and plan_path.is_absolute():
+        try:
+            plan_rel = plan_path.resolve().relative_to(Path(root).resolve())
+        except ValueError as exc:
+            raise LedgerError(f"--from-plan {plan_path}: not under the repo root {root}") from exc
+    merged: List[str] = [plan_rel.as_posix()]
     for row in rows:
         for path in row.writes:
             if path not in merged:
@@ -856,7 +863,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         paths = list(args.add)
         if args.from_plan:
             try:
-                paths += plan_targets(Path(args.from_plan))
+                paths += plan_targets(Path(args.from_plan), git_root)
             except LedgerError as exc:
                 print(f"review-findings-ledger: {exc}", file=sys.stderr)
                 return 1
