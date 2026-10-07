@@ -812,6 +812,7 @@ _SPINE_KEY_INDENT_RE = re.compile(r'^([ \t]*-[ \t]+)id:')
 _ENGINE_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:[ \t]*(open|coded)[ \t]*$')
 _ENGINE_DISPOSITION_REF_RE = re.compile(r'^[ \t]*disposition_ref:')
 _ANY_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:')
+_ENGINE_DISPOSITION_DETAIL_RE = re.compile(r'^[ \t]*disposition_detail:')
 _GATE_CLEARANCE_KEYS = ('cleared', 'cleared_evidence', 'closure_evidence')
 _GATE_CLEARANCE_RE = re.compile(
     r'^[ \t]+(?:-[ \t]+)?(?:cleared|cleared_evidence|closure_evidence):(?![ \t]*false[ \t]*$)'
@@ -852,8 +853,9 @@ def approval_body_sha(file_text: str) -> Optional[str]:
 
     `dispatch.terminal_commit` flips rows open -> coded, writes `disposition_ref`,
     and re-sorts rows to honour the D5 open-before-coded order. None of that is a
-    plan edit, so per `yaml plan-tasks` row this drops `disposition_ref:` and a
-    `disposition:` of `open`/`coded`, drops the engine-written external_gate
+    plan edit, so per `yaml plan-tasks` row this drops `disposition_ref:`, the no-op
+    close prose `disposition_detail:` (with continuation lines; only on a row
+    with no closed disposition) and a `disposition:` of `open`/`coded`, drops the engine-written external_gate
     clearance keys (`cleared`, `cleared_evidence`, `closure_evidence`, with any
     deeper-indented continuation), and orders the `do` rows (open/coded/unset
     disposition) by id. Rows in any other grouping keep their place and bytes.
@@ -891,15 +893,30 @@ def approval_body_sha(file_text: str) -> Optional[str]:
         content_indent = _SPINE_KEY_INDENT_RE.match(row_lines[0]).end() - len('id:')
         is_do = True
         kept: list[str] = []
+        detail_spans: list[list] = []
         for n, line in enumerate(row_lines):
             text = line.rstrip('\r\n')
-            at_key = n == 0 or (len(text) - len(text.lstrip(' \t'))) == content_indent
+            indent = len(text) - len(text.lstrip(' \t'))
+            at_key = n == 0 or indent == content_indent
+            open_detail = bool(detail_spans) and detail_spans[-1][1] is None
+            if open_detail and n > 0 and not at_key and (indent > content_indent or not text.strip()):
+                kept.append(line)
+                continue
+            if open_detail:
+                detail_spans[-1][1] = len(kept)
             if at_key and n > 0:
                 if _ENGINE_DISPOSITION_REF_RE.match(text) or _ENGINE_DISPOSITION_RE.match(text):
                     continue
-                if _ANY_DISPOSITION_RE.match(text):
+                if _ENGINE_DISPOSITION_DETAIL_RE.match(text):
+                    detail_spans.append([len(kept), None])
+                elif _ANY_DISPOSITION_RE.match(text):
                     is_do = False
             kept.append(line)
+        if detail_spans and detail_spans[-1][1] is None:
+            detail_spans[-1][1] = len(kept)
+        if is_do:
+            for a, b in reversed(detail_spans):
+                del kept[a:b]
         while len(kept) > 1 and not kept[-1].strip():
             kept.pop()
         if kept and not kept[-1].endswith(('\n', '\r')):

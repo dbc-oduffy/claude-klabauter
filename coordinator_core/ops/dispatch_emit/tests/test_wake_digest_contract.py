@@ -375,3 +375,85 @@ def test_terminal_commit_params_carry_script_path_and_session_id():
     assert 'script_path: "tasks/run/x.mjs"' in js
     assert f'session_id: "{sid}"' in js
     assert "script_path" not in wd.completion_return_js(**_kwargs())
+
+
+def _digest_for(tmp_path, *, test_js, verifications_js):
+    js = wd.completion_return_js(**_kwargs(review_vars=None, has_commit_request=False, skipped_rows=[]))
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    harness = tmp_path / "skips.js"
+    harness.write_text(
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "_stoppedBy = [], _blockedChunks = [];\n"
+        f"let _testResult = {test_js};\n"
+        f"let _verifications = {verifications_js};\n"
+        "let _falsifier = {status:'met', observation:'ok', sidecar_path:'f.md'};\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+_CLEAN = "{status:'pass', tests_run:5, tests_failed:0, build_clean:true, summary:'ok', sidecar_path:'s.md'}"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_run_level_skips_render_pass_with_skips_never_pass(tmp_path):
+    skips = ",".join(f"{{test:'t{i}', reason:'could not import flip_evaluator'}}" for i in range(25))
+    digest = _digest_for(
+        tmp_path,
+        test_js="{status:'pass-with-skips', tests_run:5, tests_failed:0, build_clean:true, sidecar_path:'s.md', skipped:[" + skips + "]}",
+        verifications_js="[]",
+    )
+    assert wd.validate_digest(digest) == []
+    assert digest["tests"]["status"] == "pass-with-skips"
+    assert len(digest["tests"]["skipped"]) == 20
+    assert digest["tests"]["skipped"][0] == {"test": "t0", "reason": "could not import flip_evaluator"}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_bare_pass_that_lists_skips_is_demoted(tmp_path):
+    digest = _digest_for(
+        tmp_path,
+        test_js="{status:'pass', tests_run:5, tests_failed:0, build_clean:true, sidecar_path:'s.md', skipped:[{test:'a', reason:'r'}]}",
+        verifications_js="[]",
+    )
+    assert digest["tests"]["status"] == "pass-with-skips"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_row_level_skips_are_named_and_not_counted_passed_or_failed(tmp_path):
+    digest = _digest_for(
+        tmp_path,
+        test_js=_CLEAN,
+        verifications_js=(
+            "[{chunk:'C1', status:'pass'}, "
+            "{chunk:'C2', status:'pass-with-skips', skipped:[{test:'t::x', reason:'no module'}]}]"
+        ),
+    )
+    assert wd.validate_digest(digest) == []
+    assert digest["tests"]["status"] == "pass-with-skips"
+    per_row = digest["tests"]["per_row"]
+    assert per_row["passed"] == 1 and per_row["failed"] == []
+    assert per_row["pass_with_skips"] == [
+        {"chunk": "C2", "skipped": [{"test": "t::x", "reason": "no module"}]}
+    ]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_clean_pass_is_unchanged(tmp_path):
+    digest = _digest_for(
+        tmp_path, test_js=_CLEAN, verifications_js="[{chunk:'C1', status:'pass'}]"
+    )
+    assert wd.validate_digest(digest) == []
+    assert digest["tests"]["status"] == "pass"
+    assert digest["tests"]["skipped"] == []
+    assert digest["tests"]["per_row"]["passed"] == 1
+    assert digest["tests"]["per_row"]["pass_with_skips"] == []

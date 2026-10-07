@@ -649,3 +649,13 @@ def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status(
     assert ": 'not_run')" in script
     first = script.index(expr)
     assert first < script.index("_falsifierResult.status === 'met'", first)
+
+
+def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_skips():
+    waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
+    script = compose_script(waves, name="wf", description="skips", **REVIEW_KW)
+
+    assert script.count('"pass-with-skips"') >= 2  # test_result + row_verification_result enums
+    assert "'pass-with-skips'" in script  # the digest's tests.status route
+    assert "-rs" in script and "pass-with-skips" in script.split("test:terminal")[0]
+    assert "verify:" in script and "skipped" in script

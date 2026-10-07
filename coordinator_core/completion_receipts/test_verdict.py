@@ -61,6 +61,8 @@ def derive_verdict(result: Mapping) -> str:
         if failed is not None and not isinstance(failed, bool) and isinstance(failed, int) and failed > 0:
             return "fail"
         return "errored"
+    if status == "pass-with-skips":
+        status = "pass"
     run = _count(result, "tests_run")
     failed = _count(result, "tests_failed")
     if failed > 0:

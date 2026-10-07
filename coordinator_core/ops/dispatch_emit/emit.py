@@ -2702,6 +2702,14 @@ def _resolve_markers_plus(text: str) -> str:
 #: Ordering/AC13) so the terminal ``return`` can read them regardless of
 #: whether the ``!_halted`` guard ever assigned them.
 _TEST_RESULT_VAR = "_testResult"
+
+#: A skip is not a pass: the test agent must surface skips in its structured result.
+_SKIP_REPORT_CLAUSE = (
+    "Run pytest with -rs (or read its short test summary) so every skip is listed. "
+    "If the run passes but any test was skipped, set status `pass-with-skips` (never `pass`) "
+    "and list each skip in `skipped` as {test, reason} -- the test id and its skip reason, "
+    "at most 20; an import-skip means the code under test never ran."
+)
 _FALSIFIER_RESULT_VAR = "_falsifierResult"
 
 
@@ -2778,6 +2786,7 @@ def _test_agent_call_expr(
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
+        + f"{_SKIP_REPORT_CLAUSE} "
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
     if plan_path:
@@ -3252,7 +3261,8 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    if (!incomplete && verifyScope) {\n"
         "      _verifications.push(agent(\n"
         "        `Run and report on the scoped test target(s) for ${id}: ` + "
-        "verifyScope.join(', ') + '.',\n"
+        "verifyScope.join(', ') + '. ' + "
+        f"{_js_string_literal(_SKIP_REPORT_CLAUSE)},\n"
         "        { "
         f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "

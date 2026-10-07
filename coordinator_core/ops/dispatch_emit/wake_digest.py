@@ -174,13 +174,32 @@ def _js_lit(value) -> str:
     raise TypeError(f"no JS literal rendering for {value!r}")
 
 
+#: JS predicate over `v`: a pass that skipped tests. A bare `pass` that still
+#: lists skips is demoted, so the agent forgetting the enum value cannot hide them.
+_SKIPS_PRED_JS = (
+    "v && (v.status === 'pass-with-skips' || "
+    "(v.status === 'pass' && (v.skipped ?? []).length > 0))"
+)
+_SKIP_CAP = 20
+
+
+def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
+    """JS expression: `owner.skipped` as at most `_SKIP_CAP` `{test, reason}` pairs."""
+    return (
+        f"({owner}.skipped ?? []).slice(0, {_SKIP_CAP}).map(s => "
+        f"({{ test: _cap((s && s.test) ?? '', {schema_cap}), reason: _cap((s && s.reason) ?? '', {schema_cap}) }}))"
+    )
+
+
 def _tests_status_expr(test_var: Optional[str], verification_var: str, test_absent_status: str) -> str:
-    """JS expression for the run's tests status: any failed row verification wins."""
+    """JS expression for the run's tests status: any failed row verification wins; a
+    pass that skipped tests (run-level or any row) is `pass-with-skips`, never `pass`."""
+    base = f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
+    run_skips = f"({test_var} && ({test_var}.status === 'pass-with-skips' || ({test_var}.status === 'pass' && ({test_var}.skipped ?? []).length > 0)))" if test_var is not None else "false"
     return (
         f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
-        f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)}))"
-        if test_var is not None
-        else f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : {_js_lit(test_absent_status)})"
+        f"(({run_skips} || ({base} === 'pass' && {verification_var}.some(v => {_SKIPS_PRED_JS}))) "
+        f"? 'pass-with-skips' : {base}))"
     )
 
 
@@ -272,6 +291,9 @@ def next_action_parts(
         # mint` reads: every stage's schema-validated RETURN, never a field an
         # agent was trusted to copy into its own sidecar frontmatter.
         record_fields_expr = ""
+        record_skips = (
+            "(" + test_var + " ? " + _skips_list_js(test_var) + " : [])" if test_present else "[]"
+        )
         if review_vars:
             test_num = lambda field: f"({test_var} ? {test_var}.{field} ?? null : null)" if test_present else "null"
             record_fields_expr = (
@@ -288,7 +310,8 @@ def next_action_parts(
                 + f"product_files: {delivery_var}.product_files ?? null, "
                 + f"claims_unbacked: ({delivery_var}.claims_unbacked ?? []).length, "
                 + f"unbacked: ({delivery_var}.claims_unbacked ?? []).map(c => ({{ claim: c && c.claim, anchor: c && c.anchor }})) }} : null)"
-                + f", tests: {{ status: {tests_status_expr}, run: {test_num('tests_run')}, "
+                + f", tests: {{ status: ({tests_status_expr} === 'pass-with-skips' ? 'pass' : {tests_status_expr}), "
+                + "skipped: " + record_skips + f", run: {test_num('tests_run')}, "
                 + f"failed: {test_num('tests_failed')}, sidecar: {test_num('sidecar_path')} }}"
                 + ", criterion: "
                 + (
@@ -527,10 +550,17 @@ def completion_return_js(
             else "null"
         ),
         "tests.per_row.verified": f"{verification_var}.length",
-        "tests.per_row.passed": f"{verification_var}.filter(v => v && v.status === 'pass').length",
-        "tests.per_row.failed[].chunk": f"{verification_var}.filter(v => v && v.status !== 'pass').map(v => v.chunk)[0]",
+        "tests.per_row.passed": f"{verification_var}.filter(v => v && v.status === 'pass' && !({_SKIPS_PRED_JS})).length",
+        "tests.per_row.pass_with_skips": (
+            f"{verification_var}.filter(v => {_SKIPS_PRED_JS}).slice(0, {_SKIP_CAP})"
+            f".map(v => ({{ chunk: v.chunk, skipped: {_skips_list_js('v')} }}))"
+        ),
+        "tests.skipped": (
+            f"({test_var} ? {_skips_list_js(test_var)} : [])" if test_present else "[]"
+        ),
+        "tests.per_row.failed[].chunk": f"{verification_var}.filter(v => v && v.status !== 'pass' && !({_SKIPS_PRED_JS})).map(v => v.chunk)[0]",
         "tests.per_row.failed[].anchor": (
-            f"_cap({verification_var}.filter(v => v && v.status !== 'pass')"
+            f"_cap({verification_var}.filter(v => v && v.status !== 'pass' && !({_SKIPS_PRED_JS}))"
             f".map(v => v.sidecar_path ?? null)[0], "
             f"{_maxlength(schema, 'tests.per_row.failed[].anchor')})"
         ),
@@ -649,6 +679,7 @@ def completion_return_js(
     lines.append(f"    build_clean: {table['tests.build_clean']},")
     lines.append(f"    note: {table['tests.note']},")
     lines.append(f"    sidecar: {table['tests.sidecar']},")
+    lines.append(f"    skipped: {table['tests.skipped']},")
     lines.append("    per_row: {")
     lines.append(f"      verified: {table['tests.per_row.verified']},")
     lines.append(f"      passed: {table['tests.per_row.passed']},")
@@ -659,6 +690,7 @@ def completion_return_js(
     )
     lines.append(f"      unstructured: {table['tests.per_row.unstructured']},")
     lines.append(f"      skipped: {table['tests.per_row.skipped']},")
+    lines.append(f"      pass_with_skips: {table['tests.per_row.pass_with_skips']},")
     lines.append("    },")
     lines.append("  },")
     lines.append("  review: {")

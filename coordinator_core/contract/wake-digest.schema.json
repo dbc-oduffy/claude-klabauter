@@ -47,7 +47,20 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["pass", "fail", "error", "not_run", "degraded", "unstructured"]
+          "enum": ["pass", "pass-with-skips", "fail", "error", "not_run", "degraded", "unstructured"]
+        },
+        "skipped": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test", "reason"],
+            "properties": {
+              "test": { "type": "string", "maxLength": 300 },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
         },
         "run": { "type": ["integer", "null"] },
         "failed": { "type": ["integer", "null"] },
@@ -75,7 +88,32 @@
               }
             },
             "unstructured": { "type": "array", "items": { "type": "string" } },
-            "skipped": { "type": "array", "items": { "type": "string" } }
+            "skipped": { "type": "array", "items": { "type": "string" } },
+            "pass_with_skips": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["chunk", "skipped"],
+                "properties": {
+                  "chunk": { "type": "string" },
+                  "skipped": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["test", "reason"],
+                      "properties": {
+                        "test": { "type": "string", "maxLength": 300 },
+                        "reason": { "type": "string", "maxLength": 300 }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -288,7 +326,19 @@
                             "status": { "type": "string" },
                             "run": { "type": ["integer", "null"] },
                             "failed": { "type": ["integer", "null"] },
-                            "sidecar": { "type": ["string", "null"] }
+                            "sidecar": { "type": ["string", "null"] },
+                            "skipped": {
+                              "type": "array",
+                              "maxItems": 20,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "test": { "type": "string" },
+                                  "reason": { "type": "string" }
+                                }
+                              }
+                            }
                           }
                         },
                         "criterion": {
@@ -335,9 +385,22 @@
       "additionalProperties": false,
       "required": ["status", "tests_run", "tests_failed", "sidecar_path"],
       "properties": {
-        "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+        "status": { "type": "string", "enum": ["pass", "pass-with-skips", "fail", "error"] },
         "tests_run": { "type": "integer" },
         "tests_failed": { "type": "integer", "minimum": 0 },
+        "skipped": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test", "reason"],
+            "properties": {
+              "test": { "type": "string", "maxLength": 300 },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
+        },
         "build_clean": { "type": ["boolean", "null"] },
         "summary": { "type": "string", "maxLength": 300 },
         "sidecar_path": { "type": "string", "maxLength": 300 }
@@ -349,9 +412,22 @@
       "required": ["chunk", "status", "tests_run", "tests_failed", "typecheck_clean"],
       "properties": {
         "chunk": { "type": "string" },
-        "status": { "type": "string", "enum": ["pass", "fail", "error"] },
+        "status": { "type": "string", "enum": ["pass", "pass-with-skips", "fail", "error"] },
         "tests_run": { "type": "integer" },
         "tests_failed": { "type": "integer", "minimum": 0 },
+        "skipped": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test", "reason"],
+            "properties": {
+              "test": { "type": "string", "maxLength": 300 },
+              "reason": { "type": "string", "maxLength": 300 }
+            }
+          }
+        },
         "typecheck_clean": { "type": ["boolean", "null"] },
         "summary": { "type": "string", "maxLength": 300 },
         "sidecar_path": { "type": "string", "maxLength": 300 }

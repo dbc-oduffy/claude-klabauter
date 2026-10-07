@@ -61,6 +61,16 @@ def test_terminal_commit_flip_keeps_the_stamp_valid():
     assert check_approved_body(flipped)[0] == APPROVED_BODY_OK
 
 
+def test_terminal_commit_noop_detail_keeps_the_stamp_valid():
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _NOOP_DETAIL, _flip_rows_coded
+
+    approved = _approved()
+    flipped, ids = _flip_rows_coded(approved, {"C3"}, "a" * 40, {"C3": _NOOP_DETAIL})
+    assert ids == ["C3"] and "disposition_detail" in flipped
+    assert check_approved_body(flipped)[0] == APPROVED_BODY_OK
+    assert check_approved_body(flipped.replace("t5", "t5 edited"))[0] == APPROVED_BODY_CHANGED
+
+
 def test_review_stamp_and_frontmatter_bookkeeping_is_invisible():
     approved = _approved()
     split = split_frontmatter(approved)
