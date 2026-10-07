@@ -93,3 +93,12 @@ def test_row_without_brackets_keeps_a_bare_porcelain_pathspec():
     contract = _row_return_contract(_row("C1", ["a.py", "b/c.py"]), _PLAN)
     assert "git status --porcelain -- a.py b/c.py" in contract
     assert ":(literal)" not in contract
+
+
+def test_shell_pathspec_quotes_read_the_same_in_bash_and_powershell():
+    from coordinator_core.ops.dispatch_emit.emit import _shell_pathspec
+
+    assert _shell_pathspec("src/a.ts") == "src/a.ts"
+    assert _shell_pathspec("app/[id]/route.ts") == "':(literal)app/[id]/route.ts'"
+    assert _shell_pathspec("app/[id]/o'k.ts") == "\":(literal)app/[id]/o'k.ts\""
+    assert _shell_pathspec("app/[id]/$o'k.ts") == "':(glob)app/[[]id[]]/$o?k.ts'"

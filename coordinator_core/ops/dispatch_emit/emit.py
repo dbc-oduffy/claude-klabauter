@@ -2294,10 +2294,24 @@ def _row_return_contract(
 
 def _shell_pathspec(path: str) -> str:
     """``path`` as an argument of a prompt-embedded git command: a bracketed
-    path becomes a single-quoted ``:(literal)`` pathspec (quoting is identical
-    in bash and PowerShell); every other path stays byte-identical."""
+    path becomes a quoted ``:(literal)`` pathspec; every other path stays
+    byte-identical.
+
+    The executor's shell may be bash or PowerShell, and the two escape a quote
+    differently, so only forms both read identically are emitted: single quotes;
+    double quotes when the path holds a ``'`` but nothing either shell expands;
+    otherwise a ``:(glob)`` pattern whose bracket classes spell every special
+    character, so it carries no quote at all."""
     spec = git_pathspec(path)
-    return path if spec == path else "'" + spec.replace("'", "''") + "'"
+    if spec == path:
+        return path
+    if "'" not in spec:
+        return f"'{spec}'"
+    if not any(c in path for c in '$`"\\'):
+        return f'"{spec}"'
+    special = {c: f"[{c}]" for c in "[]*?"}
+    special["'"] = "?"
+    return "':(glob)" + "".join(special.get(c, c) for c in path) + "'"
 
 
 def _fenced_paths(footprint, writes_under, surface) -> list:

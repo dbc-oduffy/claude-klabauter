@@ -548,9 +548,11 @@ def compose_ask_script(
     if blitz_fn:
         b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{")
         b.append("    phase('plan');")
+        # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
         b.append(
             f"    const _blitz = await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', repoRoot: REPO_ROOT, waveIndex: 0, "
+            "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
             f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
             "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
             "planPath: null, executionOpen: true }] });"

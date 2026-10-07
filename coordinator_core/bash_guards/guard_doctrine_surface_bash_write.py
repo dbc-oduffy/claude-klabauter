@@ -725,7 +725,11 @@ def _has_stdin_program_var_write(cmd: str, identifiers_lower: Tuple[str, ...]) -
             ).strip().replace("\\", "/")
             if " " in value:
                 continue
-            if not _mentions_governed_identifier(value.rsplit("/", 1)[-1], identifiers_lower):
+            # The full value too: a directory-home identifier (`<home>/`) never
+            # survives the basename cut.
+            if not _mentions_governed_identifier(
+                value, identifiers_lower
+            ) and not _mentions_governed_identifier(value.rsplit("/", 1)[-1], identifiers_lower):
                 continue
             deref = re.compile(
                 r"open\s*\(\s*%s\s*,\s*['\"][wax]"
@@ -736,6 +740,45 @@ def _has_stdin_program_var_write(cmd: str, identifiers_lower: Tuple[str, ...]) -
             if deref.search(body):
                 return True
     return False
+
+
+_PY_STRING_LITERAL_RE = re.compile(r"('''|\"\"\")[\s\S]*?\1|'[^'\n]*'|\"[^\"\n]*\"")
+
+
+def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) -> str:
+    """``cmd`` with every string literal in a QUOTED-delimiter stdin-program
+    heredoc body that mentions a governed identifier AND carries whitespace
+    replaced by ``''``.
+
+    A literal with whitespace in it is prose quoting the path, not a path
+    operand -- the same discriminant ``_has_stdin_program_var_write`` applies
+    to a bound value. Without this, a body that writes an ungoverned file
+    while its message text names a governed one is denied by point 3, whose
+    write marker is never related to its sink. A literal path operand has no
+    whitespace and keeps the point-3 leg's fail-closed scope.
+
+    Not narrowed: an unquoted body (the shell expands it), a body carrying an
+    exec marker (a literal there can be a shell command), or a literal that
+    itself carries a write marker."""
+
+    def _blank(match: "re.Match[str]") -> str:
+        text = match.group(0)
+        if (
+            any(c.isspace() for c in text)
+            and _mentions_governed_identifier(text, identifiers_lower)
+            and not _has_write_marker(text)
+        ):
+            return "''"
+        return text
+
+    quoted = set(_quoted_heredoc_bodies(cmd))
+    for body in _stdin_program_heredoc_bodies(cmd):
+        if body not in quoted or _has_os_exec_marker(body):
+            continue
+        blanked = _PY_STRING_LITERAL_RE.sub(_blank, body)
+        if blanked != body:
+            cmd = cmd.replace(body, blanked, 1)
+    return cmd
 
 
 def _copy_command_substitution(text: str, start: int) -> "tuple[str, int]":
@@ -1397,7 +1440,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         return True
 
     data_stripped_segments = _split_top_level_segments(
-        _strip_data_heredoc_bodies(cmd)
+        _strip_data_heredoc_bodies(_blank_prose_literal_mentions(cmd, identifiers_lower))
     )
     for segment in data_stripped_segments:
         if not _mentions_governed_identifier(segment, identifiers_lower):

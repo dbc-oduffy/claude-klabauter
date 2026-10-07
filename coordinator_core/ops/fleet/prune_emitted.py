@@ -5,7 +5,8 @@ Purpose: delete untracked `<plan>[.<variant>].workflow.mjs` scripts and their
 `.emitted.json` receipts from docs/plans/ when their plan is missing or not
 `executing`. Also sweeps `state/**/fire-*.mjs` and `state/**/*.mjs.emitted.json`
 older than 24h whose owning plan (the receipt's `plan` field, resolved in
-docs/plans/) is implemented or abandoned; an unresolvable owner is kept.
+docs/plans/, or every plan in its `plans` list) is implemented or abandoned. An unresolvable
+owner is kept until 7 days old, then deleted as `aged-out`.
 A plan-blitz fire/repair-fire unit is also closed by a landing file in its dir. Zero
 spawns, no YAML parse; tracked-at-HEAD comes from one `read_tree_spine` call
 (object store). Fails closed: an unreadable HEAD tree deletes nothing.
@@ -43,6 +44,7 @@ _EMPTY_SCALARS = frozenset({"", "null", "~"})
 
 _STATE_REL = "state"
 _STATE_AGE_S = 24 * 3600.0
+_STATE_AGED_OUT_S = 7 * 24 * 3600.0
 _STATE_CLOSED_STATUSES = frozenset({"implemented", "abandoned"})
 _STATE_RECEIPT_SUFFIX = ".mjs.emitted.json"
 _BLITZ_DIR_PREFIX = f"{_STATE_REL}/plan-blitz/"
@@ -123,6 +125,27 @@ def _receipt_plan(receipt: Path) -> Optional[str]:
     if "/" in plan or "\\" in plan or plan in (".md", "..md"):
         return None
     return plan
+
+
+def _receipt_plans(receipt: Path) -> Optional[List[str]]:
+    """The receipt's `plans` basenames, or None when absent, empty or any entry untrusted."""
+    try:
+        data = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    plans = data.get("plans") if isinstance(data, dict) else None
+    if not isinstance(plans, list) or not plans:
+        return None
+    for p in plans:
+        if (
+            not isinstance(p, str)
+            or not p.endswith(".md")
+            or "/" in p
+            or "\\" in p
+            or p in (".md", "..md")
+        ):
+            return None
+    return list(dict.fromkeys(plans))
 
 
 class _PlanFacts:
@@ -305,8 +328,10 @@ def _classify_state_dir(
     """Classify one state/ directory's fire-*.mjs / *.mjs.emitted.json units.
 
     A `<name>.mjs` script and its `<name>.mjs.emitted.json` receipt are one unit; a bare
-    non-fire script is never touched. Owner = the receipt's `plan` resolved in
-    docs/plans/; no receipt, a null plan or a missing plan file is unresolved -> kept.
+    non-fire script is never touched. Owner = the receipt's `plan` (or, for a multi-plan fire,
+    every plan in `plans`) resolved in docs/plans/. An open owner keeps the unit; an
+    unresolved owner (no receipt, null plan, missing plan file) keeps it until every file is
+    older than _STATE_AGED_OUT_S, then it is deleted as `aged-out` unless a claim is live.
     """
     units: Dict[str, List[str]] = {}
     for name in sorted(entries):
@@ -333,19 +358,33 @@ def _classify_state_dir(
             if n.endswith(_STATE_RECEIPT_SUFFIX):
                 plan_name = _receipt_plan(Path(entries[n].path))
                 break
-        facts: Optional[_PlanFacts] = None
-        if plan_name is not None:
-            if plan_name not in plan_cache:
-                plan_path = plans_dir / plan_name
-                plan_cache[plan_name] = _read_plan(plan_path) if os.path.lexists(plan_path) else None
-            facts = plan_cache[plan_name]
-            if facts is not None and facts.unreadable:
-                retain("plan-unreadable")
-                continue
+        multi: Optional[List[str]] = None
+        if plan_name is None:
+            for n in names:
+                if n.endswith(_STATE_RECEIPT_SUFFIX):
+                    multi = _receipt_plans(Path(entries[n].path))
+                    break
+        owners = [plan_name] if plan_name is not None else (multi or [])
+        owner_facts: List[Optional[_PlanFacts]] = []
+        for owner in owners:
+            if owner not in plan_cache:
+                plan_path = plans_dir / owner
+                plan_cache[owner] = _read_plan(plan_path) if os.path.lexists(plan_path) else None
+            owner_facts.append(plan_cache[owner])
+        if any(f is not None and f.unreadable for f in owner_facts):
+            retain("plan-unreadable")
+            continue
+        facts = owner_facts[0] if plan_name is not None else None
         closed_reason: Optional[str] = None
-        if facts is not None and facts.status in _STATE_CLOSED_STATUSES:
+        if multi:
+            if any(f is not None and f.status not in _STATE_CLOSED_STATUSES for f in owner_facts):
+                retain("owner-open")
+                continue
+            if all(f is not None for f in owner_facts):
+                closed_reason = "plans-closed"
+        elif facts is not None and facts.status in _STATE_CLOSED_STATUSES:
             closed_reason = f"plan-{facts.status}"
-        elif rel_dir.startswith(_BLITZ_DIR_PREFIX):
+        if closed_reason is None and rel_dir.startswith(_BLITZ_DIR_PREFIX):
             if landings is None:
                 landings = _blitz_landings(plans_dir.parent.parent / rel_dir)
             try:
@@ -355,22 +394,31 @@ def _classify_state_dir(
                 continue
             if _blitz_closed(key, mtime, landings):
                 closed_reason = "landed"
+        aging_out = False
         if closed_reason is None:
-            retain("owner-unresolved" if facts is None else "owner-open")
-            continue
-        if plan_name is not None and facts is not None:
-            if plan_name not in live_cache:
-                live_cache[plan_name] = _is_claim_live(common_dir, plans_dir / plan_name)
-            if live_cache[plan_name]:
-                retain("live-claim")
+            if facts is not None:
+                retain("owner-open")
                 continue
+            aging_out = True
+            closed_reason = "aged-out"
+        live = False
+        for owner, f in zip(owners, owner_facts):
+            if f is None:
+                continue
+            if owner not in live_cache:
+                live_cache[owner] = _is_claim_live(common_dir, plans_dir / owner)
+            live = live or live_cache[owner]
+        if live:
+            retain("live-claim")
+            continue
+        limit = _STATE_AGED_OUT_S if aging_out else _STATE_AGE_S
         try:
-            young = any(now - entries[n].stat().st_mtime < _STATE_AGE_S for n in names)
+            young = any(now - entries[n].stat().st_mtime < limit for n in names)
         except OSError:
             retain("stat-failed")
             continue
         if young:
-            retain("too-young")
+            retain("owner-unresolved" if aging_out else "too-young")
             continue
         for p in paths:
             result["candidates"].append({"path": p, "plan": plan_name, "reason": closed_reason})

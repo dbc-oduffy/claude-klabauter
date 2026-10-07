@@ -1028,8 +1028,9 @@ def _dispatch_emit(
             ask_ctx.update(ask_sizing)
             receipt_extras = {"batons": ask_sizing["batons"], "uncommitted": ask_sizing["uncommitted"]}
         else:
-            # The size phase picks the arm in-run, so M+ args are resolved for every prompt ask.
-            ask_ctx["plan_blitz_args"] = _resolve_blitz_args(None)
+            # A raw ask's arm is unknown until the in-run size phase, so its script always
+            # carries the planBlitz branch and needs the launch args the sizing route resolves.
+            ask_ctx["plan_blitz_args"] = _resolve_plan_blitz_args(None)
         if not aliased_param(params, "output_path", "out_path"):
             default_out = ask_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
             default_out.parent.mkdir(parents=True, exist_ok=True)
@@ -1313,7 +1314,7 @@ def _dispatch_emit(
         from coordinator_core.bash_guards._write_bump_applicability import declare_run_output_root
 
         pipeline_output_root = (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).resolve()
-        declare_run_output_root(pipeline_ctx["run_id"], pipeline_output_root.as_posix())
+        declare_run_output_root(pipeline_ctx["run_id"], str(pipeline_output_root))
 
     guarded_path.parent.mkdir(parents=True, exist_ok=True)
     guarded_path.write_text(script, encoding="utf-8", newline="")
@@ -1864,16 +1865,33 @@ def _empty_baton_sections(path: Path) -> list:
     return [h for h in _BATON_REQUIRED_SECTIONS if h in bodies and not "".join(bodies[h]).strip()]
 
 
-def _resolve_blitz_args(sizing_abs: Optional[str]) -> dict:
+def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
+    """planBlitz launch args for an emit whose script carries a planBlitz branch.
+
+    Raises ``SizingFireRefused`` when provisionSidecarCli is unresolved: plan-blitz refuses
+    every baton without it, so a script emitted here would halt every M+ run with "no ready
+    plan". Fail at emit, never later.
+    """
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
     from coordinator_core.warm.caller_context import resolve_caller_context
 
     plugin_root = resolve_caller_context().plugin_root
-    return plan_blitz_args.resolve(
+    args = plan_blitz_args.resolve(
         plugin_root=Path(plugin_root) if plugin_root else None,
         engine_root=Path(__file__).resolve().parents[3],
         sizing_abs=sizing_abs,
     )
+    if not args.get("provisionSidecarCli"):
+        raise SizingFireRefused(
+            [
+                "provisionSidecarCli unresolved: no provision-sidecar launcher under the "
+                "settings home, on PATH, or at <engine>/coordinator/bin/provision-sidecar.py; "
+                "plan-blitz would refuse every baton. Install the coordinator settings home "
+                "or set COORDINATOR_SETTINGS_HOME, then re-emit."
+            ]
+        )
+    return args
 
 
 def _gate_sizing_at_emit(
@@ -1942,18 +1960,7 @@ def _gate_sizing_at_emit(
     if accept_pending:
         out["accept_pending"] = True
     if verdict.arm in (ARM_M_PLUS, ARM_ROADMAP):
-        out["plan_blitz_args"] = _resolve_blitz_args((Path(root) / sizing_rel).as_posix())
-        if not out["plan_blitz_args"].get("provisionSidecarCli"):
-            # plan-blitz refuses every baton without it, so a script emitted here would halt
-            # every run with "no ready plan". Fail at emit, never later.
-            raise SizingFireRefused(
-                [
-                    "provisionSidecarCli unresolved: no provision-sidecar launcher under the "
-                    "settings home, on PATH, or at <engine>/coordinator/bin/provision-sidecar.py; "
-                    "plan-blitz would refuse every baton. Install the coordinator settings home "
-                    "or set COORDINATOR_SETTINGS_HOME, then re-emit."
-                ]
-            )
+        out["plan_blitz_args"] = _resolve_plan_blitz_args((Path(root) / sizing_rel).as_posix())
         if verdict.baton:
             baton_path = verdict.baton["path"]
             out["batons"] = [baton_path]

@@ -301,3 +301,90 @@ def test_blitz_landing_does_not_override_live_claim(env):
     res = run(root)
     assert not res["candidates"]
     assert {r["reason"] for r in res["retained"]} == {"live-claim"}
+
+
+# owner-unresolved age-out and multi-plan receipts.
+
+ANCIENT = time.time() - 8 * 86400
+
+
+def _multi(root, rel_dir, stem, plans, age=OLD):
+    files = fire(root, rel_dir, stem, None, age=age)
+    receipt = root / rel_dir / f"{stem}.mjs.emitted.json"
+    receipt.write_text(json.dumps({"plan": None, "plans": plans}))
+    os.utime(receipt, (age, age))
+    return files
+
+
+def test_unresolved_older_than_seven_days_ages_out(env):
+    root, _ = env
+    files = fire(root, WARP, "legacy.workflow", None, age=ANCIENT)
+    res = run(root)
+    assert {r["reason"] for r in res["candidates"]} == {"aged-out"}
+    assert not any(f.exists() for f in files)
+
+
+def test_unresolved_under_seven_days_kept(env):
+    root, _ = env
+    files = fire(root, WARP, "legacy.workflow", None, age=time.time() - 6 * 86400)
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"owner-unresolved"}
+
+
+def test_unresolved_tracked_old_kept(env):
+    root, state = env
+    files = fire(root, WARP, "legacy.workflow", None, age=ANCIENT)
+    state["tracked"].add(f"{WARP}/legacy.workflow.mjs")
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"tracked-at-head"}
+
+
+def test_owner_open_never_ages_out(env):
+    root, _ = env
+    plan(root, "p.md", "executing")
+    files = fire(root, WARP, "a.workflow", "p.md", age=ANCIENT)
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"owner-open"}
+
+
+def test_multi_plan_all_closed_deleted(env):
+    root, _ = env
+    plan(root, "a.md", "implemented")
+    plan(root, "b.md", "abandoned")
+    files = _multi(root, WARP, "m.workflow", ["a.md", "b.md"], age=OLD)
+    res = run(root)
+    assert {r["reason"] for r in res["candidates"]} == {"plans-closed"}
+    assert not any(f.exists() for f in files)
+
+
+def test_multi_plan_one_open_kept_even_when_ancient(env):
+    root, _ = env
+    plan(root, "a.md", "implemented")
+    plan(root, "b.md", "executing")
+    files = _multi(root, WARP, "m.workflow", ["a.md", "b.md"], age=ANCIENT)
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"owner-open"}
+
+
+def test_multi_plan_missing_plan_kept_until_aged(env):
+    root, _ = env
+    plan(root, "a.md", "implemented")
+    files = _multi(root, WARP, "m.workflow", ["a.md", "gone.md"], age=OLD)
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"owner-unresolved"}
+
+
+def test_multi_plan_live_claim_kept(env):
+    root, state = env
+    plan(root, "a.md", "implemented")
+    plan(root, "b.md", "implemented")
+    state["live"].add("b.md")
+    files = _multi(root, WARP, "m.workflow", ["a.md", "b.md"], age=OLD)
+    res = run(root)
+    assert res["pruned"] == [] and all(f.exists() for f in files)
+    assert set(reasons(res, "retained").values()) == {"live-claim"}

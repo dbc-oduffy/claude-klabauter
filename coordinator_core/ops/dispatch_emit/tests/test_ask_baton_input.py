@@ -193,4 +193,4 @@ def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys, monkeypatch):
     call = text.split("await planBlitz(", 1)[1].split("\n", 1)[0]
     assert '"provisionSidecarCli": "/x/provision-sidecar"' in call
     assert '"pluginAgentsAvailable"' in call
-    assert "gateReportPath" not in call
+    assert "gateReportPath: REPO_ROOT + '/' + _sizingRel" in call
