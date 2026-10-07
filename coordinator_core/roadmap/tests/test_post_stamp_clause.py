@@ -93,3 +93,61 @@ def test_prime_exit_refuses_body_item():
     fm = {"prime_exit_criterion": {"statement": "the gate refuses X", "derived_from": "state/sizings/x.yaml"}}
     assert pg._prime_exit(fm, None, _BODY)["kind"] == "prime-exit-post-stamp"
     assert pg._prime_exit(fm, None, None)["status"] == "PASS"
+
+
+SUITE_TIER_PHRASES = (
+    "fast tier green",
+    "the fast suite passes",
+    "full suite",
+    "full test suite passes",
+    "tier-U",
+    "Tier U grant run is green",
+    "fast-tier is green",
+    "the broad suite passes",
+)
+
+
+@pytest.mark.parametrize("text", SUITE_TIER_PHRASES)
+def test_suite_tier_refused(text):
+    from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+
+    msg = suite_tier_refusal(text)
+    assert msg and "tests covering touched files pass" in msg
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "tests covering touched files pass",
+        "Beat vanilla on category X.",
+        "the tests for the gate pass and a refusal names the replacement",
+        "a test proves the fast path stays under 50ms",
+        "the full plan is reviewed",
+        "",
+        None,
+    ],
+)
+def test_suite_tier_allowed(text):
+    from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+
+    assert suite_tier_refusal(text) is None
+
+
+@pytest.mark.parametrize("statement", ["fast tier green", "full test suite passes"])
+def test_accept_op_refuses_suite_tier_and_accepts_replacement(tmp_path, statement):
+    from coordinator_core.ops.sizing_accept_exit_criterion import _handler
+
+    (tmp_path / ".git").mkdir()
+    d = tmp_path / "state" / "sizings"
+    d.mkdir(parents=True)
+    f = d / "s.yaml"
+    f.write_text("title: t\nexit_criterion:\n  statement: ok\n")
+    r = _handler({"sizing": str(f), "pm_quote": "yes", "statement": statement}, repo_root=tmp_path)
+    assert r["exit_code"] == 1 and "tests covering touched files pass" in r["error"]
+    assert "fast" not in f.read_text() and "full" not in f.read_text()
+
+    r = _handler(
+        {"sizing": str(f), "pm_quote": "yes", "statement": "tests covering touched files pass"},
+        repo_root=tmp_path,
+    )
+    assert "suite tier" not in (r.get("error") or "")

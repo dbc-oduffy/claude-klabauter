@@ -95,6 +95,18 @@ class TestExitCriterionFlag:
         out = json.loads(capsys.readouterr().out)
         assert out["exit_criterion"] == {"statement": "Ship the thing", "accepted": None}
 
+    @pytest.mark.parametrize("text", ["fast tier green", "full suite", "tier-U"])
+    def test_suite_tier_exit_criterion_is_refused(self, monkeypatch, capsys, text):
+        _fleet_stub(monkeypatch, {})
+        rc = sa.main(["--tshirt", "M", "--exit-criterion", text])
+        assert rc == sa.EXIT_USAGE
+        assert "tests covering touched files pass" in capsys.readouterr().err
+
+    def test_replacement_exit_criterion_is_accepted(self, monkeypatch, capsys):
+        _fleet_stub(monkeypatch, {})
+        rc = sa.main(["--tshirt", "M", "--exit-criterion", "tests covering touched files pass"])
+        assert rc == sa.EXIT_OK
+
     def test_absent_exit_criterion_is_null(self, monkeypatch, capsys):
         _fleet_stub(monkeypatch, {})
         rc = sa.main(["--tshirt", "M"])

@@ -268,6 +268,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     Flag,
     build_scaffold_directive,
@@ -922,6 +924,9 @@ def route(
     _validate_probe_raise_basis(probe_raise_basis)
     _validate_interaction_mode(interaction_mode)
     scout_evidence = list(scout_evidence or [])
+    tier_refusal = suite_tier_refusal(exit_criterion)
+    if tier_refusal is not None:
+        raise SizingAssembleError(tier_refusal)
     exit_criterion_field = (
         {"statement": exit_criterion, "accepted": None} if exit_criterion else None
     )

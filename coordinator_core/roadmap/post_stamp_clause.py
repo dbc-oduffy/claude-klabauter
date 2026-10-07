@@ -48,6 +48,26 @@ def post_stamp_refusal(statement: object) -> Optional[str]:
     )
 
 
+_SUITE_TIER = re.compile(
+    r"\b(?:fast|full|broad|whole|entire)(?:[\s-]+test)?[\s-]+(?:tier|suite)s?\b|\btier[\s-]*u\b",
+    re.IGNORECASE,
+)
+
+
+def suite_tier_refusal(statement: object) -> Optional[str]:
+    """Refusal message when the statement names a suite tier (fast/full/broad tier or suite, tier-U), else None.
+
+    Shared by `sizing-assemble --exit-criterion` and `sizing.accept_exit_criterion`.
+    """
+    m = _SUITE_TIER.search(" ".join(str(statement or "").split()))
+    if m is None:
+        return None
+    return (
+        f"exit criterion names a suite tier ({m.group(0)!r}). "
+        "Use: tests covering touched files pass."
+    )
+
+
 _EXIT_HEADING = re.compile(r"^#{1,6}\s+exit criteria\b", re.IGNORECASE)
 _ITEM = re.compile(r"^\s{0,3}\d+[.)]\s+")
 
