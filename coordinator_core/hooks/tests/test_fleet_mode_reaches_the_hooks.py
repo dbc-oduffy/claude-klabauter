@@ -55,7 +55,9 @@ def _isolate_sentinel_and_fleet(tmp_path, monkeypatch):
 def _touch_autonomous_sentinel(tmp_path, session_id):
     from coordinator_core.session import autonomous_sentinel
 
-    autonomous_sentinel.sentinel_path(session_id).write_text("autonomous", encoding="utf-8")
+    sentinel = autonomous_sentinel.sentinel_path(session_id)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("autonomous", encoding="utf-8")
 
 
 def _write_fleet(record):

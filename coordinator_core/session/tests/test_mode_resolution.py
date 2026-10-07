@@ -52,7 +52,9 @@ def _write_fleet(settings_home, record):
 def _touch_autonomous_sentinel(tmp_path, session_id):
     from coordinator_core.session import autonomous_sentinel
 
-    autonomous_sentinel.sentinel_path(session_id).touch()
+    path = autonomous_sentinel.sentinel_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
 
 
 class TestAutonomousSessionWins:

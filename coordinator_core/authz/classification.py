@@ -4217,6 +4217,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   not a DR-211 archival writer.
     # Spec backlink: docs/plans/2026-10-06-emitted-output-prune-op.md (C2)
     "fleet.prune_emitted_output": OpClass.MUTATING,
+    # fleet.scratch_hygiene — MUTATING: with apply=true deletes only non-substrate scratch/ and
+    #   Temp trees (never scratch-hold or _fleet); DR-208/DR-211: not a substrate write.
+    # Spec backlink: docs/plans/2026-10-07-fleet-scratch-hygiene-op.md (C6)
+    "fleet.scratch_hygiene": OpClass.MUTATING,
     # fleet.archive_sweep_status — COMPUTE_ONLY despite the "archive" in the name:
     # it reports on the sweeps, it does not run one. `_handler` (ops/fleet/
     # sweep_status.py) reads _sweep_receipt.receipt_path and summarizes the rows;

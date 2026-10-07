@@ -245,7 +245,7 @@ class AutonomousSentinelTests(unittest.TestCase):
              mock.patch.object(Path, "unlink") as unlink_mock:
             rc = _cli._cmd_autonomous_sentinel(["disable"])
         self.assertEqual(rc, 0)
-        unlink_mock.assert_called_once_with(missing_ok=True)
+        self.assertEqual(unlink_mock.call_args_list, [mock.call(missing_ok=True)] * 2)
 
     def test_unknown_action_errors(self):
         with mock.patch.object(_cli, "_import_resolve_session_id", return_value=lambda: "sid-abc"):

@@ -292,6 +292,7 @@ def test_run_claude_klabauter_setup_records_nonzero_exit_code(monkeypatch, tmp_p
     the report, not just the raised exception's message."""
     scratch_clones = _make_scratch_clones(cloud_mod, tmp_path)
     monkeypatch.setattr(cloud_mod, "CLONES", scratch_clones)
+    monkeypatch.setattr(cloud_mod, "SETUP_OUTPUT_LOG", tmp_path / "setup-py-output.log")
 
     class _FakeCompletedProcess:
         returncode = 96

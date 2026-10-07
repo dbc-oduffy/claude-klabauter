@@ -143,6 +143,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "precedent; the library ops/deliverable_cascade.py stays undecorated for in-process callers)",
     ),
     ("coordinator_core.ops.fleet.prune_emitted", 'registers "fleet.prune_emitted_output"'),
+    ("coordinator_core.ops.fleet.scratch_hygiene", 'registers "fleet.scratch_hygiene"'),
     ("coordinator_core.ops.fleet.archive_plans", 'eager-imported for library compute; its op is killed'),
     ("coordinator_core.housekeeping.cycle", 'registers "housekeeping.cycle"'),
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),

@@ -211,7 +211,7 @@ def _autonomous_session_value(session_id: str) -> bool:
     "Do NOT couple ``MODE_KEYS`` to import-time knowledge of the sentinel
     siblings by storing a module reference".
     """
-    return autonomous_sentinel.sentinel_path(session_id).exists()
+    return autonomous_sentinel.sentinel_read_path(session_id) is not None
 
 
 def _compaction_default_for_environment(

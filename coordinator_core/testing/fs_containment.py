@@ -3,7 +3,9 @@
 Contract: coordinator-content-repo ``coordinator/docs/wiki/test-design-discipline/
 test-filesystem-containment.md``. Watched roots are the real home and the
 repo root's parent, snapshotted at depth 1 around every test. Writes under
-the repo tree or the OS temp dir never count. The guard never deletes.
+the repo tree or ``<gettempdir()>/coordinator/`` never count; bare Temp top
+level does. An unset basetemp becomes a per-run dir under
+``<gettempdir()>/coordinator/<repo>/pytest/`` (xdist workers inherit it). The guard never deletes.
 
 Stdlib + pytest only, and no package-relative imports: repos without
 ``coordinator_core`` load this file by path and register the module object.
@@ -44,11 +46,27 @@ def _contains(parent: Path, child: Path) -> bool:
     return child == parent or parent in child.parents
 
 
+def _coordinator_temp() -> Path:
+    # Mirrors coordinator_core.temp_layout; inlined because this file loads by path.
+    return Path(tempfile.gettempdir()) / "coordinator"
+
+
+def _per_run_basetemp(rootpath: Path) -> Path:
+    suffix = os.urandom(3).hex()
+    return _coordinator_temp() / rootpath.name / "pytest" / f"{os.getpid()}-{suffix}"
+
+
+# tryfirst: pytest's tmpdir plugin reads option.basetemp in its own configure.
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
+    if config.option.basetemp is None and not hasattr(config, "workerinput"):
+        basetemp = _per_run_basetemp(config.rootpath)
+        basetemp.parent.mkdir(parents=True, exist_ok=True)
+        config.option.basetemp = str(basetemp)
     # Captured here, before any fixture sandboxes HOME/USERPROFILE: a later
     # Path.home() read would watch the sandbox instead of the real home.
     repo = _resolve(config.rootpath)
-    _SANCTIONED[:] = [repo, _resolve(tempfile.gettempdir())]
+    _SANCTIONED[:] = [repo, _resolve(_coordinator_temp())]
     roots: "list[Path]" = []
     for candidate in (Path.home(), config.rootpath.parent):
         try:

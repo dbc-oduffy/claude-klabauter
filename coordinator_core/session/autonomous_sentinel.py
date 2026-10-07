@@ -26,6 +26,11 @@ Spec backlink: F2+F3 in the 2026-07-28 Windows-tempdir-convergence dispatch
 wsc-coverage-gate-runner.py, coordinator_core/hooks/nudge_em_code_dispatch.py,
 coordinator_core/hooks/postuse_advisory_dispatch.py).
 
+Dual-read window: the sentinel is written under ``<gettempdir()>/coordinator/_fleet/``
+and every reader calls ``sentinel_read_path()``, which also accepts the legacy
+bare-Temp location for one release. The fleet-scratch-hygiene queue row for
+dropping the legacy fallback ends the window.
+
 Negative-spec:
     - Do NOT hardcode ``/tmp`` or reach for ``tempfile.gettempdir()``
       directly at a new call site for this sentinel — import and call
@@ -38,8 +43,23 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from coordinator_core.temp_layout import fleet_temp_root
+
 _SENTINEL_PREFIX = "autonomous-run-"
 
 
 def sentinel_path(session_id: str) -> Path:
+    """Write path: ``fleet_temp_root()/autonomous-run-<sid>``."""
+    return fleet_temp_root() / f"{_SENTINEL_PREFIX}{session_id}"
+
+
+def legacy_sentinel_path(session_id: str) -> Path:
     return Path(tempfile.gettempdir()) / f"{_SENTINEL_PREFIX}{session_id}"
+
+
+def sentinel_read_path(session_id: str) -> Path | None:
+    """First existing of the ``_fleet`` path and the legacy bare-Temp path, else None."""
+    for path in (sentinel_path(session_id), legacy_sentinel_path(session_id)):
+        if path.exists():
+            return path
+    return None

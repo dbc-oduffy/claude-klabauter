@@ -4550,7 +4550,7 @@ if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
     fi
     # An armed autonomous/mise sentinel owns the commit cadence; a deleted
     # upstream branch must not be recreated by obeying "push".
-    if [[ -e "${TMPDIR:-/tmp}/autonomous-run-${coordinator_stop_sid}" ]]; then
+    if [[ -e "${TMPDIR:-/tmp}/coordinator/_fleet/autonomous-run-${coordinator_stop_sid}" || -e "${TMPDIR:-/tmp}/autonomous-run-${coordinator_stop_sid}" ]]; then
       exit 0
     fi
     coordinator_stop_ref=$(git symbolic-ref -q HEAD 2>/dev/null)

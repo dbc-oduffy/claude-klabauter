@@ -56,7 +56,7 @@ from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
-from coordinator_core.session.autonomous_sentinel import sentinel_path
+from coordinator_core.session.autonomous_sentinel import sentinel_read_path
 
 _VALID_POSTURES = frozenset({"precision", "default", "substrate-free"})
 _FAIL_OPEN_POSTURE = "precision"
@@ -180,7 +180,8 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     try:
-        sentinel_present = sentinel_path(session_id).is_file()
+        read_path = sentinel_read_path(session_id)
+        sentinel_present = read_path is not None and read_path.is_file()
     except Exception:
         sentinel_present = False
 

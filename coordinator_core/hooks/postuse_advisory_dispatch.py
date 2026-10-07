@@ -89,7 +89,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.hooks import nudge_hand_written_plan, nudge_unauthorized_handoff
-from coordinator_core.session.autonomous_sentinel import sentinel_path
+from coordinator_core.session.autonomous_sentinel import sentinel_path, sentinel_read_path
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
 
@@ -710,7 +710,10 @@ def _check_context_pressure_sync(
     sentinel_content = None
     if autonomous_run:
         try:
-            sentinel_content = sentinel_path(session_id).read_text(encoding="utf-8").strip()
+            read_path = sentinel_read_path(session_id)
+            sentinel_content = (
+                read_path.read_text(encoding="utf-8").strip() if read_path is not None else None
+            )
         except Exception:
             sentinel_content = None
     mise_continuance = sentinel_content == "mise-en-place"

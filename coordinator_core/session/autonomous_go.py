@@ -52,7 +52,9 @@ def _autonomous_command_signal(session_id: str) -> Optional[Dict[str, str]]:
     if not session_id:
         return None
     try:
-        path = autonomous_sentinel.sentinel_path(session_id)
+        path = autonomous_sentinel.sentinel_read_path(session_id)
+        if path is None:
+            return None
         with path.open("r", encoding="utf-8") as fh:
             first_line = fh.readline().strip()
     except OSError:

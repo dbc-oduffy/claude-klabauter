@@ -171,6 +171,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.delete_superseded_decisions":      "coordinator_core.ops.fleet.delete_superseded_decisions",
     "fleet.prune_closed_bugs":                "coordinator_core.ops.fleet.prune_bugs",
     "fleet.prune_emitted_output":             "coordinator_core.ops.fleet.prune_emitted",
+    "fleet.scratch_hygiene":                  "coordinator_core.ops.fleet.scratch_hygiene",
     "fleet.archive_completed_plans":          "coordinator_core.ops.fleet.archive_plans",
     "fleet.archive_sweep_status":             "coordinator_core.ops.fleet.sweep_status",
     "fleet.handoffs_for_plan":                "coordinator_core.ops.fleet.plan_handoffs",

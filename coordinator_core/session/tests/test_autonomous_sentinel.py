@@ -13,7 +13,7 @@ def test_sentinel_path_uses_platform_tempdir_not_hardcoded_posix_tmp(monkeypatch
 
     result = sentinel_path("abc123")
 
-    assert result == Path(sandboxed) / "autonomous-run-abc123"
+    assert result == Path(sandboxed) / "coordinator" / "_fleet" / "autonomous-run-abc123"
     assert str(result) != "/tmp/autonomous-run-abc123"
 
 
@@ -54,6 +54,7 @@ def test_writer_written_sentinel_is_found_by_reader(tmp_path, monkeypatch):
 
     session_id = "sess-e2e"
     write_path = sentinel_path(session_id)
+    write_path.parent.mkdir(parents=True, exist_ok=True)
     write_path.write_text("1")
 
     read_path = sentinel_path(session_id)
