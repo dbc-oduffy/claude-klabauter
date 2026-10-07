@@ -11,8 +11,6 @@ out to a synthetic `discover-working-repos.sh`.
 from __future__ import annotations
 
 import os
-import stat
-import sys
 from pathlib import Path
 
 import pytest
@@ -32,82 +30,10 @@ def _stub_discover(monkeypatch, repo_paths: list[str]) -> None:
     monkeypatch.setattr(rdr, "_discover_working_repos_main", _fake_discover)
 
 
-def _make_fake_machine_local(bin_dir: Path, registry: dict) -> Path:
-    """A fake `machine-local` backed by a plain text file (one KEY=VALUE per line)
-    so `has`/`get`/`set` all round-trip within a single test process without a real
-    TOML registry.
+def _read_registry(reg_dir: Path) -> dict:
+    from coordinator_core.machine_resolver import merged_flat_registry
 
-    Windows note: `shutil.which("machine-local")` (the resolver `main()` uses) only
-    matches names ending in one of PATHEXT's extensions (.COM/.EXE/.BAT/.CMD/...) on
-    native Windows -- an extensionless script (correct for the bash/git-bash oracle
-    on POSIX) is invisible to it there, which would leave the REAL operator-installed
-    `machine-local.cmd` as the only match on PATH and re-open the leak this fixture
-    exists to prevent. Mirror the real wrapper's own location-independent-forwarder
-    pattern: emit an extensionless POSIX script on non-Windows, and a `.cmd` launcher
-    on Windows (subprocess.run() execs a bare `.cmd` path directly -- CreateProcess
-    special-cases .bat/.cmd -- so no interpreter-prefix wrapping is needed, unlike the
-    `#!/usr/bin/env bash` discover-working-repos.sh case). The `.cmd` launcher below
-    invokes `sys.executable` -- the same interpreter pytest is already running under
-    -- purely to run a short-lived registry read/write and exit; test-only fixture
-    code, not a long-lived interactive console spawn.  # popup-intentional-last-resort
-    """
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    reg_file = bin_dir / "_fake_registry.txt"
-    reg_file.write_text("")
-    impl = bin_dir / "_fake_machine_local_impl.py"
-    impl.write_text(
-        "import json, sys, pathlib\n"
-        f"reg = pathlib.Path({str(reg_file)!r})\n"
-        "lines = [l for l in reg.read_text().splitlines() if l.strip()]\n"
-        "kv = dict(l.split('=', 1) for l in lines)\n"
-        "cmd = sys.argv[1]\n"
-        "key = sys.argv[2] if len(sys.argv) > 2 else ''\n"
-        "if cmd == 'has':\n"
-        "    sys.exit(0 if key in kv else 1)\n"
-        "elif cmd == 'get':\n"
-        "    if key in kv:\n"
-        "        print(kv[key], end='')\n"
-        "        sys.exit(0)\n"
-        "    sys.exit(1)\n"
-        "elif cmd == 'set':\n"
-        "    val = sys.argv[3]\n"
-        "    kv[key] = val\n"
-        "    reg.write_text('\\n'.join(f'{k}={v}' for k, v in kv.items()) + '\\n')\n"
-        "    sys.exit(0)\n"
-        "elif cmd == 'unset':\n"
-        "    kv.pop(key, None)\n"
-        "    reg.write_text('\\n'.join(f'{k}={v}' for k, v in kv.items()) + '\\n')\n"
-        "    sys.exit(0)\n"
-        "elif cmd == 'dump':\n"
-        "    args = sys.argv[1:]\n"
-        "    prefix = args[args.index('--prefix') + 1] if '--prefix' in args else None\n"
-        "    out = {k: v for k, v in kv.items() if prefix is None or k.startswith(prefix + '.')}\n"
-        "    print(json.dumps(out), end='')\n"
-        "    sys.exit(0)\n"
-        "sys.exit(9)\n"
-    )
-    if sys.platform.startswith("win"):
-        script = bin_dir / "machine-local.cmd"
-        script.write_text(
-            "@echo off\r\n"
-            f'"{sys.executable}" "{impl}" %*\r\n'
-        )
-    else:
-        script = bin_dir / "machine-local"
-        script.write_text(
-            "#!/usr/bin/env python3\n"
-            "import runpy\n"
-            f"runpy.run_path({str(impl)!r}, run_name='__main__')\n"
-        )
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return script
-
-
-def _read_registry(bin_dir: Path) -> dict:
-    reg_file = bin_dir / "_fake_registry.txt"
-    if not reg_file.exists():
-        return {}
-    return dict(l.split("=", 1) for l in reg_file.read_text().splitlines() if l.strip())
+    return {k: v for k, v in merged_flat_registry().items() if k.startswith("repos.")}
 
 
 class TestDeriveKey:
@@ -125,25 +51,14 @@ class TestDeriveKey:
 def env(tmp_path, monkeypatch):
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
-    bin_dir = tmp_path / "bin"
-    _make_fake_machine_local(bin_dir, {})
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    # Belt-and-braces: even if PATH resolution mistakenly falls through to a
-    # real `machine-local` binary (e.g. a future PATH-join bug), redirect its
-    # registry writes into the tmp_path sandbox instead of the operator's
-    # real machine-local registry. See coordinator_core.machine_resolver
-    # (`MACHINE_LOCAL_REGISTRY_DIR` env override, "test isolation").
-    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry-sandbox"))
-    # Isolate the resolution journal into the sandbox too -- `main()` now
-    # calls `record_resolution` at its exit points, and without this the
-    # default journal path would land under the real operator's
-    # settings-home.
+    reg_dir = tmp_path / "registry-sandbox"
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
     from coordinator_core.install import resolution_journal as _journal_mod
 
     monkeypatch.setenv(
         _journal_mod.RESOLUTION_JOURNAL_ENV_VAR, str(tmp_path / "resolution-journal.jsonl")
     )
-    return lib_dir, bin_dir
+    return lib_dir, reg_dir
 
 
 def test_check_only_reports_and_writes_nothing(env, tmp_path, monkeypatch):
@@ -172,76 +87,12 @@ def test_non_interactive_registers_absent_keys(env, tmp_path, monkeypatch, capsy
     assert reg["repos.repo_beta"] == repo_b
 
 
-def test_batched_snapshot_resolves_multiple_candidates_without_per_key_has(
-    env, tmp_path, monkeypatch
-):
-    """Multi-item regression, T3 h4-ops-b deferred item: with THREE
-    candidates (one already registered, two new), the already-registered/
-    not-yet-registered determination for all three comes from ONE `dump`
-    call, not one `has` spawn per candidate.
-
-    FAILS against the pre-batch per-candidate `has` loop: that code path
-    never calls `dump` at all, so asserting `dump_calls == 1` would see 0;
-    reverting `_registry_snapshot`'s call site back to the per-key `has`
-    loop makes this test fail. Confirmed by the dispatching agent via local
-    revert-and-rerun; see the run report.
-
-    Also proves per-item attribution survives the batch: the pre-registered
-    repo is left untouched (only-if-absent) while both new repos register,
-    in the same run.
-    """
-    lib_dir, bin_dir = env
-    repo_a = str(tmp_path / "dev" / "repo-alpha")
-    repo_b = str(tmp_path / "dev" / "repo-beta")
-    repo_c = str(tmp_path / "dev" / "repo-gamma")
-    _stub_discover(monkeypatch, [repo_a, repo_b, repo_c])
-
-    reg_file = bin_dir / "_fake_registry.txt"
-    reg_file.write_text("repos.repo_alpha=/manually/overridden/path\n")
-
-    import coordinator_core.ops.register_discovered_repos as rdr_mod
-
-    real_run = rdr_mod.subprocess.run
-    dump_calls = []
-    has_calls = []
-
-    def _counting_run(argv, *args, **kwargs):
-        if "dump" in argv:
-            dump_calls.append(list(argv))
-        if "has" in argv:
-            has_calls.append(list(argv))
-        return real_run(argv, *args, **kwargs)
-
-    monkeypatch.setattr(rdr_mod.subprocess, "run", _counting_run)
-
-    rc = main(["--non-interactive"], self_dir=lib_dir)
-
-    assert rc == 0
-    assert len(dump_calls) == 1, (
-        f"expected exactly one `dump` spawn resolving all 3 candidates' "
-        f"registration status, got {len(dump_calls)}: {dump_calls!r}"
-    )
-    assert has_calls == [], (
-        f"a successful dump snapshot must make the per-candidate `has` "
-        f"fallback unreachable; got {has_calls!r}"
-    )
-
-    reg = _read_registry(bin_dir)
-    assert reg["repos.repo_alpha"] == "/manually/overridden/path", (
-        "the pre-registered repo must be left untouched (only-if-absent), "
-        f"got {reg!r}"
-    )
-    assert reg["repos.repo_beta"] == repo_b
-    assert reg["repos.repo_gamma"] == repo_c
-
-
 def test_only_if_absent_never_clobbers(env, tmp_path, monkeypatch):
     lib_dir, bin_dir = env
     repo_a = str(tmp_path / "dev" / "repo-alpha")
     _stub_discover(monkeypatch, [repo_a])
 
-    reg_file = bin_dir / "_fake_registry.txt"
-    reg_file.write_text("repos.repo_alpha=/manually/overridden/path\n")
+    _seed(bin_dir, {"repos.repo_alpha": "/manually/overridden/path"})
 
     rc = main(["--non-interactive"], self_dir=lib_dir)
 
@@ -288,49 +139,6 @@ def test_discover_failure_skips_cleanly(env, tmp_path, monkeypatch, capsys):
 
     assert rc == 0
     assert "working-repo discovery failed" in capsys.readouterr().err
-
-
-def test_resolve_machine_local_fallback_uses_userprofile_when_home_absent(tmp_path, monkeypatch):
-    """Native-Windows condition (home-resolution-lint bare_home_or_chain fix,
-    2026-07-29): CLAUDE_HOME/HOME both absent, only USERPROFILE-equivalent
-    home resolvable. `_resolve_machine_local`'s fallback rung now delegates
-    to `_settings_home.home_dir()` instead of a hand-rolled `CLAUDE_HOME or
-    HOME` chain that degraded to a cwd-relative `.claude/bin/machine-local`
-    in exactly this condition."""
-    from pathlib import Path as _Path
-
-    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
-    (tmp_path / "empty-bin").mkdir()
-    monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    monkeypatch.delenv("HOME", raising=False)
-    userprofile_home = tmp_path / "winhome"
-    fallback = userprofile_home / ".claude" / "bin" / (
-        "machine-local.cmd" if os.name == "nt" else "machine-local"
-    )
-    fallback.parent.mkdir(parents=True)
-    fallback.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fallback.chmod(0o755)
-    # Path.home() only consults USERPROFILE on a real Windows interpreter;
-    # simulate that resolution here so the test proves the delegation shape.
-    monkeypatch.setattr(_Path, "home", lambda: userprofile_home)
-
-    assert rdr._resolve_machine_local(tmp_path / "lib") == str(fallback)
-
-
-def test_missing_machine_local_skips_cleanly(tmp_path, monkeypatch):
-    lib_dir = tmp_path / "lib"
-    lib_dir.mkdir()
-    _stub_discover(monkeypatch, [str(tmp_path / "dev" / "repo-x")])
-    empty_bin = tmp_path / "empty-bin"
-    empty_bin.mkdir()
-    monkeypatch.setenv("PATH", str(empty_bin))
-    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry-sandbox"))
-    monkeypatch.delenv("CLAUDE_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path / "no-claude-home"))
-
-    rc = main(["--non-interactive"], self_dir=lib_dir)
-
-    assert rc == 0
 
 
 def test_empty_discovery_output_is_a_noop(env, tmp_path, monkeypatch):
@@ -382,27 +190,6 @@ class TestResolutionJournalWiring:
         assert rdr.WRITE_SURFACE.writer_id in journal
         resolution = journal[rdr.WRITE_SURFACE.writer_id][rdr._SHAPED_CLAUSE_INDEX]
         assert resolution.entries == ()
-
-    def test_op_not_running_journals_no_row(self, tmp_path, monkeypatch):
-        lib_dir = tmp_path / "lib"
-        lib_dir.mkdir()
-        journal_path = tmp_path / "resolution-journal.jsonl"
-        monkeypatch.setenv(
-            "COORDINATOR_INSTALL_RESOLUTION_JOURNAL", str(journal_path)
-        )
-        empty_bin = tmp_path / "empty-bin"
-        empty_bin.mkdir()
-        monkeypatch.setenv("PATH", str(empty_bin))
-        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry-sandbox"))
-        _stub_discover(monkeypatch, [str(tmp_path / "dev" / "repo-x")])
-
-        rc = main(["--non-interactive"], self_dir=lib_dir)
-
-        assert rc == 0
-        # machine-local was never found -- registration was never
-        # attempted or determined this run, so nothing is journaled.
-        journal = read_journal()
-        assert rdr.WRITE_SURFACE.writer_id not in journal
 
     def test_round_trip_via_read_journal_matches_derive_receipt_entries_shape(
         self, env, tmp_path, monkeypatch
@@ -487,52 +274,34 @@ class TestWriteSurfaceDeclaration:
         assert rdr.WRITE_SURFACE.clauses[0].entry_template.key == "repos.<derived-key>"
 
 
-def test_dump_call_count_does_not_grow_with_candidate_count(env, tmp_path, monkeypatch):
-    """G6 process-count pin: the already-registered snapshot is ONE `dump`
-    call regardless of how many repos discovery surfaces -- 1 vs 4
-    candidates must cost the same single dump spawn. `set` still costs one
-    spawn per genuinely-new repo (a different destination key/value per
-    call, not batchable through `machine-local set`) -- that per-item cost
-    is real, not amplification, and is asserted separately below rather than
-    folded into the growth assertion.
-    """
-    lib_dir, bin_dir = env
-    import coordinator_core.ops.register_discovered_repos as rdr_mod
+def test_no_machine_local_subprocess_for_n_repos(env, tmp_path, monkeypatch):
+    """Registration, prune and only-if-absent are in-process: zero spawns
+    regardless of how many repos discovery surfaces."""
+    import subprocess
 
-    real_run = rdr_mod.subprocess.run
+    lib_dir, reg_dir = env
+    spawns = []
 
-    def _run_with_counting(repo_paths):
-        dump_calls = []
+    def _trap(*args, **kwargs):
+        spawns.append(args)
+        raise AssertionError("subprocess spawned")
 
-        def _counting_run(argv, *args, **kwargs):
-            if "dump" in argv:
-                dump_calls.append(list(argv))
-            return real_run(argv, *args, **kwargs)
+    monkeypatch.setattr(subprocess, "run", _trap)
+    monkeypatch.setattr(subprocess, "Popen", _trap)
+    repos = [str(tmp_path / "dev" / f"repo-{i}") for i in range(6)]
+    _stub_discover(monkeypatch, repos)
 
-        monkeypatch.setattr(rdr_mod.subprocess, "run", _counting_run)
-        _stub_discover(monkeypatch, repo_paths)
-        rc = main(["--non-interactive"], self_dir=lib_dir)
-        monkeypatch.setattr(rdr_mod.subprocess, "run", real_run)
-        return rc, dump_calls
+    assert main(["--non-interactive"], self_dir=lib_dir) == 0
 
-    rc_one, dump_one = _run_with_counting([str(tmp_path / "dev" / "repo-solo")])
-    assert rc_one == 0
-    assert len(dump_one) == 1
-
-    rc_four, dump_four = _run_with_counting(
-        [str(tmp_path / "dev" / f"repo-{i}") for i in range(4)]
-    )
-    assert rc_four == 0
-    assert len(dump_four) == 1, (
-        f"dump call count grew with candidate count: {len(dump_four)} for 4 vs "
-        f"{len(dump_one)} for 1"
-    )
+    assert spawns == []
+    assert _read_registry(reg_dir) == {f"repos.repo_{i}": repos[i] for i in range(6)}
 
 
-def _seed(bin_dir: Path, entries: dict) -> None:
-    (bin_dir / "_fake_registry.txt").write_text(
-        "".join(f"{k}={v}\n" for k, v in entries.items())
-    )
+def _seed(reg_dir: Path, entries: dict) -> None:
+    from coordinator_core.machine_resolver import registry_set
+
+    for k, v in entries.items():
+        registry_set(k, v)
 
 
 @pytest.fixture

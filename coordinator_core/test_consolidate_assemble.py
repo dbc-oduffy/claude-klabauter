@@ -26,9 +26,36 @@ def _show_stdout(shas):
     return "\n".join(blocks)
 
 
-def _dispatch(rules):
+def _batched_unique(args, commits_for):
+    """Fake the batched union `git log` / tip `rev-parse`; None when `args` is neither.
+
+    `commits_for(ref)` -> that ref's `<sha> <subject>` lines, newest first, as a linear chain.
+    """
+    sep = "\x1f"
+    if args[0] == "log" and len(args) > 1 and args[1].startswith("--format="):
+        rows: dict[str, str] = {}
+        for ref in args[2:-1]:
+            chain = commits_for(ref)
+            for i, line in enumerate(chain):
+                parent = chain[i + 1].split(" ", 1)[0] if i + 1 < len(chain) else ""
+                rows[line.split(" ", 1)[0]] = f"{line.split(' ', 1)[0]}{sep}{parent}{sep}{line}"
+        out = "".join(r + "\n" for r in rows.values())
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
+    if args[0] == "rev-parse" and len(args) > 1 and args[1].endswith("^{commit}"):
+        tips = []
+        for spec in args[1:]:
+            chain = commits_for(spec[: -len("^{commit}")])
+            tips.append(chain[0].split(" ", 1)[0] if chain else f"tip-{spec}")
+        return SimpleNamespace(returncode=0, stdout="\n".join(tips) + "\n", stderr="")
+    return None
+
+
+def _dispatch(rules, unique=()):
 
     def _run(args, cwd):
+        batched = _batched_unique(args, lambda ref: list(unique))
+        if batched is not None:
+            return batched
         for prefix, result in rules.items():
             if args[: len(prefix)] == list(prefix):
                 return result
@@ -104,6 +131,9 @@ class TestBrief:
         unique_commits = unique_commits or []
 
         def run_git(args, cwd):
+            batched = _batched_unique(args, lambda ref: unique_commits)
+            if batched is not None:
+                return batched
             if args[:2] == ["config", "user.email"]:
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
             if args[:2] == ["rev-parse", "--abbrev-ref"]:
@@ -125,10 +155,6 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout=f"{tip_author}\n", stderr="")
-            if args[0] == "log" and args[1] == "--oneline":
-                return SimpleNamespace(
-                    returncode=0, stdout="\n".join(unique_commits) + ("\n" if unique_commits else ""), stderr=""
-                )
             if args[0] == "show":
                 shas = [a for a in args[2:]]
                 return SimpleNamespace(returncode=0, stdout=_show_stdout(shas), stderr="")
@@ -233,6 +259,15 @@ class TestBrief:
         calls = []
 
         def run_git(args, cwd):
+            batched = _batched_unique(
+                args,
+                lambda ref: {
+                    "stale-a": ["aaa111 first"],
+                    "origin/stale-b": ["bbb222 second", "ccc333 third"],
+                }[ref],
+            )
+            if batched is not None:
+                return batched
             if args[:2] == ["config", "user.email"]:
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
             if args[:2] == ["rev-parse", "--abbrev-ref"]:
@@ -253,13 +288,6 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
-            if args[0] == "log" and args[1] == "--oneline":
-                ref = args[2].split("..", 1)[1]
-                commits = {
-                    "stale-a": ["aaa111 first"],
-                    "origin/stale-b": ["bbb222 second", "ccc333 third"],
-                }[ref]
-                return SimpleNamespace(returncode=0, stdout="\n".join(commits) + "\n", stderr="")
             if args[0] == "show":
                 return SimpleNamespace(returncode=0, stdout=_show_stdout(args[2:]), stderr="")
             if args[0] == "worktree" and args[1] == "list":
@@ -306,6 +334,9 @@ class TestBrief:
 
         def run_git(args, cwd):
             calls.append(list(args))
+            batched = _batched_unique(args, lambda ref: [])
+            if batched is not None:
+                return batched
             if args[:2] == ["config", "user.email"]:
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
             if args[:2] == ["rev-parse", "--abbrev-ref"]:
@@ -324,8 +355,6 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout=out, stderr="")
             if args[0] == "branch" and args[1] == "--merged":
                 return SimpleNamespace(returncode=0, stdout="  other-a\n  other-b\n", stderr="")
-            if args[0] == "log" and args[1] == "--oneline":
-                return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "worktree" and args[1] == "list":
                 return SimpleNamespace(
                     returncode=0,
@@ -448,6 +477,37 @@ class TestBrief:
                 assert dep in directive_ids
 
 
+class TestUniqueCommitsByRef:
+    def test_overlapping_branches_get_their_own_reachable_sets(self):
+        # shared tail "c3" is reachable from both tips; "b1" only from b.
+        graph = {
+            "a": ["a1 one", "c3 shared"],
+            "b": ["b1 two", "a1 one", "c3 shared"],
+            "empty": [],
+        }
+
+        def run_git(args, cwd):
+            return _batched_unique(args, lambda ref: graph[ref])
+
+        out = consolidate_assemble.unique_commits_by_ref(run_git, None, "main", ["a", "b", "empty"])
+        assert out["a"] == ["a1 one", "c3 shared"]
+        assert sorted(out["b"]) == ["a1 one", "b1 two", "c3 shared"]
+        assert out["empty"] == []
+
+    def test_spawn_count_does_not_grow_with_branch_count(self):
+        def spawns(n):
+            calls = []
+
+            def run_git(args, cwd):
+                calls.append(list(args))
+                return _batched_unique(args, lambda ref: [f"{ref}1 x"])
+
+            consolidate_assemble.unique_commits_by_ref(run_git, None, "main", [f"s{i}" for i in range(n)])
+            return len(calls)
+
+        assert spawns(1) == spawns(5)
+
+
 class TestApplyDispatchTable:
     def test_every_brief_directive_cli_resolves_in_the_closed_table(self, monkeypatch, tmp_path):
         run_git = _dispatch(
@@ -461,14 +521,14 @@ class TestApplyDispatchTable:
                 ),
                 ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
-                ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="abc123 a commit\n", stderr=""),
                 ("show",): SimpleNamespace(returncode=0, stdout="1 file changed\n", stderr=""),
                 ("worktree", "list"): SimpleNamespace(
                     returncode=0, stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n", stderr=""
                 ),
                 ("merge-base",): SimpleNamespace(returncode=1, stdout="", stderr=""),
                 ("status",): SimpleNamespace(returncode=0, stdout="", stderr=""),
-            }
+            },
+            unique=["abc123 a commit"],
         )
         monkeypatch.setattr(consolidate_assemble, "default_run_git", run_git)
         do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
@@ -496,7 +556,6 @@ class TestApplyDispatchTable:
                 ("for-each-ref",): SimpleNamespace(returncode=0, stdout=_refs("current", "stale"), stderr=""),
                 ("branch", "--merged"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("log", "-1"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
-                ("log", "--oneline"): SimpleNamespace(returncode=0, stdout="", stderr=""),
                 ("worktree", "list"): SimpleNamespace(
                     returncode=0, stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n", stderr=""
                 ),

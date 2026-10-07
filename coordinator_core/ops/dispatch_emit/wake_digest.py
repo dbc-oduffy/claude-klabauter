@@ -38,7 +38,7 @@ RUNTIME_VARS = (
     "_verifications",
     "_blockedChunks",
     "_alreadyDone",
-    "_routedOutPlans",
+    "_falsifierBroken",
     "_routedOut",
     "_skippedDone",
     "_unusableChecks",
@@ -355,6 +355,13 @@ def next_action_parts(
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
             + "inline_review: " + inline_review_expr
+            # [{plan, tells}] for each plan the pre-dispatch review called BROKEN.
+            # terminal_commit reads it to withhold that plan's `implemented` stamp.
+            + (
+                f", falsifier_broken: [...{RUNTIME_VARS[8]}.entries()]"
+                ".map(([plan, tells]) => ({ plan, tells }))"
+                if predispatch else ""
+            )
             + " }"
         )
         if anchor_only:

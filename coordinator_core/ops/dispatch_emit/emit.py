@@ -3168,7 +3168,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
     )
     return (
         "  const _alreadyDone = new Set();\n"
-        "  const _routedOutPlans = new Map();\n"
+        "  const _falsifierBroken = new Map();\n"
         "  const _routedOut = [];\n"
         "  const _skippedDone = [];\n"
         "  const _unusableChecks = [];\n"
@@ -3206,11 +3206,6 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "      _notStarted.push(id);\n"
         "      return 'BLOCKED: plan halted by stop rule in ' + "
         "_haltedPlanReasons.get(plan);\n"
-        "    }\n"
-        "    if (plan && _routedOutPlans.has(plan)) {\n"
-        "      _routedOut.push(id);\n"
-        "      return 'ROUTED-OUT: falsifier integrity BROKEN (' + "
-        "_routedOutPlans.get(plan).join(', ') + ')';\n"
         "    }\n"
         "    if (_depResults.some(r => typeof r === 'string' && "
         "r.startsWith('ROUTED-OUT:'))) {\n"
@@ -3439,7 +3434,9 @@ _PRE_SCHEMAS_VAR = "_PRE_SCHEMAS"
 #: Runtime fold of the pre-phase verdicts into the script-level sets
 #: ``_run_row_helper_js`` reads. An ``already-done`` with no usable evidence
 #: and a null or malformed check both fold to still-open; a null or malformed
-#: review is recorded UNREVIEWABLE and the plan proceeds.
+#: review is recorded UNREVIEWABLE and the plan proceeds. A BROKEN review is
+#: advisory: the plan executes, and ``_falsifierBroken`` carries it to
+#: ``dispatch.terminal_commit``, which withholds only the ``implemented`` stamp.
 _PRE_PHASE_FOLD_JS = (
     "  _checkIds.forEach((id, i) => {\n"
     "    const r = _preResults[i];\n"
@@ -3463,7 +3460,7 @@ _PRE_PHASE_FOLD_JS = (
     "      ? r.tells.filter(t => t && t.status === 'FIRED').map(t => String(t.tell))\n"
     "      : [];\n"
     "    _reviews.push({ plan, verdict: known ? r.verdict : 'UNREVIEWABLE', tells: fired });\n"
-    "    if (known && r.verdict === 'BROKEN') _routedOutPlans.set(plan, fired);\n"
+    "    if (known && r.verdict === 'BROKEN') _falsifierBroken.set(plan, fired);\n"
     "  });"
 )
 

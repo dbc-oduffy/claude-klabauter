@@ -224,6 +224,19 @@
                 "incomplete_chunks": { "type": "array", "items": { "type": "string" } },
                 "script_path": { "type": "string" },
                 "session_id": { "type": "string" },
+                "falsifier_broken": {
+                  "type": "array",
+                  "description": "One entry per plan the pre-dispatch falsifier-integrity review called BROKEN, with its fired tells. Advisory: the plan executes, and dispatch.terminal_commit withholds its implemented stamp.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["plan", "tells"],
+                    "properties": {
+                      "plan": { "type": "string" },
+                      "tells": { "type": "array", "items": { "type": "string" } }
+                    }
+                  }
+                },
                 "inline_review": {
                   "anyOf": [
                     { "type": "null" },

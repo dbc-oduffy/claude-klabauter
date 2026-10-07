@@ -234,19 +234,31 @@ def _run_harness(*, row_plan, setup, rows):
 
 def test_a_dependent_of_a_routed_out_row_routes_out_without_dispatching():
     out = _run_harness(
-        row_plan={"R": "docs/plans/broken.md"},
-        setup="_routedOutPlans.set('docs/plans/broken.md', ['CANNOT-PRODUCE-A-RED-RESULT']);",
+        row_plan={},
+        setup="",
         rows=(
-            "_rows.R = _runRow('R', [], null, run('R'));"
+            "_rows.R = Promise.resolve('ROUTED-OUT: upstream');"
             "_rows.X = _runRow('X', [_rows.R], null, run('X'));"
             "_rows.Z = _runRow('Z', [], null, run('Z'));"
         ),
     )
     assert out["calls"] == ["Z"]
-    assert out["results"]["R"].startswith("ROUTED-OUT:")
-    assert "CANNOT-PRODUCE-A-RED-RESULT" in out["results"]["R"]
-    assert out["results"]["X"].startswith("ROUTED-OUT:")
-    assert sorted(out["routedOut"]) == ["R", "X"]
+    assert out["results"]["X"] == "ROUTED-OUT: a dependency was routed out"
+    assert out["routedOut"] == ["X"]
+
+
+def test_a_falsifier_broken_plan_still_executes():
+    """BROKEN is advisory: the row runs; only terminal_commit's implemented stamp is withheld."""
+    out = _run_harness(
+        row_plan={"R": "docs/plans/broken.md"},
+        setup="_falsifierBroken.set('docs/plans/broken.md', ['SCOPE-WIDER-THAN-CLAIM']);",
+        rows=(
+            "_rows.R = _runRow('R', [], null, run('R'));"
+            "_rows.X = _runRow('X', [_rows.R], null, run('X'));"
+        ),
+    )
+    assert out["calls"] == ["R", "X"]
+    assert out["routedOut"] == []
 
 
 def test_a_dependent_of_an_already_done_row_still_dispatches():
@@ -266,14 +278,14 @@ def test_a_dependent_of_an_already_done_row_still_dispatches():
 
 _FOLD_HARNESS = r"""
 (async () => {
-  const _alreadyDone = new Set(), _routedOutPlans = new Map(), _unusableChecks = [], _reviews = [];
+  const _alreadyDone = new Set(), _falsifierBroken = new Map(), _unusableChecks = [], _reviews = [];
   const _checkIds = %(check_ids)s;
   const _reviewPlans = %(review_plans)s;
   const _preResults = %(results)s;
 %(fold)s
   console.log(JSON.stringify({
     done: [..._alreadyDone], unusable: _unusableChecks, reviews: _reviews,
-    routed: [..._routedOutPlans.entries()],
+    broken: [..._falsifierBroken.entries()],
   }));
 })();
 """
@@ -318,7 +330,7 @@ def test_an_already_done_verdict_without_evidence_folds_to_still_open_and_is_rec
     assert out["unusable"] == ["empty", "partial", "nullcheck"]
 
 
-def test_broken_review_routes_its_plan_out_and_unreviewable_or_null_proceeds():
+def test_broken_review_marks_its_plan_and_unreviewable_or_null_proceeds():
     fired = {"tell": "SCOPE-WIDER-THAN-CLAIM", "status": "FIRED", "note": ""}
     clear = {"tell": "WRONG-DENOMINATOR", "status": "CLEAR", "note": ""}
     out = _run_fold(
@@ -331,7 +343,7 @@ def test_broken_review_routes_its_plan_out_and_unreviewable_or_null_proceeds():
             None,
         ],
     )
-    assert out["routed"] == [["p-broken", ["SCOPE-WIDER-THAN-CLAIM"]]]
+    assert out["broken"] == [["p-broken", ["SCOPE-WIDER-THAN-CLAIM"]]]
     verdicts = {r["plan"]: r["verdict"] for r in out["reviews"]}
     assert verdicts == {
         "p-broken": "BROKEN",

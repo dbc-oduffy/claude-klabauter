@@ -152,20 +152,32 @@ def test_unmerged_count_uses_separate_revs(tmp_path, monkeypatch):
     assert bad == 0
 
 
+def _install_gh_stub(bin_dir: Path, map_file: Path, emit_line: str) -> None:
+    """Install a `gh` that prints JSON; Windows needs a `.cmd` for shutil.which/CreateProcess."""
+    script = bin_dir / "gh_stub.py"
+    script.write_text(
+        "import json,sys\n"
+        "m=json.load(open(sys.argv[1]))\n"
+        f"{emit_line}\n"
+    )
+    if sys.platform == "win32":
+        (bin_dir / "gh.cmd").write_text(
+            f'@"{sys.executable}" "{script}" "{map_file}"\r\n'
+        )
+        return
+    stub = bin_dir / "gh"
+    stub.write_text(f'#!/usr/bin/env bash\n"{sys.executable}" "{script}" "{map_file}"\n')
+    stub.chmod(0o755)
+
+
 def _write_gh_stub(bin_dir: Path, pr_map: dict) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     map_file = bin_dir / "pr-map.json"
     map_file.write_text(json.dumps(pr_map))
-    stub = bin_dir / "gh"
-    stub.write_text(
-        "#!/usr/bin/env bash\n"
-        "python3 -c 'import json,sys\n"
-        "m=json.load(open(sys.argv[1]))\n"
-        "print(json.dumps([dict(pr, headRefName=b) for b, pr in m.items()]))\n"
-        "' "
-        f"\"{map_file}\"\n"
+    _install_gh_stub(
+        bin_dir, map_file,
+        "print(json.dumps([dict(pr, headRefName=b) for b, pr in m.items()]))",
     )
-    stub.chmod(0o755)
 
 
 def _dated_commit(repo: Path, name: str, msg: str, ts: int) -> None:
@@ -259,7 +271,7 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
         if cmd[:2] == ["git", "for-each-ref"]:
             calls["for_each_ref"] += 1
             return real_run(cmd, timeout=timeout, cwd=cwd)
-        if cmd[:1] == ["gh"] and "pr" in cmd and "list" in cmd:
+        if cmd[:1] == ["/usr/bin/gh"] and "pr" in cmd and "list" in cmd:
             calls["gh_pr_list"] += 1
             return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
         return real_run(cmd, timeout=timeout, cwd=cwd)
@@ -277,6 +289,43 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
         f"batched gh pr list must fire exactly once for {branch_count} branches, "
         f"not once per branch: {calls}"
     )
+
+
+def _mk(root, name):
+    d = root / name
+    d.mkdir()
+    return d
+
+
+def _tip_log_calls(tmp_path, monkeypatch, n, fail_batch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    for i in range(n):
+        _git(repo, "checkout", "-q", "-b", f"work/test/b{i}")
+        _commit(repo, f"f{i}.txt", f"c{i}")
+        _git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(obs.shutil, "which", lambda name: None)
+
+    seen = []
+    real_run = obs._run
+
+    def counting_run(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
+        if cmd[:2] == ["git", "log"]:
+            seen.append(cmd)
+            if fail_batch and "--no-walk" in cmd:
+                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="")
+        return real_run(cmd, timeout=timeout, cwd=cwd)
+
+    monkeypatch.setattr(obs, "_run", counting_run)
+    assert main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"]) == 0
+    return len(seen)
+
+
+@pytest.mark.parametrize("fail_batch", [False, True])
+def test_tip_metadata_log_count_does_not_grow_with_the_set(tmp_path, monkeypatch, fail_batch):
+    one = _tip_log_calls(_mk(tmp_path, "a"), monkeypatch, 1, fail_batch)
+    five = _tip_log_calls(_mk(tmp_path, "b"), monkeypatch, 5, fail_batch)
+    assert one == five == 1
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +686,7 @@ def test_batched_author_date_read_is_one_no_walk_call_not_per_branch(tmp_path, m
     assert per_branch_calls == [], f"unexpected per-branch fallback calls on a healthy batch: {per_branch_calls}"
 
 
-def test_forced_batch_failure_routes_every_branch_through_fallback(tmp_path, monkeypatch, capsys):
+def test_forced_batch_failure_does_not_fan_out_per_branch(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     _no_gh(monkeypatch)
@@ -656,17 +705,8 @@ def test_forced_batch_failure_routes_every_branch_through_fallback(tmp_path, mon
 
     rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
     assert rc == 0
-    out = capsys.readouterr().out
-    lines = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
-    by_branch = {ln["branch"]: ln for ln in lines}
-
-    assert "work/test/one" in by_branch
-    assert by_branch["work/test/one"]["severity"] == "WARNING"
-
-    per_branch_ae = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ae"]
-    per_branch_ct = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ct"]
-    assert len(per_branch_ae) == 1
-    assert len(per_branch_ct) == 1
+    assert [c for c in calls if c[:2] == ["log", "-1"]] == []
+    assert capsys.readouterr().out.strip() == ""
 
 
 def test_duplicate_tip_shas_both_resolve_through_batch(tmp_path, monkeypatch, capsys):
@@ -745,16 +785,10 @@ def _write_multi_pr_gh_stub(bin_dir: Path, pr_map: dict) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     map_file = bin_dir / "multi-pr-map.json"
     map_file.write_text(json.dumps(pr_map))
-    stub = bin_dir / "gh"
-    stub.write_text(
-        "#!/usr/bin/env bash\n"
-        "python3 -c 'import json,sys\n"
-        "m=json.load(open(sys.argv[1]))\n"
-        "print(json.dumps([dict(pr, headRefName=b) for b, prs in m.items() for pr in prs]))\n"
-        "' "
-        f"\"{map_file}\"\n"
+    _install_gh_stub(
+        bin_dir, map_file,
+        "print(json.dumps([dict(pr, headRefName=b) for b, prs in m.items() for pr in prs]))",
     )
-    stub.chmod(0o755)
 
 
 def test_newest_pr_wins_over_an_older_merged_one(tmp_path, monkeypatch, capsys):
@@ -835,7 +869,7 @@ def test_batched_pr_listing_selects_each_branchs_newest_pr(tmp_path, monkeypatch
     real_run = obs._run
 
     def stub_gh(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
-        if cmd[:1] == ["gh"]:
+        if cmd[:1] == ["/usr/bin/gh"]:
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(listing), stderr="")
         return real_run(cmd, timeout=timeout, cwd=cwd)
 
@@ -867,7 +901,7 @@ def test_failed_pr_listing_does_not_fan_out_per_branch(tmp_path, monkeypatch, ca
     real_run = obs._run
 
     def failing_gh(cmd, timeout=obs._GIT_TIMEOUT, cwd=None):
-        if cmd[:1] == ["gh"]:
+        if cmd[:1] == ["/usr/bin/gh"]:
             gh_calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="gh: not authenticated")
         return real_run(cmd, timeout=timeout, cwd=cwd)

@@ -162,7 +162,7 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
     (``tail_ops.fire_tracker_and_roadmap_detached``) invoke as a subprocess —
     opts in.
     """
-    roadmap_id = ""
+    roadmap_ids: List[str] = []
     root_arg = ""
 
     i = 0
@@ -173,16 +173,26 @@ def main(argv: List[str], *, self_commit: bool = False) -> int:
             i += 2
             continue
         if arg in ("-h", "--help"):
-            print(f"Usage: {_PROG} <roadmap_id> [--root <repo>]")
+            print(f"Usage: {_PROG} <roadmap_id> [<roadmap_id> ...] [--root <repo>]")
             return 0
-        if not roadmap_id:
-            roadmap_id = arg
+        roadmap_ids.append(arg)
         i += 1
 
-    if not roadmap_id:
+    if not roadmap_ids:
         print(f"ERROR: {_PROG} requires <roadmap_id>", file=sys.stderr)
         return 1
 
+    # Each id is independent: one failure never skips the rest; exit is the worst rc.
+    worst = 0
+    for rid in roadmap_ids:
+        rc = _refresh_one(rid, root_arg, self_commit)
+        if rc != 0:
+            print(f"refresh-roadmap-callout: FAILED {rid} (rc={rc})", file=sys.stderr)
+            worst = worst or rc
+    return worst
+
+
+def _refresh_one(roadmap_id: str, root_arg: str, self_commit: bool) -> int:
     roadmap_id = _strip_one_quote_layer(roadmap_id)
 
     if not _validate_roadmap_id(roadmap_id):

@@ -310,7 +310,8 @@ def main(argv: list[str]) -> int:
     if _run(["git", "rev-parse", "--is-inside-work-tree"], cwd=cwd).returncode != 0:
         return 0
 
-    gh_available = shutil.which("gh") is not None
+    gh_path = shutil.which("gh")
+    gh_available = gh_path is not None
 
     min_rank = _severity_rank(severity_min.upper())
 
@@ -337,13 +338,13 @@ def main(argv: list[str]) -> int:
 
     distinct_shas = sorted({sha for sha in branch_tip_sha.values() if sha})
     tip_meta: dict[str, tuple[str, str]] = {}
-    batch_ok = False
+    # No per-branch fallback: a failed batch (unreadable tip object) leaves every branch
+    # without metadata, read as empty author / age 0.
     if distinct_shas:
         meta_res = _git(
             ["log", "--no-walk", "--format=%H%x1f%ae%x1f%ct", *distinct_shas], cwd=cwd
         )
         if meta_res.returncode == 0:
-            batch_ok = True
             for line in meta_res.stdout.splitlines():
                 parts = line.split("\x1f")
                 if len(parts) != 3:
@@ -401,7 +402,7 @@ def main(argv: list[str]) -> int:
     if gh_available and seen_branches:
         batch_res = _run(
             [
-                "gh", "pr", "list", "--state", "all", "--limit", "1000",
+                gh_path, "pr", "list", "--state", "all", "--limit", "1000",
                 "--json", "number,state,mergedAt,mergeCommit,headRefName",
             ],
             timeout=_GH_TIMEOUT,
@@ -422,28 +423,16 @@ def main(argv: list[str]) -> int:
         if tip_sha is None:
             continue
 
+        meta = tip_meta.get(tip_sha)
         if user_email:
-            if batch_ok:
-                meta = tip_meta.get(tip_sha)
-                tip_author = meta[0] if meta else ""
-            else:
-                author_res = _git(["log", "-1", "--format=%ae", tip_sha], cwd=cwd)
-                tip_author = author_res.stdout.strip() if author_res.returncode == 0 else ""
+            tip_author = meta[0] if meta else ""
             if tip_author != user_email:
                 continue
 
-        if batch_ok:
-            meta = tip_meta.get(tip_sha)
-            try:
-                tip_ct = int(meta[1]) if meta else now
-            except (ValueError, TypeError):
-                tip_ct = now
-        else:
-            ct_res = _git(["log", "-1", "--format=%ct", tip_sha], cwd=cwd)
-            try:
-                tip_ct = int(ct_res.stdout.strip()) if ct_res.returncode == 0 else now
-            except ValueError:
-                tip_ct = now
+        try:
+            tip_ct = int(meta[1]) if meta else now
+        except (ValueError, TypeError):
+            tip_ct = now
         age_secs = now - tip_ct
 
         if age_secs > max_age_secs:

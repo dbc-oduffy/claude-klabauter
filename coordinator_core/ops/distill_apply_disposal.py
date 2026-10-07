@@ -961,10 +961,24 @@ async def _delete_tracked_and_append_log(
         ]
 
         staged_denorm: list[Path] = []
-        for path in denorm_tracked_paths:
+        # One batched `git add --` over every denorm path; `git add` is atomic
+        # on a bad pathspec, so only a batch failure falls back to per-path
+        # staging to attribute exactly which parent failed.
+        add_results: list[tuple[Path, int, bytes]] = []
+        if denorm_tracked_paths:
             rc, _out, err = await _run_git(
-                "add", "--", str(path), cwd=worktree_root, env=base_env
+                "add", "--", *[str(p) for p in denorm_tracked_paths],
+                cwd=worktree_root, env=base_env,
             )
+            if rc == 0:
+                add_results = [(p, 0, b"") for p in denorm_tracked_paths]
+            else:
+                for path in denorm_tracked_paths:
+                    rc, _out, err = await _run_git(
+                        "add", "--", str(path), cwd=worktree_root, env=base_env
+                    )
+                    add_results.append((path, rc, err))
+        for path, rc, err in add_results:
             if rc != 0:
                 err_msg = err.decode(errors="replace").strip() or "git-add-denorm-failed"
                 # Not yet committed — HEAD's version IS the pre-write content.
@@ -1007,10 +1021,25 @@ async def _delete_tracked_and_append_log(
                 _LOG.error("distill.apply_disposal: git add log_path failed: %s", err_msg)
                 # Reverse everything reaped/staged so far (nothing committed yet).
                 revert_failed_ids: set[str] = set()
-                for p in reaped + staged_denorm:
-                    revert_rc, _revert_out, revert_err = await _run_git(
-                        "checkout", "HEAD", "--", str(p), cwd=worktree_root, env=_make_git_env()
+                revert_targets = reaped + staged_denorm
+                revert_results: list[tuple[Path, int, bytes]] = []
+                if revert_targets:
+                    batch_rc, _bo, batch_err = await _run_git(
+                        "checkout", "HEAD", "--", *[str(p) for p in revert_targets],
+                        cwd=worktree_root, env=_make_git_env(),
                     )
+                    if batch_rc == 0:
+                        revert_results = [(p, 0, b"") for p in revert_targets]
+                    else:
+                        # Atomic failure: re-run per path to learn which ones
+                        # genuinely could not be restored.
+                        for p in revert_targets:
+                            r_rc, _ro, r_err = await _run_git(
+                                "checkout", "HEAD", "--", str(p),
+                                cwd=worktree_root, env=_make_git_env(),
+                            )
+                            revert_results.append((p, r_rc, r_err))
+                for p, revert_rc, revert_err in revert_results:
                     if revert_rc != 0:
                         p_id = rel_id(p, worktree_root)
                         revert_failed_ids.add(p_id)

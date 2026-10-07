@@ -45,8 +45,8 @@ tier-gating logic. Retired the `bash discover-working-repos.sh` subprocess bridg
 retire-all-bash.md C18): the DoE-side `.sh` this used to shell out to is itself only a
 polyglot trampoline back onto this exact same claude-klabauter module (see that file's own
 header), so the subprocess hop was pure indirection with no logic on the other end to
-preserve. Still shells out to the machine-local CLI (PATH/sibling-dir resolved) — a
-real separate binary, not a claude-klabauter module.
+preserve. Registry reads/writes are in-process (machine_resolver), never a
+`machine-local` CLI spawn: process count is independent of repo count.
 
 Never-block contract: like the bash oracle, almost every failure mode (discovery
 error, machine-local missing, no candidates, operator declines) is a silent skip that
@@ -62,18 +62,16 @@ Port of: register-discovered-repos.sh (DoE b644d5a9, 2026-07-22)
 from __future__ import annotations
 
 import io
-import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core import launchable, machine_profile, repo_standing
-from coordinator_core._settings_home import home_dir, resolve_machine_local_cli
+from coordinator_core import machine_profile, repo_standing
+from coordinator_core._settings_home import home_dir
+from coordinator_core.machine_resolver import merged_flat_registry, registry_set, registry_unset
 from coordinator_core.install.resolution_journal import record_resolution
 from coordinator_core.install.write_surface import (
     ShapedClause,
@@ -83,7 +81,6 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.install.live_plugin_registration import installed_plugin_paths
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
 from coordinator_core.path_identity import same_dir
-from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 _PROG = "register-discovered-repos.sh"
 
@@ -213,62 +210,16 @@ def _prefer_platform_install_paths(
     return corrected
 
 
-def _resolve_machine_local(self_dir: Path) -> Optional[str]:
-    """Resolve the `machine-local` CLI: PATH first, then the CLAUDE_HOME/.claude/bin
-    fallback, exactly as the bash oracle's `command -v machine-local` / fixed-path
-    fallback ladder does. Returns None (never raises) if unresolvable.
-
-    Existence alone gates the fallback candidate -- an exec bit is no longer
-    required now that every rung is launched through an interpreter (see
-    `_machine_local_launch_argv`); a PATH hit via `shutil.which` is already
-    exec-bit-verified by the OS's own PATH search.
+def _registry_snapshot() -> Dict[str, str]:
+    """Every `repos.*` key in the merged registry, read once in-process.
+    Only-if-absent depends on this being complete: an unreadable file
+    degrades to {} per `merged_flat_registry`'s best-effort contract.
     """
-    return resolve_machine_local_cli()
-
-
-def _registry_snapshot(ml_argv: List[str]) -> Optional[Dict[str, str]]:
-    """One `dump --prefix repos --format json` call resolving every
-    `repos.*` key at once — batch counterpart to the per-candidate `has`
-    check the main() loop used to spawn once per discovered repo (T3
-    h4-ops-b deferred item; same primitive already proven in
-    `coordinator/bin/coordinator-doc-new.py` and
-    `coordinator/bin/lib/cli_shared.py::machine_local_dump_repos`).
-
-    Returns None (never {}) on any spawn/parse failure or non-zero
-    returncode — deliberately distinct from "dump ran and the registry is
-    empty". None is a signal to the caller to fall back to the reliable
-    per-key `has` check rather than treat an INDETERMINATE dump as a
-    confident "nothing is registered yet": this function's only consumer
-    gates an unconditional `set` (registration), and only-if-absent is a
-    clobber-prevention invariant (module docstring) — guessing "absent" on
-    a failed dump would let this bridge overwrite a manually-registered
-    path, exactly what only-if-absent forbids.
-    """
-    try:
-        result = subprocess.run(
-            [*ml_argv, "dump", "--prefix", "repos", "--format", "json"],
-            capture_output=True,
-            text=True,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    try:
-        data = json.loads(result.stdout)
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return {k: v for k, v in data.items() if isinstance(v, str)}
-
-
-def _machine_local_launch_argv(ml_bin: str) -> List[str]:
-    if launchable._is_windows():
-        return launchable.resolve_launchable(ml_bin)
-    return [sys.executable, ml_bin]
+    return {
+        k: v
+        for k, v in merged_flat_registry().items()
+        if k.startswith("repos.") and isinstance(v, str)
+    }
 
 
 def _stale_keys(snapshot: Dict[str, str]) -> List[str]:
@@ -306,19 +257,6 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
             print(f"Usage: {_PROG} [--non-interactive] [--check-only]", file=sys.stderr)
             return 1
 
-    base_dir = self_dir if self_dir is not None else Path.cwd()
-
-    ml_bin = _resolve_machine_local(base_dir)
-    if ml_bin is None:
-        print(
-            f"{_PROG}: machine-local CLI not found — skipping registration. "
-            "Register later: machine-local set repos.<name> <path>",
-            file=sys.stderr,
-        )
-        return 0
-
-    ml_argv = _machine_local_launch_argv(ml_bin)
-
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
@@ -327,22 +265,18 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
         print(f"{_PROG}: working-repo discovery failed: {exc}", file=sys.stderr)
         return 0
 
-    snapshot = _registry_snapshot(ml_argv)
+    snapshot = _registry_snapshot()
 
-    if snapshot is not None:
-        for full_key in _stale_keys(snapshot):
-            if check_only:
-                print(f"{_PROG}: would prune {full_key} = {snapshot[full_key]}")
-                continue
-            rc = subprocess.run(
-                [*ml_argv, "unset", full_key],
-                capture_output=True,
-                check=False,
-                **no_console_creationflags(),
-            ).returncode
-            if rc == 0:
-                print(f"{_PROG}: pruned {full_key} = {snapshot[full_key]}")
-                del snapshot[full_key]
+    for full_key in _stale_keys(snapshot):
+        if check_only:
+            print(f"{_PROG}: would prune {full_key} = {snapshot[full_key]}")
+            continue
+        try:
+            registry_unset(full_key)
+        except OSError:
+            continue
+        print(f"{_PROG}: pruned {full_key} = {snapshot[full_key]}")
+        del snapshot[full_key]
 
     candidates = [line for line in buf.getvalue().splitlines() if line.strip()]
     if not candidates:
@@ -369,17 +303,7 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
                 file=sys.stderr,
             )
             continue
-        if snapshot is not None:
-            already_registered = f"repos.{key}" in snapshot
-        else:
-            has_rc = subprocess.run(
-                [*ml_argv, "has", f"repos.{key}"],
-                capture_output=True,
-                check=False,
-                **no_console_creationflags(),
-            ).returncode
-            already_registered = has_rc == 0
-        if already_registered:
+        if f"repos.{key}" in snapshot:
             continue
         claimed = claimed_by.get(key)
         if claimed is not None:
@@ -431,12 +355,9 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     for key, path in to_register:
         print(f"{_PROG}: registering repos.{key} = {path}")
         sys.stdout.flush()
-        set_rc = subprocess.run(
-            [*ml_argv, "set", f"repos.{key}", path],
-            check=False,
-            **no_console_passthrough_kwargs(),
-        ).returncode
-        if set_rc != 0:
+        try:
+            registry_set(f"repos.{key}", path)
+        except (OSError, ValueError):
             print(f"{_PROG}: WARNING: failed to register repos.{key} — skipping.", file=sys.stderr)
         else:
             registered.append(key)

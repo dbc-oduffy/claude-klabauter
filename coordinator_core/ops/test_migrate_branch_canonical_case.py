@@ -340,3 +340,40 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch, capsys)
         f"spawn count grew with the ref set: 1 ref -> {spawns_for_one} spawns, "
         f"4 refs -> {spawns_for_many} spawns"
     )
+
+
+def _remote_cleanup_spawns(monkeypatch, n):
+    calls = []
+
+    def fake_git(root, *args, timeout=0):
+        calls.append(args)
+        return subprocess.CompletedProcess(["git", *args], 1, stdout="", stderr="")
+
+    monkeypatch.setattr(mbcc, "_git", fake_git)
+    pairs = [(f"work/B{i}", f"work/b{i}") for i in range(n)]
+    mbcc._remote_cleanup(".", pairs, open(os.devnull, "w"))
+    return len(calls)
+
+
+def test_remote_cleanup_spawn_count_does_not_grow_with_the_set(monkeypatch):
+    assert _remote_cleanup_spawns(monkeypatch, 1) == _remote_cleanup_spawns(monkeypatch, 5)
+
+
+def test_remote_cleanup_deletes_and_pushes_against_a_real_remote(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    _mkrepo(repo)
+    remote = tmp_path / "remote.git"
+    assert _git(tmp_path, "init", "-q", "--bare", str(remote)).returncode == 0
+    assert _git(repo, "remote", "add", "origin", str(remote)).returncode == 0
+    pairs = [("work/Up", "work/up"), ("work/Down", "work/down")]
+    for old, new in pairs:
+        assert _git(repo, "branch", new).returncode == 0
+        assert _git(repo, "push", "-q", "origin", f"{new}:refs/heads/{old}").returncode == 0
+
+    mbcc._remote_cleanup(str(repo), pairs, sys.stdout)
+    out = capsys.readouterr().out
+
+    remote_refs = _git(remote, "for-each-ref", "--format=%(refname)").stdout.split()
+    assert "refs/heads/work/up" in remote_refs and "refs/heads/work/down" in remote_refs
+    assert "refs/heads/work/Up" not in remote_refs and "refs/heads/work/Down" not in remote_refs
+    assert "WARN" not in out

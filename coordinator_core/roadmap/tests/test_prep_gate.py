@@ -464,7 +464,7 @@ def test_a_census_command_is_never_run(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _boom)
     fm = """census:
   - question: how many?
-    command: "false"
+    command: "grep -c never-there README.md"
     result: "0"
 prime_exit_criterion:
   statement: s
@@ -1401,3 +1401,33 @@ def test_a_done_disposition_reads_as_coded(tmp_path):
 def test_the_ue_addon_is_a_fleet_name_distinct_from_example_retrieval_repo():
     assert "example-retrieval-repo-ue-addon" in pg.FLEET_REPOS
     assert pg._matched_sibling("example-retrieval-repo-ue-addon/x.py", pg.FLEET_REPOS) == "example-retrieval-repo-ue-addon"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "tests covering touched files pass; does not need the fast tier",
+        "tests pass, not the fast tier",
+        "never run the full suite here",
+        "verified without the broad suite",
+    ],
+)
+def test_a_negated_suite_tier_mention_is_not_refused(statement):
+    from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+
+    assert suite_tier_refusal(statement) is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "the fast tier passes",
+        "not flaky; the full suite is green",
+        "does not regress and the fast tier passes",
+        "tier-U green",
+    ],
+)
+def test_a_real_suite_tier_mention_still_refuses(statement):
+    from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+
+    assert suite_tier_refusal(statement)

@@ -197,6 +197,65 @@ def main(argv: list[str]) -> int:
         return _migrate(push_cleanup)
 
 
+def _push_failures(result: subprocess.CompletedProcess, targets: list[str]) -> list[str]:
+    """Targets (full refnames) a `push --porcelain` did not accept.
+
+    Porcelain marks a refused ref with `!`; a failure with no per-ref lines at all
+    (no remote, auth) fails every target.
+    """
+    if result.returncode == 0:
+        return []
+    rejected = set()
+    parsed = False
+    for line in result.stdout.splitlines():
+        cols = line.split("	")
+        if len(cols) >= 2 and ":" in cols[1]:
+            parsed = True
+            if cols[0] == "!":
+                rejected.add(cols[1].split(":", 1)[1])
+    return [t for t in targets if t in rejected] if parsed else list(targets)
+
+
+def _remote_cleanup(git_root: str, pairs: list[tuple[str, str]], out) -> None:
+    """Delete the mixed-case remote branches and push the lowercase ones: three spawns for any N."""
+    ls_remote = _git(
+        git_root, "ls-remote", "--exit-code", "origin",
+        *[f"refs/heads/{old}" for old, _ in pairs],
+        timeout=_GIT_NETWORK_TIMEOUT_SECS,
+    )
+    on_remote = set()
+    if ls_remote.returncode == 0:
+        for line in ls_remote.stdout.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                on_remote.add(parts[1].strip())
+    to_delete = [old for old, _ in pairs if f"refs/heads/{old}" in on_remote]
+    if to_delete:
+        for old in to_delete:
+            print(f"  REMOTE-DELETE: origin/{old}", file=out)
+        targets = [f"refs/heads/{old}" for old in to_delete]
+        push_delete = _git(
+            git_root, "push", "--porcelain", "origin", "--delete", *to_delete,
+            timeout=_GIT_NETWORK_TIMEOUT_SECS,
+        )
+        for t in _push_failures(push_delete, targets):
+            print(
+                f"  WARN: remote delete of '{t[len('refs/heads/'):]}' failed (may already be gone)",
+                file=out,
+            )
+    for _, new in pairs:
+        print(f"  REMOTE-PUSH: origin/{new}", file=out)
+    push_new = _git(
+        git_root, "push", "--porcelain", "-u", "origin", *[new for _, new in pairs],
+        timeout=_GIT_NETWORK_TIMEOUT_SECS,
+    )
+    for t in _push_failures(push_new, [f"refs/heads/{new}" for _, new in pairs]):
+        print(
+            f"  WARN: push of '{t[len('refs/heads/'):]}' returned non-zero (may need re-run)",
+            file=out,
+        )
+
+
 def _migrate(push_cleanup: bool) -> int:
     git_root = _find_git_root(os.getcwd())
     if git_root is None:
@@ -245,6 +304,7 @@ def _migrate(push_cleanup: bool) -> int:
     renamed = 0
     skipped = 0
     failed = 0
+    renamed_pairs: list[tuple[str, str]] = []
 
     for ref in local_refs:
         lc = ref.lower()
@@ -274,32 +334,10 @@ def _migrate(push_cleanup: bool) -> int:
             failed += 1
             continue
 
-        if push_cleanup:
-            ls_remote = _git(
-                git_root, "ls-remote", "--exit-code", "origin", f"refs/heads/{ref}",
-                timeout=_GIT_NETWORK_TIMEOUT_SECS,
-            )
-            if ls_remote.returncode == 0:
-                print(f"  REMOTE-DELETE: origin/{ref}", file=out)
-                push_delete = _git(
-                    git_root, "push", "origin", "--delete", ref,
-                    timeout=_GIT_NETWORK_TIMEOUT_SECS,
-                )
-                if push_delete.returncode != 0:
-                    print(
-                        f"  WARN: remote delete of '{ref}' failed (may already be gone)",
-                        file=out,
-                    )
-            print(f"  REMOTE-PUSH: origin/{lc}", file=out)
-            push_new = _git(
-                git_root, "push", "-u", "origin", lc,
-                timeout=_GIT_NETWORK_TIMEOUT_SECS,
-            )
-            if push_new.returncode != 0:
-                print(
-                    f"  WARN: push of '{lc}' returned non-zero (may need re-run)",
-                    file=out,
-                )
+        renamed_pairs.append((ref, lc))
+
+    if push_cleanup and renamed_pairs:
+        _remote_cleanup(git_root, renamed_pairs, out)
 
     print("", file=out)
     print("=== Summary ===", file=out)

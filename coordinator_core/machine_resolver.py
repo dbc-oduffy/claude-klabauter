@@ -492,6 +492,27 @@ def registry_set(key: str, value: str) -> None:
     retire_paired_content_root_key(key)
 
 
+def registry_unset(key: str) -> bool:
+    """Remove one flat root-namespace key line from ``registry.local.toml``
+    in-process. Returns True when a line was removed, False when the key was
+    absent there (a key held only in ``registry.toml`` is left alone).
+    Raises ``OSError`` on a genuine filesystem failure.
+    """
+    target_path = registry_dir() / _REGISTRY_TARGET_FILE
+    try:
+        content = target_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    pattern = re.compile(r'^"' + re.escape(key) + r'"\s*=.*\n?', re.MULTILINE)
+    new_content, removed = pattern.subn("", content)
+    if not removed:
+        return False
+    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
+    tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
+    os.replace(tmp_path, target_path)
+    return True
+
+
 def merged_flat_registry() -> dict:
     """Merge `registry.local.toml` over `registry.toml` (local wins), flattened
     to dotted keys, via a direct `tomllib` read — no `machine-local` CLI

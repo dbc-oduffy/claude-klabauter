@@ -399,14 +399,19 @@ def fire_tracker_and_roadmap_detached(
     roadmap_ids = _consumed_handoff_roadmap_ids(worktree_root, consumed_handoff_paths)
     if not roadmap_ids:
         result["skipped"].append(f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:no-roadmap-id")
-    for roadmap_id in roadmap_ids:
+    if roadmap_ids:
+        # One spawn for all ids: the CLI takes many ids, so spawn count is O(1) in N.
         callout_script = str(bin_dir / _ROADMAP_CALLOUT_CLI_SCRIPT)
-        if spawn_detached(repo_root_str, callout_script, ["--root", repo_root_str, roadmap_id]):
-            result["acted"].append(f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:{roadmap_id}")
-        else:
-            result["failed"].append(
-                f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:{roadmap_id}: spawn_detached returned False"
-            )
+        spawned = spawn_detached(
+            repo_root_str, callout_script, ["--root", repo_root_str, *roadmap_ids]
+        )
+        for roadmap_id in roadmap_ids:
+            if spawned:
+                result["acted"].append(f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:{roadmap_id}")
+            else:
+                result["failed"].append(
+                    f"detached_fire:{_ROADMAP_CALLOUT_CLI_SCRIPT}:{roadmap_id}: spawn_detached returned False"
+                )
     return result
 
 

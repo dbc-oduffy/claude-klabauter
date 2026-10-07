@@ -54,12 +54,22 @@ _SUITE_TIER = re.compile(
 )
 
 
+_TIER_NEGATOR = re.compile(r"\b(?:not|no|never|without|nor|instead\s+of)\b|n't\b", re.IGNORECASE)
+
+
+def _negated(clause_head: str) -> bool:
+    """True when a negator sits within the 3 words before a mention, in the same clause."""
+    head = re.split(r"[.;,:]", clause_head)[-1]
+    return bool(_TIER_NEGATOR.search(" ".join(head.split()[-3:])))
+
+
 def suite_tier_refusal(statement: object) -> Optional[str]:
     """Refusal message when the statement names a suite tier (fast/full/broad tier or suite, tier-U), else None.
 
     Shared by `sizing-assemble --exit-criterion` and `sizing.accept_exit_criterion`.
     """
-    m = _SUITE_TIER.search(" ".join(str(statement or "").split()))
+    text = " ".join(str(statement or "").split())
+    m = next((x for x in _SUITE_TIER.finditer(text) if not _negated(text[: x.start()])), None)
     if m is None:
         return None
     return (

@@ -96,6 +96,7 @@ _PARAM_FIELDS = (
     Field("inline_review", "dict"),
     Field("task_output_path", "nonempty_str"),
     Field("plan_path", "nonempty_str"),
+    Field("falsifier_broken", "list"),
 )
 
 
@@ -615,6 +616,27 @@ def _mint_review_stamp(
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
         return {"review_stamp": "refused", "review_stamp_refusal": repr(exc)}
     return {"review_stamp": "minted"}
+
+
+def _falsifier_broken_tells(marks: object, plan_path: Optional[str]) -> Optional[list]:
+    """The fired tells when the run's pre-dispatch review called ``plan_path``'s
+    falsifier BROKEN, else None. ``marks`` is the digest's ``[{plan, tells}]``;
+    plans are matched as repo-relative POSIX paths, so a ``./`` or backslash
+    spelling on either side still matches."""
+    if not plan_path or not isinstance(marks, list):
+        return None
+
+    def norm(p: str) -> str:
+        p = p.replace("\\", "/")
+        return p[2:] if p.startswith("./") else p
+
+    want = norm(plan_path)
+    for mark in marks:
+        key = mark.get("plan") if isinstance(mark, dict) else None
+        tells = mark.get("tells") if isinstance(mark, dict) else None
+        if isinstance(key, str) and norm(key) == want:
+            return [str(t) for t in tells] if isinstance(tells, list) else []
+    return None
 
 
 def _stamp_plan_implemented(worktree_root: Path, plan_rel: str, sha: str) -> dict:
@@ -1502,7 +1524,16 @@ def _terminal_commit(
         coded_stale = reply.pop("coded_index_stale", [])
         if coded_stale:
             reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))
-        if (
+        broken_tells = _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path)
+        if request.plan_path and reply.get("review_stamp") == "minted" and broken_tells is not None:
+            reply["plan_status"] = "not-stamped"
+            reply["plan_status_reason"] = (
+                "falsifier integrity BROKEN at pre-dispatch ("
+                + (", ".join(broken_tells) or "no tell named")
+                + "): a met judge on this falsifier is not self-stamped; close it through the EM "
+                "re-judge route (terminal-judge.md § Closing a plan whose run judged not_met)"
+            )
+        elif (
             request.plan_path
             and reply.get("review_stamp") == "minted"
             and not incomplete_chunks

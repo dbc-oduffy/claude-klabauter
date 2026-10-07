@@ -298,9 +298,42 @@ def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[s
     return names
 
 
-def unique_commits(run_git: RunGit, repo_root: Path, base: str, stale_ref: str) -> list[str]:
-    proc = run_git(["log", "--oneline", f"{base}..{stale_ref}"], repo_root)
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+def unique_commits_by_ref(
+    run_git: RunGit, repo_root: Path, base: str, refs: list[str]
+) -> dict[str, list[str]]:
+    """One `git log` over all `refs` excluding `base`; per-ref `<abbrev> <subject>` lines.
+
+    Per-ref membership is recovered by walking parent links inside the union, which is
+    closed under "reachable from a tip and not from base", so it equals `base..ref`.
+    Order within a ref follows the union walk.
+    """
+    if not refs:
+        return {}
+    sep = "\x1f"
+    proc = run_git(["log", f"--format=%H{sep}%P{sep}%h %s", *refs, f"^{base}"], repo_root)
+    rows: dict[str, tuple[list[str], str]] = {}
+    order: list[str] = []
+    for line in proc.stdout.splitlines():
+        parts = line.split(sep, 2)
+        if len(parts) != 3:
+            continue
+        rows[parts[0]] = (parts[1].split(), parts[2])
+        order.append(parts[0])
+
+    tips_proc = run_git(["rev-parse", *[f"{r}^{{commit}}" for r in refs]], repo_root)
+    tips = tips_proc.stdout.split()
+    out: dict[str, list[str]] = {}
+    for ref, tip in zip(refs, tips):
+        seen: set[str] = set()
+        stack = [tip] if tip in rows else []
+        while stack:
+            sha = stack.pop()
+            if sha in seen or sha not in rows:
+                continue
+            seen.add(sha)
+            stack.extend(rows[sha][0])
+        out[ref] = [rows[sha][1] for sha in order if sha in seen]
+    return out
 
 
 def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
@@ -374,26 +407,30 @@ def brief(
             branches_report.append({**entry, "tip_author": author, "operator": operator, "category": category})
             continue
 
-        # Counted against main, not the checked-out branch: a `current` behind main would
-        # report every main-only commit as unique to each stale branch.
-        commits = unique_commits(run_git, repo_root, main_branch or current, ref)
         recent = ref in all_tip_times and now - all_tip_times[ref] < RECENCY_FLOOR_SECONDS
-        branches_report.append(
-            {
-                **entry,
-                "tip_author": author,
-                "operator": operator,
-                "category": category,
-                "unique_commit_count": len(commits),
-                **({"recent": True} if recent else {}),
-            }
+        report_row = {
+            **entry,
+            "tip_author": author,
+            "operator": operator,
+            "category": category,
+            **({"recent": True} if recent else {}),
+        }
+        branches_report.append(report_row)
+        stale_branches.append(
+            {"entry": entry, "name": name, "category": category, "recent": recent, "report_row": report_row}
         )
 
-        shas = [line.split(" ", 1)[0] for line in commits]
-        stale_branches.append(
-            {"entry": entry, "name": name, "category": category, "commits": commits, "shas": shas, "recent": recent}
-        )
-        all_shas.extend(shas)
+    # Counted against main, not the checked-out branch: a `current` behind main would
+    # report every main-only commit as unique to each stale branch.
+    commits_by_ref = unique_commits_by_ref(
+        run_git, repo_root, main_branch or current, [s["entry"]["ref"] for s in stale_branches]
+    )
+    for stale in stale_branches:
+        commits = commits_by_ref.get(stale["entry"]["ref"], [])
+        stale["commits"] = commits
+        stale["shas"] = [line.split(" ", 1)[0] for line in commits]
+        stale["report_row"]["unique_commit_count"] = len(commits)
+        all_shas.extend(stale["shas"])
 
     global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
 

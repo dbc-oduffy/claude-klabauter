@@ -416,6 +416,23 @@ def test_fire_tracker_and_roadmap_detached_dedupes_roadmap_ids(tmp_path):
     assert result["acted"].count("detached_fire:refresh-roadmap-callout.py:goal-example") == 1
 
 
+def test_fire_tracker_and_roadmap_detached_spawn_count_independent_of_id_count(tmp_path):
+    counts = []
+    for n in (1, 5):
+        root = tmp_path / f"r{n}"
+        rels = [
+            _write_handoff(root, f"2026-07-23-{k}.md", f"goal-{k}") for k in range(n)
+        ]
+        with patch.object(tail_ops, "spawn_detached", return_value=True) as mock_spawn:
+            result = tail_ops.fire_tracker_and_roadmap_detached(root, rels)
+        counts.append(mock_spawn.call_count)
+        assert len(result["acted"]) == n
+        assert mock_spawn.call_args[0][2][2:] == [f"goal-{k}" for k in range(n)] or set(
+            mock_spawn.call_args[0][2][2:]
+        ) == {f"goal-{k}" for k in range(n)}
+    assert counts == [1, 1]
+
+
 def test_fire_tracker_and_roadmap_detached_records_spawn_failure(tmp_path):
     worktree_root = tmp_path
     rel_path = _write_handoff(worktree_root, "2026-07-23-a.md", "goal-example")

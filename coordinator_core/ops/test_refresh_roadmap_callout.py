@@ -313,3 +313,17 @@ def test_resolve_cc_root_bare_directory_is_unresolved(tmp_path, monkeypatch):
     content_root.mkdir()
     _seed_content_pointer(tmp_path, monkeypatch, content_root)
     assert refresh_roadmap_callout._resolve_cc_root() == ""
+
+
+def test_multi_id_processes_all_when_one_fails(tmp_path, capsys):
+    rc = main(["bad/id", "road-a", "road-b", "--root", str(tmp_path)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "invalid roadmap_id 'bad/id'" in captured.err
+    assert "FAILED bad/id" in captured.err
+    assert "roadmap 'road-a'" in captured.out
+    assert "roadmap 'road-b'" in captured.out
+
+
+def test_multi_id_all_ok_exits_zero(tmp_path, capsys):
+    assert main(["road-a", "road-b", "--root", str(tmp_path)]) == 0

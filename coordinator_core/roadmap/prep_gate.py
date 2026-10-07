@@ -111,6 +111,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
+from coordinator_core.roadmap import census
 from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_body_refusal,
     post_stamp_refusal,
@@ -711,7 +712,7 @@ def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Option
 # ---------------------------------------------------------------------------
 
 
-def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
+def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """``census:`` present, every entry ``question`` + ``command`` + ``result``.
 
     Presence is the predicate, and ``census: []`` passes. Requiring the KEY asks
@@ -733,6 +734,19 @@ def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(entries, list):
         return _defect("census-malformed", "census: is not a list")
     bad: List[str] = []
+    unscreenable: List[str] = []
+    tracked: Optional[frozenset] = None
+    if repo_root is not None:
+        # One ls-files for every python target in the plan, not one per entry.
+        tracked = census.tracked_targets(
+            repo_root,
+            [
+                c
+                for e in entries
+                if isinstance(e, dict)
+                for c in census.python_candidates(str(e.get("command") or ""), repo_root)
+            ],
+        )
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             bad.append(f"[{index}] not a mapping")
@@ -744,8 +758,22 @@ def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
         unanswered = [k for k in CENSUS_ENTRY_KEYS if is_placeholder(entry.get(k))]
         if unanswered:
             bad.append(f"[{index}] scaffold placeholder in {', '.join(unanswered)}")
+            continue
+        bad_count = census.count_defect(entry)
+        if bad_count:
+            bad.append(f"[{index}] {bad_count}")
+        refusal = census.screen(str(entry["command"]), repo_root, tracked)
+        if refusal:
+            unscreenable.append(f"[{index}] {refusal}")
     if bad:
         return _defect("census-incomplete", "; ".join(bad))
+    if unscreenable:
+        # The revalidator refuses exactly these at fire time, so a stamp here would certify a
+        # premise nothing can re-ask.
+        return _defect(
+            "census-unscreenable",
+            "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
+        )
     if not entries:
         return _pass("declared-empty — this plan rests on no counted premise")
     return _pass(f"{len(entries)} re-runnable census entr(ies)")
@@ -1887,7 +1915,7 @@ def evaluate_plan(
         prime_exit = _prime_exit(fm, repo_root, text)
         classes = {
             "SPINE": _spine(plan_path, text, repo_root),
-            "CENSUS": _census(fm),
+            "CENSUS": _census(fm, edge_root),
             "EXTERNAL_DEPS": _external_deps(
                 raw_spine_rows(text),
                 root_names,
@@ -2023,7 +2051,9 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
     if "CENSUS" in failing_classes:
         lines.append(
             "  fix: declare `census: []` if this plan rests on no counted premise, or "
-            "one entry per counted claim with question/command/result all filled in"
+            "one entry per counted claim with question/command/result all filled in; "
+            "each command a read-only pipeline the revalidator can re-run, and a counted "
+            "result carries `count: <int>` so a re-run compares the number, not the prose"
         )
     if "PRIME_EXIT" in failing_classes:
         lines.append(
