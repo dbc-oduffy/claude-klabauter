@@ -164,7 +164,7 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.session.claimed_write import append_claimed_line
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
-#: `record_offers` and `decline` append to `state/subagent-share/<session-
+#: `record_offers` and `decline` append to `.coordinator-local/subagent-share/<session-
 #: id>/group-em-send-log.jsonl` -- only the HOLDER's log, written by the
 #: holder or on the holder's behalf under the holder's key (DR-408), one
 #: file per session id -- a data-dependent set GENERATES cannot name. Same

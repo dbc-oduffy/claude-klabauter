@@ -70,3 +70,36 @@ def test_repo_hold_skips_entirely_and_clear_resumes(repo):
     assert push_hold.clear_hold(root)  # idempotent
     po.push_outstanding(root)
     assert pushed == [root]
+
+
+def test_allow_sha_round_trips_and_clear_drops_it(repo):
+    root, _ = repo
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()  # popup-intentional-last-resort
+    assert push_hold.set_hold(root, "work/x", "r", allow_sha=sha[:10])
+    assert push_hold.read_hold_allow(root, "work/x") == ("r", sha)
+    assert push_hold.list_holds(root)["branch_allow"] == {"work/x": sha}
+    assert push_hold.set_hold(root, "work/x", "r2")
+    assert push_hold.read_hold_allow(root, "work/x") == ("r2", None)
+    push_hold.set_hold(root, "work/x", "r", allow_sha=sha)
+    assert push_hold.clear_hold(root, "work/x")
+    assert push_hold.read_hold_allow(root, "work/x") == (None, None)
+    assert not push_hold.set_hold(root, "work/x", "r", allow_sha="deadbeef" * 5)
+
+
+def test_cli_set_allow_sha_then_list(repo):
+    import sys
+
+    root, _ = repo
+    cli = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "push-hold.py"
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # popup-intentional-last-resort
+
+    def run(*a):
+        return subprocess.run([sys.executable, str(cli), *a, "--repo", str(root)], capture_output=True,
+                              text=True, creationflags=flags)
+
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True,
+                         creationflags=flags).stdout.strip()
+    assert run("set", "--branch", "work/x", "--reason", "r", "--allow-sha", sha[:8]).returncode == 0
+    out = run("list")
+    assert out.returncode == 0 and f"branch work/x: r (allow {sha})" in out.stdout

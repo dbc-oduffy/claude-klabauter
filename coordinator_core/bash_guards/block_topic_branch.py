@@ -28,6 +28,11 @@ Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
 env prefix on the git segment only; the hook environment never overrides.
 An empty value never overrides.
 
+Push hold (`coordinator_core.push_hold`): a `git push` whose target branch is
+held (repo-wide or per-branch) is denied, and the override above never clears
+it, deletes included. A hold with an allowed SHA admits only an explicit refspec whose source
+resolves to that SHA. `--all`/`--mirror` are denied when any hold exists.
+
 Zero git spawns: pure token parsing, `.git/HEAD` and `.git/config` file reads.
 """
 
@@ -119,10 +124,7 @@ _COMMAND_ENDS = frozenset({"|", "||", "&&", ";", "&"})
 _REDIRECT_RE = re.compile(r"^(?:\d*|&)(?:>>?|<)&?")
 
 
-def _push_targets(args: List[str]) -> List[str]:
-    """Destination refs of a `git push`; empty when nothing is judgeable."""
-    if any(t in _PUSH_DELETE_FLAGS for t in args):
-        return []
+def _push_positional(args: List[str]) -> List[str]:
     positional: List[str] = []
     i = 0
     while i < len(args):
@@ -142,6 +144,14 @@ def _push_targets(args: List[str]) -> List[str]:
             continue
         positional.append(tok)
         i += 1
+    return positional
+
+
+def _push_targets(args: List[str]) -> List[str]:
+    """Destination refs of a `git push`; empty when nothing is judgeable."""
+    if any(t in _PUSH_DELETE_FLAGS for t in args):
+        return []
+    positional = _push_positional(args)
     targets: List[str] = []
     if positional[1:2] == ["tag"]:
         return targets
@@ -247,6 +257,125 @@ def _inline_reason(raw_tokens: List[str]) -> str:
     return ""
 
 
+def _git_root(cwd: Optional[str], c_dirs: List[str]) -> Optional[str]:
+    from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
+
+    from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
+
+    def _native(p: str) -> str:
+        translated = translate_msys_path(p)
+        return p if translated is None else translated
+
+    start = _native(cwd or os.getcwd())
+    for d in (_native(d) for d in c_dirs):
+        start = d if os.path.isabs(d) else os.path.join(start, d)
+    return resolve_git_root_cheap(start)
+
+
+_HEX_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _resolve_sha(git_root: str, src: str) -> Optional[str]:
+    """`src` lowercased when hex (a prefix is matched against the allowed SHA by the
+    caller), else the SHA a loose/packed ref or HEAD names; None when unresolvable."""
+    low = src.lower()
+    if _HEX_RE.match(low):
+        return low
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+
+        gd = str(resolve_git_common_dir(git_root))
+        if src == "HEAD":
+            branch = _head_branch(git_root)
+            if branch is None:
+                with open(os.path.join(str(_git_dir(git_root)), "HEAD"), encoding="utf-8") as fh:
+                    return fh.read().strip().lower()
+            src = _HEADS_PREFIX + branch
+        full = src if src.startswith("refs/") else None
+        for cand in ([full] if full else [_HEADS_PREFIX + src, "refs/tags/" + src]):
+            path = os.path.join(gd, *cand.split("/"))
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as fh:
+                    return fh.read().strip().lower()
+            with open(os.path.join(gd, "packed-refs"), encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == cand:
+                        return parts[0].lower()
+    except Exception:  # noqa: BLE001 -- an unresolvable source is not the allowed SHA
+        return None
+    return None
+
+
+def _git_dir(git_root: str):
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    return resolve_git_dir(git_root)
+
+
+def _held_push(tokens: List[str], cwd: Optional[str]) -> Optional[str]:
+    """Deny reason when this `git push` targets a held branch not released by
+    its allowed SHA, else None."""
+    parsed = _git_argv(tokens)
+    if parsed is None or parsed[0] != "push":
+        return None
+    _, args, c_dirs = parsed
+    deleting = any(t in _PUSH_DELETE_FLAGS for t in args)
+    git_root = _git_root(cwd, c_dirs)
+    if not git_root:
+        return None
+    from coordinator_core import push_hold
+
+    positional = _push_positional(args)
+    if positional[1:2] == ["tag"]:
+        return None
+    if any(t in ("--all", "--mirror") for t in args):
+        holds = push_hold.list_holds(git_root)
+        note = holds["repo"] or next(iter(holds["branches"].values()), None)
+        return _hold_reason(None, note) if note else None
+    specs = positional[1:]
+    head = None
+    if not specs:
+        head = _head_branch(git_root)
+        pairs = [(None, head)] if head else []
+    else:
+        pairs = []
+        for spec in specs:
+            spec = spec.lstrip("+")
+            src, sep, dst = spec.partition(":")
+            ref = dst if sep else spec
+            if sep and not src:
+                deleting_ref = True
+            else:
+                deleting_ref = deleting
+            if ref == "HEAD":
+                ref = _head_branch(git_root)
+            if ref and ref.startswith(_HEADS_PREFIX):
+                ref = ref[len(_HEADS_PREFIX):]
+            elif ref and ref.startswith("refs/"):
+                continue
+            if ref:
+                pairs.append((None if deleting_ref or not sep else src, ref))
+    for src, branch in pairs:
+        note, allow = push_hold.read_hold_allow(git_root, branch)
+        if note is None:
+            continue
+        sha = _resolve_sha(git_root, src) if src and allow else None
+        if sha and allow.startswith(sha):
+            continue
+        return _hold_reason(branch, note)
+    return None
+
+
+def _hold_reason(branch: Optional[str], note: str) -> str:
+    where = f"branch `{branch}`" if branch else "repo"
+    return (
+        f"BLOCKED: push hold on {where}: {note}. "
+        "Alternative: `push-hold clear`, or push the hold's --allow-sha as an explicit "
+        "`<sha>:refs/heads/<branch>` refspec."
+    )
+
+
 def _offending_ref(
     tokens: List[str], cwd: Optional[str], env: Optional[Dict[str, str]] = None
 ) -> Optional[str]:
@@ -265,19 +394,7 @@ def _offending_ref(
     else:
         return None
 
-    from coordinator_core.subagent_sandbox.engine import resolve_git_root_cheap
-
-    from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
-
-    def _native(p: str) -> str:
-        translated = translate_msys_path(p)
-        return p if translated is None else translated
-
-    start = _native(cwd or os.getcwd())
-    c_dirs = [_native(d) for d in c_dirs]
-    for d in c_dirs:
-        start = d if os.path.isabs(d) else os.path.join(start, d)
-    git_root = resolve_git_root_cheap(start)
+    git_root = _git_root(cwd, c_dirs)
     configured = read_configured_day_branch(git_root) if git_root else None
     machine: Optional[str] = None
     for ref in refs:
@@ -318,6 +435,16 @@ def _deny_reason(ref: str) -> str:
     )
 
 
+def _deny(reason: str) -> Dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -335,16 +462,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for resolved in resolve_command_positions(
         cmd, preserve_windows_backslashes=True
     ):
+        held = _held_push(resolved.tokens, cwd)
+        if held is not None:
+            return _deny(held)
         ref = _offending_ref(resolved.tokens, cwd, env)
         if ref is None:
             continue
         if _inline_reason(resolved.raw_tokens):
             continue
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": _deny_reason(ref),
-            }
-        }
+        return _deny(_deny_reason(ref))
     return None

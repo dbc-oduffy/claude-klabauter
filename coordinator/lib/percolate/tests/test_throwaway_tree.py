@@ -193,3 +193,19 @@ def test_clone_checks_out_under_the_dest_line_ending_config(
         assert (tree / "lf.txt").read_bytes() == b"one\ntwo\n"
     finally:
         discard_throwaway_tree(tree)
+
+
+def test_throwaway_parent_is_never_a_drive_root(tmp_path, monkeypatch):
+    from percolate import throwaway_tree as tt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert tt._throwaway_parent(repo) == tmp_path.resolve()
+
+    anchor = Path(tmp_path.anchor)
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: anchor / "repo" if self == repo else real_resolve(self, *a, **k))
+    monkeypatch.setattr(Path, "mkdir", lambda self, *a, **k: None)
+    parent = tt._throwaway_parent(repo)
+    assert parent.parent != parent
+    assert parent != anchor and parent.parent != anchor

@@ -1,13 +1,15 @@
 """push-hold -- freeze or release the cadence push for a repo or one branch.
 
 Usage:
-  push-hold set   [--branch X] [--reason TEXT] [--repo PATH]
+  push-hold set   [--branch X] [--reason TEXT] [--allow-sha SHA] [--repo PATH]
   push-hold clear [--branch X] [--repo PATH]
   push-hold list  [--repo PATH]
 
 Without --branch the hold covers the whole repo. The hold lives in the repo's
 git config (`coordinator.pushHold`, `branch.<X>.coordinatorPushHold`);
-`push.outstanding` reports a held branch as skipped `push:hold`.
+`push.outstanding` reports a held branch as skipped `push:hold`; a manual
+`git push` of a held branch is refused. --allow-sha names the one commit a
+manual `git push <remote> <sha>:refs/heads/<branch>` may release.
 """
 
 from __future__ import annotations
@@ -28,17 +30,20 @@ def main(argv: list[str]) -> int:
     ap.add_argument("action", choices=["set", "clear", "list"])
     ap.add_argument("--branch", default=None)
     ap.add_argument("--reason", default=None)
+    ap.add_argument("--allow-sha", default=None)
     ap.add_argument("--repo", type=Path, default=Path.cwd())
     args = ap.parse_args(argv)
 
     if args.action == "list":
         holds = push_hold.list_holds(args.repo)
-        print(f"repo: {holds['repo'] or '-'}")
+        allow = f" (allow {holds['repo_allow']})" if holds["repo_allow"] else ""
+        print(f"repo: {holds['repo'] or '-'}{allow}")
         for name, note in holds["branches"].items():
-            print(f"branch {name}: {note}")
+            a = holds["branch_allow"].get(name)
+            print(f"branch {name}: {note}" + (f" (allow {a})" if a else ""))
         return 0
     if args.action == "set":
-        ok = push_hold.set_hold(args.repo, args.branch, args.reason)
+        ok = push_hold.set_hold(args.repo, args.branch, args.reason, args.allow_sha)
     else:
         ok = push_hold.clear_hold(args.repo, args.branch)
     if not ok:
