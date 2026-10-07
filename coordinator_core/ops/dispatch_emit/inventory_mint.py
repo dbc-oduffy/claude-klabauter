@@ -37,7 +37,14 @@ Column mapping, applied per live Chunk-table row:
     deps          -> row `depends_on`, one `{chunk, gate_kind:
                      "output-consumption-runtime"}` edge per comma-split
                      id (minus any edge whose target row is
-                     closed-satisfied -- see `_resolve_dep_kinds`), PLUS
+                     closed-satisfied -- see `_resolve_dep_kinds`). A plain
+                     id fans out onto EVERY minted chunk of that row (and
+                     warns when one of them is blocked on another plan,
+                     `depends_on_plan`); `<row>.<chunk>` targets exactly the
+                     one minted id `<row>.<chunk>` of an earlier,
+                     plan-expanded row, and refuses
+                     (`DottedDependencyError`) an unknown chunk, a row that
+                     did not expand, or a row not earlier in the table. PLUS
                      one edge per live `depends_on` target of the source
                      plan chunk the cell omits (a target absent from the
                      inventory and not `coded` in the plan refuses with
@@ -381,6 +388,12 @@ class PlanDependencyUnaccountedError(InventoryMintError):
     ahead of its premise."""
 
 
+class DottedDependencyError(InventoryMintError):
+    """A `<row>.<chunk>` dep that cannot name exactly one minted chunk: the
+    parent row did not expand into a plan's chunks, the chunk is not in the
+    expansion, or the parent row does not appear earlier in the table."""
+
+
 class UnrecognizedDispositionError(InventoryMintError):
     """Raised when one or more chunk-table rows carry a `disposition` text
     matching none of the LIVE prefixes, the blocking-closed prefixes, or
@@ -662,6 +675,17 @@ def _raw_disposition_kind(row_id: str, raw: str) -> str:
     )
 
 
+def _dotted_dep_parent(dep_id: str, known_ids) -> Optional[Tuple[str, str]]:
+    """`<row>.<chunk>` -> `(row, chunk)` when `dep_id` is not itself a row id
+    and some dot-split prefix of it is one; else `None` (a plain id)."""
+    if dep_id in known_ids:
+        return None
+    for index, char in enumerate(dep_id):
+        if char == "." and dep_id[:index] in known_ids:
+            return dep_id[:index], dep_id[index + 1:]
+    return None
+
+
 def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
     """Every row id in `chunk_rows` -> its FINAL kind, after transitively
     routing out any row whose dep chain reaches a `routed out ...` row
@@ -693,7 +717,8 @@ def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
             return kind
         stack = stack | {row_id}
         for dep_id in _split_id_list(rows_by_id[row_id]["deps"]):
-            if resolve(dep_id, stack) == _DEP_KIND_ROUTED_OUT:
+            dotted = _dotted_dep_parent(dep_id, kinds)
+            if resolve(dotted[0] if dotted else dep_id, stack) == _DEP_KIND_ROUTED_OUT:
                 warnings.warn(
                     f"chunk table row {row_id!r} routed out: its dependency "
                     f"{dep_id!r} was routed out, and a row cannot outlive "
@@ -1015,6 +1040,11 @@ def mint_rows(
     #: F25b: "a dependent plan's roots wait on every chunk of the plan it
     #: depends on").
     item_all_ids: Dict[str, List[str]] = {}
+    #: Expanded item id -> {plan chunk id: minted id}; what a `<row>.<chunk>`
+    #: dep resolves against. Absent for a non-expanded item.
+    item_chunks: Dict[str, Dict[str, str]] = {}
+    #: Expanded item id -> chunk ids whose plan row carries `depends_on_plan`.
+    item_blocked: Dict[str, List[str]] = {}
 
     for row_id, row, writes in live:
         spec_path = _strip_backtick(row["spec path"])
@@ -1024,11 +1054,45 @@ def mint_rows(
         fire_context = row.get("fire context", "").strip()
 
         explicit_dep_ids: set = set()
+        dotted_targets: List[str] = []
+        repair_added = set(repairs.get(row_id, {}).get("added_deps", []))
         for dep_id in _split_id_list(row["deps"]):
-            dep_kind = dep_kinds.get(dep_id, _DEP_KIND_UNKNOWN)
+            dotted = _dotted_dep_parent(dep_id, dep_kinds)
+            dep_kind = dep_kinds.get(dotted[0] if dotted else dep_id, _DEP_KIND_UNKNOWN)
             if dep_kind == _DEP_KIND_CLOSED_SATISFIED:
                 continue  # satisfied -- the dependency is already discharged
+            if dotted is not None:
+                parent, chunk = dotted
+                if parent not in item_all_ids:
+                    raise DottedDependencyError(
+                        f"chunk table row {row_id!r}: dep {dep_id!r} names "
+                        f"row {parent!r}, which does not appear earlier in "
+                        "the table as a minted row"
+                    )
+                if parent not in item_chunks:
+                    raise DottedDependencyError(
+                        f"chunk table row {row_id!r}: dep {dep_id!r} names a "
+                        f"chunk of row {parent!r}, which did not expand into "
+                        "a plan's chunks -- use the plain id"
+                    )
+                if chunk not in item_chunks[parent]:
+                    raise DottedDependencyError(
+                        f"chunk table row {row_id!r}: dep {dep_id!r}: row "
+                        f"{parent!r} has no chunk {chunk!r} (expanded "
+                        f"chunks: {sorted(item_chunks[parent])!r})"
+                    )
+                dotted_targets.append(item_chunks[parent][chunk])
+                continue
             explicit_dep_ids.add(dep_id)
+            if dep_id not in repair_added:
+                for blocked in item_blocked.get(dep_id, []):
+                    warnings.warn(
+                        f"chunk table row {row_id!r} depends on whole row "
+                        f"{dep_id!r}, whose chunk {blocked!r} is blocked on "
+                        "another plan (depends_on_plan); use "
+                        f"'{dep_id}.<chunk>' to depend on a specific chunk",
+                        stacklevel=2,
+                    )
         # Every minted id an inter-item `deps` edge from this row must fan
         # out onto -- the WHOLE dependency item's chunk set, not just its
         # roots: a dependent's root(s) may consume any of its output.
@@ -1040,6 +1104,9 @@ def mint_rows(
             }
             for dep_id in sorted(explicit_dep_ids)
             for target in item_all_ids.get(dep_id, [dep_id])
+        ] + [
+            {"chunk": target, "gate_kind": "output-consumption-runtime"}
+            for target in dotted_targets
         ]
 
         sub_rows = (
@@ -1142,6 +1209,13 @@ def mint_rows(
                 entry_ids.append(minted_id)
 
             item_all_ids[row_id] = entry_ids
+            item_chunks[row_id] = dict(id_map)
+            plan_raw = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+            item_blocked[row_id] = [
+                chunk
+                for chunk in id_map
+                if (plan_raw.get(chunk) or {}).get("depends_on_plan")
+            ]
             continue
 
         # Plain, non-plan-sourced row: unchanged single-executor mint.

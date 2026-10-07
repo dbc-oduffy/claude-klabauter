@@ -1011,3 +1011,122 @@ def test_plan_sourced_rows_carry_consumes_and_writes_under(tmp_path):
     assert by_id["P3.C2"]["consumes"] == ["lib/gate.ts"]
     assert by_id["P3.C2"]["writes_under"] == ["app/pages/"]
     assert "consumes" not in by_id["P3.C1"]
+
+
+# ---------------------------------------------------------------------------
+# `<row>.<chunk>` deps: one edge onto one minted chunk of an earlier,
+# plan-expanded row; a plain id keeps the whole-item fan-out.
+# ---------------------------------------------------------------------------
+
+_BLOCKED_CHUNK_PLAN_FIXTURE = _TWO_CHUNK_PLAN_FIXTURE.replace(
+    "```\n",
+    "- id: A3\n"
+    "  title: Third A step\n"
+    "  writes:\n"
+    "    - some/plan_a/three.py\n"
+    "  depends_on_plan:\n"
+    "    - {plan: docs/plans/fixture-plan-c.md, chunk: C1, gate_kind: epistemic-premise}\n"
+    "```\n",
+)
+assert "```yaml plan-tasks\n" in _BLOCKED_CHUNK_PLAN_FIXTURE
+
+_LANDED_PLAN_FIXTURE = textwrap.dedent(
+    """\
+    ---
+    run_id: fixture-plan-c
+    ---
+
+    ## Tasks
+
+    ```yaml plan-tasks
+    - id: C1
+      title: Landed
+      disposition: coded
+      writes:
+        - some/plan_c/one.py
+    ```
+    """
+)
+
+
+def _dotted_inventory(tmp_path, deps: str, p1_disposition: str = "in_progress"):
+    (tmp_path / ".git").mkdir()
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "fixture-plan-a.md").write_text(_BLOCKED_CHUNK_PLAN_FIXTURE, encoding="utf-8")
+    (plan_dir / "fixture-plan-b.md").write_text(_ONE_CHUNK_PLAN_FIXTURE, encoding="utf-8")
+    (plan_dir / "fixture-plan-c.md").write_text(_LANDED_PLAN_FIXTURE, encoding="utf-8")
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    text = textwrap.dedent(
+        f"""\
+        ---
+        run_id: 20260918T000000-dotted
+        ---
+
+        ## Chunk table
+
+        | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+        |---|---|---|---|---|---|---|---|
+        | P1 | `docs/plans/fixture-plan-a.md` | whole plan A | `docs/plans/fixture-plan-a.md` | — | scoped pytest | S | {p1_disposition} |
+        | P2 | `docs/plans/fixture-plan-b.md` | whole plan B | `docs/plans/fixture-plan-b.md` | {"—" if deps.startswith("P3") else deps} | scoped pytest | S | in_progress |
+        | P3 | | plain | `some/plain.py` | — | scoped pytest | S | in_progress |
+        | P4 | | after plain | `some/plain4.py` | {deps if deps.startswith("P3") else "—"} | scoped pytest | S | in_progress |
+        """
+    )
+    path = inv_dir / "20260918T000000-dotted.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _mint(path):
+    return im.mint_rows(
+        im.parse_chunk_table(path.read_text(encoding="utf-8")), inventory_path=path
+    )
+
+
+def test_dotted_dep_yields_a_single_edge_onto_that_chunk(tmp_path):
+    by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1.A2"))}
+    assert by_id["P2.B1"]["depends_on"] == [
+        {"chunk": "P1.A2", "gate_kind": "output-consumption-runtime"}
+    ]
+
+
+def test_plain_dep_still_fans_out_to_every_minted_chunk(tmp_path):
+    with pytest.warns(UserWarning):
+        by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1"))}
+    assert {e["chunk"] for e in by_id["P2.B1"]["depends_on"]} == {"P1.A1", "P1.A2", "P1.A3"}
+
+
+def test_dotted_dep_on_an_unknown_chunk_refuses(tmp_path):
+    with pytest.raises(im.DottedDependencyError, match="no chunk 'Z9'"):
+        _mint(_dotted_inventory(tmp_path, "P1.Z9"))
+
+
+def test_dotted_dep_on_a_non_expanded_row_refuses(tmp_path):
+    with pytest.raises(im.DottedDependencyError, match="did not expand"):
+        _mint(_dotted_inventory(tmp_path, "P3.C1"))
+
+
+def test_dotted_dep_on_a_later_row_refuses(tmp_path):
+    path = _dotted_inventory(tmp_path, "P4.X")
+    with pytest.raises(im.DottedDependencyError, match="does not appear earlier"):
+        _mint(path)
+
+
+def test_plain_dep_on_a_row_with_a_cross_plan_blocked_chunk_warns(tmp_path):
+    with pytest.warns(UserWarning) as record:
+        _mint(_dotted_inventory(tmp_path, "P1"))
+    text = "\n".join(str(w.message) for w in record)
+    for needle in ("'P2'", "'P1'", "'A3'", "P1.<chunk>"):
+        assert needle in text
+
+
+def test_dotted_dep_does_not_warn_about_blocked_chunks(tmp_path, recwarn):
+    _mint(_dotted_inventory(tmp_path, "P1.A1"))
+    assert not [w for w in recwarn if "depends_on_plan" in str(w.message)]
+
+
+def test_dotted_dep_on_a_closed_satisfied_parent_yields_no_edge(tmp_path):
+    by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1.A2", "landed"))}
+    assert "depends_on" not in by_id["P2.B1"]
