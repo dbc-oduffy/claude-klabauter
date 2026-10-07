@@ -453,6 +453,17 @@ def _drop_review_stamp_block(fm_text: str) -> str:
     return "\n".join(kept)
 
 
+def _write_stamp(plan_path: Path, split: Any, stamp: Dict[str, Any]) -> None:
+    """Replace `plan_path`'s `review_stamp:` block with `stamp`, writing nothing else."""
+    raw_yaml = yaml.safe_dump({"review_stamp": stamp}, default_flow_style=False, sort_keys=False).strip()
+    # `review_stamp` is a nested mapping, so a block form is built by hand rather than
+    # routed through insert_fm_field_raw's single-line contract.
+    body_lines = raw_yaml.splitlines()[1:]
+    indented = "\n".join(f"  {ln}" for ln in body_lines)
+    new_fm = _drop_review_stamp_block(split.fm_text).rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
+    replace_text(plan_path, rebuild(split, new_fm))
+
+
 _RUN_REPORT_LIFECYCLE = frozenset({"open", "dispatched", "in_flight", "complete", "blocked", "thrashing"})
 
 
@@ -697,15 +708,7 @@ def mint(
 
     stamp["stamped_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    raw_yaml = yaml.safe_dump({"review_stamp": stamp}, default_flow_style=False, sort_keys=False).strip()
-    # Drop the synthetic top-level key line; keep everything indented beneath it —
-    # `review_stamp` is a nested mapping, so a block form is built by hand
-    # rather than routed through insert_fm_field_raw's single-line contract.
-    body_lines = raw_yaml.splitlines()[1:]
-    indented = "\n".join(f"  {ln}" for ln in body_lines)
-    new_fm = _drop_review_stamp_block(split.fm_text).rstrip() + "\n" + "review_stamp:\n" + indented + "\n"
-    new_text = rebuild(split, new_fm)
-    replace_text(plan_path, new_text)
+    _write_stamp(plan_path, split, stamp)
     return stamp
 
 
@@ -778,6 +781,82 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
     return None
 
 
+_UNMET_CRITERION = ("not_met", "indeterminate")
+
+
+def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
+    """Refusal when the plan's `review_stamp` records an unmet criterion that no re-judge
+    has since turned `met`; `None` otherwise (no stamp, or a `met` one). A `met` replaces
+    the unmet status only through `rejudge`, from a bound judge sidecar."""
+    try:
+        fm_data = yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        return None
+    stamp = fm_data.get("review_stamp") if isinstance(fm_data, dict) else None
+    criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
+    status = criterion.get("status") if isinstance(criterion, dict) else None
+    if status not in _UNMET_CRITERION:
+        return None
+    return (
+        f"review_stamp criterion is {status}; emit-dispatch-workflow --plan {plan_path} --rejudge "
+        "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+        f"then: review-stamp.py rejudge --plan {plan_path}"
+    )
+
+
+def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
+    """Record a fresh, plan-bound `met` criterion verdict into the existing stamp's criterion
+    block. The verdict is read only off an engine-written record under `state/delivery-verdicts/`
+    (`reverify_delivery record`, from the Workflow's task output), never a parameter or a
+    hand-written file. Returns `{"status": "rejudged"|"unchanged", "reason": ...}`; a
+    not_met/indeterminate newest record, or none bound and newer than the stamp, writes nothing."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit.verdict_supersession import _instant, latest_criterion_record
+
+    _, split = _read_plan_frontmatter(plan_path)
+    fm_data = yaml.safe_load(split.fm_text) or {}
+    stamp = fm_data.get("review_stamp") if isinstance(fm_data, dict) else None
+    if not isinstance(stamp, dict) or not isinstance(stamp.get("criterion"), dict):
+        raise MintRefusal(f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge")
+    plan_id = str(fm_data.get("plan_id") or "")
+    if not plan_id:
+        raise MintRefusal(f"review-stamp: {plan_path} carries no plan_id")
+    criterion = stamp["criterion"]
+    if criterion.get("status") == "met":
+        return {"status": "unchanged", "reason": "criterion already met"}
+    stamped_at = _instant(stamp.get("stamped_at"))
+    if stamped_at is None:
+        raise MintRefusal("review-stamp: the stamp carries no parseable stamped_at")
+
+    record = latest_criterion_record(repo_root, plan_id, stamped_at)
+    if record is None:
+        return {
+            "status": "unchanged",
+            "reason": "no recorded judge result bound to this plan is newer than the stamp; run "
+            f"emit-dispatch-workflow --plan {plan_path} --rejudge --out <x>.workflow.mjs, fire it, "
+            "then reverify_delivery record --result-json <task output>",
+        }
+    result = record["criterion"]
+    rel = record["record_path"]
+    if result["status"] != "met":
+        return {"status": "unchanged", "reason": f"newest judge result {rel} is {result['status']}, not met"}
+    observation = str(result.get("observation") or "").strip()
+    if not observation:
+        return {"status": "unchanged", "reason": f"judge result {rel} records no observation"}
+
+    stamp["criterion"] = {
+        "status": "met",
+        "observation": observation,
+        "sidecar": rel,
+        "prior_status": criterion.get("status"),
+        "judged_at": record["recorded_at"],
+        "judged_head_sha": record.get("head_sha"),
+    }
+    _write_stamp(plan_path, split, stamp)
+    return {"status": "rejudged", "reason": f"criterion met per {rel}"}
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-stamp")
     sub = parser.add_subparsers(dest="verb", required=True)
@@ -803,6 +882,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     check_p.add_argument("--plan", required=True)
     check_p.add_argument("--repo-root", required=False, default=None)
     check_p.add_argument("--supersession", action="store_true")
+
+    rj_p = sub.add_parser(
+        "rejudge", help="Record a recorded, plan-bound judge `met` result into the stamp's criterion."
+    )
+    rj_p.add_argument("--plan", required=True)
+    rj_p.add_argument("--repo-root", required=False, default=None)
 
     pf_p = sub.add_parser("product-files", help="Print the product-file count of a diff.")
     pf_p.add_argument("--diff", required=True)
@@ -842,6 +927,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"review-stamp: minted for {plan_path} at {stamp['terminal_commit_sha']}")
         return 0
 
+    if args.verb == "rejudge":
+        try:
+            result = rejudge(plan_path, repo_root)
+        except MintRefusal as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"review-stamp: {result['status']}: {result['reason']}")
+        return 0 if result["status"] == "rejudged" or result["reason"] == "criterion already met" else 1
+
     if args.verb == "check":
         reason = check(plan_path, repo_root, supersession=args.supersession)
         if reason is not None:
@@ -871,6 +965,12 @@ def _mint_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         superseding_record=Path(record) if record else None,
     )
     return {"status": "minted", "review_stamp": stamp}
+
+
+@register_op("review_stamp.rejudge")
+def _rejudge_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    root = main_worktree_root(repo_root) if repo_root else Path(params.get("repo_root") or ".")
+    return rejudge(Path(params["plan"]), root)
 
 
 @register_op("review_stamp.check")

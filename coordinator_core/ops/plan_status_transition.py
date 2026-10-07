@@ -1624,6 +1624,12 @@ def _stamp_implemented(opts: _Opts) -> int:
                 "drop --override-reason"
             )
 
+        from coordinator_core.ops.review_stamp import criterion_refusal
+
+        unmet = criterion_refusal(plan_path, split.fm_text)
+        if unmet is not None:
+            raise MutateAbort(f"{_PROG}: refusing to stamp implemented: {opts.plan}: {unmet}")
+
         # Goal-falsifier gate (P129-C1): the direct verb is the second door
         # into `status: implemented` (`/workstream-complete`'s `d-stamp-
         # plan-implemented` -> `archive_stamp.cs_stamp_plan_implemented` ->

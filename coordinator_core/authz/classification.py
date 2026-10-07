@@ -2183,6 +2183,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: coordinator-content-repo docs/plans/2026-09-27-review-inside-execute-plan.md, row MK1.
     "review_stamp.mint": OpClass.MUTATING,
+    # review_stamp.rejudge — MUTATING: rewrites the plan's `review_stamp.criterion`
+    # from an engine-written criterion-rejudge record; same five answers as mint.
+    "review_stamp.rejudge": OpClass.MUTATING,
     # review_stamp.check — COMPUTE_ONLY: pure read (tree/ancestry/supersession
     # git reads), no write of any kind.
     "review_stamp.check": OpClass.COMPUTE_ONLY,

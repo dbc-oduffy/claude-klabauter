@@ -8,6 +8,7 @@ stays out of every minter's import closure.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -84,3 +85,36 @@ def latest_foreign_claims_supersession(repo_root: Path, run_record_rel: str) -> 
     fm = _newest_supersession(repo_root, run_record_rel)
     claims = fm.get("foreign_claims") if fm else None
     return [str(c) for c in claims] if isinstance(claims, list) else None
+
+
+REJUDGE_KIND = "criterion-rejudge"
+
+
+def _instant(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def latest_criterion_record(repo_root: Path, plan_id: str, newer_than: datetime) -> Optional[dict]:
+    """The newest engine-written record under `VERDICT_DIR` bound to `plan_id` (`plan_id` field)
+    that carries a `criterion` status and was recorded strictly after `newer_than`: a
+    `criterion-rejudge` record or a delivery-verdict record that re-judged the criterion.
+    `None` when there is none."""
+    base = repo_root / VERDICT_DIR
+    if not base.is_dir():
+        return None
+    best: Optional[tuple] = None
+    for path in base.glob("*/*.md"):
+        fm = _frontmatter(path)
+        if not fm or fm.get("kind") not in (RECORD_KIND, REJUDGE_KIND) or str(fm.get("plan_id")) != plan_id:
+            continue
+        criterion = fm.get("criterion")
+        at = _instant(fm.get("recorded_at"))
+        if not (isinstance(criterion, dict) and criterion.get("status") and at and at > newer_than):
+            continue
+        key = (at, path.name)
+        if best is None or key > best[0]:
+            best = (key, {**fm, "record_path": path.relative_to(repo_root).as_posix()})
+    return best[1] if best else None

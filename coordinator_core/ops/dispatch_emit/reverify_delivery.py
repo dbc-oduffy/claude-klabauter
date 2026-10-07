@@ -45,6 +45,7 @@ from coordinator_core.ops.review_mint.execute_review import (
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F401 -- re-exported for callers of this module
     RECORD_KIND,
+    REJUDGE_KIND,
     VERDICT_DIR,
     _frontmatter,
     latest_criterion_supersession,
@@ -656,6 +657,111 @@ def emit_reverify(
     return {"path": out_path, "supersedes": rel, "claims": len(claims), "receipt": receipt}
 
 
+def compose_rejudge_script(
+    *,
+    fragment: dict,
+    stage_schemas: dict,
+    plan_path: str,
+    plan_id: Optional[str],
+    run_base_sha: Optional[str],
+    head_sha: str,
+    repo_root: Optional[Path] = None,
+    host_degraded: bool = False,
+) -> str:
+    """A Workflow script holding only the roster's criterion judge, run at HEAD; its returned
+    `criterion` is what `record` turns into a `criterion-rejudge` record."""
+    review = parse_execute_review(fragment)
+    call = compose_criterion_judge(
+        review,
+        stage_schemas=stage_schemas,
+        plan_path=plan_path,
+        run_base_sha=run_base_sha or "run_base_sha",
+        falsifier=None,
+        criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
+        prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
+        host_degraded=host_degraded,
+    )
+    if call is None:
+        raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
+    ident = {"rejudge": True, "plan_id": plan_id, "head_sha": head_sha, "plan_path": plan_path}
+    return (
+        "// Runs inside the Workflow runner; a top-level `return` is legal there.\n"
+        "export const meta = {\n"
+        "  name: 'rejudge-criterion',\n"
+        "  description: 'Re-run only the criterion judge at HEAD over a stamped unmet criterion.',\n"
+        f"  phases: [{_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)}],\n"
+        "};\n\n"
+        f"  phase({_js_string_literal(CRITERION_JUDGE_PHASE_TITLE)});\n"
+        f"  const _judge = await {call};\n"
+        f"  return {{ reverify_delivery: {json.dumps(ident, sort_keys=True)}, "
+        "criterion: _judge ? { status: _judge.status ?? null, observation: _judge.observation ?? null } : null };\n"
+    )
+
+
+def emit_rejudge(
+    *, repo_root: Path, plan_path: str, out_path: str, agent_type_host: Optional[str] = None
+) -> dict:
+    """Emit the judge-only script for a plan whose `review_stamp` records an unmet criterion."""
+    from coordinator_core.ops.dispatch_emit.emit import _AGENT_TYPE_HOST_DEGRADED
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _load_review_inputs, _write_emission_receipt
+    from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN
+
+    text = Path(plan_path).read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    split = split_frontmatter(text)
+    try:
+        fm = (yaml.safe_load(split.fm_text) or {}) if split else {}
+    except yaml.YAMLError:
+        fm = {}
+    stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
+    criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
+    if not isinstance(criterion, dict) or criterion.get("status") == "met":
+        raise ReverifyRefused(f"rejudge: {plan_path} carries no unmet review_stamp criterion to re-judge")
+    fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
+    script = compose_rejudge_script(
+        fragment=fragment,
+        stage_schemas=schemas,
+        plan_path=plan_path,
+        plan_id=str(fm.get("plan_id") or "") or None,
+        run_base_sha=stamp.get("run_base_sha"),
+        head_sha=_head_sha(repo_root),
+        repo_root=repo_root,
+        host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+    )
+    Path(out_path).write_text(script, encoding="utf-8", newline="\n")
+    receipt = _write_emission_receipt(Path(out_path), plan_path, {}, extras={"route": "rejudge-criterion"})
+    return {"path": out_path, "receipt": receipt}
+
+
+def record_criterion_rejudge(
+    *, repo_root: Path, plan_id: Optional[str], head_sha: str, criterion: Optional[dict], session_id: str = ""
+) -> str:
+    """Exclusive-create the `criterion-rejudge` record from the judge's returned `criterion`;
+    returns its repo-relative path. Carries no delivery block, so delivery supersession
+    never reads it."""
+    status = (criterion or {}).get("status")
+    if not plan_id or status not in _CRITERION_STATUSES:
+        raise ReverifyRefused(
+            f"rejudge: needs a plan_id and a criterion status in {_CRITERION_STATUSES}, got {status!r}"
+        )
+    now = datetime.now(timezone.utc)
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "-", plan_id)
+    rel = VERDICT_DIR / now.strftime("%Y-%m") / f"{stem}.rejudge.{now.strftime('%Y%m%dT%H%M%S%fZ')}.md"
+    fm = {
+        "kind": REJUDGE_KIND,
+        "plan_id": plan_id,
+        "head_sha": head_sha,
+        "recorded_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "session_id": session_id,
+        "criterion": {"status": status, "observation": criterion.get("observation"), "sidecar": None},
+    }
+    target = repo_root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "x", encoding="utf-8", newline="\n") as fh:
+        fh.write("---\n" + yaml.safe_dump(fm, default_flow_style=False, sort_keys=False) + "---\n")
+    declare_write(str(target))
+    return rel.as_posix()
+
+
 def _unwrap_task_output(result: Any) -> dict:
     """The result inside a Workflow task-output wrapper (`result`/`output`/`return_value`,
     possibly JSON text); anything else raises."""
@@ -686,12 +792,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     parser = argparse.ArgumentParser(prog="reverify-delivery")
     sub = parser.add_subparsers(dest="cmd", required=True)
     rec = sub.add_parser("record", help="write the superseding delivery-verdict from the Workflow result")
-    rec.add_argument("--run-record", required=True)
+    rec.add_argument("--run-record", default=None, help="required except for a judge-only rejudge result")
     rec.add_argument("--result-json", required=True, help="the Workflow's returned JSON, or a path to it")
     rec.add_argument("--repo-root", default=None)
     rec.add_argument("--session-id", default="")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    repo_root = Path(args.repo_root) if args.repo_root else _repo_of_record(Path(args.run_record))
     raw = args.result_json
     try:
         if not raw.lstrip().startswith("{"):
@@ -700,6 +805,18 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if "reverify_delivery" not in result:
             result = _unwrap_task_output(result)
         ident = result["reverify_delivery"]
+        if ident.get("rejudge"):
+            print(record_criterion_rejudge(
+                repo_root=Path(args.repo_root) if args.repo_root else Path.cwd(),
+                plan_id=ident.get("plan_id"),
+                head_sha=ident["head_sha"],
+                criterion=result.get("criterion"),
+                session_id=args.session_id,
+            ))
+            return 0
+        if not args.run_record:
+            raise ValueError("--run-record is required for a delivery re-verify result")
+        repo_root = Path(args.repo_root) if args.repo_root else _repo_of_record(Path(args.run_record))
         run_record = _frontmatter(Path(args.run_record)) or {}
         frozen = _frozen_foreign_claims(repo_root, run_record)
         rel = record_delivery_verdict(

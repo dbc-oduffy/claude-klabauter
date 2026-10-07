@@ -321,6 +321,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",
+    "review_stamp.rejudge":                   "coordinator_core.ops.review_stamp",
     "review_stamp.check":                     "coordinator_core.ops.review_stamp",
     "review_mint.bookkeep_wave":              "coordinator_core.ops.review_mint.wave_bookkeeping",
     "review_mint.record_superseding_review":  "coordinator_core.ops.review_mint.supersede",

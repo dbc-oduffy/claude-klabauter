@@ -268,6 +268,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ".coordinator-local/subagent-share/*/*.review-wave-bookkeeping.md whose plan_id matches",
     )
     parser.add_argument(
+        "--rejudge",
+        action="store_true",
+        help="with --plan and --out: emit a script firing only the criterion judge at HEAD over the "
+        "plan's stamped unmet review_stamp criterion; record its result with "
+        "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record --result-json <task output>`, "
+        "then `review-stamp.py rejudge --plan <plan>`",
+    )
+    parser.add_argument(
         "--mark-landed",
         dest="mark_landed_phase",
         default=None,
@@ -763,6 +771,35 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             )
             return EXIT_USAGE
         return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
+
+    if args.rejudge:
+        if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):
+            print(
+                f"emit-dispatch-workflow: ERROR — --rejudge needs --plan and --out "
+                f"ending {_REQUIRED_OUT_SUFFIX!r}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.dispatch_emit.op import _installed_plugin_root
+        from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import ReverifyRefused, emit_rejudge
+
+        try:
+            result = emit_rejudge(
+                repo_root=Path(args.repo_root).resolve() if args.repo_root else Path.cwd(),
+                plan_path=args.plan,
+                out_path=args.out_path,
+                agent_type_host=resolve_agent_type_host(
+                    coordinator_agent_type_host=os.environ.get("COORDINATOR_AGENT_TYPE_HOST"),
+                    claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT") or _installed_plugin_root(),
+                ),
+            )
+        except (ReverifyRefused, *_DATA_ERRORS) as exc:
+            print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        print(json.dumps(result, indent=2, sort_keys=True))
+        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
+        return EXIT_OK
 
     if args.reverify_delivery is not None:
         if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):

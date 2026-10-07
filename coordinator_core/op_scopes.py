@@ -703,6 +703,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # and mint writes only the caller's own worktree, keyed identically to
     # dispatch.terminal_commit (never a `params.repo_root` override).
     "review_stamp.mint":                        "common_dir",
+    "review_stamp.rejudge":                     "common_dir",
     "review_stamp.check":                       "common_dir",
     # review_mint.bookkeep_wave — MUTATING: writes only the caller's own
     # worktree, keyed identically to review_stamp.mint/dispatch.terminal_commit

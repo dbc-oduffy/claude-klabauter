@@ -2728,6 +2728,7 @@ def _test_agent_call_expr(
     scope: list[str],
     agent_type_host: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    plan_path: Optional[str] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2743,6 +2744,8 @@ def _test_agent_call_expr(
         f"Run the scoped test targets: [{', '.join(scope)}]. Report raw evidence; "
         "do not gate. Write your record and return sidecar_path -- required."
     )
+    if plan_path:
+        prompt += f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}."
     return (
         "agent("
         f"{_js_string_literal(prompt)}, "
@@ -4227,7 +4230,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -4238,7 +4241,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path)};"
             )
             test_var = _TEST_RESULT_VAR
 
