@@ -390,3 +390,42 @@ def test_worktree_freeze_registers_diff_files_as_review_targets_and_nothing_else
     for rel, admitted in (("pkg/b.py", True), ("other.py", False)):
         candidate = Path(guard.casefold_path(str(tmp_path / rel)))
         assert guard._is_registered_review_target(str(tmp_path), "sess-freeze-1", candidate) is admitted
+
+
+def test_bracketed_tracked_and_untracked_paths_reach_the_frozen_diff(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    seg = repo / "api" / "[entityId]"
+    seg.mkdir(parents=True)
+    (seg / "route.ts").write_text("v1\n")
+    (repo / "seed.txt").write_text("s\n")
+    _git(["add", "."], cwd=repo)
+    _git(["commit", "-q", "-m", "seed"], cwd=repo)
+    base = _git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+    (seg / "route.ts").write_text("v2\n")
+    new = repo / "api" / "[slug]"
+    new.mkdir()
+    (new / "route.ts").write_text("new\n")
+
+    result = freeze_diff(
+        repo, base, "bracket-slice",
+        paths=["api/[entityId]/route.ts", "api/[slug]/route.ts"], worktree=True,
+    )
+
+    assert result["error"] is None, result
+    assert result["uncovered_paths"] == []
+    diff = Path(result["diff_path"]).read_text(encoding="utf-8")
+    assert "diff --git a/api/[entityId]/route.ts b/api/[entityId]/route.ts" in diff
+    assert "diff --git a/api/[slug]/route.ts b/api/[slug]/route.ts" in diff
+
+
+def test_glob_pathspecs_still_expand_in_a_worktree_freeze(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    base = _commit(repo, "a.py", "1\n", "seed")
+    (repo / "a.py").write_text("2\n")
+    result = freeze_diff(repo, base, "glob-slice", paths=["*.py"], worktree=True)
+    assert result["error"] is None, result
+    assert "diff --git a/a.py" in Path(result["diff_path"]).read_text(encoding="utf-8")

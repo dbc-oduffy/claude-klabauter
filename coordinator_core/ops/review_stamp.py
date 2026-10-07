@@ -83,6 +83,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.completion_receipts.verdict import mint_refusal, superseding_delivery, test_verdict_of
 from coordinator_core.session.claimed_write import replace_text
@@ -767,6 +768,7 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
                 own_rel = own.relative_to(Path(repo_root).resolve()).as_posix()
             except ValueError:
                 own_rel = None
+            writes = [git_pathspec(w) for w in writes]
             spec = [*writes, f":(exclude){own_rel}"] if own_rel else writes
             try:
                 out = _run_git(["log", "--format=%H", f"{terminal}..HEAD", "--", *spec], cwd=str(repo_root))

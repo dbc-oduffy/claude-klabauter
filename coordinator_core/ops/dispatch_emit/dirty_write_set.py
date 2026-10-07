@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.pathspec import _declared_paths
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
@@ -56,7 +57,7 @@ def _dirty_in_write_set(
         return []
     if ignorecase is None:
         ignorecase = _default_ignorecase()
-    specs = [f":(icase,literal){p}" for p in ordered] if ignorecase else ordered
+    specs = [f":(icase,literal){p}" for p in ordered] if ignorecase else [git_pathspec(p) for p in ordered]
     argv = [
         "-C", str(repo_root), "--no-optional-locks", "status",
         "--porcelain", "--untracked-files=all", "--", *specs,

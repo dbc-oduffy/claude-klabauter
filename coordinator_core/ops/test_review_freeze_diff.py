@@ -469,7 +469,7 @@ def test_glob_and_magic_pathspec_entries_excluded_from_check(tmp_path: Path) -> 
         tmp_path,
         f"{sha1}..{sha2}",
         "magic",
-        paths=["*.md", "no-such-file?.txt", "[abc].txt", ":no-such/*"],
+        paths=["*.md", "no-such-file?.txt", "[abc]*.txt", ":no-such/*"],
     )
 
     assert result["error"] is None

@@ -292,6 +292,11 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.typecheck_leg import (
+    TypecheckLeg,
+    typecheck_leg,
+    typecheck_prompt_clause,
+)
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -2729,6 +2734,7 @@ def _test_agent_call_expr(
     agent_type_host: Optional[str] = None,
     repo_root: Optional[Path] = None,
     plan_path: Optional[str] = None,
+    typecheck: Optional[TypecheckLeg] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2736,13 +2742,18 @@ def _test_agent_call_expr(
     call). Carries a ``schema:`` (``test_result``) so the digest reads a
     structured result rather than free text, and the prompt now REQUIRES
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
-    copies verbatim).
+    copies verbatim). ``typecheck`` (``typecheck_leg``) folds a ``tsc --noEmit``
+    leg into the same prompt; an empty ``scope`` with a leg runs only the leg.
     """
     scope = collapse_test_scope(scope, repo_root)
+    run_clause = (
+        f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
+    )
     prompt = (
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
-        f"Run the scoped test targets: [{', '.join(scope)}]. Report raw evidence; "
-        "do not gate. Write your record and return sidecar_path -- required."
+        f"{run_clause}"
+        + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
+        + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
     if plan_path:
         prompt += f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}."
@@ -4214,7 +4225,17 @@ def compose_script(
                 "falsifier to fall back to"
             )
     else:
-        if not scope:
+        ts_leg = typecheck_leg(
+            [
+                p
+                for row in flat_rows
+                if plan_context is None
+                or not _row_build_gate_commands(row, plan_context.row_build_gates)
+                for p in _declared_paths(row)
+            ],
+            repo_root,
+        )
+        if not scope and ts_leg is None:
             guarded_blocks.append(_no_test_scope_narration())
             test_absent_note = "spine writes no testable surface"
             # An all-prose spine has no test target but still owes its
@@ -4230,7 +4251,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -4241,7 +4262,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg)};"
             )
             test_var = _TEST_RESULT_VAR
 

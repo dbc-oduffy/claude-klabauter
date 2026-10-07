@@ -144,6 +144,7 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.git_index import IndexParseError, parse_index_stat
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
@@ -182,16 +183,8 @@ def _error(message: str, uncovered_paths: Optional[List[str]] = None) -> dict:
     }
 
 
-_MAGIC_PATHSPEC_CHARS = ("*", "?", "[")
-
-
-def _is_magic_pathspec(entry: str) -> bool:
-    """True for an entry this coverage check does not attempt to test: a
-    glob-metacharacter entry (``*``, ``?``, ``[``) or a ``:``-prefixed magic
-    pathspec. Excluded from `_uncovered_paths` entirely — never reported as
-    uncovered (see module negative-spec). There is no fnmatch/wildmatch
-    reimplementation; the one production caller passes literal repo paths."""
-    return entry.startswith(":") or any(ch in entry for ch in _MAGIC_PATHSPEC_CHARS)
+_is_magic_pathspec = is_magic_pathspec
+_git_pathspec = git_pathspec
 
 
 def _c_unquote(token: str) -> str:
@@ -565,7 +558,7 @@ def _freeze_diff_worktree(
             "untracked additions from."
         )
 
-    diff_argv = ["diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *paths]
+    diff_argv = ["diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *(_git_pathspec(p) for p in paths)]
     dr = _git(diff_argv, cwd=repo_root)
     if not dr.ok:
         raise ValueError(
@@ -840,7 +833,7 @@ def freeze_diffs_batch(
         stdin_payload = "".join(f"{endpoints[i][1]} {endpoints[i][0]}\n" for i in diff_pending_idx)
         diff_argv = ["diff-tree", "--stdin", "-p"]
         if shared_paths_list:
-            diff_argv += ["--", *shared_paths_list]
+            diff_argv += ["--", *(_git_pathspec(p) for p in shared_paths_list)]
         dt = _git(diff_argv, cwd=repo_root, input_data=stdin_payload)
         if not dt.ok:
             raise ValueError(

@@ -721,25 +721,50 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     return out
 
 
+_STATUS_FIELD = r'^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
 _DELIVERED_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>',
+    r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>'
+    rf'|(?i:{_STATUS_FIELD}DONE(?:_WITH_CONCERNS)?\b)',
     re.MULTILINE,
 )
 _UNDELIVERED_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:PARTIAL|BLOCKED)</exit-status>',
+    r'^\s*"?[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:PARTIAL|BLOCKED)</exit-status>'
+    rf'|(?i:{_STATUS_FIELD}(?:PARTIAL|BLOCKED)\b)',
     re.MULTILINE,
 )
 _PARTIAL_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}PARTIAL[*_`]{0,2}:|<exit-status>PARTIAL</exit-status>', re.MULTILINE
+    r'^\s*"?[*_`]{0,2}PARTIAL[*_`]{0,2}:|<exit-status>PARTIAL</exit-status>'
+    rf'|(?i:{_STATUS_FIELD}PARTIAL\b)',
+    re.MULTILINE,
 )
 _UNDONE_LINE_RE = re.compile(r"^\s*[-*]?\s*[*_`]{0,2}(?:not done|undone|remaining)", re.IGNORECASE)
+_CAUSE_HEADING_RE = re.compile(
+    r"^#{1,6}\s+.*\b(?:why|cause|blocker|blocked|reason)\b", re.IGNORECASE
+)
 _UNDONE_CAP = 400
 
 
+def _cause_section(lines: list) -> list:
+    """The body of the first heading naming a cause/blocker/reason, up to the next heading."""
+    for i, ln in enumerate(lines):
+        if _CAUSE_HEADING_RE.match(ln.strip()):
+            body = []
+            for nxt in lines[i + 1:]:
+                if nxt.lstrip().startswith("#"):
+                    break
+                if nxt.strip():
+                    body.append(nxt.strip())
+            return [ln.strip().lstrip("#").strip() + ":"] + body if body else []
+    return []
+
+
 def _undone_summary(text: str) -> str:
-    """The report's named undone work: its ``Not done``/``Remaining`` lines, else its PARTIAL line."""
+    """The report's named undone work: its ``Not done``/``Remaining`` lines, else its
+    cause/blocker section, else its PARTIAL line."""
     lines = text.splitlines()
     picked = [ln.strip() for ln in lines if _UNDONE_LINE_RE.match(ln)]
+    if not picked:
+        picked = _cause_section(lines)
     if not picked:
         picked = [ln.strip() for ln in lines if re.match(r'\s*"?[*_`]{0,2}PARTIAL', ln)]
     return " | ".join(picked)[:_UNDONE_CAP]
@@ -993,7 +1018,8 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
     plan = getattr(request, "plan_path", None) or (
         params.get("plan_path") if isinstance(params, dict) else None
     ) or "<plan>"
-    command = f"emit-dispatch-workflow --plan {plan}"
+    run_text = (params.get("task_output_path") if isinstance(params, dict) else None) or "<run-output-file>"
+    command = f"emit-dispatch-workflow --plan {plan} --only-incomplete {run_text}"
     if stranded:
         return (
             f"stranded files for {', '.join(sorted(stranded))}: commit or discard them, "

@@ -132,15 +132,52 @@ def test_stranded_row_reply_names_the_next_command(repo):
     out = _call(repo, _run(repo, "BLOCKED: no runtime\n"))
     assert out["next"] == (
         "stranded files for C1: commit or discard them, "
-        "then re-emit with emit-dispatch-workflow --plan <plan>"
+        "then re-emit with emit-dispatch-workflow --plan <plan> --only-incomplete <run-output-file>"
     )
 
 
 def test_resume_hint_names_the_plan_and_every_stranded_row():
     hint = terminal_commit._resume_hint(
-        {"P1": ["a.py"], "X1": ["b.py"]}, {}, {"plan_path": "docs/plans/p.md"}
+        {"P1": ["a.py"], "X1": ["b.py"]},
+        {},
+        {"plan_path": "docs/plans/p.md", "task_output_path": "out/task.output"},
     )
     assert hint == (
-        "stranded files for P1, X1: commit or discard them, "
-        "then re-emit with emit-dispatch-workflow --plan docs/plans/p.md"
+        "stranded files for P1, X1: commit or discard them, then re-emit with "
+        "emit-dispatch-workflow --plan docs/plans/p.md --only-incomplete out/task.output"
     )
+
+
+_STATUS_FIELD_PARTIAL = (
+    "# API row report\n\nstatus: PARTIAL\n\nExamined 6 of 6 footprint paths.\n\n"
+    "## Delivered\n- routes\n\n"
+    "## Why PARTIAL: the row's Done-when cannot go green inside the footprint\n"
+    "contracts.test.ts fails only because two files OUTSIDE my footprint lack rows.\n"
+    "1. `contracts.test.ts` SAMPLES needs samples.\n\n## Concerns\n- gate.ts\n"
+)
+
+
+def test_status_field_partial_row_is_withheld_with_its_cause_section(repo):
+    out = _call(repo, _run(repo, _STATUS_FIELD_PARTIAL))
+    assert out["nothing_to_commit"] is True
+    assert out["stranded"] == {"C1": ["a.py"]}
+    assert "OUTSIDE my footprint" in out["blockers"]["C1"]
+    assert out["incomplete_reasons"]["C1"].startswith("executor_partial: ")
+
+
+@pytest.mark.parametrize("line", ["status: DONE", "**Status:** DONE_WITH_CONCERNS", "## status: done"])
+def test_status_field_done_row_lands(repo, line):
+    out = _call(repo, _run(repo, f"# report\n\n{line}\n\nbody\n"))
+    assert out["partial_committed"] == ["C1"], out
+
+
+@pytest.mark.parametrize("line", ["status: BLOCKED", "Status: partial"])
+def test_status_field_not_done_is_not_delivered(line):
+    text = f"# report\n\n{line}\n"
+    assert terminal_commit._UNDELIVERED_REPORT_RE.search(text)
+    assert not terminal_commit._DELIVERED_REPORT_RE.search(text)
+
+
+def test_undone_summary_prefers_not_done_lines_over_the_cause_section():
+    text = _STATUS_FIELD_PARTIAL + "Not done: rebuild\n"
+    assert terminal_commit._undone_summary(text) == "Not done: rebuild"
