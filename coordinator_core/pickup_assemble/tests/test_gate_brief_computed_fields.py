@@ -21,10 +21,14 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_brief as pa
+from coordinator_core.session import record_homes
 from coordinator_core.pickup_assemble.tests._git_harness import git as _git, init_repo as _init_repo
 
 # Declared, not excused: `brief()` reads real git state (tree quiescence,
 # premise drift) that no fixture stands in for.
+_H = record_homes.record_path("", "handoffs", "h.md").replace("\\", "/")
+_PEER = record_homes.record_path("", "handoffs", "peer.md").replace("\\", "/")
+
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -42,20 +46,20 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _seed(repo: Path, extra_fm: str = "", body: str = "Body.") -> Path:
-    path = repo / "state" / "handoffs" / "h.md"
+    path = Path(record_homes.record_path(str(repo), "handoffs", "h.md"))
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
         'title: "T"\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: open\n'
         'predecessor: "none"\ndeployment_state: awaiting_gate\npickup_ready: true\n' + extra_fm
     )
     path.write_text(f"---\n{fm}---\n\n# H\n\n{body}\n", encoding="utf-8")
-    _git(repo, "add", "state/handoffs/h.md")
+    _git(repo, "add", _H)
     _git(repo, "commit", "-m", "add baton")
     return path
 
 
 def _brief(repo: Path) -> dict:
-    return pa.brief("state/handoffs/h.md", repo_root=repo).decision_object
+    return pa.brief(_H, repo_root=repo).decision_object
 
 
 def _jgate(obj: dict) -> dict:
@@ -149,14 +153,14 @@ def test_own_repo_leg_is_not_foreign(repo, registry):
 
 def test_resolved_blocked_by_is_peer(repo, registry):
     registry(claude_klabauter=repo)
-    peer = repo / "state" / "handoffs" / "peer.md"
+    peer = Path(record_homes.record_path(str(repo), "handoffs", "peer.md"))
     peer.parent.mkdir(parents=True, exist_ok=True)
     peer.write_text(
         '---\ntitle: "P"\ncreated: 2026-01-01\nbranch: b\nstatus: open\npredecessor: "none"\n'
         "deployment_state: in_flight\nhandoff_id: hnd-peer-aaaaaa\n---\n\nPeer.\n",
         encoding="utf-8",
     )
-    _git(repo, "add", "state/handoffs/peer.md")
+    _git(repo, "add", _PEER)
     _git(repo, "commit", "-m", "peer")
     _seed(repo, "blocked_by: [hnd-peer-aaaaaa]\n")
 

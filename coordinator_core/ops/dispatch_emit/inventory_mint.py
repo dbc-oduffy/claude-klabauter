@@ -55,6 +55,13 @@ Column mapping, applied per live Chunk-table row:
     verification  -> the body's `Verification (this row is DONE only when
                      this holds): <text>` line.
     complexity    -> the body's `Complexity: <text>` line.
+    fire context  -> optional; a non-empty cell appends one trailing
+                     `Fire context: <text>` line to the body of the plain
+                     row and of EVERY chunk a plan-sourced row expands into
+                     (`Spec:` stays first). Carries run-time facts (e.g. a
+                     box-slot grant ref) into the brief without touching the
+                     plan file, so `mise_prepped_sha` is unaffected by
+                     construction.
     disposition   -> LIVE/CLOSED classification (see `_is_live_disposition`)
                      -- only LIVE rows reach the minted spine at all; a
                      CLOSED row (`pending ...`, `routed out ...`, `dropped
@@ -295,7 +302,7 @@ _REQUIRED_COLUMNS = (
 
 #: Columns a Chunk table may omit; an absent column or a blank/`—`/`-` cell
 #: reads as `""` on every row dict.
-_OPTIONAL_COLUMNS = ("spec path", "complexity")
+_OPTIONAL_COLUMNS = ("spec path", "complexity", "fire context")
 _ABSENT_CELLS = frozenset({"", "\u2014", "-"})
 
 
@@ -593,7 +600,18 @@ def _infer_change_kind(writes: List[str]) -> str:
     return "code-edit"
 
 
-def _row_body(row_id: str, spec_path: str, summary: str, verification: str, complexity: str) -> str:
+def _fire_context_line(fire_context: str) -> str:
+    return f"Fire context: {fire_context}\n" if fire_context else ""
+
+
+def _row_body(
+    row_id: str,
+    spec_path: str,
+    summary: str,
+    verification: str,
+    complexity: str,
+    fire_context: str = "",
+) -> str:
     spec_line = f"Spec: {spec_path} ({row_id})\n" if spec_path else ""
     complexity_line = f"Complexity: {complexity}\n" if complexity else ""
     return (
@@ -601,6 +619,7 @@ def _row_body(row_id: str, spec_path: str, summary: str, verification: str, comp
         f"{summary}\n"
         f"Verification (this row is DONE only when this holds): {verification}\n"
         f"{complexity_line}"
+        f"{_fire_context_line(fire_context)}"
     )
 
 
@@ -1002,6 +1021,7 @@ def mint_rows(
         summary = row["summary"].strip()
         verification = row["verification"].strip()
         complexity = row["complexity"].strip()
+        fire_context = row.get("fire context", "").strip()
 
         explicit_dep_ids: set = set()
         for dep_id in _split_id_list(row["deps"]):
@@ -1096,8 +1116,12 @@ def mint_rows(
                     # plan-scoped stop rule halts every plan in the run.
                     "body": (
                         f"Spec: {spec_path} ({minted_id})\n{r.body}"
+                        + ("" if r.body.endswith("\n") or not fire_context else "\n")
+                        + _fire_context_line(fire_context)
                         if r.body
-                        else _row_body(minted_id, spec_path, r.title or summary, verification, complexity)
+                        else _row_body(
+                            minted_id, spec_path, r.title or summary, verification, complexity, fire_context
+                        )
                     ),
                     "writes": r_writes,
                 }
@@ -1150,7 +1174,7 @@ def mint_rows(
             "title": summary,
             "change_kind": _infer_change_kind(writes or writes_under),
             "surface": (writes or writes_under)[0],
-            "body": _row_body(row_id, spec_path, summary, verification, complexity),
+            "body": _row_body(row_id, spec_path, summary, verification, complexity, fire_context),
             "writes": writes,
         }
         if writes_under:

@@ -819,6 +819,75 @@ def test_plan_sourced_expanded_rows_name_their_source_plan(tmp_path):
     assert "Do the first step." in by_id["P1.A1"]["body"]
 
 
+def _fire_context_inventory(tmp_path, cell: str | None):
+    """Two-plan inventory whose P1 row carries a `fire context` column
+    (`None` omits the column entirely). Plan A's A1 has a `body:`, A2 none."""
+    inventory_path = _write_two_plan_inventory(tmp_path)
+    plan_a = tmp_path / "docs" / "plans" / "fixture-plan-a.md"
+    plan_a.write_text(
+        _TWO_CHUNK_PLAN_FIXTURE.replace(
+            "  title: First A step\n",
+            "  title: First A step\n  body: |\n    Do the first step.\n",
+        ),
+        encoding="utf-8",
+    )
+    if cell is not None:
+        lines = inventory_path.read_text(encoding="utf-8").splitlines()
+        out = []
+        for line in lines:
+            if line.startswith("| id "):
+                line += " fire context |"
+            elif line.startswith("|---"):
+                line += "---|"
+            elif line.startswith("| P1 "):
+                line += f" {cell} |"
+            elif line.startswith("| P2 "):
+                line += " — |"
+            out.append(line)
+        inventory_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return inventory_path
+
+
+def _mint_by_id(inventory_path):
+    rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
+    return {r["id"]: r for r in im.mint_rows(rows, inventory_path=inventory_path)}
+
+
+def test_fire_context_reaches_every_chunk_of_an_expanded_plan_row(tmp_path):
+    ref = "G-CAPTURE/2026/j"
+    by_id = _mint_by_id(_fire_context_inventory(tmp_path, ref))
+    for row_id in ("P1.A1", "P1.A2"):
+        body = by_id[row_id]["body"]
+        assert body.splitlines()[-1] == f"Fire context: {ref}", row_id
+        assert body.startswith(f"Spec: docs/plans/fixture-plan-a.md ({row_id})\n"), row_id
+    assert "Fire context" not in by_id["P2.B1"]["body"]
+
+
+def test_fire_context_reaches_a_plain_single_row_mint(tmp_path):
+    inv = _write_inventory(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ## Chunk table
+
+            | id | summary | footprint | deps | verification | disposition | fire context |
+            |---|---|---|---|---|---|---|
+            | C1 | plain | `coordinator_core/a.py` | — | pytest | in_progress | grant X |
+            """
+        ),
+    )
+    rows = im.parse_chunk_table(inv.read_text(encoding="utf-8"))
+    body = im.mint_rows(rows)[0]["body"]
+    assert body.endswith("Fire context: grant X\n")
+
+
+@pytest.mark.parametrize("cell", [None, "—", "-", "  "])
+def test_absent_column_or_empty_fire_context_adds_nothing(tmp_path, cell):
+    by_id = _mint_by_id(_fire_context_inventory(tmp_path, cell))
+    for row in by_id.values():
+        assert "Fire context" not in row["body"]
+
+
 def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path):
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
     from coordinator_core.ops.dispatch_emit.wave_map import build_waves

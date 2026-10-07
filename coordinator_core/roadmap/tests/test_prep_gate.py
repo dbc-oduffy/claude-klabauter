@@ -1431,3 +1431,36 @@ def test_a_real_suite_tier_mention_still_refuses(statement):
     from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
     assert suite_tier_refusal(statement)
+
+
+# ---------------------------------------------------------------------------
+# Repair fields: mechanical / repair on every finding
+# ---------------------------------------------------------------------------
+
+
+def test_external_dep_undeclared_is_mechanical_and_names_the_paths() -> None:
+    finding = pg._defect("external-dep-undeclared", "reads ../sibling/x.py", withheld=["r1"])
+    assert finding["mechanical"] is True
+    assert "external_gate" in finding["repair"]
+    assert "reads_at_head" in finding["repair"]
+    assert "../sibling/x.py" in finding["repair"]
+
+
+def test_prime_exit_suite_tier_is_mechanical_and_names_the_field() -> None:
+    finding = pg._refuse("prime-exit-suite-tier", "names the fast tier")
+    assert finding["mechanical"] is True
+    assert "prime_exit_criterion" in finding["repair"]
+    assert "names the fast tier" in finding["repair"]
+
+
+@pytest.mark.parametrize("kind", ["census-incomplete", "wave-cycle", "ValueError", "nonesuch"])
+def test_judgment_and_unlisted_kinds_are_not_mechanical(kind: str) -> None:
+    finding = pg._defect(kind, "whatever")
+    assert finding["mechanical"] is False
+    assert finding["repair"] is None
+
+
+def test_pass_carries_no_repair() -> None:
+    finding = pg._pass("ok")
+    assert finding["mechanical"] is False
+    assert finding["repair"] is None

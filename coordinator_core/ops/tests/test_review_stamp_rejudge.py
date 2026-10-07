@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from coordinator_core.ops import review_stamp as m
+from coordinator_core.session import record_homes
 from coordinator_core.ops.plan_status_transition import main
 from coordinator_core.ops.tests.test_plan_status_transition import _write
 from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import _init_repo
@@ -45,7 +46,7 @@ def _judge(tmp_path: Path, status: str, *, plan: str = PLAN_ID, stale: bool = Fa
     """An engine-shaped `criterion-rejudge` record, as `reverify_delivery record` writes it."""
     recorded = "2026-09-30T00:00:00.000000Z" if stale else "2026-10-02T00:00:00.000000Z"
     name = "stale" if stale else plan
-    path = tmp_path / "state" / "delivery-verdicts" / "2026-10" / f"{name}.rejudge.{status}.md"
+    path = Path(record_homes.home_dir(str(tmp_path), "delivery-verdicts")) / "2026-10" / f"{name}.rejudge.{status}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = {"kind": "criterion-rejudge", "plan_id": plan, "head_sha": "abc", "recorded_at": recorded,
           "criterion": {"status": status, "observation": "judged", "sidecar": None}}

@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -55,7 +57,45 @@ def _revalidator():
     return mod
 
 
-def certify(plan: Path, repo_root: Path, timeout: int) -> dict:
+#: Lines of `git log` shown per drifted stamp; the rest are counted, not printed.
+_ATTRIBUTION_SHOWN = 20
+#: Hard cap on what one `git log` returns, so an old stamp cannot stream the whole history.
+_ATTRIBUTION_FETCH = 500
+
+
+def _git_log_since(repo_root: Path, since: str, timeout: int) -> list[str]:
+    """`%h %s` lines for commits after `since`, newest first; empty when git cannot answer."""
+    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    try:
+        proc = subprocess.run(
+            ["git", "log", f"--since={since}", f"--max-count={_ATTRIBUTION_FETCH}",
+             "--format=%h %s"],
+            cwd=repo_root, capture_output=True, text=True, timeout=timeout, **kw,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return proc.stdout.splitlines() if proc.returncode == 0 else []
+
+
+def _attribution(repo_root: Path, since: str, timeout: int, cache: dict) -> list[str]:
+    """Commits since the stamp, one `git log` per distinct stamp anchor across the whole run.
+
+    The anchor is `mise_prepped_at`: `mise_prepped_sha` is a blob hash of the plan body, not a
+    commit, so it cannot bound a log.
+    """
+    if since not in cache:
+        lines = _git_log_since(repo_root, since, timeout)
+        shown = lines[:_ATTRIBUTION_SHOWN]
+        extra = len(lines) - len(shown)
+        if extra:
+            plus = "+" if len(lines) >= _ATTRIBUTION_FETCH else ""
+            shown.append(f"... {extra}{plus} more omitted")
+        cache[since] = shown
+    return cache[since]
+
+
+def certify(plan: Path, repo_root: Path, timeout: int, attribute: bool = False,
+            cache: dict | None = None) -> dict:
     try:
         text = plan.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -68,6 +108,12 @@ def certify(plan: Path, repo_root: Path, timeout: int) -> dict:
         row["sha_detail"] = f"stamp fields missing: {', '.join(stamp.get('missing') or [])}"
     if stamp["state"] == "CERTIFIED":
         row["census"] = _revalidator().revalidate(plan, repo_root, timeout)
+        since = str(stamp.get("recorded_at") or "").strip()
+        if attribute and since:
+            cache = {} if cache is None else cache
+            for e in row["census"]["entries"]:
+                if e["state"] == "DRIFT":
+                    e["attribution"] = list(_attribution(repo_root, since, timeout, cache))
     return row
 
 
@@ -88,6 +134,8 @@ def _print(rows: list[dict]) -> None:
                 print(f"      basis    {e['basis']}")
             if e.get("detail"):
                 print(f"      detail   {e['detail']}")
+            for line in e.get("attribution") or []:
+                print(f"      since    {line}")
 
 
 def main(argv: list[str]) -> int:
@@ -96,13 +144,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--repo-root", default=".", help="the repo the census commands run in (default: cwd)")
     ap.add_argument("--timeout", type=int, default=30, help="per census command, seconds")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--attribute", action="store_true",
+                    help="on census DRIFT, list commits since the stamp (one git log per distinct stamp)")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
 
     root = Path(args.repo_root).resolve()
-    rows = [certify(Path(p) if Path(p).is_absolute() else root / p, root, args.timeout)
+    cache: dict = {}
+    rows = [certify(Path(p) if Path(p).is_absolute() else root / p, root, args.timeout,
+                    args.attribute, cache)
             for p in args.plans]
     if args.json:
         json.dump(rows, sys.stdout, indent=1)

@@ -333,12 +333,44 @@ def repo_gitignored_roots(repo_root: Path) -> frozenset:
 # ---------------------------------------------------------------------------
 
 
+#: kind -> (mechanical, repair template). Mechanical means a deterministic edit to
+#: the plan file needing no judgment about the work; ``{detail}`` is the finding's
+#: own detail, which names the offending paths. An unlisted kind (census counts,
+#: premises, scope, engine errors, exception-named kinds) is (False, None).
+_FINDING_CLASSIFICATION: Dict[str, Any] = {
+    "external-dep-undeclared": (
+        True,
+        "edit external_gate: declare each external path, or move a sibling repo's "
+        "path out of reads_at_head and quote it inline in the body — {detail}",
+    ),
+    "prime-exit-suite-tier": (
+        True,
+        "edit prime_exit_criterion statement: name the behaviour and the tests "
+        "covering the touched files, not a suite tier — {detail}",
+    ),
+}
+
+
+def _repair_fields(status: str, kind: Optional[str], detail: str) -> Dict[str, Any]:
+    mechanical, template = (False, None)
+    if status in ("DEFECT", "REFUSE") and kind:
+        mechanical, template = _FINDING_CLASSIFICATION.get(kind, (False, None))
+    repair = template.format(detail=detail) if mechanical and template else None
+    return {"mechanical": bool(repair), "repair": repair}
+
+
 def _pass(detail: str, withheld: Optional[List[str]] = None) -> Dict[str, Any]:
-    return {"status": "PASS", "kind": None, "detail": detail, "withheld": withheld or []}
+    return {
+        "status": "PASS", "kind": None, "detail": detail, "withheld": withheld or [],
+        **_repair_fields("PASS", None, detail),
+    }
 
 
 def _defect(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dict[str, Any]:
-    return {"status": "DEFECT", "kind": kind, "detail": detail, "withheld": withheld or []}
+    return {
+        "status": "DEFECT", "kind": kind, "detail": detail, "withheld": withheld or [],
+        **_repair_fields("DEFECT", kind, detail),
+    }
 
 
 #: RETIRED with the REFUSED verdict it produced, and kept as the one shape that
@@ -346,7 +378,10 @@ def _defect(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dic
 #: helper and be seen doing it rather than inventing a second refusal path. No
 #: predicate calls it; see ``REFUSED`` for the ruling.
 def _refuse(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dict[str, Any]:
-    return {"status": "REFUSE", "kind": kind, "detail": detail, "withheld": withheld or []}
+    return {
+        "status": "REFUSE", "kind": kind, "detail": detail, "withheld": withheld or [],
+        **_repair_fields("REFUSE", kind, detail),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1939,7 +1974,10 @@ def evaluate_plan(
         kind = type(exc).__name__
         detail = f"{kind}: {exc}".strip().splitlines()[0][:300]
         classes = {
-            "SPINE": {"status": "ERROR", "kind": "engine-error", "detail": detail, "withheld": []}
+            "SPINE": {
+                "status": "ERROR", "kind": "engine-error", "detail": detail, "withheld": [],
+                "mechanical": False, "repair": None,
+            }
         }
     if any(v["status"] == "ERROR" for v in classes.values()):
         verdict = ENGINE_ERROR

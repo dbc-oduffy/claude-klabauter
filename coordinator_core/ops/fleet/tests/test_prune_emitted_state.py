@@ -9,9 +9,10 @@ import time
 import pytest
 
 from coordinator_core.ops.fleet import prune_emitted as pe
+from coordinator_core.session import record_homes
 
 OLD = time.time() - 3 * 86400
-BLITZ = "state/plan-blitz/20261001T000000Z"
+BLITZ = record_homes.home_dir("", "plan-blitz").replace(os.sep, "/") + "/20261001T000000Z"
 
 
 @pytest.fixture

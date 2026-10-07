@@ -138,7 +138,7 @@ def _engine_error_report(plan_path: Path, exc: Exception) -> Dict[str, Any]:
     """
     kind = type(exc).__name__
     detail = f"{kind}: {exc}".strip().splitlines()[0][:300]
-    classes = {"SPINE": {"status": "DEFECT", "kind": "engine-error", "detail": detail, "withheld": []}}
+    classes = {"SPINE": {"status": "DEFECT", "kind": "engine-error", "detail": detail, "withheld": [], "mechanical": False, "repair": None}}
     message = "\n".join(
         [
             f"mise-prep: {ENGINE_ERROR} — {plan_path.name}",

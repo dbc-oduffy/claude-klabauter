@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.ops import artifact_adopt as mod
 from coordinator_core.ops.artifact_adopt_contract import adopt_command
+from coordinator_core.session import record_homes
 
 REL = "docs/plans/2026-10-01-engine-op-and-cli-gaps.md"
 BODY = "\n# Engine op gaps\n\nText with trailing space \n\n```yaml\nk: v\n```\n"
@@ -119,7 +120,7 @@ def test_unterminated_frontmatter_refused(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "rel", ["docs/plans/2026-10-01-x.review.md", "docs/plans/sub/x.md", "state/handoffs/x.md", "README.md"]
+    "rel", ["docs/plans/2026-10-01-x.review.md", "docs/plans/sub/x.md", record_homes.record_path("", "handoffs", "x.md").replace("\\", "/"), "README.md"]
 )
 def test_sidecar_and_non_plan_refused(tmp_path, rel):
     git = _repo(tmp_path)
