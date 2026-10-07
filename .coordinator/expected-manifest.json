@@ -1980,8 +1980,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "8f8e3331dbdd4db1ab6a486988804ab79f91c526",
-    "coordinator_core/_engine_stamp": "800ee6ad752bc4c0d30271fb7883236fb3eeff3d",
+    "coordinator_core/_engine_published_at": "df9302bb221887066bd6a1406744376e34b81bc2",
+    "coordinator_core/_engine_stamp": "808a3606e3d7a87a09c25db37eb66d3f11927cdc",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3136,7 +3136,7 @@
     "coordinator_core/group_em/baseline.py": "7894003a34bd063c5600ea5729f3c8af1f4356c9",
     "coordinator_core/group_em/human_entry.py": "2b4cc4c4018d5fa20e122289a19acdf0ca71bf30",
     "coordinator_core/group_em/idle_report.py": "62e6d094c1551f7b2f4c7f84eaef44fb10b2e469",
-    "coordinator_core/group_em/nomination.py": "7e3273245619f3eaea969886d9ece142666b86db",
+    "coordinator_core/group_em/nomination.py": "391ed0cf36eb92f211387610a2ca14086e39fc46",
     "coordinator_core/group_em/obligations.py": "9bf1613bfb9ced01ee1264ffea8b779b6578b9a6",
     "coordinator_core/group_em/read_pass.py": "e8a012d113f1760b0c50139d725a17661e43ce13",
     "coordinator_core/group_em/repo_root_arg.py": "63826519a724d9a4d504ea0a29f220a620fffb5d",
@@ -3150,7 +3150,7 @@
     "coordinator_core/group_em/tests/test_deprecated_crown_flag_alias.py": "859999e8d18d347af860b2c55e1d269388619c08",
     "coordinator_core/group_em/tests/test_human_entry.py": "2bd8a7065f7f74a2552787bb7b952f16d9c8f313",
     "coordinator_core/group_em/tests/test_idle_report.py": "80b4b2ba3cd545a90cfabc923f211cd0e5b3afb7",
-    "coordinator_core/group_em/tests/test_nomination.py": "7f0edfa3ebdeff3c1680361e6c29d20948eb6f36",
+    "coordinator_core/group_em/tests/test_nomination.py": "2509c9727bfdafe1c2e62d2c62760b8a085db083",
     "coordinator_core/group_em/tests/test_obligations.py": "d22d9acd4ca598d56728470543eeccce93d43fd0",
     "coordinator_core/group_em/tests/test_read_pass.py": "e68cbc473b264adbf1a96c20f56ab4463c7d8983",
     "coordinator_core/group_em/tests/test_repo_root_arg.py": "3a3ca44ae203d2362baff2e60e328073d729251b",
@@ -6401,7 +6401,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "96dcf52991938085d4ba160ba74cb83a770c8cfb",
+    "coordinator_core/warm/door/door.exe.provenance.json": "042cca949506b4a527f2c03f953a924d3e0c5fc4",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -6967,5 +6967,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "5d8a113dbc3d11a84a07a1efc0af92afd63d3460"
+  "source_head": "d9a009a9dbc5cc12fc63399f13c790b1b19826a6"
 }

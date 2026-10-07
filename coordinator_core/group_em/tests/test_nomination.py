@@ -408,3 +408,30 @@ def test_rejected_standing_is_no_standing(repo_root, record_dir, monkeypatch):
     assert nomination.who(repo_root, record_dir)["entry_status"] == "rejected"
     assert nomination.standing(repo_root, "sid-h", record_dir)["standing"] == "no_match"
     assert nomination.read_authoritative(repo_root, record_dir) is None
+
+
+def test_claim_writes_the_box_record_and_a_claim_elsewhere_takes_it(tmp_path, record_dir, monkeypatch):
+    repo_a, repo_b = tmp_path / "a", tmp_path / "b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _stub_live(monkeypatch, True, "live")
+    nomination.claim(str(repo_a), "sid-a", directory=record_dir)
+    assert nomination.box_holder(record_dir)["session_id"] == "sid-a"
+
+    nomination.claim(str(repo_b), "sid-b", directory=record_dir)
+    box = nomination.box_holder(record_dir)
+    assert box["session_id"] == "sid-b" and box["live"] is True
+    # repo a's per-repo record still names sid-a: stale against the box holder, not a rival.
+    assert nomination.read_record(str(repo_a.resolve()), record_dir)["session_id"] == "sid-a"
+
+
+def test_box_record_is_not_listed_as_a_repo_record(repo_root, record_dir):
+    nomination.claim(repo_root, "sid-a", directory=record_dir)
+    assert [p.name for p in record_dir.glob("*.json")] == [nomination._record_path(repo_root, record_dir).name]
+
+
+def test_box_holder_none_without_record_or_unverified(repo_root, record_dir, monkeypatch):
+    assert nomination.box_holder(record_dir) is None
+    nomination.claim(repo_root, "sid-h", directory=record_dir)
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "pending"})
+    assert nomination.box_holder(record_dir) is None

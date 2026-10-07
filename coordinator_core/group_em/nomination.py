@@ -12,7 +12,9 @@ and the claim cannot disagree about a holder. They never write, lock or claim.
 
 Purpose: exactly one Group EM per repo is a filesystem invariant expressed by ONE JSON file per
 repo under ``<settings-home>/state/group-em/<repo-key>.json`` -- machine-global, in NEITHER
-repo's tree. This module is the in-plane reader/claimer for ``groupem.enter`` (C5); the record
+repo's tree. The standing itself is box-wide: every claim also writes
+``<settings-home>/state/group-em/box/holder.json``, read by `box_holder()`, and a per-repo record
+naming any other session is stale. This module is the in-plane reader/claimer for ``groupem.enter`` (C5); the record
 shape and repo-key derivation are mirrored from the reference script above, not imported from it
 -- that repo's shell-out carve-out list does not name this site.
 
@@ -111,6 +113,13 @@ def _record_path(repo_root: str, directory: Optional[Path] = None) -> Path:
     return base / f"{repo_key(repo_root)}.json"
 
 
+def _box_record_path(directory: Optional[Path] = None) -> Path:
+    """The ONE box-wide holder record. In its own subdirectory so nothing that lists the per-repo
+    records ever reads it as one."""
+    base = directory if directory is not None else settings_home() / "state" / "group-em"
+    return base / "box" / "holder.json"
+
+
 def _write_json_atomic(target: Path, record: dict) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     handle, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
@@ -188,6 +197,13 @@ def _build_record(
     return record
 
 
+def _write_claim(repo_root: str, record: dict, directory: Optional[Path]) -> None:
+    """The standing is box-wide: the entering repo's record and the box record are the same claim,
+    so a per-repo record another session holds elsewhere is stale, never a rival."""
+    _write_json_atomic(_record_path(repo_root, directory), record)
+    _write_json_atomic(_box_record_path(directory), record)
+
+
 class NotHumanEnteredError(RuntimeError):
     """The claim carries no prompt_id or a malformed session id; no record was written."""
 
@@ -239,6 +255,20 @@ def read_authoritative(
     return record
 
 
+def box_holder(directory: Optional[Path] = None, now: Optional[float] = None) -> Optional[dict]:
+    """The box-wide holder, verified exactly as `read_authoritative` verifies a per-repo record,
+    plus ``live``/``live_reason``; None for no record, a pending claim or a rejected one. A
+    per-repo record whose ``session_id`` differs from this holder's is stale."""
+    try:
+        record = json.loads(_box_record_path(directory).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or entry_status(record, now, directory)["status"] != "verified":
+        return None
+    liveness = is_live(record)
+    return {**record, "live": liveness.live, "live_reason": liveness.live_reason}
+
+
 def claim(
     repo_root_str: str,
     session_id: str,
@@ -284,7 +314,7 @@ def claim(
 
     if existing is None:
         record = _build_record(repo_root, session_id, peer_name, nominated_by, note, entry_evidence)
-        _write_json_atomic(_record_path(repo_root, directory), record)
+        _write_claim(repo_root, record, directory)
         return {
             "claimed": True,
             "holder": session_id,
@@ -296,7 +326,7 @@ def claim(
     incumbent_sid = str(existing.get("session_id") or "")
     if incumbent_sid == session_id:
         record = _build_record(repo_root, session_id, peer_name, nominated_by, note, entry_evidence)
-        _write_json_atomic(_record_path(repo_root, directory), record)
+        _write_claim(repo_root, record, directory)
         return {
             "claimed": True,
             "holder": session_id,
@@ -324,7 +354,7 @@ def claim(
         record["replaced_holder_name"] = displaced["peer_name"]
         record["replaced_nominated_at"] = displaced["nominated_at"]
         record["replaced_live_reason"] = liveness.live_reason
-    _write_json_atomic(_record_path(repo_root, directory), record)
+    _write_claim(repo_root, record, directory)
     return {
         "claimed": True,
         "holder": session_id,
