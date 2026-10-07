@@ -144,7 +144,7 @@ def test_recommendation_present_still_emits_full_judgment_point_unchanged_dispos
     )
     assert jp["id"] == "jgate"
     assert jp["recommendation"] == {"disposition": "cleared", "rationale": "shipped, resolvable sha"}
-    assert jp["reason"] is None
+    assert "reason" not in jp
     # Dispositions/resolves are IDENTICAL to the no-recommendation shape —
     # a recommendation narrows what the EM reads, never the EM's own
     # dispositions or what resolving each one clears (negative spec 4).

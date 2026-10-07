@@ -4089,7 +4089,7 @@ class TestEmitDirectValidation:
                     {
                         "id": "j-raw",
                         "question": "?",
-                        "dispositions": [],
+                        "dispositions": [{"value": "resolve"}],
                         "recommendation": None,
                         "reason": "insufficient-evidence",
                     },
@@ -4218,7 +4218,7 @@ class TestJudgmentPointConstructorRequiresRecommendation:
             recommendation,
         )
         assert jp["recommendation"] == recommendation
-        assert jp["reason"] is None
+        assert "reason" not in jp
 
     def test_recommendation_rejects_a_confidence_field(self):
         with pytest.raises(ValueError):
