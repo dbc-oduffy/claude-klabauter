@@ -160,6 +160,28 @@ def _scoped_test_call(agent_type_host: Optional[str]) -> str:
     return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
 
 
+_USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
+HALT_USAGE_LIMIT = "usage_limit"
+
+
+def _usage_limit_helper_js() -> str:
+    """`_haltOnUsageLimit(e)`: a limit-shaped agent failure becomes a resumable `_halted`; any other error rethrows.
+
+    The run id the harness resumes from is not visible to the script, so the halt carries a hint to
+    read it from the Workflow result.
+    """
+    return (
+        f"  const _USAGE_LIMIT_RE = {_USAGE_LIMIT_RE};\n"
+        "  function _haltOnUsageLimit(e) {\n"
+        "    const msg = String((e && (e.message ?? e)) ?? '');\n"
+        "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
+        f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
+        "resume_from_run_id: 'this Workflow run id (wf_...)', "
+        "next_action: 'After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id.' };\n"
+        "  }"
+    )
+
+
 _PLAN_SLOT = "PLAN_PATH_SLOT_X"
 _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
 _JUDGE_PATH_CLAUSE = (
@@ -384,6 +406,7 @@ def compose_ask_script(
     if blitz_fn:
         b.append(blitz_fn)
     b.append(_row_runner_js())
+    b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = null;")
     if judge_expr is not None:
@@ -496,7 +519,7 @@ def compose_ask_script(
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID } "
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID, ...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
         ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, session_id: _SESSION_ID })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
@@ -595,17 +618,21 @@ def compose_ask_script(
     if judge_expr is None:
         b.append(f"  if (!_halted && {test_guard}) {{")
         b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+        b.append("    try {")
         b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
+        b.append("    } catch (e) { _haltOnUsageLimit(e); }")
         b.append("  }")
     else:
         b.append("  if (!_halted) {")
         b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
+        b.append("    try {")
         b.append(
             f"    [{_emit._TEST_RESULT_VAR}, {_emit._FALSIFIER_RESULT_VAR}] = await parallel([\n"
             f"      () => ({test_guard}) ? {_scoped_test_call(agent_type_host)} : null,\n"
             f"      () => {_emit._never_stranding_criterion(judge_expr, judge=True)},\n"
             "    ]);"
         )
+        b.append("    } catch (e) { _haltOnUsageLimit(e); }")
         b.append("  }")
     review_vars = _emit.review_stage_vars(
         review,
@@ -627,7 +654,7 @@ def compose_ask_script(
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
-        "blocked: _blockedChunks, unanswered: _unansweredBriefs, "
+        "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "

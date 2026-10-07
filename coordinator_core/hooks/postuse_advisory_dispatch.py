@@ -57,6 +57,9 @@ Translation notes:
     (new) first-Agent-dispatch  → _check_first_agent_dispatch_sync (session_id + tool_name)
     (fan-in) unauthorized-handoff → nudge_unauthorized_handoff.advisory_text
                                     (tool_name + file_path + content + transcript_path)
+    (new) hand-written-plan     → nudge_hand_written_plan.advisory_text (Write to docs/plans/
+                                    without plan_id; names artifact.adopt; merges after the
+                                    unauthorized-handoff text)
     (new) group-em-watch-arm    → _check_group_em_watch_arm_sync
                                     (session_id + transcript_path)
     (new) workflow-run capture  → _capture_workflow_run_record_sync (bookkeeping only,
@@ -85,7 +88,7 @@ from typing import Any, Mapping, Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks._payload import field
-from coordinator_core.hooks import nudge_unauthorized_handoff
+from coordinator_core.hooks import nudge_hand_written_plan, nudge_unauthorized_handoff
 from coordinator_core.session.autonomous_sentinel import sentinel_path
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
@@ -2100,9 +2103,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     # The other three fail-open when session_id is absent, but short-circuit
     # early here to skip asyncio.to_thread overhead when there's nothing to do.
+    hw_coro = nudge_hand_written_plan.advisory_text(
+        tool_name, file_path, content, session_id, repo_root
+    )
+
     if not session_id:
         uh_text = await _leg_text("unauthorized_handoff", uh_coro)
-        return post_advisory(uh_text) if uh_text else no_advisory()
+        hw_text = await _leg_text("hand_written_plan", hw_coro)
+        texts = [text for text in (uh_text, hw_text) if text]
+        return post_advisory("\n\n".join(texts)) if texts else no_advisory()
 
     # Run all five checks plus the silent capture leg concurrently — they use
     # disjoint sentinel namespaces.
@@ -2170,6 +2179,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if tool_name in _TOUCH_RECORDING_TOOLS and touch_path
             else _idle()
         ),
+        hw_coro,
         return_exceptions=True,
     )
     labels = (
@@ -2196,7 +2206,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if isinstance(touch_result, BaseException):
         _text_or_breadcrumb("write_touch_record", touch_result)
 
-    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, ge_text) if text]
+    hw_text = _text_or_breadcrumb("hand_written_plan", results[8])
+
+    texts = [text for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text) if text]
     if texts:
         return post_advisory("\n\n".join(texts))
     return no_advisory()

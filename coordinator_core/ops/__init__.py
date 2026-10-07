@@ -171,6 +171,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
+    ("coordinator_core.ops.artifact_adopt", 'registers "artifact.adopt"'),
     ("coordinator_core.ops.goals_match", 'registers "goal.match_candidates"'),
     ("coordinator_core.ops.plan_match", 'registers "plan.match_candidates"'),
     ("coordinator_core.ops.plan_capture_persist", 'registers "plan.persist_capture"'),

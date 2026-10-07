@@ -425,7 +425,7 @@ def _classify_receiver_for_draft(to: str, dry_run: bool):
 
 
 def _validate_draft_params(params: dict):
-    dry_run = params.get("dry_run")
+    dry_run = params.get("dry_run", False)
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
             _MODE, dry_run,
@@ -490,7 +490,8 @@ def _validate_draft_params(params: dict):
         return build_setup_error_result(
             _MODE, dry_run,
             f"memo.draft: kind {kind!r} is not a valid enum value "
-            f"(must be one of: {', '.join(_VALID_KINDS)}).",
+            f"(must be one of: {', '.join(_VALID_KINDS)}). "
+            f"Answering an inbound memo: use in_reply_to, not a new kind.",
         )
 
     scoped_to = params.get("scoped_to")

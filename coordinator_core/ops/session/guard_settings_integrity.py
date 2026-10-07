@@ -898,6 +898,13 @@ class HookDeliveryReport:
         return self.content_root_error is not None and self.settings_present
 
 
+def _is_cloud_only_probe(command: str) -> bool:
+    """True for the settings-only `cloud_path_probe.py` entry that
+    `scripts/cloud_setup.py` declares by design; it has no plugin-side twin."""
+    token = _extract_script_token(command)
+    return token is not None and token.replace("\\", "/").endswith("/cloud_path_probe.py")
+
+
 def _tail_key(token: str) -> Optional[str]:
     """Root-independent join key for a script-shaped hook command token --
     its last two path segments (e.g. `scripts/foo.py`, lower-cased),
@@ -1014,8 +1021,11 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         if settings_data is not None:
             hooks_block = settings_data.get("hooks")
             if isinstance(hooks_block, dict) and hooks_block:
-                settings_present = True
-                settings_commands = _iter_hook_commands(hooks_block)
+                settings_commands = [
+                    c for c in _iter_hook_commands(hooks_block)
+                    if not _is_cloud_only_probe(c)
+                ]
+                settings_present = bool(settings_commands)
     settings_resolvable = settings_present and _script_commands_resolve(
         settings_commands, content_root
     )

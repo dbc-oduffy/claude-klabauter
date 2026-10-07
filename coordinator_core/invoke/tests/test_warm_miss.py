@@ -50,6 +50,21 @@ def test_permanent_reason_skips_wait_and_prints_loud_line_once(client, monkeypat
     assert "COLD: ENGINE_SKEW" in err
 
 
+def test_unstamped_by_ruling_prints_cold_by_design_not_defect(client, monkeypatch, capsys):
+    from coordinator_core.invoke.warm_miss import settle_warm_miss
+
+    reason = (
+        "warm engine: this clone carries no engine build stamp, so it is not a "
+        "warm-server host -- by ruling, not by defect."
+    )
+    monkeypatch.setattr(client, "last_cold_reason", lambda: reason)
+    assert settle_warm_miss(MSG) is None
+    err = capsys.readouterr().err
+    assert "ENGINE UNREACHABLE" not in err
+    assert "This is a defect" not in err
+    assert err.count("runs cold by design") == 1
+
+
 def test_expiry_prints_loud_line_once(client, monkeypatch, capsys):
     from coordinator_core.invoke.warm_miss import settle_warm_miss
 

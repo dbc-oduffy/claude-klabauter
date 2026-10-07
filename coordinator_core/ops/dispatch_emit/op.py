@@ -1310,7 +1310,7 @@ def _dispatch_emit(
         from coordinator_core.bash_guards._write_bump_applicability import declare_run_output_root
 
         pipeline_output_root = (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).resolve()
-        declare_run_output_root(pipeline_ctx["run_id"], str(pipeline_output_root))
+        declare_run_output_root(pipeline_ctx["run_id"], pipeline_output_root.as_posix())
 
     guarded_path.parent.mkdir(parents=True, exist_ok=True)
     guarded_path.write_text(script, encoding="utf-8", newline="")

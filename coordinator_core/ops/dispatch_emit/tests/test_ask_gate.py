@@ -125,7 +125,7 @@ def _composed_objects(op: str) -> list:
     return [
         [pair.split(":")[0].strip() for pair in body.split(",")]
         for body in re.findall(r"\{ ([^{}]*?) \}", expr)
-        if "run_id" in body or "sizing_path" in body
+        if ("run_id" in body or "sizing_path" in body) and not body.startswith("commit_sizing_path")
     ]
 
 

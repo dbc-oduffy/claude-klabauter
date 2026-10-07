@@ -268,9 +268,9 @@ class TestC3bMigratedGuardVerdictsUnchanged:
     ):
         import os
 
-        resolved = _plan_body_guard._resolve_git_dir(str(scratch_repo))
+        resolved = _plan_body_guard._resolve_git_root(str(scratch_repo))
         assert resolved is not None
-        assert os.path.basename(os.path.normpath(resolved)) == ".git"
+        assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
     def test_handoff_guard_allows_unprotected_write_outside_any_handoff(self, scratch_repo):
         payload = {
@@ -313,12 +313,12 @@ class TestD4MigratedGitDirResolversUnchanged:
     def test_plan_body_git_dir_resolves_absolute_inside_repo(self, scratch_repo):
         import os
 
-        resolved = _plan_body_guard._resolve_git_dir(str(scratch_repo))
+        resolved = _plan_body_guard._resolve_git_root(str(scratch_repo))
         assert resolved is not None
         assert os.path.isabs(resolved)
-        assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo / ".git"))
+        assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
     def test_plan_body_git_dir_none_outside_any_repo(self, tmp_path):
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
-        assert _plan_body_guard._resolve_git_dir(str(outside)) is None
+        assert _plan_body_guard._resolve_git_root(str(outside)) is None

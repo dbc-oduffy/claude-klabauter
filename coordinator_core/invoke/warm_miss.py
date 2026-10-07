@@ -246,6 +246,11 @@ def settle_warm_miss(msg: dict) -> Optional[dict]:
                 f"{msg.get('method')} path=in-process.",
                 file=sys.stderr,
             )
+        elif "carries no engine build stamp" in why:
+            print(
+                f"[warm-client] {msg.get('method')} runs cold by design: {why}",
+                file=sys.stderr,
+            )
         else:
             print(
                 f"[warm-client] ENGINE UNREACHABLE -- running {msg.get('method')} "

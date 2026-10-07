@@ -1001,6 +1001,24 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-212-handoff-lifecycle-inplace-frontmatter-mutation-carveout.md § D1/D2
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "handoff.normalize": OpClass.MUTATING,
+    # artifact.adopt — MUTATING: fills the producer-stamped frontmatter keys of ONE
+    # docs/plans/<name>.md plan; writes only when write is true, dry run otherwise.
+    # DR-208 five-question affirmation (citing ops/artifact_adopt.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      locked_rmw rewrites the one plan file's frontmatter (write=True and changed).
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The target plan file and locked_rmw's lock sidecar; nothing when write is absent.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      docs/plans/ is shared session-authored substrate.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The plan file is read by other ops, hooks and sessions.
+    # Bounds: single target file, path confined to the worktree and to docs/plans/<name>.md;
+    # idempotent (fill-if-absent, second run changed=false); bytes after the closing --- are
+    # verified unchanged or the write is refused; no git commit; no HTTP route.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    #            docs/plans/2026-10-06-artifact-adopt-plans.md § C3
+    "artifact.adopt": OpClass.MUTATING,
     # handoff.discharge_landed — MUTATING: stamps shipped_in/deployment_state on every baton of
     # the landed target plans and git-mvs them to archive/handoffs/ in one commit.
     "handoff.discharge_landed": OpClass.MUTATING,

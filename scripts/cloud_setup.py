@@ -1598,8 +1598,10 @@ def run_claude_klabauter_setup(report: Report) -> None:
         # only the last 40 lines, marked when truncated.
         all_lines = (result.stdout or "").rstrip().splitlines()
         tail_lines = all_lines if len(all_lines) <= 40 else ["... (earlier output omitted)", *all_lines[-40:]]
+        kept: dict = {}
+        _keep_failed_output(SETUP_OUTPUT_LOG, result.stdout, kept)
         raise RuntimeError(
-            f"scripts/setup.py exited {result.returncode}"
+            f"scripts/setup.py exited {result.returncode} (full output: {kept['output_log']})"
             + _hard_probe_failure_summary(result.stdout)
             + "\n--- combined output (tail) ---\n"
             + "\n".join(tail_lines)
@@ -2987,6 +2989,7 @@ _REPROBE_PAUSE_S = 0.5
 
 
 RAG_INSTALL_OUTPUT_LOG = Path("/root/example-retrieval-repo-cloud-install-output.log")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
+SETUP_OUTPUT_LOG = Path("/root/cloud-setup-setup-py-output.log")  # abs-path-ok: single-host cloud VM entrypoint (module docstring)
 _OUTPUT_TAIL_CHARS = 1500
 
 
