@@ -3435,6 +3435,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "sizing.ship": OpClass.MUTATING,
     # sizing.mark_routed — MUTATING: writes status: routed + goal_id under locked_rmw.
     "sizing.mark_routed": OpClass.MUTATING,
+    # review.reachability — COMPUTE_ONLY: one `git diff` read plus in-process file reads; writes nothing.
+    "review.reachability": OpClass.COMPUTE_ONLY,
     # sizing.discharge_surfaced — MUTATING: writes `pm_resolution` under locked_rmw
     # (2026-09-11; see coordinator_core/ops/sizing_discharge_surfaced.py docstring —
     # it never writes `surfaced_to_pm`, which stays listed).
@@ -4704,15 +4706,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # path.
     "baton.carry_forward": OpClass.MUTATING,
     "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
-
-    # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
-    # appends one line to `.git/coordinator-sessions/<sid>/pm_turns.jsonl`
-    # under `held_lock`.
-    #
-    # baton.pm_turns — COMPUTE_ONLY: `read_turns` reads that file through
-    # `_load` only; no lock, no write primitive on this path.
-    "baton.pm_turn_append": OpClass.MUTATING,
-    "baton.pm_turns": OpClass.COMPUTE_ONLY,
 
     # warm.request_status — COMPUTE_ONLY (D5, docs/plans/2026-09-23-warm-
     # dispatch-reconcile.md § C4): a pure poll read of the accept process's

@@ -9,7 +9,6 @@ from coordinator_core.session.grant import (
     write_tier_u_grant,
 )
 from coordinator_core.session import core as _session_core
-from coordinator_core.session.suite_authority import suite_authority
 
 ARGS_INVALID = object()
 
@@ -66,11 +65,8 @@ def parse_check_args(rest: list[str]):
 def run_grant_directive(args: list[str], *, repo_root: Optional[str] = None) -> Tuple[int, str]:
     """Execute one `grant`/`revoke`/`check` directive in-process. Returns
     `(exit_code, message)`; `message` is diagnostic text for a non-zero code
-    and empty on success — except a successful `check`, whose message is the
-    one line `basis: cloud-box` or `basis: grant`. The caller decides where
-    it goes (stderr/stdout for the CLI, the apply report for a ceremony).
-    `check` answers suite authority (cloud-box or a live grant), not grant
-    presence; it cannot see caller identity.
+    and empty on success — the caller decides where it goes (stderr for the
+    CLI, the apply report for a ceremony).
 
     `repo_root` defaults to `None`, so `merge_assemble`'s existing call
     (which never passes it) is byte-for-byte unchanged and resolves the
@@ -111,12 +107,9 @@ def run_grant_directive(args: list[str], *, repo_root: Optional[str] = None) -> 
         parsed = parse_check_args(rest)
         if parsed is ARGS_INVALID:
             return EXIT_USAGE, "check"
-        authority = suite_authority(repo_root)
-        if authority.authorized:
-            return EXIT_OK, f"basis: {authority.basis}"
         granted, record = check_tier_u_grant(repo_root) if repo_root is not None else check_tier_u_grant()
         if granted:
-            return EXIT_OK, "basis: grant"
+            return EXIT_OK, ""
         if record is None:
             return EXIT_FALSE, "check: no Tier-U grant found for this session"
         resolved_sid = _session_core.resolve_session_id(repo_root)

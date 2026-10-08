@@ -289,7 +289,6 @@ from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFai
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
-from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
 from coordinator_core.workstream_complete import judgments as _judgments
 from coordinator_core.contract.apply_base import assert_dispatchable
 from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
@@ -931,32 +930,6 @@ def _fill_completion_entry_surfaces(
     except AuthoredSurfaceMissing as exc:
         return f"{entry.name} left placeholder; set decisions key(s): {', '.join(exc.keys)}"
     return None
-
-
-def _run_post_close_directives(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Dispatches the directives held back for after the close commit (those
-    carrying `AFTER_CLOSE_COMMIT_KEY`), in list order, each through the same
-    closed `_CLI_DISPATCH` seam as the main pass. Returns one record per
-    directive: `id`, `exit_code`, and `output` when the CLI printed anything
-    (a skip reason, a signal), or `error` when dispatch itself raised.
-
-    Never raises and never moves apply's exit code: the commit these follow
-    has already landed, and each CLI reports its own skip.
-    """
-    results: list[dict[str, Any]] = []
-    for directive in directives:
-        record: dict[str, Any] = {"id": directive["id"]}
-        try:
-            outcome = _dispatch_directive(directive)
-        except (Exception, SystemExit) as exc:  # noqa: BLE001 - best-effort by contract; a CLI can `sys.exit` at import
-            record["error"] = f"{type(exc).__name__}: {exc}"
-        else:
-            record["exit_code"] = outcome["exit_code"]
-            output = (outcome["stdout"] or outcome["stderr"] or "").strip()
-            if output:
-                record["output"] = output
-        results.append(record)
-    return results
 
 
 def _execute_directives(
@@ -1871,8 +1844,6 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL), brief_transport_fail_report
 
         directives = envelope.get("directives", [])
-        post_close = [d for d in directives if d.get(AFTER_CLOSE_COMMIT_KEY)]
-        directives = [d for d in directives if not d.get(AFTER_CLOSE_COMMIT_KEY)]
         judgment_points = envelope.get("judgment_points", [])
         effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
@@ -2015,21 +1986,6 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # nothing new to commit.
             push_report = _run_push_outstanding_tail(worktree_root)
             report["push"] = push_report
-
-            # Only a close that completed and whose commit step ran clean has a
-            # committed tree for these to act on. A halted, partial or failed
-            # pass also reaches this line, as does one that attempted no commit.
-            if (
-                exit_code == int(WorkstreamApplyExitCode.SUCCESS)
-                and (close_commit_report or {}).get("attempted")
-                and not (close_commit_report or {}).get("commit_failed")
-            ):
-                report["post_close"] = _run_post_close_directives(post_close)
-                # The fold above commits after the tail's own release, so a
-                # path it touched would otherwise stay claimed.
-                directives_commit_tail._release_committed_path_claims(  # noqa: SLF001 - same seam as the tail's own release
-                    worktree_root, sid or "", ()
-                )
 
             # A FAILED PUSH DOES NOT DOWNGRADE A SUCCEEDED COMMIT (2026-08-27).
             # This block used to read `push_status == "push-failed" and

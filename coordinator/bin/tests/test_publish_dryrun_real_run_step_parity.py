@@ -2,20 +2,18 @@
 regression guard (`docs/plans/2026-09-11-publish-build-verify-swap-one-staging-pa.md`
 chunk C2).
 
-With C1 landed, every percolate-engine phase `process_target` dispatches runs
-in both `--dry-run` and a real run against the staging copy (§ C1) — the ONE
-exception is `_swap_publish_staging_into_dest`, withheld under dry-run and
-declared as the sole real-run-only `process_target`-owned phase via
-`publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES`.
+Every percolate-engine phase `process_target` dispatches runs in both
+`--dry-run` and a real run against the empty staging directory; the set of
+real-run-only `process_target`-owned phases,
+`publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES`, is empty.
 
 This file drives the REAL `process_target` (never a stub of the fork itself)
 twice over the same fixture row — once with `dry_run=True`, once with
 `dry_run=False` — threading a `timing_sink` through both runs to collect the
 exact `_time_phase` labels `process_target` dispatches in each mode, and
 asserts the two label sets differ by EXACTLY
-`publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES` — not merely that the swap
-label is present/absent, but that no OTHER phase silently gained or lost
-dry-run reachability as a side effect of this refactor.
+`publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES`, so no phase silently gains or
+loses dry-run reachability.
 
 Percolate-engine dispatch functions are monkeypatched to lightweight fakes
 (mirrors `test_publish_dryrun_builds_staging.py`'s own pattern) so the run
@@ -93,7 +91,7 @@ def _wire_common_fakes(monkeypatch, *, src_dir: Path):
     )
     monkeypatch.setattr(publish, "dispatch_percolate_pre_rsync", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_standalone_guards", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "sync_manifest", lambda src, dst, totals, dry_run, out: True)
+    monkeypatch.setattr(publish, "sync_manifest", lambda src, dst, totals, dry_run, out, **kw: True)
     monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_preswap_function_gate", lambda *a, **k: True)
     monkeypatch.setattr(
@@ -120,11 +118,6 @@ def _wire_common_fakes(monkeypatch, *, src_dir: Path):
     monkeypatch.setattr(publish, "dispatch_percolate_post_rsync", fake_post_rsync)
     monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
-    monkeypatch.setattr(
-        publish,
-        "_swap_all_rows_into_dest",
-        lambda *a, **k: None,
-    )
 
 
 def _run_process_target(tmp_path, monkeypatch, *, row_name: str, dry_run: bool) -> "list[tuple]":
@@ -173,12 +166,9 @@ def test_dryrun_and_real_run_phase_sets_differ_by_exactly_the_swap(tmp_path, mon
     dry_run_phases = {phase for (_row, phase, _wall, _cpu) in dry_run_timings}
     real_run_phases = {phase for (_row, phase, _wall, _cpu) in real_run_timings}
 
-    # DR-445 (docs/decisions/DR-445-publish-assembles-in-a-throwaway-and-
-    # moves-once.md): `process_target` no longer performs the swap in either
-    # run mode — it moved to the round orchestrator (`_run_round_dr445` /
-    # `_swap_all_rows_into_dest`), which runs it once per round, after every
-    # gate, never inside `process_target`. The two phase sets are therefore
-    # IDENTICAL now, and `PROCESS_TARGET_REAL_RUN_ONLY_PHASES` is empty.
+    # `process_target` writes no destination in either run mode: `_run_round` lands the diff
+    # once per round, after every gate. The two phase sets are therefore IDENTICAL, and
+    # `PROCESS_TARGET_REAL_RUN_ONLY_PHASES` is empty.
     assert dry_run_phases.issubset(real_run_phases)
 
     assert real_run_phases - dry_run_phases == publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES
@@ -186,5 +176,5 @@ def test_dryrun_and_real_run_phase_sets_differ_by_exactly_the_swap(tmp_path, mon
     assert real_run_phases == dry_run_phases
 
     assert publish.PROCESS_TARGET_REAL_RUN_ONLY_PHASES <= real_run_phases
-    assert "_swap_all_rows_into_dest" not in real_run_phases
-    assert "_swap_all_rows_into_dest" not in dry_run_phases
+    assert "land_diff" not in real_run_phases
+    assert "land_diff" not in dry_run_phases

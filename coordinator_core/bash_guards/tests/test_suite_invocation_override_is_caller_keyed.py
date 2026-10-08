@@ -78,16 +78,8 @@ class TestCloudBoxAllowsBroadSuiteForEm:
         }
 
     def test_cloud_em_runs_with_no_grant(self, monkeypatch):
-        # Pin the machine rung: the cloud basis needs a cloud machine, and the host running
-        # this test usually isn't one.
-        from coordinator_core import env_locality
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-        monkeypatch.setattr(env_locality, "machine_rung", lambda *a, **k: env_locality.Locality("cloud", "high", "machine", "test"))
-        monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
-        # Cloud-box discharges the authority leg only; the suite-mutex wrapper leg still binds.
-        payload = self._em({"CLAUDE_CODE_REMOTE": "true"})
-        payload["tool_input"]["command"] = "with-suite-mutex -- " + _CMD
-        assert guard.check(payload) is None
+        assert guard.check(self._em({"CLAUDE_CODE_REMOTE": "true"})) is None
 
     def test_local_em_without_grant_is_denied(self, monkeypatch):
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))

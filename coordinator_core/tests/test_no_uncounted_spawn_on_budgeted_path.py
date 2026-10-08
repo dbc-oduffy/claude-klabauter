@@ -1252,14 +1252,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/baton_carry_forward.py",
         ("_carry_forward_read",),
     ),
-    "baton.pm_turn_append": (
-        "coordinator_core/ops/baton_pm_turns.py",
-        ("_pm_turn_append",),
-    ),
-    "baton.pm_turns": (
-        "coordinator_core/ops/baton_pm_turns.py",
-        ("_pm_turns",),
-    ),
     "changelog.upsert_reviewed": (
         "coordinator_core/ops/changelog_ops.py",
         ("_upsert_reviewed_handler",),
@@ -2340,6 +2332,9 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
+    "review.reachability": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
+    ),
     "review.snapshot_diff_and_head": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -2400,6 +2395,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "research.restructure_for_repeat_topic": ("coordinator_core/ops/research_dir_restructure.py", "_handler"),
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
+    "review.reachability": ("coordinator_core/ops/review_reachability.py", "_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session_ledger.aggregate_chain_loe": (
@@ -2434,7 +2430,7 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     hand-picked one -- and asserts it against the frozen disposition, byte for byte, per op.
     A site the live tree adds or drops without this dict being updated in the SAME change fails
     here, matching `test_cluster_d2_open_disposition_matches_live_measurement`'s own precedent.
-    Also asserts the total pair count (58) and the entrypoint-resolves-to-a-real-function
+    Also asserts the total pair count (59) and the entrypoint-resolves-to-a-real-function
     precondition."""
     for op_key, (relpath, func_name) in _CLUSTER_D3_OPEN_ENTRYPOINTS.items():
         assert op_key in _CLUSTER_D3_OPEN_DISPOSITION, f"{op_key} has an entrypoint but no disposition entry"
@@ -2499,9 +2495,10 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # `git_state.head_blobs` (the ls-tree fallback memo.send's legitimation names): 56 + 1 = 57.
     # 57 -> 56 (2026-10-03): `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py` and no longer reaches `git_native.py::_git._invoke`: -1.
-    assert total_pairs == 58, (
+    # 58 -> 59 (2026-10-08): new op `review.reachability` reaches `git/run.py::run_git`: +1.
+    assert total_pairs == 59, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "58 measured 2026-10-08 (56 on 2026-10-03; +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -6870,6 +6867,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
     "review.freeze_diff": 2,
     "review.partition_slices": 3,
+    "review.reachability": 1,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
     "session.commits": 1,

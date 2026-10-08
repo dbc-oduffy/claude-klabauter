@@ -130,14 +130,13 @@ def test_round_pin_source_sha_error_degrades_to_per_row_skip_pattern(tmp_path):
     assert pinned == {}
 
 
-def test_delta_row_source_sha_reads_through_round_pin_not_fresh_head(tmp_path, monkeypatch):
+def test_round_plan_head_reads_through_round_pin_not_fresh_head(tmp_path):
     source_repo = tmp_path / "source"
     _init_repo(source_repo)
     (source_repo / "f.txt").write_text("v1", encoding="utf-8")
     head1 = _commit_all(source_repo, "v1")
 
     target = _make_target("sample", tmp_path / "dest", source_repo)
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
 
     pinned: "dict[str, str]" = {}
     publish._round_pin_source_sha(source_repo, pinned, out=io.StringIO(), late=False)
@@ -145,8 +144,11 @@ def test_delta_row_source_sha_reads_through_round_pin_not_fresh_head(tmp_path, m
     (source_repo / "f.txt").write_text("v2", encoding="utf-8")
     _commit_all(source_repo, "v2")
 
-    sha = publish._delta_row_source_sha(target, pinned)
-    assert sha == f"{source_repo}:{head1}"
+    plan = publish._plan_round_for_root(
+        tmp_path / "dest", [target],
+        full_sweep=True, signature="sig", round_pinned_shas=pinned, publish_sync_module=object(),
+    )
+    assert plan.head == head1
 
 
 def test_attribute_identity_finding_row_longest_prefix_wins(tmp_path):

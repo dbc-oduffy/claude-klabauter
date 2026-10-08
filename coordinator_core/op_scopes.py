@@ -398,6 +398,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.decline":                           "common_dir",
     "sizing.ship":                               "common_dir",
     "sizing.mark_routed":                        "common_dir",
+    "review.reachability":                       "show_top",
     "sizing.discharge_surfaced":                 "common_dir",
     "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_xl_exit":                      "common_dir",
@@ -465,8 +466,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session_baton.promote":                 "none",
     "baton.carry_forward":                   "common_dir",
     "baton.carry_forward_read":              "common_dir",
-    "baton.pm_turn_append":                  "common_dir",
-    "baton.pm_turns":                        "common_dir",
     "session.reap":                          "common_dir",
     "session.audit_unreapable":               "common_dir",
     # session.boot_sweep — GRAVESTONED 2026-08-27, K-059. No scope row, because

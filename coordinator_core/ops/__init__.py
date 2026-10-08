@@ -364,6 +364,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "review-diff-freeze-op-wanted.md)",
     ),
     ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
+    ("coordinator_core.ops.review_reachability", 'registers "review.reachability" (2026-10-08, wired-up gate entry-point and click-path reachability)'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
@@ -466,7 +467,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_commits", 'registers "session.commits"'),
     ("coordinator_core.ops.session_baton_mint", 'registers "session_baton.mint"'),
     ("coordinator_core.ops.session_baton_promote", 'registers "session_baton.promote"'),
-    ("coordinator_core.ops.baton_pm_turns", 'registers "baton.pm_turn_append", "baton.pm_turns"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
     ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
     ("coordinator_core.ops.write_identity_file", 'registers "install.write_identity_file"'),

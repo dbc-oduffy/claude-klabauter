@@ -121,7 +121,7 @@ def test_terminal_commit_reply_names_the_unsent_memo(tmp_path):
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 
     for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("a\n", encoding="utf-8")

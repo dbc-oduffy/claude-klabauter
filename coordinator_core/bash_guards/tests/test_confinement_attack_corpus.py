@@ -385,11 +385,6 @@ XFAIL_BYPASSES: Dict[Tuple[str, str], str] = {
     # 879-process incident and did not). `_FIND_WRAPPER_WORDS` (9 words:
     # sudo/command/time/env/nice/nohup/exec/timeout/stdbuf) still has neither
     # `setsid` nor `busybox` in it.
-    ("runaway-find", "setsid_wrapper"): (
-        "LIVE BYPASS: check_runaway_find's `_FIND_WRAPPER_WORDS` does not "
-        "include `setsid` -- the Staff Engineer staff-eng review 2026-07-29 Finding 3, "
-        "verified live (`setsid find` allows)"
-    ),
     ("runaway-find", "busybox_wrapper"): (
         "LIVE BYPASS: check_runaway_find's `_FIND_WRAPPER_WORDS` does not "
         "include `busybox` -- the Staff Engineer staff-eng review 2026-07-29 Finding 3, "

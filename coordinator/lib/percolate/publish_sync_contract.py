@@ -54,6 +54,19 @@ def accepted_keywords(source: str, symbol: str) -> "tuple[bool, set[str], bool]"
     return False, set(), False
 
 
+DIFF_SCALED_KEYWORDS = frozenset({"only_paths", "removed_sink", "enforce_guards"})
+
+
+def lacks_diff_scaled_keywords(source: str, symbol: str) -> "set[str]":
+    """The diff-scaled keywords (`only_paths`, `removed_sink`, `enforce_guards`) that `symbol`
+    does not accept in `source`; empty when it accepts both or a `**kwargs`
+    catch-all. An undefined symbol reports both as missing."""
+    defined, accepted, _bare = accepted_keywords(source, symbol)
+    if "**" in accepted:
+        return set()
+    return set(DIFF_SCALED_KEYWORDS) - accepted if defined else set(DIFF_SCALED_KEYWORDS)
+
+
 def would_refuse(override_path: Path) -> "list[str]":
     """The reasons a round would refuse this override, empty when it would
     not. Mirrors `check_publish_sync_contract`'s obligations in the order that

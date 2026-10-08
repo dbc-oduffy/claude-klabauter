@@ -317,7 +317,6 @@ def compose_ask_script(
     script_path: Optional[str] = None,
     plan_blitz_args: Optional[dict] = None,
     writes: Sequence[str] = (),
-    cross_repo_approved: bool = False,
     roadmap_blitz_text: Optional[str] = None,
     agent_type_host: Optional[str] = None,
     baton: Optional[dict] = None,
@@ -409,7 +408,6 @@ def compose_ask_script(
     b.append(f"  let _sizingRel = {_lit(sizing_rel) if sizing_rel else 'null'};")
     writes_literal = json.dumps(list(writes))
     b.append(f"  let _writes = {writes_literal};")
-    b.append(f"  const _crossRepoApproved = {'true' if cross_repo_approved else 'false'};")
     b.append("  let _planRel = null;")
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
@@ -529,11 +527,8 @@ def compose_ask_script(
         f"Run `{_INVOKE} {OP_ASK_STAGE} '",
         # ask_stage takes exactly one of plan_path / sizing_path: the plan
         # when a plan phase authored one, else the XS sizing.
-        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, "
-        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
-        "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
-        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, "
-        "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID })",
+        "js:JSON.stringify(_planRel ? { run_id: _runId, plan_path: _planRel, writes: _writes, session_id: _SESSION_ID, ...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) } "
+        ": { run_id: _runId, sizing_path: _sizingRel, writes: _writes, gated: _gated, session_id: _SESSION_ID })",
         "'` and return its JSON reply verbatim. If it replies `{\"error\": ...}`, return that "
         "message as `error` with run_dir and marker_path empty and rows and review_declared_paths "
         "empty -- never an empty manifest without the error.",

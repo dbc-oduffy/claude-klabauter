@@ -38,12 +38,6 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-@pytest.fixture(autouse=True)
-def _attended_machine_by_default(monkeypatch):
-    """Grant-path tests run on the attended-box basis even inside a cloud container."""
-    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
-
-
 def _make_repo(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
     subprocess.run(
@@ -287,7 +281,7 @@ class TestEnforceTierUGate:
             called["n"] += 1
             return False, None
 
-        monkeypatch.setattr(grant, "check_tier_u_grant", _spy)
+        monkeypatch.setattr(tier_u_gate, "check_tier_u_grant", _spy)
 
         result = tier_u_gate.enforce_tier_u_gate(
             "pytest coordinator_core", repo_root=str(repo), session_id="s1"
@@ -388,7 +382,7 @@ class TestEnforceTierUGate:
             called["n"] += 1
             return False, None
 
-        monkeypatch.setattr(grant, "check_tier_u_grant", _spy)
+        monkeypatch.setattr(tier_u_gate, "check_tier_u_grant", _spy)
         result = tier_u_gate.enforce_tier_u_gate(
             self._OPAQUE_WRAPPER, repo_root=str(repo), session_id="s1"
         )
@@ -468,7 +462,7 @@ class TestEnforceTierUGate:
             called["n"] += 1
             return False, None
 
-        monkeypatch.setattr(grant, "check_tier_u_grant", _spy)
+        monkeypatch.setattr(tier_u_gate, "check_tier_u_grant", _spy)
         result = tier_u_gate.enforce_tier_u_gate(
             tier_t_cmd, repo_root=str(repo), session_id="s1"
         )
@@ -945,60 +939,3 @@ class TestClassifierMustNeverLearnTheDeclarationKey:
             for mod in vars(guard).values()
             if inspect.ismodule(mod)
         )
-
-
-class TestCloudBoxAuthority:
-    _TIER_U = "pytest"
-    _TIER_F = "pytest coordinator_core"
-
-    @staticmethod
-    def _cloud(monkeypatch, rung="cloud"):
-        from types import SimpleNamespace
-
-        from coordinator_core import env_locality
-
-        monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
-        monkeypatch.setattr(env_locality, "machine_rung", lambda *a, **k: SimpleNamespace(call=rung))
-
-    @pytest.mark.parametrize("cmd", [_TIER_U, _TIER_F])
-    def test_cloud_basis_proceeds_without_grant(self, tmp_path, monkeypatch, cmd):
-        repo = _make_repo(tmp_path)
-        self._cloud(monkeypatch)
-        result = tier_u_gate.enforce_tier_u_gate(cmd, repo_root=str(repo), session_id="s1")
-        assert result.proceed is True
-
-    @pytest.mark.parametrize("cmd", [_TIER_U, _TIER_F])
-    def test_attended_machine_refuses_without_grant(self, tmp_path, monkeypatch, cmd):
-        repo = _make_repo(tmp_path)
-        self._cloud(monkeypatch, rung="attended")
-        result = tier_u_gate.enforce_tier_u_gate(cmd, repo_root=str(repo), session_id="s1")
-        assert result.proceed is False
-        assert "Tier-U grant" in result.refusal_message
-
-    def test_forged_marker_on_suspect_machine_refuses(self, tmp_path, monkeypatch):
-        repo = _make_repo(tmp_path)
-        self._cloud(monkeypatch, rung="suspect")
-        result = tier_u_gate.enforce_tier_u_gate(
-            self._TIER_U, repo_root=str(repo), session_id="s1"
-        )
-        assert result.proceed is False
-
-    @pytest.mark.parametrize("key", ["fast_test_cmd", "full_test_cmd"])
-    def test_own_suite_refusal_still_fires_in_cloud(self, tmp_path, monkeypatch, key):
-        repo = _make_repo(tmp_path)
-        (repo / "coordinator.local.md").write_text(
-            f"---\n{key}: pytest coordinator_core\n---\n"
-        )
-        self._cloud(monkeypatch)
-        result = tier_u_gate.enforce_tier_u_gate(
-            "pytest coordinator_core", repo_root=str(repo), session_id="s1"
-        )
-        assert result.proceed is False
-        assert "PYTEST_CURRENT_TEST" in result.refusal_message
-
-    def test_refusal_text_names_the_box_condition(self, tmp_path):
-        repo = _make_repo(tmp_path)
-        result = tier_u_gate.enforce_tier_u_gate(
-            self._TIER_U, repo_root=str(repo), session_id="s1"
-        )
-        assert "cloud-box session needs no grant" in result.refusal_message

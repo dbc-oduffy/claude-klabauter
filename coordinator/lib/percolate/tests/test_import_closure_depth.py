@@ -152,9 +152,7 @@ def test_coordinator_rooted_import_is_not_a_violation(tmp_path):
     mirror `c587c774` with their imports resolving there).
 
     A future widening that adds `coordinator` or `lib` to
-    `NEVER_PUBLISHED_ROOTS` fails this test, which is the point: the
-    assembled union is `assembled_mirror_gate`'s question, not this
-    gate's."""
+    `NEVER_PUBLISHED_ROOTS` fails this test, which is the point."""
     root = _tree(
         tmp_path,
         {

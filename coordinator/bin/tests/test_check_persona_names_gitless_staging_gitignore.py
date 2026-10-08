@@ -4,22 +4,17 @@ catching a real leak in published-surface content.
 
 ROOT CAUSE THIS PINS
 ---------------------
-`percolate`'s publish staging tree (`_create_publish_staging_dir`,
-`coordinator/bin/publish.py`) is built via `shutil.copytree(dest_dir,
-staging_dir, ignore=shutil.ignore_patterns(".git"))` -- `.git` is excluded,
-but gitignored content is NOT (`shutil.ignore_patterns` knows nothing about
-`.gitignore`). `check-persona-names.py`'s file enumeration
-(`_repo.repo_files`) is git-aware when `.git` is present (`git ls-files
---cached --others --exclude-standard`, which DOES honor `.gitignore`), but
-falls back to a plain `_walk_files` filesystem walk -- with NO gitignore
-awareness at all -- whenever `.git` is absent, which is exactly the staging
-tree's shape. A stray, gitignored runtime-state file
-(`state/session-hierarchy.<codename>.json`, observed live 2026-08-13) that a
-coordinator session wrote into the real destination tree via
-`coordinator_state_root`'s Rule 5 (sibling-repo state placement) therefore
-rode the copytree into the staging dir and tripped a FILE-PATH finding on a
-path that was never publishable in the first place (`state/` is gitignored
-by this repo's own tracked `.gitignore`).
+`percolate`'s publish staging trees (`_create_publish_staging_dir`,
+`coordinator/bin/publish.py`) carry no `.git`. `check-persona-names.py`'s file
+enumeration (`_repo.repo_files`) is git-aware when `.git` is present (`git
+ls-files --cached --others --exclude-standard`, which DOES honor
+`.gitignore`), but falls back to a plain `_walk_files` filesystem walk -- with
+NO gitignore awareness at all -- whenever `.git` is absent, which is exactly
+a staging tree's shape. A stray, gitignored runtime-state file
+(`state/session-hierarchy.<codename>.json`, observed live 2026-08-13) that
+reached such a tree tripped a FILE-PATH finding on a path that was never
+publishable in the first place (`state/` is gitignored by this repo's own
+tracked `.gitignore`).
 
 Spec backlink: state/audits/2026-08-13-persona-guard-staging-gitignore-gap.md
 """

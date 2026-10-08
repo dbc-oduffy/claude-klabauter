@@ -78,7 +78,7 @@ def test_writes_outside_repo_root_refused_and_nothing_written(repo, capsys):
     _put(repo, "XS")
     outside = (repo.parent / "other-repo" / "a.py").as_posix()
     rc = _emit(repo, "--writes", outside)
-    assert rc != 0 and "outside every git checkout" in capsys.readouterr().err
+    assert rc != 0 and "outside repo root" in capsys.readouterr().err
     assert _mjs(repo) == []
 
 

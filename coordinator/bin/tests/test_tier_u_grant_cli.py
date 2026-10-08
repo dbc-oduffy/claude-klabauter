@@ -41,13 +41,8 @@ def stub_import_module():
     orig_import = _cli._import_module
     orig_write = grant_directive.write_tier_u_grant
     orig_revoke = grant_directive.revoke_tier_u_grant
-    orig_check = grant_directive.check_tier_u_grant
-    orig_suite = grant_directive.suite_authority
-    from coordinator_core.session.suite_authority import SuiteAuthority
 
     def _apply(stub_grant):
-        grant_directive.check_tier_u_grant = stub_grant.check_tier_u_grant
-        grant_directive.suite_authority = lambda *a, **k: SuiteAuthority(False, None, None)
         _cli._import_module = lambda: stub_grant
         _cli._grant_directive_module = lambda: grant_directive
         grant_directive.write_tier_u_grant = stub_grant.write_tier_u_grant
@@ -57,8 +52,6 @@ def stub_import_module():
     _cli._import_module = orig_import
     grant_directive.write_tier_u_grant = orig_write
     grant_directive.revoke_tier_u_grant = orig_revoke
-    grant_directive.check_tier_u_grant = orig_check
-    grant_directive.suite_authority = orig_suite
 
 
 def test_grant_true_exits_0(stub_import_module):
@@ -115,30 +108,8 @@ def test_grant_dangling_ceremony_flag_exits_2(stub_import_module):
 
 def test_check_true_exits_0(stub_import_module):
     stub_import_module(_StubGrant(check_tier_u_grant=lambda *a, **k: (True, {"note": "x"})))
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = _cli.main(["check"])
+    rc = _cli.main(["check"])
     assert rc == 0
-    assert buf.getvalue().strip() == "basis: grant"
-
-
-def test_check_cloud_box_prints_basis(stub_import_module):
-    from coordinator_core.session import grant_directive
-    from coordinator_core.session.suite_authority import SuiteAuthority
-
-    stub_import_module(_StubGrant(check_tier_u_grant=lambda *a, **k: (False, None)))
-    grant_directive.suite_authority = lambda *a, **k: SuiteAuthority(True, "cloud-box", None)
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = _cli.main(["check"])
-    assert rc == 0
-    assert buf.getvalue().strip() == "basis: cloud-box"
-
-
-def test_help_states_check_answers_authority(capsys):
-    assert _cli.main(["help"]) == 0
-    out = capsys.readouterr().out
-    assert "cloud-box" in out and "caller identity" in out
 
 
 def test_check_false_exits_1(stub_import_module):

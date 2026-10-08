@@ -218,8 +218,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="a file in the ask's footprint (repeatable; --ask/--sizing only); "
-        "a path in a sibling checkout is a cross-repo write (see --cross-repo-approved); "
-        "a path outside every checkout is refused at emit",
+        "a path outside the repo root is refused at emit",
     )
     parser.add_argument(
         "--restamp",
@@ -388,12 +387,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="overwrite an --out path already holding a different session's emission",
-    )
-    parser.add_argument(
-        "--cross-repo-approved",
-        action="store_true",
-        help="plan/ask route: the PM approved this run's sibling-repo writes (the "
-        "approve_cross_repo_write touchpoint); implied on a remote venue",
     )
     parser.add_argument(
         "--chatty",
@@ -795,6 +788,21 @@ def _review_only_refusal(args) -> "Optional[str]":
     return None
 
 
+def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
+    """Print a --rejudge/--reverify-delivery emission; under --fire, fire it and print the
+    handle. Trap: a close route that drops --fire returns no handle, and a headless caller
+    reads that silence as a fire."""
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if not args.fire:
+        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
+        return EXIT_OK
+    from coordinator_core.ops.workflow_fire.fire import fire_workflow
+
+    fire_record = fire_workflow(result["path"], cwd=args.repo_root or None)
+    print(json.dumps(fire_record, indent=2, sort_keys=True))
+    return EXIT_OK
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -841,9 +849,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         except (ReverifyRefused, *_DATA_ERRORS) as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
-        print(json.dumps(result, indent=2, sort_keys=True))
-        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
-        return EXIT_OK
+        return _report_close_route_emit(result, args)
 
     if args.reverify_delivery is not None:
         if args.plan and not args.out_path:
@@ -873,9 +879,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         except (ReverifyRefused, *_DATA_ERRORS) as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
-        print(json.dumps(result, indent=2, sort_keys=True))
-        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
-        return EXIT_OK
+        return _report_close_route_emit(result, args)
 
     if args.restamp:
         if args.plan or args.inventory or args.out_path or args.fire:
@@ -1176,12 +1180,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force}
-    # Venue is read here, in the dispatching session's own env: the op body may
-    # run warm-served, where os.environ belongs to whoever spawned the server.
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
-
-    if args.cross_repo_approved or is_remote_venue():
-        params["cross_repo_approved"] = True
     if args.out_path:
         params["output_path"] = args.out_path
     if is_ask_route:
