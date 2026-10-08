@@ -58,11 +58,12 @@ def test_plans_writing_one_path_are_taken_together(tmp_path):
         [("a", "—"), ("b", "—"), ("c", "—")],
     )
     report, _, _ = _tranche(inv, 2)
-    # a+b are 3 rows together: deferred as a group; c fits.
-    assert report["plans"] == ["c"]
+    # a+b are 3 rows together, over the budget: split plan-by-plan. a (1 row)
+    # and c (1 row) fill the tranche; b waits for the next one.
+    assert report["plans"] == ["a", "c"]
     reasons = {d["plan"]: d["reason"] for d in report["deferred"]}
-    assert set(reasons) == {"a", "b"}
-    assert "src/shared.py" in reasons["a"] and "exceed row_budget 2 alone" in reasons["a"]
+    assert set(reasons) == {"b"}
+    assert "src/shared.py" in reasons["b"] and "split across tranches" in reasons["b"]
     report, _, _ = _tranche(inv, 3)
     assert report["plans"] == ["a", "b"]
 
@@ -209,3 +210,65 @@ def test_withholding_propagates_along_consumes(tmp_path):
     detail = {e["id"]: e["detail"] for e in exclusions}
     assert detail["S1"] == "withheld: consumes src/b1.ts written by withheld B1"
     assert detail["S2"].startswith("withheld: consumes src/s1.ts written by withheld S1")
+
+
+def _hub_set(tmp_path, n=6, rows_each=2):
+    names = [f"p{k}" for k in range(n)]
+    plans = {
+        nm: [_chunk(f"{nm.upper()}H", "src/hub.py")] + _n_rows(nm.upper(), rows_each - 1)
+        for nm in names
+    }
+    return _repo(tmp_path, plans, [(nm, "—") for nm in names]), names
+
+
+def test_oversize_hub_group_splits_across_passes_and_estimate_counts_it(tmp_path):
+    inv, names = _hub_set(tmp_path)  # six plans of 2 rows write src/hub.py: 12 rows
+    report, _, _ = _tranche(inv, 5)
+    assert report["plans"] == names[:2]
+    assert report["rows"] == 4
+    assert "unplaceable" not in report["remaining"]
+    assert report["remaining"] == {"passes_remaining": 2, "rows_remaining": 8}
+
+
+def test_group_that_fits_stays_whole(tmp_path):
+    inv, names = _hub_set(tmp_path, n=3)
+    report, _, _ = _tranche(inv, 6)
+    assert report["plans"] == names
+    assert report["remaining"]["passes_remaining"] == 0
+
+
+def test_only_a_single_over_budget_plan_is_unplaceable(tmp_path):
+    inv = _repo(
+        tmp_path,
+        {
+            "big": [_chunk("B0", "src/hub.py")] + _n_rows("BX", 4),
+            "s1": [_chunk("S0", "src/hub.py")],
+            "s2": [_chunk("T0", "src/hub.py")],
+            "dep": _n_rows("D", 1),
+        },
+        [("s1", "—"), ("s2", "—"), ("big", "—"), ("dep", "big")],
+    )
+    report, _, _ = _tranche(inv, 3)
+    assert report["plans"] == ["s1", "s2"]
+    remaining = report["remaining"]
+    assert remaining["unplaceable"] == ["big"]
+    assert remaining["blocked_by_unplaceable"] == ["dep"]
+    assert remaining["passes_remaining"] == 0
+    reasons = {d["plan"]: d["reason"] for d in report["deferred"]}
+    assert "exceed row_budget 3 alone" in reasons["big"]
+
+
+def test_part_review_specs_cover_only_that_parts_plans(tmp_path, monkeypatch, _review_loaders):
+    inv = _repo(
+        tmp_path,
+        {nm: _n_rows(nm.upper(), 2) for nm in ("a", "b", "c", "d")},
+        [(nm, "—") for nm in ("a", "b", "c", "d")],
+    )
+    seen: list = []
+    monkeypatch.setattr(
+        op_mod, "_inventory_review_specs", lambda inventory, only: seen.append(only) or []
+    )
+    _dispatch_emit(
+        {"inventory_path": str(inv), "target_root": str(tmp_path), "inventory_part": [1, 2]}
+    )
+    assert seen == [frozenset({"docs/plans/a.md", "docs/plans/b.md"})]

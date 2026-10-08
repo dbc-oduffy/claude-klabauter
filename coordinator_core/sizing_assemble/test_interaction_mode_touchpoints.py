@@ -5,7 +5,8 @@ Covers Design § Engine's touchpoint table and the mode-vs-size interaction:
 per-mode touchpoint ids at M (the AC table), the XS/S size rule that drops
 the sizing-stage touchpoint, `exit_criterion_pending` firing at every
 resized M+ regardless of mode or a passed statement, `post_size_prompt_
-pending` suppressed in `ceo` mode only, and route/stages equality across
+pending` suppressed in `ceo` mode and, outside hands-on, wherever the engine
+skips sizing acceptance (plan/dispatch XS-L), and route/stages equality across
 all three modes against a recorded table (never a re-derivation of C0's
 route logic).
 
@@ -141,9 +142,33 @@ class TestPostSizePromptSuppressedInCeoOnly:
         assert "post_size_prompt_pending" not in decision["detents"]
 
     @pytest.mark.parametrize("tshirt", ["M", "L", "XL", "XXL"])
-    @pytest.mark.parametrize("mode", ["hands-on", "pm"])
-    def test_hands_on_and_pm_keep_post_size_prompt_pending(self, tshirt, mode):
-        decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
+    def test_hands_on_keeps_post_size_prompt_pending_at_every_size(self, tshirt):
+        decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="hands-on")
+        assert "post_size_prompt_pending" in decision["detents"]
+
+    @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
+    def test_pm_keeps_post_size_prompt_pending_at_xl_plus(self, tshirt):
+        decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="pm")
+        assert "post_size_prompt_pending" in decision["detents"]
+
+    @pytest.mark.parametrize("tshirt", ["M", "L"])
+    def test_pm_drops_post_size_prompt_where_acceptance_skipped(self, tshirt):
+        decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode="pm")
+        assert decision["route"] == "plan"
+        assert "post_size_prompt_pending" not in decision["detents"]
+        assert "shall we go with that" not in decision["next_move"]
+
+    @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
+    def test_shape_route_keeps_prompt_except_ceo(self, mode):
+        decision = sa.route(
+            estimate={"tshirt": "L"}, interaction_mode=mode, jtbd_unclear=True
+        )
+        assert decision["route"] == "shape"
+        assert ("post_size_prompt_pending" in decision["detents"]) == (mode != "ceo")
+
+    def test_pm_decision_at_xl_keeps_prompt_in_pm_mode(self):
+        decision = sa.route(estimate={"tshirt": "XL"}, interaction_mode="pm")
+        assert decision["route"] == "pm-decision"
         assert "post_size_prompt_pending" in decision["detents"]
 
     def test_pm_decision_pending_unchanged_across_modes(self):

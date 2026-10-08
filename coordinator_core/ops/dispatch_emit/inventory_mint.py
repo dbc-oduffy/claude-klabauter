@@ -1526,41 +1526,59 @@ def _pick_groups(
     shared: Dict[str, str],
     row_budget: int,
 ) -> Tuple[List[str], Dict[str, str]]:
-    """Greedy fill in table order over whole groups: `(taken items, {item: why
-    deferred})`. A group is taken only when every prerequisite outside it is
-    already taken, and only if all of it fits; passes repeat so a group whose
-    prerequisite sits later in the table still lands."""
+    """Greedy fill in table order: `(taken items, {item: why deferred})`. A
+    group is taken only when every prerequisite outside it is already taken,
+    and only if all of it fits; passes repeat so a group whose prerequisite
+    sits later in the table still lands.
+
+    A shared-path group over the budget is exploded into single-plan units,
+    packed plan-by-plan in dependency order across sequential tranches. That is
+    safe because tranches fire strictly in sequence: two writers of one path in
+    different tranches never overlap, edge or no edge, and writers that land in
+    the same tranche are ordered or withheld by the emitter. Only a single plan
+    whose own rows exceed the budget can never be placed."""
+    units: List[Tuple[List[str], str]] = []
+    for group in groups:
+        total = sum(size[i] for i in group)
+        label = ""
+        if len(group) > 1:
+            label = f"plans {', '.join(group)} write the same path {shared.get(group[0], '')}; "
+        if len(group) > 1 and total > row_budget:
+            units.extend(
+                ([i], f"{label}{total} rows exceed row_budget {row_budget}, split across tranches; ")
+                for i in group
+            )
+        else:
+            units.append((group, label))
     taken: List[str] = []
     used = 0
-    undecided = list(groups)
+    undecided = list(units)
     reasons: Dict[str, str] = {}
     progress = True
     while progress:
         progress = False
-        for group in list(undecided):
+        for unit in list(undecided):
+            group, label = unit
             members = set(group)
             external = set().union(*(prereqs[i] for i in group)) - members
             blocking = sorted(p for p in external if p not in taken)
             total = sum(size[i] for i in group)
-            label = ""
-            if len(group) > 1:
-                label = f"plans {', '.join(group)} write the same path {shared.get(group[0], '')}; "
             if blocking:
                 why = f"{label}prerequisite {', '.join(blocking)} not in this tranche"
             elif total > row_budget:
                 why = f"{label}{total} rows exceed row_budget {row_budget} alone"
-                undecided.remove(group)
+                undecided.remove(unit)
             elif used + total > row_budget:
                 why = f"{label}{total} rows do not fit the remaining {row_budget - used} of row_budget {row_budget}"
             else:
                 taken.extend(group)
                 used += total
-                undecided.remove(group)
+                undecided.remove(unit)
                 progress = True
                 continue
             for i in group:
                 reasons[i] = why
-    for group in undecided:
+    for group, _ in undecided:
         for i in group:
             reasons.setdefault(i, "prerequisite not in this tranche")
     return taken, {i: r for i, r in reasons.items() if i not in taken}
@@ -1583,8 +1601,10 @@ def select_tranche(
     the tranche; an edge onto a landed item was dropped at mint (and a
     `depends_on_plan` predecessor already `coded` never withholds a row), so
     what remains is a live prerequisite. Items whose rows write one path
-    (`_shared_path_groups`) are taken or deferred together; a group over the
-    budget alone is deferred with that reason. A plan is never split; later
+    (`_shared_path_groups`) are taken or deferred together while the group
+    fits the budget; an oversize group is split plan-by-plan across sequential
+    tranches (`_pick_groups`). Only a single plan over the budget is
+    `unplaceable`. A plan is never split; later
     items that fit are still taken. Table items with no minted rows (withheld,
     routed out, fully landed) are `skipped`, never counted. `remaining`
     simulates further tranches at the same budget over the deferred set,
@@ -1625,7 +1645,11 @@ def select_tranche(
         passes += 1
     remaining = {"passes_remaining": passes, "rows_remaining": sum(size[i] for i in left)}
     if pending:
-        remaining["unplaceable"] = [i for i in left if i in pending]
+        stuck = [i for i in left if i in pending]
+        remaining["unplaceable"] = [i for i in stuck if size[i] > row_budget]
+        blocked = [i for i in stuck if size[i] <= row_budget]
+        if blocked:
+            remaining["blocked_by_unplaceable"] = blocked
     if withheld:
         remaining["withheld_not_counted"] = len(withheld)
     present = set(items)
@@ -1724,6 +1748,7 @@ def mint_spine(
     tranche_out: Optional[dict] = None,
     withheld_out: Optional[Dict[str, str]] = None,
     tranche_inventory_out: Optional[dict] = None,
+    part_items_out: Optional[List[str]] = None,
 ) -> Tuple[str, Path]:
     """The `--inventory` mint leg's one entry point.
 
@@ -1789,6 +1814,10 @@ def mint_spine(
         index, count = part
         rows = select_part(rows, [_strip_backtick(r["id"]) for r in chunk_rows], index, count)
         run_id = f"{run_id}-p{index}"
+        if part_items_out is not None:
+            part_items_out.extend(
+                dict.fromkeys(_row_item_ids(rows, [_strip_backtick(r["id"]) for r in chunk_rows]))
+            )
     if row_budget is None and max_rows is not None and len(rows) > max_rows:
         raise InventoryTooLargeError(
             f"inventory {path.name} mints {len(rows)} live rows, over max_rows "

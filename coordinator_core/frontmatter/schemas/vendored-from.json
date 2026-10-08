@@ -143,6 +143,10 @@
     "blob": "cdf831d739af01f56c3c2b24138046881d830096",
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
+  "seam-check.schema.json": {
+    "blob": "74c5e7593c239261f9af33c6a96079cee1212e36",
+    "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
+  },
   "sizing-object.schema.json": {
     "blob": "f5a3834fddb86ebb4a6e215c2f5cfa9d847ab295",
     "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"

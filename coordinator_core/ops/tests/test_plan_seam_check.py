@@ -658,6 +658,11 @@ def test_universe_consumed_path_with_only_an_uncoded_outside_writer(tmp_path, gi
     assert f["plan"] == a and f["blocking"] is False and f["counterpart_plan"] == b
     assert f["path"] == "lib/y.py" and f["row"] == "R1"
     _plan(root, "b", _row("W1", "[lib/y.py]", extra="  disposition: coded\n"))
+    r = _check(root, [a], universe=True)
+    [f] = r["findings"]
+    assert f["class"] == "missing-seam" and f["blocking"] is False and f["counterpart_plan"] == b
+    assert "written by coded row W1 but absent at HEAD" in f["detail"] and r["verdict"] == "CLEAN"
+    git.tracked.add("lib/y.py")
     assert _seams(_check(root, [a], universe=True)) == []
 
 
@@ -683,12 +688,55 @@ def test_universe_caps_findings_and_names_the_overflow(tmp_path, git):
     assert "10 further missing-seam findings omitted" in summary["detail"] and summary["blocking"] is False
 
 
-def test_universe_findings_stay_out_of_the_sidecar(tmp_path, git):
+def test_universe_findings_persist_in_a_schema_valid_sidecar(tmp_path, git):
     root = _root(tmp_path)
     a = _plan(root, "a", _row("R1", "[x.py]"))
     _plan(root, "b", _row("R1", "[x.py]"))
     r = op._record_handler({"plans": [a], "phase": "prep", "named_set": True, "universe": True}, repo_root=root)
     assert len(_seams(r)) == 1
     doc = yaml.safe_load((root / "docs/plans/a.seam.yaml").read_text(encoding="utf-8"))
-    assert doc["findings"] == []
+    assert [f["class"] for f in doc["findings"]] == ["missing-seam"] and doc["schema_version"] == "1.1.0"
+    assert doc["findings"][0]["blocking"] is False
     _validate(doc)
+
+
+def test_universe_capped_rollup_and_consume_seam_sidecar_validate(tmp_path, git):
+    root = _root(tmp_path)
+    paths = ", ".join(f"f{i:03d}.py" for i in range(60))
+    a = _plan(root, "a", _row("R1", f"[{paths}]", consumes="[lib/y.py]"))
+    _plan(root, "b", _row("R1", f"[{paths}, lib/y.py]"))
+    op._record_handler({"plans": [a], "phase": "prep", "named_set": True, "universe": True}, repo_root=root)
+    doc = yaml.safe_load((root / "docs/plans/a.seam.yaml").read_text(encoding="utf-8"))
+    assert len(doc["findings"]) == op.MISSING_SEAM_CAP + 1
+    _validate(doc)
+
+
+def test_consume_of_an_open_outside_writers_path_is_one_non_blocking_missing_seam(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", consumes="[lib/y.py]"))
+    c = _plan(root, "c", _row("W1", "[lib/y.py]"))
+    d = _plan(root, "d", _row("W1", "[lib/y.py]", extra="  appends: [lib/y.py]\n"))
+    r = _check(root, [a], universe=True)
+    assert r["verdict"] == "CLEAN" and _classes(r, blocking=True) == []
+    assert [f["class"] for f in r["findings"]] == ["missing-seam"]
+    [f] = r["findings"]
+    assert f["counterpart_plan"] == c and d in f["detail"] and f["blocking"] is False
+    off = _check(root, [a])
+    assert off["verdict"] != "CLEAN" and [x["class"] for x in off["findings"]] == ["unpromised-export"]
+
+
+def test_an_appending_outside_plan_counts_as_the_writer(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", consumes="[log.md]"))
+    c = _plan(root, "c", _row("W1", "[log.md]", extra="  appends: [log.md]\n"))
+    r = _check(root, [a], universe=True)
+    assert [(f["class"], f["counterpart_plan"], f["blocking"]) for f in r["findings"]] == [("missing-seam", c, False)]
+
+
+def test_consume_nobody_writes_stays_a_blocking_export_with_universe(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", consumes="[lib/z.py]"))
+    _plan(root, "c", _row("W1", "[other.py]"))
+    r = _check(root, [a], universe=True)
+    assert r["verdict"] != "CLEAN"
+    assert [f["class"] for f in r["findings"] if f["blocking"]] == ["unpromised-export"]

@@ -1197,6 +1197,7 @@ def _dispatch_emit(
             tranche_report: dict = {}
             withheld_plans: dict = {}
             tranche_inventory: dict = {}
+            part_items: list = []
             spine_text, spine_path = mint_spine(
                 inventory_path,
                 max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
@@ -1207,7 +1208,21 @@ def _dispatch_emit(
                 tranche_out=tranche_report,
                 withheld_out=withheld_plans,
                 tranche_inventory_out=tranche_inventory,
+                part_items_out=part_items,
             )
+            if part:
+                # A part is cut from the inventory's rows, not its record, so
+                # the record still lists every plan: scope the review to the
+                # part's own plans.
+                part_item_set = set(part_items)
+                part_plans = frozenset(
+                    _strip_backtick(r["spec path"])
+                    for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
+                    if _strip_backtick(r["id"]) in part_item_set
+                )
+                only_review_plans = (
+                    part_plans if only_review_plans is None else only_review_plans & part_plans
+                )
             if tranche_inventory:
                 # The tranche is its own inventory record from here on: its
                 # landed-reconcile and review specs must see only its plans.

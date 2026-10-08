@@ -900,8 +900,10 @@ def route(
             alters `route`, `fork`, or `xl_exit` — it selects which
             `touchpoints` render, exactly as `compaction_warnings` selects
             an advisory variant without ever suppressing the advisory
-            itself. In `ceo` mode only, `post_size_prompt_pending` is
-            suppressed (ceo's single touchpoint is the exit criterion).
+            itself. In `ceo` mode, `post_size_prompt_pending` is
+            suppressed (ceo's single touchpoint is the exit criterion); in
+            every mode but `hands-on` it is also dropped wherever
+            `sizing_acceptance_skipped(route, tshirt)` holds.
         interaction_mode_source: "flag" | "fleet" | "default" — set by
             `main()`; `route()` never resolves this itself and only echoes
             the value it is given back into the return payload.
@@ -995,9 +997,13 @@ def route(
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
     if sizing_acceptance_skipped(resolved_route, resized_tshirt):
-        # Not `post_size_prompt_pending`: that is where the PM states appetite, which the
-        # engine never infers.
-        detents = [d for d in detents if d != "exit_criterion_pending"]
+        # The engine carries this straight to execution: the appetite ask goes too, in every
+        # mode but hands-on (the PM choosing to be in the loop per turn). Appetite stays
+        # PM-stated-only; nothing here infers it.
+        dropped = {"exit_criterion_pending"}
+        if interaction_mode != "hands-on":
+            dropped.add("post_size_prompt_pending")
+        detents = [d for d in detents if d not in dropped]
 
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")

@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/seam-check.schema.json",
   "x-schema-name": "seam-check",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 adds the non-blocking `missing-seam` finding class; history in coordinator/schemas/SCHEMA-BUMP-HISTORY.md. RE-VENDOR: claude-klabauter.",
   "applies_to": "docs/plans/*.seam.yaml",
   "description": "Per-plan seam-check sidecar written by plan.seam_record beside the plan. Overwritten on each run. Bare verdict enum values live only here and in the op reply; caller-facing text spells them SEAM-REFUSED / SEAM-DRIFT.",
   "type": "object",
@@ -82,6 +84,7 @@
               "capabilities-undeclared",
               "unpromised-export",
               "writes-collision",
+              "missing-seam",
               "drifted-contract"
             ]
           },

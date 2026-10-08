@@ -37,8 +37,7 @@ Reply fields:
                    "missing_consumer", "path", "row", "detail"}],
      "phase", "wave", "checked_at_sha"}
     plan.seam_record adds "sidecars": [repo-relative paths written]. ``missing-seam``
-    findings are reply-only: the vendored seam-check schema's class enum does not admit
-    them, so the sidecar omits them until that enum gains the class.
+    findings persist in the sidecar (seam-check schema 1.1.0).
 
 Negative-spec:
   - plan.seam_check opens no file for write.
@@ -88,7 +87,7 @@ _DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 GENERATES: list = []
 MUTATES = ["docs/plans/*.seam.yaml"]
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 _PHASES = ("prep", "fire", "wave-boundary")
 _RANGE_RE = re.compile(r"^([0-9A-Fa-f]{7,64})\.\.([0-9A-Fa-f]{7,64})$")
 
@@ -724,7 +723,7 @@ class _Universe:
         self.plans = _open_outside_plans(ctx, pset)
         self.exact: Dict[str, set] = {}
         self.prefix: Dict[str, set] = {}
-        self.coded: set = set()
+        self.coded: Dict[tuple, str] = {}
         self.appends: Dict[str, set] = {}
         for rel, plan in self.plans.items():
             self.appends[rel] = _raw_append_only(plan)
@@ -735,11 +734,11 @@ class _Universe:
                 for p in paths:
                     self.exact.setdefault(p, set()).add(rel)
                     if row.get("disposition") == "coded":
-                        self.coded.add((rel, p))
+                        self.coded.setdefault((rel, p), str(row.get("id") or ""))
                 for p in prefixes:
                     self.prefix.setdefault(p, set()).add(rel)
                     if row.get("disposition") == "coded":
-                        self.coded.add((rel, p))
+                        self.coded.setdefault((rel, p), str(row.get("id") or ""))
 
     def writers(self, item: str) -> set:
         """Out-of-set plans promising ``item`` exactly, under a prefix, or beneath it (a directory)."""
@@ -753,11 +752,17 @@ class _Universe:
                     hits |= rels
         return hits
 
-    def codes(self, rel: str, item: str) -> bool:
-        """True when a coded row of ``rel`` promises ``item`` or something it covers."""
+    def coded_row(self, rel: str, item: str) -> Optional[str]:
+        """Id of a coded row of ``rel`` promising ``item`` or something it covers; None when there is none."""
         stem = item + "/"
         ancestors = set(_ancestors_or_self(item))
-        return any(r == rel and (k in ancestors or k.startswith(stem)) for r, k in self.coded)
+        for (r, k), row_id in sorted(self.coded.items()):
+            if r == rel and (k in ancestors or k.startswith(stem)):
+                return row_id
+        return None
+
+    def codes(self, rel: str, item: str) -> bool:
+        return self.coded_row(rel, item) is not None
 
 
 def _overlap_seams(pset: Dict[str, _Plan], uni: _Universe) -> list:
@@ -812,11 +817,12 @@ def _consume_seams(pset: Dict[str, _Plan], ctx: dict, uni: _Universe, unwritten:
                     continue
                 if any(w in edges or uni.codes(w, norm) for w in writers):
                     continue
-                first = sorted(writers)[0]
+                first, *others = sorted(writers)
+                more = f"; also written by {', '.join(others)}" if others else ""
                 out.append(_finding(
                     rel, MISSING_SEAM, False,
                     f"row {row.id} consumes {raw}, whose only promised writer is open plan {first}"
-                    " (outside the set) and no writing row is coded",
+                    f" (outside the set) and no writing row is coded{more}",
                     counterpart=first, path=raw, row=row.id))
     return out
 
@@ -877,7 +883,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
                         tree.want(p)
     unwritten: list = []
     if ctx["universe"]:
-        uni = _Universe(ctx, pset)
+        uni = ctx["uni"] = _Universe(ctx, pset)
         ctx.setdefault("set_promised", _set_promises(pset))
         ctx.setdefault("siblings", _siblings(ctx))
         seams += _overlap_seams(pset, uni)
@@ -902,8 +908,24 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
             label = f"{cap.get('click_path')} (role {cap.get('role')}): shipped {path}"
             findings.append(_finding(plan.rel, CAP, True, f"shipped path {path} is not tracked at HEAD",
                                      capability=str(cap.get("id") or ""), missing=label))
+    uni = ctx.get("uni")
     for plan, row, raw, legacy in pending:
         if tree.at("HEAD", raw):
+            continue
+        # A consume an open out-of-set plan writes is that plan's gap, never an export:
+        # `_consume_seams` already reported it unless a writer is edged or coded. A coded
+        # writer whose file is absent at HEAD is the one case it leaves silent (coded
+        # flips at terminal_commit, so the file should be there), so it is reported here.
+        norm = _normalize_path(raw)
+        writers = uni.writers(norm) if uni is not None and not legacy else set()
+        if writers:
+            coded = sorted(w for w in writers if uni.codes(w, norm))
+            if coded and not any(w in plan.edge_plans() for w in writers):
+                seams.append(_finding(
+                    plan.rel, MISSING_SEAM, False,
+                    f"row {row.id} consumes {raw}, written by coded row {uni.coded_row(coded[0], norm)}"
+                    f" but absent at HEAD (open plan {coded[0]})",
+                    counterpart=coded[0], path=raw, row=row.id))
             continue
         source = "reads: (legacy, not consumes:)" if legacy else "consumes"
         findings.append(_finding(
@@ -945,7 +967,7 @@ def _sidecar(reply: dict, rel: str, findings: list) -> dict:
         "checked_at_sha": reply["checked_at_sha"],
         "set": reply["set"],
         "verdict": reply["per_plan"][rel],
-        "findings": [{k: f[k] for k in keys} for f in findings if f["class"] != MISSING_SEAM],
+        "findings": [{k: f[k] for k in keys} for f in findings],
     }
 
 
