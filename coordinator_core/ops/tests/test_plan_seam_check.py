@@ -491,3 +491,33 @@ def test_a_sibling_repo_consume_is_not_an_unpromised_export(tmp_path, git, monke
     a = _plan(root, "a", _row("R1", "[x.py]", "[coordinator-content-repo/coordinator/hooks/hooks.json, gone.py]"))
     r = _check(root, [a])
     assert [f["path"] for f in r["findings"] if f["class"] == "unpromised-export"] == ["gone.py"]
+
+
+@pytest.mark.parametrize("which", ["cat-file", "diff"])
+def test_a_git_timeout_is_named_as_an_engine_failure(tmp_path, monkeypatch, which):
+    fake = FakeGit()
+
+    def timing_out(args, **kw):
+        if which in args:
+            return SimpleNamespace(ok=False, stdout="", timed_out=True)
+        return fake(args, **kw)
+
+    monkeypatch.setattr(op, "run_git", timing_out)
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    with pytest.raises(ValueError, match=rf"engine failure: git {which}.* timed out"):
+        _check(root, [a], "wave-boundary", landed_range=RANGE, landed_rows=[], wave=1)
+
+
+def test_git_reads_carry_no_seam_specific_timeout(git, tmp_path, monkeypatch):
+    seen = []
+
+    def recording(args, **kw):
+        seen.append(kw.get("timeout"))
+        return git(args, **kw)
+
+    monkeypatch.setattr(op, "run_git", recording)
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    _check(root, [a], "wave-boundary", landed_range=RANGE, landed_rows=[], wave=1)
+    assert seen and all(t is None for t in seen)

@@ -70,7 +70,6 @@ MUTATES = ["docs/plans/*.seam.yaml"]
 SCHEMA_VERSION = "1.0.0"
 _PHASES = ("prep", "fire", "wave-boundary")
 _RANGE_RE = re.compile(r"^([0-9A-Fa-f]{7,64})\.\.([0-9A-Fa-f]{7,64})$")
-_GIT_TIMEOUT_SECS = 0.4
 
 CAP = "capability-without-ui-consumer"
 UNDECLARED_CAPS = "capabilities-undeclared"
@@ -214,8 +213,8 @@ class _Tree:
         result = run_git(
             ["-C", str(self.root), "cat-file", "--batch-check"],
             input=("\n".join(lines) + "\n").encode("utf-8"),
-            timeout=_GIT_TIMEOUT_SECS,
         )
+        _raise_on_timeout(result, "cat-file --batch-check")
         out = result.stdout.split("\n")
         self.present = set()
         self.sha = None
@@ -230,6 +229,14 @@ class _Tree:
 
     def at(self, rev: str, path: str) -> bool:
         return f"{rev}:{path}" in (self.present or ())
+
+
+def _raise_on_timeout(result, what: str) -> None:
+    """A git read that timed out is an engine failure, named as one: a caller
+    reads any op error as fail-closed, and "cannot resolve HEAD" would send
+    the reader looking at the repo instead of at the engine."""
+    if getattr(result, "timed_out", False):
+        raise ValueError(f"engine failure: git {what} timed out")
 
 
 def _contained_rel(raw: str, root: Path) -> Optional[str]:
@@ -607,8 +614,8 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     if ctx["phase"] == "wave-boundary":
         diff = run_git(
             ["-C", str(root), "diff", "--name-only", "--no-renames", "-z", ctx["landed_range"]],
-            timeout=_GIT_TIMEOUT_SECS,
         )
+        _raise_on_timeout(diff, f"diff --name-only {ctx['landed_range']}")
         if not diff.ok:
             raise ValueError(f"cannot diff landed_range {ctx['landed_range']}")
         touched = [p for p in diff.stdout.split("\0") if p]
