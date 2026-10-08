@@ -16,6 +16,7 @@ from percolate.publish_delta import (  # noqa: E402
     WarmPlan,
     find_publish_base,
     materialize_paths,
+    materialize_subtree,
     plan_publish_round,
 )
 
@@ -201,3 +202,20 @@ def test_materialize_symlink_as_text(tmp_path):
     out = tmp_path / "out"
     assert materialize_paths(src, head, ["link"], out) == {"link": 0o120000}
     assert (out / "link").read_bytes() == b"root/f0.txt"
+
+
+def test_materialize_subtree_writes_only_that_subtree(tmp_path, spawn_counter):
+    src, _ = _src(tmp_path)
+    _commit(src, {"sub/deep/h.txt": b"h"}, "deep")
+    head = _git(src, "rev-parse", "HEAD")
+    out = tmp_path / "out"
+    n = len(spawn_counter)
+    modes = materialize_subtree(src, head, "sub", out)
+    assert len(spawn_counter) == n
+    written = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
+    assert written == sorted([f"sub/g{i}.txt" for i in range(30)] + ["sub/deep/h.txt"])
+    assert set(modes) == set(written)
+    assert (out / "sub" / "deep" / "h.txt").read_bytes() == b"h"
+    assert materialize_subtree(src, head, "setup/other.txt", tmp_path / "one") == {"setup/other.txt": 0o100644}
+    with pytest.raises(RuntimeError):
+        materialize_subtree(src, head, "nope", tmp_path / "none")

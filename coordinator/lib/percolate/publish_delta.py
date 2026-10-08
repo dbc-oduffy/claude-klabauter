@@ -172,3 +172,39 @@ def materialize_paths(
         target.write_bytes(obj[1])
         modes[rel] = entry[0]
     return modes
+
+
+def materialize_subtree(source_toplevel: Path, sha: str, rel: str, into: Path) -> Dict[str, int]:
+    """`rel` (a blob or a tree) of commit `sha` written under `into` at its rel path, nothing
+    else of the commit read; return rel -> git mode for every blob written. Absent at `sha`
+    raises."""
+    info = read_commit(source_toplevel, sha)
+    if info is None:
+        raise RuntimeError(f"publish_delta: commit {sha} unreadable")
+    common = resolve_git_common_dir(source_toplevel)
+    entry = _lookup(common, info.tree, rel)
+    if entry is None:
+        raise RuntimeError(f"publish_delta: {rel} is absent at {sha[:12]}")
+    if entry[0] != _TREE:
+        return materialize_paths(source_toplevel, sha, [rel], into)
+    modes: Dict[str, int] = {}
+    stack = [(rel, entry[1])]
+    while stack:
+        prefix, tree_sha = stack.pop()
+        obj = read_object(common, tree_sha)
+        entries = _parse_tree_entries(obj[1]) if obj is not None and obj[0] == "tree" else None
+        if entries is None:
+            raise RuntimeError(f"publish_delta: tree {tree_sha} for {prefix} unreadable")
+        for name, (mode, child) in entries.items():
+            child_rel = f"{prefix}/{name}"
+            if mode == _TREE:
+                stack.append((child_rel, child))
+                continue
+            blob = read_object(common, child)
+            if blob is None:
+                raise RuntimeError(f"publish_delta: blob {child} for {child_rel} unreadable")
+            target = Path(into) / child_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blob[1])
+            modes[child_rel] = mode
+    return modes
