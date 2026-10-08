@@ -163,11 +163,18 @@ _FINDING_FIELDS = ("capability", "missing_consumer", "counterpart_plan", "path",
 def _seam_call(repo_root: Path, plans: list[str], phase: str, named_set: bool, read_only: bool) -> dict:
     """One `plan.seam_record` (`plan.seam_check` when `read_only`) call over the whole set.
 
+    A named set is checked with `universe` on: its gaps against open plans outside the set come
+    back as non-blocking `missing-seam` findings rather than blocking `unpromised-export`, so an
+    out-of-set dependency never refuses the stamp. The default set is every approved plan, so it
+    has no outside worth the extra parse.
+
     Raises `ValueError` on an op error or a reply without `verdict`/`per_plan`: a seam check that
     did not answer is never a pass.
     """
     op = _SEAM_OPS[read_only]
-    reply = _invoke(repo_root, op, {"plans": list(plans), "phase": phase, "named_set": named_set})
+    reply = _invoke(
+        repo_root, op, {"plans": list(plans), "phase": phase, "named_set": named_set, "universe": named_set}
+    )
     if not isinstance(reply.get("verdict"), str) or not isinstance(reply.get("per_plan"), dict):
         raise ValueError(f"{op} returned a reply without `verdict` and `per_plan`")
     return reply

@@ -773,7 +773,7 @@
     "coordinator/bin/mise-prep-gate.py": "b0d2ffba97cfce0f671202a6e1a80cb145657c35",
     "coordinator/bin/mise-prep-run.cmd": "7c942a8a8790a9ab8b204ba8cb57a07a9bcdd0f3",
     "coordinator/bin/mise-prep-run.ps1": "0352bf9ed02b4255922a37b63c6646e4e088dc3b",
-    "coordinator/bin/mise-prep-run.py": "4ab6a8abb370c03dd01f59e5e621f1005a311267",
+    "coordinator/bin/mise-prep-run.py": "50611e28c345352282b75802a44965a02333bc97",
     "coordinator/bin/mise-prep-upgrade.cmd": "44e5d8c73106099227597582031a555c85267ed9",
     "coordinator/bin/mise-prep-upgrade.py": "b5ada85c4744a30ceaf50a87ac5234bd9c357b8b",
     "coordinator/bin/navi-singleton.cmd": "0d081c83d2cef745cb177d9b9c2b173fd33669d6",
@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "dfacf915d25c17eb375de91ca708d02b264dad10",
-    "coordinator_core/_engine_stamp": "b1b85ce9e1781f94d58084830cb64b8641628499",
+    "coordinator_core/_engine_published_at": "ebbcd2eefb3fb743c165c5c73604d93bd872e2ea",
+    "coordinator_core/_engine_stamp": "512245b69287b6e6282628e97a6b9df4f6728752",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -7146,5 +7146,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "2025cd7b30de34180c98632b0d707a29a9c46198"
+  "source_head": "d4439711bff649dd8d74f769930cc2b7eca06c86"
 }
