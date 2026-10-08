@@ -65,7 +65,6 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 _ROW_NAMES = ["row-a", "row-b", "row-c"]
-_SKIPPED_ROW = "row-b"
 
 
 def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
@@ -113,26 +112,18 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
     monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
-    monkeypatch.setattr(
-        publish, "compute_delta_invalidation_signature", lambda store_path, engine_ctx: "fixed-sig"
-    )
-    monkeypatch.setattr(
-        publish,
-        "delta_row_unchanged",
-        lambda setup_dir, target, signature, round_pinned_shas: target.name == _SKIPPED_ROW,
-    )
+    monkeypatch.setattr(publish, "write_publish_provenance_record", lambda **kwargs: None)
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
-        # Must never be reached for `_SKIPPED_ROW` — the delta whole-row skip
-        # happens in `main()`'s loop before `process_target` dispatch.
-        assert target.name != _SKIPPED_ROW
         rows_reached.append(target.name)
         totals.processed += 1
 
     monkeypatch.setattr(publish, "process_target", fake_process_target)
 
 
-def test_delta_skipped_row_reported_separately_and_not_as_succeeded(monkeypatch, tmp_path, capsys):
+def test_delta_flag_is_an_accepted_no_op_every_row_is_processed(monkeypatch, tmp_path, capsys):
+    """The diff-scaled round subsumes the `--delta` whole-row skip: the flag still parses, and no row
+    is skipped as "unchanged since last publish"."""
     rows_reached: list = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     _wire_common_fakes(monkeypatch, tmp_path, rows_reached=rows_reached)
@@ -141,10 +132,10 @@ def test_delta_skipped_row_reported_separately_and_not_as_succeeded(monkeypatch,
     captured = capsys.readouterr()
     combined = captured.out + captured.err
 
-    assert rows_reached == ["row-a", "row-c"]
-    assert "--delta: unchanged since last publish" in combined
+    assert rows_reached == _ROW_NAMES
+    assert "unchanged since last publish" not in combined
     summary_line = combined.split("Rows succeeded:")[1].split("\n")[0]
-    assert "2/3" in summary_line
-    assert "1 skipped, unchanged" in summary_line
+    assert "3/3" in summary_line
+    assert "skipped" not in summary_line
     assert "Rows FAILED" not in combined
     assert rc == 0

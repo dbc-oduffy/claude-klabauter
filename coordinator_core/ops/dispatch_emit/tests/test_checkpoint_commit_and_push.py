@@ -140,11 +140,10 @@ def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tm
 
     from coordinator_core.ops.ceremony import commit_v2
 
-    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
     def git(*args):
         return subprocess.run(
-            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
 
     git("init", "-q", "-b", "work/p")
@@ -177,11 +176,10 @@ def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refu
 
     from coordinator_core.ops.ceremony import commit_v2
 
-    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
     def git(*args):
         return subprocess.run(
-            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
 
     git("init", "-q", "-b", "work/p")
@@ -206,11 +204,10 @@ def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp
 
     from coordinator_core.ops.ceremony import commit_v2
 
-    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
     def git(*args):
         return subprocess.run(
-            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
 
     git("init", "-q", "-b", "work/p")

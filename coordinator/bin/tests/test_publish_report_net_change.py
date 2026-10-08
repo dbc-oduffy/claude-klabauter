@@ -44,8 +44,12 @@ def test_bytecode_is_never_reported_on_either_side(tmp_path):
         {"pkg/mod.py": "x = 1\n", "pkg/__pycache__/mod.cpython-313.pyc": "new"},
     )
     buf = io.StringIO()
-    changed, removed = publish._report_published_diff(
-        staging, dest, publish.RunTotals(), out=buf
+    changed, removed = publish._report_staged_diff(
+        staging,
+        dest,
+        frozenset({"pkg/__pycache__/gone.cpython-313.pyc"}),
+        publish.RunTotals(),
+        out=buf,
     )
     assert changed == frozenset() and removed == frozenset(), buf.getvalue()
 
@@ -55,8 +59,8 @@ def test_a_file_rewritten_and_restored_in_one_run_is_not_a_net_change(tmp_path):
     digests: "dict[Path, object]" = {}
 
     row_a = _tree(tmp_path / "a", {"pkg/mod.py": "rewritten\n", "pkg/real.py": "old\n"})
-    changed_a, _ = publish._report_published_diff(
-        row_a, dest, publish.RunTotals(), out=io.StringIO(), pre_round_digests=digests
+    changed_a, _ = publish._report_staged_diff(
+        row_a, dest, frozenset(), publish.RunTotals(), out=io.StringIO(), pre_round_digests=digests
     )
     assert changed_a == {"pkg/mod.py"}
     (dest / "pkg" / "mod.py").write_bytes(b"rewritten\n")
@@ -64,8 +68,8 @@ def test_a_file_rewritten_and_restored_in_one_run_is_not_a_net_change(tmp_path):
     row_b = _tree(
         tmp_path / "b", {"pkg/mod.py": "owner\n", "pkg/real.py": "new\n", "pkg/add.py": "n\n"}
     )
-    changed_b, _ = publish._report_published_diff(
-        row_b, dest, publish.RunTotals(), out=io.StringIO(), pre_round_digests=digests
+    changed_b, _ = publish._report_staged_diff(
+        row_b, dest, frozenset(), publish.RunTotals(), out=io.StringIO(), pre_round_digests=digests
     )
     assert changed_b == {"pkg/mod.py", "pkg/real.py", "pkg/add.py"}
     for rel in changed_b:

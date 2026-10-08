@@ -1,15 +1,10 @@
-"""Structural enforcement for DR-445 (assemble-in-a-throwaway, move once).
+"""Structural enforcement of the publish round's order: stage, gate the union, land.
 
 docs/decisions/DR-445-publish-assembles-in-a-throwaway-and-moves-once.md § Enforcement:
-"A test pins the order structurally: no destination write precedes the last
-gate, and no gate follows the first destination write."
-
-Pinned names this test is written against (two peers land these concurrently
-— this file is RED until both do, by design):
-  - coordinator/bin/publish.py: `_run_round_dr445`, `_swap_all_rows_into_dest`,
-    `process_target` (stage-only post-DR445).
-  - coordinator/lib/percolate/throwaway_tree.py: `build_throwaway_tree`,
-    `discard_throwaway_tree`.
+"no destination write precedes the last gate, and no gate follows the first destination
+write." The diff-scaled round (`_run_round`) keeps that order without a throwaway clone:
+`process_target` stages each row, the end-of-run gates read the per-root staged union, and
+`land_diff` is the only destination write.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_order_dr445.py -q
 """
@@ -20,6 +15,7 @@ import ast
 import importlib.util
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -29,18 +25,13 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-# Gate/round-boundary names DR-445 requires to bracket the throwaway build/
-# swap/commit/discard sequence. Every one of these must exist as a module
-# attribute on `publish` post-DR445 — a missing one is a red test, not a
-# skip, because the spec pins these exact names.
-_GATE_NAMES = (
-    "run_pre_sync_gates",
-    "dispatch_percolate_post_rsync",
-    "dispatch_percolate_pre_ci",
-    "dispatch_percolate_inject",
-    "dispatch_preswap_function_gate",
-    "dispatch_preswap_payload_parity_gate",
-    "dispatch_end_of_run_assembled_mirror_gate",
+_END_OF_RUN_GATE_NAMES = (
+    "dispatch_end_of_run_identity_check",
+    "dispatch_end_of_run_install_doc_payload_check",
+    "dispatch_end_of_run_unscanned_published_check",
+    "dispatch_end_of_run_function_gate",
+    "dispatch_end_of_run_entrypoint_gate",
+    "dispatch_end_of_run_argv_parity_gate",
 )
 
 
@@ -133,21 +124,16 @@ def _wire_common_fakes(monkeypatch, tmp_path, rows):
     monkeypatch.setattr(publish, "_resolve_publish_sync_module_path", lambda setup_dir: tmp_path / "publish_sync.py")
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "write_publish_provenance_record", lambda **kwargs: None)
 
-    monkeypatch.setattr(publish, "dispatch_end_of_run_identity_check", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "dispatch_end_of_run_install_doc_payload_check", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "dispatch_end_of_run_function_gate", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "dispatch_end_of_run_entrypoint_gate", lambda *a, **k: True)
+    for gate_name in _END_OF_RUN_GATE_NAMES:
+        monkeypatch.setattr(publish, gate_name, lambda *a, **k: True)
 
 
-def _wrap_and_record(monkeypatch, name, record, call_log=None):
-    """Monkeypatch `publish.<name>` with a wrapper that appends `name` to
-    `record` (and, if `call_log` is given, `(name, args, kwargs)`) then
-    calls through to the original. Raises AttributeError (an expected red
-    failure, per this file's module docstring) if `name` does not yet exist
-    on `publish` — i.e. before the peer chunk lands it."""
-    original = getattr(publish, name)
+def _wrap_and_record(monkeypatch, owner, name, record, call_log=None):
+    """Replace `owner.<name>` with a wrapper that appends `name` to `record` (and
+    `(name, args, kwargs)` to `call_log`) and calls through."""
+    original = getattr(owner, name)
 
     def _wrapper(*args, **kwargs):
         record.append(name)
@@ -155,15 +141,30 @@ def _wrap_and_record(monkeypatch, name, record, call_log=None):
             call_log.append((name, args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(publish, name, _wrapper)
+    monkeypatch.setattr(owner, name, _wrapper)
+
+
+def _stage_payload(dest_dir: Path, files: "dict[str, str]"):
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{dest_dir.name}.publish-staging-", dir=str(dest_dir.parent)))
+    for rel, content in files.items():
+        target_path = staging_dir / rel
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(content, encoding="utf-8", newline="\n")
+    return publish.StagedRowResult(
+        staging_dir=staging_dir,
+        row_visited=set(),
+        row_changed_files=None,
+        row_removed_files=set(),
+        row_published_files={Path(rel) for rel in files},
+        report_text="",
+        synced=len(files),
+        deleted=0,
+    )
 
 
 def _build_round_fixture(monkeypatch, tmp_path, *, fail_gate: str = None):
-    """One-row round with real gates/build/swap/commit/discard wrapped for
-    recording. `process_target` is faked (its own staging behavior is
-    covered separately by AC3's static check and by the peer chunk's own
-    tests) — it only marks the row processed; it must NEVER touch
-    `target.dest_dir` directly per DR-445."""
+    """One-row round: real gate dispatch wrappers and the real `land_diff`, recorded in call order.
+    `process_target` is faked to stage one new file."""
     dest_root = tmp_path / "dest-repo"
     _init_git_repo(dest_root)
     dest_a = dest_root / "sub-a"
@@ -173,121 +174,64 @@ def _build_round_fixture(monkeypatch, tmp_path, *, fail_gate: str = None):
     record: list = []
     call_log: list = []
 
-    for gate_name in _GATE_NAMES:
+    for gate_name in _END_OF_RUN_GATE_NAMES:
         if fail_gate is not None and gate_name == fail_gate:
-            monkeypatch.setattr(publish, gate_name, lambda *a, **k: (record.append(gate_name), False)[1])
+            monkeypatch.setattr(publish, gate_name, lambda *a, _n=gate_name, **k: (record.append(_n), False)[1])
         else:
-            _wrap_and_record(monkeypatch, gate_name, record, call_log)
+            _wrap_and_record(monkeypatch, publish, gate_name, record, call_log)
 
-    _wrap_and_record(monkeypatch, "build_throwaway_tree", record, call_log)
-    _wrap_and_record(monkeypatch, "discard_throwaway_tree", record, call_log)
-    _wrap_and_record(monkeypatch, "_swap_all_rows_into_dest", record, call_log)
+    publish._bootstrap_engine()
+    from percolate import diff_commit
+
+    _wrap_and_record(monkeypatch, diff_commit, "land_diff", record, call_log)
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
         record.append("process_target:row-a")
         totals.processed += 1
+        return _stage_payload(target.dest_dir, {"payload.txt": "published\n"})
 
     monkeypatch.setattr(publish, "process_target", fake_process_target)
 
     return dest_root, rows, record, call_log
 
 
-def test_event_order_build_gates_swap_commit_discard(monkeypatch, tmp_path):
+def test_event_order_stage_gates_land(monkeypatch, tmp_path):
     dest_root, rows, record, _call_log = _build_round_fixture(monkeypatch, tmp_path)
 
     rc = publish.main(["row-a"])
 
     assert rc == 0, f"expected a clean round, got rc={rc}"
-    assert "build_throwaway_tree" in record
-    assert "_swap_all_rows_into_dest" in record
-    assert "discard_throwaway_tree" in record
-
-    build_idx = record.index("build_throwaway_tree")
-    swap_idx = record.index("_swap_all_rows_into_dest")
-    discard_idx = record.index("discard_throwaway_tree")
-
-    gate_indices = [record.index(g) for g in _GATE_NAMES if g in record]
-    assert gate_indices, "no gate was recorded — wrappers did not fire"
-
-    assert build_idx < min(gate_indices), (
-        "build_throwaway_tree must precede every gate", record
-    )
-    assert max(gate_indices) < swap_idx, (
-        "every gate must precede the swap", record
-    )
-    # The round commit (2026-09-29 PM ruling: commit-in-throwaway then
-    # fetch + `merge --ff-only`) now runs INSIDE `_swap_all_rows_into_dest`
-    # itself rather than as a separate recorded event straight after it —
-    # "nothing runs between the swap and the commit" now reads as "the swap
-    # IS the commit", so the only remaining ordering obligation is that
-    # nothing else this test wraps fires between the swap and the discard.
-    assert swap_idx < discard_idx, (
-        "the swap (which now commits) must precede the discard", record
-    )
-    assert record[swap_idx + 1] == "discard_throwaway_tree", (
-        "no other recorded event may run between the swap and the discard",
-        record,
-    )
-    assert discard_idx == len(record) - 1, (
-        "discard_throwaway_tree must be the last recorded event", record
-    )
+    assert record[0] == "process_target:row-a", record
+    assert "land_diff" in record
+    land_idx = record.index("land_diff")
+    gate_indices = [record.index(g) for g in _END_OF_RUN_GATE_NAMES if g in record]
+    assert set(g for g in _END_OF_RUN_GATE_NAMES if g in record) == set(_END_OF_RUN_GATE_NAMES), record
+    assert max(gate_indices) < land_idx, ("every gate must precede the landing", record)
+    assert min(gate_indices) > record.index("process_target:row-a"), ("gates read staged rows", record)
+    assert land_idx == len(record) - 1, ("nothing the test wraps runs after the landing", record)
+    assert "payload.txt" in _git(dest_root, "ls-tree", "-r", "--name-only", "HEAD").stdout.replace("sub-a/", "")
 
 
-def test_failing_gate_leaves_dest_untouched_and_discards_throwaway(monkeypatch, tmp_path):
+def test_failing_gate_leaves_dest_untouched(monkeypatch, tmp_path):
     dest_root, rows, record, _call_log = _build_round_fixture(
-        monkeypatch, tmp_path, fail_gate="dispatch_end_of_run_assembled_mirror_gate"
+        monkeypatch, tmp_path, fail_gate="dispatch_end_of_run_argv_parity_gate"
     )
     before_mtimes = _mtimes(dest_root)
     before_porcelain = _porcelain(dest_root)
+    before_head = _git(dest_root, "rev-parse", "HEAD").stdout
 
     rc = publish.main(["row-a"])
 
     assert rc != 0, "a failing gate must not report success"
-    assert "_swap_all_rows_into_dest" not in record, (
-        "the swap must never fire when a gate fails", record
-    )
-    assert "discard_throwaway_tree" in record, (
-        "the throwaway must still be discarded on a failing round", record
-    )
-    assert record[-1] == "discard_throwaway_tree", (
-        "discard is the last event pass or fail", record
-    )
-
-    after_porcelain = _porcelain(dest_root)
-    after_mtimes = _mtimes(dest_root)
-    assert after_porcelain == before_porcelain == "", (
-        f"dest must stay clean on a failing gate, got: {after_porcelain!r}"
-    )
-    assert after_mtimes == before_mtimes, (
-        "no file under dest_dir may be touched (written or re-stat'd) when "
-        "the round fails before the swap"
-    )
-
-
-# Every end-of-run gate `_run_round_dr445` dispatches (§ its own Phase 3
-# comment) — distinct from `_GATE_NAMES` above, which mixes in per-row
-# pre-sync/preswap gate names used only for the build/gate/swap/commit/
-# discard ordering assertions. The peer chunk retargets ALL of these to the
-# throwaway root, so this list must name every one of them, not just
-# `dispatch_end_of_run_assembled_mirror_gate`.
-_END_OF_RUN_GATE_NAMES = (
-    "dispatch_end_of_run_identity_check",
-    "dispatch_end_of_run_install_doc_payload_check",
-    "dispatch_end_of_run_unscanned_published_check",
-    "dispatch_end_of_run_function_gate",
-    "dispatch_end_of_run_entrypoint_gate",
-    "dispatch_end_of_run_argv_parity_gate",
-    "dispatch_end_of_run_assembled_mirror_gate",
-)
+    assert "land_diff" not in record, ("the landing must never fire when a gate fails", record)
+    assert _git(dest_root, "rev-parse", "HEAD").stdout == before_head
+    assert _porcelain(dest_root) == before_porcelain == ""
+    assert _mtimes(dest_root) == before_mtimes, "no destination file may be touched when a gate fails"
 
 
 def _root_args(value):
-    """Flatten a gate call's positional/keyword value into the Path-like
-    root args it carries — a bare `Path`/str, every element of a
-    `List[Path]`/tuple/set, or every KEY of a `dict[Path, ...]` (several
-    end-of-run gates take `*_by_repo_root` dicts keyed by root rather than a
-    `repo_roots` list — § `dispatch_end_of_run_unscanned_published_check`).
-    Non-path, non-container values yield nothing."""
+    """Flatten a gate call's value into Path-like root args: a bare `Path`/str, each element of a
+    list/tuple/set, or each KEY of a dict (the `*_by_repo_root` shapes)."""
     if isinstance(value, dict):
         for key in value:
             yield from _root_args(key)
@@ -298,39 +242,22 @@ def _root_args(value):
         yield value
 
 
-def test_gates_receive_the_throwaway_root_never_the_dest(monkeypatch, tmp_path):
-    """Every end-of-run gate call this round makes must be handed the
-    throwaway tree's root — as a scalar OR inside a `repo_roots: List[Path]`
-    — never `target.dest_dir`. Checked across ALL end-of-run gates
-    (`_END_OF_RUN_GATE_NAMES`), not just the assembled-mirror gate: the peer
-    is retargeting every one of them to the throwaway."""
+def test_gates_receive_the_staged_union_never_the_dest(monkeypatch, tmp_path):
+    """Every end-of-run gate is handed the per-root staged union, never `target.dest_dir`."""
     dest_root, rows, record, call_log = _build_round_fixture(monkeypatch, tmp_path)
+    union_roots: list = []
+    original_assemble = publish._assemble_root_union
 
-    # `_wire_common_fakes` stubbed most end-of-run gates to `lambda *a, **k:
-    # True` (no recording) so the build/gate/swap/commit ordering tests above
-    # stay narrow. Re-wrap every one of them here so this test's `call_log`
-    # actually captures their root args.
-    for gate_name in _END_OF_RUN_GATE_NAMES:
-        _wrap_and_record(monkeypatch, gate_name, record, call_log)
+    def _spy(*args, **kwargs):
+        union = original_assemble(*args, **kwargs)
+        union_roots.append(union.union_root)
+        return union
 
-    sentinel_throwaway = tmp_path / "throwaway-marker"
-    # A real (if trivial) git repo: post-DR445 the swap itself reads `git
-    # status` INSIDE the throwaway (§ `_throwaway_delta_paths`) rather than
-    # only gates reading it, so a bare directory here now fails the swap
-    # with "not a git repository" before this test ever gets to check gate
-    # root args. An empty repo's status is clean, so the swap sees no delta
-    # and skips straight past — this test is scoped to gate args, not swap
-    # content.
-    _init_git_repo(sentinel_throwaway)
-
-    def _fake_build(*args, **kwargs):
-        record.append("build_throwaway_tree")
-        return sentinel_throwaway
-
-    monkeypatch.setattr(publish, "build_throwaway_tree", _fake_build)
+    monkeypatch.setattr(publish, "_assemble_root_union", _spy)
 
     rc = publish.main(["row-a"])
     assert rc == 0, f"expected a clean round, got rc={rc}"
+    assert len(union_roots) == 1
 
     dest_a = dest_root / "sub-a"
     seen_gate_names = set()
@@ -338,37 +265,22 @@ def test_gates_receive_the_throwaway_root_never_the_dest(monkeypatch, tmp_path):
         if name not in _END_OF_RUN_GATE_NAMES:
             continue
         seen_gate_names.add(name)
-        # `percolate_root`/`out` are real, non-root kwargs some gates also
-        # take (§ `dispatch_end_of_run_identity_check`'s own signature) —
-        # deliberately excluded here since neither is a "root argument" this
-        # test is scoped to; everything else (positional AND the remaining
-        # kwargs, including every `*_by_repo_root` dict) is in scope.
-        _non_root_kwarg_names = {"percolate_root", "out"}
-        values_in_scope = list(args) + [
-            v for k, v in kwargs.items() if k not in _non_root_kwarg_names
-        ]
+        non_root_kwarg_names = {"percolate_root", "out"}
+        values_in_scope = list(args) + [v for k, v in kwargs.items() if k not in non_root_kwarg_names]
         root_values = []
         for value in values_in_scope:
             root_values.extend(_root_args(value))
-        assert str(dest_a) not in [str(v) for v in root_values], (
-            f"{name} received target.dest_dir among its root args, never allowed post-DR-445",
-            args,
-            kwargs,
-        )
+        assert str(dest_a) not in [str(v) for v in root_values], (name, args, kwargs)
+        assert str(dest_root) not in [str(v) for v in root_values], (name, args, kwargs)
         assert root_values, (f"{name} carried no Path-like root args to check", args, kwargs)
-        assert all(str(sentinel_throwaway) == str(v) for v in root_values), (
-            f"{name} was handed a root that is not the throwaway tree", args, kwargs, root_values
-        )
+        assert all(str(union_roots[0]) == str(v) for v in root_values), (name, args, kwargs, root_values)
 
-    assert seen_gate_names == set(_END_OF_RUN_GATE_NAMES), (
-        "not every end-of-run gate fired this round", seen_gate_names
-    )
+    assert seen_gate_names == set(_END_OF_RUN_GATE_NAMES), seen_gate_names
 
 
 def test_process_target_has_no_static_write_into_dest_dir():
-    """AC3 (DR-445 § Enforcement, `process_target` becomes stage-only): the
-    AST of `process_target` must contain no call to the swap function and no
-    shutil/os rename-or-copy call whose target names `dest_dir`."""
+    """`process_target` is stage-only: the AST of `process_target` must contain no call to the
+    landing and no shutil/os rename-or-copy call whose target names `dest_dir`."""
     source = (_BIN_DIR / "publish.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(_BIN_DIR / "publish.py"))
 
@@ -380,6 +292,7 @@ def test_process_target_has_no_static_write_into_dest_dir():
     assert func_node is not None, "process_target not found in publish.py"
 
     _FORBIDDEN_CALL_NAMES = {
+        "land_diff",
         "_swap_all_rows_into_dest",
         "_swap_publish_staging_into_dest",
         "_swap_publish_staging_into_dest_root",
@@ -404,12 +317,8 @@ def test_process_target_has_no_static_write_into_dest_dir():
         elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
             pair = (fn.value.id, fn.attr)
             if pair in _FORBIDDEN_MODULE_FUNCS:
-                # only a violation if it looks like it targets dest_dir --
-                # scan the call's arg source text for "dest_dir"
                 call_src = ast.get_source_segment(source, node) or ""
                 if "dest_dir" in call_src:
                     violations.append(f"{pair[0]}.{pair[1]}")
 
-    assert not violations, (
-        f"process_target contains a write into dest_dir, not allowed post-DR-445: {violations}"
-    )
+    assert not violations, f"process_target contains a write into dest_dir: {violations}"

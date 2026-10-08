@@ -1,19 +1,16 @@
+"""Honest change reporting primitives (`files_differ`), `--target` name selection, and the
+store+transform signature the warm round stamps into its trailers
+(`compute_delta_invalidation_signature`). The `--delta` whole-row skip these once fed is gone: the
+diff-scaled round subsumes it.
+"""
 
 from __future__ import annotations
 
 import importlib.util
-import os
-import subprocess
 import sys
 import time
+import types
 from pathlib import Path
-
-import pytest
-
-pytestmark = [
-    pytest.mark.spawns_process,
-    pytest.mark.cadence,
-]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -30,26 +27,6 @@ def _load_publish_module():
 
 
 publish = _load_publish_module()
-
-
-def _git(*args, cwd):
-    result = subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True
-    )
-    return result.stdout.strip()
-
-
-def _init_repo(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    _git("init", "-q", cwd=path)
-    _git("config", "user.email", "test@example.com", cwd=path)
-    _git("config", "user.name", "Test", cwd=path)
-
-
-def _commit_all(path: Path, message: str) -> str:
-    _git("add", "-A", cwd=path)
-    _git("commit", "-q", "-m", message, cwd=path)
-    return _git("rev-parse", "HEAD", cwd=path)
 
 
 def test_files_differ_ignores_mtime_when_bytes_identical(tmp_path):
@@ -99,239 +76,12 @@ def test_requested_names_empty_means_unfiltered():
     assert requested_names == []
 
 
-def test_delta_record_round_trip(tmp_path):
-    setup_dir = tmp_path / "setup"
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sig1", source_sha="src1", dest_head="dest1"
-    )
-    record = publish.load_delta_record(setup_dir, "sample")
-    assert record == {"signature": "sig1", "source_sha": "src1", "dest_head": "dest1"}
+def test_delta_flags_still_parse_as_no_ops():
+    parser = publish.build_arg_parser()
 
-
-def test_load_delta_record_absent_returns_none(tmp_path):
-    assert publish.load_delta_record(tmp_path / "setup", "nope") is None
-
-
-def test_git_is_clean_true_for_committed_tree(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    (repo / "f.txt").write_text("x", encoding="utf-8")
-    _commit_all(repo, "init")
-    assert publish._git_is_clean(repo) is True
-
-
-def test_git_is_clean_false_for_dirty_tree(tmp_path):
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    (repo / "f.txt").write_text("x", encoding="utf-8")
-    _commit_all(repo, "init")
-    (repo / "f.txt").write_text("edited locally", encoding="utf-8")
-    assert publish._git_is_clean(repo) is False
-
-
-def test_git_is_clean_none_for_non_git_dir(tmp_path):
-    d = tmp_path / "not-a-repo"
-    d.mkdir()
-    assert publish._git_is_clean(d) is None
-
-
-def _make_target(name: str, dest_dir: Path, source_dir: Path, *, mode: str = "mirror"):
-    return publish.ResolvedTarget(
-        name=name,
-        mode=mode,
-        source_dir=source_dir,
-        dest_dir=dest_dir,
-    )
-
-
-def test_delta_row_unchanged_true_when_everything_matches(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo)
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is True
-
-
-def test_delta_row_unchanged_false_on_signature_mismatch(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo)
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-    assert publish.delta_row_unchanged(setup_dir, target, "sigB", {}) is False
-
-
-def test_delta_row_unchanged_false_when_source_advances(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo)
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-
-    (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
-    _commit_all(source_repo, "source update")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
-
-
-def test_delta_row_unchanged_false_when_destination_drifts(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo, mode="manifest")
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-
-    (dest_repo / "f.txt").write_text("edited by hand", encoding="utf-8")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
-
-
-def test_delta_row_unchanged_true_for_mirror_row_despite_dirty_tree(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-
-    (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is True
-
-
-def test_delta_row_unchanged_false_for_mirror_row_when_source_advances(tmp_path, monkeypatch):
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-
-    (dest_repo / "f.txt").write_text("prior publish's own uncommitted output", encoding="utf-8")
-    (source_repo / "f.txt").write_text("payload v2", encoding="utf-8")
-    _commit_all(source_repo, "source update")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
-
-
-def test_delta_row_unchanged_false_for_mirror_row_when_destination_head_advances(
-    tmp_path, monkeypatch
-):
-    """A mirror row whose DESTINATION repo advanced (a real commit landed —
-    e.g. a human or other automation committing into the mirror) since the
-    recorded publish must NOT skip, even with the clean-tree leg exempted:
-    conditions 3-5 (signature/source-HEAD/dest-HEAD) still do the real
-    correctness work for mirror rows."""
-    setup_dir = tmp_path / "setup"
-    source_repo = tmp_path / "source"
-    dest_repo = tmp_path / "dest"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo, mode="mirror")
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-
-    source_sha = publish._delta_row_source_sha(target, {})
-    dest_head = publish._git_head(dest_repo)
-    publish.write_delta_record(
-        setup_dir, "sample", signature="sigA", source_sha=source_sha, dest_head=dest_head
-    )
-
-    (dest_repo / "g.txt").write_text("a real commit into the mirror", encoding="utf-8")
-    _commit_all(dest_repo, "dest advanced")
-    assert publish.delta_row_unchanged(setup_dir, target, "sigA", {}) is False
-
-
-def test_delta_row_unchanged_false_when_no_prior_record(tmp_path, monkeypatch):
-    dest_repo = tmp_path / "dest"
-    source_repo = tmp_path / "source"
-    _init_repo(source_repo)
-    (source_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(source_repo, "source init")
-    _init_repo(dest_repo)
-    (dest_repo / "f.txt").write_text("payload", encoding="utf-8")
-    _commit_all(dest_repo, "dest init")
-
-    target = _make_target("sample", dest_repo, source_repo)
-    monkeypatch.setattr(publish, "_contributing_roots", lambda t: [source_repo])
-    assert publish.delta_row_unchanged(tmp_path / "setup", target, "sigA", {}) is False
+    assert parser.parse_args(["--delta"]).delta is True
+    assert parser.parse_args(["--no-delta"]).delta is False
+    assert parser.parse_args([]).delta is True
 
 
 def test_compute_delta_invalidation_signature_changes_on_store_edit(tmp_path):
@@ -351,3 +101,49 @@ def test_compute_delta_invalidation_signature_stable_when_nothing_changes(tmp_pa
     sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
     sig2 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
     assert sig1 == sig2
+
+
+def test_the_delta_skip_machinery_is_gone():
+    for name in ("write_delta_record", "load_delta_record", "delta_row_unchanged", "_delta_state_path",
+                 "_delta_row_source_sha", "_git_is_clean"):
+        assert not hasattr(publish, name), name
+
+
+def _fake_engine(tmp_path):
+    """A `coordinator_core` with a percolate package, an entry module importing `dep`, and an unrelated op."""
+    core = tmp_path / "coordinator_core"
+    (core / "percolate").mkdir(parents=True)
+    (core / "ops").mkdir()
+    for init in (core / "__init__.py", core / "percolate" / "__init__.py", core / "ops" / "__init__.py"):
+        init.write_text("", encoding="utf-8")
+    (core / "dep.py").write_text("X = 1\n", encoding="utf-8")
+    (core / "ops" / "unrelated.py").write_text("Y = 1\n", encoding="utf-8")
+    entry = core / "ops" / "percolate_run.py"
+    entry.write_text("from coordinator_core import dep\n\n\ndef run_percolate():\n    return dep.X\n", encoding="utf-8")
+    namespace: dict = {}
+    # Compiled under the entry's own filename so `inspect.getfile` resolves to it, with no import.
+    exec(compile("def run_percolate():\n    return None\n", str(entry), "exec"), namespace)
+    module = types.SimpleNamespace(run_percolate=namespace["run_percolate"])
+    return core, publish.PercolateEngineContext(engine_claude_klabauter=module, store=None)
+
+
+def test_signature_ignores_an_op_outside_the_transform_import_closure(tmp_path):
+    core, engine_ctx = _fake_engine(tmp_path)
+    store_path = tmp_path / "percolate-store.yaml"
+    store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
+    sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
+
+    (core / "ops" / "unrelated.py").write_text("Y = 2\n", encoding="utf-8")
+
+    assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) == sig1
+
+
+def test_signature_changes_on_a_module_the_transform_imports(tmp_path):
+    core, engine_ctx = _fake_engine(tmp_path)
+    store_path = tmp_path / "percolate-store.yaml"
+    store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
+    sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
+
+    (core / "dep.py").write_text("X = 2\n", encoding="utf-8")
+
+    assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) != sig1

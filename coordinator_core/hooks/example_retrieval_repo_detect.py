@@ -114,7 +114,7 @@ def detect_banner(cwd: str) -> str:
     db_path = os.path.join(example_retrieval_repo_dir, "graph.db")
 
     if not os.path.isfile(db_path):
-        return "example-retrieval-repo: UNINITIALIZED — no graph.db; run the example-retrieval-repo indexer"
+        return "project-rag: UNINITIALIZED — no graph.db; run the project-RAG indexer"
 
     try:
         db_mtime_epoch = Path(db_path).stat().st_mtime
@@ -133,7 +133,7 @@ def detect_banner(cwd: str) -> str:
 
     built_commit = _git(repo_root, "log", "-1", f"--before={mtime_str}", "--format=%H")
     if not built_commit:
-        return "example-retrieval-repo: UNINITIALIZED — graph.db predates git history; run the example-retrieval-repo indexer"
+        return "project-rag: UNINITIALIZED — graph.db predates git history; run the project-RAG indexer"
 
     delta_raw = _git(repo_root, "rev-list", f"{built_commit}..HEAD", "--count")
     if delta_raw is None:
@@ -147,7 +147,7 @@ def detect_banner(cwd: str) -> str:
         return "example-retrieval-repo: fresh (HEAD aligned)"
 
     base_msg = (
-        f"example-retrieval-repo: STALE — {delta} commits behind HEAD; "
+        f"project-rag: STALE — {delta} commits behind HEAD; "
         "example-retrieval-repo queries may miss recent changes"
     )
 
@@ -156,10 +156,10 @@ def detect_banner(cwd: str) -> str:
         if delta > 50:
             lines.append(
                 f"  WARNING: {delta} commits — index is significantly out of date. "
-                "Run the example-retrieval-repo indexer to rebuild."
+                "Run the project-RAG indexer to rebuild."
             )
         if age_days > 7:
-            lines.append(f"  WARNING: index is {age_days} days old. Run the example-retrieval-repo indexer to rebuild.")
+            lines.append(f"  WARNING: index is {age_days} days old. Run the project-RAG indexer to rebuild.")
         lines.append("</system-reminder>")
         return "\n".join(lines)
 

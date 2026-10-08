@@ -26,7 +26,6 @@ import argparse
 import functools
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,12 +110,12 @@ _ATTRIBUTION_FETCH = 500
 
 def _git_log_since(repo_root: Path, since: str, timeout: int) -> list[str]:
     """`%h %s` lines for commits after `since`, newest first; empty when git cannot answer."""
-    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
     try:
         proc = subprocess.run(
             ["git", "log", f"--since={since}", f"--max-count={_ATTRIBUTION_FETCH}",
              "--format=%h %s"],
-            cwd=repo_root, capture_output=True, text=True, timeout=timeout, **kw,
+            cwd=repo_root, capture_output=True, text=True, timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []

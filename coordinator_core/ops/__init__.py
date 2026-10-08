@@ -365,6 +365,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "review-diff-freeze-op-wanted.md)",
     ),
     ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
+    ("coordinator_core.ops.review_reachability", 'registers "review.reachability" (2026-10-08, wired-up gate entry-point and click-path reachability)'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
@@ -520,6 +521,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "research.verify_scout_inventory_completeness"',
     ),
     ("coordinator_core.ops.research_archive_workdir", 'registers "research.archive_workdir"'),
+    ("coordinator_core.ops.research_close", 'registers "research.close"'),
+    ("coordinator_core.ops.research_shape", 'registers "research.shape"'),
     (
         "coordinator_core.ops.research_dir_restructure",
         'registers "research.restructure_for_repeat_topic"',

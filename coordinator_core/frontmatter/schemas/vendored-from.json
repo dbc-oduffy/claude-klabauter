@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "7200cb51a80330f427077b96ed6ff0a73e025ca5",
-    "doe_commit": "45430c385b9ef62239362bfe914120b0e8fcd25b"
+    "blob": "dcbb016865e444a123e22239937918af9289df54",
+    "doe_commit": "c986b17470096d33938d180eaff16c6a2d6fd794"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -92,12 +92,12 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "plan-tasks.schema.json": {
-    "blob": "0df70876453c14ed3f52ef58b8d18dc556146657",
-    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+    "blob": "35905d5ad09e48d527f4daae0ef8d6005523f705",
+    "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"
   },
   "plan.schema.json": {
-    "blob": "b8f17cbde420a749429a5e36deebfb28ab929920",
-    "doe_commit": "c9ddf0f2ee88ea9501b5f6515081d4fb30f43832"
+    "blob": "c4a6e31f150045e54f58068855d84989ca636e71",
+    "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",
@@ -143,13 +143,9 @@
     "blob": "cdf831d739af01f56c3c2b24138046881d830096",
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
-  "seam-check.schema.json": {
-    "blob": "37be1bad459024e532b748b817c54fef7d66de6b",
-    "doe_commit": "c9ddf0f2ee88ea9501b5f6515081d4fb30f43832"
-  },
   "sizing-object.schema.json": {
-    "blob": "dc82c53df27d78c325319de9b0e6158f0b2d751c",
-    "doe_commit": "b1aa0d205ac9eef1ba1a1552ead9ae8df640d10c"
+    "blob": "f5a3834fddb86ebb4a6e215c2f5cfa9d847ab295",
+    "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

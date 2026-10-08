@@ -1612,9 +1612,23 @@ async def _resync_main_index_for_moves(
     # whole batch, and the remaining chunks still run: each chunk is
     # independent index hygiene over a disjoint path set, so stopping early
     # would leave residue nothing else clears.
-    for chunk in _argv_group_chunks(
-        [(m, (str(m.src), str(m.dst))) for m in relevant_moves]
-    ):
+    # A src the index never held (a `restage_src` adoption of an untracked file) matches no
+    # pathspec, and one unmatched path fails the whole restore; only its dst is restored.
+    indexed = None
+    if any(m.restage_src for m in relevant_moves):
+        try:
+            from coordinator_core.git.git_state import read_index
+
+            indexed = read_index(worktree_root)
+        except Exception:  # noqa: BLE001 -- an unreadable index keeps every src in the argv
+            indexed = None
+
+    def _tokens(m: "Move") -> Tuple[str, ...]:
+        if m.restage_src and indexed is not None and rel_id(m.src, worktree_root) not in indexed:
+            return (str(m.dst),)
+        return (str(m.src), str(m.dst))
+
+    for chunk in _argv_group_chunks([(m, _tokens(m)) for m in relevant_moves]):
         argv = ["git", "restore", "--staged", "--"]
         for _move, tokens in chunk:
             argv.extend(tokens)
