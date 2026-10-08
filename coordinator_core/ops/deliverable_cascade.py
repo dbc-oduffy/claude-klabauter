@@ -591,6 +591,17 @@ def _collect_live_candidates_for_kind(
 # ---------------------------------------------------------------------------
 
 
+def _awaiting_gate_is_ungated(fm: dict) -> bool:
+    """True for an `awaiting_gate` handoff that names no blocker: empty
+    `blocked_by`, no `gate_dependency`/`gate_evidence`, and `blocking_notes`
+    empty or the bare PLACEHOLDER scaffold literal."""
+    if fm.get("blocked_by") or fm.get("gate_dependency") or fm.get("gate_evidence"):
+        return False
+    notes = fm.get("blocking_notes")
+    notes = notes.strip() if isinstance(notes, str) else notes
+    return not notes or (isinstance(notes, str) and notes.upper().startswith("PLACEHOLDER"))
+
+
 async def _predicate_refusal(
     candidate_path: Path,
     fm: dict,
@@ -645,7 +656,11 @@ async def _predicate_refusal(
     leg_c = kind.predicate_legs["c"]
     if leg_c.applies:
         lifecycle_value = fm.get(kind.lifecycle_field)
-        if lifecycle_value not in kind.live_values:
+        if lifecycle_value not in kind.live_values and not (
+            kind is _HANDOFF_KIND
+            and lifecycle_value == "awaiting_gate"
+            and _awaiting_gate_is_ungated(fm)
+        ):
             # Unifying the two kinds'
             # branches into one POSITIVE `live_values` check (Finding 1)
             # collapsed the handoff-specific wording into a single generic

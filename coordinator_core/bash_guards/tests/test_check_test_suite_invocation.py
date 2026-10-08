@@ -370,6 +370,13 @@ def test_testpaths_root_positional_with_scoping_flag_is_not_laundered(repo, free
     `testpaths` root (`coordinator_core/`) is the regression shape."""
     reason = _reason(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
     assert "Detected:" in reason
+    assert "filter selection, not collection" in reason
+    assert "file::node" in reason
+
+
+def test_a_suite_deny_with_no_selection_flag_carries_no_selection_note(repo, free_mutex):
+    reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    assert "filter selection, not collection" not in reason
 
 
 def test_bare_dash_k_with_no_positional_stays_tier_t(repo, free_mutex):

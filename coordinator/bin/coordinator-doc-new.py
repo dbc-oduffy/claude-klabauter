@@ -3440,11 +3440,9 @@ def _scaffold_roadmap_baton(
     Graph field placeholders (sprint, wave, loe, blocked_by, scope) are
     best-effort stubs — the author fills them via Edit after the topo sort via
     bin/roadmap-number-stubs (skills/roadmap-planning/SKILL.md § Step 2.1.5).
-    gate_dependency is the deprecated single-string gate field (C2); when not
-    supplied a scaffolded stub instead gets a blocking_notes placeholder (C1 of
-    docs/plans/2026-08-03-gate-dependency-template-emission-spec.md) — the
-    non-deprecated field satisfies the same cross-field OR without writing the
-    field the template was deprecating it away from.
+    gate_dependency is the deprecated single-string gate field (C2). Supplied, the
+    stub is awaiting_gate on it; absent, the stub is ready_to_fire with no gate
+    field and no blocking_notes (baa11c6df3).
 
     pickup_ready is OMITTED per SKILL § Phase 2.1 note: absence triggers a non-blocking
     /pickup warn; awaiting_gate + a named gate (blocking_notes, gate_dependency, or
@@ -3529,12 +3527,8 @@ def _scaffold_roadmap_baton(
     ]
     if sizing_object:
         lines.append(_sizing_object_line(sizing_object))
-    # awaiting_gate requires at least one of gate_dependency (deprecated),
-    # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
-    # --gate-dependency writes the deprecated field as before; otherwise the
-    # stub gets a blocking_notes placeholder — non-dominating scaffolding is
-    # not possible here (both fields dominate gate_eval rule 1/1a), but the
-    # placeholder at least stops parking the deprecated field by default.
+    # An explicit --gate-dependency is the only gate a stub is born with; it
+    # satisfies awaiting_gate's cross-field OR (CROSS_FIELD_RULES).
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
     if handoff_id:
@@ -3631,15 +3625,9 @@ def _scaffold_goal_seed(
     omitted entirely (not null) when not supplied, matching handoff_id's
     optional-omit convention.
 
-    deployment_state defaults to awaiting_gate — a vision-slice stub is dormant
-    until a PM picks it up via the goal-setting ceremony's second entry point.
-    An explicit gate_dependency writes the deprecated single-string gate field
-    (C2 of handoff.schema.json); when not supplied the stub instead gets a
-    blocking_notes placeholder, which satisfies the same cross-field OR
-    (handoff.schema.json § awaiting_gate needs at least one of gate_dependency
-    (deprecated), blocked_by, or blocking_notes) without scaffolding the
-    deprecated field by default (C1 of
-    docs/plans/2026-08-03-gate-dependency-template-emission-spec.md).
+    deployment_state is awaiting_gate only on an explicit gate_dependency (the
+    deprecated single-string gate field, C2 of handoff.schema.json); otherwise the
+    stub is ready_to_fire with no gate field and no blocking_notes (baa11c6df3).
 
     origin_handoff_id/predecessor_id are pure carry-through ID-companions (C2) —
     see _scaffold_handoff's docstring for the full carry-not-mint contract.
@@ -3707,11 +3695,8 @@ def _scaffold_goal_seed(
             lines.append(_minted_by_line)
     if workstream:
         lines.append(f"workstream: {_yaml_quote(workstream)}")
-    # awaiting_gate requires at least one of gate_dependency (deprecated),
-    # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
-    # --gate-dependency writes the deprecated field as before; otherwise the
-    # stub gets a blocking_notes placeholder instead of defaulting the
-    # deprecated field.
+    # An explicit --gate-dependency is the only gate a stub is born with; it
+    # satisfies awaiting_gate's cross-field OR (CROSS_FIELD_RULES).
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
     if goals:
@@ -3796,14 +3781,9 @@ def _scaffold_roadmap_seed(
     empty goals list here is a SKILL-process gap, not a valid deferred state.
     Emitted as an array per Rule C2-2b; caller (goal-setting ceremony) supplies it.
 
-    deployment_state defaults to awaiting_gate (PM fire required). An explicit
-    gate_dependency writes the deprecated single-string gate field (C2 of
-    handoff.schema.json); when not supplied the stub instead gets a
-    blocking_notes placeholder, which satisfies the same cross-field OR
-    (handoff.schema.json § awaiting_gate needs at least one of gate_dependency
-    (deprecated), blocked_by, or blocking_notes) without scaffolding the
-    deprecated field by default (C1 of
-    docs/plans/2026-08-03-gate-dependency-template-emission-spec.md).
+    deployment_state is awaiting_gate only on an explicit gate_dependency (the
+    deprecated single-string gate field, C2 of handoff.schema.json); otherwise the
+    stub is ready_to_fire with no gate field and no blocking_notes (baa11c6df3).
 
     origin_handoff_id/predecessor_id are pure carry-through ID-companions (C2) —
     see _scaffold_handoff's docstring for the full carry-not-mint contract.
@@ -3880,11 +3860,8 @@ def _scaffold_roadmap_seed(
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
     ])
-    # awaiting_gate requires at least one of gate_dependency (deprecated),
-    # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
-    # --gate-dependency writes the deprecated field as before; otherwise the
-    # stub gets a blocking_notes placeholder instead of defaulting the
-    # deprecated field.
+    # An explicit --gate-dependency is the only gate a stub is born with; it
+    # satisfies awaiting_gate's cross-field OR (CROSS_FIELD_RULES).
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
     if goals:

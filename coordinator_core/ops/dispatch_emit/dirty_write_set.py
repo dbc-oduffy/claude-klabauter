@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,6 +18,7 @@ from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.pathspec import _declared_paths
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
 
 
 class DirtyWriteSetError(ValueError):
@@ -85,9 +87,35 @@ def _dirty_in_write_set(
     return sorted(dirty)
 
 
-def guard_against_dirty_write_set(plan_path, repo_root: Path, *, run=None, ignorecase=None) -> None:
+GENERATED_OUTPUTS_KEY = "generated_outputs"
+REGENERABLE_NOTE = "regenerable, owner unknown: the row that writes it regenerates and commits it"
+_EXAMPLES = 5
+
+
+def declared_generated_outputs(repo_root: Path) -> list[str]:
+    """Globs from the `generated_outputs` key of `coordinator.local.md`.
+
+    The value is a comma-separated list (an optional `[...]` wrapper and
+    per-item quotes are stripped); absent or empty means no declaration.
+    """
+    raw = cs_read_local_md_key(str(repo_root), GENERATED_OUTPUTS_KEY).strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    return [g for g in (_norm(p.strip().strip("\"'")) for p in raw.split(",")) if g]
+
+
+def _matches_any(path: str, globs: list[str], ignorecase: bool) -> bool:
+    """`*` and `**` both cross `/`, so `data/serving/**` covers every depth."""
+    folded = path.lower() if ignorecase else path
+    return any(fnmatchcase(folded, g.lower() if ignorecase else g) for g in globs)
+
+
+def guard_against_dirty_write_set(plan_path, repo_root: Path, *, run=None, ignorecase=None) -> Optional[dict]:
     """Refuse emission when a path the dispatchable rows will write and commit
     is already dirty or untracked — before any script or brief reaches disk.
+
+    Dirty paths matching a declared `generated_outputs` glob do not refuse;
+    they come back as `{"count", "examples", "note"}` (else `None`).
 
     Negative spec: reads only the write-set union through one scoped porcelain
     call — never the unscoped tree, never claims.
@@ -97,6 +125,13 @@ def guard_against_dirty_write_set(plan_path, repo_root: Path, *, run=None, ignor
         union.update(_declared_paths(row))
         union.update(row.writes_under)
     dirty = _dirty_in_write_set(sorted(union), Path(repo_root), run=run, ignorecase=ignorecase)
+    regenerable: list[str] = []
+    if dirty:
+        globs = declared_generated_outputs(Path(repo_root))
+        if globs:
+            fold = _default_ignorecase() if ignorecase is None else ignorecase
+            regenerable = [d for d in dirty if _matches_any(_norm(d), globs, fold)]
+            dirty = [d for d in dirty if d not in set(regenerable)]
     if dirty is None:
         raise DirtyWriteSetError(
             "emission refused -- the write-set dirtiness check could not run "
@@ -111,3 +146,6 @@ def guard_against_dirty_write_set(plan_path, repo_root: Path, *, run=None, ignor
             + "\n  - ".join(dirty)
             + "\nCommit or reconcile them with their owner, then re-emit."
         )
+    if regenerable:
+        return {"count": len(regenerable), "examples": regenerable[:_EXAMPLES], "note": REGENERABLE_NOTE}
+    return None

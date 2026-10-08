@@ -248,3 +248,49 @@ def test_directory_prefix_with_backslashes_and_case(tmp_path) -> None:
     run = FakeRun("?? Source/Mod/New.cpp\n")
     got = tool._dirty_in_write_set(["SOURCE\\Mod\\"], tmp_path, run=run, ignorecase=True)
     assert got == ["Source/Mod/New.cpp"]
+
+
+# --- generated_outputs: regenerable dirt does not refuse ----------------------
+
+ROWS_GENERATED = """\
+- id: C1
+  title: gen
+  change_kind: code-edit
+  surface: data/serving/
+  writes:
+    - src/a.py
+  writes_under:
+    - data/serving/
+  disposition: open
+  body: |
+    regenerate
+"""
+
+
+def _declare(tmp_path: Path, value: str) -> None:
+    (tmp_path / "coordinator.local.md").write_text(
+        f"---\ngenerated_outputs: {value}\n---\n", encoding="utf-8"
+    )
+
+
+def test_declared_glob_lets_emit_proceed_and_lists_paths(tmp_path) -> None:
+    _declare(tmp_path, '"data/serving/**, public/exports/**"')
+    status = "".join(f"?? data/serving/s/{i}.json\n" for i in range(12))
+    out = _guard(_plan(tmp_path, ROWS_GENERATED), tmp_path, FakeRun(status))
+    assert out["count"] == 12
+    assert len(out["examples"]) == 5
+    assert out["note"] == tool.REGENERABLE_NOTE
+
+
+def test_non_matching_dirty_path_still_refuses(tmp_path) -> None:
+    _declare(tmp_path, "[data/serving/**]")
+    run = FakeRun("?? data/serving/x.json\n M src/a.py\n")
+    with pytest.raises(tool.DirtyWriteSetError) as info:
+        _guard(_plan(tmp_path, ROWS_GENERATED), tmp_path, run)
+    assert "src/a.py" in str(info.value) and "x.json" not in str(info.value)
+
+
+def test_no_declaration_is_unchanged(tmp_path) -> None:
+    with pytest.raises(tool.DirtyWriteSetError, match="data/serving/x.json"):
+        _guard(_plan(tmp_path, ROWS_GENERATED), tmp_path, FakeRun("?? data/serving/x.json\n"))
+    assert _guard(_plan(tmp_path, ROWS_GENERATED), tmp_path, FakeRun("")) is None

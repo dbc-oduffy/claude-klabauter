@@ -401,3 +401,42 @@ def test_ac10_composition_parent_ships_minted_spinoff_untouched_legacy_spinoff_r
     assert any(
         str(legacy_spinoff) in p or legacy_spinoff.name in p for p in refused_paths
     )
+
+
+# ---------------------------------------------------------------------------
+# awaiting_gate with nothing gating it is not "live-but-blocked".
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"blocked_by": []},
+        {"blocked_by": [], "blocking_notes": ""},
+        {"blocked_by": [], "blocking_notes": "PLACEHOLDER"},
+    ],
+)
+def test_ungated_awaiting_gate_clears_leg_c(tmp_path, extra):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(repo, "20260101-stub.md", deployment_state="awaiting_gate")
+    fm = {"deployment_state": "awaiting_gate", "deliverable_id": "dlv-test-000000", **extra}
+    assert asyncio.run(cascade_mod._predicate_refusal(handoff, fm, repo / ".git")) is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"blocked_by": ["other-stub"]},
+        {"blocked_by": [], "blocking_notes": "waits on the vendor"},
+        {"blocked_by": [], "gate_dependency": "pm sign-off"},
+    ],
+)
+def test_really_gated_awaiting_gate_still_refuses(tmp_path, extra):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(repo, "20260101-stub.md", deployment_state="awaiting_gate")
+    fm = {"deployment_state": "awaiting_gate", "deliverable_id": "dlv-test-000000", **extra}
+    reason = asyncio.run(cascade_mod._predicate_refusal(handoff, fm, repo / ".git"))
+    assert reason is not None and "live-but-blocked" in reason

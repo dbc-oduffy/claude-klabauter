@@ -1299,6 +1299,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             file=sys.stderr,
         )
 
+    regenerable_dirty = None
     try:
         if args.plan and not args.inventory:
             from coordinator_core.ops.dispatch_emit.dirty_write_set import (
@@ -1308,7 +1309,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
             guard_root = repo_root or _repo_root_for_plan(args.plan)
             if guard_root is not None:
-                guard_against_dirty_write_set(Path(args.plan), guard_root)
+                regenerable_dirty = guard_against_dirty_write_set(Path(args.plan), guard_root)
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
         except ScriptOverCapError as over:
@@ -1327,6 +1328,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return EXIT_DATA_ERROR
 
     result["admission"] = admission_record
+    if regenerable_dirty:
+        result["regenerable_dirty"] = regenerable_dirty
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.lanes:
         for emitted in result["parts"]:

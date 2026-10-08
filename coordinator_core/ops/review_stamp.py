@@ -613,6 +613,11 @@ def mint(
             reverified_tests = latest_tests_supersession(repo_root, run_rel)
             if reverified_tests is not None:
                 integration_data = {**integration_data, "tests": reverified_tests}
+    frozen_claims = prep_data.get("foreign_claims")
+    if isinstance(frozen_claims, list) and frozen_claims:
+        from coordinator_core.ops.dispatch_emit.reverify_delivery import live_held_claims
+
+        prep_data = {**prep_data, "foreign_claims": live_held_claims(repo_root, frozen_claims)}
     prior_criterion = integration_data.get("criterion")
     if isinstance(prior_criterion, dict) and prior_criterion.get("status") in _UNMET_CRITERION:
         from datetime import datetime, timezone

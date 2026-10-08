@@ -66,7 +66,7 @@ def test_unresolved_confinement_foreign_zero_files():
     assert _refusal(rec) == "review-stamp: refusing to mint: 1 confinement violation(s)"
     rec = _record()
     rec["prep"]["foreign_claims"] = ["a.py peer", "zzz.py peer"]
-    assert _refusal(rec) == "review-stamp: refusing to mint: 1 foreign claim(s) on spine paths"
+    assert _refusal(rec) == "review-stamp: refusing to mint: 1 foreign claim(s) on spine paths: a.py peer"
     rec = _record()
     rec["prep"]["slice_files"] = []
     rec["prep"]["product_files"] = []

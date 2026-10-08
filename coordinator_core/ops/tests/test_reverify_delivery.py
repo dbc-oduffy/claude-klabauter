@@ -244,6 +244,7 @@ def _record_live(repo, rel, record, head):
 
 def test_released_foreign_claims_are_cleared_by_reverify(tmp_path, monkeypatch):
     repo, record, rel, head, _ = _foreign_record(tmp_path, 7)
+    monkeypatch.setattr(rd, "live_held_claims", lambda r, f: list(f))
     with pytest.raises(m.MintRefusal, match="7 foreign claim"):
         m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
     monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
@@ -255,6 +256,7 @@ def test_released_foreign_claims_are_cleared_by_reverify(tmp_path, monkeypatch):
 
 def test_a_still_held_foreign_claim_keeps_refusing(tmp_path, monkeypatch):
     repo, record, rel, head, claims = _foreign_record(tmp_path, 2)
+    monkeypatch.setattr(rd, "live_held_claims", lambda r, f: list(f))
     monkeypatch.setattr(rd, "_claim_held", lambda path, cwd: False)
     monkeypatch.setattr(rd, "live_foreign_claims", lambda r, f, h: [claims[1]])
     _record_live(repo, rel, record, head)
@@ -269,8 +271,9 @@ def test_a_claim_whose_commit_is_not_an_ancestor_stays_live(tmp_path, monkeypatc
     assert rd.live_foreign_claims(repo, [off, f"a.txt {head[:12]}"], head) == [off]
 
 
-def test_old_record_keeps_the_frozen_foreign_claims(tmp_path):
+def test_old_record_keeps_the_frozen_foreign_claims(tmp_path, monkeypatch):
     repo, record, rel, head, _ = _foreign_record(tmp_path, 3)
+    monkeypatch.setattr(rd, "live_held_claims", lambda r, f: list(f))
     _supersede(repo, rel, "PASS")
     assert rd.latest_foreign_claims_supersession(repo, rel) is None
     with pytest.raises(m.MintRefusal, match="3 foreign claim"):

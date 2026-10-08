@@ -496,3 +496,13 @@ def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
         assert record["deliverable_id"] == stub["deliverable_id"]
         assert f'sizing_object: "{stub["sizing_object"]}"' in _fm(tmp_path / stub["path"])
     assert len({yaml.safe_load((tmp_path / p).read_text(encoding="utf-8"))["deliverable_id"] for p in paths}) == len(paths)
+
+
+def test_blocker_free_stub_is_born_ready_to_fire_with_no_placeholder_notes(tmp_path, roadmap):
+    reply = bs.stage_roadmap(tmp_path, str(roadmap / "OVERVIEW.md"))
+    by_cluster = {s["cluster"]: s for s in reply["stubs"]}
+    free = _fm(tmp_path / by_cluster["C1"]["path"])
+    assert "deployment_state: ready_to_fire" in free
+    assert "blocking_notes" not in free
+    gated = _fm(tmp_path / by_cluster["C2"]["path"])
+    assert "deployment_state: awaiting_gate" in gated and "blocking_notes" not in gated

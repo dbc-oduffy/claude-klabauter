@@ -1104,6 +1104,25 @@ def _walk_pytest_args(args: Sequence[str]) -> Tuple[bool, List[str]]:
     return scoped, positionals
 
 
+_SELECTION_FLAGS = frozenset({"-k", "-m", "--lf", "--last-failed", "--ff", "--failed-first", "--deselect"})
+
+
+def _selection_flag_note(segments_argv: Sequence[Sequence[str]]) -> str:
+    """A closing line for a deny whose command narrows only by a selection flag.
+
+    The 2026-08-14 correction keeps ``pytest tests/ -k expr`` suite-shaped, because
+    selection flags filter what runs, not what is collected. A caller who reads the deny
+    as a misclassification needs the reason and the scoped form, once.
+    """
+    for argv in segments_argv:
+        if any(a in _SELECTION_FLAGS or a.startswith(("-k=", "-m=")) for a in argv):
+            return (
+                "\n-k/-m/--lf filter selection, not collection: the whole suite is still "
+                "collected. Name the test files or file::node ids to run scoped."
+            )
+    return ""
+
+
 def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
                      cwd: Optional[str], label: str) -> Optional[str]:
     """Is this pytest invocation suite-shaped?
@@ -3011,9 +3030,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     cmd_safe = _sanitize(cmd)
+    note = _selection_flag_note(segments_argv or ())
 
     if is_subagent:
-        return _deny(_deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root))
+        return _deny(_deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root) + note)
 
     if configured is None:
         configured = _configured_test_cmds(repo_root)
@@ -3068,15 +3088,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 and by_tier["fast_test_cmd"] == by_tier["full_test_cmd"]
             )
             if "U" in matched_tiers:
-                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
-            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
+                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note)
+            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note)
 
         if not _command_wrapped_in_suite_mutex(cmd, dialect, testpaths, cwd, configured):
-            return _deny(_deny_reason_wrapper_required(detected, cmd_safe))
+            return _deny(_deny_reason_wrapper_required(detected, cmd_safe) + note)
 
     holder = _mutex_holder()
     if holder:
-        return _deny(_deny_reason_mutex(detected, cmd_safe, holder))
+        return _deny(_deny_reason_mutex(detected, cmd_safe, holder) + note)
 
     return None
 

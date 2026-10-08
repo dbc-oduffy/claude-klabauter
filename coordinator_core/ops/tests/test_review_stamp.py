@@ -931,7 +931,16 @@ def test_mint_ignores_peer_claims_outside_the_reviewed_footprint(tmp_path):
     assert m.mint(plan_path, repo, build_test_path=str(build_test))["unresolved"] == []
 
 
-def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path):
+def _live_claims(monkeypatch, held):
+    from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+
+    monkeypatch.setattr(
+        rd, "live_held_claims", lambda r, f: [c for c in f if str(c).split(" ", 1)[0] in held]
+    )
+
+
+def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path, monkeypatch):
+    _live_claims(monkeypatch, {"coordinator_core/foo.py", "peer/a.py"})
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
     _set_prep(repo, slice_files=["coordinator_core/foo.py"],
@@ -941,13 +950,70 @@ def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path):
+def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path, monkeypatch):
+    _live_claims(monkeypatch, {"peer/a.py"})
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
     _set_prep(repo, foreign_claims=["peer/a.py"])
     plan_path = repo / "docs" / "plans" / "example.md"
     with pytest.raises(m.MintRefusal, match="1 foreign claim"):
         m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_mint_ignores_a_frozen_claim_no_longer_live(tmp_path, monkeypatch):
+    _live_claims(monkeypatch, set())
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, slice_files=["coordinator_core/foo.py"], foreign_claims=["coordinator_core/foo.py"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    assert m.mint(plan_path, repo, build_test_path=str(build_test))["unresolved"] == []
+
+
+def test_mint_refusal_names_the_claims_still_live(tmp_path, monkeypatch):
+    _live_claims(monkeypatch, {"coordinator_core/foo.py"})
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, slice_files=["coordinator_core/foo.py", "coordinator_core/bar.py"],
+              foreign_claims=["coordinator_core/foo.py peerA", "coordinator_core/bar.py peerB"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match=r"1 foreign claim.*coordinator_core/foo.py peerA") as exc:
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+    assert "bar.py" not in str(exc.value)
+
+
+def test_live_read_failure_keeps_the_frozen_refusal(tmp_path, monkeypatch):
+    from coordinator_core.session import claim_index
+
+    def boom(*a, **k):
+        raise OSError("ledger unreadable")
+
+    monkeypatch.setattr(claim_index, "lookup", boom)
+    repo = _setup_repo(tmp_path)
+    _, build_test = _mint_success_fixture(repo)
+    _set_prep(repo, slice_files=["coordinator_core/foo.py"], foreign_claims=["coordinator_core/foo.py"])
+    plan_path = repo / "docs" / "plans" / "example.md"
+    with pytest.raises(m.MintRefusal, match="1 foreign claim"):
+        m.mint(plan_path, repo, build_test_path=str(build_test))
+
+
+def test_live_held_claims_batches_one_lookup_over_all_paths(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+    from coordinator_core.session import claim_index, liveness, touch_record
+
+    calls = []
+
+    class Found(dict):
+        recorded_kind = {"a.py": {"peer": "w"}, "b.py": {"gone": "w"}}
+
+    def fake_lookup(paths, **kw):
+        calls.append(list(paths))
+        return Found({"a.py": ["peer"], "b.py": ["gone"], "c.py": []})
+
+    monkeypatch.setattr(claim_index, "lookup", fake_lookup)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd: sid == "peer")
+    monkeypatch.setattr(touch_record, "kind_blocks_a_peer_commit", lambda k: True)
+    assert rd.live_held_claims(tmp_path, ["a.py x", "b.py y", "c.py z"]) == ["a.py x"]
+    assert calls == [["a.py", "b.py", "c.py"]]
 
 
 _OPERATOR_FM = """\

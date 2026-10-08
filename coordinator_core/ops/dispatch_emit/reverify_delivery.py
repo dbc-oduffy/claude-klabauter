@@ -492,6 +492,39 @@ def _claim_held(path: str, cwd: str) -> bool:
         return True
 
 
+def live_held_claims(repo_root: Path, frozen: List[Any]) -> List[str]:
+    """The subset of `frozen` (`"<path> ..."` strings) whose path a live session still holds a
+    blocking claim on, answered by one `claim_index.lookup` over every path. An unanswerable
+    ledger returns every claim (fail closed)."""
+    from coordinator_core.session import claim_index, liveness, touch_record
+
+    claims = [str(c) for c in frozen]
+    if not claims:
+        return []
+    cwd = str(repo_root)
+    paths = sorted({c.split(" ", 1)[0] for c in claims})
+    try:
+        found = claim_index.lookup(paths, cwd=cwd)
+        live_by_sid: Dict[str, bool] = {}
+        held = set()
+        for path in paths:
+            claimants = found.get(path, [])
+            if claim_index.UNANSWERABLE in claimants:
+                return claims
+            kinds = (found.recorded_kind or {}).get(path, {})
+            for sid in claimants:
+                if not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
+                    continue
+                if sid not in live_by_sid:
+                    live_by_sid[sid] = bool(liveness.session_live(sid, cwd))
+                if live_by_sid[sid]:
+                    held.add(path)
+                    break
+    except Exception:  # noqa: BLE001 - an unanswerable ledger must keep the claims blocking
+        return claims
+    return [c for c in claims if c.split(" ", 1)[0] in held]
+
+
 def live_foreign_claims(repo_root: Path, frozen: List[Any], head_sha: str) -> List[str]:
     """The subset of `frozen` (`"<path> ..."` strings) still blocking at `head_sha`: its path is
     held by a live session, or a commit it names is not an ancestor of `head_sha`."""

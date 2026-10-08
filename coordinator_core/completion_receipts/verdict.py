@@ -95,7 +95,10 @@ def mint_refusal(
     if confinement_violations > 0:
         return f"review-stamp: refusing to mint: {confinement_violations} confinement violation(s)"
     if len(foreign_claims) > 0:
-        return f"review-stamp: refusing to mint: {len(foreign_claims)} foreign claim(s) on spine paths"
+        return (
+            f"review-stamp: refusing to mint: {len(foreign_claims)} foreign claim(s) on spine paths: "
+            + ", ".join(str(c) for c in foreign_claims)
+        )
     if reviewed_files == 0:
         return "review-stamp: refusing to mint: zero files in the reviewed diff"
     return None
