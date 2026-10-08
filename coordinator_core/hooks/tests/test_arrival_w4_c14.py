@@ -362,3 +362,45 @@ def test_day_branch_assert_loads_the_engines_own_session_ensure_branch():
     fn = day_branch_assert._load_session_ensure_branch()
     assert callable(fn)
     assert day_branch_assert._load_session_ensure_branch() is fn
+
+
+def _stop(tmp_path, text, sid):
+    from coordinator_core.hooks.guard_manufactured_blocker import _handler
+
+    transcript = _write_transcript(tmp_path, text)
+    return _handler(
+        {
+            "payload": {
+                "transcript_path": str(transcript),
+                "session_id": sid,
+                "cwd": str(tmp_path),
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Hands-on task: waiting on you to add a redirect URI in the Stytch dashboard.",
+        "- **Operator action:** waiting on you to sign in once so the cookie lands.",
+        "Operator action: now wait on you for the sign-in.",
+    ],
+)
+def test_declared_operator_action_is_exempt(tmp_path, line):
+    out = _stop(tmp_path, "Deployed the fix.\n" + line + "\nDone otherwise.", "sess-op")
+    assert out == {}
+
+
+def test_declared_construct_does_not_exempt_other_lines(tmp_path):
+    text = "Operator action: sign in once.\nThe merge strategy is waiting on you to decide."
+    out = _stop(tmp_path, text, "sess-op-mixed")
+    hso = out["hookSpecificOutput"]
+    assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
+
+
+def test_hand_up_message_names_the_construct(tmp_path):
+    out = _stop(tmp_path, "Three things now wait on you: A, B, C.", "sess-msg")
+    hso = out["hookSpecificOutput"]
+    msg = hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    assert "Hands-on task:" in msg and "Operator action:" in msg

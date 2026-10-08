@@ -19,6 +19,8 @@ FULL_VALUES: dict = {
     "handoff_id": "hnd-example-abcdef",
     "recovers_session": "sid-example",
     "gate_dependency": "example-subsystem gate",
+    "deployment_state": "awaiting_gate",
+    "workstream": "example-ws",
     "goals": ["goal-one", "goal-two"],
     "roadmap_id": "rmp-example-abcdef",
     "stub_id": "stb-example-abcdef",
@@ -113,28 +115,6 @@ def test_present_as_null_custom_absent_literal():
     del values["gate_dependency"]
     output = render_template(template, values)
     assert "gate_dependency: PLACEHOLDER" in output.split("\n")
-
-
-def test_value_or_literal_fallback_present_branch_writes_deprecated_field():
-    output = render_document("goal-seed", FULL_VALUES)
-    lines = output.split("\n")
-    assert (
-        'gate_dependency: "example-subsystem gate"  # deprecated; superseded by blocked_by/blocking_notes'
-        in lines
-    )
-    assert not any(line.startswith("blocking_notes:") for line in lines)
-
-
-def test_value_or_literal_fallback_absent_branch_writes_fallback_line():
-    values = dict(FULL_VALUES)
-    del values["gate_dependency"]
-    output = render_document("goal-seed", values)
-    lines = output.split("\n")
-    assert (
-        "blocking_notes: PLACEHOLDER — name the condition gating this baton, "
-        "or delete this line once blocked_by names it" in lines
-    )
-    assert not any(line.startswith("gate_dependency:") for line in lines)
 
 
 def test_optional_omit_present_branch_emits_line():
@@ -313,42 +293,6 @@ def test_ready_to_fire_arms_still_scaffold_pickup_ready_true(doc_type):
 # ---------------------------------------------------------------------------
 
 _SEED_TYPES = ["goal-seed", "roadmap-seed", "roadmap-baton"]
-
-
-@pytest.mark.parametrize("doc_type", _SEED_TYPES)
-def test_seed_placeholder_blocking_notes_derives_no_gate(doc_type):
-    """The scaffolded PLACEHOLDER note must never park the stub.
-
-    Prose cannot gate (2026-08-19 ruling), and nothing on the graph clears an
-    inert field -- so if this ever started gating, every seed ever scaffolded
-    would be permanently unpickupable.
-    """
-    from coordinator_core.reconcile.gate_eval import derive_readiness
-
-    # The PLACEHOLDER line is the ABSENT branch of the deprecated
-    # `gate_dependency` conditional, so it only renders with that value gone.
-    # Rendering with FULL_VALUES takes the present branch and this test would
-    # assert nothing -- it must not be allowed to pass vacuously.
-    values = {k: v for k, v in FULL_VALUES.items() if k not in ("gate_dependency", "blocking_notes")}
-    output = render_document(doc_type, values)
-
-    assert "blocking_notes:" in output, (
-        f"{doc_type} rendered no blocking_notes PLACEHOLDER line; this test "
-        "exists to pin that line's inertness and must not silently skip"
-    )
-    note = next(
-        line.split(":", 1)[1].strip()
-        for line in output.splitlines()
-        if line.startswith("blocking_notes:")
-    )
-    assert "PLACEHOLDER" in note
-    verdict = derive_readiness(
-        {"deployment_state": "awaiting_gate", "blocked_by": [], "blocking_notes": note},
-        [],
-    )
-
-    assert verdict["deployment_state"] == "ready_to_fire"
-    assert verdict["pickup_ready"] is True
 
 
 @pytest.mark.parametrize("doc_type", _SEED_TYPES)

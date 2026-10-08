@@ -230,8 +230,8 @@ def _patch_frontmatter(
                 out.append("blocked_by:")
                 out.extend(f"  - {b}" for b in blocked_by)
                 continue
-            elif line.startswith("blocking_notes: PLACEHOLDER") and blocked_by:
-                continue
+            elif line == "deployment_state: ready_to_fire" and blocked_by:
+                line = "deployment_state: awaiting_gate"
         out.append(line)
     return "\n".join(out)
 
@@ -587,6 +587,7 @@ def stage_roadmap(
             sizing_object=sizing_rel,
             blocks=sorted(blocks_of[label]),
             covers=unit["sources"],
+            workstream=prefix,
         )
         content = _patch_frontmatter(
             content,

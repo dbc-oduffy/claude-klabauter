@@ -21,6 +21,11 @@ def _outside_f7_carveout_scope(monkeypatch):
     monkeypatch.setattr(_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tempdir(monkeypatch, tmp_path):
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+
+
 def _advisory_text(result: dict) -> str:
     return result["hookSpecificOutput"]["additionalContext"]
 
@@ -289,3 +294,43 @@ def test_xs_other_route_still_nudges(monkeypatch) -> None:
 def test_no_sizing_still_nudges(monkeypatch) -> None:
     _stub_sizing(monkeypatch, None)
     assert op(_sizing_payload()) is not None
+
+
+def _edit(path: str, new: str, sid: str = "sess-rep") -> dict:
+    return {
+        "tool_name": "Edit",
+        "session_id": sid,
+        "tool_input": {
+            "file_path": path,
+            "old_string": "def f():\n    return 1",
+            "new_string": new,
+        },
+    }
+
+
+_SMALL = "def f():\n    return g(1, 2)"
+
+
+def test_repeat_small_edit_to_same_file_nudges_once() -> None:
+    p = "/repo/pkg/script.py"
+    assert op(_edit(p, _SMALL)) is not None
+    assert op(_edit(p, "def f():\n    return g(3, 4)")) is None
+    assert op(_edit(p, "def f():\n    return g(5, 6)")) is None
+
+
+def test_second_file_still_nudges() -> None:
+    assert op(_edit("/repo/pkg/a.py", _SMALL)) is not None
+    assert op(_edit("/repo/pkg/b.py", _SMALL)) is not None
+
+
+def test_large_repeat_edit_still_nudges() -> None:
+    p = "/repo/pkg/big.py"
+    assert op(_edit(p, _SMALL)) is not None
+    big = "\n".join(f"    x{i} = compute({i})" for i in range(60))
+    assert op(_edit(p, "def f():\n" + big)) is not None
+
+
+def test_other_session_nudges_again() -> None:
+    p = "/repo/pkg/s.py"
+    assert op(_edit(p, _SMALL, "s-one")) is not None
+    assert op(_edit(p, _SMALL, "s-two")) is not None

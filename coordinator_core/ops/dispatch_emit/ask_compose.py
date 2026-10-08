@@ -257,7 +257,7 @@ def _phase_titles(
 
 _REVIEW_NOOP_EXIT = "return { halted: 'no-op',"
 _REVIEW_NOOP_TAIL = "wave: null, integration: null }; }"
-_REVIEW_SLICES_GUARD = "  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length) {"
+_REVIEW_SLICES_GUARD = "  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {"
 
 
 def _single_exit_review(blocks: list[str]) -> str:
@@ -270,7 +270,7 @@ def _single_exit_review(blocks: list[str]) -> str:
     if prep.count(_REVIEW_NOOP_EXIT) != 1 or _REVIEW_NOOP_TAIL not in prep or _REVIEW_SLICES_GUARD not in prep:
         raise AskComposeRefused("review prep block no longer has the no-op exit shape single-exit composition rewrites")
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
-    prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || !(_reviewPrep.slices ?? []).length)) {", 1)
+    prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))) {", 1)
     rest = "\n\n".join(blocks[1:])
     return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
 

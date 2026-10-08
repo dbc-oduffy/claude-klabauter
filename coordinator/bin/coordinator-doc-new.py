@@ -3358,6 +3358,17 @@ def _spinoff_marker(
     return f"<!-- spinoff: {created} by {who} during {authoring_session} -->"
 
 
+_STUB_PREFIX_RE = re.compile(r"^(?P<prefix>.+)-\d+$")
+
+
+def _roadmap_workstream(workstream: str | None, stub_id: str) -> str | None:
+    """Explicit workstream, else the stub-id slug prefix (`rmp-03` -> `rmp`); None when neither exists."""
+    if workstream and workstream.strip():
+        return workstream.strip()
+    m = _STUB_PREFIX_RE.match(stub_id or "")
+    return m.group("prefix") if m else None
+
+
 def _scaffold_roadmap_baton(
     title: str,
     branch: str,
@@ -3373,6 +3384,7 @@ def _scaffold_roadmap_baton(
     predecessor: str | None = None,
     goals: list[str] | None = None,
     covers: list[str] | None = None,
+    workstream: str | None = None,
 ) -> str:
     """Generate validator-clean roadmap-baton frontmatter + canonical section skeleton.
 
@@ -3472,6 +3484,7 @@ def _scaffold_roadmap_baton(
     _category = category if category else "roadmap"
     _validate_category(_category)
     _predecessor = predecessor.strip() if predecessor and predecessor.strip() else "none"
+    _workstream = _roadmap_workstream(workstream, stub_id)
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
@@ -3487,11 +3500,11 @@ def _scaffold_roadmap_baton(
         # See skills/roadmap-planning/SKILL.md § Step 2.1, authoring_session field semantics.
         f"authoring_session: {_yaml_quote(f'state/roadmap/{roadmap_id}/')}  # path-shaped; /pickup reads origin context here",
         # _yaml_quote applied to authoring_session interpolation (matches adjacent quoted fields)
-        "workstream: PLACEHOLDER  # replace with roadmap short prefix slug",
+        *([f"workstream: {_yaml_quote(_workstream)}"] if _workstream else []),
         "sprint: 1  # fill from roadmap-number-stubs topo output (Step 2.1.5)",
         "wave: 1    # fill from roadmap-number-stubs topo output (Step 2.1.5)",
         "loe: M",
-        "deployment_state: awaiting_gate",
+        f"deployment_state: {'awaiting_gate' if gate_dependency else 'ready_to_fire'}",
     ]
     _blocks = [b.strip() for b in (blocks or []) if isinstance(b, str) and b.strip()]
     if _blocks:
@@ -3524,8 +3537,6 @@ def _scaffold_roadmap_baton(
     # placeholder at least stops parking the deprecated field by default.
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
-    else:
-        lines.append("blocking_notes: PLACEHOLDER — name the condition gating this baton, or delete this line once blocked_by names it")
     if handoff_id:
         lines.append(f"handoff_id: {_yaml_quote(handoff_id)}")
     _goals = [g.strip() for g in (goals or []) if isinstance(g, str) and g.strip()]
@@ -3599,6 +3610,7 @@ def _scaffold_goal_seed(
     predecessor_id: str | None = None,
     category: str | None = None,
     summary: str | None = None,
+    workstream: str | None = None,
 ) -> str:
     """Generate validator-clean goal-seed frontmatter + canonical section skeleton.
 
@@ -3672,7 +3684,7 @@ def _scaffold_goal_seed(
         "status: open",
         "predecessor: none",
         "kind: goal-seed",
-        "deployment_state: awaiting_gate",
+        f"deployment_state: {'awaiting_gate' if gate_dependency else 'ready_to_fire'}",
         f"category: {_category}",
         f"summary: {_yaml_quote(summary if summary else placeholder_summary)}",
     ]
@@ -3693,9 +3705,8 @@ def _scaffold_goal_seed(
         _minted_by_line = _resolve_minted_by_line()
         if _minted_by_line:
             lines.append(_minted_by_line)
-    else:
-        lines.append("authoring_session: PLACEHOLDER")
-    lines.append("workstream: PLACEHOLDER")
+    if workstream:
+        lines.append(f"workstream: {_yaml_quote(workstream)}")
     # awaiting_gate requires at least one of gate_dependency (deprecated),
     # blocked_by, or blocking_notes (CROSS_FIELD_RULES). An explicit
     # --gate-dependency writes the deprecated field as before; otherwise the
@@ -3703,8 +3714,6 @@ def _scaffold_goal_seed(
     # deprecated field.
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
-    else:
-        lines.append("blocking_notes: PLACEHOLDER — name the condition gating this baton, or delete this line once blocked_by names it")
     if goals:
         lines.append("origin_goal_id:")
         lines.extend(f"  - {_yaml_quote(g)}" for g in goals)
@@ -3762,6 +3771,7 @@ def _scaffold_roadmap_seed(
     predecessor_id: str | None = None,
     category: str | None = None,
     summary: str | None = None,
+    workstream: str | None = None,
 ) -> str:
     """Generate validator-clean roadmap-seed frontmatter + section skeleton.
 
@@ -3841,7 +3851,7 @@ def _scaffold_roadmap_seed(
         "status: open",
         "predecessor: none",
         "kind: roadmap-seed",
-        "deployment_state: awaiting_gate",
+        f"deployment_state: {'awaiting_gate' if gate_dependency else 'ready_to_fire'}",
         f"category: {_category}",
         f"summary: {_yaml_quote(summary if summary else placeholder_summary)}",
     ]
@@ -3864,10 +3874,9 @@ def _scaffold_roadmap_seed(
         _minted_by_line = _resolve_minted_by_line()
         if _minted_by_line:
             lines.append(_minted_by_line)
-    else:
-        lines.append("authoring_session: PLACEHOLDER")
+    if workstream:
+        lines.append(f"workstream: {_yaml_quote(workstream)}")
     lines.extend([
-        "workstream: PLACEHOLDER  # replace with roadmap short prefix slug",
         f"deliverable_id: {_dlv}",
         f"initiative: {_ini}  # FK to state/initiatives/<id>.yaml; null when no named initiative",
     ])
@@ -3878,8 +3887,6 @@ def _scaffold_roadmap_seed(
     # deprecated field.
     if gate_dependency:
         lines.append(f"gate_dependency: {_yaml_quote(gate_dependency)}  # deprecated; superseded by blocked_by/blocking_notes")
-    else:
-        lines.append("blocking_notes: PLACEHOLDER — name the condition gating this baton, or delete this line once blocked_by names it")
     if goals:
         lines.append("origin_goal_id:")
         lines.extend(f"  - {_yaml_quote(g)}" for g in goals)
@@ -7482,6 +7489,16 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         ),
     )
     parser.add_argument(
+        "--workstream",
+        dest="workstream",
+        default=None,
+        metavar="SLUG",
+        help=(
+            "(roadmap-baton, goal-seed, roadmap-seed) workstream: slug. roadmap-baton "
+            "derives it from --stub-id's prefix when omitted; the seeds omit the key."
+        ),
+    )
+    parser.add_argument(
         "--gate-dependency",
         dest="gate_dependency",
         default=None,
@@ -7492,8 +7509,8 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             "blocked_by/blocking_notes). deployment_state=awaiting_gate (the "
             "default for all three types) requires at least one of "
             "gate_dependency, blocked_by, or blocking_notes. When omitted, the "
-            "scaffold writes a blocking_notes placeholder instead — fill via "
-            "Edit before the stub is pickup-ready."
+            "scaffold writes deployment_state: ready_to_fire and no gate field; "
+            "roadmap-blitz-stage re-gates batons that gain blocked_by."
         ),
     )
 
@@ -8754,8 +8771,15 @@ def main(argv: "list[str] | None" = None) -> int:
             sizing_object=args.sizing_object,
         )
     elif doc_type == "roadmap-baton":
-        roadmap_id = args.roadmap_id if args.roadmap_id else "placeholder-rm"
-        stub_id = args.stub_id if args.stub_id else "placeholder-stub-1"
+        if not (args.roadmap_id and args.stub_id):
+            _missing = [f for f, v in (("--roadmap-id", args.roadmap_id), ("--stub-id", args.stub_id)) if not v]
+            print(
+                f"coordinator-doc-new: --type roadmap-baton requires {' and '.join(_missing)}.",
+                file=sys.stderr,
+            )
+            return 1
+        roadmap_id = args.roadmap_id
+        stub_id = args.stub_id
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None
         content = _scaffold_roadmap_baton(
             title=title,
@@ -8772,6 +8796,7 @@ def main(argv: "list[str] | None" = None) -> int:
             predecessor=args.predecessor,
             goals=_goals_list,
             covers=args.covers,
+            workstream=args.workstream,
         )
     elif doc_type == "goal-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None
@@ -8785,6 +8810,7 @@ def main(argv: "list[str] | None" = None) -> int:
             predecessor_id=args.predecessor_id,
             category=args.category,
             summary=args.summary,
+            workstream=args.workstream,
         )
     elif doc_type == "roadmap-seed":
         _goals_list = [g.strip() for g in args.goals.split(",") if g.strip()] if args.goals else None
@@ -8800,6 +8826,7 @@ def main(argv: "list[str] | None" = None) -> int:
             predecessor_id=args.predecessor_id,
             category=args.category,
             summary=args.summary,
+            workstream=args.workstream,
         )
     elif doc_type == "memo":
         content = _scaffold_memo(

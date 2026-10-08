@@ -24,6 +24,11 @@ Suppression conditions (no_advisory):
      diff sizes was REJECTED (one session's datapoint, wrong unit — see
      `_is_semantic_bypass_edit`'s docstring) in favor of this semantic mechanism.
 
+  6. `op()` ONLY: a repeat small edit (<= `_SMALL_EDIT_MAX_LINES` new lines in the
+     call) to a file already nudged this session. The nudge fires once per file per
+     session (marker in the platform temp dir); a new file, or a call writing more
+     than the threshold, still nudges.
+
 Negative-spec:
   - MultiEdit edits[] are NOT forwarded by the mcp_tool hook (only scalar fields
     are forwarded). The source JS's MultiEdit edits[] walk is not portable here.
@@ -508,6 +513,36 @@ def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
     return False
 
 
+_SMALL_EDIT_MAX_LINES = 40
+
+
+def _edit_new_line_count(tool_input: dict) -> int:
+    """Lines this one tool call writes (new_string / content)."""
+    edits = tool_input.get("edits")
+    if isinstance(edits, list) and edits:
+        texts = [e.get("new_string") for e in edits if isinstance(e, dict)]
+    else:
+        texts = [tool_input.get("new_string"), tool_input.get("content")]
+    return sum(t.count("\n") + 1 for t in texts if isinstance(t, str) and t)
+
+
+def _nudged_marker_path(session_id: str, file_path: str) -> str:
+    import tempfile
+
+    hash8 = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:8]
+    return os.path.join(
+        tempfile.gettempdir(), f"coordinator-nudged-{session_id}-{hash8}"
+    )
+
+
+def _mark_nudged(path: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("1")
+    except OSError:
+        pass
+
+
 def _session_sizing_is_xs_dispatch(payload: dict, session_id: str) -> bool:
     """True iff a sizing this session touched has route `dispatch` and tshirt XS.
 
@@ -584,6 +619,14 @@ def op(payload: dict) -> dict | None:
 
     if _session_sizing_is_xs_dispatch(payload, session_id):
         return None
+
+    nudged_marker = _nudged_marker_path(session_id, file_path)
+    if (
+        _sentinel_exists(nudged_marker)
+        and _edit_new_line_count(tool_input) <= _SMALL_EDIT_MAX_LINES
+    ):
+        return None
+    _mark_nudged(nudged_marker)
 
     executor_type, ambiguous = _derive_executor_info(file_path)
     edit_description = _describe_edit(payload)

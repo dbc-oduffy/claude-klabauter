@@ -135,7 +135,7 @@ def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     _, phases = _compose()
     _, prep_block = phases[0]
     guard = prep_block.splitlines()[-1]
-    assert guard.startswith("  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length)")
+    assert guard.startswith("  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))")
     assert "product_files" not in guard
     assert "throw new Error(" in guard
 
@@ -173,7 +173,7 @@ def test_every_wave_call_carries_its_roster_model_effort_and_schema():
 def test_integration_phase_binds_reviewintegration():
     _, phases = _compose()
     _, integration_block = phases[2]
-    assert "const _reviewIntegration = await (async () => { try { return await agent(" in integration_block
+    assert "const _reviewIntegration = _verifyOnly ? null : await (async () => { try { return await agent(" in integration_block
     assert "agentType: 'coordinator:code-reviewer'" in integration_block
     assert json.dumps(_STAGE_SCHEMAS["review-integration-result"], sort_keys=True) in integration_block
 
@@ -424,7 +424,7 @@ def test_prep_scopes_foreign_claims_to_peer_commits_inside_the_footprint():
     assert "NOT in declared_paths under foreign_claims" not in prep_block
 
 
-def _run_prep_block(prep_result: dict) -> dict:
+def _run_prep_block(prep_result: dict, landed: dict | None = None) -> dict:
     """Execute the emitted prep block under node with the agent call stubbed to
     return ``prep_result``; returns ``{"slices": [...]}`` or ``{"error": msg}``."""
     import shutil
@@ -443,8 +443,10 @@ def _run_prep_block(prep_result: dict) -> dict:
         for ln in body
     ]
     script = (
-        "(async () => { try { const _out = await (async () => {\n" + "\n".join(body) +
-        "\n return {slices: _reviewPrep.slices}; })();"
+        "(async () => { try { const _out = await (async () => {\n"
+        + (f"const _landed = {json.dumps(landed)};\n" if landed is not None else "")
+        + "\n".join(body)
+        + "\n return {slices: _reviewPrep.slices, verifyOnly: _verifyOnly}; })();"
         "\n console.log(JSON.stringify(_out));"
         "\n} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
     )
@@ -502,6 +504,43 @@ def test_zero_product_files_disagreeing_with_a_slice_that_lists_files_does_not_h
     prep = {**_PREP, "product_files": 0, "slices": [{"id": "s1", "files": ["x.py"], "diff_path": "d"}]}
     result = _run_prep_block(prep)
     assert "halted" not in result and result["slices"][0]["id"] == "s1"
+
+
+_LANDED = {"C12": {"status": "coded"}}
+
+
+def test_landed_rows_with_no_product_file_proceed_verification_only_not_refuse():
+    result = _run_prep_block({**_PREP, "product_files": 0}, landed=_LANDED)
+    assert "error" not in result and "halted" not in result
+    assert result["verifyOnly"] is True and result["slices"] == []
+
+
+@pytest.mark.parametrize(
+    "prep",
+    [
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 0},
+        {**_PREP, "product_files": 0, "foreign_claims": ["peer.py"]},
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 3},
+        None,
+    ],
+)
+def test_landed_rows_with_failed_or_product_prep_still_refuse(prep):
+    result = _run_prep_block(prep, landed=_LANDED)
+    assert "review prep returned no slices" in result["error"]
+
+
+def test_landed_rows_with_product_files_keep_their_review_slice():
+    result = _run_prep_block(dict(_PREP), landed=_LANDED)
+    assert result["verifyOnly"] is False and len(result["slices"]) == 1
+
+
+def test_verification_only_skips_whole_diff_reviewers_and_integration_but_not_delivery_verifier():
+    _, phases = _compose()
+    wave_block, integration_block = phases[1][1], phases[2][1]
+    assert wave_block.count("() => _verifyOnly ? null : (") == 2
+    verifier = wave_block.split("const _reviewWave")[1].rsplit("() => (async", 1)[1]
+    assert "_verifyOnly" not in verifier
+    assert "const _reviewIntegration = _verifyOnly ? null : await" in integration_block
 
 
 def test_prep_prompt_takes_product_files_from_the_launcher_line():

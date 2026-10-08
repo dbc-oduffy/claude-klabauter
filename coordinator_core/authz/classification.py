@@ -1055,6 +1055,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § "New ops default to
     # MUTATING until a reviewer affirms COMPUTE_ONLY."
     "handoff.repoint_origin": OpClass.MUTATING,
+    # baton.supersede — MUTATING: DR-208-default classification. Stamps superseded_by
+    # onto one live state/handoffs/*.md baton under locked_rmw (ops/baton_supersede.py).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § "New ops default to
+    # MUTATING until a reviewer affirms COMPUTE_ONLY."
+    "baton.supersede": OpClass.MUTATING,
     # initiative.serve_set — COMPUTE_ONLY: reads state/initiatives/*.yaml under the
     # main worktree and returns the attachable-initiative set as a JSON payload. No
     # file writes, no git ops, no subprocess spawns. Handler: ops/initiatives_serve.py.

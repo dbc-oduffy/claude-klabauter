@@ -124,16 +124,10 @@ class RoadmapBatonNoFlagsFallbackTest(unittest.TestCase):
         self.assertTrue(_cli._SLUG_RE.match(fields["roadmap_id"]))
         self.assertTrue(_cli._SLUG_RE.match(fields["stub_id"]))
 
-    def test_full_cli_no_flags_roadmap_baton_mints_valid_slugs(self):
-        """End-to-end: invoking the real CLI surface with no --roadmap-id/
-        --stub-id must produce the same lowercase, _SLUG_RE-conformant
-        fallback -- not just the internal scaffolder helper."""
+    def test_full_cli_no_ids_roadmap_baton_is_refused(self):
+        """The CLI refuses a roadmap-baton without --roadmap-id/--stub-id rather than minting placeholder ids."""
         with _tmp_git_repo() as (repo, out_path):
             result = subprocess.run(
-                # --no-sizing-object is not a "flag" in this test's sense: roadmap-baton
-                # is held to the same explicit-sizing-answer bar as --type plan, so it
-                # is a floor for every invocation. The slug fallback under test is the
-                # --roadmap-id/--stub-id absence, which is unchanged.
                 [
                     sys.executable, str(_CLI_PATH), "--type", "roadmap-baton",
                     "--no-sizing-object", "--out", str(out_path),
@@ -144,13 +138,10 @@ class RoadmapBatonNoFlagsFallbackTest(unittest.TestCase):
                 timeout=30,
                 **_NO_CONSOLE,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            fm_text = out_path.read_text().split("---", 2)[1]
-            fields = yaml.safe_load(fm_text)
-            self.assertTrue(_cli._SLUG_RE.match(fields["roadmap_id"]), fields["roadmap_id"])
-            self.assertTrue(_cli._SLUG_RE.match(fields["stub_id"]), fields["stub_id"])
-            self.assertNotEqual(fields["roadmap_id"], "PLACEHOLDER-RM")
-            self.assertNotEqual(fields["stub_id"], "PLACEHOLDER-stub-1")
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("--roadmap-id", result.stderr)
+            self.assertIn("--stub-id", result.stderr)
+            self.assertFalse(out_path.exists())
 
 
 class ScaffoldSelfValidationTest(unittest.TestCase):

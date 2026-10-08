@@ -4,8 +4,7 @@ Covers:
   - every staged template file parses + validates against FORMAT_VERSION
   - format round-trip: load -> re-serialize -> re-parse -> re-validate is lossless
   - all 22 extracted types are present (the plan's "extract ALL 22" requirement)
-  - all 4 conditional idioms (present_as_null, optional_omit, list_emit_if_present,
-    value_or_literal_fallback) are exercised across the corpus, and no unsanctioned
+  - all 3 conditional idioms (present_as_null, optional_omit, list_emit_if_present) are exercised across the corpus, and no unsanctioned
     field kind sneaks in (AC3)
 
 Spec backlink: pln-strang-12-document-generation--75a7eb § C2 (AC3)
@@ -170,28 +169,6 @@ def test_missing_required_key_is_rejected():
     }
     errors = tf.validate_template(bad)
     assert any("missing required key" in e for e in errors)
-
-
-def test_fallback_line_must_be_a_string():
-    bad = {
-        "format_version": tf.FORMAT_VERSION,
-        "doc_type": "x",
-        "frontmatter": {
-            "style": "fenced",
-            "fields": [
-                {
-                    "kind": "value_or_literal_fallback",
-                    "key": "foo",
-                    "field": "foo",
-                    "quote": False,
-                    "fallback_line": 123,
-                }
-            ],
-        },
-        "body": None,
-    }
-    errors = tf.validate_template(bad)
-    assert any("'fallback_line' must be a string" in e for e in errors)
 
 
 def test_absent_literal_must_be_a_string():

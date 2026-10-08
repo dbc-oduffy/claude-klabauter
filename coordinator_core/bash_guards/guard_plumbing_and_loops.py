@@ -170,6 +170,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from typing import Any, Dict, Optional, Tuple
 
@@ -775,6 +776,37 @@ def _verdict_powershell(
     return None
 
 
+_SMALL_LITERAL_LOOP_MAX = 3
+_NON_LITERAL_ITEM_CHARS = frozenset("$*?[]{}`~\\")
+_PLAIN_SEPARATOR_RE = re.compile(r"[-=_*#~.]+")
+
+
+def _small_literal_for_loop(tokens: Any) -> bool:
+    """A bare ``for x in <=3 literal items; do ...; done`` -- a one-shot
+    diagnostic whose spawn count is fixed and tiny. Globs, substitutions,
+    expansions and any ``find -exec``/``xargs`` wrapper are not small."""
+    if not tokens or len(tokens) < 5 or tokens[0] != "for" or tokens[2] != "in":
+        return False
+    if any(t == "-exec" or t == "xargs" for t in tokens):
+        return False
+    items = []
+    for t in tokens[3:]:
+        if t in (";", "do"):
+            break
+        items.append(t)
+    if not items or len(items) > _SMALL_LITERAL_LOOP_MAX:
+        return False
+    return not any(set(i) & _NON_LITERAL_ITEM_CHARS for i in items)
+
+
+def _only_plain_separator_echo(classification: Any) -> bool:
+    for m in classification.matches:
+        if m.shape is Shape.LABEL_OR_EXIT_ECHO:
+            args = m.evidence.split()[1:]
+            return all(_PLAIN_SEPARATOR_RE.fullmatch(a) for a in args)
+    return False
+
+
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
 ) -> Optional[Dict[str, Any]]:
@@ -836,6 +868,12 @@ def check(
     if primary is None:
         return None
 
+    if primary.shape is Shape.FOR_LOOP and _small_literal_for_loop(classification.tokens):
+        return None
+    if primary.shape is Shape.LABEL_OR_EXIT_ECHO and _only_plain_separator_echo(classification):
+        return None
+    echo_is_separator = _only_plain_separator_echo(classification)
+
     verdict: Optional[Dict[str, Any]] = None
     if primary.shape is Shape.HEAD_TAIL_PLUMBING:
         verdict = _verdict_head_tail(
@@ -846,7 +884,7 @@ def check(
     elif primary.shape is Shape.WHILE_READ_LOOP:
         verdict = _verdict_while_read(cmd, session_id, host_is_windows, payload)
 
-    if not classification.has_shape(Shape.LABEL_OR_EXIT_ECHO):
+    if echo_is_separator or not classification.has_shape(Shape.LABEL_OR_EXIT_ECHO):
         return verdict
     if verdict is not None:
         return _append_echo_line(verdict)

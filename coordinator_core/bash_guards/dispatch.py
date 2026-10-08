@@ -444,6 +444,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
     "block-unreal-engine-resave": ("-run=",),
+    "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
     "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
     "block-subagent-stash-creation": ("stash",),
     "block-subagent-grant-acquisition": ("claude_md_grant",),
@@ -1293,6 +1294,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_editor_kill_by_name import (
             MATCHERS as _matchers_editor_kill_by_name,
         )
+        from coordinator_core.bash_guards.block_whole_filesystem_scan import (
+            MATCHERS as _matchers_whole_filesystem_scan,
+        )
         from coordinator_core.bash_guards.guard_inprocess_search import (
             MATCHERS as _matchers_inprocess_search,
         )
@@ -1327,6 +1331,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_perforce_submit,
             _matchers_unreal_engine_resave,
             _matchers_editor_kill_by_name,
+            _matchers_whole_filesystem_scan,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -2317,6 +2322,10 @@ def _build_guard_chain(
         check as _check_editor_kill_by_name,
         MATCHERS as _matchers_editor_kill_by_name,
     )
+    from coordinator_core.bash_guards.block_whole_filesystem_scan import (
+        check as _check_whole_filesystem_scan,
+        MATCHERS as _matchers_whole_filesystem_scan,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2660,6 +2669,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_editor_kill_by_name),
+        ),
+        # No search rooted at a whole filesystem or drive.
+        GuardEntry(
+            "block-whole-filesystem-scan",
+            lambda: _check_whole_filesystem_scan(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_whole_filesystem_scan),
         ),
         # Branch-name and plan-body confinement: deny-or-None guards, ahead of
         # `offer-git-c` so a `cd <dir> && git ...` prefix cannot route around them.

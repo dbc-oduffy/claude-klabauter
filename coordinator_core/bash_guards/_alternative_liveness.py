@@ -145,6 +145,7 @@ from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_topic_branch
 from coordinator_core.bash_guards import block_editor_kill_by_name
+from coordinator_core.bash_guards import block_whole_filesystem_scan
 from coordinator_core.bash_guards import block_perforce_submit
 from coordinator_core.bash_guards import block_unreal_engine_resave
 from coordinator_core.bash_guards import block_worktree_sentinel_creation
@@ -696,6 +697,9 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_editor_kill_by_name": lambda: block_editor_kill_by_name.check(
         _payload("taskkill /IM UnrealEditor.exe", agent_id=None)
+    ),
+    "block_whole_filesystem_scan": lambda: block_whole_filesystem_scan.check(
+        _payload("find / -name altlive-probe", agent_id=None)
     ),
     "block_unreal_engine_resave": lambda: block_unreal_engine_resave.check(
         _payload("UnrealEditor-Cmd Proj.uproject -run=ResavePackages", agent_id=None)

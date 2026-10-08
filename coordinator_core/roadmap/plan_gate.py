@@ -221,6 +221,8 @@ _BATON_FIELDS = frozenset(
         # scanner cannot read one — the constraint the schema's own field
         # descriptions record so nobody tidies them into a map later.
         "plan_blitz_hold_reason", "plan_blitz_hold_cite", "plan_blitz_hold_until",
+        # Terminal: the baton's work was folded into the baton this names.
+        "superseded_by",
         # The OWNER's own declared gate. `deployment_state: awaiting_gate` above is
         # half the statement; this is the half that says what is being waited on.
         "gate_dependency",
@@ -1130,6 +1132,51 @@ def deliverable_id_collisions(plans: "PlanIndex") -> List[Dict[str, Any]]:
     return collisions
 
 
+def annotate_collisions(
+    collisions: List[Dict[str, Any]], records: Sequence[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Add `kind`, `batons`, `driver_action` and `next_step` to each collision row.
+
+    Reports, never resolves (`deliverable.fork_detect`'s posture): no winner
+    field. An id carried by 2+ live batons of which at most one is not
+    `deployment_state: continued` is a succession chain sharing one id by
+    design -- `lineage`, no action. Anything else is a `fork`. No op splits an
+    id (carry-not-remint, D1), so the fork step is an adjudication routed to the
+    owner, and `deliverable_id` is never hand-edited.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in collisions:
+        did = row["deliverable_id"]
+        carriers = [
+            r
+            for r in records
+            if did in _as_list(r["_fm"].get("deliverable_id"))
+            or did in _as_list(r["_fm"].get("deliverable_ids"))
+        ]
+        stale = [r for r in carriers if r["deployment_state"] != "continued"]
+        lineage = len(carriers) >= 2 and len(stale) <= 1
+        if lineage:
+            kind, action = "lineage", "none"
+            step = "expected lineage, no action: continued stages share one id by design"
+        else:
+            kind, action = "fork", "report-to-owner"
+            step = (
+                f"true fork: {len(row['paths'])} plans share one id; no op splits ids. "
+                "Not blocking this wave -- memo the owner to adjudicate which are one "
+                "deliverable; do not hand-edit deliverable_id"
+            )
+        out.append(
+            dict(
+                row,
+                kind=kind,
+                batons=sorted(r["id"] for r in carriers),
+                driver_action=action,
+                next_step=step,
+            )
+        )
+    return out
+
+
 def _live_successor_plans(deliverable_id: str, exclude_path: str, plans: "PlanIndex") -> List[str]:
     """Plans sharing `deliverable_id` that are NOT `exclude_path` and are not
     themselves superseded — the candidate "successor" set for one baton's own
@@ -1966,6 +2013,19 @@ def assemble_plan_gate(
             return None
         return {}
 
+    def _w_superseded(record):
+        """A baton whose work was folded into another is terminal: neither a
+        candidate nor held nor unsized. The target is not checked for existence."""
+        target = str(record["_fm"].get("superseded_by") or "").strip()
+        if not target:
+            return None
+        return {
+            "baton": record["id"],
+            "path": record["path"],
+            "title": record["title"],
+            "superseded_by": target,
+        }
+
     def _w_held(record):
         """A baton somebody decided must not fire is HELD -- example-retrieval-repo,
         2026-09-11, the friction that cost them the most.
@@ -2052,6 +2112,7 @@ def assemble_plan_gate(
         ("superseded_deliverable", _w_superseded_deliverable),
         (None, _w_out_of_roadmap),
         (None, _w_not_targeted),
+        ("superseded", _w_superseded),
         ("held", _w_held),
         ("waiting_on_execution", _w_waiting_on_execution),
     ]
@@ -2076,12 +2137,15 @@ def assemble_plan_gate(
     replanned_rows = withdrawn["replanned"]
     superseded_deliverable_rows = withdrawn["superseded_deliverable"]
     held_rows = withdrawn["held"]
+    superseded_rows = withdrawn["superseded"]
     waiting_on_execution_rows = withdrawn["waiting_on_execution"]
 
     # Corpus-wide, never reduced: two LIVE plans sharing one `deliverable_id`
     # is an authoring question this module cannot answer from disk, so it is
     # named rather than silently picked — see `deliverable_id_collisions`.
-    deliverable_id_collision_rows = deliverable_id_collisions(plans)
+    deliverable_id_collision_rows = annotate_collisions(
+        deliverable_id_collisions(plans), records
+    )
 
     # A baton whose OWNER declared a gate says so in the report —
     # example-cockpit-repo, 2026-09-11.
@@ -2386,6 +2450,7 @@ def assemble_plan_gate(
         "deliverable_id_collisions": deliverable_id_collision_rows,
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
+        "superseded": superseded_rows,
         "gated": gated_rows,
         "inert_fields": inert_rows,
         "counts": dict(
@@ -2393,6 +2458,7 @@ def assemble_plan_gate(
             untracked=len(untracked_rows),
             resurrected=len(resurrected_rows),
             replanned=len(replanned_rows),
+            superseded=len(superseded_rows),
             superseded_deliverable=len(superseded_deliverable_rows),
             deliverable_id_collisions=len(deliverable_id_collision_rows),
             shared_wave_slot=len(shared_wave_slot_rows),

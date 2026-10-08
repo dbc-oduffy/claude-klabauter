@@ -740,6 +740,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/handoff_phase_stamp.py",
         ("_handler",),
     ),
+    "baton.supersede": (
+        "coordinator_core/ops/baton_supersede.py",
+        ("_handler",),
+    ),
     "hooks.agent_completion_log": (
         "coordinator_core/hooks/agent_completion_log.py",
         ("_handler",),

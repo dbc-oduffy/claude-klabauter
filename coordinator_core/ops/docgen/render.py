@@ -33,10 +33,6 @@ and ``body`` blocks in order and renders exactly what the shape prescribes:
     shape line-for-line (e.g. ``completion``'s ``chain``).
   - ``list_emit_if_present``: a ``key:`` header plus one ``  - <item>`` line
     per element, but only when the resolved list is non-empty.
-  - ``value_or_literal_fallback``: ``{key}: {value}{suffix}`` when the resolved
-    value is truthy (identical shape to ``value``); else the fixed
-    ``fallback_line`` verbatim, no substitution — a different key entirely, not
-    this field's key with a placeholder value (contrast ``present_as_null``).
 
 Quoting mirrors the oracle's ``_yaml_quote`` (``bin/lib/memo_compose.py``)
 byte-for-byte: always double-quote, escaping ``\\``, ``"``, ``\\n``, ``\\r``,
@@ -131,13 +127,6 @@ def _render_optional_omit(spec: dict, values: Mapping[str, Any]) -> str | None:
     return spec.get("absent_comment")
 
 
-def _render_value_or_literal_fallback(spec: dict, values: Mapping[str, Any]) -> str:
-    value = values.get(spec["field"])
-    if value:
-        return _render_keyed_value(spec, value)
-    return spec["fallback_line"]
-
-
 def _render_list_emit_if_present(spec: dict, values: Mapping[str, Any]) -> list[str]:
     items = values.get(spec["field"])
     if not items:
@@ -169,17 +158,12 @@ def _dispatch_list_emit_if_present(spec: dict, values: Mapping[str, Any]) -> lis
     return _render_list_emit_if_present(spec, values)
 
 
-def _dispatch_value_or_literal_fallback(spec: dict, values: Mapping[str, Any]) -> list[str]:
-    return [_render_value_or_literal_fallback(spec, values)]
-
-
 _FIELD_RENDERERS = {
     "literal": _dispatch_literal,
     "value": _dispatch_value,
     "present_as_null": _dispatch_present_as_null,
     "optional_omit": _dispatch_optional_omit,
     "list_emit_if_present": _dispatch_list_emit_if_present,
-    "value_or_literal_fallback": _dispatch_value_or_literal_fallback,
 }
 
 

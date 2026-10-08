@@ -54,11 +54,11 @@ class GoalSeedRoadmapSeedOmitPickupReadyTest(unittest.TestCase):
         self.assertNotIn("pickup_ready", content)
 
     def test_goal_seed_still_awaiting_gate(self):
-        content = _cli._scaffold_goal_seed(title="t", branch="b")
+        content = _cli._scaffold_goal_seed(title="t", branch="b", gate_dependency="g")
         self.assertIn("deployment_state: awaiting_gate", content)
 
     def test_roadmap_seed_still_awaiting_gate(self):
-        content = _cli._scaffold_roadmap_seed(title="t", branch="b")
+        content = _cli._scaffold_roadmap_seed(title="t", branch="b", gate_dependency="g")
         self.assertIn("deployment_state: awaiting_gate", content)
 
 

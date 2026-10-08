@@ -273,6 +273,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.discharge_landed":               "common_dir",
     "handoff.backfill_claim_stamp":          "common_dir",
     "handoff.repoint_origin":                "common_dir",
+    "baton.supersede":                       "common_dir",
     "handoff.close_origin_stub":             "common_dir",
     "handoff.normalize":                     "common_dir",
     "initiative.serve_set":                  "common_dir",

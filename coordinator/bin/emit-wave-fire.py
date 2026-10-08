@@ -528,6 +528,39 @@ def _baton_arg(record: dict) -> dict:
     }
 
 
+def _unlinked_split_line(records: list[dict]) -> str:
+    """Why each unlinked baton has no `planPath`, and whether any of it needs the driver.
+
+    Buckets are exclusive, in priority order. Only `broken` needs action: the baton names a
+    plan (or several tie) that no link basis resolved, so the planner would author over it.
+    The rest are the expected reasons a planning wave holds a baton with no plan.
+    """
+    buckets = {"broken": [], "held": [], "routed": [], "unsized": [], "planless": []}
+    for r in records:
+        if r.get("unlinked_plan_claim") or r.get("ambiguous_plan_link"):
+            key = "broken"
+        elif r.get("held"):
+            key = "held"
+        elif r.get("waiting_on_execution"):
+            key = "routed"
+        elif not r.get("sized"):
+            key = "unsized"
+        else:
+            key = "planless"
+        buckets[key].append(r["id"])
+    split = (
+        f"  unlinked {len(records)}: {len(buckets['planless'])} plannable-planless, "
+        f"{len(buckets['unsized'])} unsized, {len(buckets['routed'])} routed to execution, "
+        f"{len(buckets['held'])} held, {len(buckets['broken'])} broken link. "
+    )
+    if buckets["broken"]:
+        return (
+            split + f"Action: {buckets['broken']} name a plan no link basis resolves; "
+            "write `governing_plan:` onto each, re-freeze."
+        )
+    return split + "No action: the wave plans the rest."
+
+
 def _engine_ref(repo_root: Path, script_source: Path) -> dict:
     """What code this fire is a frozen copy of, recorded at emit time.
 
@@ -1268,8 +1301,9 @@ def main(argv=None) -> int:
         "--wave-index",
         type=int,
         default=0,
-        help="which wave OF THE FROZEN REPORT to fire. `roadmap.plan_gate` numbers `waves` "
-        "from the READ, so every wave of a run arrives as 0 and this is almost always 0.",
+        help="0-based index into the frozen gate's `waves` list, NOT the run's wave number "
+        "(use --wave-number for that). `roadmap.plan_gate` numbers `waves` from the READ, so "
+        "this is almost always 0; out of range is refused.",
     )
     ap.add_argument(
         "--wave-number",
@@ -1455,9 +1489,11 @@ def main(argv=None) -> int:
         waves = _wave_id_lists(payload.get("waves") or [])
     except ValueError as exc:
         return refuse(f"malformed gate report: {exc}")
-    if args.wave_index >= len(waves):
+    if not 0 <= args.wave_index < len(waves):
         return refuse(
-            f"the report has {len(waves)} wave(s); wave {args.wave_index} is not one of them"
+            f"the frozen gate has {len(waves)} wave(s); --wave-index {args.wave_index} is a "
+            "0-based index into it, not the run's wave number. Use --wave-number for the run's "
+            "wave."
         )
     wave_ids = list(waves[args.wave_index])
     if not wave_ids:
@@ -1582,6 +1618,9 @@ def main(argv=None) -> int:
         f"adopted {len(adopted)} from this trail",
         file=sys.stderr,
     )
+    unlinked = [by_id[e["id"]] for e in entries if not e.get("planPath")]
+    if unlinked:
+        print(_unlinked_split_line(unlinked), file=sys.stderr)
     if adopted:
         print(
             f"  ADOPTED {len(adopted)} plan(s) from this trail that the gate report does not link "

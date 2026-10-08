@@ -150,7 +150,14 @@ _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
 
 _OUT_RE = re.compile(r"(?<![^ \t])(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
 
-_O_IS_NOT_OUTPUT = frozenset({"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "git"})
+#: Tools whose ``-o`` is an output FILE. Any other command word (grep, sed, awk,
+#: find's ``-o`` OR operator, ssh -o options, ...) takes a non-path ``-o`` value.
+_O_IS_OUTPUT_FILE = frozenset({
+    "gcc", "g++", "cc", "c++", "clang", "clang++", "cl", "ld", "rustc", "go",
+    "curl", "sort", "pandoc", "dotnet", "msbuild", "nvcc", "ffmpeg", "tsc",
+})
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_MV_LEAD_OK = frozenset({"&&", "||", "|", ";", "git", "sudo", "command", "then", "do", "else", "{", "(", "!", "time"})
 
 _HEREDOC_GLUE_RE = re.compile(r"<<.*$")
 _PROCSUB_GLUE_RE = re.compile(r"<\(.*$")
@@ -242,9 +249,12 @@ def _extract_dest_candidates(cmd: str) -> List[str]:
     dest: List[str] = []
     in_mv = False
     arg_count = 0
+    prev = ";"
     for t in _tokenize_quote_aware(cmd):
         if t == "" or t == "\\":
             continue
+        lead_ok = prev in _MV_LEAD_OK or prev.endswith((";", "&", "|", "(")) or bool(_ENV_ASSIGN_RE.match(prev))
+        prev = t
         if in_mv:
             if t.startswith("-"):
                 continue
@@ -254,7 +264,7 @@ def _extract_dest_candidates(cmd: str) -> List[str]:
                 in_mv = False
                 arg_count = 0
             continue
-        if t == "mv":
+        if t == "mv" and lead_ok:
             in_mv = True
             arg_count = 0
     return dest
@@ -408,7 +418,7 @@ def _extract_out_candidates(cmd: str) -> List[str]:
     out: List[str] = []
     for line in cmd.split("\n"):
         for m in _OUT_RE.finditer(line):
-            if m.group(0).startswith("-o") and _segment_command_word(line, m.start()) in _O_IS_NOT_OUTPUT:
+            if m.group(0).startswith("-o") and _segment_command_word(line, m.start()) not in _O_IS_OUTPUT_FILE:
                 continue
             out.append(m.group(1))
     return out

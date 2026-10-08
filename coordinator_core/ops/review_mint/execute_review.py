@@ -348,13 +348,23 @@ def compose_execute_review(
             f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) {{ "
             f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
             f"prep: _reviewPrep, wave: null, integration: null }}; }}\n"
+            # Rows landed but changed no product file (a verification-only row):
+            # the clean empty-diff prep is the one case with nothing to review.
+            # The slice reviewers, other whole-diff reviewers and integration
+            # are skipped; the delivery verifier and the terminal judge still run.
+            # The same clean-prep predicate as the no-op halt, minus its
+            # landed-rows condition; a refused prep fails `verdict`, and a prep
+            # with product files fails `product_files`, so both still throw.
+            f"  const _verifyOnly = !!(_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+            f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
+            f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length));\n"
             # A failed or refused prep yields no slices -- a refusal reports
             # product_files 0, so the guard keys on the slices alone. The wave's
             # `?? []` would otherwise expand to no sliced reviewer and land the
             # run reviewed by the whole-diff tail alone. Declared paths are
             # non-empty here: the plan route always declares them, and the queue
             # route skips the wave before prep when no row committed.
-            f"  if (!_reviewPrep || !(_reviewPrep.slices ?? []).length) {{ throw new Error("
+            f"  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {{ throw new Error("
             f"{_js_string_literal(_NO_SLICES_REFUSAL)}); }}",
         )
     )
@@ -449,7 +459,10 @@ def compose_execute_review(
             )
         )
         call = f"() => agent({_prompt_literal(wave_prompt)} + {frozen}, " + call[len(prefix):]
-        item_lines.append(f"    {_degrading(call)}")
+        degraded = _degrading(call)
+        item_lines.append(
+            f"    {degraded}" if is_delivery_verifier else f"    () => _verifyOnly ? null : ({degraded})()"
+        )
 
     map_lines = ",\n".join(item_lines)
 
@@ -505,7 +518,7 @@ def compose_execute_review(
             (
                 integration_phase,
                 f"  phase({_js_string_literal(integration_phase)});\n"
-                f"  const _reviewIntegration = await {_degrading(integration_call)};",
+                f"  const _reviewIntegration = _verifyOnly ? null : await {_degrading(integration_call)};",
             )
         )
 

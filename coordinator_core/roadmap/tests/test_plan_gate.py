@@ -731,6 +731,37 @@ def test_two_live_plans_sharing_a_deliverable_id_are_named_not_silently_picked(t
     assert collision["paths"] == sorted([path_x, path_y])
 
 
+def test_a_collision_among_live_batons_is_a_fork_with_a_next_step(tmp_path):
+    path_x = _plan(tmp_path, "plan-x", "draft", deliverable_id="dlv-dup")
+    path_y = _plan(tmp_path, "plan-y", "approved", deliverable_id="dlv-dup")
+    _baton(tmp_path, "baton-x", governing_plan=path_x, deliverable_id="dlv-dup")
+    _baton(tmp_path, "baton-y", governing_plan=path_y, deliverable_id="dlv-dup")
+
+    collision = pg.assemble_plan_gate(tmp_path)["deliverable_id_collisions"][0]
+
+    assert collision["kind"] == "fork"
+    assert collision["batons"] == ["baton-x", "baton-y"]
+    assert collision["driver_action"] == "report-to-owner"
+    assert "winner" not in collision
+    assert "do not hand-edit deliverable_id" in collision["next_step"]
+
+
+def test_a_continued_chain_sharing_an_id_is_an_expected_lineage(tmp_path):
+    path_x = _plan(tmp_path, "plan-x", "draft", deliverable_id="dlv-dup")
+    path_y = _plan(tmp_path, "plan-y", "approved", deliverable_id="dlv-dup")
+    _baton(
+        tmp_path, "stage-1", governing_plan=path_x, deliverable_id="dlv-dup",
+        deployment_state="continued", continued_into="stage-2",
+    )
+    _baton(tmp_path, "stage-2", governing_plan=path_y, deliverable_id="dlv-dup")
+
+    collision = pg.assemble_plan_gate(tmp_path)["deliverable_id_collisions"][0]
+
+    assert collision["kind"] == "lineage"
+    assert collision["driver_action"] == "none"
+    assert collision["next_step"].startswith("expected lineage, no action")
+
+
 def test_kind_plan_is_admitted_because_the_template_emits_it():
     assert pg.is_plan_record({"kind": "plan"}) is True
     assert pg.is_plan_record({}) is True
@@ -1389,3 +1420,35 @@ def test_an_archived_plan_that_was_abandoned_does_not_open_the_gate(tmp_path):
     dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
 
     assert dependent["execution_gate"]["open"] is False
+
+
+def test_a_superseded_baton_is_terminal_counted_and_listed_with_its_target(tmp_path):
+    _baton(tmp_path, "folded-1", superseded_by="target-1")
+    _baton(tmp_path, "target-1")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["superseded"] == 1
+    assert report["counts"]["held"] == 0
+    assert report["counts"]["candidates"] == 1
+    assert report["counts"]["unsized"] == 1
+    assert all("folded-1" not in wave for wave in report["waves"])
+    (row,) = report["superseded"]
+    assert row["baton"] == "folded-1"
+    assert row["superseded_by"] == "target-1"
+
+
+def test_a_superseded_baton_that_is_also_held_reports_only_as_superseded(tmp_path):
+    _baton(tmp_path, "folded-1", superseded_by="target-1", plan_blitz_hold_reason="x")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["superseded"] == 1
+    assert report["counts"]["held"] == 0
+    assert report["counts"]["unsized"] == 0
+
+
+def test_an_empty_superseded_by_leaves_the_baton_a_candidate(tmp_path):
+    _baton(tmp_path, "live-1", superseded_by='""')
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["superseded"] == 0
+    assert report["counts"]["candidates"] == 1

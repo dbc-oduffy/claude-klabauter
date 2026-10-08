@@ -38,17 +38,6 @@ THREE idioms, each reused independently across fields:
      line followed by one ``  - <item>`` line per element ONLY when the resolved
      list is non-empty; the whole block (header + items) is omitted when the
      list is empty or absent (e.g. ``origin_goal_id`` from the ``goals`` arg).
-  4. **value-or-literal-fallback** — added 2026-08-05 (re-opens the "closed at 3"
-     finding above; see ``archive/specs/2026-08/2026-08-03-gate-dependency-template-emission-spec.md``
-     § C1, which introduced this idiom oracle-side and was never ported here).
-     When the resolved value is truthy, emit ``{key}: {value}{suffix}`` exactly
-     like ``value``; when falsy, emit a completely different FIXED line
-     (``fallback_line``, verbatim — a different key, not this field's absence).
-     Distinct from ``present_as_null`` (which always emits the SAME key with a
-     substituted value) and from ``optional_omit`` (whose absent branch is
-     silence or a comment on the SAME key, never a second key). Used for
-     ``gate_dependency``, whose unfilled default now writes a `blocking_notes``
-     placeholder instead of parking the deprecated field (C1 of the spec above).
 
 A template additionally carries plain, non-conditional lines:
 
@@ -72,7 +61,7 @@ A template additionally carries plain, non-conditional lines:
     (optionally YAML-quoted per ``quote``) — no presence branch; the caller is
     expected to always supply the value (e.g. ``title``, ``created``).
 
-No FieldSpec kind beyond these six exists, and no kind reaches for arbitrary
+No FieldSpec kind beyond these five exists, and no kind reaches for arbitrary
 Python (no eval, no callable payloads in the JSON) — AC3's "no idiom requires an
 escape hatch to Python" is a structural property of this module's validator, not
 a convention: ``validate_template`` rejects any ``kind`` outside ``FIELD_KINDS``.
@@ -112,16 +101,12 @@ FORMAT_VERSION = "docgen-template/v1"
 # The two non-conditional line kinds (always emitted; no presence branch).
 _PLAIN_FIELD_KINDS = frozenset({"literal", "value"})
 
-# The 3 idioms AC3 originally closed the set at, plus "value_or_literal_fallback"
-# (2026-08-05, archive/specs/2026-08/2026-08-03-gate-dependency-template-emission-spec.md
-# § C1) — a real 4th shape the oracle introduced after AC3 landed, not a casual
-# re-opening. Do not add a 5th without the same substrate-verification rigor.
+# The 3 idioms AC3 closed the set at. Do not add a 4th without substrate verification.
 CONDITIONAL_FIELD_KINDS = frozenset(
     {
         "present_as_null",
         "optional_omit",
         "list_emit_if_present",
-        "value_or_literal_fallback",
     }
 )
 
@@ -130,7 +115,7 @@ FIELD_KINDS = _PLAIN_FIELD_KINDS | CONDITIONAL_FIELD_KINDS
 # Kinds carrying a fixed "line" string (no key/field/quote shape).
 _LINE_SHAPED_KINDS = frozenset({"literal"})
 
-# Kinds carrying the key/field/quote(/suffix) shape — "value" plus the 4 conditionals.
+# Kinds carrying the key/field/quote(/suffix) shape — "value" plus the 3 conditionals.
 _KEYED_SHAPED_KINDS = frozenset({"value"}) | CONDITIONAL_FIELD_KINDS
 
 BODY_KINDS = frozenset({"raw"})
@@ -144,7 +129,6 @@ _FIELD_REQUIRED_KEYS: dict[str, frozenset] = {
     "present_as_null": frozenset({"key", "field", "quote"}),
     "optional_omit": frozenset({"key", "field", "quote"}),
     "list_emit_if_present": frozenset({"key", "field", "quote"}),
-    "value_or_literal_fallback": frozenset({"key", "field", "quote", "fallback_line"}),
 }
 
 # Keys every field spec dict may carry beyond the required set (all optional).
@@ -154,7 +138,6 @@ _FIELD_OPTIONAL_KEYS: dict[str, frozenset] = {
     "present_as_null": frozenset({"suffix", "absent_literal"}),
     "optional_omit": frozenset({"suffix", "absent_comment"}),
     "list_emit_if_present": frozenset(),
-    "value_or_literal_fallback": frozenset({"suffix"}),
 }
 
 
@@ -206,8 +189,6 @@ def _validate_field_spec(spec: Any, index: int) -> list[str]:
             errors.append(f"{prefix} (kind={kind}): 'absent_literal' must be a string")
         if "absent_comment" in spec and not isinstance(spec["absent_comment"], str):
             errors.append(f"{prefix} (kind={kind}): 'absent_comment' must be a string")
-        if "fallback_line" in spec and not isinstance(spec["fallback_line"], str):
-            errors.append(f"{prefix} (kind={kind}): 'fallback_line' must be a string")
     return errors
 
 

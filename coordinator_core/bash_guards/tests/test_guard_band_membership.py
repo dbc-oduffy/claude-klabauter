@@ -54,6 +54,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-perforce-submit",
     "block-unreal-engine-resave",
     "block-editor-kill-by-name",
+    "block-whole-filesystem-scan",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see

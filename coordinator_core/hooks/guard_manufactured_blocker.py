@@ -48,6 +48,10 @@ both the fire and its discharge in the block-discharge ledger in the same
 call) -- no manual `block-discharge record` round trip. A repeat trigger in
 the same session is silent (`no_advisory()`).
 
+Declared operator acts: a line starting `Hands-on task:` or `Operator action:`
+(optionally bulleted or bolded) names a physical act only the operator can do
+and is removed before any check runs (`_strip_declared_operator_actions`).
+
 Trigger predicates (`_HANDOFF_PATTERNS`/`_POSSESSIVE_PATTERNS`/
 `_OWNERSHIP_CUE_PATTERNS`) skip a match sitting in a negated clause
 ("nothing is waiting on you") or inside a quoted span ("your call" quoted
@@ -203,7 +207,9 @@ _CORRECTION_TEXT = (
     "its own nouns -- an unnecessary stop costs context and PM attention "
     "neither gets back. Drive it as far as you can yourself and re-close "
     "having resolved it, or state the genuine PM-altitude question plainly "
-    "if one remains.\n"
+    "if one remains. A physical act only the operator can do (dashboard "
+    "click, sign-in) is no hand-up: put it on its own line starting "
+    "`Hands-on task:` or `Operator action:`.\n"
 )
 
 _SIZING_TOPIC_PATTERNS = [
@@ -240,6 +246,21 @@ _DECLARATIVE_STALL_CORRECTION_TEXT = (
 )
 
 _BULLET_CONTINUATION_LINE_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+
+
+_DECLARED_OPERATOR_ACTION_RE = re.compile(
+    r"^[ \t]*(?:(?:[-*+>]|\d+[.)])[ \t]+)?(?:\*\*|__)?"
+    r"(?:hands-on[ \t]+task|operator[ \t]+action)[ \t]*:",
+    re.IGNORECASE,
+)
+
+
+def _strip_declared_operator_actions(text: str) -> str:
+    """Drop lines that declare an operator-only physical act (`Hands-on task:`
+    / `Operator action:`) so no trigger or decidability check reads them."""
+    return "\n".join(
+        ln for ln in text.split("\n") if not _DECLARED_OPERATOR_ACTION_RE.match(ln)
+    )
 
 
 def _tail_text(path: str, max_bytes: int = _TAIL_WINDOW_BYTES) -> str:
@@ -606,6 +627,10 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     text = _final_assistant_text(transcript_path)
     if not text:
+        return no_advisory()
+
+    text = _strip_declared_operator_actions(text)
+    if not text.strip():
         return no_advisory()
 
     if not _matches_manufactured_blocker(text):

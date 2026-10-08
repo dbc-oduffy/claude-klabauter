@@ -323,11 +323,13 @@ class SeedPlaceholderBlockingNotesDoesNotGateTest(unittest.TestCase):
         self.assertEqual(result["deployment_state"], "ready_to_fire")
         self.assertIs(result["pickup_ready"], True)
 
-    def test_goal_seed_and_roadmap_seed_scaffold_the_placeholder_note(self):
-        goal_seed_content = _cli._scaffold_goal_seed(title="t", branch="b")
-        roadmap_seed_content = _cli._scaffold_roadmap_seed(title="t", branch="b")
-        for content in (goal_seed_content, roadmap_seed_content):
-            self.assertIn("blocking_notes: PLACEHOLDER", content)
+    def test_gateless_seeds_scaffold_no_blocking_notes_key(self):
+        for content in (
+            _cli._scaffold_goal_seed(title="t", branch="b"),
+            _cli._scaffold_roadmap_seed(title="t", branch="b"),
+        ):
+            self.assertNotIn("blocking_notes", content)
+            self.assertIn("deployment_state: ready_to_fire", content)
 
 
 if __name__ == "__main__":

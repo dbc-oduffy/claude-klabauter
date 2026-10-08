@@ -227,6 +227,7 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "block_venv_creation": lambda mod: "python -m venv .venv",
     "block_editor_kill_by_name": lambda mod: "Stop-Process -Name UnrealEditor",
+    "block_whole_filesystem_scan": lambda mod: "find / -name x",
     "block_unreal_engine_resave": (
         lambda mod: "UnrealEditor-Cmd.exe Proj.uproject -run=ResavePackages"
     ),
