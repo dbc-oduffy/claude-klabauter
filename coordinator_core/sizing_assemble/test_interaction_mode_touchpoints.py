@@ -21,8 +21,9 @@ import coordinator_core.sizing_assemble as sa
 from coordinator_core.session.mode_resolution import INTERACTION_MODES
 
 
-def _touchpoint_ids(mode: str, tshirt: str) -> list[str]:
-    return [t["id"] for t in sa.touchpoints(mode, tshirt)]
+def _touchpoint_ids(mode: str, tshirt: str, route: str | None = None) -> list[str]:
+    route = route or sa._BASE_ROUTE_BY_TSHIRT[tshirt]
+    return [t["id"] for t in sa.touchpoints(mode, tshirt, route)]
 
 
 class TestTouchpointTableIsTotal:
@@ -36,18 +37,19 @@ class TestTouchpointTableIsTotal:
 
 
 class TestTouchpointsAtM:
+    # `plan` is M's resolved route; a keeping route is exercised in the last test.
     def test_pm_at_m(self):
-        assert _touchpoint_ids("pm", "M") == ["accept_sizing", "accept_result"]
+        assert _touchpoint_ids("pm", "M", "plan") == ["accept_result"]
 
     def test_hands_on_at_m(self):
-        assert _touchpoint_ids("hands-on", "M") == [
-            "accept_sizing",
-            "execute_go",
-            "wrap_up",
-        ]
+        assert _touchpoint_ids("hands-on", "M", "plan") == ["execute_go", "wrap_up"]
 
     def test_ceo_at_m(self):
-        assert _touchpoint_ids("ceo", "M") == ["accept_exit_criterion"]
+        assert _touchpoint_ids("ceo", "M", "plan") == []
+
+    def test_modes_at_m_on_a_keeping_route(self):
+        assert _touchpoint_ids("pm", "M", "shape") == ["accept_sizing", "accept_result"]
+        assert _touchpoint_ids("ceo", "M", "pm-decision") == ["accept_exit_criterion"]
 
 
 class TestTouchpointsAtS:
@@ -65,16 +67,52 @@ class TestTouchpointsAtS:
             assert _touchpoint_ids(mode, "XS") == _touchpoint_ids(mode, "S")
 
 
+class TestAgentRunSizingRule:
+    """PM ruling 2026-10-08: plan/dispatch at XS-L skip the sizing-stage touchpoints in every mode."""
+
+    @pytest.mark.parametrize("mode", list(INTERACTION_MODES))
+    @pytest.mark.parametrize(
+        "route,tshirt", [("plan", "L"), ("plan", "M"), ("dispatch", "M"), ("dispatch", "XS")]
+    )
+    def test_plan_and_dispatch_to_l_drop_sizing_stage(self, mode, route, tshirt):
+        ids = _touchpoint_ids(mode, tshirt, route)
+        assert not {"accept_sizing", "accept_exit_criterion"} & set(ids)
+
+    @pytest.mark.parametrize("mode", list(INTERACTION_MODES))
+    @pytest.mark.parametrize(
+        "route,tshirt",
+        [("plan", "XL"), ("plan", "XXL"), ("shape", "S"), ("shape", "L"), ("pm-decision", "L"),
+         ("pm-decision", "XL"), ("roadmap", "M"), ("goal-setting", "XXL")],
+    )
+    def test_everything_else_keeps_its_touchpoints(self, mode, route, tshirt):
+        assert _touchpoint_ids(mode, tshirt, route) == [
+            t["id"] for t in sa.TOUCHPOINTS_BY_MODE[mode]
+        ]
+
+    @pytest.mark.parametrize("mode", list(INTERACTION_MODES))
+    def test_route_threads_the_resolved_route_into_the_decision(self, mode):
+        l_plan = sa.route(estimate={"tshirt": "L"}, interaction_mode=mode)
+        assert not {"accept_sizing", "accept_exit_criterion"} & {t["id"] for t in l_plan["touchpoints"]}
+        assert "exit_criterion_pending" not in l_plan["detents"]
+        xl = sa.route(estimate={"tshirt": "XL"}, interaction_mode=mode)
+        assert "exit_criterion_pending" in xl["detents"]
+
+    def test_shape_resolved_from_unclear_jtbd_at_l_keeps_the_ask(self):
+        d = sa.route(estimate={"tshirt": "L"}, jtbd_unclear=True, interaction_mode="pm")
+        assert d["route"] == "shape" and "exit_criterion_pending" in d["detents"]
+        assert [t["id"] for t in d["touchpoints"]][0] == "accept_sizing"
+
+
 class TestExitCriterionPendingDetent:
-    @pytest.mark.parametrize("tshirt", ["M", "L", "XL", "XXL"])
+    @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
     @pytest.mark.parametrize("mode", list(INTERACTION_MODES))
     def test_fires_at_every_resized_m_plus_in_every_mode(self, tshirt, mode):
         decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
         assert "exit_criterion_pending" in decision["detents"]
 
-    @pytest.mark.parametrize("tshirt", ["XS", "S"])
+    @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L"])
     @pytest.mark.parametrize("mode", list(INTERACTION_MODES))
-    def test_absent_at_xs_s(self, tshirt, mode):
+    def test_absent_where_the_engine_skips_acceptance(self, tshirt, mode):
         decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
         assert "exit_criterion_pending" not in decision["detents"]
 
@@ -86,7 +124,7 @@ class TestExitCriterionPendingDetent:
 
     def test_fires_even_when_a_statement_was_passed(self):
         decision = sa.route(
-            estimate={"tshirt": "M"}, exit_criterion="Ship the thing", interaction_mode="pm"
+            estimate={"tshirt": "XL"}, exit_criterion="Ship the thing", interaction_mode="pm"
         )
         assert "exit_criterion_pending" in decision["detents"]
         assert decision["exit_criterion"] == {"statement": "Ship the thing", "accepted": None}

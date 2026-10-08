@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_TOUCHPOINT,
     GateVerdict,
 )
+from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
@@ -106,7 +107,8 @@ def gate(
     needs_acceptance = False
     if mode in sa.TOUCHPOINTS_BY_MODE:
         needs_acceptance = any(
-            t["id"] in _ACCEPT_TOUCHPOINTS for t in sa.touchpoints(mode, tshirt)
+            t["id"] in _ACCEPT_TOUCHPOINTS
+            for t in sa.touchpoints(mode, tshirt, sizing.get("route"))
         )
     if accepted_null and needs_acceptance:
         line = next((r for r in refusals if r.startswith(_ACCEPTED_NULL_PREFIX)), "")
@@ -116,13 +118,23 @@ def gate(
             touchpoint=line.partition("accept it first: ")[2]
             or f"coordinator-invoke sizing.accept_exit_criterion for {sizing_rel}",
         )
+    acceptance = None
     if accepted_null:
         refusals = [r for r in refusals if not r.startswith(_ACCEPTED_NULL_PREFIX)]
+    if accepted_null and sizing_acceptance_skipped(sizing.get("route"), tshirt):
+        # Nobody was asked: the receipt says so, since `accepted` stays null.
+        acceptance = {
+            "by": ENGINE_SIZE_RULE,
+            "route": sizing.get("route"),
+            "tshirt": tshirt,
+            "mode": mode,
+            "ruling": "2026-10-08",
+        }
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
 
     if arm != ARM_M_PLUS:
-        return GateVerdict(arm=arm, halt=None)  # roadmap mints no baton: roadmap-blitz stubs are the batons
+        return GateVerdict(arm=arm, halt=None, acceptance=acceptance)  # roadmap mints no baton: roadmap-blitz stubs are the batons
 
     doc_new = _load_doc_new()
     try:
@@ -132,7 +144,10 @@ def gate(
     # The effective route, so a PM-recorded accept_multi_session plans in the
     # single-mode wave instead of re-adjudicating the sizing's raw `pm-decision`.
     return GateVerdict(
-        arm=arm, halt=None, baton={"id": baton["id"], "path": baton["path"], "route": route}
+        arm=arm,
+        halt=None,
+        baton={"id": baton["id"], "path": baton["path"], "route": route},
+        acceptance=acceptance,
     )
 
 

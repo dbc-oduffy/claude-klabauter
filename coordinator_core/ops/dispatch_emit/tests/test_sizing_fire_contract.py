@@ -50,8 +50,8 @@ def test_matching_routes_are_fireable():
 
 
 def test_all_missing_fields_yield_one_refusal_list():
-    s = _sizing(interaction_mode=None, exit_criterion={})
-    out = sf.collect_fire_refusals(s, sizing_rel="state/sizings/a.yaml", arm="s", writes=[])
+    s = _sizing("XL", route="plan", interaction_mode=None, exit_criterion={})
+    out = sf.collect_fire_refusals(s, sizing_rel="state/sizings/a.yaml", arm="m_plus", writes=[])
     joined = " | ".join(out)
     assert "statement" in joined and "accepted" in joined and "interaction_mode" in joined
     assert len(out) == 3
@@ -93,3 +93,13 @@ def test_load_sizing_contained(tmp_path):
         sf.load_sizing(tmp_path, "outside.yaml")
     with pytest.raises(sf.SizingFireRefused):
         sf.load_sizing(tmp_path, "state/sizings/../../outside.yaml")
+
+
+@pytest.mark.parametrize(
+    "tshirt,route,asked",
+    [("L", "plan", False), ("M", "dispatch", False), ("XL", "plan", True), ("S", "shape", True), ("M", "pm-decision", True)],
+)
+def test_null_acceptance_is_refused_only_outside_the_engine_size_rule(tshirt, route, asked):
+    s = _sizing(tshirt, route=route, exit_criterion={"statement": "x", "accepted": None})
+    out = sf.collect_fire_refusals(s, sizing_rel="state/sizings/a.yaml", arm="m_plus", writes=[])
+    assert any(r.startswith("`exit_criterion.accepted`") for r in out) is asked

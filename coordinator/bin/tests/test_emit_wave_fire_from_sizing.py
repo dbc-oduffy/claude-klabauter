@@ -93,7 +93,7 @@ def _bound(tmp_path):
 
 
 def test_bare_sizing_names_every_failing_field_once(tmp_path, capsys):
-    _setup(tmp_path, {"route": "plan", "estimate": {"tshirt": "S"}}, baton=None)
+    _setup(tmp_path, {"route": "plan", "estimate": {"tshirt": "XL"}}, baton=None)
     assert _fire(tmp_path) == ewf.EXIT_REFUSED
     err = capsys.readouterr().err
     assert err.count("REFUSED") == 1
@@ -270,10 +270,17 @@ def test_baton_flags_without_from_sizing_are_refused(tmp_path, capsys, flag, val
 
 
 def test_null_acceptance_names_both_accept_forms(tmp_path):
-    sizing = _sizing("M")
+    sizing = _sizing("XL")
     sizing["exit_criterion"]["accepted"] = None
     msg = " ".join(ewf._collect_sizing_refusals(sizing))
     assert "--pm-quote" in msg and "--apm-ruling" in msg
+
+
+@pytest.mark.parametrize("tshirt", ["M", "L"])
+def test_null_acceptance_is_not_refused_at_plan_to_l(tshirt):
+    sizing = _sizing(tshirt)
+    sizing["exit_criterion"]["accepted"] = None
+    assert not any("accepted" in r for r in ewf._collect_sizing_refusals(sizing))
 
 
 def test_existing_baton_is_fired_without_minting_a_new_one(tmp_path, monkeypatch):

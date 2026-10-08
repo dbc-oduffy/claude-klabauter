@@ -79,6 +79,9 @@ class ChainManifest:
     trail_dir: str
     wave_args: dict[str, Any]
     script_source: str
+    # The route and size the chain was fired under; None on a manifest written before they were recorded.
+    accepted_route: str | None = None
+    accepted_tshirt: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, indent=2)

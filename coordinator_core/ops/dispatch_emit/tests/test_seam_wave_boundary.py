@@ -47,6 +47,13 @@ def _two_plan_waves():
     ]
 
 
+def test_certified_plans_ride_into_the_leg_params_only_when_given():
+    assert "certified_plans" not in _compose(_two_plan_waves())
+    script = _compose(_two_plan_waves(), seam=SeamInputs({}, False, (P1, "docs/plans/p9.md")))
+    assert 'const _seamCertified = ["docs/plans/p1.md", "docs/plans/p9.md"];' in script
+    assert "certified_plans: _seamCertified," in script
+
+
 def _registration(script: str, row_id: str) -> str:
     return next(line for line in script.splitlines() if line.startswith(f"  _rows['{row_id}'] = _runRow("))
 

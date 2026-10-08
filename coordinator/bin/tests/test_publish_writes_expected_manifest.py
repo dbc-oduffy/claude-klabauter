@@ -96,5 +96,13 @@ def test_a_cold_round_declares_the_expected_manifest_for_the_commit(tmp_path):
     (union / "pkg").mkdir(parents=True)
     (union / "pkg" / "m.py").write_text("x\n")
     u = SimpleNamespace(cold=True, union_root=union, survivors={"pkg/m.py": None, ".coordinator/expected-manifest.json": None})
-    assert publish._declared_payload(u) == {"pkg/m.py", ".coordinator/expected-manifest.json"}
-    assert publish._declared_payload(SimpleNamespace(cold=False, union_root=union, survivors={})) == frozenset()
+    assert publish._declared_payload(u, ()) == {"pkg/m.py", ".coordinator/expected-manifest.json"}
+
+
+def test_a_warm_round_declares_exactly_what_it_landed(tmp_path):
+    from types import SimpleNamespace
+
+    warm = SimpleNamespace(cold=False, union_root=tmp_path, survivors={})
+    landed = ("pkg/m.py", ".coordinator/expected-manifest.json")
+    assert publish._declared_payload(warm, landed) == frozenset(landed)
+    assert publish._declared_payload(warm, ()) == frozenset()

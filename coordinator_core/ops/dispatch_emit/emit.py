@@ -3471,10 +3471,13 @@ class SeamInputs(NamedTuple):
 
     ``plan_edges``: run plan -> plans its ``depends_on_plan`` edges name.
     ``capabilities``: some run plan declares a non-empty ``capabilities``.
+    ``certified_plans``: the full certified set the run's tranche was cut from, when the
+    caller knows it; the seam check counts a ``ui_consumer`` plan listed here as in the set.
     """
 
     plan_edges: dict
     capabilities: bool
+    certified_plans: tuple = ()
 
 
 _SEAM_REPLY_SCHEMA = {
@@ -3502,6 +3505,7 @@ class SeamLeg(NamedTuple):
     gated: tuple
     holds: dict
     held_plans: dict
+    certified_plans: tuple = ()
 
 
 def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]:
@@ -3562,7 +3566,10 @@ def seam_leg_for(
     for rid, waits in holds.items():
         for m in waits:
             held_plans.setdefault(m, set()).add(row_plan[rid])
-    return SeamLeg(tuple(plans), gated, holds, {m: tuple(sorted(v)) for m, v in held_plans.items()})
+    return SeamLeg(
+        tuple(plans), gated, holds, {m: tuple(sorted(v)) for m, v in held_plans.items()},
+        seam.certified_plans,
+    )
 
 
 def _seam_leg_js(
@@ -3593,11 +3600,13 @@ def _seam_leg_js(
         f"  const _seamHeldPlans = {json.dumps({str(k): list(v) for k, v in seam.held_plans.items()})};",
         "  const _seamFailures = [];",
         f"  const _seamPlans = {json.dumps(list(seam.plans))};",
+        *([f"  const _seamCertified = {json.dumps(list(seam.certified_plans))};"] if seam.certified_plans else []),
         f"  const _SEAM_REPLY_SCHEMA = {json.dumps(_SEAM_REPLY_SCHEMA)};",
         "  const _seamRelease = {};",
         "  const _seamGates = {};",
         "  async function _seamLeg(n, sha) {",
-        "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,",
+        "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,"
+        + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
         f"      landed_range: {_js_string_literal(run_base_sha + '..')} + sha,",
         f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
         "    let r = null;",
@@ -3667,7 +3676,8 @@ def _plan_seam_facts(text: Optional[str], raw_rows: Sequence[dict]) -> tuple:
 
 
 def seam_inputs_for(
-    rows_by_plan: dict, plan_path: str, plan_text: Optional[str], raw_by_id: dict, repo_root
+    rows_by_plan: dict, plan_path: str, plan_text: Optional[str], raw_by_id: dict, repo_root,
+    certified_plans: Sequence[str] = (),
 ) -> SeamInputs:
     """Read each run plan's edges and ``capabilities``: ``plan_path`` from the text
     already in hand, a source plan of a multi-plan run from the repo."""
@@ -3689,7 +3699,7 @@ def seam_inputs_for(
         if targets:
             edges[key] = tuple(targets)
         capabilities = capabilities or declared
-    return SeamInputs(edges, capabilities)
+    return SeamInputs(edges, capabilities, tuple(certified_plans))
 
 
 def _checkpoint_commit_js(
@@ -5369,8 +5379,13 @@ def emit_script(
     hold_rows: Optional[frozenset] = None,
     hold_reason: Optional[str] = None,
     held_out: Optional[dict] = None,
+    certified_plans: Sequence[str] = (),
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``certified_plans`` is the full certified set a tranche spine was cut from; it rides
+    into the wave-boundary seam leg so a consumer plan of another tranche still counts
+    as in the set.
 
     ``hold_rows`` (with a ``hold_reason``) keeps those rows, and every row that
     depends on one over declared or read-after-write edges, out of the waves
@@ -5616,7 +5631,7 @@ def emit_script(
         held_rows=held_rows,
         slot_rows=[row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True],
         seam=None if review_only else seam_inputs_for(
-            rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root
+            rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
         ),
     )
 

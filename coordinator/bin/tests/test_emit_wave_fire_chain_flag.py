@@ -93,6 +93,7 @@ def test_chain_writes_manifest_and_prints_the_call(tmp_path, capsys):
     assert data["sizing_object"] == SIZING_REL
     assert data["baton"] == BATON_REL
     assert data["interaction_mode"] == "pm"
+    assert (data["accepted_route"], data["accepted_tshirt"]) == ("plan", "M")
     assert data["wave_args"]["mode"] == "single"
     assert data["wave_args"]["batons"][0]["id"] == "hnd-1"
     out = capsys.readouterr().out
@@ -174,3 +175,15 @@ def test_a_different_chain_does_not_overwrite_a_manifest(tmp_path, monkeypatch, 
     err = capsys.readouterr().err
     assert "state/sizings/s1.yaml" in err and "state/sizings/s2.yaml" in err
     assert "state/sizings/s1.yaml" in squatter.read_text(encoding="utf-8")
+
+
+def test_chain_fires_a_null_acceptance_under_the_engine_size_rule(tmp_path):
+    sizing = _sizing(tshirt="L")
+    sizing["exit_criterion"]["accepted"] = None
+    assert _fire(tmp_path, sizing, "--chain") == ewf.EXIT_OK
+
+
+def test_chain_refuses_a_null_acceptance_at_xl(tmp_path):
+    sizing = _sizing(tshirt="XL")
+    sizing["exit_criterion"]["accepted"] = None
+    assert _fire(tmp_path, sizing, "--chain") != ewf.EXIT_OK

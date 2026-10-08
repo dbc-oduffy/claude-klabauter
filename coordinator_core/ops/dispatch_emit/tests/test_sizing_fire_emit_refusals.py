@@ -59,7 +59,7 @@ def test_word_inside_intent_is_not_residue():
 
 
 def test_accept_hint_names_launcher_and_keeps_prefix():
-    out = _refusals(_fireable(exit_criterion={"statement": "done", "accepted": None}))
+    out = _refusals(_fireable(estimate={"tshirt": "XL"}, exit_criterion={"statement": "done", "accepted": None}))
     assert len(out) == 1
     assert out[0].startswith("`exit_criterion.accepted` is null")
     assert f"sizing-accept-exit-criterion --sizing {REL} --pm-quote" in out[0]

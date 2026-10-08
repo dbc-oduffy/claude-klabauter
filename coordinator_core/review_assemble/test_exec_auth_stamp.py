@@ -1737,3 +1737,37 @@ def test_authorize_invocation_typed_command_refused_in_autonomous_session(
     assert rc == EXIT_USAGE
     assert "--authorized-by-delegation" in capsys.readouterr().err
     assert "execution_authorized_by" not in plan_path.read_text(encoding="utf-8")
+
+
+def _engine_rule_sizing(mode: str, *, route: str = "plan", tshirt: str = "L") -> str:
+    return (
+        f"status: sized\ninteraction_mode: {mode}\nroute: {route}\nestimate:\n  tshirt: {tshirt}\n"
+        "exit_criterion:\n  statement: done\n  accepted: null\n"
+    )
+
+
+@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
+def test_sizing_arm_engine_rule_authorizes_null_acceptance_at_plan_l_in_every_mode(
+    tmp_path: Path, mode: str
+) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    plan, sizing = _sizing_fixture(tmp_path, _engine_rule_sizing(mode))
+    code, result = stamp_sizing_authorization(plan, sizing, at="2026-10-08", repo_root=tmp_path)
+    assert code == EXIT_OK, result
+    fm = yaml.safe_load((tmp_path / plan).read_text(encoding="utf-8").split("---")[1])
+    assert fm["execution_authorized_by"] == "engine-size-rule"
+    assert fm["execution_authorized_note"] == (
+        f"authorized by engine-size-rule (mode={mode}, route=plan, tshirt=L): state/sizings/s.yaml"
+    )
+
+
+@pytest.mark.parametrize("route,tshirt", [("plan", "XL"), ("shape", "S"), ("pm-decision", "M")])
+def test_sizing_arm_engine_rule_does_not_cover_xl_shape_or_pm_decision(
+    tmp_path: Path, route: str, tshirt: str
+) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    plan, sizing = _sizing_fixture(tmp_path, _engine_rule_sizing("pm", route=route, tshirt=tshirt))
+    code, result = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
+    assert code == EXIT_BUSINESS_FAIL and "accepted" in result["error"]

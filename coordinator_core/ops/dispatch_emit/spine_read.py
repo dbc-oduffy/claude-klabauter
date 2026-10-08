@@ -1233,14 +1233,23 @@ def read_spine(
     # blocked it, so the appended entry can name the full chain back to the
     # row that actually carries the gate/operator mode.
     transitive_root: dict[str, str] = {}
+    # Row -> the path whose withheld writer blocked it, for hops that came from
+    # `consumes:` rather than `depends_on`. A consumer dispatched beside its
+    # withheld producer reads a file that does not exist yet.
+    consumed_via: dict[str, str] = {}
+    consumers_of = _consume_edges(rows)
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
-        for dependent_id in dependents.get(current, ()):
+        hops = [(d, None) for d in dependents.get(current, ())]
+        hops += [(d, path) for d, path in consumers_of.get(current, ())]
+        for dependent_id, path in hops:
             if dependent_id in satisfied_ids or dependent_id in blocked_ids:
                 continue
             blocked_ids.add(dependent_id)
             transitive_root[dependent_id] = current
+            if path is not None:
+                consumed_via[dependent_id] = path
             frontier.append(dependent_id)
 
     if exclusions is not None and transitive_root:
@@ -1253,6 +1262,19 @@ def read_spine(
             while cur in transitive_root:
                 cur = transitive_root[cur]
                 chain.append(cur)
+            if row_id in consumed_via:
+                exclusions.append(
+                    {
+                        "id": row_id,
+                        "reason": "withheld_by_consumed_path",
+                        "detail": (
+                            f"withheld: consumes {consumed_via[row_id]} written by "
+                            f"withheld {chain[1]}"
+                            + (f"; root {chain[-1]} is withheld" if len(chain) > 2 else "")
+                        ),
+                    }
+                )
+                continue
             if chain[-1] in deferred_ids:
                 exclusions.append(
                     {
@@ -1293,6 +1315,44 @@ def read_spine(
             dispatchable_rows[i] = row._replace(depends_on=stripped)
 
     return dispatchable_rows
+
+
+def _consume_edges(rows: list) -> dict:
+    """Writer row id -> [(consumer row id, path)] for every `consumes:` read of
+    a path another row writes. Paths every writer only `appends:` to derive no
+    edge (the `wave_map` derived-edge rule), so a hub-file reader is not held."""
+    from coordinator_core.ops.dispatch_emit.wave_map import (
+        _append_only_paths,
+        _is_ancestor,
+        _normalize_path,
+    )
+
+    exempt = _append_only_paths(rows)
+    writers: list = []
+    for row in rows:
+        if row.writes is UNDECLARED or not isinstance(row.writes, list):
+            continue
+        writers.append(
+            (
+                row.id,
+                {_normalize_path(p) for p in row.writes},
+                [_normalize_path(p) for p in row.writes_under],
+            )
+        )
+    out: dict = {}
+    for row in rows:
+        for raw_path in row.reads or ():
+            if not isinstance(raw_path, str):
+                continue
+            path = _normalize_path(raw_path)
+            if path in exempt:
+                continue
+            for wid, exact, prefixes in writers:
+                if wid != row.id and (
+                    path in exact or any(path == pre or _is_ancestor(pre, path) for pre in prefixes)
+                ):
+                    out.setdefault(wid, []).append((row.id, raw_path))
+    return out
 
 
 def executable_body(title: str, body: str) -> bool:

@@ -18,6 +18,9 @@ Wire params (both ops):
         capabilities-undeclared findings block.
     landed_range ("<base-sha>..<head-sha>"), landed_rows ([{plan, row}]), wave (int)
         — required at wave-boundary, refused otherwise.
+    certified_plans ([plan path], optional, any phase) — the full certified set the run was
+        cut from; a ui_consumer plan listed here counts as in the set when the checked
+        ``plans`` are only one tranche of it.
     universe (bool, optional, default false) — true also checks the set against every
         open plan under docs/plans/ outside it (status not in PLAN_TERMINAL_STATUS) and
         adds ``missing-seam`` findings: (1) a set plan and an out-of-set plan write one
@@ -318,10 +321,22 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
     named_set = params.get("named_set")
     if not isinstance(named_set, bool):
         raise ValueError("named_set must be a bool")
+    certified_raw = params.get("certified_plans")
+    if certified_raw is None:
+        certified_raw = []
+    if not isinstance(certified_raw, list) or not all(isinstance(p, str) and p.strip() for p in certified_raw):
+        raise ValueError("certified_plans must be a list of repo-relative plan paths")
+    certified = set()
+    for raw in certified_raw:
+        rel = _contained_rel(raw, root)
+        if rel is None:
+            raise ValueError(f"certified plan escapes the resolved worktree: {raw!r}")
+        certified.add(rel)
     wave_keys = ("landed_range", "landed_rows", "wave")
     present = [k for k in wave_keys if params.get(k) is not None]
     out = {"plans": plans, "passed": passed, "phase": phase, "named_set": named_set,
-           "universe": universe, "landed_range": None, "landed_rows": [], "wave": None}
+           "universe": universe, "landed_range": None, "landed_rows": [], "wave": None,
+           "certified": certified}
     if phase != "wave-boundary":
         if present:
             raise ValueError(f"{', '.join(present)} are accepted only at phase wave-boundary")
@@ -407,7 +422,7 @@ def _consumer_problem(plan, consumer, pset, ctx, tree, deferred):
     if ".." in rel.split("/") or rel.startswith("/"):
         return ref, "ui_consumer plan path escapes the repo"
     target = pset.get(rel)
-    in_set = target is not None
+    in_set = target is not None or rel in ctx["certified"]
     if target is None:
         target = _load_outside(ctx, rel)
     if target is None:
@@ -578,11 +593,28 @@ def _grouped_collisions(findings: list) -> list:
     return grouped
 
 
-def _landed_writes(ctx: dict, pset) -> tuple:
+def _resolve_landed(ctx: dict, pset) -> list:
+    """The landed rows keyed by the id their own plan spells.
+
+    A minted inventory spine namespaces each source row as ``<chunk>.<id>`` and the wave
+    commit reports that minted id, while the source plan holds only ``<id>``: an id
+    absent from its plan is retried with each leading dotted segment dropped. Unresolved
+    ids pass through unchanged."""
+    out = []
+    for rel, row_id in ctx["landed_rows"]:
+        plan = pset.get(rel) or _load_outside(ctx, rel)
+        ids = plan.raw_by_id if plan is not None else {}
+        parts = row_id.split(".")
+        found = next((".".join(parts[i:]) for i in range(len(parts)) if ".".join(parts[i:]) in ids), row_id)
+        out.append((rel, found))
+    return out
+
+
+def _landed_writes(landed_rows: list, ctx: dict, pset) -> tuple:
     """Rows named landed: their declared paths and prefixes, and the first landing plan per exact path."""
     paths, prefixes = set(), set()
     exact_by_path: Dict[str, str] = {}
-    for rel, row_id in ctx["landed_rows"]:
+    for rel, row_id in landed_rows:
         plan = pset.get(rel) or _load_outside(ctx, rel)
         raw = plan.raw_by_id.get(row_id) if plan is not None else None
         if raw is None:
@@ -597,8 +629,9 @@ def _landed_writes(ctx: dict, pset) -> tuple:
 
 def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> list:
     findings: list = []
-    landed = set(ctx["landed_rows"])
-    land_paths, land_prefixes, landed_by_path = _landed_writes(ctx, pset)
+    landed_rows = _resolve_landed(ctx, pset)
+    landed = set(landed_rows)
+    land_paths, land_prefixes, landed_by_path = _landed_writes(landed_rows, ctx, pset)
     touched_norm = {_normalize_path(t): t for t in touched}
     for rel, plan in pset.items():
         for row in plan.live_rows:

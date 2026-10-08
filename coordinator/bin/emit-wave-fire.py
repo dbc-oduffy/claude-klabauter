@@ -1035,6 +1035,14 @@ def _effective_route(sizing: dict) -> object:
     return effective_route(sizing)
 
 
+def _acceptance_skipped(sizing: dict) -> bool:
+    """The engine size rule on the recorded route and size: nobody is asked to accept."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_core.ops.dispatch_emit.sizing_fire import _acceptance_skipped
+
+    return _acceptance_skipped(sizing)
+
+
 def _collect_sizing_refusals(sizing: dict) -> list[str]:
     """Every failing fire-or-mint input of a sizing, one message each; empty when fireable."""
     out: list[str] = []
@@ -1042,7 +1050,7 @@ def _collect_sizing_refusals(sizing: dict) -> list[str]:
     ec = ec if isinstance(ec, dict) else {}
     if not ec.get("statement"):
         out.append("`exit_criterion.statement` is absent — nothing to hand off as the prime exit criterion")
-    if ec.get("accepted") is None:
+    if ec.get("accepted") is None and not _acceptance_skipped(sizing):
         out.append("`exit_criterion.accepted` is null — the exit criterion is not accepted yet "
             "(accept it with `--pm-quote` or `--apm-ruling`)")
     if not sizing.get("interaction_mode"):
@@ -1168,6 +1176,8 @@ def _emit_chain_from_sizing(
         trail_dir=_rel(trail_dir),
         wave_args=wave_args,
         script_source=_rel(script_source),
+        accepted_route=str(route),
+        accepted_tshirt=str(tshirt),
     )
     try:
         contract.write_manifest(manifest_file, manifest)

@@ -181,8 +181,9 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
         "task_output_path=<the run's task-output file> (its next_action.params supplies "
         "incomplete_chunks and inline_review), or pass incomplete_chunks and inline_review "
         "from the digest's terminal_commit_cli line. A run that died before its review "
-        "stage has no inline_review to pass: land its DONE rows by hand via the scoped "
-        "commit route",
+        "stage has no inline_review to pass: re-emit it review-only (emit-dispatch-workflow "
+        "--inventory <inv> --review-only --rows <DONE ids> --run-base <sha>) and land from "
+        "that run's terminal_commit_cli line",
         refused="missing-run-outcome",
         missing=absent,
     )

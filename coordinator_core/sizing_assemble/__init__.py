@@ -268,6 +268,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
 from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
@@ -637,11 +638,9 @@ TOUCHPOINTS_BY_MODE: dict[str, tuple[dict[str, str], ...]] = {
     ),
 }
 
-#: The sizing-stage touchpoint ids dropped at a resized XS/S (Design §
-#: Engine "Size rule" -- XS/S never ask today, so the later touchpoints
-#: stay but the size-gate ask is skipped).
+#: The sizing-stage touchpoint ids the engine skips when `sizing_acceptance_skipped`
+#: holds; the later touchpoints (`execute_go`, `wrap_up`, `accept_result`) are kept.
 _SIZING_STAGE_TOUCHPOINT_IDS = frozenset({"accept_sizing", "accept_exit_criterion"})
-
 
 def _assert_touchpoint_table_total() -> None:
     """Every member of `_INTERACTION_MODES_EXPECTED` has a `TOUCHPOINTS_BY_MODE`
@@ -661,12 +660,12 @@ def _assert_touchpoint_table_total() -> None:
 _assert_touchpoint_table_total()
 
 
-def touchpoints(interaction_mode: str, resized_tshirt: str) -> list[dict[str, str]]:
-    """Which human gates `interaction_mode` has at `resized_tshirt` (Design §
-    Engine). At a resized XS/S the sizing-stage touchpoint is dropped (it
-    never asks today); the later touchpoints in the mode's chain are kept."""
+def touchpoints(interaction_mode: str, resized_tshirt: str, route: str) -> list[dict[str, str]]:
+    """Which human gates `interaction_mode` has for `route` at `resized_tshirt` (Design §
+    Engine). Where `sizing_acceptance_skipped` holds the sizing-stage touchpoints are
+    dropped; the later touchpoints in the mode's chain are kept."""
     base = TOUCHPOINTS_BY_MODE[interaction_mode]
-    if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS:
+    if sizing_acceptance_skipped(route, resized_tshirt):
         return [dict(t) for t in base if t["id"] not in _SIZING_STAGE_TOUCHPOINT_IDS]
     return [dict(t) for t in base]
 
@@ -995,6 +994,11 @@ def route(
     else:
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
+    if sizing_acceptance_skipped(resolved_route, resized_tshirt):
+        # Not `post_size_prompt_pending`: that is where the PM states appetite, which the
+        # engine never infers.
+        detents = [d for d in detents if d != "exit_criterion_pending"]
+
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")
 
@@ -1215,7 +1219,7 @@ def route(
             "elaboration."
         )
 
-    mode_touchpoints = touchpoints(interaction_mode, resized_tshirt)
+    mode_touchpoints = touchpoints(interaction_mode, resized_tshirt, resolved_route)
 
     if "exit_criterion_pending" in detents:
         if exit_criterion:

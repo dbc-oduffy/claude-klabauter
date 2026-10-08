@@ -129,6 +129,26 @@ def test_ui_consumer_in_set_resolves_and_in_other_plan_must_be_coded(tmp_path, g
     assert _check(root, [a])["verdict"] == "CLEAN"
 
 
+def test_ui_consumer_in_the_certified_set_counts_as_in_set_at_prep_and_wave_boundary(tmp_path, git):
+    root = _root(tmp_path)
+    ui = _plan(root, "ui", _row("C4", "[ui.tsx]"))
+    a = _plan(root, "a", _row("R1", "[x.py]"), fm=_cap(f"    ui_consumer: {{plan: {ui}, chunk: C4}}\n"))
+    assert _check(root, [a])["verdict"] == "REFUSED"
+    assert _check(root, [a], certified_plans=[ui, a])["verdict"] == "CLEAN"
+    wb = _check(root, [a], "wave-boundary", True, landed_range=RANGE, landed_rows=[], wave=1,
+                certified_plans=[ui])
+    assert wb["verdict"] == "CLEAN"
+    other = _check(root, [a], certified_plans=["docs/plans/elsewhere.md"])
+    assert other["verdict"] == "REFUSED"
+
+
+def test_certified_plans_must_stay_inside_the_worktree(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    with pytest.raises(ValueError, match="certified plan escapes"):
+        _check(root, [a], certified_plans=["../outside.md"])
+
+
 @pytest.mark.parametrize("row,why", [
     (_row("C4", "[ui.tsx]", extra="  disposition: wont_do\n"), "wont_do"),
     (_row("C4", "[ui.tsx]", extra="  disposition: voided\n"), "voided"),
@@ -283,6 +303,26 @@ def test_drift_promised_path_absent(tmp_path, git):
     assert f["path"] == "lib.py" and f["row"] == "B1"
     git.landed.add("lib.py")
     assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def test_a_landed_row_reported_by_its_minted_inventory_id_still_counts_as_landed(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[x/a.py]") + _row("A2", "[x/b.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[x/a.py]"))
+    git.touched = ["x/a.py"]
+    git.landed.add("x/a.py")
+    r = _wb(root, [a, b], [(a, "chunk-a.A1")])
+    assert r["verdict"] == "CLEAN", r["findings"]
+    assert not [f for f in r["findings"] if "no landed row declared" in f["detail"]]
+
+
+def test_an_unlanded_row_hitting_a_touched_path_is_still_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[x/a.py]"))
+    b = _plan(root, "b", _row("B1", "[x/z.py]"))
+    git.touched = ["x/z.py"]
+    r = _wb(root, [a, b], [(a, "chunk-a.A1")])
+    assert r["verdict"] == "DRIFT"
 
 
 def test_drift_asks_the_landed_head_not_head(tmp_path, git):

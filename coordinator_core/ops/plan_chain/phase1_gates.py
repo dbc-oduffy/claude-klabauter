@@ -10,6 +10,7 @@ import io
 from pathlib import Path
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.ops.sizing_acceptance import sizing_acceptance_skipped
 from coordinator_core.ops.plan_chain.contract import ChainManifest, Halt, halt
 from coordinator_core.pickup_assemble import _parse_fm_dict
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
@@ -18,6 +19,7 @@ from coordinator_core.roadmap.plan_gate import assemble_plan_gate
 from coordinator_core.session.claims import claim_plan
 
 _EXECUTE = "execute"
+_READY_GATE = "ready-gate"
 
 
 def _rel_and_abs(plan_path: str | Path, repo_root: Path) -> tuple[str, Path]:
@@ -41,6 +43,48 @@ def _read_fm(path: Path) -> dict:
     except OSError:
         return {}
     return _parse_fm_dict(split.fm_text) if split is not None else {}
+
+
+def _resize_gate(manifest: ChainManifest, repo_root: Path) -> Halt | None:
+    """Re-resolve the sizing's route and size after the plan stage, which may have rewritten them.
+
+    A manifest that recorded the fired route and size halts on any change, accepted or not: a
+    PM acceptance covers the size it was given for. Without them (an older manifest), a chain
+    launched with no PM acceptance runs only under `sizing_acceptance_skipped`. An unreadable
+    sizing is `_authorize_gate`'s to refuse.
+    """
+    from coordinator_core.ops.dispatch_emit.sizing_fire import (
+        SizingFireRefused,
+        effective_route,
+        load_sizing,
+    )
+
+    try:
+        sizing = load_sizing(repo_root, manifest.sizing_object)
+    except SizingFireRefused:
+        return None
+    estimate = sizing.get("estimate")
+    tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
+    route = sizing.get("route")
+    if manifest.accepted_route is not None or manifest.accepted_tshirt is not None:
+        if (effective_route(sizing), tshirt) == (manifest.accepted_route, manifest.accepted_tshirt):
+            return None
+        return Halt(
+            _READY_GATE,
+            f"{manifest.sizing_object} was fired as route {manifest.accepted_route!r} at "
+            f"{manifest.accepted_tshirt!r} and is now route {effective_route(sizing)!r} at "
+            f"{tshirt!r}; surface the resize",
+        )
+    ec = sizing.get("exit_criterion")
+    if isinstance(ec, dict) and ec.get("accepted") is not None:
+        return None
+    if sizing_acceptance_skipped(route, tshirt):
+        return None
+    return Halt(
+        _READY_GATE,
+        f"{manifest.sizing_object} resized to route {route!r} at {tshirt!r} during planning: "
+        "the PM has not accepted it; surface it for acceptance",
+    )
 
 
 def _stamp_gate(rel: str, repo_root: Path) -> Halt | None:
@@ -98,7 +142,8 @@ def run(manifest: ChainManifest, plan_path: str | Path, *, repo_root: str | Path
     root = Path(repo_root)
     rel, absolute = _rel_and_abs(plan_path, root)
     return (
-        _stamp_gate(rel, root)
+        _resize_gate(manifest, root)
+        or _stamp_gate(rel, root)
         or _authorize_gate(absolute, manifest.sizing_object, root)
         or _roadmap_gate(manifest, root)
         or _claim_gate(rel, root)

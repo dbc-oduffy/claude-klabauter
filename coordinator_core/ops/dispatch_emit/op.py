@@ -230,6 +230,7 @@ import hashlib
 import json
 from coordinator_core.atomic_replace import atomic_write_bytes
 import os
+import re
 import stat
 import sys
 import uuid
@@ -403,6 +404,22 @@ def _refuse_unapproved_body(plan_path: str) -> None:
         raise ValueError(f"dispatch.emit: {Path(plan_path).name}: {message}")
     if state == APPROVED_BODY_UNVERIFIABLE:
         print(f"dispatch.emit: {Path(plan_path).name}: {message}", file=sys.stderr)
+
+
+def _certified_plans(inventory_path) -> list:
+    """Spec paths of the full certified set an inventory run belongs to: a tranche record
+    (`<base>-t<N>.md`) answers for its base inventory, whose Chunk table holds every plan
+    the mise certified, so a seam consumer elsewhere in that set is not read as outside it."""
+    if not inventory_path:
+        return []
+    path = Path(inventory_path)
+    base = path.with_name(re.sub(r"-t\d+$", "", path.stem) + ".md")
+    source = base if base.is_file() else path
+    try:
+        rows = parse_chunk_table(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return sorted({s for s in (_strip_backtick(r.get("spec path", "")) for r in rows) if s.endswith(".md")})
 
 
 def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
@@ -1179,16 +1196,23 @@ def _dispatch_emit(
             resume_skipped: list = []
             tranche_report: dict = {}
             withheld_plans: dict = {}
+            tranche_inventory: dict = {}
             spine_text, spine_path = mint_spine(
                 inventory_path,
-                max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS,
+                max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
                 part=(int(part[0]), int(part[1])) if part else None,
                 skip_landed=bool(params.get("skip_landed")),
                 skipped_out=resume_skipped,
                 row_budget=params.get("row_budget"),
                 tranche_out=tranche_report,
                 withheld_out=withheld_plans,
+                tranche_inventory_out=tranche_inventory,
             )
+            if tranche_inventory:
+                # The tranche is its own inventory record from here on: its
+                # landed-reconcile and review specs must see only its plans.
+                inventory_path = str(tranche_inventory["path"])
+                Path(inventory_path).write_text(tranche_inventory["text"], encoding="utf-8", newline="\n")
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
             )
@@ -1199,9 +1223,14 @@ def _dispatch_emit(
                 )
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
-            landed_reconciled = reconcile_landed(Path(inventory_path))
-            inventory_review_specs = _inventory_review_specs(
-                Path(inventory_path), only_review_plans
+            # A review-only run executes nothing: no landed-flip writes to the
+            # plans and no pre-dispatch checks or falsifier reviews.
+            review_only_run = params.get("review_only_rows") is not None
+            landed_reconciled = {} if review_only_run else reconcile_landed(Path(inventory_path))
+            inventory_review_specs = (
+                []
+                if review_only_run
+                else _inventory_review_specs(Path(inventory_path), only_review_plans)
             )
 
         if not plan_path:
@@ -1414,8 +1443,9 @@ def _dispatch_emit(
             run_base_sha=params.get("run_base_sha"),
             chatty=bool(params.get("chatty")),
             cross_repo_approved=bool(params.get("cross_repo_approved")),
-            predispatch=bool(inventory_path),
+            predispatch=bool(inventory_path) and params.get("review_only_rows") is None,
             review_specs=inventory_review_specs,
+            certified_plans=_certified_plans(inventory_path),
             credit_rows=rows_backed_before_base,
             hold_rows=hold_rows or None,
             hold_reason=params.get("hold_reason"),
