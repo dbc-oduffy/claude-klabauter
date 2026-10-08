@@ -2828,8 +2828,14 @@ _UNJUDGED_CAUSE_JS = (
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
-    "((r) => { if (!r || typeof r !== 'object') return r; "
-    "if (r.status === 'met') { const why = []; "
+    "((r) => { if (!r || typeof r !== 'object') return r; "
+    # DoE C1 (judge-reachability-check): a met judge naming an unreachable entry
+    # or a broken click path is not_met; `undecidable` never moves the status.
+    "if (r.status === 'met' && r.reachability) { const rc = r.reachability; "
+    "const first = (rc.unreachable || [])[0] || (rc.broken_click_paths || [])[0]; "
+    "if (first) { const reason = 'not wired up: ' + first; log(reason); "
+    "return { ...r, status: 'not_met', differs_from_baseline: null, reason }; } } "
+    "if (r.status === 'met') { const why = []; "
     "if (!Array.isArray(r.observed) || r.observed.length === 0) why.push('nothing observed'); "
     "const v = r.falsifier && r.falsifier.verdict; "
     "if (v && v !== 'pass' && v !== 'not_present') why.push('falsifier ' + v); "

@@ -844,6 +844,7 @@ def route(
     probe_raise_basis: Optional[str] = None,
     name: Optional[str] = None,
     exit_criterion: Optional[str] = None,
+    click_paths: Optional[list] = None,
     interaction_mode: str = "hands-on",
     interaction_mode_source: Optional[str] = None,
     premise_evidence: Optional[str] = None,
@@ -927,9 +928,13 @@ def route(
     tier_refusal = suite_tier_refusal(exit_criterion)
     if tier_refusal is not None:
         raise SizingAssembleError(tier_refusal)
+    if click_paths and not exit_criterion:
+        raise SizingAssembleError("--click-path needs --exit-criterion: a click path belongs to a criterion")
     exit_criterion_field = (
         {"statement": exit_criterion, "accepted": None} if exit_criterion else None
     )
+    if exit_criterion_field is not None and click_paths:
+        exit_criterion_field["click_paths"] = click_paths
 
     if express_lane:
         return {
@@ -1274,6 +1279,17 @@ def route(
     }
 
 
+def parse_click_path(raw: str) -> dict:
+    """`"<role>: <nav step> > <step> > ..."` -> `{role, steps}`, nav entry first."""
+    role, sep, rest = raw.partition(":")
+    steps = [s.strip() for s in rest.split(">") if s.strip()]
+    if not sep or not role.strip() or len(steps) < 2:
+        raise SizingAssembleError(
+            f"--click-path {raw!r}: expected '<role>: <nav step> > <step>' with at least two steps"
+        )
+    return {"role": role.strip(), "steps": steps}
+
+
 def _render_block(mapping: dict) -> str:
     import yaml
 
@@ -1340,6 +1356,7 @@ def write_back(
     decision: dict[str, Any],
     *,
     exit_criterion: Optional[str] = None,
+    click_paths: Optional[list] = None,
     interaction_mode: Optional[str] = None,
     premise_provenance: Optional[str] = None,
     premise_evidence: Optional[str] = None,
@@ -1445,6 +1462,8 @@ def write_back(
             if existing.get("accepted") is None:
                 existing["statement"] = exit_criterion.strip()
                 existing["accepted"] = None
+                if click_paths:
+                    existing["click_paths"] = click_paths
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
@@ -1560,6 +1579,7 @@ def main(argv: list[str]) -> int:
     probe_raise_basis = None
     scout_evidence: list[str] = []
     exit_criterion = None
+    click_paths: list = []
     interaction_mode_flag = None
     premise_evidence = None
     write_path = None
@@ -1632,6 +1652,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--exit-criterion" and i + 1 < len(argv):
             exit_criterion = argv[i + 1]
+            i += 2
+        elif tok == "--click-path" and i + 1 < len(argv):
+            click_paths.append(argv[i + 1])
             i += 2
         elif tok == "--interaction-mode" and i + 1 < len(argv):
             interaction_mode_flag = argv[i + 1]
@@ -1727,6 +1750,7 @@ def main(argv: list[str]) -> int:
             probe_raise_basis=probe_raise_basis,
             name=name,
             exit_criterion=exit_criterion,
+            click_paths=[parse_click_path(c) for c in click_paths] or None,
             interaction_mode=interaction_mode,
             interaction_mode_source=interaction_mode_source,
             premise_evidence=premise_evidence,
@@ -1745,6 +1769,7 @@ def main(argv: list[str]) -> int:
                 write_path,
                 decision,
                 exit_criterion=exit_criterion,
+                click_paths=decision.get("exit_criterion", {}).get("click_paths") if decision.get("exit_criterion") else None,
                 interaction_mode=interaction_mode,
                 premise_provenance=premise_provenance,
                 premise_evidence=premise_evidence,

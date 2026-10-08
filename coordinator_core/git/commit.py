@@ -68,6 +68,7 @@ argument (review: overengineering-reviewer Finding 2, 2026-08-30).
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
@@ -90,6 +91,8 @@ from coordinator_core.git.git_objects import (
     cas_ref,
     packed_contains,
     read_object,
+    flush_object_batch,
+    object_batch,
     write_object,
 )
 from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_tree_spine
@@ -932,6 +935,16 @@ def _attach_session_id_trailer(message: str, repo: Union[str, Path]) -> str:
     )
 
 
+def _in_object_batch(fn):
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with object_batch():
+            return fn(*args, **kwargs)
+
+    return run
+
+
+@_in_object_batch
 def commit_paths(
     repo: Union[str, Path] = _REQUIRED,  # type: ignore[assignment]
     paths: Sequence[str] = _REQUIRED,  # type: ignore[assignment]
@@ -1484,6 +1497,10 @@ def commit_paths(
             "caller reading the success line. Pass allow_empty=True for a "
             "deliberate marker commit."
         )
+
+    # Every blob and tree lands here as one pack: signing spawns git, and the
+    # ref below must point at objects already on disk.
+    flush_object_batch()
 
     name, email = _identity(repo)
     when = _stamp()

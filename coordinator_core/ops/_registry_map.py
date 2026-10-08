@@ -389,6 +389,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "review.snapshot_diff_and_head":          "coordinator_core.ops.ceremony.snapshot_diff_and_head",
     "review.freeze_diff":                     "coordinator_core.ops.review_freeze_diff",
     "review.partition_slices":                "coordinator_core.ops.review_partition_slices",
+    "review.reachability":                    "coordinator_core.ops.review_reachability",
     "workday.stitch_sidecar_into_summary":    "coordinator_core.ops.workday_stitch_sidecar_summary",
     "repo_setup.validate_target_root":        "coordinator_core.ops.bootstrap_repo",
     "research.verify_scout_inventory_completeness": "coordinator_core.ops.verify_scout_inventory_completeness",
