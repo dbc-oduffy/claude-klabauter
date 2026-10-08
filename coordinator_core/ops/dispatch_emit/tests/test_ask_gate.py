@@ -55,8 +55,8 @@ def test_accepted_xl_shape_halts_as_room(repo):
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "shape"
 
 
-def test_xl_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
-    _put(repo, tshirt="XL", route="plan")
+def test_m_plus_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
+    _put(repo, tshirt="M", route="plan")
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "touchpoint"
     assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]  # C2/C9: launcher line and REL in v.halt["touchpoint"]
@@ -80,56 +80,6 @@ def test_xs_s_with_null_acceptance_proceeds(repo, tshirt, route, arm):
     _put(repo, tshirt=tshirt, route=route)
     v = gate(repo, REL, writes=["a.py"])
     assert v.halt is None and v.arm == arm and v.baton is None
-
-
-@pytest.mark.cadence
-@pytest.mark.spawns_process
-@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
-@pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "plan")])
-def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(repo, mode, tshirt, route):
-    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
-    _put(repo, tshirt=tshirt, route=route, mode=mode)
-    v = gate(repo, REL)
-    assert v.halt is None and v.arm == "m_plus"
-    assert v.acceptance["by"] == "engine-size-rule" and v.acceptance["mode"] == mode
-
-
-@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
-@pytest.mark.parametrize("tshirt,route", [("XL", "plan"), ("XXL", "plan")])
-def test_xl_keeps_the_acceptance_touchpoint(repo, mode, tshirt, route):
-    _put(repo, tshirt=tshirt, route=route, mode=mode)
-    v = gate(repo, REL)
-    assert v.halt["kind"] == "touchpoint"
-    assert v.acceptance is None
-
-
-@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
-@pytest.mark.parametrize("tshirt", ["M", "L"])
-def test_pm_decision_below_xl_resolved_to_plan_keeps_the_touchpoint(repo, mode, tshirt):
-    _put(repo, tshirt=tshirt, route="pm-decision", mode=mode, xl_exit="accept_multi_session")
-    v = gate(repo, REL)
-    assert v.halt["kind"] == "touchpoint" and v.acceptance is None
-
-
-@pytest.mark.parametrize("tshirt", ["S", "L"])
-def test_shape_keeps_the_room_halt_at_any_size(repo, tshirt):
-    _put(repo, tshirt=tshirt, route="shape")
-    assert gate(repo, REL).halt["kind"] == "room"
-
-
-def test_skipped_acceptance_verdict_carries_the_engine_stamp(repo):
-    _put(repo, tshirt="XS", route="dispatch")
-    v = gate(repo, REL, writes=["a.py"])
-    assert v.halt is None
-    assert v.to_json()["acceptance"] == {
-        "by": "engine-size-rule", "route": "dispatch", "tshirt": "XS", "mode": "pm", "ruling": "2026-10-08",
-    }
-
-
-def test_recorded_acceptance_carries_no_engine_stamp(repo):
-    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
-    v = gate(repo, REL, writes=["a.py"])
-    assert v.halt is None and "acceptance" not in v.to_json()
 
 
 @pytest.mark.cadence

@@ -3403,37 +3403,3 @@ def test_plan_chain_run_windows_backslash_argv0_subagent_denies(monkeypatch):
 def test_plan_chain_run_main_loop_allows():
     payload = _payload("plan-chain-run --manifest x.json", agent_id=None)
     assert guard.check(payload) is None
-
-
-_NEXT_ROUTE_PATH = "src/app/(ddct)/ddct/e/[type]/[id]/page.tsx"
-
-
-@pytest.mark.parametrize("spelling", [_NEXT_ROUTE_PATH, ":(literal)" + _NEXT_ROUTE_PATH])
-def test_literal_and_bare_spellings_reach_the_ownership_leg_as_the_same_key(
-    spelling, tmp_path
-):
-    """The claim ledger keys on the bare repo-relative path, so a
-    `:(literal)`-wrapped pathspec element must be unwrapped before the
-    ownership leg or a path the session wrote is reported as claimed by none.
-    """
-    seen = []
-    target = tmp_path / _NEXT_ROUTE_PATH
-    target.parent.mkdir(parents=True)
-    target.write_text("x")
-
-    def fake_scope(session_id, paths, cwd, *, allow_orphans):
-        seen.append(list(paths))
-        return True, ""
-
-    allowed, _ = guard._git_commit_agent_pathspec_permitted(
-        [spelling], False, str(tmp_path), "sid", None,
-        assert_paths_in_session_scope=fake_scope,
-    )
-    assert allowed
-    assert seen == [[_NEXT_ROUTE_PATH]]
-
-
-def test_repo_relativize_pathspec_unwraps_literal_around_an_absolute_element():
-    assert guard._repo_relativize_pathspec(
-        [":(literal)" + _FAKE_REPO_ROOT + "/src/foo.py"], _FAKE_REPO_ROOT
-    ) == (["src/foo.py"], False)

@@ -167,7 +167,6 @@ class WaveRow(NamedTuple):
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
-    appends: tuple = ()
 
 
 class WaveCycleError(ValueError):
@@ -288,89 +287,6 @@ def _declared_closure(declared: dict[str, set[str]]) -> dict[str, set[str]]:
     return closure
 
 
-def _append_only_paths(rows: list[EmitterRow]) -> set[str]:
-    """Normalized exact paths every writer in ``rows`` lists under ``appends:``.
-
-    A read of such a path never orders: appending rows commute, so the reader
-    sees the hub file's head either way. One in-place writer (or a
-    ``writes_under`` prefix covering the path) makes it an ordinary write.
-    """
-    appended: set[str] = set()
-    in_place: set[str] = set()
-    prefixes: list[str] = []
-    for row in rows:
-        if row.writes is UNDECLARED or not isinstance(row.writes, list):
-            continue
-        declared = {_normalize_path(p) for p in getattr(row, "appends", ()) or ()}
-        for path in row.writes:
-            norm = _normalize_path(path)
-            (appended if norm in declared else in_place).add(norm)
-        prefixes.extend(_normalize_path(p) for p in row.writes_under)
-    return {
-        path
-        for path in appended - in_place
-        if not any(path == pre or _is_ancestor(pre, path) for pre in prefixes)
-    }
-
-
-def _cyclic_derived_edges(
-    preds: dict[str, set[str]], derived: set[tuple[str, str]]
-) -> set[tuple[str, str]]:
-    """The ``derived`` (row, predecessor) edges lying on some cycle of ``preds``.
-
-    An edge is on a cycle exactly when both endpoints share a strongly
-    connected component (Tarjan, iterative: a spine can run to ~1000 rows).
-    """
-    index: dict[str, int] = {}
-    low: dict[str, int] = {}
-    on_stack: set[str] = set()
-    stack: list[str] = []
-    comp: dict[str, int] = {}
-    counter = 0
-    for root in preds:
-        if root in index:
-            continue
-        work = [(root, iter(sorted(preds[root])))]
-        index[root] = low[root] = counter
-        counter += 1
-        stack.append(root)
-        on_stack.add(root)
-        while work:
-            node, it = work[-1]
-            advanced = False
-            for succ in it:
-                if succ not in preds:
-                    continue
-                if succ not in index:
-                    index[succ] = low[succ] = counter
-                    counter += 1
-                    stack.append(succ)
-                    on_stack.add(succ)
-                    work.append((succ, iter(sorted(preds[succ]))))
-                    advanced = True
-                    break
-                if succ in on_stack:
-                    low[node] = min(low[node], index[succ])
-            if advanced:
-                continue
-            work.pop()
-            if work:
-                parent = work[-1][0]
-                low[parent] = min(low[parent], low[node])
-            if low[node] == index[node]:
-                while True:
-                    member = stack.pop()
-                    on_stack.discard(member)
-                    comp[member] = node
-                    if member == node:
-                        break
-    return {
-        (reader, writer)
-        for reader, writer in derived
-        if reader == writer or comp.get(reader) == comp.get(writer)
-    }
-
-
 def _predecessors(
     rows: list[EmitterRow],
     provenance: dict[tuple[str, str], str] | None = None,
@@ -397,8 +313,6 @@ def _predecessors(
     row_ids = {row.id for row in rows}
     preds: dict[str, set[str]] = {row.id: set() for row in rows}
     declared: dict[str, set[str]] = {row.id: set() for row in rows}
-    append_only = _append_only_paths(rows)
-    derived_edges: set[tuple[str, str]] = set()
 
     for row in rows:
         for edge in row.depends_on:
@@ -429,8 +343,6 @@ def _predecessors(
             collisions = []
             for read_path in reader.reads:
                 normalized = _normalize_path(read_path)
-                if normalized in append_only:
-                    continue
                 if normalized in write_paths:
                     collisions.append((read_path, write_paths[normalized]))
                     continue
@@ -472,28 +384,12 @@ def _predecessors(
                     )
                 continue
             preds[reader.id].add(writer.id)
-            if writer.id not in declared[reader.id]:
-                derived_edges.add((reader.id, writer.id))
             if provenance is not None and (reader.id, writer.id) not in provenance:
                 read_path, write_path = collisions[0]
                 provenance[(reader.id, writer.id)] = (
                     f"derived: {reader.id} reads {read_path}, "
                     f"written by {writer.id}"
                 )
-
-    for reader_id, writer_id in sorted(_cyclic_derived_edges(preds, derived_edges)):
-        preds[reader_id].discard(writer_id)
-        if provenance is not None:
-            provenance.pop((reader_id, writer_id), None)
-            _logger.warning(
-                "wave_map: dropped derived edge %s -> %s (%s reads a path "
-                "written by %s); a cycle passes through it and a derived "
-                "edge never creates one",
-                reader_id,
-                writer_id,
-                reader_id,
-                writer_id,
-            )
 
     return preds
 
@@ -758,7 +654,6 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 body=row.body,
                 verification_runs=getattr(row, "verification_runs", None),
                 change_kind=row.change_kind,
-                appends=getattr(row, "appends", ()),
             )
             for row in wave
         ]

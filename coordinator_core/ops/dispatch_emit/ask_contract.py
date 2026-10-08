@@ -33,15 +33,9 @@ class GateVerdict:
     arm: str | None
     halt: dict | None
     baton: dict | None = None
-    # Set only when the engine's size rule discharged a null `exit_criterion.accepted`: the
-    # sizing object cannot carry this, so the verdict is the record that nobody was asked.
-    acceptance: dict | None = None
 
     def to_json(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
-        if self.acceptance is not None:
-            out["acceptance"] = self.acceptance
-        return out
+        return {"arm": self.arm, "halt": self.halt, "baton": self.baton}
 
 
 @dataclass(frozen=True)

@@ -268,7 +268,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
 from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
@@ -638,9 +637,11 @@ TOUCHPOINTS_BY_MODE: dict[str, tuple[dict[str, str], ...]] = {
     ),
 }
 
-#: The sizing-stage touchpoint ids the engine skips when `sizing_acceptance_skipped`
-#: holds; the later touchpoints (`execute_go`, `wrap_up`, `accept_result`) are kept.
+#: The sizing-stage touchpoint ids dropped at a resized XS/S (Design §
+#: Engine "Size rule" -- XS/S never ask today, so the later touchpoints
+#: stay but the size-gate ask is skipped).
 _SIZING_STAGE_TOUCHPOINT_IDS = frozenset({"accept_sizing", "accept_exit_criterion"})
+
 
 def _assert_touchpoint_table_total() -> None:
     """Every member of `_INTERACTION_MODES_EXPECTED` has a `TOUCHPOINTS_BY_MODE`
@@ -660,12 +661,12 @@ def _assert_touchpoint_table_total() -> None:
 _assert_touchpoint_table_total()
 
 
-def touchpoints(interaction_mode: str, resized_tshirt: str, route: str) -> list[dict[str, str]]:
-    """Which human gates `interaction_mode` has for `route` at `resized_tshirt` (Design §
-    Engine). Where `sizing_acceptance_skipped` holds the sizing-stage touchpoints are
-    dropped; the later touchpoints in the mode's chain are kept."""
+def touchpoints(interaction_mode: str, resized_tshirt: str) -> list[dict[str, str]]:
+    """Which human gates `interaction_mode` has at `resized_tshirt` (Design §
+    Engine). At a resized XS/S the sizing-stage touchpoint is dropped (it
+    never asks today); the later touchpoints in the mode's chain are kept."""
     base = TOUCHPOINTS_BY_MODE[interaction_mode]
-    if sizing_acceptance_skipped(route, resized_tshirt):
+    if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS:
         return [dict(t) for t in base if t["id"] not in _SIZING_STAGE_TOUCHPOINT_IDS]
     return [dict(t) for t in base]
 
@@ -900,10 +901,8 @@ def route(
             alters `route`, `fork`, or `xl_exit` — it selects which
             `touchpoints` render, exactly as `compaction_warnings` selects
             an advisory variant without ever suppressing the advisory
-            itself. In `ceo` mode, `post_size_prompt_pending` is
-            suppressed (ceo's single touchpoint is the exit criterion); in
-            every mode but `hands-on` it is also dropped wherever
-            `sizing_acceptance_skipped(route, tshirt)` holds.
+            itself. In `ceo` mode only, `post_size_prompt_pending` is
+            suppressed (ceo's single touchpoint is the exit criterion).
         interaction_mode_source: "flag" | "fleet" | "default" — set by
             `main()`; `route()` never resolves this itself and only echoes
             the value it is given back into the return payload.
@@ -995,15 +994,6 @@ def route(
         detents.append("scope_boundary_acknowledged")
     else:
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
-
-    if sizing_acceptance_skipped(resolved_route, resized_tshirt):
-        # The engine carries this straight to execution: the appetite ask goes too, in every
-        # mode but hands-on (the PM choosing to be in the loop per turn). Appetite stays
-        # PM-stated-only; nothing here infers it.
-        dropped = {"exit_criterion_pending"}
-        if interaction_mode != "hands-on":
-            dropped.add("post_size_prompt_pending")
-        detents = [d for d in detents if d not in dropped]
 
     if resolved_route == "pm-decision":
         detents.append("pm_decision_pending")
@@ -1225,7 +1215,7 @@ def route(
             "elaboration."
         )
 
-    mode_touchpoints = touchpoints(interaction_mode, resized_tshirt, resolved_route)
+    mode_touchpoints = touchpoints(interaction_mode, resized_tshirt)
 
     if "exit_criterion_pending" in detents:
         if exit_criterion:
@@ -1300,7 +1290,7 @@ def parse_click_path(raw: str) -> dict:
     return {"role": role.strip(), "steps": steps}
 
 
-def _render_block(mapping: dict | list) -> str:
+def _render_block(mapping: dict) -> str:
     import yaml
 
     dumped = yaml.safe_dump(
@@ -1415,9 +1405,6 @@ def write_back(
     record_premise = premise_provenance not in (None, "unrecorded")
     if record_premise and not (premise_evidence or "").strip():
         raise SizingAssembleError("--premise-provenance given without --premise-evidence")
-    from coordinator_core.ops.baton_pm_turns import recent_window
-
-    pm_verbatims = recent_window(cwd=str(root))
 
     def mutate(old: str) -> str:
         try:
@@ -1483,10 +1470,6 @@ def write_back(
             text = write_fm_nested_field(text, "research", _render_block(research))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
-        # First write only: once present, the EM curates it by hand and a
-        # re-run must not restore what they cut.
-        if "pm_verbatims" not in doc and pm_verbatims:
-            text = write_fm_nested_field(text, "pm_verbatims", _render_block(pm_verbatims))
         intent_now = doc.get("intent")
         computed_intent = (decision.get("intent") or "").strip()
         if (

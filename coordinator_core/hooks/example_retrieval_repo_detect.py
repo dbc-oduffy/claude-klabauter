@@ -21,7 +21,7 @@ marker files, a single file-mtime stat, and two `git` subprocess calls. There
 is no pwsh-only primitive (no registry read, no WMI query) anywhere in the
 oracle pair, so this ports cleanly; nothing here falls back to stays-bash.
 
-Kill-switch: env COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED=1 disables.
+Kill-switch: env COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED=1 disables.
 
 Example-Game-Repo dedupe: `.example-game-repo/` or `Saved/ExampleGameRepoProjectRag` found walking up
 from cwd => silent exit; the example-game-repo-specific hook owns that banner.
@@ -97,7 +97,7 @@ def _git(repo_root: str, *args: str) -> str | None:
 
 
 def detect_banner(cwd: str) -> str:
-    if os.environ.get("COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED") == "1":
+    if os.environ.get("COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED") == "1":
         return ""
 
     if _find_marker_upward(cwd, ".example-game-repo") is not None:
@@ -114,7 +114,7 @@ def detect_banner(cwd: str) -> str:
     db_path = os.path.join(example_retrieval_repo_dir, "graph.db")
 
     if not os.path.isfile(db_path):
-        return "project-rag: UNINITIALIZED — no graph.db; run the project-RAG indexer"
+        return "example-retrieval-repo: UNINITIALIZED — no graph.db; run the example-retrieval-repo indexer"
 
     try:
         db_mtime_epoch = Path(db_path).stat().st_mtime
@@ -133,7 +133,7 @@ def detect_banner(cwd: str) -> str:
 
     built_commit = _git(repo_root, "log", "-1", f"--before={mtime_str}", "--format=%H")
     if not built_commit:
-        return "project-rag: UNINITIALIZED — graph.db predates git history; run the project-RAG indexer"
+        return "example-retrieval-repo: UNINITIALIZED — graph.db predates git history; run the example-retrieval-repo indexer"
 
     delta_raw = _git(repo_root, "rev-list", f"{built_commit}..HEAD", "--count")
     if delta_raw is None:
@@ -147,7 +147,7 @@ def detect_banner(cwd: str) -> str:
         return "example-retrieval-repo: fresh (HEAD aligned)"
 
     base_msg = (
-        f"project-rag: STALE — {delta} commits behind HEAD; "
+        f"example-retrieval-repo: STALE — {delta} commits behind HEAD; "
         "example-retrieval-repo queries may miss recent changes"
     )
 
@@ -156,10 +156,10 @@ def detect_banner(cwd: str) -> str:
         if delta > 50:
             lines.append(
                 f"  WARNING: {delta} commits — index is significantly out of date. "
-                "Run the project-RAG indexer to rebuild."
+                "Run the example-retrieval-repo indexer to rebuild."
             )
         if age_days > 7:
-            lines.append(f"  WARNING: index is {age_days} days old. Run the project-RAG indexer to rebuild.")
+            lines.append(f"  WARNING: index is {age_days} days old. Run the example-retrieval-repo indexer to rebuild.")
         lines.append("</system-reminder>")
         return "\n".join(lines)
 

@@ -28,11 +28,6 @@ KINDS: dict[str, tuple[Any, str]] = {
     "str_list": (_is_str_list, "a list of strings"),
     "list": (lambda v: isinstance(v, list), "a list"),
     "dict": (lambda v: isinstance(v, dict), "an object"),
-    "bool": (lambda v: isinstance(v, bool), "a boolean"),
-    "pos_int": (
-        lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
-        "a positive integer",
-    ),
 }
 
 

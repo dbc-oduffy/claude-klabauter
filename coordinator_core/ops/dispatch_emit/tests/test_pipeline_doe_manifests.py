@@ -279,6 +279,9 @@ def test_roster_stage_has_one_literal_site_per_agent_type(monkeypatch, tmp_path)
     types = [g["agentType"] for g in agent_graph(script)]
     assert types.count("coordinator:the Staff Engineer") == 2 and types.count("coordinator:sid") == 2
     assert '"pat": "coordinator:the Staff Engineer"' in script and "withItem(" in script
+    # The runtime fan-out (slugs from mc's return) refuses an off-roster slug by name, up front.
+    assert script.count("slug(s) not on the roster: ") == 1
+    assert "Object.hasOwn(rosterTypes['team'], x)" in script.split("phase('r2')")[1]
 
 
 def test_runtime_item_is_filled_by_the_script_not_the_composer(monkeypatch, tmp_path):

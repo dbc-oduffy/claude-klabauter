@@ -184,6 +184,10 @@ def _close_sync(worktree: Path, params: dict) -> dict:
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "research.close" handler.
 
+    Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
+    ``topic_slug`` (both safe single path segments), ``outputs`` (optional list of
+    scratch-relative file paths; default every regular file directly in scratch_dir).
+
     Returns (exit_code 0): scouts -> ``{committed: false, digest_path}``; corpus/deep ->
     ``{committed: true, sha, paths}``. Returns (exit_code 1): ``{committed: false, error}``.
     """

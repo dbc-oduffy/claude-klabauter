@@ -1245,18 +1245,3 @@ class TestOwnershipLegRebuilt:
         assert len(capped.encode("utf-8")) <= 73  # 70-byte cap + "..." ellipsis
         assert "indeterminate" in capped
         assert "adoption withheld" in capped
-
-
-def test_dirty_unclaimed_probe_treats_bracket_paths_literally(tmp_path):
-    """`[type]` is a git character class unless the pathspec is `:(literal)`;
-    a bare one matches nothing, so a dirty orphan reads as clean."""
-    import subprocess
-
-    from coordinator_core.ops.session import scope_report
-
-    rel = "src/app/(ddct)/ddct/e/[type]/[id]/page.tsx"
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    f = tmp_path / rel
-    f.parent.mkdir(parents=True)
-    f.write_text("x")
-    assert scope_report._dirty_unclaimed_paths(str(tmp_path), [rel]) == {rel}

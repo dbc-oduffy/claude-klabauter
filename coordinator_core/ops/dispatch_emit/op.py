@@ -230,7 +230,6 @@ import hashlib
 import json
 from coordinator_core.atomic_replace import atomic_write_bytes
 import os
-import re
 import stat
 import sys
 import uuid
@@ -404,22 +403,6 @@ def _refuse_unapproved_body(plan_path: str) -> None:
         raise ValueError(f"dispatch.emit: {Path(plan_path).name}: {message}")
     if state == APPROVED_BODY_UNVERIFIABLE:
         print(f"dispatch.emit: {Path(plan_path).name}: {message}", file=sys.stderr)
-
-
-def _certified_plans(inventory_path) -> list:
-    """Spec paths of the full certified set an inventory run belongs to: a tranche record
-    (`<base>-t<N>.md`) answers for its base inventory, whose Chunk table holds every plan
-    the mise certified, so a seam consumer elsewhere in that set is not read as outside it."""
-    if not inventory_path:
-        return []
-    path = Path(inventory_path)
-    base = path.with_name(re.sub(r"-t\d+$", "", path.stem) + ".md")
-    source = base if base.is_file() else path
-    try:
-        rows = parse_chunk_table(source.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return sorted({s for s in (_strip_backtick(r.get("spec path", "")) for r in rows) if s.endswith(".md")})
 
 
 def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
@@ -698,7 +681,6 @@ _PARAM_FIELDS = (
         )
     ),
     Field("inventory_part", "list"),
-    Field("row_budget", "pos_int"),
     Field("queue", "list"),
     Field("overrides", "dict"),
     Field("writes", "str_list"),
@@ -856,12 +838,21 @@ def _research_route_setup(
         segments.append((manifest, inputs, validate(manifest, inputs)))
     if not aliased_param(params, "output_path", "out_path"):
         params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
+    close_params = {
+        "scratch_dir": (root / scratch_rel).as_posix(),
+        "tier": shape["tier"],
+        "run_id": run_id,
+        "topic_slug": research_emit.topic_slug(
+            str(ask or ""), brief_rel if from_sizing else ""
+        ),
+    }
     research_ctx = {
         "root": root,
         "run_id": run_id,
         "brief": brief_rel,
         "segments": segments,
         "shape": {"tier": shape["tier"], "reason": shape["reason"], "pipelines": shape["pipelines"]},
+        "next_action": {"op": "research.close", "params": close_params},
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
@@ -1116,8 +1107,7 @@ def _dispatch_emit(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
             ask_sizing = _gate_sizing_at_emit(
-                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton,
-                cross_repo_approved=bool(params.get("cross_repo_approved")),
+                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton
             )
         else:
             given_root = repo_root or params.get("target_root")
@@ -1187,7 +1177,6 @@ def _dispatch_emit(
         return _emit_lanes(params, repo_root)
 
     inventory_review_specs: list = []
-    tranche_inventory: dict = {}
     if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
             _refuse_inventory_outside_repo(
@@ -1195,39 +1184,13 @@ def _dispatch_emit(
             )
             part = params.get("inventory_part")
             resume_skipped: list = []
-            tranche_report: dict = {}
-            withheld_plans: dict = {}
-            part_items: list = []
             spine_text, spine_path = mint_spine(
                 inventory_path,
-                max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
+                max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS,
                 part=(int(part[0]), int(part[1])) if part else None,
                 skip_landed=bool(params.get("skip_landed")),
                 skipped_out=resume_skipped,
-                row_budget=params.get("row_budget"),
-                tranche_out=tranche_report,
-                withheld_out=withheld_plans,
-                tranche_inventory_out=tranche_inventory,
-                part_items_out=part_items,
             )
-            if part:
-                # A part is cut from the inventory's rows, not its record, so
-                # the record still lists every plan: scope the review to the
-                # part's own plans.
-                part_item_set = set(part_items)
-                part_plans = frozenset(
-                    _strip_backtick(r["spec path"])
-                    for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
-                    if _strip_backtick(r["id"]) in part_item_set
-                )
-                only_review_plans = (
-                    part_plans if only_review_plans is None else only_review_plans & part_plans
-                )
-            if tranche_inventory:
-                # The tranche is its own inventory record from here on: its
-                # landed-reconcile and review specs must see only its plans.
-                inventory_path = str(tranche_inventory["path"])
-                Path(inventory_path).write_text(tranche_inventory["text"], encoding="utf-8", newline="\n")
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
             )
@@ -1238,14 +1201,9 @@ def _dispatch_emit(
                 )
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
-            # A review-only run executes nothing: no landed-flip writes to the
-            # plans and no pre-dispatch checks or falsifier reviews.
-            review_only_run = params.get("review_only_rows") is not None
-            landed_reconciled = {} if review_only_run else reconcile_landed(Path(inventory_path))
-            inventory_review_specs = (
-                []
-                if review_only_run
-                else _inventory_review_specs(Path(inventory_path), only_review_plans)
+            landed_reconciled = reconcile_landed(Path(inventory_path))
+            inventory_review_specs = _inventory_review_specs(
+                Path(inventory_path), only_review_plans
             )
 
         if not plan_path:
@@ -1361,7 +1319,10 @@ def _dispatch_emit(
         from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script
 
         script = compose_chain_script(
-            research_ctx["segments"], run_id=research_ctx["run_id"], agent_type_host=agent_type_host
+            research_ctx["segments"],
+            run_id=research_ctx["run_id"],
+            agent_type_host=agent_type_host,
+            next_action=research_ctx["next_action"],
         )
         receipt_extras = {
             **(receipt_extras or {}),
@@ -1420,7 +1381,6 @@ def _dispatch_emit(
             script_path=_script_path_under(guarded_path, ask_ctx["root"]),
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
-            cross_repo_approved=bool(params.get("cross_repo_approved")),
             agent_type_host=agent_type_host,
             baton=ask_ctx.get("baton"),
             accept_pending=bool(ask_ctx.get("accept_pending")),
@@ -1440,38 +1400,30 @@ def _dispatch_emit(
         if params.get("hold_reason") and not hold_rows:
             raise ValueError("dispatch.emit hold_reason requires hold_rows")
         held_out: dict = {}
-        try:
-            script = emit_script(
-                plan_path,
-                name=params.get("name"),
-                description=params.get("description"),
-                repo_root=repo_root or _repo_root_for_plan(plan_path),
-                session_id=emitting_session_id,
-                review_roster_fragment=review_roster_fragment,
-                review_stage_schemas=review_stage_schemas,
-                agent_type_host=agent_type_host,
-                preamble=preamble,
-                box_terms=box_terms,
-                script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
-                findings_out=plan_findings,
-                landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
-                review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
-                run_base_sha=params.get("run_base_sha"),
-                chatty=bool(params.get("chatty")),
-                cross_repo_approved=bool(params.get("cross_repo_approved")),
-                predispatch=bool(inventory_path) and params.get("review_only_rows") is None,
-                review_specs=inventory_review_specs,
-                certified_plans=_certified_plans(inventory_path),
-                credit_rows=rows_backed_before_base,
-                hold_rows=hold_rows or None,
-                hold_reason=params.get("hold_reason"),
-                held_out=held_out,
-            )
-        except ScriptOverCapError as over:
-            # Part emits re-enter on this tranche record, not a fresh one (`_emit_inventory_parts`).
-            if tranche_inventory:
-                over.tranche_inventory = inventory_path
-            raise
+        script = emit_script(
+            plan_path,
+            name=params.get("name"),
+            description=params.get("description"),
+            repo_root=repo_root or _repo_root_for_plan(plan_path),
+            session_id=emitting_session_id,
+            review_roster_fragment=review_roster_fragment,
+            review_stage_schemas=review_stage_schemas,
+            agent_type_host=agent_type_host,
+            preamble=preamble,
+            box_terms=box_terms,
+            script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
+            findings_out=plan_findings,
+            landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
+            review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
+            run_base_sha=params.get("run_base_sha"),
+            chatty=bool(params.get("chatty")),
+            predispatch=bool(inventory_path),
+            review_specs=inventory_review_specs,
+            credit_rows=rows_backed_before_base,
+            hold_rows=hold_rows or None,
+            hold_reason=params.get("hold_reason"),
+            held_out=held_out,
+        )
         if held_out:
             receipt_extras = {
                 **(receipt_extras or {}),
@@ -1587,15 +1539,12 @@ def _dispatch_emit(
 
     if research_ctx is not None:
         reply.update(research_ctx["shape"])
+        reply["next_action"] = research_ctx["next_action"]
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled
         if params.get("skip_landed"):
             reply["resume_skipped_landed"] = resume_skipped
-        if tranche_report:
-            reply["tranche"] = tranche_report
-        if withheld_plans:
-            reply["withheld_plans"] = withheld_plans
 
     if not is_queue_route:
         anchor_root = repo_root or (
@@ -2094,11 +2043,7 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
 
 
 def _gate_sizing_at_emit(
-    root: Path,
-    sizing_rel: str,
-    writes: list,
-    baton: Optional[dict] = None,
-    cross_repo_approved: bool = False,
+    root: Path, sizing_rel: str, writes: list, baton: Optional[dict] = None
 ) -> dict:
     """Run the in-run gate and the footprint check before any script is composed.
 
@@ -2109,10 +2054,8 @@ def _gate_sizing_at_emit(
     is derived from whether the sizing already named a baton, never from git.
     """
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
-    from types import SimpleNamespace
-
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_TOUCHPOINT
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import CrossRepoWriteError, check_cross_repo_writes
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
     from coordinator_core.ops.dispatch_emit.sizing_fire import (
         ARM_M_PLUS,
         ARM_ROADMAP,
@@ -2123,13 +2066,11 @@ def _gate_sizing_at_emit(
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES
 
-    try:
-        check_cross_repo_writes(
-            [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],
-            Path(root), approved=cross_repo_approved,
+    outside = paths_outside_repo_root(writes, root)
+    if outside:
+        raise SizingFireRefused(
+            [f"writes outside repo root {Path(root).as_posix()}: {', '.join(outside)}"]
         )
-    except CrossRepoWriteError as exc:
-        raise SizingFireRefused([str(exc)]) from exc
     sizing = load_sizing(root, sizing_rel)
     had_baton = bool(sizing.get("baton"))
     # An XS footprint is authored at run time when --writes is absent; the gate's

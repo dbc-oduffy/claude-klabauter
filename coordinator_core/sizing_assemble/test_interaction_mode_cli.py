@@ -130,9 +130,8 @@ class TestFalsifierShape:
         assert out["interaction_mode"] == "pm"
         assert out["interaction_mode_source"] == "flag"
         assert out["route"] == "plan"
-        # plan at M: the engine discharges the sizing-stage acceptance (PM ruling 2026-10-08)
-        assert "exit_criterion_pending" not in out["detents"]
-        assert [t["id"] for t in out["touchpoints"]] == ["accept_result"]
+        assert "exit_criterion_pending" in out["detents"]
+        assert [t["id"] for t in out["touchpoints"]] == ["accept_sizing", "accept_result"]
 
     def test_baseline_regression_unrecognized_argument(self, monkeypatch, capsys):
         """Confirms the pre-C6 baseline usage-error the falsifier's

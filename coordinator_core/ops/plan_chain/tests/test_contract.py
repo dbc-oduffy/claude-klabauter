@@ -69,27 +69,6 @@ def test_manifest_round_trips_through_json():
 
 
 def test_manifest_path_and_constants():
-    assert contract.manifest_path("trail", 3, "b.d") == Path("trail") / "chain-3-b.d.json"
+    assert contract.manifest_path("trail", 3) == Path("trail") / "chain-3-1.json"
     assert contract.CHAIN_BIN == "plan-chain-run"
     assert contract.CHAIN_FLAG == "--chain"
-
-
-def _manifest(sizing, baton="b", deliverable=None):
-    return contract.ChainManifest(
-        sizing_object=sizing, baton=baton, deliverable_id=deliverable, interaction_mode="pm",
-        repo_root="r", trail_dir="t", wave_args={}, script_source="s.mjs",
-    )
-
-
-def test_chain_key_keys_on_baton_and_deliverable():
-    assert contract.chain_key("hnd-1") == "hnd-1"
-    assert contract.chain_key("hnd-1", "D 2") == "hnd-1.D_2"
-
-
-def test_write_manifest_is_idempotent_for_one_chain_and_refuses_another(tmp_path):
-    p = tmp_path / "chain-0-b.json"
-    contract.write_manifest(p, _manifest("s1.yaml"))
-    contract.write_manifest(p, _manifest("s1.yaml"))
-    with pytest.raises(contract.ChainManifestCollision, match="s1.yaml.*s2.yaml"):
-        contract.write_manifest(p, _manifest("s2.yaml"))
-    assert contract.ChainManifest.from_json(p.read_text(encoding="utf-8")).sizing_object == "s1.yaml"

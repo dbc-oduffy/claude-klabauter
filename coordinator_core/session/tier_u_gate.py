@@ -222,12 +222,7 @@ session-scoped identity token is threaded through), the R6 declaration
 exit is available to WHATEVER caller invokes these CLIs with the literal
 resolved ``fast_test_cmd`` string -- narrower than a full Tier-U grant
 (single string, single command shape) but not narrowed to EM-only. Flagged
-here rather than silently narrowed with a fake check. The subagent leg is
-closed one layer up: the CLI-name identity deny in the suite authority
-contract (``suite_authority``), not this seam.
-
-Authority is ``suite_authority(...).authorized`` (cloud-box basis, else a live
-Tier-U grant); the own-suite refusal and the R6 ordering stay ahead of it.
+here rather than silently narrowed with a fake check.
 """
 
 from __future__ import annotations
@@ -249,7 +244,7 @@ from coordinator_core.resolve_validation_cmd import (
 from coordinator_core.session.fast_tier_declaration import (
     fast_tier_unscoped_declaration,
 )
-from coordinator_core.session.suite_authority import suite_authority
+from coordinator_core.session.grant import check_tier_u_grant
 
 
 def _fast_tier_unscoped_declaration_covers(cmd: str, repo_root: Optional[str]) -> bool:
@@ -460,7 +455,8 @@ def enforce_tier_u_gate(
         own_key = _resolving_own_tier_from_inside_its_suite(cmd, repo_root)
         if own_key:
             return _own_suite_refusal(own_key, "F")
-        if suite_authority(cwd=repo_root, session_id=session_id).authorized:
+        granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
+        if granted:
             return TierUGateResult(proceed=True)
 
         detected = tier_f_matches[0].detected
@@ -469,9 +465,8 @@ def enforce_tier_u_gate(
             "Refusing to run: this command is the repo's configured fast "
             f"test tier (Tier F -- detected: {detected}) and the calling "
             "session holds no live Tier-U grant. Per PM ruling 2026-08-04 "
-            "the grant ask is the escape hatch on a box (a cloud-box session "
-            "is authorized without one) -- there is no declaration-based "
-            "exemption for Tier F.\n\n"
+            "the grant ask is the only escape hatch for the fast tier -- "
+            "there is no declaration-based exemption for Tier F.\n\n"
             f"{remediation}\n\n"
             "Ask the PM for a grant, then run: "
             "tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n\n"
@@ -488,7 +483,8 @@ def enforce_tier_u_gate(
     if own_key:
         return _own_suite_refusal(own_key, "U")
 
-    if suite_authority(cwd=repo_root, session_id=session_id).authorized:
+    granted, _record = check_tier_u_grant(cwd=repo_root, session_id=session_id)
+    if granted:
         return TierUGateResult(proceed=True)
 
     if tier_u_matches:
@@ -512,8 +508,7 @@ def enforce_tier_u_gate(
         f"invocation (Tier U -- detected: {detected}) and the "
         "calling session holds no live Tier-U grant.\n\n"
         f"{remediation}\n\n"
-        "A cloud-box session needs no grant. On a box, three honest "
-        "exits: (a) configure a scoped fast_test_cmd (a test "
+        "Three honest exits: (a) configure a scoped fast_test_cmd (a test "
         "file, directory, or node-id scope -- see the remediation above), "
         "(b) declare fast_tier_unscoped_reason in coordinator.local.md with "
         "a prose rationale (covers only the literal resolved fast_test_cmd "

@@ -338,34 +338,6 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
-    "plan.seam_check": {
-        "prep_fire": {
-            "ceiling": 1,
-            "reason": (
-                "First recorded 2026-10-08 at the value it entered with: one batched cat-file --batch-check answers every tracked-at-HEAD question for the set."
-            ),
-        },
-        "wave_boundary": {
-            "ceiling": 2,
-            "reason": (
-                "First recorded 2026-10-08 at the value it entered with: the batched cat-file plus one name-only diff of the landed range."
-            ),
-        },
-    },
-    "plan.seam_record": {
-        "prep_fire": {
-            "ceiling": 1,
-            "reason": (
-                "First recorded 2026-10-08 at the value it entered with: one batched cat-file --batch-check answers every tracked-at-HEAD question for the set."
-            ),
-        },
-        "wave_boundary": {
-            "ceiling": 2,
-            "reason": (
-                "First recorded 2026-10-08 at the value it entered with: the batched cat-file plus one name-only diff of the landed range."
-            ),
-        },
-    },
     "plan.stamp_prepped": {
         "census_python_target_tracking": {
             "ceiling": 1,

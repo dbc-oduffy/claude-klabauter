@@ -34,9 +34,3 @@ def test_marker_distinct_from_commit_request():
 def test_gate_verdict_to_json():
     v = c.GateVerdict(None, {"kind": c.HALT_ROOM, "reason": "x"})
     assert v.to_json() == {"arm": None, "halt": {"kind": "room", "reason": "x"}, "baton": None}
-
-
-def test_gate_verdict_to_json_omits_acceptance_when_unset():
-    assert "acceptance" not in c.GateVerdict("s", None).to_json()
-    stamp = {"by": "engine-size-rule"}
-    assert c.GateVerdict("s", None, acceptance=stamp).to_json()["acceptance"] == stamp

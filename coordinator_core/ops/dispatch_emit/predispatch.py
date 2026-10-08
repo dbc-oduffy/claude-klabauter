@@ -12,7 +12,7 @@ from typing import NamedTuple, Optional, Sequence
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 CHECK_PHASE_TITLE = "Pre-dispatch check"
-CHECK_AGENT_MODEL = "haiku"
+CHECK_AGENT_MODEL = "sonnet"
 
 ALREADY_DONE_RULE = (
     "Verdict rule. Answer `already-done` only when, for EACH clause of the row's "
@@ -32,12 +32,6 @@ class AgentSpec(NamedTuple):
     model: str
     prompt: str
     schema: str
-    #: Falsifier-integrity verdict cache. ``schema == CACHED_SCHEMA`` marks a hit:
-    #: ``prompt`` is then the cached result JSON and no agent is dispatched. On a
-    #: fresh review ``cache_path``/``cache_key`` tell the script where to persist
-    #: the verdict it gets back.
-    cache_path: Optional[str] = None
-    cache_key: Optional[tuple[str, str]] = None
 
 
 #: Placeholder every check prompt carries where the rule goes. The emitter
@@ -46,7 +40,6 @@ class AgentSpec(NamedTuple):
 ALREADY_DONE_RULE_MARKER = "{{ALREADY_DONE_RULE}}"
 
 CHECK_SCHEMA = "predispatch_check_result"
-CACHED_SCHEMA = "cached_result"
 
 
 def _footprint_text(writes: object) -> str:

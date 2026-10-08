@@ -43,7 +43,7 @@ def _sizing(repo, tshirt="M", mode="pm", accepted=None, **over):
         "name": "baton fixture",
         "intent": "exercise the baton input",
         "estimate": {"tshirt": tshirt, "provisional": True},
-        "route": {"XS": "dispatch", "S": "spec-dispatch", "M": "plan", "XL": "plan"}[tshirt],
+        "route": {"XS": "dispatch", "S": "spec-dispatch", "M": "plan"}[tshirt],
         "detents": [],
         "fork": None,
         "xl_exit": None,
@@ -88,13 +88,13 @@ def test_unaccepted_pm_sizing_emit_gate_sets_accept_pending(repo, monkeypatch):
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
     _baton(repo)
-    _sizing(repo, "XL", mode="pm")
+    _sizing(repo, "M", mode="pm")
     out = _gate_sizing_at_emit(repo, REL, [], baton={"path": BATON, "deliverable_id": "dlv-x-abc123"})
     assert out["accept_pending"] is True and out["batons"] == [BATON]
 
 
 def test_unaccepted_hands_on_still_refuses(repo):
-    _sizing(repo, "XL", mode="hands-on")
+    _sizing(repo, "M", mode="hands-on")
     with pytest.raises(SizingFireRefused, match="touchpoint"):
         _gate_sizing_at_emit(repo, REL, [])
 
@@ -119,7 +119,7 @@ def test_emit_with_baton_joins_it_and_embeds_accept_phase(repo, capsys, monkeypa
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _baton(repo)
-    _sizing(repo, "XL", mode="pm")
+    _sizing(repo, "M", mode="pm")
     rc = cli.main(["--ask", "--sizing", REL, "--baton", BATON, "--repo-root", str(repo)])
     assert rc == 0
     out = capsys.readouterr().out
@@ -169,7 +169,7 @@ def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch):
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
-    _sizing(repo, "XL", mode="pm")
+    _sizing(repo, "M", mode="pm")
     b = {"path": BATON, "deliverable_id": "dlv-x-abc123"}
     (repo / BATON).write_text(
         f"---\nhandoff_id: hnd-x-abc123\ndeliverable_id: dlv-x-abc123\n---\n{_SKELETON}", encoding="utf-8", newline="\n"

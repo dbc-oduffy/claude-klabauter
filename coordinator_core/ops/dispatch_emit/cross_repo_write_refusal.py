@@ -1,30 +1,37 @@
 """
-coordinator_core.ops.dispatch_emit.cross_repo_write_refusal -- classify a
-spine's declared ``writes:`` that land outside the emitting repo.
+coordinator_core.ops.dispatch_emit.cross_repo_write_refusal -- refuse a
+spine whose declared ``writes:`` land in a sibling repo the terminal
+commit cannot reach.
+
+Purpose: friction item 2026-09-27 "cross-repo rows went uncommitted
+silently". ``dispatch.terminal_commit`` (terminal_commit.py) issues
+exactly ONE ``ceremony.commit_v2`` call, keyed on the caller's own
+worktree (``repo_root``). A row whose ``writes:`` path resolves under a
+SIBLING checkout -- a directory that sits next to ``repo_root`` and is
+itself a git worktree (has its own ``.git``) -- can never land there: the
+path does not exist relative to ``repo_root``, so ``terminal_commit``
+silently drops it as "absent and untracked at HEAD" (its own
+``dropped_absent`` contract) rather than raising. The edit sits on disk,
+uncommitted, until a human notices.
+
+This module is the smaller of the two correct fixes named in that
+friction report: refuse the row AT EMIT TIME, naming the offending rows
+and the sibling repo, rather than teaching ``terminal_commit`` to issue a
+second ``ceremony.commit_v2`` call against a different worktree (which
+would also need its own admission/session-claim story). A plan that
+genuinely needs a cross-repo write still has one route: split it into two
+plans, one per repo, and use ``external_gate`` to sequence them -- exactly
+the convention ``spine_read.py`` already documents for cross-repo
+blockers.
 
 A path is outside ``repo_root`` when it is absolute (drive-letter or POSIX)
 and not under ``repo_root``, when its normalised relative form escapes via
 ``..``, or when its first segment names a sibling git checkout.
 
-Outside paths split two ways:
-
-- **Sibling-repo writes** -- the path resolves under a git checkout sitting
-  next to ``repo_root``. These are carried: ``dispatch.terminal_commit``
-  lands one ``ceremony.commit_v2`` per repo (``split_sibling_paths``). On a
-  remote (cloud) venue the run proceeds; elsewhere it halts on the
-  ``approve_cross_repo_write`` touchpoint until the PM approves, and that
-  approval is the run's cross-repo commit assent (``approved=True``).
-- **Unreachable writes** -- outside every git checkout. No commit can land
-  them, so the emit refuses (``CrossRepoWriteError``).
-
-Trap: a sibling path must never fall through to ``terminal_commit``'s
-home-repo commit -- it would be dropped as "absent and untracked at HEAD"
-and sit uncommitted on disk. ``split_sibling_paths`` is the one resolver
-both the emit check and the commit use; never re-derive it.
-
 Negative-spec: this module does not walk the tree or call ``git status``.
 It is pure path arithmetic plus one targeted ``.git``-presence probe on the
-candidate a row itself named -- never a directory scan.
+sibling candidate a row itself named -- never a directory scan for what
+"might" be a sibling repo.
 
 ``gated_rows`` is the gate ledger: it reads the ``exclusions`` ledger
 ``read_spine`` fills and never re-derives gating. It withholds, never refuses;
@@ -45,14 +52,7 @@ _DRIVE_ABS = re.compile(r"^[A-Za-z]:/")
 
 
 class CrossRepoWriteError(ValueError):
-    """A declared write no commit can land (outside every git checkout)."""
-
-
-class CrossRepoApprovalNeeded(CrossRepoWriteError):
-    """Sibling-repo writes on a non-remote venue, not yet PM-approved."""
-
-
-APPROVE_TOUCHPOINT = "approve_cross_repo_write"
+    pass
 
 
 def _posix(path: str) -> str:
@@ -115,101 +115,36 @@ def _is_sibling_repo_dir(repo_root: Path, segment: str) -> bool:
     return (candidate / ".git").exists()
 
 
-def sibling_write(raw: str, repo_root: Path) -> Optional[tuple[Path, str]]:
-    """``(sibling_worktree_root, repo-relative posix path)`` when ``raw``
-    resolves under a git checkout that sits next to ``repo_root``; else None."""
-    repo_root = Path(repo_root)
-    posix = _posix(raw)
-    if _is_absolute(posix):
-        normalized = posixpath.normpath(posix)
-        parent = _posix(str(repo_root.parent)).rstrip("/") + "/"
-        if not normalized.startswith(parent):
-            return None
-        rest = normalized[len(parent):]
-    else:
-        normalized = posixpath.normpath(posix)
-        rest = normalized[3:] if normalized.startswith("../") else normalized
-        if rest.startswith("../"):
-            return None
-    segment = _first_segment(rest)
-    if segment is None or "/" not in rest or not _is_sibling_repo_dir(repo_root, segment):
-        return None
-    return repo_root.parent / segment, rest.split("/", 1)[1]
-
-
-def split_sibling_paths(
-    paths: Iterable[str], repo_root: Path
-) -> tuple[list[str], dict[Path, list[str]]]:
-    """Partition ``paths`` into (home paths, {sibling root: its relative
-    paths}), input order kept within each bucket."""
-    home: list[str] = []
-    siblings: dict[Path, list[str]] = {}
-    for raw in paths:
-        hit = sibling_write(raw, repo_root)
-        if hit is None:
-            home.append(raw)
-        else:
-            siblings.setdefault(hit[0], []).append(hit[1])
-    return home, siblings
-
-
-def is_remote_venue(env: Optional[Mapping[str, str]] = None) -> bool:
-    """Cloud session per ``env_locality.harness_rung`` (``CLAUDE_CODE_REMOTE=true``)."""
-    from coordinator_core.env_locality import harness_rung
-
-    hit = harness_rung(env)
-    return hit is not None and hit.call == "cloud"
-
-
-def check_cross_repo_writes(
-    rows,
-    repo_root: Optional[Path],
-    *,
-    approved: bool = False,
-    env: Optional[Mapping[str, str]] = None,
-) -> list[str]:
-    """Classify every row's ``writes:`` / ``writes_under:`` outside
-    ``repo_root``. Returns the sibling-repo names the run will write.
-
-    Raises ``CrossRepoWriteError`` naming any write outside every checkout,
-    and ``CrossRepoApprovalNeeded`` when sibling writes exist on a non-remote
-    venue without ``approved``. No-op when ``repo_root`` is ``None``."""
+def check_cross_repo_writes(rows, repo_root: Optional[Path]) -> None:
+    """Refuse emission if any row's ``writes:`` (or ``writes_under:``)
+    resolves under a sibling repo's checkout, naming the offending rows
+    and the repo. No-op when ``repo_root`` is ``None`` -- mirrors
+    ``check_cross_plan_write_overlap``'s own posture, since there is no
+    worktree to compare a sibling against."""
     if repo_root is None:
-        return []
+        return
     repo_root = Path(repo_root)
 
-    unreachable: list[str] = []
-    sibling_rows: list[str] = []
-    repos: list[str] = []
+    offenders: list[str] = []
     for row in rows:
         candidates: list[str] = []
         writes = getattr(row, "writes", UNDECLARED)
         if writes is not UNDECLARED and isinstance(writes, list):
             candidates.extend(p for p in writes if isinstance(p, str) and p)
         candidates.extend(getattr(row, "writes_under", ()) or ())
-        for p in paths_outside_repo_root(candidates, repo_root):
-            hit = sibling_write(p, repo_root)
-            if hit is None:
-                unreachable.append(f"{row.id} ({p!r})")
-                continue
-            sibling_rows.append(f"{row.id} ({p!r})")
-            if hit[0].name not in repos:
-                repos.append(hit[0].name)
+        offenders.extend(
+            f"{row.id} ({p!r})" for p in paths_outside_repo_root(candidates, repo_root)
+        )
 
-    if unreachable:
-        raise CrossRepoWriteError(
-            f"writes: resolve outside every git checkout beside repoRoot ({repo_root}) -- "
-            f"{'; '.join(unreachable)}. No commit can land these paths; name them "
-            "under the owning repo's checkout."
-        )
-    if sibling_rows and not approved and not is_remote_venue(env):
-        raise CrossRepoApprovalNeeded(
-            f"{APPROVE_TOUCHPOINT}: this run writes into {', '.join(repos)} beside "
-            f"{repo_root.name} -- {'; '.join(sibling_rows)}. Ask the PM whether this "
-            "cross-repo write is okay; on approval re-emit with --cross-repo-approved "
-            "(the approval is this session's cross-repo commit assent)."
-        )
-    return repos
+    if not offenders:
+        return
+
+    raise CrossRepoWriteError(
+        f"writes: resolve outside repoRoot ({repo_root}) -- {'; '.join(offenders)}. "
+        "The terminal commit is scoped to this worktree and can never land "
+        "these paths; split into a per-repo plan and sequence with "
+        "external_gate instead."
+    )
 
 
 def _gate_description(raw: Optional[Mapping]) -> str:

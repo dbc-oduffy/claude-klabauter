@@ -1,4 +1,4 @@
-"""`emit-wave-fire --from-sizing`: chain by default for pm/ceo, `--plan-only` escape; manifest, printed driver call, trigger refusals."""
+"""`emit-wave-fire --from-sizing`: the in-session fire by default, headless chain only on `--chain` with a warning; manifest, printed driver call, trigger refusals."""
 
 from __future__ import annotations
 
@@ -54,27 +54,28 @@ def _fire(tmp_path, sizing, *extra):
     ])
 
 
-def test_pm_chains_by_default(tmp_path, capsys):
-    assert _fire(tmp_path, _sizing()) == ewf.EXIT_OK
-    assert (tmp_path / "trail" / "chain-0-hnd-1.json").is_file()
-    assert not list((tmp_path / "trail").glob("*.mjs"))
+@pytest.mark.parametrize("mode", ["pm", "ceo"])
+def test_pm_and_ceo_fire_in_session_by_default(tmp_path, capsys, mode):
+    assert _fire(tmp_path, _sizing(mode=mode)) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+    assert not (tmp_path / "trail" / "chain-0-1.json").exists()
 
 
-def test_ceo_chains_by_default(tmp_path, capsys):
-    assert _fire(tmp_path, _sizing(mode="ceo")) == ewf.EXIT_OK
-    assert (tmp_path / "trail" / "chain-0-hnd-1.json").is_file()
+def test_chain_warns_that_it_runs_headless(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(), "--chain") == ewf.EXIT_OK
+    assert "WARNING: --chain runs every stage as a headless background child" in capsys.readouterr().err
 
 
 def test_hands_on_is_plan_only(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(mode="hands-on")) == ewf.EXIT_OK
     assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
-    assert not (tmp_path / "trail" / "chain-0-hnd-1.json").exists()
+    assert not (tmp_path / "trail" / "chain-0-1.json").exists()
 
 
 def test_pm_plan_only_flag_keeps_the_plan_only_fire(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(), "--plan-only") == ewf.EXIT_OK
     assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
-    assert not (tmp_path / "trail" / "chain-0-hnd-1.json").exists()
+    assert not (tmp_path / "trail" / "chain-0-1.json").exists()
 
 
 def test_pm_xl_falls_back_to_plan_only_by_default(tmp_path, capsys):
@@ -88,12 +89,11 @@ def test_chain_and_plan_only_conflict(tmp_path, capsys):
 
 def test_chain_writes_manifest_and_prints_the_call(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(), "--chain") == ewf.EXIT_OK
-    manifest = (tmp_path / "trail" / "chain-0-hnd-1.json").resolve()
+    manifest = (tmp_path / "trail" / "chain-0-1.json").resolve()
     data = json.loads(manifest.read_text(encoding="utf-8"))
     assert data["sizing_object"] == SIZING_REL
     assert data["baton"] == BATON_REL
     assert data["interaction_mode"] == "pm"
-    assert (data["accepted_route"], data["accepted_tshirt"]) == ("plan", "M")
     assert data["wave_args"]["mode"] == "single"
     assert data["wave_args"]["batons"][0]["id"] == "hnd-1"
     out = capsys.readouterr().out
@@ -107,7 +107,7 @@ def test_chain_json_shape(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["waveIndex"] == 0
     assert out["chain"]["batons"] == ["hnd-1"]
-    assert out["chain"]["manifest"].endswith("chain-0-hnd-1.json")
+    assert out["chain"]["manifest"].endswith("chain-0-1.json")
 
 
 @pytest.mark.parametrize("sizing,field", [
@@ -130,60 +130,3 @@ def test_plan_only_fire_still_writes_the_mjs(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(), "--plan-only") == ewf.EXIT_OK
     assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
     assert "single-plan fire for hnd-1" in capsys.readouterr().out
-
-
-def _fire_second(tmp_path, monkeypatch, n):
-    """Fire sizing/baton `n` into the shared trail dir; scaffolding is idempotent."""
-    sizing_rel, baton_rel = f"state/sizings/s{n}.yaml", f"state/handoffs/b{n}.md"
-    for d in ("state/sizings", "state/handoffs", "trail", ".git", "doctrine/coordinator/workflows",
-              "doctrine/coordinator/agents"):
-        (tmp_path / d).mkdir(parents=True, exist_ok=True)
-    (tmp_path / sizing_rel).write_text(yaml.safe_dump(_sizing()), encoding="utf-8")
-    (tmp_path / baton_rel).write_text(BATON.replace("hnd-1", f"hnd-{n}"), encoding="utf-8")
-    (tmp_path / "doctrine/coordinator/workflows/plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
-    monkeypatch.setattr(
-        ewf, "_load_mint",
-        lambda: (lambda *a, **k: {"id": f"hnd-{n}", "path": baton_rel, "title": "Minted baton"}),
-    )
-    return ewf.main([
-        "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
-        "--plugin-root", str(tmp_path / "doctrine/coordinator"), "--from-sizing", sizing_rel,
-        "--live-engine-tree", "--chain",
-    ])
-
-
-def test_two_sizings_in_one_trail_keep_both_manifests(tmp_path, monkeypatch, capsys):
-    assert _fire_second(tmp_path, monkeypatch, 1) == ewf.EXIT_OK
-    assert _fire_second(tmp_path, monkeypatch, 2) == ewf.EXIT_OK
-    first = json.loads((tmp_path / "trail" / "chain-0-hnd-1.json").read_text(encoding="utf-8"))
-    second = json.loads((tmp_path / "trail" / "chain-0-hnd-2.json").read_text(encoding="utf-8"))
-    assert first["sizing_object"] == "state/sizings/s1.yaml"
-    assert second["sizing_object"] == "state/sizings/s2.yaml"
-
-
-def test_refiring_the_same_chain_is_idempotent(tmp_path, monkeypatch, capsys):
-    assert _fire_second(tmp_path, monkeypatch, 1) == ewf.EXIT_OK
-    assert _fire_second(tmp_path, monkeypatch, 1) == ewf.EXIT_OK
-
-
-def test_a_different_chain_does_not_overwrite_a_manifest(tmp_path, monkeypatch, capsys):
-    assert _fire_second(tmp_path, monkeypatch, 1) == ewf.EXIT_OK
-    squatter = tmp_path / "trail" / "chain-0-hnd-2.json"
-    squatter.write_text(
-        (tmp_path / "trail" / "chain-0-hnd-1.json").read_text(encoding="utf-8"), encoding="utf-8")
-    assert _fire_second(tmp_path, monkeypatch, 2) == ewf.EXIT_REFUSED
-    err = capsys.readouterr().err
-    assert "state/sizings/s1.yaml" in err and "state/sizings/s2.yaml" in err
-    assert "state/sizings/s1.yaml" in squatter.read_text(encoding="utf-8")
-
-
-def test_chain_fires_a_null_acceptance_under_the_engine_size_rule(tmp_path):
-    sizing = _sizing(tshirt="L")
-    sizing["exit_criterion"]["accepted"] = None
-    assert _fire(tmp_path, sizing, "--chain") == ewf.EXIT_OK
-
-
-def test_chain_refuses_a_null_acceptance_at_xl(tmp_path):
-    sizing = _sizing(tshirt="XL")
-    sizing["exit_criterion"]["accepted"] = None
-    assert _fire(tmp_path, sizing, "--chain") != ewf.EXIT_OK

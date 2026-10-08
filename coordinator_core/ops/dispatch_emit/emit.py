@@ -313,7 +313,6 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
 )
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEW_PHASE_TITLE
 from coordinator_core.ops.dispatch_emit.predispatch import (
-    CACHED_SCHEMA,
     ALREADY_DONE_RULE,
     ALREADY_DONE_RULE_MARKER,
     CHECK_PHASE_TITLE,
@@ -2829,14 +2828,14 @@ _UNJUDGED_CAUSE_JS = (
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
-    "((r) => { if (!r || typeof r !== 'object') return r; "
+    "((r) => { if (!r || typeof r !== 'object') return r; "
     # DoE C1 (judge-reachability-check): a met judge naming an unreachable entry
     # or a broken click path is not_met; `undecidable` never moves the status.
-    "if (r.status === 'met' && r.reachability) { const rc = r.reachability; "
-    "const first = (rc.unreachable || [])[0] || (rc.broken_click_paths || [])[0]; "
-    "if (first) { const reason = 'not wired up: ' + first; log(reason); "
-    "return { ...r, status: 'not_met', differs_from_baseline: null, reason }; } } "
-    "if (r.status === 'met') { const why = []; "
+    "if (r.status === 'met' && r.reachability) { const rc = r.reachability; "
+    "const first = (rc.unreachable || [])[0] || (rc.broken_click_paths || [])[0]; "
+    "if (first) { const reason = 'not wired up: ' + first; log(reason); "
+    "return { ...r, status: 'not_met', differs_from_baseline: null, reason }; } } "
+    "if (r.status === 'met') { const why = []; "
     "if (!Array.isArray(r.observed) || r.observed.length === 0) why.push('nothing observed'); "
     "const v = r.falsifier && r.falsifier.verdict; "
     "if (v && v !== 'pass' && v !== 'not_present') why.push('falsifier ' + v); "
@@ -3466,242 +3465,6 @@ def _checkpoint_trailer(plan_path: Optional[str], run_base_sha: Optional[str]) -
     return f"\n\nCheckpoint-Plan: {plan_path}\nCheckpoint-Base: {run_base_sha}"
 
 
-class SeamInputs(NamedTuple):
-    """What an emit knows about the run's plans that the waves do not carry.
-
-    ``plan_edges``: run plan -> plans its ``depends_on_plan`` edges name.
-    ``capabilities``: some run plan declares a non-empty ``capabilities``.
-    ``certified_plans``: the full certified set the run's tranche was cut from, when the
-    caller knows it; the seam check counts a ``ui_consumer`` plan listed here as in the set.
-    """
-
-    plan_edges: dict
-    capabilities: bool
-    certified_plans: tuple = ()
-
-
-_SEAM_REPLY_SCHEMA = {
-    "type": "object",
-    "required": ["verdict", "per_plan", "findings"],
-    "properties": {
-        "verdict": {"type": "string", "enum": ["CLEAN", "DRIFT", "REFUSED"]},
-        "per_plan": {"type": "object"},
-        "findings": {"type": "array", "items": {"type": "object"}},
-        "sidecars": {"type": "array", "items": {"type": "string"}},
-    },
-}
-
-
-class SeamLeg(NamedTuple):
-    """The wave-boundary seam leg of one emitted run.
-
-    ``plans``: every plan of the run, as the op's ``plans`` param.
-    ``gated``: wave numbers whose seam leg a held row awaits.
-    ``holds``: row id -> wave numbers (below the row's own) it awaits.
-    ``held_plans``: wave number -> plans owning a row held behind that wave's leg.
-    """
-
-    plans: tuple
-    gated: tuple
-    holds: dict
-    held_plans: dict
-    certified_plans: tuple = ()
-
-
-def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]:
-    return row_plan or plan_path
-
-
-def seam_leg_for(
-    waves: list,
-    row_plans: dict,
-    plan_path: Optional[str],
-    seam: Optional[SeamInputs],
-    committable_ids: frozenset,
-    run_base_sha: Optional[str] = None,
-) -> Optional[SeamLeg]:
-    """The run's seam leg, or ``None`` when it does not qualify (single plan, no
-    edge, ``capabilities`` absent or empty) or no wave commits.
-
-    A row is held only when it reads a path a row of another plan writes, or its
-    plan names a ``depends_on_plan`` edge; it awaits the leg of each earlier wave
-    that lands such a row (or a row of the named plan). Every other row awaits nothing."""
-    if seam is None or not run_base_sha:
-        return None
-    flat = [(n, row) for n, wave in enumerate(waves, start=1) for row in wave]
-    plans = sorted({p for _, row in flat if (p := _plan_of(row_plans.get(row.id), plan_path))})
-    has_edge = any(seam.plan_edges.get(p) for p in plans)
-    if not (len(plans) > 1 or has_edge or seam.capabilities):
-        return None
-    gated = tuple(
-        n for n, wave in enumerate(waves, start=1) if any(r.id in committable_ids for r in wave)
-    )
-    if not gated:
-        return None
-
-    def writes_path(row, path: str) -> bool:
-        if row.writes is not UNDECLARED and path in row.writes:
-            return True
-        return any(path == u.rstrip("/") or path.startswith(u.rstrip("/") + "/") for u in row.writes_under)
-
-    holds: dict = {}
-    for n, row in flat:
-        mine = _plan_of(row_plans.get(row.id), plan_path)
-        named = set(seam.plan_edges.get(mine, ()))
-        waits = {
-            m
-            for m, other in flat
-            if m < n
-            and m in gated
-            and _plan_of(row_plans.get(other.id), plan_path) != mine
-            and (
-                _plan_of(row_plans.get(other.id), plan_path) in named
-                or any(writes_path(other, path) for path in (row.reads or ()))
-            )
-        }
-        if waits:
-            holds[row.id] = tuple(sorted(waits))
-    row_plan = {row.id: _plan_of(row_plans.get(row.id), plan_path) for _, row in flat}
-    held_plans: dict = {}
-    for rid, waits in holds.items():
-        for m in waits:
-            held_plans.setdefault(m, set()).add(row_plan[rid])
-    return SeamLeg(
-        tuple(plans), gated, holds, {m: tuple(sorted(v)) for m, v in held_plans.items()},
-        seam.certified_plans,
-    )
-
-
-def _seam_leg_js(
-    seam: SeamLeg,
-    agent_type_host: Optional[str],
-    *,
-    plan_path: Optional[str],
-    run_base_sha: Optional[str],
-    js,
-    head: str,
-    repo_flag: str,
-) -> list:
-    """Script-scope seam machinery: per-wave gates the held rows await, and
-    ``_seamLeg``, one ``plan.seam_record`` agent dispatch per landed wave commit."""
-    exec_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
-    phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
-    route = (
-        " Run `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
-        f"/bin/coordinator-invoke\" plan.seam_record{repo_flag} '<params>'` with exactly the "
-        "params above as the JSON `<params>`, and return the op's reply verbatim: `verdict`, "
-        "`per_plan`, `findings`, `sidecars`. Judge nothing, edit nothing, commit nothing. "
-        "If the op refuses or errors, put its verbatim output in `findings` as one object with "
-        "`class` `op-error` and report `verdict` REFUSED for any op refusal or error."
-    )
-    return [
-        "  const _seamDrift = [];",
-        "  const _seamCommitted = [];",
-        f"  const _seamHeldPlans = {json.dumps({str(k): list(v) for k, v in seam.held_plans.items()})};",
-        "  const _seamFailures = [];",
-        f"  const _seamPlans = {json.dumps(list(seam.plans))};",
-        *([f"  const _seamCertified = {json.dumps(list(seam.certified_plans))};"] if seam.certified_plans else []),
-        f"  const _SEAM_REPLY_SCHEMA = {json.dumps(_SEAM_REPLY_SCHEMA)};",
-        "  const _seamRelease = {};",
-        "  const _seamGates = {};",
-        "  async function _seamLeg(n, sha) {",
-        "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,"
-        + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
-        f"      landed_range: {_js_string_literal(run_base_sha + '..')} + sha,",
-        f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
-        "    let r = null;",
-        "    try {",
-        "      r = await agent(",
-        f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`.' + "
-        f"{js(route)},",
-        f"        {{ label: 'seam:wave-' + n, phase: {phase}, agentType: {exec_type}, "
-        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _SEAM_REPLY_SCHEMA }}",
-        "      );",
-        "    } catch (e) {",
-        "      r = null;",
-        "    }",
-        "    const marked = (r && r.per_plan && typeof r.per_plan === 'object')",
-        "      ? Object.keys(r.per_plan).filter((p) => r.per_plan[p] === 'DRIFT') : [];",
-        "    const found = ((r && r.findings) || []).filter((f) => f && f.blocking !== false);",
-        "    const usable = r && (r.verdict === 'CLEAN' || r.verdict === 'DRIFT') "
-        "&& r.per_plan && typeof r.per_plan === 'object' "
-        "&& !(r.verdict === 'DRIFT' && !marked.length && !(r.findings || []).length);",
-        "    if (!usable) {",
-        "      _seamFail(n, (r && r.verdict) ? 'unusable reply (' + r.verdict + ')' : 'no usable reply');",
-        "      return;",
-        "    }",
-        "    if (r.verdict !== 'DRIFT') return;",
-        "    const halted = new Set(marked);",
-        "    found.forEach((f) => {",
-        "      if (f.plan) halted.add(f.plan);",
-        "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : marked;",
-        "      _seamDrift.push({ wave: n, class: f.class || 'unclassified', plans: named, path: f.path || '' });",
-        "    });",
-        "    if (!found.length) _seamDrift.push({ wave: n, class: 'unclassified', plans: marked, path: '' });",
-        "    halted.forEach((p) => {",
-        "      _haltedPlans.add(p);",
-        "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam leg of wave ' + n);",
-        "    });",
-        "  }",
-        "  function _seamFail(n, why) {",
-        "    _seamFailures.push('wave ' + n + ': ' + why);",
-        "    const held = _seamHeldPlans[n] || [];",
-        "    held.forEach((p) => {",
-        "      _haltedPlans.add(p);",
-        "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam check failed at wave ' + n);",
-        "    });",
-        "    if (held.length) _seamDrift.push({ wave: n, plans: held, path: '', failed: why });",
-        "  }",
-    ]
-
-
-def _plan_seam_facts(text: Optional[str], raw_rows: Sequence[dict]) -> tuple:
-    """``(edge target plans, declares non-empty capabilities)`` of one plan's text:
-    its frontmatter ``depends_on_plan`` and every row's."""
-    edges: list = []
-    declared = False
-    if text:
-        split = split_frontmatter(text)
-        try:
-            doc = load_frontmatter_doc(split.fm_text) if split else None
-        except yaml.YAMLError:
-            doc = None
-        if isinstance(doc, dict):
-            declared = bool(doc.get("capabilities"))
-            edges.extend(doc.get("depends_on_plan") or [])
-    for raw in raw_rows:
-        edges.extend(raw.get("depends_on_plan") or [])
-    targets = [str(e["plan"]).replace("\\", "/") for e in edges if isinstance(e, dict) and e.get("plan")]
-    return targets, declared
-
-
-def seam_inputs_for(
-    rows_by_plan: dict, plan_path: str, plan_text: Optional[str], raw_by_id: dict, repo_root,
-    certified_plans: Sequence[str] = (),
-) -> SeamInputs:
-    """Read each run plan's edges and ``capabilities``: ``plan_path`` from the text
-    already in hand, a source plan of a multi-plan run from the repo."""
-    from coordinator_core.ops.plan_tasks_render import load_rows as _load
-
-    edges: dict = {}
-    capabilities = False
-    for plan, row_ids in rows_by_plan.items():
-        if plan is None or plan == plan_path:
-            text, raws = plan_text, [raw_by_id.get(i, {}) for i in row_ids]
-        else:
-            try:
-                text = (Path(repo_root) / plan).read_text(encoding="utf-8") if repo_root is not None else None
-            except OSError:
-                text = None
-            raws = [r for r in _load(text).rows if isinstance(r, dict)] if text else []
-        targets, declared = _plan_seam_facts(text, raws)
-        key = plan if plan is not None else plan_path
-        if targets:
-            edges[key] = tuple(targets)
-        capabilities = capabilities or declared
-    return SeamInputs(edges, capabilities, tuple(certified_plans))
-
-
 def _checkpoint_commit_js(
     agent_type_host: Optional[str],
     *,
@@ -3710,7 +3473,6 @@ def _checkpoint_commit_js(
     push_branch: Optional[str],
     plan_path: Optional[str] = None,
     run_base_sha: Optional[str] = None,
-    seam: Optional[SeamLeg] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -3737,15 +3499,14 @@ def _checkpoint_commit_js(
     commit_tail = (
         " You are the only stage that stages or commits anything. Commit exactly this "
         "declared path list and nothing else. Pass the list VERBATIM as `paths` with "
-        "`skip_missing` and `gone_tracked_as_deleted` true: the engine drops entries "
-        "that are neither on disk nor tracked, keeps untracked files, and commits a "
-        "tracked entry gone from the worktree as the row's declared deletion. Do not run `git status` and do not filter, "
+        "`skip_missing` true: the engine drops entries that are neither on disk nor "
+        "tracked and keeps untracked files. Do not run `git status` and do not filter, "
         "narrow or add any entry: ["
     )
     route = (
         "] -- commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
-        "'{\"paths\":[...],\"skip_missing\":true,\"gone_tracked_as_deleted\":true,\"message\":\"<message>\"}'` -- the only committer route. "
+        "'{\"paths\":[...],\"skip_missing\":true,\"message\":\"<message>\"}'` -- the only committer route. "
         "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
         "If every listed path already matches HEAD, commit nothing and report outcome "
         "committed without a sha. If the outcome is indeterminate, reconcile it against "
@@ -3767,21 +3528,12 @@ def _checkpoint_commit_js(
         "  let _commitChain = Promise.resolve();",
         "  function _waveCommit(n, ids) {",
         "    _waveTriggers.push(Promise.allSettled(ids.map((i) => _rows[i])).then(() => {",
-        (
-            "      _commitChain = _commitChain.then(() => _commitWave(n, ids))"
-            ".finally(() => _seamRelease[n]('DONE: seam leg of wave ' + n + ' settled'));"
-            if seam is not None
-            else "      _commitChain = _commitChain.then(() => _commitWave(n, ids));"
-        ),
+        "      _commitChain = _commitChain.then(() => _commitWave(n, ids));",
         "    }));",
         "  }",
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
-        (
-            "    if (!done.length) { if ((_seamHeldPlans[n] || []).length) _seamFail(n, 'no commit landed'); return; }"
-            if seam is not None
-            else "    if (!done.length) return;"
-        ),
+        "    if (!done.length) return;",
         "    const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];",
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
@@ -3803,7 +3555,6 @@ def _checkpoint_commit_js(
         "    }",
         "    if (!r || r.outcome !== 'committed') {",
         "      _commitFailures.push(id + ': ' + ((r && r.reason) || 'no committer reply'));",
-        *(["      _seamFail(n, 'no commit landed');"] if seam is not None else []),
         "      return;",
         "    }",
     ]
@@ -3833,21 +3584,7 @@ def _checkpoint_commit_js(
             "      _pushFailures.push(id + ': ' + String((e && e.message) || e).slice(-300));",
             "    }));",
         ]
-    if seam is not None:
-        lines.append("    if (!r.sha) return;")
-        lines.append("    done.forEach((i) => _seamCommitted.push(i));")
-        lines.append("    await _seamLeg(n, r.sha);")
     lines.append("  }")
-    if seam is not None:
-        lines += _seam_leg_js(
-            seam,
-            agent_type_host,
-            plan_path=plan_path,
-            run_base_sha=run_base_sha,
-            js=_js,
-            head=head,
-            repo_flag=repo_flag,
-        )
     return "\n".join(lines)
 
 
@@ -3899,8 +3636,6 @@ def _spec_prompt_expr(spec: AgentSpec, shared: SharedBlocks) -> str:
 
 
 def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optional[str]) -> str:
-    if spec.schema == CACHED_SCHEMA:
-        return f"async () => ({spec.prompt})"
     opts = [
         f"label: {_js_string_literal(spec.label)}",
         f"phase: {_js_string_literal(spec.phase)}",
@@ -3918,61 +3653,11 @@ def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optio
     )
 
 
-def _verdict_cache_blocks(
-    review_specs: Sequence[AgentSpec], repo_root: Optional[Path], agent_type_host: Optional[str]
-) -> list[str]:
-    """Persist each freshly returned SOUND/BROKEN verdict where ``review_inputs`` looks for
-    it next emit. Best-effort and off the critical path: a failed write only costs a
-    re-review; the agent is awaited at script end through ``_verdictCacheWrites``."""
-    entries = [
-        (
-            "{ path: "
-            + _js_string_literal(
-                (repo_root / spec.cache_path).as_posix() if repo_root else spec.cache_path
-            )
-            + f", falsifier_sha: {_js_string_literal(spec.cache_key[0])}"
-            + f", plan_sha: {_js_string_literal(spec.cache_key[1])} }}"
-        )
-        if spec.cache_path and spec.cache_key
-        else "null"
-        for spec in review_specs
-    ]
-    if all(e == "null" for e in entries):
-        return []
-    agent_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
-    return [
-        "  const _verdictCacheWrites = [];",
-        "  {",
-        "    const _reviewCache = [" + ", ".join(entries) + "];",
-        "    const _files = [];",
-        "    _reviewCache.forEach((c, j) => {",
-        "      const r = _preResults[_checkIds.length + j];",
-        "      if (!c || !r || (r.verdict !== 'SOUND' && r.verdict !== 'BROKEN')) return;",
-        "      const tells = Array.isArray(r.tells)",
-        "        ? r.tells.filter(t => t && t.status === 'FIRED').map(t => String(t.tell))",
-        "        : [];",
-        "      _files.push({ path: c.path, text: JSON.stringify("
-        "{ falsifier_sha: c.falsifier_sha, plan_sha: c.plan_sha, verdict: r.verdict, tells }, null, 2) + '\\n' });",
-        "    });",
-        "    if (_files.length) {",
-        "      _verdictCacheWrites.push(agent(",
-        "        'Write each file below with the Write tool: `path` is the absolute file path "
-        "(create its directory if missing), `text` is the exact file content. Do nothing else. "
-        "Files: ' + JSON.stringify(_files),",
-        f"        {{ label: 'verdict-cache', phase: {_js_string_literal(CHECK_PHASE_TITLE)}, "
-        f"agentType: {agent_type}, {_model_opt('', 'haiku')}, effort: 'low' }}",
-        "      ).then(() => null, () => null));",
-        "    }",
-        "  }",
-    ]
-
-
 def _pre_phase_blocks(
     specs: Sequence[AgentSpec],
     review_specs: Sequence[AgentSpec],
     shared: SharedBlocks,
     agent_type_host: Optional[str],
-    repo_root: Optional[Path] = None,
 ) -> list[str]:
     """The script blocks for the pre-dispatch phase: one ``parallel([...])`` of
     every check and review thunk, then the fold into the ``_run_row_helper_js``
@@ -3981,7 +3666,7 @@ def _pre_phase_blocks(
     all_specs = [*specs, *review_specs]
     schemas = ", ".join(
         f"{_js_string_literal(name)}: {stage_schema_literal(name)}"
-        for name in sorted({spec.schema for spec in all_specs if spec.schema != CACHED_SCHEMA})
+        for name in sorted({spec.schema for spec in all_specs})
     )
     thunks = ",\n".join(
         f"    {_spec_thunk_js(spec, shared, agent_type_host)}" for spec in all_specs
@@ -3997,7 +3682,6 @@ def _pre_phase_blocks(
         + ", ".join(_js_string_literal(spec.key) for spec in review_specs)
         + "];",
         _PRE_PHASE_FOLD_JS,
-        *_verdict_cache_blocks(review_specs, repo_root, agent_type_host),
     ]
 
 
@@ -4192,7 +3876,6 @@ def compose_script(
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
     slot_rows: Sequence[str] = (),
-    seam: Optional[SeamInputs] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -4386,7 +4069,6 @@ def compose_script(
         f"{stage_schema_literal('row_verification_result')};"
     )
 
-    seam_leg: Optional[SeamLeg] = None
     if review_only:
         landed_seed = ", ".join(
             "{id}: {{ paths: [{paths}] }}".format(
@@ -4409,18 +4091,6 @@ def compose_script(
             if expected_branch and expected_branch not in _CHECKPOINT_PROTECTED_BRANCHES
             else None
         )
-        seam_leg = seam_leg_for(
-            waves,
-            _row_plans,
-            plan_path,
-            seam,
-            frozenset(
-                rid
-                for rid, paths in row_pathspecs.items()
-                if paths and len(paths) <= _SHARED_PATH_ARRAY_THRESHOLD
-            ),
-            run_base_sha,
-        )
         if push_branch is None:
             body_blocks.append(
                 "  log('No checkpoint push: the run is not on a non-protected work branch "
@@ -4434,7 +4104,6 @@ def compose_script(
                 push_branch=push_branch,
                 plan_path=plan_path,
                 run_base_sha=run_base_sha,
-                seam=seam_leg,
             )
         )
         body_blocks.append(_run_row_helper_js(agent_type_host))
@@ -4452,7 +4121,7 @@ def compose_script(
         if review_specs:
             phase_titles.append(REVIEW_PHASE_TITLE)
         body_blocks.extend(
-            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host, repo_root)
+            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host)
         )
 
     runtime_cap = _runtime_cap_on_host()
@@ -4481,24 +4150,10 @@ def compose_script(
             )
         unchecked_rows: list[str] = []
         committable_rows: set[str] = set()
-        if seam_leg is not None:
-            for n in seam_leg.gated:
-                body_blocks.append(
-                    f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
-                )
         for node in dag.nodes:
             row = node.row
             deps_expr = (
-                "["
-                + ", ".join(
-                    [f"_rows[{_js_string_literal(rid)}]" for rid in node.after]
-                    + (
-                        [f"_seamGates[{n}]" for n in seam_leg.holds.get(row.id, ())]
-                        if seam_leg is not None
-                        else []
-                    )
-                )
-                + "]"
+                "[" + ", ".join(f"_rows[{_js_string_literal(rid)}]" for rid in node.after) + "]"
             )
             verify_scope = row_verify_scopes[row.id]
             verify_expr = (
@@ -4602,8 +4257,6 @@ def compose_script(
                 "});"
             )
     body_blocks.append("  await Promise.all(_verifications);")
-    if any(spec.cache_path for spec in review_specs):
-        body_blocks.append("  await Promise.all(_verdictCacheWrites);")
     if not review_only:
         body_blocks.append("  await Promise.all(_waveTriggers);")
         body_blocks.append("  await _commitChain;")
@@ -4616,11 +4269,6 @@ def compose_script(
             "  if (_pushFailures.length) log('Checkpoint pushes that failed (the commits are "
             "local only): ' + _pushFailures.join('; '));"
         )
-        if seam_leg is not None:
-            body_blocks.append(
-                "  if (_seamFailures.length) log('Seam legs that returned no verdict (their "
-                "waves were not checked): ' + _seamFailures.join('; '));"
-            )
 
     marker = _terminal_commit_marker(
         flat_rows,
@@ -4853,7 +4501,6 @@ def compose_script(
             session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
             predispatch={"checks_run": len(pre_check_specs)} if predispatch else None,
             held=bool(held_rows),
-            seam=seam_leg is not None,
         )
     )
 
@@ -5372,7 +5019,6 @@ def emit_script(
     review_only_rows: Optional[frozenset] = None,
     run_base_sha: Optional[str] = None,
     chatty: bool = False,
-    cross_repo_approved: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
     credit_rows: Optional[Callable[[Path, str, Optional[str]], Sequence[str]]] = None,
@@ -5380,13 +5026,8 @@ def emit_script(
     hold_rows: Optional[frozenset] = None,
     hold_reason: Optional[str] = None,
     held_out: Optional[dict] = None,
-    certified_plans: Sequence[str] = (),
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
-
-    ``certified_plans`` is the full certified set a tranche spine was cut from; it rides
-    into the wave-boundary seam leg so a consumer plan of another tranche still counts
-    as in the set.
 
     ``hold_rows`` (with a ``hold_reason``) keeps those rows, and every row that
     depends on one over declared or read-after-write edges, out of the waves
@@ -5560,7 +5201,7 @@ def emit_script(
     check_unschedulable_rows(rows, raw_by_id)
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
-    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
+    check_cross_repo_writes(rows, repo_root)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))
@@ -5596,11 +5237,6 @@ def emit_script(
         else None
     )
 
-    rows_by_plan: dict = {}
-    for wave in waves:
-        for row in wave:
-            rows_by_plan.setdefault(_row_source_plan(row), []).append(row.id)
-
     return compose_script(
         waves,
         name=resolved_name,
@@ -5631,9 +5267,6 @@ def emit_script(
         review_only=review_only,
         held_rows=held_rows,
         slot_rows=[row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True],
-        seam=None if review_only else seam_inputs_for(
-            rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
-        ),
     )
 
 

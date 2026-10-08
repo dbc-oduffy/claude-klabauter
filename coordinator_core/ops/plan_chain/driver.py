@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -51,7 +52,33 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _result_from_record(record: Mapping[str, Any], session_id: str) -> WorkflowResult:
+def _workflow_run_result(session_id: str, script_path: Path) -> dict[str, Any] | None:
+    """The Workflow's own return, from the child session's run record.
+
+    Trap: the model's final answer is a retyped copy of this value and corrupts a large one,
+    so the run record is read first and the answer text is only the fallback.
+    """
+    config = os.environ.get("CLAUDE_CONFIG_DIR")
+    projects = (Path(config) if config else Path.home() / ".claude") / "projects"
+    want = os.path.normcase(os.path.abspath(script_path))
+    best: tuple[str, dict[str, Any]] | None = None
+    for run_file in projects.glob(f"*/{session_id}/workflows/*.json"):
+        try:
+            run = json.loads(run_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        result = run.get("result") if isinstance(run, dict) else None
+        if not isinstance(result, dict) or run.get("status") != "completed":
+            continue
+        if os.path.normcase(os.path.abspath(str(run.get("scriptPath") or ""))) != want:
+            continue
+        stamp = str(run.get("timestamp") or "")
+        if best is None or stamp > best[0]:
+            best = (stamp, result)
+    return best[1] if best else None
+
+
+def _result_from_record(record: Mapping[str, Any], session_id: str, script_path: Path) -> WorkflowResult:
     from coordinator_core.ops.workflow_fire import fire
 
     log_path = record.get("log_path")
@@ -66,7 +93,9 @@ def _result_from_record(record: Mapping[str, Any], session_id: str) -> WorkflowR
     raw = raw if isinstance(raw, str) else ""
     if not raw and text:
         raw = text[-2000:]
-    digest = _parse_json_object(raw) if raw and not envelope.get("is_error") else None
+    digest = _workflow_run_result(session_id, script_path)
+    if digest is None and raw and not envelope.get("is_error"):
+        digest = _parse_json_object(raw)
     return WorkflowResult(
         digest=digest, raw_result=raw, child_session_id=session_id, task_output_path=str(log_path or "")
     )
@@ -83,7 +112,7 @@ def _default_runner(repo_root: str) -> WorkflowRunner:
             session_id=session_id,
             wait=True,
         )
-        return _result_from_record(record, session_id)
+        return _result_from_record(record, session_id, script_path)
 
     return runner
 

@@ -134,12 +134,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
     stamp_approved_body_sha,
 )
-from coordinator_core.ops.sizing_acceptance import (
-    ENGINE_SIZE_RULE,
-    acceptance_source,
-    acceptance_words,
-    sizing_acceptance_skipped,
-)
+from coordinator_core.ops.sizing_acceptance import acceptance_source, acceptance_words
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.pickup_assemble import resolve_repo_root
 
@@ -1003,13 +998,7 @@ def stamp_sizing_authorization(
 
     ec = doc.get("exit_criterion")
     accepted = ec.get("accepted") if isinstance(ec, dict) else None
-    estimate = doc.get("estimate")
-
-    # A null acceptance is the engine's to discharge, from the recorded route and size.
-    engine_rule = accepted is None and sizing_acceptance_skipped(
-        doc.get("route"), estimate.get("tshirt") if isinstance(estimate, dict) else None
-    )
-    if not engine_rule and not acceptance_words(accepted):
+    if not acceptance_words(accepted):
         return EXIT_BUSINESS_FAIL, {
             "error": f"refusing to mint: {sizing_path}: exit_criterion.accepted is not recorded -- "
             f"accept it first (sizing-accept-exit-criterion)"
@@ -1020,15 +1009,8 @@ def stamp_sizing_authorization(
             "error": f"refusing to mint: {sizing_path}: status is {status!r}, "
             f"not one of {list(_SIZING_AUTHORIZABLE_STATUS)}"
         }
-    mode = str(
-        doc.get("interaction_mode") or (accepted.get("mode") if accepted else "") or ""
-    ).strip()
-    if engine_rule:
-        if mode not in ("hands-on", "pm", "ceo"):
-            return EXIT_BUSINESS_FAIL, {
-                "error": f"refusing to mint: {sizing_path}: interaction mode is {mode or 'absent'!r}"
-            }
-    elif mode not in ("pm", "ceo"):
+    mode = str(doc.get("interaction_mode") or accepted.get("mode") or "").strip()
+    if mode not in ("pm", "ceo"):
         return EXIT_BUSINESS_FAIL, {
             "error": f"refusing to mint: {sizing_path}: interaction mode is {mode or 'absent'!r}; "
             f"sizing acceptance authorizes only pm/ceo -- hands-on needs "
@@ -1048,17 +1030,8 @@ def stamp_sizing_authorization(
     if approved_state == APPROVED_BODY_CHANGED:
         return EXIT_BUSINESS_FAIL, {"error": f"refusing to mint: {plan_path}: {approved_msg}"}
 
-    if engine_rule:
-        # `by` names the rule, never "PM": nobody was asked.
-        by = ENGINE_SIZE_RULE
-        note = (
-            f"authorized by engine-size-rule (mode={mode}, route={doc.get('route')}, "
-            f"tshirt={estimate.get('tshirt')}): {sizing_rel}"
-        )
-    else:
-        by = "PM"
-        src = ", source=apm" if acceptance_source(accepted) == "apm" else ""
-        note = f"authorized by accepted sizing (mode={mode}{src}): {sizing_rel}"
+    src = ", source=apm" if acceptance_source(accepted) == "apm" else ""
+    note = f"authorized by accepted sizing (mode={mode}{src}): {sizing_rel}"
     fm = split_frontmatter(text).fm_text
     unchanged = read_fm_field_unquoted(fm, "execution_authorized_sha") == _canonical_body_sha(text, root)
     existing_at = read_fm_field_unquoted(fm, "execution_authorized_at")
@@ -1075,7 +1048,7 @@ def stamp_sizing_authorization(
 
     exit_code, result = stamp_execution_authorization(
         plan_path,
-        by,
+        "PM",
         note,
         at=at or (existing_at if unchanged and existing_at else None),
         repo_root=root,

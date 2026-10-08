@@ -215,10 +215,7 @@ def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Opt
     """
     if not candidates:
         return set()
-    result = run_git(
-        ["status", "--porcelain", "--", *(f":(literal){c}" for c in candidates)],
-        cwd=cwd or os.getcwd(),
-    )
+    result = run_git(["status", "--porcelain", "--", *candidates], cwd=cwd or os.getcwd())
     if result.returncode != 0:
         return None
     dirty: set = set()

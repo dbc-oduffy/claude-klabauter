@@ -3033,12 +3033,8 @@ def _scaffold_spinoff(
     kind: str = "spinoff",
     governing_plan: str | None = None,
     next_steps: Sequence[str] = (),
-    origin: "SpinoffOrigin | None" = None,
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
-
-    origin, when supplied, replaces the per-call `_resolve_spinoff_origin()` scan: a bulk
-    minter resolves the origin once and passes it to every scaffold. Absent, unchanged.
 
     kind="session-handoff" emits the same work-spec sections under a
     session-handoff header: no origin_* fields, no "What travels with this
@@ -3231,7 +3227,7 @@ def _scaffold_spinoff(
         _authoring_session_line,
     ]
     if not _is_session:
-        _origin = origin if origin is not None else _resolve_spinoff_origin()
+        _origin = _resolve_spinoff_origin()
         _origin_handoff_id = origin_handoff_id or _origin.origin_handoff_id
         lines.append(f"origin_session: {_yaml_quote(_authoring_session_value)}")
         lines.append(
@@ -4171,20 +4167,6 @@ def _scaffold_plan(
         # complete and true declaration; a placeholder criterion is neither.
         "census: []  # counted premises as question/command/result rows; [] declares none —",
         "            # a claim a reviewer can falsify. Bar: coordinator/bin/mise-prep-gate.py.",
-        # `capabilities` is never scaffolded as a live `[]`: that is the positive claim
-        # that the plan delivers no user-facing capability, and a scaffold cannot make it.
-        # A schema-valid entry of `<REPLACE:` markers keeps the plan refused by
-        # plan_scaffold_markers until filled, and still validates as plan frontmatter.
-        "capabilities:",
-        '  - id: "<REPLACE: capability id, unique in this plan; replace this list with [] only if the plan delivers no user-facing capability>"',
-        '    statement: "<REPLACE: what the user can do>"',
-        '    role: "<REPLACE: who reaches it>"',
-        '    click_path: "<REPLACE: nav entry to page>"',
-        '    ui_consumer: {chunk: "<REPLACE: chunk id>"}',
-        "    # ui_consumer takes exactly one form; use one of these in its place, or ui_carve_out:",
-        "    #   ui_consumer: {plan: <plan path, omit for this plan>, chunk: <chunk id>}",
-        "    #   ui_consumer: {shipped: <path tracked at HEAD>}",
-        "    #   ui_carve_out: \"<the PM's own words leaving the UI out>\"",
         # Fleet brightlines — emitted LIVE, deliberately not commented out like
         # the `prime_exit_criterion` block directly above. That block is
         # conditionally owed (read-side keyed on `estimate.tshirt` M/L/XL, which

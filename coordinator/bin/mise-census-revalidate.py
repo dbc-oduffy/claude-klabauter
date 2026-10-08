@@ -262,19 +262,12 @@ def run_entry(entry: dict, repo_root: Path, timeout: int) -> dict:
         })
         return row
     count = entry.get("count")
-    count = count if isinstance(count, int) and not isinstance(count, bool) else None
-    verdict = _census().same_value(count, recorded, out)
-    if verdict is None:
-        rec_n, rec_v = _census().split_count(recorded)
-        count = count if count is not None else rec_n
-        if count is not None:
-            verdict = _census().compare_count(count, out)
-        else:
-            verdict = compare(recorded, out)
+    if isinstance(count, int) and not isinstance(count, bool):
+        verdict = _census().compare_count(count, out)
+    else:
+        verdict = compare(recorded, out)
     row.update(verdict)
-    shown_n, shown_v = _census().split_count(recorded)
-    shown_n = entry["count"] if "count" in entry else shown_n
-    row["recorded"] = (f"count {shown_n}; " if shown_n is not None else "") + shown_v[:400]
+    row["recorded"] = (f"count {count}; " if "count" in entry else "") + recorded.strip()[:400]
     row["observed"] = out.strip()[:400]
     return row
 

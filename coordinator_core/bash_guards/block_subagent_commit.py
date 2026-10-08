@@ -5974,10 +5974,6 @@ def _repo_relativize_pathspec(
 
     rewritten: List[str] = []
     for path in paths:
-        # The claim ledger keys on the bare repo-relative path; a
-        # `:(literal)` wrapper (admitted by the sweeping check) would never
-        # match a claim, so it is unwrapped here for every downstream reader.
-        path = _literal_pathspec_inner_path(path) or path
         candidate_posix = path.replace("\\", "/")
         if not _pathspec_element_is_absolute(candidate_posix):
             rewritten.append(path)

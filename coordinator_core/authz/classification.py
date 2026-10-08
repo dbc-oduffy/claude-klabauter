@@ -1277,52 +1277,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write? No.  4. Shared mutable state? No.
     #   5. Persistent state changes observable across processes? No.
     "plan.cross_plan_gate": OpClass.COMPUTE_ONLY,
-    # plan.seam_check — COMPUTE_ONLY: evaluates the set-level seam check over caller-named
-    # docs/plans/*.md and RETURNS verdict and findings. Read twin of plan.seam_record below;
-    # the split is the point, and a write here would collapse it.
-    # DR-208 five-question affirmation (citing ops/plan_seam_check.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #      Reads plan files and asks git (cat-file --batch-check, name-only diff) read-only.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?     No.
-    "plan.seam_check": OpClass.COMPUTE_ONLY,
-    # plan.seam_record — MUTATING: runs plan.seam_check's evaluation, then writes one
-    # docs/plans/<stem>.seam.yaml per named plan, atomically (atomic_write_bytes). Never commits.
-    # DR-208 five-question affirmation (citing ops/plan_seam_check.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Overwrites the per-plan seam sidecar beside each named plan.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      A same-directory tempfile, replaced onto the sidecar.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      docs/plans/ is coordinator substrate shared across EM sessions.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The terminal judge and the next caller read the sidecar back.
-    "plan.seam_record": OpClass.MUTATING,
-    # plan.seam_fix — MUTATING: mints depends_on_plan edges onto caller-named docs/plans/*.md
-    # rows so colliding writers are ordered; locked read-modify-write (plan_tasks_mutate's
-    # locked_rmw), only touched rows re-serialized. Never commits.
-    # DR-208 five-question affirmation (citing ops/plan_seam_fix.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Rewrites plan-tasks rows in the named plans.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    "plan.seam_fix": OpClass.MUTATING,
-    # seam.mint_batons — MUTATING: mints staged (awaiting_gate) handoff batons for residual
-    # seam flags, capped with one rollup, and records key->baton in state/seam-baton-index.json
-    # for cross-run dedup. Never commits.
-    # DR-208 five-question affirmation (citing ops/seam_baton_mint.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Creates state/handoffs/*.md and rewrites the dedup index.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    "seam.mint_batons": OpClass.MUTATING,
     # plan.stamp_prepped — MUTATING: the ONLY writer of the four-field mise-prep attest
     # (mise_prepped_by/_at/_sha/_findings) on a caller-named docs/plans/*.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) with the gate
@@ -4760,15 +4714,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # path.
     "baton.carry_forward": OpClass.MUTATING,
     "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
-
-    # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
-    # appends one line to `.git/coordinator-sessions/<sid>/pm_turns.jsonl`
-    # under `held_lock`.
-    #
-    # baton.pm_turns — COMPUTE_ONLY: `read_turns` reads that file through
-    # `_load` only; no lock, no write primitive on this path.
-    "baton.pm_turn_append": OpClass.MUTATING,
-    "baton.pm_turns": OpClass.COMPUTE_ONLY,
 
     # warm.request_status — COMPUTE_ONLY (D5, docs/plans/2026-09-23-warm-
     # dispatch-reconcile.md § C4): a pure poll read of the accept process's

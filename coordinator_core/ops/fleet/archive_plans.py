@@ -200,7 +200,7 @@ _SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY = "sidecar-follows-primary: primary is not 
 _REASON_SIDECAR_DEST_EXISTS = "sidecar-dest-exists: refusing to overwrite an existing archived sidecar"
 
 _EVIDENCE_SUFFIX = ".evidence.yaml"
-_FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json", _EVIDENCE_SUFFIX, ".seam.yaml")
+_FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json", _EVIDENCE_SUFFIX)
 
 # Single-flight lock — same stale-lock tolerance rationale as
 # archive_terminal_handoffs._SWEEP_LOCK_STALE_S: sized generously above this

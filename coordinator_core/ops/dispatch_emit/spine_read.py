@@ -143,7 +143,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from types import MappingProxyType
 from typing import NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
@@ -703,16 +702,12 @@ class EmitterRow(NamedTuple):
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
     reads_at_head: tuple = ()
-    appends: tuple = ()
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-# Above one repo's plan corpus (~300): a set check reads every plan, and a
-# full clear at the limit made each read of a larger set miss.
-_MEMO_LIMIT = 1024
+_MEMO_LIMIT = 256
 _FM_DOCS: dict = {}
 _ROWS_MEMO: dict = {}
-_SCHEMA_ERRORS: dict = {}
 
 
 def _remember(memo: dict, key: str, value):
@@ -747,21 +742,6 @@ def _parse_rows(source: str) -> RowsResult:
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
     return RowsResult(status=LocateStatus.LOCATED, rows=rows)
-
-
-def _schema_error_memo(source: str):
-    """``check_plan_tasks_source(source)`` memoised per process by text, as a read-only mapping.
-
-    It is a pure function of the text and, with jsonschema row validation,
-    the dearest part of a spine read; a set check reads every plan.
-    """
-    try:
-        return _SCHEMA_ERRORS[source]
-    except KeyError:
-        error = check_plan_tasks_source(source)
-        return _remember(
-            _SCHEMA_ERRORS, source, None if error is None else MappingProxyType(dict(error))
-        )
 
 
 def load_rows_memo(source: str):
@@ -851,21 +831,12 @@ def contradictory_read_paths(reads, reads_at_head) -> list:
 
 
 def read_spine(
-    plan_path,
-    exclusions: Optional[list] = None,
-    keep_coded: frozenset = frozenset(),
-    *,
-    schema_preflight: bool = True,
+    plan_path, exclusions: Optional[list] = None, keep_coded: frozenset = frozenset()
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
 
     ``keep_coded`` names ``coded`` rows to return as rows anyway (a review of
     hand-landed work needs the row the dispatch would otherwise skip).
-
-    ``schema_preflight=False`` skips the whole-spine schema check that only
-    sharpens a malformed ``depends_on`` message; the per-row edge checks below
-    still raise. For a reader over a large plan set that does not dispatch
-    (``plan.seam_check``), where that check is most of the cost.
 
     Raises ``SpineReadError`` if the spine block is absent or malformed,
     ``InvalidRowIdError`` if any row's ``id`` is missing/non-string or
@@ -949,8 +920,8 @@ def read_spine(
 
     raw_rows = [with_canonical_disposition(raw) for raw in result.rows]
 
-    if schema_preflight and any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
-        schema_error = _schema_error_memo(source)
+    if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
+        schema_error = check_plan_tasks_source(source)
         if schema_error is not None and schema_error["field"].startswith("depends_on"):
             raise MalformedDependencyEdgeError(
                 f"plan {plan_path!r} spine field {schema_error['field']}: "
@@ -1090,11 +1061,6 @@ def read_spine(
                 ),
                 change_kind=raw.get("change_kind"),
                 reads_at_head=reads_at_head,
-                appends=(
-                    tuple(p for p in raw["appends"] if isinstance(p, str))
-                    if isinstance(raw.get("appends"), list)
-                    else ()
-                ),
             )
         )
 
@@ -1233,23 +1199,14 @@ def read_spine(
     # blocked it, so the appended entry can name the full chain back to the
     # row that actually carries the gate/operator mode.
     transitive_root: dict[str, str] = {}
-    # Row -> the path whose withheld writer blocked it, for hops that came from
-    # `consumes:` rather than `depends_on`. A consumer dispatched beside its
-    # withheld producer reads a file that does not exist yet.
-    consumed_via: dict[str, str] = {}
-    consumers_of = _consume_edges(rows)
     frontier = list(blocked_ids)
     while frontier:
         current = frontier.pop()
-        hops = [(d, None) for d in dependents.get(current, ())]
-        hops += [(d, path) for d, path in consumers_of.get(current, ())]
-        for dependent_id, path in hops:
+        for dependent_id in dependents.get(current, ()):
             if dependent_id in satisfied_ids or dependent_id in blocked_ids:
                 continue
             blocked_ids.add(dependent_id)
             transitive_root[dependent_id] = current
-            if path is not None:
-                consumed_via[dependent_id] = path
             frontier.append(dependent_id)
 
     if exclusions is not None and transitive_root:
@@ -1262,19 +1219,6 @@ def read_spine(
             while cur in transitive_root:
                 cur = transitive_root[cur]
                 chain.append(cur)
-            if row_id in consumed_via:
-                exclusions.append(
-                    {
-                        "id": row_id,
-                        "reason": "withheld_by_consumed_path",
-                        "detail": (
-                            f"withheld: consumes {consumed_via[row_id]} written by "
-                            f"withheld {chain[1]}"
-                            + (f"; root {chain[-1]} is withheld" if len(chain) > 2 else "")
-                        ),
-                    }
-                )
-                continue
             if chain[-1] in deferred_ids:
                 exclusions.append(
                     {
@@ -1315,44 +1259,6 @@ def read_spine(
             dispatchable_rows[i] = row._replace(depends_on=stripped)
 
     return dispatchable_rows
-
-
-def _consume_edges(rows: list) -> dict:
-    """Writer row id -> [(consumer row id, path)] for every `consumes:` read of
-    a path another row writes. Paths every writer only `appends:` to derive no
-    edge (the `wave_map` derived-edge rule), so a hub-file reader is not held."""
-    from coordinator_core.ops.dispatch_emit.wave_map import (
-        _append_only_paths,
-        _is_ancestor,
-        _normalize_path,
-    )
-
-    exempt = _append_only_paths(rows)
-    writers: list = []
-    for row in rows:
-        if row.writes is UNDECLARED or not isinstance(row.writes, list):
-            continue
-        writers.append(
-            (
-                row.id,
-                {_normalize_path(p) for p in row.writes},
-                [_normalize_path(p) for p in row.writes_under],
-            )
-        )
-    out: dict = {}
-    for row in rows:
-        for raw_path in row.reads or ():
-            if not isinstance(raw_path, str):
-                continue
-            path = _normalize_path(raw_path)
-            if path in exempt:
-                continue
-            for wid, exact, prefixes in writers:
-                if wid != row.id and (
-                    path in exact or any(path == pre or _is_ancestor(pre, path) for pre in prefixes)
-                ):
-                    out.setdefault(wid, []).append((row.id, raw_path))
-    return out
 
 
 def executable_body(title: str, body: str) -> bool:

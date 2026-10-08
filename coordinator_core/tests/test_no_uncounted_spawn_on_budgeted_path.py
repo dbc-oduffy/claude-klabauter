@@ -365,22 +365,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_cross_plan_gate.py",
         ("_handler",),
     ),
-    "plan.seam_check": (
-        "coordinator_core/ops/plan_seam_check.py",
-        ("_check_handler",),
-    ),
-    "plan.seam_record": (
-        "coordinator_core/ops/plan_seam_check.py",
-        ("_record_handler",),
-    ),
-    "plan.seam_fix": (
-        "coordinator_core/ops/plan_seam_fix.py",
-        ("_handler",),
-    ),
-    "seam.mint_batons": (
-        "coordinator_core/ops/seam_baton_mint.py",
-        ("_mint_handler",),
-    ),
     # Enrolled 2026-10-08: each measures an EMPTY function-granular reachable spawn set.
     "artifact.adopt": (
         "coordinator_core/ops/artifact_adopt.py",
@@ -1272,14 +1256,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/baton_carry_forward.py",
         ("_carry_forward_read",),
     ),
-    "baton.pm_turn_append": (
-        "coordinator_core/ops/baton_pm_turns.py",
-        ("_pm_turn_append",),
-    ),
-    "baton.pm_turns": (
-        "coordinator_core/ops/baton_pm_turns.py",
-        ("_pm_turns",),
-    ),
     "changelog.upsert_reviewed": (
         "coordinator_core/ops/changelog_ops.py",
         ("_upsert_reviewed_handler",),
@@ -1974,34 +1950,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
         "`test_stamp_prepped_spawns_exactly_the_budgeted_ls_files` (`assert len(spawns) == budget`, "
         "read from the manifest's plan.stamp_prepped `census_python_target_tracking`); the attribution is "
-        "itself asserted on every run.",
-    ),
-    (
-        "plan.seam_check",
-        "coordinator_core/git/run.py",
-        "run_git",
-        "git",
-        0,
-    ): _Legitimation(
-        counter=_GLOBAL_SUBPROCESS_SPAWN,
-        counted_by="coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py",
-        executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
-        "`test_seam_check_spawns_exactly_the_budgeted_batches` (`assert len(spawns) == budget`, "
-        "read from the manifest's plan.seam_check `spawn_count_budget`); the attribution is "
-        "itself asserted on every run.",
-    ),
-    (
-        "plan.seam_record",
-        "coordinator_core/git/run.py",
-        "run_git",
-        "git",
-        0,
-    ): _Legitimation(
-        counter=_GLOBAL_SUBPROCESS_SPAWN,
-        counted_by="coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py",
-        executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
-        "`test_seam_record_spawns_exactly_the_budgeted_batches` (`assert len(spawns) == budget`, "
-        "read from the manifest's plan.seam_record `spawn_count_budget`); the attribution is "
         "itself asserted on every run.",
     ),
     (

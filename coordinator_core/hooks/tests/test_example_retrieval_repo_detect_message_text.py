@@ -47,8 +47,8 @@ def test_uninitialized_banner_names_no_repo(tmp_path):
 
     banner = example_retrieval_repo_detect.detect_banner(str(tmp_path))
 
-    assert banner.startswith("project-rag: UNINITIALIZED")
-    assert "run the project-RAG indexer" in banner
+    assert banner.startswith("example-retrieval-repo: UNINITIALIZED")
+    assert "run the example-retrieval-repo indexer" in banner
     _assert_clean(banner)
 
 
@@ -68,7 +68,7 @@ def test_stale_banner_names_no_repo(tmp_path):
     ):
         banner = example_retrieval_repo_detect.detect_banner(str(tmp_path))
 
-    assert banner.startswith("project-rag: STALE")
+    assert banner.startswith("example-retrieval-repo: STALE")
     _assert_clean(banner)
 
 
@@ -81,7 +81,7 @@ def test_stale_escalated_banner_names_no_repo(tmp_path):
         banner = example_retrieval_repo_detect.detect_banner(str(tmp_path))
 
     assert "<system-reminder>" in banner
-    assert "Run the project-RAG indexer to rebuild" in banner
+    assert "Run the example-retrieval-repo indexer to rebuild" in banner
     _assert_clean(banner)
 
 

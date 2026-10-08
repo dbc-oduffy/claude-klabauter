@@ -174,7 +174,6 @@ from typing import Any, Mapping, NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
-from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
 
 # ---------------------------------------------------------------------------
 # Manifest CLI names (must be registered verbatim in __init__.py's
@@ -208,9 +207,6 @@ _KEY_FOLD_DESC = "fold_desc"
 #: ("governing_plan_path": "preflight.governing_plan_resolution.path") — never a
 #: second name for the same value.
 _KEY_GOVERNING_PLAN_PATH = "governing_plan_path"
-#: The completion entry's authored title, written into the entry
-#: `d-complete-entry` scaffolds by `apply._fill_completion_entry_surfaces`.
-_KEY_TITLE = "title"
 
 FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_GOVERNING_PLAN_SLUG,
@@ -219,7 +215,6 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_PLAN_PATH,
     _KEY_FOLD_DESC,
     _KEY_GOVERNING_PLAN_PATH,
-    _KEY_TITLE,
 )
 
 #: `status:` values a run-report sidecar's frontmatter carries that mark it
@@ -435,9 +430,6 @@ def build_baton_chain_closure_directive(
     args = ["--repo", str(repo_root), "signal", handoff_path]
     directive = _directive("d-baton-chain-closure", _BATON_CHAIN_CLOSURE_CLI, args)
     directive["best_effort"] = True
-    # Held until after the close commit: the chain's tip is stamped terminal
-    # by the ship step, which runs later than this builder's own position.
-    directive[AFTER_CLOSE_COMMIT_KEY] = True
     return directive
 
 

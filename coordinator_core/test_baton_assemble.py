@@ -4567,9 +4567,7 @@ class TestHandoffSupersedePredecessorEndToEnd:
             repo / archived_rel,
             [
                 "handoff_id: hnd-pred-archived-1a2b4d",
-                # Shipped-but-unmirrored: `deployment_state: shipped` on disk is
-                # terminal and refused by the supersede choke point.
-                "deployment_state: in_flight",
+                "deployment_state: shipped",
                 "shipped_in: deadbeef",
                 "title: Already-archived predecessor",
                 "created: 2026-07-20",

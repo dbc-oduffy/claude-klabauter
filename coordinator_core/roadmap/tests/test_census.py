@@ -175,18 +175,3 @@ def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypat
     )
     assert bad["kind"] == "census-unscreenable"
     assert census.ALLOWED_FORM in bad["detail"]
-
-
-@pytest.mark.parametrize(
-    "count,recorded,observed,state",
-    [
-        (None, "count 12; v", "v", "MATCH"),  # prefix is shape, not value
-        (7, "multi\nline", "multi\nline", "MATCH"),  # identical output, count counts something else
-        (None, "count 12; v", "count 12; v", "MATCH"),
-        (None, "count 12; v", "count 13; v", "DRIFT"),  # both sides carry a count and differ
-        (None, "count 12; v", "w", None),  # genuinely different value: left to the count compare
-    ],
-)
-def test_same_value_normalises_the_count_prefix(count, recorded, observed, state):
-    verdict = census.same_value(count, recorded, observed)
-    assert (verdict["state"] if verdict else None) == state

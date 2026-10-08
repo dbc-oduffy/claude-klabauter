@@ -425,8 +425,6 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "check-machine-local-regeneratability",
     "sweep-terminal-handoffs",
     "sweep-terminal-sizings",
-    "scip-rebuild-at-ceremony",
-    "structural-index-refresh",
     "review-brightline-gate",
     "freeze-review-diff",
     "classify-dispatch-shape",
@@ -1848,13 +1846,6 @@ def build_directives(
     # last-in-list reasoning. See
     # `build_terminal_sizing_sweep_directive`'s own docstring.
     directives.append(directives_session_hygiene.build_terminal_sizing_sweep_directive())
-
-    # -- Post-close steps --
-    # Listed last and held back by `apply` until its close commit and push
-    # have run. See `build_post_close_directives`'s own docstring.
-    directives.extend(
-        directives_session_hygiene.build_post_close_directives(repo_root)
-    )
 
     return directives
 

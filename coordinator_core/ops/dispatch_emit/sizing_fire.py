@@ -12,7 +12,6 @@ from typing import Mapping, Sequence
 import yaml
 
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.sizing_acceptance import sizing_acceptance_skipped
 from coordinator_core.session import record_homes
 
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
@@ -104,12 +103,6 @@ def s_plan_path(sizing_rel: str) -> str:
     return f"docs/plans/{PurePosixPath(str(sizing_rel).replace(chr(92), '/')).stem}.md"
 
 
-def _acceptance_skipped(sizing: Mapping) -> bool:
-    """The engine size rule, on the recorded route (never `effective_route`) and size."""
-    est = sizing.get("estimate")
-    return sizing_acceptance_skipped(sizing.get("route"), est.get("tshirt") if isinstance(est, Mapping) else None)
-
-
 def collect_fire_refusals(
     sizing: Mapping,
     *,
@@ -127,7 +120,7 @@ def collect_fire_refusals(
     ec = ec if isinstance(ec, Mapping) else {}
     if not ec.get("statement"):
         out.append("`exit_criterion.statement` is absent — nothing to hand off as the exit criterion")
-    if ec.get("accepted") is None and not _acceptance_skipped(sizing):
+    if ec.get("accepted") is None:
         out.append(
             "`exit_criterion.accepted` is null — accept it first: "
             f"sizing-accept-exit-criterion --sizing {sizing_rel} --pm-quote \"<PM's words>\" "

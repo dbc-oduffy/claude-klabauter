@@ -218,8 +218,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="a file in the ask's footprint (repeatable; --ask/--sizing only); "
-        "a path in a sibling checkout is a cross-repo write (see --cross-repo-approved); "
-        "a path outside every checkout is refused at emit",
+        "a path outside the repo root is refused at emit",
     )
     parser.add_argument(
         "--restamp",
@@ -264,9 +263,9 @@ def _build_parser() -> argparse.ArgumentParser:
         const="",
         default=None,
         metavar="RUN_TEXT",
-        help="with --plan or --inventory, and --run-base: emit a script that only reviews and tests the rows "
+        help="with --plan and --run-base: emit a script that only reviews and tests the rows "
         "named by --rows and by RUN_TEXT's `checkpoint(wave N): ... — ids` subjects; with neither, "
-        "the plan's `coded` rows (--inventory requires one of the two). Reviews the diff from --run-base to the worktree; "
+        "the plan's `coded` rows. Reviews the diff from --run-base to the worktree; "
         "no row, commit or push step is emitted",
     )
     parser.add_argument(
@@ -353,15 +352,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         help="refuse an --inventory minting more live rows than this (default 100)",
     )
-    parser.add_argument(
-        "--row-budget",
-        "--tranche",
-        dest="row_budget",
-        default=None,
-        type=int,
-        help="--inventory: emit the next whole plans (dependency order) fitting N rows "
-        "instead of refusing; the rest are reported as deferred",
-    )
     parser.add_argument("--limit", default=None, type=int, help="limit override (queue route)")
     parser.add_argument(
         "--budget-tokens",
@@ -397,12 +387,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="overwrite an --out path already holding a different session's emission",
-    )
-    parser.add_argument(
-        "--cross-repo-approved",
-        action="store_true",
-        help="plan/ask route: the PM approved this run's sibling-repo writes (the "
-        "approve_cross_repo_write touchpoint); implied on a remote venue",
     )
     parser.add_argument(
         "--chatty",
@@ -684,11 +668,6 @@ def _emit_inventory_parts(
             **params,
             "output_path": str(inventory.parent / f"{run_id}{_REQUIRED_OUT_SUFFIX}"),
         }
-    # Every part, and every retry at a higher count, cuts the ONE tranche record the
-    # over-cap emit minted; re-minting per part numbered sibling parts t8/t9.
-    tranche_record = getattr(over, "tranche_inventory", None)
-    if tranche_record:
-        params = {**params, "inventory_path": str(tranche_record)}
     while True:
         results: list = []
         try:
@@ -798,10 +777,8 @@ def _review_only_refusal(args) -> "Optional[str]":
         return None
     if args.review_only is None or args.run_base is None:
         return "--review-only and --run-base are required together"
-    if not args.plan and not args.inventory:
-        return "--review-only is accepted only with --plan or --inventory"
-    if args.plan and args.inventory:
-        return "--review-only takes --plan or --inventory, not both"
+    if not args.plan:
+        return "--review-only is accepted only with --plan"
     if not re.fullmatch(r"[0-9a-f]{7,40}", args.run_base):
         return f"--run-base {args.run_base!r} is not 7-40 lowercase hex digits"
     conflicts = [
@@ -811,8 +788,7 @@ def _review_only_refusal(args) -> "Optional[str]":
             ("--resume-from", args.resume_from),
             ("--reverify-delivery", args.reverify_delivery is not None),
             ("--chatty", args.chatty),
-            ("--row-budget", args.row_budget is not None),
-            ("--lanes", args.lanes),
+            ("--inventory", args.inventory),
             ("--queue", args.queue),
             ("--profile", args.profile),
             ("--ask", args.ask is not None),
@@ -1251,12 +1227,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force}
-    # Venue is read here, in the dispatching session's own env: the op body may
-    # run warm-served, where os.environ belongs to whoever spawned the server.
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
-
-    if args.cross_repo_approved or is_remote_venue():
-        params["cross_repo_approved"] = True
     if args.out_path:
         params["output_path"] = args.out_path
     if is_ask_route:
@@ -1337,51 +1307,42 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["landed_rows"] = sorted(
                 landed_rows_from_text(Path(args.only_incomplete).read_text(encoding="utf-8"))
             )
-    if args.review_only is not None:
-        from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
-        from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
+        if args.review_only is not None:
+            from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
+            from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
 
-        review_set = {r.strip() for r in (args.rows or "").split(",") if r.strip()}
-        if args.review_only:
-            try:
-                text = Path(args.review_only).read_text(encoding="utf-8")
-            except OSError as exc:
+            review_set = {r.strip() for r in (args.rows or "").split(",") if r.strip()}
+            if args.review_only:
+                try:
+                    text = Path(args.review_only).read_text(encoding="utf-8")
+                except OSError as exc:
+                    print(
+                        f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
+                        f"unreadable: {exc}",
+                        file=sys.stderr,
+                    )
+                    return EXIT_USAGE
+                review_set |= landed_rows_from_text(text)
+            if not review_set:
+                try:
+                    review_set = set(coded_row_ids(args.plan))
+                except (OSError, SpineReadError) as exc:
+                    print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+                    return EXIT_DATA_ERROR
+            review_rows = sorted(review_set)
+            if not review_rows:
                 print(
-                    f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
-                    f"unreadable: {exc}",
+                    "emit-dispatch-workflow: ERROR — --review-only names no row: pass --rows, "
+                    "RUN_TEXT with checkpoint subjects, or a plan with coded rows",
                     file=sys.stderr,
                 )
-                return EXIT_USAGE
-            review_set |= landed_rows_from_text(text)
-        if not review_set and args.inventory:
-            print(
-                "emit-dispatch-workflow: ERROR — --review-only with --inventory names no row: "
-                "pass --rows or RUN_TEXT with checkpoint subjects",
-                file=sys.stderr,
-            )
-            return EXIT_USAGE
-        if not review_set:
-            try:
-                review_set = set(coded_row_ids(args.plan))
-            except (OSError, SpineReadError) as exc:
-                print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
                 return EXIT_DATA_ERROR
-        review_rows = sorted(review_set)
-        if not review_rows:
-            print(
-                "emit-dispatch-workflow: ERROR — --review-only names no row: pass --rows, "
-                "RUN_TEXT with checkpoint subjects, or a plan with coded rows",
-                file=sys.stderr,
-            )
-            return EXIT_DATA_ERROR
-        params["review_only_rows"] = review_rows
-        params["run_base_sha"] = args.run_base
+            params["review_only_rows"] = review_rows
+            params["run_base_sha"] = args.run_base
     if args.inventory:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:
             params["max_rows"] = args.max_rows
-        if args.row_budget is not None:
-            params["row_budget"] = args.row_budget
         if args.lanes:
             params["lanes"] = True
             for name in ("part", "lane_count", "hot_files"):

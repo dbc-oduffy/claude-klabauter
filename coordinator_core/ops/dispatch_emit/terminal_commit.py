@@ -151,44 +151,6 @@ def _error(message: str, **extra: object) -> dict:
     return result
 
 
-#: Refusals raised before the run's incomplete set is known: ``stranded`` would
-#: read ``{}`` ("nothing left behind") when it is really unknown, so the key is omitted.
-_STRANDED_UNKNOWN_REFUSALS = frozenset({"missing-run-outcome", "unreviewed"})
-
-
-def _missing_run_outcome(params: object) -> Optional[dict]:
-    """Refusal naming every run-outcome param the caller omitted, else ``None``.
-
-    The emitted script's marker records what the run promised (chunks, paths),
-    never how it ended: ``incomplete_chunks`` and the review-stage
-    ``inline_review`` exist only in the run's result digest
-    (``next_action.params``), so a bare ``script_path`` cannot supply them.
-    Deriving them from chunk reports would land code the review wave never saw,
-    which the deterministic-review ruling forbids. Checked once, ahead of the
-    per-field validation, so the caller learns every gap in one reply.
-    """
-    if not isinstance(params, dict) or not isinstance(params.get("script_path"), str):
-        return None
-    absent = [
-        name for name in ("incomplete_chunks", "inline_review") if params.get(name) is None
-    ]
-    if "incomplete_chunks" not in absent:
-        return None
-    return _error(
-        f"params {absent} not passed. The run outcome is not derivable from "
-        f"script_path {params['script_path']!r} (it carries only the commit-request marker: "
-        "chunks and declared paths) and no params.task_output_path was given. Pass "
-        "task_output_path=<the run's task-output file> (its next_action.params supplies "
-        "incomplete_chunks and inline_review), or pass incomplete_chunks and inline_review "
-        "from the digest's terminal_commit_cli line. A run that died before its review "
-        "stage has no inline_review to pass: re-emit it review-only (emit-dispatch-workflow "
-        "--inventory <inv> --review-only --rows <DONE ids> --run-base <sha>) and land from "
-        "that run's terminal_commit_cli line",
-        refused="missing-run-outcome",
-        missing=absent,
-    )
-
-
 _MINTED_SPINE_ORIGIN = "mise inventory record"
 _SPINE_SUFFIX = ".spine.md"
 
@@ -323,24 +285,6 @@ def _source_rows_by_plan(
         if row in spine_ids:
             out.setdefault(rel, set()).add(row)
     return out
-
-
-#: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan.
-_SEAM_SIDECAR_SUFFIX = ".seam.yaml"
-
-
-def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: list) -> list:
-    """Worktree-relative `.seam.yaml` sidecars on disk beside the run's plan and each
-    source plan its committed rows came from, in sorted order."""
-    if not plan_path:
-        return []
-    plans = {plan_path, *_source_rows_by_plan(worktree_root, plan_path, chunk_ids)}
-    found = []
-    for plan in sorted(plans):
-        rel = str(PurePosixPath(plan).with_name(PurePosixPath(plan).stem + _SEAM_SIDECAR_SUFFIX))
-        if (worktree_root / rel).is_file():
-            found.append(rel)
-    return found
 
 
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
@@ -839,27 +783,6 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     return out
 
 
-def _commit_siblings(
-    sibling_paths: dict, subject: str, home_sha: Optional[str], session_id: Optional[str]
-) -> list:
-    """One ``ceremony.commit_v2`` per sibling repo, scoped to that repo's
-    declared paths. A refusal is reported per repo, never raised."""
-    out: list = []
-    for root, paths in sibling_paths.items():
-        message = subject + (f"\n\nCross-Repo-Of: {home_sha}" if home_sha else "")
-        params: dict = {"paths": list(paths), "message": message}
-        if session_id is not None:
-            params["session_id"] = session_id
-        try:
-            reply = reentrant_dispatch("ceremony.commit_v2", params, repo_root=Path(root) / ".git")
-        except OpUnavailableError:
-            reply = {"committed": False, "error": "ceremony.commit_v2 is not registered"}
-        if not isinstance(reply, dict):
-            reply = {"committed": False, "error": f"unexpected commit_v2 reply: {reply!r}"}
-        out.append({"repo": Path(root).name, "paths": list(paths), **reply})
-    return out
-
-
 _STATUS_FIELD = r'^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
 _DELIVERED_REPORT_RE = re.compile(
     r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>'
@@ -1153,7 +1076,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              marker (D2) out of. Guarded under
                                              the caller's own worktree before
                                              any read.
-        incomplete_chunks (list[str], required unless task_output_path supplies it; may be empty) -- chunk ids the
+        incomplete_chunks (list[str], required, may be empty) -- chunk ids the
                                              run did NOT finish DONE. Any id
                                              not present in the marker's
                                              request refuses the call.
@@ -1205,9 +1128,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     (a peer already landed the bytes) passes through unmodified, as a
     non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
     paths]}`` for each ``incomplete_chunks`` id the request marker names, the
-    work the commit left uncommitted; ``{}`` when none, or when no marker was read. The key is
-    omitted on a ``missing-run-outcome`` or ``unreviewed`` refusal: the incomplete set was not
-    known, so an empty map would falsely read as "nothing stranded".
+    work the commit left uncommitted; ``{}`` when none, or when no marker was read.
     ``entangled`` (present only when non-empty) maps each chunk held back from the commit to
     the stranded chunk ids whose uncommitted ``.py`` files it imports (transitively): landing it
     would leave an unresolvable import at that sha. It is stranded with them, its reason
@@ -1231,8 +1152,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     blockers: dict = {}
     regraded: dict = {}
     reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers, regraded)
-    if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
-        reply["stranded"] = stranded
+    reply["stranded"] = stranded
     if blockers:
         reply["blockers"] = blockers
     if regraded:
@@ -1303,10 +1223,6 @@ def _terminal_commit(
                 k: v for k, v in params.items() if k != "task_output_path"}}
         except ValueError as exc:
             return _error(str(exc))
-
-    missing = _missing_run_outcome(params)
-    if missing is not None:
-        return missing
 
     refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
     if refusal is not None:
@@ -1566,21 +1482,8 @@ def _terminal_commit(
     if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
 
-    # A sibling-checkout path never reaches the home commit (it would drop as
-    # absent-at-HEAD); each sibling repo lands its own commit after the home one.
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
-
-    all_paths, sibling_paths = split_sibling_paths(all_paths, worktree_root)
-
-    def _with_siblings(reply: dict) -> dict:
-        if sibling_paths:
-            reply["sibling_commits"] = _commit_siblings(
-                sibling_paths, _subject(done_chunks, "review trail"), reply.get("sha"), session_id
-            )
-        return reply
-
     if not all_paths:
-        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+        return {"committed": False, "nothing_to_commit": True}
 
     if not anchor_only:
         cited_sizing = _cited_sizing(worktree_root, request.plan_path)
@@ -1596,11 +1499,6 @@ def _terminal_commit(
             )
             if (worktree_root / evidence_rel).is_file() and evidence_rel not in all_paths:
                 all_paths.append(evidence_rel)
-        for seam_rel in _seam_sidecars(
-            worktree_root, request.plan_path, [c.id for c in done_chunks + partial_chunks]
-        ):
-            if seam_rel not in all_paths:
-                all_paths.append(seam_rel)
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
@@ -1628,7 +1526,7 @@ def _terminal_commit(
         all_paths = [p for p in all_paths if p not in removed]
 
     if not all_paths and not deleted_paths:
-        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+        return {"committed": False, "nothing_to_commit": True}
 
     scope.update(root=worktree_root, request=request)
     final_paths_set = set(all_paths)
@@ -1861,12 +1759,4 @@ def _terminal_commit(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
-    if reply.get("committed") or reply.get("nothing_to_commit"):
-        _with_siblings(reply)
-    elif sibling_paths:
-        reply["sibling_commits"] = [
-            {"repo": root.name, "paths": paths, "committed": False,
-             "error": "home commit did not land; sibling commit withheld"}
-            for root, paths in sibling_paths.items()
-        ]
     return reply
