@@ -219,6 +219,28 @@ def test_writes_under_collision(tmp_path, git):
     assert _check(root, [a, b])["verdict"] == "REFUSED"
 
 
+def test_two_appends_to_one_path_do_not_collide(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/hub.ts, s/a.ts]", extra="  appends: [s/hub.ts]\n"))
+    b = _plan(root, "b", _row("R2", "[s/hub.ts]", extra="  appends: [s/hub.ts]\n"))
+    assert _check(root, [a, b])["verdict"] == "CLEAN"
+
+
+def test_an_append_against_an_in_place_write_collides(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/hub.ts]", extra="  appends: [s/hub.ts]\n"))
+    b = _plan(root, "b", _row("R2", "[s/hub.ts]"))
+    r = _check(root, [a, b])
+    assert r["verdict"] == "REFUSED" and {f["path"] for f in r["findings"]} == {"s/hub.ts"}
+
+
+def test_one_in_place_row_makes_the_plan_an_in_place_writer(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/hub.ts]", extra="  appends: [s/hub.ts]\n") + _row("R3", "[s/hub.ts]"))
+    b = _plan(root, "b", _row("R2", "[s/hub.ts]", extra="  appends: [s/hub.ts]\n"))
+    assert _check(root, [a, b])["verdict"] == "REFUSED"
+
+
 def test_ordered_pair_is_clean(tmp_path, git):
     root = _root(tmp_path)
     a = _plan(root, "a", _row("R1", "[s/x.py]"))

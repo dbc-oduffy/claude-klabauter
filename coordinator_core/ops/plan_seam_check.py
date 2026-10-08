@@ -28,6 +28,8 @@ Reply fields:
 Negative-spec:
   - plan.seam_check opens no file for write.
   - Neither op commits or accepts a caller-supplied root.
+  - Two plans that only append to a path (`appends:` on every row writing it)
+    do not collide on it; an append against an in-place write still does.
   - Git is asked twice at most per call: one ``cat-file --batch-check`` for HEAD's
     sha and every path-tracked question, and at wave-boundary one name-only diff.
 """
@@ -137,6 +139,24 @@ class _Plan:
                 self._live = []
                 self.unreadable = str(exc)
         return self._live
+
+    def append_only_paths(self) -> set:
+        """Normalized paths every live row writing them also lists under `appends:`.
+
+        `appends:` annotates `writes:` -- the path stays in `writes` so the
+        commit pathspec is unchanged. One in-place writer of a path in this
+        plan makes it an ordinary write here."""
+        appended: set = set()
+        in_place: set = set()
+        for row in self.live_rows:
+            if row.writes is UNDECLARED:
+                continue
+            written = _write_paths_from_rows([row])
+            raw = (self.raw_by_id.get(row.id) or {}).get("appends")
+            declared = _write_paths_from_rows([SimpleNamespace(writes=raw, writes_under=())]) if isinstance(raw, list) and raw else set()
+            appended |= written & declared
+            in_place |= written - declared
+        return appended - in_place
 
     def edge_plans(self) -> set:
         edges = list(frontmatter_plan_edges(self.text) or [])
@@ -475,6 +495,7 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
         for p in prefixes:
             prefix.setdefault(p, set()).add(rel)
     ordered = _edge_closure(pset)
+    appends = {rel: p.append_only_paths() for rel, p in pset.items()}
     seen: set = set()
     for rel, (paths, prefixes) in sets.items():
         for item in sorted(paths | prefixes):
@@ -485,6 +506,8 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
                 hits |= prefix.get(item, set())
             for other in hits - {rel}:
                 if other in ordered[rel] or rel in ordered[other]:
+                    continue
+                if item in appends[rel] and item in appends[other]:
                     continue
                 key = (rel, other, item)
                 if key in seen:
