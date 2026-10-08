@@ -68,3 +68,21 @@ def test_bind_plan_script_refuses_empty_session_and_missing_source(tmp_path):
     with pytest.raises(ValueError):
         plan_stage.bind_plan_script(_manifest(tmp_path, tmp_path / "nope.mjs"), child_session_id="s")
     assert not list((tmp_path / "trail").glob("*")) if (tmp_path / "trail").exists() else True
+
+
+def test_plan_blitz_wave_return_nests_digest_under_digest_key(tmp_path):
+    (tmp_path / "p.md").write_text("x", encoding="utf-8")
+    wave = {
+        "waveIndex": 0,
+        "trailDir": "t",
+        "ready": [{"batonId": "b", "verdict": "ready", "planPath": "p.md"}],
+        "pulled": [],
+        "digest": _ready("p.md"),
+    }
+    assert plan_stage.read_plan_result(_wr(wave), repo_root=tmp_path) == "p.md"
+    assert plan_stage.plan_digest(_wr(wave)) == wave["digest"]
+
+
+def test_wave_return_without_digest_still_halts(tmp_path):
+    out = plan_stage.read_plan_result(_wr({"waveIndex": 0, "ready": []}), repo_root=tmp_path)
+    assert isinstance(out, Halt) and out.halted_at == "plan"

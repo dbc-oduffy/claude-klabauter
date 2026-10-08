@@ -146,7 +146,7 @@ def _drive(
     ran = _run_child(runner, plan_script, plan_sid, "plan")
     if isinstance(ran, Halt):
         return ran
-    seen["plan"] = ran.digest
+    seen["plan"] = plan_stage.plan_digest(ran) or ran.digest
     plan_path = plan_stage.read_plan_result(ran, repo_root=root)
     if isinstance(plan_path, Halt):
         return plan_path

@@ -1451,15 +1451,9 @@ def commit_paths(
                 resolve_git_common_dir(repo), old_head, candidates
             )
             if rollback_check.refusal(findings):
-                detail = "; ".join(
-                    f"{f.path} (depth {f.depth}, restores {f.restores_commit})"
-                    for f in findings
-                )
                 raise StagedRollbackRefused(
-                    f"staged rollback detected -- {detail}. Refused before "
-                    "any tree or commit object was written. Pass the "
-                    "reverted path(s) in `declared_reverts` if this is "
-                    "intentional."
+                    rollback_check.refusal_detail(findings, candidates)
+                    + " (`declared_reverts` in-process). Nothing was written."
                 )
 
     filled = _synthesize_absent_spine_dirs(spine, assembled)

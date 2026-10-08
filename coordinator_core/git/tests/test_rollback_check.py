@@ -148,6 +148,20 @@ def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
     assert rollback_check.refusal(findings) is True
 
 
+def test_deletion_refusal_names_deletion_and_pasteable_override(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "new.txt", "added\n", "add new.txt")
+    head = _commit(repo, "new.txt", "edited\n", "edit new.txt")
+    candidates = {"new.txt": rollback_check.ABSENT}
+
+    findings = rollback_check.find_exact_blob_rollbacks(_common(repo), head, candidates, window=500)
+    text = rollback_check.refusal_detail(findings, candidates)
+
+    assert rollback_check.refusal(findings) is True
+    assert "deletion" in text
+    assert text.endswith("re-run with: --declared-revert new.txt")
+
+
 def test_unchanged_paths_are_never_findings(tmp_path):
     repo = _repo(tmp_path)
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")

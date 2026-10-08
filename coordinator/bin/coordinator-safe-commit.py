@@ -207,6 +207,10 @@ def _bootstrap_engine() -> None:
     global _BOOTSTRAP_DONE
     if _BOOTSTRAP_DONE:
         return
+    _bin = str(Path(__file__).resolve().parent)
+    if _bin not in sys.path:
+        # Loaded by spec (tests), the script dir is not sys.path[0] and `lib` misresolves.
+        sys.path.insert(0, _bin)
     try:
         import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
         from cc_invoke import require_engine_on_path  # noqa: E402

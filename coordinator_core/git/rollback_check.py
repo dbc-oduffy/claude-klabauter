@@ -242,3 +242,23 @@ def refusal(findings: List[RollbackFinding]) -> bool:
         return True
     paths = {f.path for f in findings}
     return len(paths) >= 3
+
+
+def refusal_detail(
+    findings: List[RollbackFinding], candidates: Mapping[str, Union[str, object]]
+) -> str:
+    """The refusal text both commit routes print, ending in a pasteable override.
+
+    A deletion of a path added inside the window is a rollback by K-016 clause
+    2 (ruling state/rulings/2026-10-08-apm-rollback-gate-deletions.md), so an
+    intended `git rm` lands here; naming it a deletion keeps it a one-retry cost.
+    """
+    deleted = [f.path for f in findings if candidates.get(f.path) is ABSENT]
+    restored = [f for f in findings if candidates.get(f.path) is not ABSENT]
+    parts = [f"{f.path} (depth {f.depth}, restores {f.restores_commit})" for f in restored]
+    if deleted:
+        parts.append(
+            "deletion of file(s) added within the window: " + ", ".join(deleted)
+        )
+    flags = " ".join(f"--declared-revert {f.path}" for f in findings)
+    return f"staged rollback detected -- {'; '.join(parts)}. If intended, re-run with: {flags}"

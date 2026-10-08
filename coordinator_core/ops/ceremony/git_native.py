@@ -3304,18 +3304,13 @@ def _commit_scoped_private_index(
                 resolve_git_common_dir(root), old_head, candidates
             )
             if rollback_check.refusal(findings):
-                detail = "; ".join(
-                    f"{f.path} (depth {f.depth}, restores {f.restores_commit})"
-                    for f in findings
-                )
                 return GitResult(
                     returncode=-1,
                     stdout="",
                     stderr=(
-                        f"_commit_scoped_private_index: staged rollback detected -- "
-                        f"{detail}. Refused before any tree or commit object was "
-                        "written. Pass the reverted path(s) via --declared-revert "
-                        "if this is intentional."
+                        "_commit_scoped_private_index: "
+                        + rollback_check.refusal_detail(findings, candidates)
+                        + ". Nothing was written."
                     ),
                 )
 

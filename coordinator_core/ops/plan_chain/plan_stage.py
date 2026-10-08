@@ -58,10 +58,21 @@ def bind_plan_script(
     return out
 
 
+def plan_digest(result: WorkflowResult) -> dict | None:
+    """The ``kind: plan`` digest: plan-blitz returns its wave result with the digest under ``digest``."""
+    top = result.digest
+    if not isinstance(top, dict):
+        return None
+    if top.get("kind") == "plan":
+        return top
+    nested = top.get("digest")
+    return nested if isinstance(nested, dict) and nested.get("kind") == "plan" else None
+
+
 def read_plan_result(result: WorkflowResult, *, repo_root: str | Path) -> str | Halt:
     """The ready plan's path (as the digest names it), or the Halt that ends the chain."""
-    digest = result.digest
-    if not isinstance(digest, dict) or digest.get("kind") != "plan":
+    digest = plan_digest(result)
+    if digest is None:
         return halt("plan-no-digest", "plan Workflow returned no kind:plan digest")
     outcome = digest.get("outcome")
     if outcome != "ready":
