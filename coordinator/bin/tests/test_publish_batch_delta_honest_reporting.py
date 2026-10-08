@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import time
+import types
 from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
@@ -106,3 +107,43 @@ def test_the_delta_skip_machinery_is_gone():
     for name in ("write_delta_record", "load_delta_record", "delta_row_unchanged", "_delta_state_path",
                  "_delta_row_source_sha", "_git_is_clean"):
         assert not hasattr(publish, name), name
+
+
+def _fake_engine(tmp_path):
+    """A `coordinator_core` with a percolate package, an entry module importing `dep`, and an unrelated op."""
+    core = tmp_path / "coordinator_core"
+    (core / "percolate").mkdir(parents=True)
+    (core / "ops").mkdir()
+    for init in (core / "__init__.py", core / "percolate" / "__init__.py", core / "ops" / "__init__.py"):
+        init.write_text("", encoding="utf-8")
+    (core / "dep.py").write_text("X = 1\n", encoding="utf-8")
+    (core / "ops" / "unrelated.py").write_text("Y = 1\n", encoding="utf-8")
+    entry = core / "ops" / "percolate_run.py"
+    entry.write_text("from coordinator_core import dep\n\n\ndef run_percolate():\n    return dep.X\n", encoding="utf-8")
+    namespace: dict = {}
+    # Compiled under the entry's own filename so `inspect.getfile` resolves to it, with no import.
+    exec(compile("def run_percolate():\n    return None\n", str(entry), "exec"), namespace)
+    module = types.SimpleNamespace(run_percolate=namespace["run_percolate"])
+    return core, publish.PercolateEngineContext(engine_claude_klabauter=module, store=None)
+
+
+def test_signature_ignores_an_op_outside_the_transform_import_closure(tmp_path):
+    core, engine_ctx = _fake_engine(tmp_path)
+    store_path = tmp_path / "percolate-store.yaml"
+    store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
+    sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
+
+    (core / "ops" / "unrelated.py").write_text("Y = 2\n", encoding="utf-8")
+
+    assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) == sig1
+
+
+def test_signature_changes_on_a_module_the_transform_imports(tmp_path):
+    core, engine_ctx = _fake_engine(tmp_path)
+    store_path = tmp_path / "percolate-store.yaml"
+    store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
+    sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
+
+    (core / "dep.py").write_text("X = 2\n", encoding="utf-8")
+
+    assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) != sig1

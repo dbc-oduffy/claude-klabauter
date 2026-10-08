@@ -1586,7 +1586,7 @@
     "coordinator/bin/tests/test_publish_argv_parity_gate.py": "aa873a81e8c824e67e0555aff16f61f42a59ff92",
     "coordinator/bin/tests/test_publish_argv_parity_origin_batch.py": "d0c1b568f595592b280327932496a5c25f07c968",
     "coordinator/bin/tests/test_publish_authored_parity.py": "d6c576beedcc67a8209a21e655c108b320aef34c",
-    "coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py": "b1ce743b74069932858ed3c35dd1190cba591292",
+    "coordinator/bin/tests/test_publish_batch_delta_honest_reporting.py": "db8403e3393c751f376119545e13751984a278a4",
     "coordinator/bin/tests/test_publish_channel_divergence_report.py": "8ea03901f34e94ac0b358c80878e6fae1e0eb897",
     "coordinator/bin/tests/test_publish_cold_removals_this_source_shipped.py": "e76906967105a3b993df05703b6ab20d82eb45f6",
     "coordinator/bin/tests/test_publish_commit_subject_names_source_sha.py": "619ac0f537177bf42e3fe9c17c3dc9184495e7ff",
@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "ea3d97b8ae50b2002e9d1ecc829cb374e74d8fa6",
-    "coordinator_core/_engine_stamp": "97a343f01dbcee2b3541f3f300e8a63e1e0498b6",
+    "coordinator_core/_engine_published_at": "05754d6ae95e55a9af80ac409033d1de98732218",
+    "coordinator_core/_engine_stamp": "b702da5a327ecf21b644fdb8d30413d4733b09b4",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6538,7 +6538,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "6655dec2f7e8266472c00cbf56c21d7a762dafd0",
+    "coordinator_core/warm/door/door.exe.provenance.json": "6648135a4b29845254f4df15ca81d93819b85898",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -7105,5 +7105,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c747737676192c8d2349dcb5ee43fe89a363a2ab"
+  "source_head": "356ac3ccc7ace525d631dc03c303806eb3fb3dcd"
 }
