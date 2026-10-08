@@ -197,6 +197,7 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
     _tokenize_full_command,
 )
+from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
 from coordinator_core.bash_guards._command_tokenizer import (
     _SEPARATOR_TOKEN_RE,
     exceeds_tokenizable_ceiling,
@@ -1058,6 +1059,8 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             ):
                 return fallback
             read_path = _expand_from_env(path_token, self._assigned_vars)
+            if read_path is not None:
+                read_path = translate_msys_path(read_path)
             effective_cwd = self._cwd_after(prior_segments)
             mentions = (
                 None
@@ -1127,6 +1130,9 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             if len(args) != 1:
                 return _UNRESOLVED_CWD
             target = _expand_from_env(args[0], self._assigned_vars)
+            # Bash hands `/x/repo` for `C:\repo`; os.path reads it as a rooted
+            # path on the current drive, so the script read would miss.
+            target = None if target is None else translate_msys_path(target)
             if target is None:
                 return _UNRESOLVED_CWD
             cwd = target if os.path.isabs(target) else os.path.join(cwd or ".", target)

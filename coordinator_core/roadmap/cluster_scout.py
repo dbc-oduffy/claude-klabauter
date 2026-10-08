@@ -3,7 +3,7 @@ coordinator_core.roadmap.cluster_scout — pure dispatch planner for
 ``dispatch-cluster-scout`` (coordinator:roadmap-planning step 2, Phase 1).
 
 Purpose: given a set of reconciliation.md clusters, decide which get a web
-scout dispatched, which get a PM-gated deep-research directive, and which are
+scout dispatched, which get a deep-research directive, and which are
 skipped outright — WITHOUT ever computing the two inputs that drive that
 decision. Both ``depth_disposition`` (the PM's step-1.5.0 disposition) and
 ``excluded_clusters`` (example-retrieval-repo's UE-probe resolution) arrive from the
@@ -42,9 +42,9 @@ Dispatch decision per cluster, in order:
      hand-authored the corpus file — states it per cluster.
   3. resolved ``depth_disposition`` for the cluster:
        - ``"deep-research"`` -> emit a directive, dispatch nothing. ``/research``
-         is PM-gated and never EM-auto-invoked (fragment ``never`` rule
-         ``no-research-pipeline``); self-escalating here would take a PM gate
-         this module does not hold.
+         is never invoked here (fragment ``never`` rule
+         ``no-research-pipeline``): the op emits the directive and the EM
+         sizes and fires ``/coordinator:research``.
        - ``"solo-scout"`` -> compose the brief and mark for dispatch.
        - anything else -> a caller defect; raised loud, never guessed.
 
@@ -254,9 +254,9 @@ def plan_cluster_dispatch(
                     cluster_id=cluster.id,
                     action=_ACTION_DEEP_RESEARCH_DIRECTIVE,
                     reason=(
-                        "depth_disposition is deep-research -- /research is "
-                        "PM-gated and never EM-auto-invoked; emit a "
-                        "directive naming the cluster, dispatch nothing "
+                        "depth_disposition is deep-research -- emit a "
+                        "directive naming the cluster, dispatch nothing; "
+                        "the EM sizes and fires /coordinator:research "
                         "(no-research-pipeline)"
                     ),
                 )

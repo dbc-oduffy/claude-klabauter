@@ -132,11 +132,8 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # take `status` instead of `chunk`; no row-level `required` delta.
         # 3.6.0 -> 3.7.0 (708e50df4b) re-looked: optional `deferred_until`
         # only, valid on an open row; no `required` delta.
-        # 3.7.0 -> 3.10.0 (cc3ebdf1ed) re-looked: `voided` disposition, the
-        # `memo-send` row kind and an optional `receipt` object (its own
-        # `required` applies only when present); no row-level `required` delta.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.10.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.7.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

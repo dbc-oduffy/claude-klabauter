@@ -1059,6 +1059,14 @@ class TestNamedScriptFileIsReadNotRefused:
         assert guard.check(_payload(rel, cwd=str(tmp_path))) is None
         assert guard.check(_payload("cd sub && python3 bad.py", cwd=str(tmp_path))) is not None
 
+    @pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is Windows-only")
+    def test_msys_spelled_cd_and_script_path_resolve(self, tmp_path):
+        (tmp_path / "gen.py").write_text("print('ok')\n")
+        drive, rest = os.path.splitdrive(str(tmp_path))
+        msys = "/" + drive[0].lower() + rest.replace("\\", "/")
+        assert guard.check(_payload("cd %s; python3 gen.py" % msys, cwd="C:/")) is None
+        assert guard.check(_payload("python3 %s/gen.py" % msys, cwd="C:/")) is None
+
     def test_unresolvable_cd_target_fails_closed(self, tmp_path):
         (tmp_path / "gen.py").write_text("print('ok')\n")
         cmd = "cd $W1A_UNSET_DIR && python3 gen.py"

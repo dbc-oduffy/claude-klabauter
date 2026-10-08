@@ -151,10 +151,6 @@ machine-wide (leg 0.5):
      the grant leg (an ungranted command is never told to wrap what it is
      not authorized to run) and strictly before the mutex leg (a wrapped
      command still waits its turn if another run already holds the lock).
-     A cloud-box basis (``suite_authority.cloud_box_basis``) discharges the
-     grant leg only; the wrapper and mutex legs still bind a cloud EM. A
-     subagent invoking ``validate-fast-and-packageability`` or
-     ``workday-complete-step1-validate`` is denied on identity.
 
   3. MUTEX leg (layer 6, fail-OPEN) -- a suite-shaped command is denied while
      ANOTHER suite run holds the machine-wide mutex
@@ -2082,9 +2078,7 @@ def _command_wrapped_in_suite_mutex(
     return False
 
 
-def _deny_reason_wrapper_required(
-    detected: str, cmd_safe: str, cloud_box: bool = False
-) -> str:
+def _deny_reason_wrapper_required(detected: str, cmd_safe: str) -> str:
     """WRAPPER-leg deny text -- a granted Tier-U/F command that does not
     route through ``with-suite-mutex`` and so would hold no mutex while it
     runs. Names the wrapped form of the caller's OWN command so the fix is a
@@ -2094,16 +2088,11 @@ def _deny_reason_wrapper_required(
         "Route this through the suite mutex so no other run overlaps "
         "yours:\n"
         "  with-suite-mutex -- %s\n\n"
-        "%s must actually HOLD the machine-wide "
+        "A granted Tier-U/F command must actually HOLD the machine-wide "
         "test mutex while it runs; a bare invocation holds nothing.\n\n"
         "  Detected: %s\n"
         "  Command:  %s"
-    ) % (
-        cmd_safe,
-        "A suite command" if cloud_box else "A granted Tier-U/F command",
-        detected,
-        cmd_safe,
-    )
+    ) % (cmd_safe, detected, cmd_safe)
 
 
 _WITH_TIER_T_SLOT_BASENAMES = frozenset({
@@ -2903,49 +2892,12 @@ def _caller_is_subagent(payload: Dict[str, Any]) -> bool:
 
 
 def _is_cloud_box(payload: Dict[str, Any]) -> bool:
-    """Cloud-box basis (marker AND cloud machine rung); discharges authority only."""
-    from coordinator_core.session.suite_authority import cloud_box_basis
+    """Harness-rung cloud marker read off the caller's own env, per call."""
+    from coordinator_core.env_locality import harness_rung
 
     env = payload.get("env")
-    return cloud_box_basis(env if isinstance(env, dict) else None) is not None
-
-
-_SUITE_CLI_NAMES = frozenset({
-    "validate-fast-and-packageability", "workday-complete-step1-validate",
-})
-_SUITE_CLI_PREFILTER_RE = re.compile(
-    r"validate-fast-and-packageability|workday-complete-step1-validate"
-)
-_SUITE_CLI_SUFFIXES = (".py", ".cmd", ".ps1")
-
-
-def _is_suite_cli_token(token: str) -> bool:
-    name = _base(token)
-    for suffix in _SUITE_CLI_SUFFIXES:
-        if name.lower().endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    return name in _SUITE_CLI_NAMES
-
-
-def _invokes_suite_cli(cmd: str, dialect: Optional[_Dialect]) -> Optional[str]:
-    """Name of a suite-running CLI this command invokes as a segment head
-    (directly, or as the script of a python/py/pwsh interpreter), else None."""
-    for raw_argv in _segment_argvs(cmd, dialect):
-        argv = _strip_command_prefix(raw_argv)
-        if not argv:
-            continue
-        head = _base(argv[0]).lower()
-        if _is_suite_cli_token(argv[0]):
-            return _base(argv[0])
-        if head.startswith(("python", "py", "pwsh", "powershell")):
-            for tok in argv[1:]:
-                if tok.startswith("-"):
-                    continue
-                if _is_suite_cli_token(tok):
-                    return _base(tok)
-                break
-    return None
+    hit = harness_rung(env if isinstance(env, dict) else None)
+    return hit is not None and hit.call == "cloud"
 
 
 
@@ -2992,14 +2944,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cwd = payload.get("cwd")
     cwd = cwd if isinstance(cwd, str) and cwd else None
-
-    if is_subagent and _SUITE_CLI_PREFILTER_RE.search(cmd):
-        cli = _invokes_suite_cli(cmd, _dialect_from_tool_name(payload.get("tool_name")))
-        if cli:
-            return _deny(_deny_reason_subagent(
-                "suite-running CLI " + cli, _sanitize(cmd), payload=payload,
-                git_root=resolve_git_root(cwd) or cwd,
-            ))
 
     if not _RUNNER_PREFILTER_RE.search(cmd):
         # Dynamic leg (2026-08-10): a repo whose configured test command
@@ -3107,9 +3051,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     matched_tiers = _matched_tiers(cmd_for_tiering, cwd, testpaths, configured)
     collect_only = any(_is_pytest_collect_only_segment(argv) for argv in segments_argv)
     if matched_tiers & {"U", "F"} and not collect_only:
-        # cloud-box discharges the authority leg only; the wrapper and
-        # mutex-holder legs below still bind a cloud EM.
-        cloud_box = _is_cloud_box(payload)
+        # PM ruling 2026-10-04: a cloud EM has an uncontended box and runs any
+        # suite; subagents were already denied above, everywhere.
+        if _is_cloud_box(payload):
+            return None
         # R6 (DR-088 amendment, 2026-07-25): a repo may DECLARE its fast
         # tier legitimately unscoped (``coordinator_core.session.
         # fast_tier_declaration`` owns that declaration and its key). This
@@ -3137,7 +3082,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             and _fast_tier_unscoped_declaration(repo_root)
             and _matches_declared_fast_test_cmd(segments_argv, configured)
         )
-        granted = declared_unscoped_fast_tier or cloud_box
+        granted = declared_unscoped_fast_tier
         grant_record: Optional[Dict[str, Any]] = None
         if not granted:
             granted, grant_record = _tier_u_grant(cwd)
@@ -3153,7 +3098,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note)
 
         if not _command_wrapped_in_suite_mutex(cmd, dialect, testpaths, cwd, configured):
-            return _deny(_deny_reason_wrapper_required(detected, cmd_safe, cloud_box=cloud_box) + note)
+            return _deny(_deny_reason_wrapper_required(detected, cmd_safe) + note)
 
     holder = _mutex_holder()
     if holder:

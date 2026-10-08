@@ -1,0 +1,17 @@
+schema_version: 1
+pipeline: unblock
+description: Fixture deep roster pipeline, one member per roster entry.
+inputs:
+  brief: required
+  scratch_dir: optional
+  lists:
+    roster:
+      kind: roster
+stages:
+  - id: member
+    phase: Roster
+    agent_type_from: inputs.roster
+    template: unblock-member-template.md
+    fan_out:
+      over: inputs.roster
+    output: "{{scratch_dir}}/{{item}}.md"

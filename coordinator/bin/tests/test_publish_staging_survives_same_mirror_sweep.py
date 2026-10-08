@@ -2,10 +2,9 @@
 a later row's stale-staging sweep must not reap an earlier row's live staging
 tree for the same mirror.
 
-`shutil.copytree` stamps the dest root's mtime onto the fresh staging dir; with
-an hours-old mirror root the age-keyed sweep read the tree as orphaned and
-deleted it before the round's throwaway overlay read it (FileNotFoundError in
-`_overlay_root`, every row unpublished).
+The age-keyed sweep must never read a staging directory this process minted as
+orphaned, whatever the mirror root's own mtime: deleting it before the round's
+union overlay reads it leaves every row unpublished.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_staging_survives_same_mirror_sweep.py -q
 """

@@ -14,7 +14,7 @@ from coordinator_core.hooks import suggest_sonnet_research as ssr  # noqa: E402
 
 
 def _run(params):
-    with mock.patch.object(ssr, "_research_plugins", return_value=(False, False)):
+    with mock.patch.object(ssr, "_research_plugins", return_value=False):
         return asyncio.run(ssr._handler(params))
 
 
@@ -63,19 +63,21 @@ def _advisory_with(plugins):
     return result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_notebooklm_suggested_only_when_sub_plugin_present():
-    assert "/notebooklm-research" in _advisory_with((True, True))
-    without = _advisory_with((True, False))
-    assert "/notebooklm-research" not in without
-    assert "/coordinator:research --mode=web" in without
+@pytest.mark.parametrize("present", [True, False])
+def test_both_branches_name_research_command_only(present):
+    msg = _advisory_with(present)
+    assert "/coordinator:research" in msg
+    assert "--mode=" not in msg
+    assert "/notebooklm-research" not in msg
+    assert 'emit-dispatch-workflow --research --ask "<question>"' in msg
+    assert "emit-dispatch-workflow --from-sizing <path>" in msg
+    assert ("install deep-research plugin" in msg) is (not present)
 
 
-def test_research_plugins_reads_notebooklm_subdir(tmp_path):
+def test_research_plugins_is_presence_bool(tmp_path):
     dr = tmp_path / "pipelines" / "deep-research"
     dr.mkdir(parents=True)
     with mock.patch.object(ssr, "_deep_research_plugin_dir", return_value=str(dr)):
-        assert ssr._research_plugins() == (True, False)
-        (dr / "notebooklm").mkdir()
-        assert ssr._research_plugins() == (True, True)
+        assert ssr._research_plugins() is True
     with mock.patch.object(ssr, "_deep_research_plugin_dir", return_value=None):
-        assert ssr._research_plugins() == (False, False)
+        assert ssr._research_plugins() is False

@@ -119,7 +119,7 @@ def test_solo_scout_dispatches_with_composed_brief() -> None:
 
 def test_deep_research_yields_directive_and_no_dispatch() -> None:
     """AC17: a deep-research cluster yields a directive and no dispatch --
-    /research is PM-gated and never self-escalated."""
+    the op never invokes /research itself."""
     clusters = [Cluster(id="c1", scope_text="scope one")]
     decisions = plan_cluster_dispatch(
         clusters, depth_disposition="deep-research", excluded_clusters=[]
@@ -273,7 +273,7 @@ def test_excluded_clusters_are_an_input_not_a_probe() -> None:
     assert "INPUT to this op" in excluded["source"]
 
 
-def test_pm_gated_research_never_self_escalates() -> None:
+def test_fragment_deep_research_disposition_emits_a_directive() -> None:
     scout = _fragment()
     assert scout["depth_disposition"]["deep-research"].startswith(
         "emit a directive"

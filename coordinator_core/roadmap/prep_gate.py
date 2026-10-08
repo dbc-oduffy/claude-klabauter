@@ -2196,7 +2196,19 @@ def refusal_message(
         # part that is derivable from the plan's own body. Naming the converter
         # here is what stops each session rediscovering it — a runnable script,
         # never a slash command, because what fails here may have no session.
-        lines.append(_upgrade_fix_line())
+        # A census command in a refused FORM is stated, not missing: the converter
+        # derives nothing for it, so it is named only when another class owes it work.
+        unscreenable = classes.get("CENSUS", {}).get("kind") == "census-unscreenable"
+        if unscreenable:
+            lines.append(
+                "  fix: rewrite each named census command BY HAND as a read-only pipeline "
+                "(grep/find/wc/jq, git <read>) — mise-prep-upgrade derives missing "
+                "declarations and does not rewrite a stated command"
+            )
+        if not unscreenable or any(
+            k != "CENSUS" and v["status"] != "PASS" for k, v in classes.items()
+        ):
+            lines.append(_upgrade_fix_line())
     return "\n".join(lines)
 
 

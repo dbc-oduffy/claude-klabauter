@@ -109,7 +109,7 @@ _STRUCTURALLY_SEPARATE_KWARGS = frozenset({"changed_paths"})
 #: says the resolved module accepts it, so its absence from the two pins below is
 #: intentional and is itself pinned by
 #: `test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs`.
-_DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names"})
+_DELIBERATELY_OPTIONAL_KWARGS = frozenset({"foreign_dir_names", "only_paths", "removed_sink", "enforce_guards"})
 
 #: `sync_mirror` declares `injected_paths`, but `dispatch_mirror_like` deliberately
 #: never forwards it (unlike `foreign_dir_names`, no runtime signature probe gates
@@ -230,6 +230,10 @@ def test_foreign_dir_names_is_deliberately_absent_from_bind_kwargs():
         "publish_sync copy accepts it, precisely so a copy that lags does not "
         "fail-close a live publish path. Putting it in bind_kwargs makes "
         "check_publish_sync_contract require it of every consumer override."
+    )
+    assert not {"only_paths", "removed_sink", "enforce_guards"} & frozenset(descriptor.bind_kwargs), (
+        "only_paths/removed_sink/enforce_guards are passed only behind a runtime signature probe; "
+        "in bind_kwargs they would fail-close a publish_sync copy that lags."
     )
     assert descriptor.accepts_foreign_dir_names is True, (
         "the mirror descriptor must still DECLARE that its entry point takes "

@@ -105,6 +105,26 @@ def test_partition_splits_untracked_sidecars_from_the_commit_batch(tmp_path: Pat
     }
 
 
+def test_untracked_row_evidence_is_committed_with_its_plan(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    _write_and_commit_plan(root, "2026-08-23-ev.md", "implemented")
+    evidence = root / "docs" / "plans" / "2026-08-23-ev.evidence.yaml"
+    evidence.write_text("C1: []\n", encoding="utf-8")
+    _write_fire_script(root, "2026-08-23-ev")
+
+    moves, _skipped = m.plan_sweep(root, root, cap=10)
+    commit_moves, fs_moves = m._partition_untracked_sidecars(root, moves)
+
+    by_id = {mv.candidate_id: mv for mv in commit_moves}
+    assert set(by_id) == {"docs/plans/2026-08-23-ev.md", "docs/plans/2026-08-23-ev.evidence.yaml"}
+    assert by_id["docs/plans/2026-08-23-ev.evidence.yaml"].restage_src is True
+    assert {mv.candidate_id for mv in fs_moves} == {
+        "docs/plans/2026-08-23-ev.workflow.mjs",
+        "docs/plans/2026-08-23-ev.workflow.mjs.emitted.json",
+    }
+
+
 def test_partition_keeps_a_tracked_sidecar_in_the_commit_batch(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     _init_repo(root)
@@ -262,6 +282,9 @@ def test_untracked_evidence_sidecar_follows_its_plan_into_the_archive(tmp_path: 
     dest = root / "archive" / "specs" / "2026-08" / "2026-08-24-ev.evidence.yaml"
     assert dest.is_file()
     assert not evidence.exists()
+    ls_tree = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout
+    assert "archive/specs/2026-08/2026-08-24-ev.evidence.yaml" in ls_tree
+    assert _git(["status", "--porcelain", "--", "archive", "docs"], root).stdout == ""
 
 
 def test_tracked_evidence_sidecar_rides_the_archive_commit(tmp_path: Path) -> None:

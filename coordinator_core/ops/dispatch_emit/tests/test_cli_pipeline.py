@@ -29,10 +29,7 @@ def captured(monkeypatch, tmp_path):
     return calls
 
 
-def test_pipeline_flags_map_to_params(captured, tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "coordinator_core.ops.dispatch_emit.cross_repo_write_refusal.is_remote_venue", lambda env=None: False
-    )
+def test_pipeline_flags_map_to_params(captured, tmp_path):
     brief = tmp_path / "b.md"
     brief.write_text("the brief", encoding="utf-8")
     argv = [

@@ -293,8 +293,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "artifact.adopt":                        "common_dir",
     "plan.gated_criteria_met":               "common_dir",
     "plan.cross_plan_gate":                  "common_dir",
-    "plan.seam_check":                       "common_dir",
-    "plan.seam_record":                      "common_dir",
     "goal.match_candidates":                 "common_dir",
     "goal.close_day":                        "common_dir",
     "goal.close_day_apply":                  "common_dir",
@@ -400,6 +398,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.decline":                           "common_dir",
     "sizing.ship":                               "common_dir",
     "sizing.mark_routed":                        "common_dir",
+    "review.reachability":                       "show_top",
     "sizing.discharge_surfaced":                 "common_dir",
     "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_xl_exit":                      "common_dir",
@@ -467,8 +466,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session_baton.promote":                 "none",
     "baton.carry_forward":                   "common_dir",
     "baton.carry_forward_read":              "common_dir",
-    "baton.pm_turn_append":                  "common_dir",
-    "baton.pm_turns":                        "common_dir",
     "session.reap":                          "common_dir",
     "session.audit_unreapable":               "common_dir",
     # session.boot_sweep — GRAVESTONED 2026-08-27, K-059. No scope row, because
@@ -736,6 +733,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "repo_setup.copy_console_subprocess_tripwire": "show_top",
     "research.archive_workdir":                 "common_dir",
     "research.restructure_for_repeat_topic":    "common_dir",
+    "research.close":                           "common_dir",
+    "research.shape":                           "none",
     "session.resolve_chain_terminal_disposition": "common_dir",
     # session.rotate_orphan_sweep_log — common_dir: must match
     # session.boot_sweep's existing common_dir entry for the SAME

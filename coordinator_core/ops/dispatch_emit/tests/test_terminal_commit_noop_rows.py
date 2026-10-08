@@ -130,7 +130,7 @@ def _git(root: Path, *args: str) -> str:
 
     return subprocess.run(
         ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 

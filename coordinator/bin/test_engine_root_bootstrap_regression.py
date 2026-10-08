@@ -845,11 +845,6 @@ _RESOLVER_FAMILY_BY_FILE = {
     "lib/coordinator_data_root.py": frozenset({"env_first"}),
     "reverify-delivery.py": frozenset({"env_first"}),
     "test-verdict.py": frozenset({"env_first"}),
-    "mise-census-revalidate.py": frozenset({"env_first"}),
-    "mise-certify.py": frozenset({"env_first"}),
-    "plan-chain-run.py": frozenset({"self_location"}),
-    "plan-evidence-append": frozenset({"env_first"}),
-    "push-hold.py": frozenset({"env_first"}),
 }
 
 
