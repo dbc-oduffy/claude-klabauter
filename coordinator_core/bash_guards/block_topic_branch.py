@@ -6,7 +6,8 @@ a day branch:
   `git checkout -b|-B <ref>`, `git switch -c|-C|--create|--force-create <ref>`,
   `git branch <new-ref> [<start>]`, `git push <remote> <ref>|<src>:<dst>`
   (judged on the destination ref). `git -C <dir> ...` and other git global
-  options are walked past. Listing, `-d`/`-D`/`-m`/`-c` and any other
+  options are walked past; the repo judged is the one `-C`, or an earlier
+  top-level `cd` in the same command, enters. Listing, `-d`/`-D`/`-m`/`-c` and any other
   non-create `git branch` flag, tag pushes, ref deletions, and a push with no
   refspec are never denied.
 
@@ -272,6 +273,18 @@ def _git_root(cwd: Optional[str], c_dirs: List[str]) -> Optional[str]:
     return resolve_git_root_cheap(start)
 
 
+def _cd_target(cwd: Optional[str], args: List[str]) -> Optional[str]:
+    """The directory `cd <args>` enters from `cwd`; `cwd` unchanged when the target is not
+    one literal path."""
+    positional = [a for a in args if not a.startswith("-")]
+    if len(positional) != 1 or "$" in positional[0] or "`" in positional[0] or positional[0] == "~":
+        return cwd
+    from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
+
+    target = translate_msys_path(positional[0]) or positional[0]
+    return target if os.path.isabs(target) else os.path.join(cwd or os.getcwd(), target)
+
+
 _HEX_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -459,9 +472,17 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(env, dict):
         env = None
 
-    for resolved in resolve_command_positions(
-        cmd, preserve_windows_backslashes=True
-    ):
+    segments = resolve_command_positions(cmd, preserve_windows_backslashes=True)
+    # The repo a git segment acts on is the one an earlier top-level `cd` entered, exactly as
+    # `git -C` names it. Trap: the tokenizer flattens a subshell, so a `cd` inside `( ... )`
+    # would leak past its `)`; a command with any subshell keeps the payload cwd.
+    follow_cd = not any(
+        t.startswith("(") or t.endswith(")") for seg in segments for t in seg.raw_tokens
+    )
+    for resolved in segments:
+        if follow_cd and resolved.depth == 0 and resolved.tokens[:1] == ["cd"]:
+            cwd = _cd_target(cwd, resolved.tokens[1:])
+            continue
         held = _held_push(resolved.tokens, cwd)
         if held is not None:
             return _deny(held)

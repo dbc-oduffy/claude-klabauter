@@ -187,7 +187,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.roadmap_blitz_land", 'registers "roadmap.blitz_land"'),
     ("coordinator_core.ops.roadmap_blitz_stage", 'registers "roadmap.blitz_stage"'),
     ("coordinator_core.ops.plan_cross_plan_gate", 'registers "plan.cross_plan_gate"'),
-    ("coordinator_core.ops.plan_seam_check", 'registers "plan.seam_check", "plan.seam_record"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),
@@ -365,6 +364,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "review-diff-freeze-op-wanted.md)",
     ),
     ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
+    ("coordinator_core.ops.review_reachability", 'registers "review.reachability" (2026-10-08, wired-up gate entry-point and click-path reachability)'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',
@@ -467,7 +467,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_commits", 'registers "session.commits"'),
     ("coordinator_core.ops.session_baton_mint", 'registers "session_baton.mint"'),
     ("coordinator_core.ops.session_baton_promote", 'registers "session_baton.promote"'),
-    ("coordinator_core.ops.baton_pm_turns", 'registers "baton.pm_turn_append", "baton.pm_turns"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
     ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
     ("coordinator_core.ops.write_identity_file", 'registers "install.write_identity_file"'),
@@ -520,6 +519,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "research.verify_scout_inventory_completeness"',
     ),
     ("coordinator_core.ops.research_archive_workdir", 'registers "research.archive_workdir"'),
+    ("coordinator_core.ops.research_close", 'registers "research.close"'),
+    ("coordinator_core.ops.research_shape", 'registers "research.shape"'),
     (
         "coordinator_core.ops.research_dir_restructure",
         'registers "research.restructure_for_repeat_topic"',

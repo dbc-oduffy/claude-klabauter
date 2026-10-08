@@ -79,3 +79,15 @@ def test_stages_seen():
     assert er.stages_seen(_digest()) == ["execute", "review"]
     assert er.stages_seen(_digest(review={"status": "not_run"})) == ["execute"]
     assert er.stages_seen(None) == []
+
+
+def test_read_commit_reply_halts_on_refused_stamp():
+    h = er.read_commit_reply(
+        {"committed": True, "sha": "abc", "review_stamp": "refused", "review_stamp_refusal": "late delta"}
+    )
+    assert isinstance(h, Halt) and h.halted_at == "terminal-commit"
+    assert "late delta" in h.reason and "abc" in h.reason
+    assert er.read_commit_reply({"committed": True, "sha": "abc", "review_stamp": "minted"}) == {
+        "sha": "abc",
+        "receipt_path": "",
+    }

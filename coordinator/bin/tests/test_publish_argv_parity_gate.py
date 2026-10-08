@@ -40,6 +40,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+from round_stage_fake import make_stage_fake  # noqa: E402
 
 
 def _init_committed_git_repo(root: Path) -> None:
@@ -350,7 +351,7 @@ class _StubClaudeKlabauter:
     def run_identity_check(self, dest):
         return {"ran": True, "skipped": False, "exit_code": 0, "findings": "clean"}
 
-    def run_parse_sweep(self, repo_root):
+    def run_parse_sweep(self, repo_root, **_):
         return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
     def enumerate_gate_entrypoints(self, repo_root):
@@ -413,15 +414,8 @@ def _stub_dest_refresh(monkeypatch) -> None:
     )
 
 
-def _stub_assembled_mirror_leg(monkeypatch) -> None:
-    monkeypatch.setattr(
-        publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
-    )
-
-
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     _stub_dest_refresh(monkeypatch)
-    _stub_assembled_mirror_leg(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kwargs: (percolate_root, "test-rung")
@@ -441,7 +435,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
+    monkeypatch.setattr(publish, "process_target", make_stage_fake(publish, changed_known=False))
 
 
 def _single_row(name: str, repo_root: Path) -> list:

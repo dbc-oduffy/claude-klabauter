@@ -1549,6 +1549,14 @@ def _provision_plan_derivable_doc(
     return rel_doc_path
 
 
+def _walk_git_root(path: str) -> Optional[str]:
+    """Git root by directory walk, spawning ``git rev-parse`` only when the walk
+    finds none. The spawn is bounded at 2s and returns ``None`` on timeout, so
+    leading with it turned a loaded box into a missing sidecar for an eligible
+    dispatch; the walk is the same answer the miss sentinel is filed under."""
+    return _show_toplevel_no_spawn(path) or resolve_git_root(path)
+
+
 def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optional[str]) -> Optional[str]:
     """Compute + write the report-sidecar doc; return its repo-relative path, or ``None``.
 
@@ -1568,7 +1576,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     """
     if not cwd:
         return None
-    git_root = resolve_git_root(cwd)
+    git_root = _walk_git_root(cwd)
     if not git_root:
         # F6 (GH #71): `cwd` is a genuine, truthy path (not klabauter#47's
         # falsy-cwd refusal above), but it names a directory that is not
@@ -1583,7 +1591,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
         # None` refusal, unchanged, when no such fallback signal exists.
         plan_path_hint = payload.get("plan_path") or None
         if plan_path_hint:
-            git_root = resolve_git_root(os.path.dirname(str(plan_path_hint)))
+            git_root = _walk_git_root(os.path.dirname(str(plan_path_hint)))
     policy = load_policy(policy_path)
 
     agent_id, agent_type, subagent_type = resolve_effective_types(payload, git_root)

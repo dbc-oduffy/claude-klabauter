@@ -301,7 +301,6 @@ cases fail closed.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
@@ -498,59 +497,6 @@ def build_terminal_sizing_sweep_directive() -> dict[str, Any]:
         "depends_on": None,
         "already_satisfied": False,
     }
-
-
-#: Marks a directive `apply` holds back from the main pass and dispatches
-#: only after the close commit and push have run. Everything in the main pass
-#: runs BEFORE that commit, so a step that must see the committed tree cannot
-#: be an ordinary directive.
-AFTER_CLOSE_COMMIT_KEY = "after_close_commit"
-
-_STRUCTURAL_INDEX_REFRESH_CLI = "structural-index-refresh"
-_CEREMONY_REINDEX_CLI = "scip-rebuild-at-ceremony"
-
-
-def build_post_close_directives(root: Path) -> list[dict[str, Any]]:
-    """The index steps the close owes AFTER its own commit, in dispatch
-    order: the structural index refresh, then the SCIP rebuild.
-    (`directives_completion.build_baton_chain_closure_directive` is the third
-    held-back directive; it is built with the completion step.)
-
-    Both are UNCONDITIONAL here and `best_effort`: each CLI decides for
-    itself whether there is anything to do and says so on stdout (the
-    refresh only when notable; the rebuild prints `scip-rebuild: skipped -- <reason>` when the box
-    cannot take one), which `apply` records under `report["post_close"]`. A
-    predicate in this builder would skip silently.
-
-    Every path argument is absolute: `apply` dispatches in-process without a
-    chdir, and each CLI's own default is the cwd's repo.
-    """
-    directives: list[dict[str, Any]] = []
-    directives.append(
-        {
-            "id": "d-structural-index-refresh",
-            "cli": _STRUCTURAL_INDEX_REFRESH_CLI,
-            # The CLI's own default waits 30s on the refresh; a close does not
-            # wait at all, and the refresh carries on in the background.
-            "args": ["--root", str(root), "--timeout", "0"],
-            "depends_on": None,
-            "already_satisfied": False,
-            "best_effort": True,
-            AFTER_CLOSE_COMMIT_KEY: True,
-        }
-    )
-    directives.append(
-        {
-            "id": "d-ceremony-reindex",
-            "cli": _CEREMONY_REINDEX_CLI,
-            "args": ["--ceremony", "workstream-complete", "--repo-root", str(root)],
-            "depends_on": None,
-            "already_satisfied": False,
-            "best_effort": True,
-            AFTER_CLOSE_COMMIT_KEY: True,
-        }
-    )
-    return directives
 
 
 _WAIVED_ITEM_KEY = "waived_items"

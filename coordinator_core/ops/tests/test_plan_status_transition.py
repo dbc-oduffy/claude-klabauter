@@ -1130,7 +1130,7 @@ def test_ac3_plan_trigger_no_scope_derived_evidence_falls_back_to_the_stamp_comm
     assert rc == 0, (out, err)
     stamp_sha = subprocess.run(
         ["git", "log", "-1", "--format=%H", "--grep", "-> implemented"],
-        cwd=str(tmp_path), capture_output=True, text=True,
+        cwd=str(tmp_path), capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
     split = split_frontmatter(handoff.read_text(encoding="utf-8"))

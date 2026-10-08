@@ -457,3 +457,21 @@ def test_omitted_mode_defaults_to_the_recorded_interaction_mode(tmp_path):
     repo, sizing = _setup(tmp_path, _CEO)
     assert _run(_base(), repo)["exit_code"] == 0
     assert _doc(sizing)["exit_criterion"]["accepted"]["mode"] == "ceo"
+
+def test_accept_keeps_click_paths(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    proposed = (
+        _PROPOSED
+        + "  click_paths:\n  - role: admin\n    steps:\n    - Settings\n    - Grant access\n"
+    )
+    sizing = _seed_sizing(repo, exit_criterion=proposed)
+
+    result = _run(_base(), repo)
+
+    assert result["exit_code"] == 0, result
+    doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
+    assert doc["exit_criterion"]["click_paths"] == [
+        {"role": "admin", "steps": ["Settings", "Grant access"]}
+    ]
+    assert doc["exit_criterion"]["accepted"]["pm_quote"]

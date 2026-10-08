@@ -5,6 +5,7 @@ Field names are those of ``contract/wake-digest.schema.json``. That schema has n
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping
 
 from coordinator_core.ops.plan_chain.contract import Halt, WorkflowResult, halt
@@ -28,7 +29,8 @@ def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
 
     for dev in d.get("deviations") or []:
         if isinstance(dev, dict) and dev.get("kind") == "blocked":
-            return halt("executor-block", f"chunk {dev.get('chunk')} blocked: {dev.get('anchor', '')}")
+            why = str(dev.get("anchor") or "").strip() or "the executor gave no reason; read its report in the task output"
+            return halt("executor-block", f"chunk {dev.get('chunk')} blocked: {why}")
 
     verdict = ((d.get("review") or {}).get("delivery") or {}).get("verdict")
     if verdict in ("FAIL", "unstructured"):
@@ -49,6 +51,20 @@ def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
         "execute digest carries no dispatch.terminal_commit next_action",
         running_stage="execute",
     )
+
+
+def resume_params(result: WorkflowResult, script_path: Path) -> dict[str, Any]:
+    """What the EM passes to ``dispatch.terminal_commit`` after an execute-stage halt.
+
+    The digest's own terminal_commit params when it carried them, always with ``script_path``
+    and ``task_output_path`` set, so no one hunts the child's task file by session id.
+    """
+    action = (result.digest or {}).get("next_action")
+    params = action.get("params") if isinstance(action, dict) and action.get("op") == _TERMINAL_COMMIT_OP else None
+    out = dict(params) if isinstance(params, dict) else {}
+    out["script_path"] = str(script_path)
+    out["task_output_path"] = result.task_output_path
+    return out
 
 
 def read_commit_reply(reply: Mapping[str, Any] | None) -> dict[str, str] | Halt:
@@ -72,6 +88,11 @@ def read_commit_reply(reply: Mapping[str, Any] | None) -> dict[str, str] | Halt:
         return halt(
             "terminal-commit-refused",
             str(refusal) if refusal else "terminal_commit made no commit",
+        )
+    if body.get("review_stamp") == "refused":
+        return halt(
+            "terminal-commit-refused",
+            f"committed {sha} but review_stamp refused: {body.get('review_stamp_refusal')}",
         )
     receipts = body.get("receipts")
     receipt = receipts[0] if isinstance(receipts, list) and receipts else ""

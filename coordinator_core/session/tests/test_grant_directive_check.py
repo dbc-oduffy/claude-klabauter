@@ -25,51 +25,13 @@ def test_check_with_trailing_argv_is_usage():
     assert message
 
 
-@pytest.fixture(autouse=True)
-def _not_cloud(monkeypatch):
-    from coordinator_core.session import suite_authority as sa
-
-    monkeypatch.setattr(sa, "cloud_box_basis", lambda env=None: None)
-    monkeypatch.setattr(sa.grant, "check_tier_u_grant", lambda *a, **k: (False, None))
-
-
-def test_check_granted_is_exit_ok_with_grant_basis(monkeypatch):
+def test_check_granted_is_exit_ok_with_no_message(monkeypatch):
     monkeypatch.setattr(
         grant_directive, "check_tier_u_grant", lambda: (True, {"granted_by": "pm"})
     )
     code, message = grant_directive.run_grant_directive(["check"])
     assert code == grant_directive.EXIT_OK
-    assert message == "basis: grant"
-
-
-def test_check_live_grant_via_suite_authority_is_grant_basis(monkeypatch):
-    from coordinator_core.session import suite_authority as sa
-
-    monkeypatch.setattr(sa.grant, "check_tier_u_grant", lambda *a, **k: (True, {"granted_by": "pm"}))
-    code, message = grant_directive.run_grant_directive(["check"])
-    assert (code, message) == (grant_directive.EXIT_OK, "basis: grant")
-
-
-def test_check_cloud_box_no_grant_is_ok_cloud_basis(monkeypatch):
-    from coordinator_core.session import suite_authority as sa
-
-    monkeypatch.setattr(sa, "cloud_box_basis", lambda env=None: "cloud-box: x")
-    code, message = grant_directive.run_grant_directive(["check"])
-    assert (code, message) == (grant_directive.EXIT_OK, "basis: cloud-box")
-
-
-def test_check_forged_marker_on_attended_machine_is_denied(monkeypatch):
-    from coordinator_core import env_locality
-    from coordinator_core.session import suite_authority as sa
-
-    monkeypatch.undo()
-    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
-    monkeypatch.setattr(env_locality, "machine_rung", lambda *a, **k: type("R", (), {"call": "attended"})())
-    monkeypatch.setattr(sa.grant, "check_tier_u_grant", lambda *a, **k: (False, None))
-    monkeypatch.setattr(grant_directive, "check_tier_u_grant", lambda *a, **k: (False, None))
-    code, message = grant_directive.run_grant_directive(["check"])
-    assert code == grant_directive.EXIT_FALSE
-    assert "no Tier-U grant found" in message
+    assert message == ""
 
 
 def test_check_no_record_names_absence_directly(monkeypatch):

@@ -119,12 +119,12 @@ def test_prep_passes_a_screenable_entry_carrying_a_count():
 def repo(tmp_path):
     import subprocess
 
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     (tmp_path / "pkg").mkdir()
     (tmp_path / "tool.py").write_text("print(1)\n")
     (tmp_path / "pkg" / "__main__.py").write_text("print(1)\n")
     (tmp_path / "untracked.py").write_text("print(1)\n")
-    subprocess.run(["git", "add", "tool.py", "pkg/__main__.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "tool.py", "pkg/__main__.py"], cwd=tmp_path, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return tmp_path
 
 

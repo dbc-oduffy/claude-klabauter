@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,15 @@ publish = _load_publish_module()
 
 _ROW_NAMES = ["row-a"]
 
+_END_OF_RUN_GATE_NAMES = (
+    "dispatch_end_of_run_identity_check",
+    "dispatch_end_of_run_install_doc_payload_check",
+    "dispatch_end_of_run_unscanned_published_check",
+    "dispatch_end_of_run_function_gate",
+    "dispatch_end_of_run_entrypoint_gate",
+    "dispatch_end_of_run_argv_parity_gate",
+)
+
 
 def _wire_common_fakes(
     monkeypatch,
@@ -103,7 +113,7 @@ def _wire_common_fakes(
         def resolve_target(self, store, name):
             raise KeyError(name)
 
-        def run_parse_sweep(self, repo_root):
+        def run_parse_sweep(self, repo_root, **_):
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
         def enumerate_gate_entrypoints(self, repo_root):
@@ -129,17 +139,29 @@ def _wire_common_fakes(
     monkeypatch.setattr(
         publish, "compute_delta_invalidation_signature", lambda store_path, engine_ctx: "fixed-sig"
     )
-    monkeypatch.setattr(
-        publish,
-        "delta_row_unchanged",
-        lambda setup_dir, target, signature, round_pinned_shas: False,
-    )
     monkeypatch.setattr(publish, "report_candidate_divergence", lambda repo_root: None)
+    monkeypatch.setattr(publish, "write_publish_provenance_record", lambda **kwargs: None)
+    for gate_name in _END_OF_RUN_GATE_NAMES:
+        monkeypatch.setattr(publish, gate_name, lambda *a, **k: True)
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
         if fail_row:
             raise SystemExit(1)
         totals.processed += 1
+        staging_dir = Path(
+            tempfile.mkdtemp(prefix=f".{target.dest_dir.name}.publish-staging-", dir=str(target.dest_dir.parent))
+        )
+        (staging_dir / "payload.txt").write_text("published\n", encoding="utf-8", newline="\n")
+        return publish.StagedRowResult(
+            staging_dir=staging_dir,
+            row_visited=set(),
+            row_changed_files=None,
+            row_removed_files=set(),
+            row_published_files={Path("payload.txt")},
+            report_text="",
+            synced=1,
+            deleted=0,
+        )
 
     monkeypatch.setattr(publish, "process_target", fake_process_target)
 
