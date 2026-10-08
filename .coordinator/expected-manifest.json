@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "cc95dfbece1c150507939303b02ab0f02ea09cc6",
-    "coordinator_core/_engine_stamp": "34aa9ca07cabc6967657d003d0554d2047c9dc0e",
+    "coordinator_core/_engine_published_at": "ea3d97b8ae50b2002e9d1ecc829cb374e74d8fa6",
+    "coordinator_core/_engine_stamp": "97a343f01dbcee2b3541f3f300e8a63e1e0498b6",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4745,7 +4745,7 @@
     "coordinator_core/ops/plan_chain/driver.py": "e0fca9dc801567c17043d45414b51a0804145ca0",
     "coordinator_core/ops/plan_chain/emit_leg.py": "9aa2b7c58779accca82acb7ebfe420117f54acb4",
     "coordinator_core/ops/plan_chain/execute_result.py": "8d316c9420035fede8b341f6233c34bf889f3297",
-    "coordinator_core/ops/plan_chain/phase1_checks.py": "1d7d7725ffb252578f843a3cf1b2a7b3cf56b42c",
+    "coordinator_core/ops/plan_chain/phase1_checks.py": "d1cc06a5e93c3dcdfba1604c381a67a0a618dfb3",
     "coordinator_core/ops/plan_chain/phase1_gates.py": "27627285508a01d1412f82c9cd60eca053579141",
     "coordinator_core/ops/plan_chain/plan_stage.py": "38da076bda19e617c54f9ebc0681e51400e1e88b",
     "coordinator_core/ops/plan_chain/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
@@ -4757,8 +4757,8 @@
     "coordinator_core/ops/plan_chain/tests/test_driver.py": "aed9bfcfb6e160500d9bd93d19dbc3be5d5531d8",
     "coordinator_core/ops/plan_chain/tests/test_emit_leg.py": "07bd2821c9512f809c1a92e9e759d7c63a554ff7",
     "coordinator_core/ops/plan_chain/tests/test_execute_result.py": "7e23f56b5b9afe1b6575378ce7c9389feec120be",
-    "coordinator_core/ops/plan_chain/tests/test_phase1_checks.py": "ec5fbe9a99bc5483ba24b894a0fd02f3abbe288d",
-    "coordinator_core/ops/plan_chain/tests/test_phase1_dead_session_gate.py": "b446c720f7796553b171eec23124a44a982d93e8",
+    "coordinator_core/ops/plan_chain/tests/test_phase1_checks.py": "357885e6f3b8e242a7754d178606c81ea7b243e8",
+    "coordinator_core/ops/plan_chain/tests/test_phase1_dead_session_gate.py": "9d8aa4e9206047f4731bccb30fcab309a3a81bb2",
     "coordinator_core/ops/plan_chain/tests/test_phase1_gates.py": "07e91085f95d0fc4581007d820a415ff5262e493",
     "coordinator_core/ops/plan_chain/tests/test_plan_stage.py": "77ee707176fef44fa763f99d261ade1731351a62",
     "coordinator_core/ops/plan_cross_plan_gate.py": "64c208811c5befc6bbd0dbd7ceeb7b1990bb91b6",
@@ -6538,7 +6538,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "cc8205985c607beb2ab1c3fcd2a1ab60129b7ea5",
+    "coordinator_core/warm/door/door.exe.provenance.json": "6655dec2f7e8266472c00cbf56c21d7a762dafd0",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -7105,5 +7105,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "03af648401668acf738fbeabe319c8d942c20c74"
+  "source_head": "c747737676192c8d2349dcb5ee43fe89a363a2ab"
 }

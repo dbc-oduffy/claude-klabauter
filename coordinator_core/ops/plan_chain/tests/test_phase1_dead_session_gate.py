@@ -71,7 +71,7 @@ def test_run_halts_on_dead_session(tmp_path, roster, monkeypatch):
     roster({"other-aa"})
     monkeypatch.setattr(p1, "_write_baseline", lambda *a: None)
     monkeypatch.setattr(p1, "_check_plan", lambda *a: {"verdict": "VALID", "rows": []})
-    monkeypatch.setattr(p1, "_spine_exclusions", lambda *a: [])
+    monkeypatch.setattr(p1, "_spine_read", lambda *a: ([], []))
     h = p1.run(
         p1.ChainManifest("s", "b", None, "pm", ".", "t", {}, "src"),
         _plan(tmp_path, "coordinator-content-repo-55"),
