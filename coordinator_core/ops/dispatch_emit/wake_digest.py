@@ -49,6 +49,7 @@ RUNTIME_VARS = (
     "_skippedDone",
     "_unusableChecks",
     "_reviews",
+    "_runBase",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -449,6 +450,7 @@ def completion_return_js(
     predispatch: Optional[dict] = None,
     held: bool = False,
     seam: bool = False,
+    run_base_runtime: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -672,7 +674,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
-        "run_base_sha": _js_lit(run_base_sha),
+        "run_base_sha": RUNTIME_VARS[13] if run_base_runtime else _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),

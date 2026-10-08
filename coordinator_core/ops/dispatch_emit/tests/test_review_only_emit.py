@@ -120,7 +120,6 @@ def test_bad_sha_and_missing_plan_refused(tmp_path, capsys):
         ["--resume-from", "x"],
         ["--reverify-delivery", "x"],
         ["--chatty"],
-        ["--inventory", "x"],
         ["--queue", "x"],
         ["--ask"],
         ["--profile", "x"],
@@ -136,6 +135,16 @@ def test_conflicting_flags_refused(tmp_path, capsys, extra):
 
     assert code == cli.EXIT_USAGE
     assert "exclusive of" in err
+
+
+def test_review_only_takes_plan_or_inventory_not_both(tmp_path, capsys):
+    run = tmp_path / "run.txt"
+    run.write_text("x", encoding="utf-8")
+
+    code, err = _run(["--plan", "p.md", "--inventory", "x", "--review-only", str(run), "--run-base", _BASE], capsys)
+
+    assert code == cli.EXIT_USAGE
+    assert "--review-only takes --plan or --inventory, not both" in err
 
 
 _PLAN = (
