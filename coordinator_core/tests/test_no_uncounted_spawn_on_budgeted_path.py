@@ -1036,6 +1036,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/sizing_ship.py",
         ("_handler",),
     ),
+    "sizing.mark_routed": (
+        "coordinator_core/ops/sizing_mark_routed.py",
+        ("_handler",),
+    ),
     "spec_backlink.resolve": (
         "coordinator_core/ops/spec_backlink_resolve.py",
         ("_resolve_handler",),
@@ -4373,7 +4377,6 @@ def _live_unenrolled_spawn_site_keys():
 _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
     {
         ("coordinator_core/goals/reassess_krs.py", "_gather_signal", "<dynamic>", 0),
-        ("coordinator_core/hooks/context_pressure_precompact.py", "_run_git", "git", 0),
         ("coordinator_core/install/clone_sibling_repo.py", "clone_idempotent", "git", 0),
         ("coordinator_core/install/prereq_probe.py", "_check_windows_terminal_presence", "winget", 0),
         ("coordinator_core/install/prereq_probe.py", "_run", "<dynamic>", 0),
@@ -4535,7 +4538,7 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
 #: read of the function, corroborated by its own docstring), so the site
 #: this entry named no longer exists to be enrolled or legitimized. Net -1.
 #: 136 -> 133: `ops/review_trail_write.py`'s 3 sites drained with the deleted module.
-_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 133
+_FROZEN_UNENROLLED_INVENTORY_HIGH_WATER = 132
 
 
 def _op_keyed_uncovered_pairs():
@@ -5092,18 +5095,6 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
 #:     preconditions.
 _NAMED_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
     (
-        "coordinator_core/hooks/context_pressure_precompact.py",
-        "_run_git",
-        "git",
-        0,
-    ): (
-        "2026-08-23 exempt -- `_run_git` is a PreCompact-hook read helper "
-        "(house 2.0s timeout, degrades to \"\" on any failure, per "
-        "test_hot_path_subprocess_timeouts.py's own hardening); "
-        "`hooks.context_pressure_precompact` is not a `_BUDGETED_ENTRYPOINTS` "
-        "op and this site is not on any budgeted op's reachable set."
-    ),
-    (
         "coordinator_core/install/prereq_probe.py",
         "_check_windows_terminal_presence",
         "winget",
@@ -5438,7 +5429,6 @@ _TRANCHE_A_FILES: frozenset = frozenset({
     "coordinator_core/install/prereq_probe.py",
     "coordinator_core/ops/release_tagging.py",
     "coordinator_core/ops/run_semgrep_scan.py",
-    "coordinator_core/hooks/context_pressure_precompact.py",
     "coordinator_core/ops/ceremony/update_docs_scan.py",
     "coordinator_core/ops/distill_apply_disposal.py",
     "coordinator_core/ops/merge_quiet_activity_gate.py",
@@ -5476,7 +5466,7 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "reaches outside tranche a's own file scope:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_NAMED_ARGV0_DISPOSITIONS) == 31, (
+    assert len(_NAMED_ARGV0_DISPOSITIONS) == 30, (
         f"_NAMED_ARGV0_DISPOSITIONS carries {len(_NAMED_ARGV0_DISPOSITIONS)} "
         "entries, not the 31 expected after fleet.archive_completed_plans's kill "
         "removed its 2 named-argv0 sites (archive_plans.py deleted whole) from "
@@ -5486,7 +5476,7 @@ def test_named_argv0_sites_in_tranche_a_are_dispositioned_on_their_own_terms():
         "whole module, and P014-C3 (2026-09-24) converted "
         "`hooks.subagent_fabrication_check._git_porcelain_for_paths` onto the "
         "`session_facts` producer -- the site no longer exists as a direct "
-        "spawn here, so its row is deleted rather than re-keyed -- a count "
+        "spawn here, so its row is deleted rather than re-keyed, and the PreCompact hook's `_run_git` went in-process (2026-10-08) -- a count "
         "drift here means either a site was missed or one was double-counted."
     )
 

@@ -7,9 +7,12 @@ from __future__ import annotations
 import datetime
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from coordinator_core.ops.plan_chain.contract import ChainManifest, Halt, halt
 
@@ -92,6 +95,68 @@ def _plan_targets(plan_path: Path, repo_root: Path) -> list[str]:
     return plan_targets(plan_path, repo_root)
 
 
+_SESSION_ID_RE = re.compile(
+    r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|(?P<repo>[a-z0-9][a-z0-9-]*)-[0-9a-f]{2})$"
+)
+_GATE_ADDRESS_KEYS = ("owner_repo", "holder", "target")
+
+
+def _gate_entries(plan_path: Path) -> list[dict[str, Any]]:
+    """Uncleared ``external_gate`` mappings, row-level and frontmatter; unreadable plan -> []."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.dispatch_emit.spine_read import load_frontmatter_doc, load_rows_memo
+
+    try:
+        source = plan_path.read_text(encoding="utf-8")
+        lists = [row.get("external_gate") for row in load_rows_memo(source).rows]
+        split = split_frontmatter(source)
+        doc = load_frontmatter_doc(split.fm_text) if split is not None else None
+        if isinstance(doc, dict):
+            lists.append(doc.get("external_gate"))
+    except (OSError, ValueError, yaml.YAMLError):
+        return []
+    return [
+        e
+        for entries in lists
+        if isinstance(entries, list)
+        for e in entries
+        if isinstance(e, dict) and e.get("cleared") is not True
+    ]
+
+
+def _session_is_dead(sid: str, root: Path) -> bool:
+    """True only on a positive not-live; an unreadable roster is not a verdict."""
+    from coordinator_core.session import liveness
+
+    try:
+        roster = liveness.live_session_ids(str(root))
+        if not roster:
+            return False
+        return sid not in roster and not liveness.session_live(sid, str(root))
+    except Exception:
+        return False
+
+
+def _dead_session_gate(plan_path: Path, root: Path) -> str | None:
+    """A refusal for a gate addressed to a dead session instead of a repo."""
+    for entry in _gate_entries(plan_path):
+        for key in _GATE_ADDRESS_KEYS:
+            value = entry.get(key)
+            match = _SESSION_ID_RE.match(value) if isinstance(value, str) else None
+            if match is None or not _session_is_dead(value, root):
+                continue
+            repo = entry.get("repo") or entry.get("owner_repo") or match.group("repo")
+            if repo == value:
+                repo = match.group("repo")
+            target = f"repo {repo}" if repo else "the owning repo"
+            return (
+                f"external_gate {key} {value} is addressed to a dead session; "
+                f"re-address it to {target}"
+            )
+    return None
+
+
 def _spine_failed(reason: str) -> Halt:
     return halt("spine-check-failed", reason)
 
@@ -127,6 +192,9 @@ def run(manifest: ChainManifest, plan_path: str | Path, *, repo_root: str | Path
         exclusions = _spine_exclusions(plan)
     except ValueError as exc:
         return _spine_failed(f"spine unreadable: {exc}")
+    dead = _dead_session_gate(plan, root)
+    if dead is not None:
+        return halt("external-gate-uncleared", dead)
     gated = [e["id"] for e in exclusions if e.get("reason") == "external_gate"]
     if gated:
         return halt(

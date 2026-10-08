@@ -32,7 +32,7 @@ _BASE_RE = re.compile(r"^Checkpoint-Base: (?P<v>[0-9a-f]{7,40})\s*$", re.M)
 #: A run longer than this is not a checkpoint run; stop rather than walk all history.
 _WALK_CAP = 500
 
-_CLOSED = frozenset({"coded", "spun_off", "backlogged", "wont_do", "superseded", "abandoned"})
+_CLOSED = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided", "superseded", "abandoned"})
 
 
 def checkpoint_row_ids(subject: str) -> List[str]:

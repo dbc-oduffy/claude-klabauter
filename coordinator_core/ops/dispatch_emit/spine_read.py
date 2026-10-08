@@ -173,7 +173,7 @@ class _Undeclared:
 
 UNDECLARED = _Undeclared()
 
-NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
+NON_DISPATCHABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided"})
 
 #: Authored aliases for a canonical disposition. Spines written before `coded`
 #: was enforced say `done`; every reader folds them where rows are read.
@@ -399,6 +399,35 @@ def _is_memo_send_row(raw: dict) -> bool:
     return isinstance(brief, str) and _MEMO_SEND_BRIEF_RE.search(brief) is not None
 
 
+def memo_row_slug(raw: dict) -> Optional[str]:
+    """The memo topic a memo-send row is keyed on, or ``None``.
+
+    ``receipt:`` (a ``.../sent/<slug>.md`` path or a bare slug) wins; else the
+    topic of a staged ``memo-outbox/<topic>.md`` draft on ``surface:``/``writes:``.
+    """
+    from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
+
+    receipt = raw.get("receipt")
+    if isinstance(receipt, str) and receipt.strip():
+        leaf = receipt.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        return leaf[:-3] if leaf.endswith(".md") else leaf
+    for path in (raw.get("surface"), *(raw.get("writes") or ())):
+        if isinstance(path, str):
+            topic = memo_outbox_topic(path)
+            if topic:
+                return topic
+    return None
+
+
+def memo_receipt_exists(repo_root: Optional[Path], slug: str) -> bool:
+    """True when the sender-side receipt ``memo-outbox/sent/<slug>.md`` exists under ``repo_root``."""
+    if repo_root is None:
+        return False
+    from coordinator_core.ops.fleet.memo_wire import memo_send_performed_paths
+
+    return (Path(repo_root) / memo_send_performed_paths(slug)[0]).is_file()
+
+
 def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     """True if `raw`'s row-level ``external_gate`` (plus any ``extra_gates``
     resolved onto this row from plan frontmatter — see
@@ -501,6 +530,10 @@ class SpineReadError(ValueError):
     — this module does not attempt to emit against a spine it could not
     locate or parse.
     """
+
+
+class MemoRowNoReceiptError(SpineReadError):
+    """A memo-send row names no slug: no outbox topic on its surface/writes and no ``receipt:``."""
 
 
 class UnknownDispositionError(SpineReadError):
@@ -1056,9 +1089,29 @@ def read_spine(
         disposition = raw.get("disposition")
         deferred = raw.get("deferred") is True or bool(raw.get("deferred_until"))
         em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw)
+        memo_slug = None
+        memo_delivered = False
+        if (
+            raw.get("performer") != "em"
+            and _is_memo_send_row(raw)
+            and disposition not in NON_DISPATCHABLE_DISPOSITIONS
+            and deferred is not True
+        ):
+            slug = memo_row_slug(raw)
+            if slug is None:
+                raise MemoRowNoReceiptError(
+                    f"row {raw.get('id')!r} is a memo-send row but names no memo "
+                    "topic: stage the draft at .coordinator-local/memo-outbox/<slug>.md "
+                    "on surface:/writes:, or declare receipt: "
+                    ".coordinator-local/memo-outbox/sent/<slug>.md"
+                )
+            memo_slug = slug
+            memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
         plan_hold = None
         if not (
-            disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True or em_performed
+            disposition in NON_DISPATCHABLE_DISPOSITIONS
+            or deferred is True
+            or em_performed
         ):
             plan_hold = plan_level_hold or _unlanded_plan_edge(
                 raw, plan_path, plan_edge_root, plan_edge_cache
@@ -1084,14 +1137,21 @@ def read_spine(
                     "deferred",
                     "deferred: true" if raw.get("deferred") is True else "deferred_until hold",
                 )
-            elif em_performed:
+            elif memo_delivered:
                 _reason = (
-                    "em-performed",
-                    "performer: em"
-                    if raw.get("performer") == "em"
-                    else "EM STEP: cross-repo memo send -- a subagent cannot "
-                    "send it; the EM runs `cross-repo-memo send` after this run",
+                    "memo-delivered",
+                    "memo already sent: sender-side receipt exists at "
+                    ".coordinator-local/memo-outbox/sent/%s.md" % memo_slug,
                 )
+            elif memo_slug is not None:
+                _reason = (
+                    "memo-send",
+                    "EM: send %s -- run `cross-repo-memo send %s`; the row closes "
+                    "on .coordinator-local/memo-outbox/sent/%s.md, not on a claim"
+                    % (memo_slug, memo_slug, memo_slug),
+                )
+            elif em_performed:
+                _reason = ("em-performed", "performer: em")
             elif _is_operator_row(raw):
                 _reason = (
                     "operator",

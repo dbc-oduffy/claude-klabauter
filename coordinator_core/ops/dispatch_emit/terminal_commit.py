@@ -287,6 +287,45 @@ def _source_rows_by_plan(
     return out
 
 
+def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
+    """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
+
+    A memo row is an EM act, never dispatched; it closes on
+    ``memo-outbox/sent/<slug>.md`` existing. Unreadable plan or spine: empty.
+    """
+    if not request.plan_path:
+        return {}
+    text = _read_rel(worktree_root, request.plan_path)
+    if text is None:
+        return {}
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _is_memo_send_row,
+        memo_receipt_exists,
+        memo_row_slug,
+    )
+
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return {}
+    try:
+        rows = yaml.safe_load(located.body) or []
+    except yaml.YAMLError:
+        return {}
+    out: dict = {}
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict) or row.get("performer") == "em":
+            continue
+        if (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
+            continue
+        slug = memo_row_slug(row)
+        if slug is not None and not memo_receipt_exists(worktree_root, slug):
+            out[str(row["id"])] = slug
+    return out
+
+
 def _row_rank(row: dict) -> tuple:
     from coordinator_core.frontmatter.schema_validate import (
         _PLAN_TASKS_GROUPING_ORDER,
@@ -1389,6 +1428,7 @@ def _terminal_commit(
             bookkeeping_record_path = None
 
     known_ids = {chunk.id for chunk in request.chunks}
+    unsent_memos = _memo_rows_without_receipt(worktree_root, request)
     report_cache: dict = {}
     regraded_here = _regradable_chunks(
         worktree_root, request, incomplete_chunks, inline_review, report_cache
@@ -1678,6 +1718,7 @@ def _terminal_commit(
             request.plan_path
             and reply.get("review_stamp") == "minted"
             and not incomplete_chunks
+            and not unsent_memos
             and reply.get("coded_sha")
         ):
             reply.update(_stamp_plan_implemented(worktree_root, request.plan_path, str(reply["sha"])))
@@ -1686,6 +1727,9 @@ def _terminal_commit(
             reply["plan_status_reason"] = (
                 f"incomplete chunks remain: {sorted(incomplete_chunks)}"
                 if incomplete_chunks
+                else "memo not sent (no sender-side receipt): "
+                + ", ".join(f"{rid} ({slug})" for rid, slug in sorted(unsent_memos.items()))
+                if unsent_memos
                 else "coded-stamp commit did not land"
             )
         criterion = inline_review.get("criterion")
@@ -1712,5 +1756,7 @@ def _terminal_commit(
     reply["dropped_absent"] = dropped_absent
     reply["deleted_paths"] = deleted_paths
     reply["unmarked_incomplete"] = unmarked_incomplete
+    if unsent_memos:
+        reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
     return reply

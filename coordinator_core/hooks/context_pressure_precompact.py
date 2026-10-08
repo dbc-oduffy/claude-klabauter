@@ -97,29 +97,6 @@ GENERATES: list = []
 _TOTAL_LINE_CAP = 100
 
 
-def _run_git(args: List[str], cwd: Optional[str] = None) -> str:
-    import subprocess
-
-    from coordinator_core.win_portability import no_console_creationflags
-
-    try:
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=2.0,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return ""
-    if proc.returncode != 0:
-        return ""
-    return (proc.stdout or "").strip()
-
-
 def _extract_ids(raw: str) -> Tuple[str, str]:
     try:
         data = json.loads(raw)
@@ -173,26 +150,76 @@ def _build_tasks_section(session_id: str) -> List[str]:
     return lines
 
 
+_LOG_COUNT = 3
+_ABBREV_LEN = 10
+_UNSTAGED_NOT_LISTED = "(unstaged list not computed; run git status)"
+_STAGED_CAP = 10
+
+
+def _recent_commits(repo: Path, head: str) -> List[str]:
+    from itertools import islice
+
+    from coordinator_core.git import commit_walk
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    out: List[str] = []
+    common = resolve_git_common_dir(repo)
+    for sha, meta in islice(commit_walk.walk(common, head), _LOG_COUNT):
+        subject = meta["message"].splitlines()[0].strip() if meta["message"] else ""
+        out.append(f"{sha[:_ABBREV_LEN]} {subject}".rstrip())
+    return out
+
+
+def _staged_paths(repo: Path) -> List[str]:
+    """Repo-relative paths whose index `(mode, sha)` differs from HEAD's tree.
+    Staged DELETIONS (`git rm --cached`) are not listed (see
+    `push_failure_verdict._inprocess_staged_unstaged`). Raises on a
+    corrupt/conflicted index.
+    """
+    from coordinator_core.git.git_state import head_blobs, read_index
+
+    index = read_index(repo)
+    paths = sorted(index)
+    if not paths:
+        return []
+    head_map = head_blobs(repo, paths)
+    return [p for p in paths if head_map.get(p) != (index[p].mode, index[p].sha)]
+
+
 def _build_git_section(cwd: Optional[str]) -> List[str]:
+    from coordinator_core.git import repo_root as _repo_root_seam
+    from coordinator_core.git.git_state import head_branch, head_sha
+
     lines = ["", "## Git State"]
-    branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
-    if branch:
-        lines.append(f"Branch: {branch}")
-        lines.append("Recent commits:")
-        log = _run_git(["log", "--oneline", "-3"], cwd=cwd)
-        if log:
-            lines.extend(log.splitlines())
-        lines.append("")
-        lines.append("Modified files:")
-        modified = _run_git(["--no-optional-locks", "diff", "--name-only"], cwd=cwd)
-        if modified:
-            lines.extend(modified.splitlines()[:20])
-        staged = _run_git(["diff", "--staged", "--name-only"], cwd=cwd)
-        if staged:
-            lines.append("Staged files:")
-            lines.extend(staged.splitlines()[:10])
-    else:
+    root = _repo_root_seam.show_toplevel(cwd)
+    branch = None
+    head = None
+    if root:
+        try:
+            head = head_sha(root)
+            branch = head_branch(root) if head else None
+        except (OSError, ValueError):
+            branch = None
+    if not branch:
         lines.append("(not a git repository)")
+        return lines
+    repo = Path(root)
+    lines.append(f"Branch: {branch}")
+    lines.append("Recent commits:")
+    try:
+        lines.extend(_recent_commits(repo, head))
+    except (OSError, ValueError):
+        pass
+    lines.append("")
+    lines.append("Modified files:")
+    lines.append(_UNSTAGED_NOT_LISTED)
+    try:
+        staged = _staged_paths(repo)
+    except (OSError, ValueError):
+        staged = []
+    if staged:
+        lines.append("Staged files:")
+        lines.extend(staged[:_STAGED_CAP])
     return lines
 
 

@@ -1090,6 +1090,38 @@ def test_resolve_coded_no_pm_approved_needed(tmp_path):
     assert "disposition_detail: shipped in abc1234" in text
 
 
+def test_resolve_voided_without_reason_is_refused(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-voided-noreason.md", _PLAN_WITH_TASKS)
+    before = plan.read_text(encoding="utf-8")
+
+    for reason in (None, "", "   "):
+        result = _run(_handler(
+            {"verb": "resolve", "plan_path": str(plan), "id": "C1",
+             "disposition": "voided", "reason": reason},
+            repo_root=repo / ".git",
+        ))
+        assert result["exit_code"] == 1, result
+        assert "reason" in result["error"]
+    assert plan.read_text(encoding="utf-8") == before
+
+
+def test_resolve_voided_records_reason_date_actor(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-voided.md", _PLAN_WITH_TASKS)
+
+    result = _run(_handler(
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1",
+         "disposition": "voided", "reason": "superseded by C9", "actor": "em-1"},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: voided" in text
+    assert re.search(r"superseded by C9 \(voided \d{4}-\d{2}-\d{2} by em-1\)", text)
+
+
 def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path):
     repo = _make_git_repo(tmp_path)
     deferred = _PLAN_WITH_TASKS.replace(

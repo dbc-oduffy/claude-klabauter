@@ -252,6 +252,9 @@ FLOOR_GUARDS = frozenset(
         "block-consumed-handoff-edit",
         # a demotable sentinel guard lets an agent lower the level that gates it
         "block-approval-sentinel-creation",
+        # PM load norm (CLAUDE.md § Load norm): a whole-drive scan occupies the box for
+        # tens of minutes and runs on orphaned after a tool timeout
+        "block-whole-filesystem-scan",
     }
 )
 

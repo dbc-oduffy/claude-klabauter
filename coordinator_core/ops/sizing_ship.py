@@ -139,6 +139,10 @@ _SHIPPABLE_FROM = frozenset({"sized", "routed"})
 
 _INCOMPATIBLE_TERMINAL = frozenset({"declined", "superseded"})
 
+#: Shipping these on their first artifact stamped a 224-requirement ask terminal
+#: while most of it was unbuilt (example-stats-repo ae003ee696).
+_CASCADE_ONLY_ROUTES = frozenset({"goal-setting", "roadmap", "shape"})
+
 
 def _validate_sizing_fm(fm_text: str) -> list:
     try:
@@ -218,6 +222,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "different, incompatible terminal fact — 'declined' means the spend "
                 "was refused, 'superseded' means replaced by a later sizing; neither "
                 "is 'shipped' and this op never overwrites one with the other"
+            )
+
+        route = read_fm_field_unquoted(old_text, "route")
+        if route in _CASCADE_ONLY_ROUTES:
+            raise MutateAbort(
+                f"refusing to ship {p}: route {route!r} is terminal only through the "
+                "deliverable cascade, never on its first artifact; use "
+                "sizing.mark_routed to record the landing"
             )
 
         if current_status not in _SHIPPABLE_FROM:

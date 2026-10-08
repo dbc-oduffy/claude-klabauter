@@ -612,7 +612,7 @@ def test_a_gate_with_no_requires_is_not_prepped(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "closure", ["disposition: coded", "disposition: wont_do", "disposition: open\n  deferred: true"]
+    "closure", ["disposition: coded", "disposition: wont_do", "disposition: voided","disposition: open\n  deferred: true"]
 )
 def test_a_row_no_wave_schedules_is_skipped_not_withheld(tmp_path, closure):
     """`withheld` becomes `mise_prepped_findings`: rows held by an uncleared

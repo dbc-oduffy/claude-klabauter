@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest import mock
 
-from coordinator_core.hooks import context_pressure_precompact, example_retrieval_repo_detect
+from coordinator_core.hooks import example_retrieval_repo_detect
 
 
 def _fake_run(*, returncode=0, stdout="ok\n"):
@@ -40,40 +40,6 @@ def test_example_retrieval_repo_detect_git_unchanged_on_posix():
     fake_flags.assert_called_once_with()
     _, kwargs = fake_run.call_args
     assert "creationflags" not in kwargs
-    assert kwargs.get("capture_output") is True
-    assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 2.0
-
-
-def test_context_pressure_precompact_run_git_passes_suppression_kwargs_on_windows():
-    with mock.patch(
-        "coordinator_core.win_portability.no_console_creationflags",
-        return_value={"creationflags": 0x08000000},
-    ) as fake_flags, mock.patch("subprocess.run", return_value=_fake_run()) as fake_run:
-        result = context_pressure_precompact._run_git(["log", "-1"], cwd="fake-repo-root")
-
-    assert result == "ok"
-    fake_flags.assert_called_once_with()
-    _, kwargs = fake_run.call_args
-    assert kwargs.get("creationflags") == 0x08000000
-    assert kwargs.get("cwd") == "fake-repo-root"
-    assert kwargs.get("capture_output") is True
-    assert kwargs.get("text") is True
-    assert kwargs.get("timeout") == 2.0
-
-
-def test_context_pressure_precompact_run_git_unchanged_on_posix():
-    with mock.patch(
-        "coordinator_core.win_portability.no_console_creationflags",
-        return_value={},
-    ) as fake_flags, mock.patch("subprocess.run", return_value=_fake_run()) as fake_run:
-        result = context_pressure_precompact._run_git(["log", "-1"], cwd="fake-repo-root")
-
-    assert result == "ok"
-    fake_flags.assert_called_once_with()
-    _, kwargs = fake_run.call_args
-    assert "creationflags" not in kwargs
-    assert kwargs.get("cwd") == "fake-repo-root"
     assert kwargs.get("capture_output") is True
     assert kwargs.get("text") is True
     assert kwargs.get("timeout") == 2.0

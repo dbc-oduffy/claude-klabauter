@@ -69,3 +69,8 @@ def test_allows_scoped(cmd):
 
 def test_powershell_tool_is_matched():
     assert _run("find / -name x", tool="PowerShell")
+
+def test_deny_is_a_floor_and_survives_a_warn_level():
+    from coordinator_core import machine_profile
+
+    assert "block-whole-filesystem-scan" in machine_profile.FLOOR_GUARDS

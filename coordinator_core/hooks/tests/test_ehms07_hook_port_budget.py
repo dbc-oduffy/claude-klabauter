@@ -1,7 +1,7 @@
 """Each of the 8 ehms-07 hook ops fits the HOOK_PORT band on its dominant path with zero spawns.
 
 The context_pressure_precompact case measures only the no-valid-session_id path; its real
-PreCompact path spawns git (`_run_git`) and is not covered here.
+PreCompact path is spawn-free (in-process git reads) and is not covered here.
 """
 
 from __future__ import annotations

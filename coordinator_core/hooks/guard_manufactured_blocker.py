@@ -140,6 +140,25 @@ def _reported_speech(prefix: str) -> bool:
     return bool(_ATTRIBUTION_RE.search(scope))
 
 
+# Third-party subject: a clause whose subject is a named other party ("coordinator-content-repo-55
+# is waiting on you") reports that party's state, not this turn's hand-up. A
+# first-person or this-session marker anywhere in the clause keeps the trigger live.
+_THIRD_PARTY_OPENER_RE = re.compile(
+    r"^\W*(?:(?:the|that|a|another|your|their)\s+)?"
+    r"(?:(?=[\w-]*\d)[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}|peers?|sessions?|group\s+ems?)\b",
+    re.IGNORECASE,
+)
+_FIRST_PERSON_RE = re.compile(r"\b(?:I|we|this\s+session)\b|\b(?:I|we)['’]", re.IGNORECASE)
+
+
+def _third_party_clause(prefix: str) -> bool:
+    """Mirrors DoE b352ba90d's predicate byte-for-byte; keep the two in step.
+    A session name needs two hyphens and a digit, so "DR-242" is not one."""
+    boundaries = list(_ATTRIBUTION_SCOPE_BOUNDARY_RE.finditer(prefix))
+    clause = prefix[boundaries[-1].end():] if boundaries else prefix
+    return bool(_THIRD_PARTY_OPENER_RE.match(clause)) and not _FIRST_PERSON_RE.search(clause)
+
+
 def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
     """True iff `pattern` fires in `text` outside any negated clause, quoted
     span, or reported-speech attribution -- the shared trigger predicate for
@@ -155,8 +174,10 @@ def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
                 continue
             if _reported_speech(text[: offset + m.start()]):
                 continue
+            if _third_party_clause(text[: offset + m.start()]):
+                continue
             return True
-        offset += len(clause) + 1
+        offset +=len(clause) + 1
     return False
 
 

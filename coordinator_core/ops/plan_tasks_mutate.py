@@ -1140,6 +1140,19 @@ _DISPOSITION_DETAIL_OFFER = (
 # enforcement leg asked of claude-klabauter by that plan's C8 memo.
 _PLAN_TASKS_CASE_AGAINST_REQUIRED_DISPOSITIONS = frozenset({'backlogged', 'wont_do'})
 
+_VOIDED = "voided"
+
+
+def _voided_detail(resolution: dict) -> str:
+    """`disposition_detail` prose for a voided row: reason, UTC date, actor.
+    Rows carry no date/actor field, so the three ride in the detail text."""
+    import datetime
+
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    actor = str(resolution.get("actor") or "").strip() or "unattributed"
+    return f"{str(resolution['reason']).strip()} (voided {today} by {actor})"
+
+
 _CASE_AGAINST_OFFER = (
     "pass case_against naming the strongest honest case for doing the "
     "work now (--verb resolve --id {task_id} --disposition {disposition} "
@@ -1751,6 +1764,15 @@ def _resolve(
                 )
 
         for r in resolutions:
+            if r["disposition"] == _VOIDED and not str(r.get("reason") or "").strip():
+                raise MutateAbort(
+                    f"resolve: disposition 'voided' for task {r['id']!r} requires a "
+                    "non-empty reason naming why the deliverable is no longer needed "
+                    f"(--verb resolve --id {r['id']} --disposition voided --reason \"<why>\"). "
+                    "Refusing rather than closing a row with no recorded cause."
+                )
+
+        for r in resolutions:
             rows_by_id[r["id"]]["disposition"] = r["disposition"]
             case_against = r.get("case_against")
             if case_against is not None:
@@ -1778,6 +1800,8 @@ def _resolve(
             disposition = r["disposition"]
             disposition_ref = r.get("disposition_ref")
             disposition_detail = r.get("disposition_detail")
+            if disposition == _VOIDED:
+                disposition_detail = _voided_detail(r)
             row = rows_by_id[task_id]
 
             # `_dispatch_spun_off` VERIFIES the caller-supplied
@@ -1896,7 +1920,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    disposition/disposition_ref/disposition_detail — use
                    resolve for those (D4).
         resolve  : EITHER id (str), disposition (str, required) — one of
-                   open|coded|spun_off|backlogged|wont_do; disposition_ref
+                   open|coded|spun_off|backlogged|wont_do|voided (voided
+                   requires reason; actor optional; both land in
+                   disposition_detail with the UTC date); disposition_ref
                    (str, optional); disposition_detail (str, required for
                    spun_off/backlogged — see below; optional otherwise);
                    case_against (str, required for backlogged/wont_do —
@@ -1995,6 +2021,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                         "disposition_ref": entry.get("disposition_ref"),
                         "disposition_detail": entry.get("disposition_detail"),
                         "case_against": entry.get("case_against"),
+                        "reason": entry.get("reason"),
+                        "actor": entry.get("actor"),
                     }
                 )
         else:
@@ -2005,6 +2033,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     "disposition_ref": params.get("disposition_ref"),
                     "disposition_detail": params.get("disposition_detail"),
                     "case_against": params.get("case_against"),
+                    "reason": params.get("reason"),
+                    "actor": params.get("actor"),
                 }
             ]
         return await asyncio.to_thread(_resolve, plan_path, resolutions, worktree, repo_root)

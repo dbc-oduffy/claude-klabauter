@@ -3217,9 +3217,9 @@ def _excluded_rows_narration(excluded: list) -> str:
     """
     lines = ["  // ROWS THIS SCRIPT DOES NOT RUN -- read before treating the plan as executed."]
     def _owed(e: dict) -> bool:
-        return e.get("reason") == "operator" or str(e.get("detail", "")).startswith(
-            "EM STEP"
-        )
+        return e.get("reason") in ("operator", "memo-send") or str(
+            e.get("detail", "")
+        ).startswith("EM STEP")
 
     operator_rows = [e for e in excluded if _owed(e)]
     other_rows = [e for e in excluded if not _owed(e)]
@@ -3236,6 +3236,16 @@ def _excluded_rows_narration(excluded: list) -> str:
             "completing."
         )
     return "\n".join(lines)
+
+
+def _slot_rows_narration(slot_rows: Sequence[str]) -> str:
+    """Names the rows marked `needs_slot` (a long-running or memory-heavy
+    process) so the Group EM can schedule the run against box load before
+    firing it."""
+    return (
+        "  // ROWS HOLDING A SCARCE SLOT (needs_slot) -- clear box load with the "
+        "Group EM before firing: " + ", ".join(slot_rows)
+    )
 
 
 def _gitignore_degraded_narration() -> str:
@@ -3859,6 +3869,7 @@ def compose_script(
     review_only: bool = False,
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
+    slot_rows: Sequence[str] = (),
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -4496,6 +4507,8 @@ def compose_script(
         body_blocks.insert(0, declaration)
     if repo_anchor:
         body_blocks.insert(0, _REPO_ROOT_DECLARATION)
+    if slot_rows:
+        body_blocks.insert(0, _slot_rows_narration(slot_rows))
     if excluded_rows:
         body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
@@ -5247,6 +5260,7 @@ def emit_script(
         precredited_rows=precredited_rows,
         review_only=review_only,
         held_rows=held_rows,
+        slot_rows=[row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True],
     )
 
 

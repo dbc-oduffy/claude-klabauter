@@ -397,6 +397,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "deliverable.fork_detect":                  "common_dir",
     "sizing.decline":                           "common_dir",
     "sizing.ship":                               "common_dir",
+    "sizing.mark_routed":                        "common_dir",
     "sizing.discharge_surfaced":                 "common_dir",
     "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_xl_exit":                      "common_dir",

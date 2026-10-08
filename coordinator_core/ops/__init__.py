@@ -225,6 +225,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         '`shipped` terminal status when no plan was ever minted for the routed work)',
     ),
     (
+        "coordinator_core.ops.sizing_mark_routed",
+        'registers "sizing.mark_routed" (2026-10-08, sized -> routed plus goal_id for '
+        'cascade-only routes that sizing.ship refuses)',
+    ),
+    (
         "coordinator_core.ops.sizing_discharge_surfaced",
         'registers "sizing.discharge_surfaced" (2026-09-11, records a PM answer to a '
         '`surfaced_to_pm` item in `pm_resolution` against the artifact that settled it, '
