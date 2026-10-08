@@ -366,6 +366,24 @@ def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
     assert "later commit" in reason
 
 
+def test_superseding_refusal_routes_review_only_from_the_terminal_commit(tmp_path, monkeypatch):
+    """The original run base collides with that run's frozen slice; the late delta starts at the terminal."""
+    repo = _setup_repo(tmp_path)
+    terminal_sha, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+    foo = repo / "coordinator_core" / "foo.py"
+    foo.parent.mkdir(exist_ok=True)
+    foo.write_text("changed later\n", encoding="utf-8")
+    _commit(repo, "later touch")
+    seen = []
+    monkeypatch.setattr(m, "_review_only_route", lambda plan, base: seen.append(base) or "")
+
+    m.check(plan_path, repo, supersession=True)
+
+    assert seen == [terminal_sha]
+
+
 def test_review_only_route_names_the_coded_rows(tmp_path):
     plan = tmp_path / "p.md"
     plan.write_text(

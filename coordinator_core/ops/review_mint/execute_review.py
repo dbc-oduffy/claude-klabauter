@@ -167,8 +167,10 @@ def _degrading(call: str) -> str:
     return f"() => {wrapped}" if call.startswith("() => ") else wrapped
 
 
-#: Thrown by the emitted script when review prep yields nothing to review
-#: over a diff that has product files. Fails the run closed before anything lands.
+#: Prefix of the `halted` string the emitted script returns when review prep yields nothing
+#: to review over a diff that has product files. Fails the run closed before anything lands.
+NO_SLICES_HALT = "review prep returned no slices"
+
 _NO_SLICES_REFUSAL = (
     "review prep returned no slices (it failed, refused, or froze nothing); "
     "refusing to continue unreviewed. Re-run the review prep, then resume."
@@ -294,10 +296,19 @@ def compose_execute_review(
         f"run's footprint. Peers' work elsewhere in the shared tree is normal and is never "
         f"a foreign claim, and so is any write by this run itself: its executors', reviewers' "
         f"and EM's own commits, and every `.coordinator-local/subagent-share/` sidecar. Count a "
-        f"commit foreign only when a live peer session claims the path (`who-claims-path`); "
-        f"an empty list is the usual answer. When the verdict is "
+        f"commit foreign only when a live peer session claims the path "
+        f"(`session-claim-cli who-claims-path <path>`, on the settings-home bin); "
+        f"an empty list is the usual answer. Take the verdict from "
+        f"`review-brightline-gate --worktree-base {run_base_sha or 'run_base_sha'} --paths "
+        f"<every declared path>` (settings-home bin; its stdout line carries VERDICT=). When the verdict is "
         f"single-reviewer-ok, slices is exactly ONE slice spanning every product file, with "
-        f"diff_path equal to whole_diff_path; slices is never empty while product_files > 0.\n"
+        f"diff_path equal to whole_diff_path. When it is PARTITION-MANDATORY, group the product "
+        f"files by their first two path segments (merge groups to at most 6), freeze each group "
+        f"with `freeze-review-diff --worktree --range {run_base_sha or 'run_base_sha'} "
+        f"--slice-id {prep_slice_id}-<n> --paths <that group's files>`, and return one slice per "
+        f"group (id, files, diff_path from the launcher, sidecar_path = whole_diff_sidecars.personas[0]). "
+        f"Every launcher named here is on PATH; never report a missing binary in place of slices. "
+        f"slices is never empty while product_files > 0.\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}\n"
         f"declared_paths:{'' if declared_paths_js else ' ' + ', '.join(declared_paths)}"
@@ -364,8 +375,10 @@ def compose_execute_review(
             # run reviewed by the whole-diff tail alone. Declared paths are
             # non-empty here: the plan route always declares them, and the queue
             # route skips the wave before prep when no row committed.
-            f"  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {{ throw new Error("
-            f"{_js_string_literal(_NO_SLICES_REFUSAL)}); }}",
+            f"  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly)) {{ "
+            f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
+            f"String(_reviewPrep?.verdict ?? 'none') + ')', reason: {_js_string_literal(_NO_SLICES_REFUSAL)}, "
+            f"prep: _reviewPrep ?? null, wave: null, integration: null }}; }}",
         )
     )
 

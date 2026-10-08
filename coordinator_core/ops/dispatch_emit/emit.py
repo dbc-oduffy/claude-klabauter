@@ -3456,8 +3456,12 @@ def _checkpoint_commit_js(
         return (" + " + _REPO_ROOT_VAR + " + ").join(_js_string_literal(part) for part in text.split("\0"))
 
     commit_tail = (
-        " You are the only stage that stages or commits anything. Stage exactly this "
-        "declared path list and nothing else, dropping any entry that neither exists "
+        " You are the only stage that stages or commits anything. Commit exactly this "
+        "declared path list and nothing else. Resolve it with ONE call, "
+        "`git status --porcelain -uall -- <the list>`: pass every entry that exists on "
+        "disk as `paths` -- modified, staged or UNTRACKED (`??`, a file the row created) "
+        "alike. Never narrow the list to tracked or `git diff` output, and never add an "
+        "untracked file the list does not name. Drop only an entry that neither exists "
         "on disk nor is tracked at HEAD: ["
     )
     route = (

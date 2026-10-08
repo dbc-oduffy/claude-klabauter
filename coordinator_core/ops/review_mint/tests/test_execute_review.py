@@ -137,7 +137,7 @@ def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     guard = prep_block.splitlines()[-1]
     assert guard.startswith("  if (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))")
     assert "product_files" not in guard
-    assert "throw new Error(" in guard
+    assert "throw" not in guard and "return { halted:" in guard
 
 
 def test_review_wave_is_one_parallel_with_slice_map_and_whole_diff_calls():
@@ -484,7 +484,8 @@ def test_single_reviewer_ok_with_product_files_yields_exactly_one_whole_diff_sli
 )
 def test_empty_slices_without_single_reviewer_ok_over_product_files_still_refuses(prep):
     result = _run_prep_block(prep)
-    assert "review prep returned no slices" in result["error"]
+    assert result["halted"].startswith("review prep returned no slices")
+    assert "error" not in result and result["wave"] is None
 
 
 def test_prep_prompt_says_single_reviewer_ok_returns_one_whole_diff_slice():
@@ -526,7 +527,8 @@ def test_landed_rows_with_no_product_file_proceed_verification_only_not_refuse()
 )
 def test_landed_rows_with_failed_or_product_prep_still_refuse(prep):
     result = _run_prep_block(prep, landed=_LANDED)
-    assert "review prep returned no slices" in result["error"]
+    assert result["halted"].startswith("review prep returned no slices")
+    assert "error" not in result and result["wave"] is None
 
 
 def test_landed_rows_with_product_files_keep_their_review_slice():
@@ -573,3 +575,16 @@ def test_host_degraded_review_wave_emits_no_coordinator_agent_type_and_keeps_eve
     assert "agentType: 'general-purpose'" in text
     assert "You are acting as the " in text
     assert re.search(r"agentType:\s*['\"]coordinator:", "\n".join(b for _, b in normal))
+
+
+def test_halt_names_the_prep_verdict():
+    result = _run_prep_block({**_PREP, "verdict": "PARTITION-MANDATORY"})
+    assert result["halted"] == "review prep returned no slices (prep verdict: PARTITION-MANDATORY)"
+    assert result["prep"]["verdict"] == "PARTITION-MANDATORY"
+
+
+def test_prep_brief_names_resolvable_launchers_for_gate_and_claims():
+    prep = _compose()[1][0][1]
+    assert "session-claim-cli who-claims-path" in prep
+    assert "review-brightline-gate --worktree-base" in prep
+    assert "PARTITION-MANDATORY, group the product files" in prep

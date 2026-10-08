@@ -124,3 +124,54 @@ def test_push_failures_are_collected_and_logged_after_pushes_settle():
     settled = execute.index("await Promise.all(_checkpointPushes);")
     assert settled < execute.index("if (_pushFailures.length) log(")
     assert "slice(-300)" in script
+
+
+def test_committer_is_told_to_include_untracked_declared_files():
+    script = _script(expected_branch="work/run")
+
+    assert "git status --porcelain -uall -- <the list>" in script
+    assert "UNTRACKED (`??`, a file the row created)" in script
+    assert "never add an untracked file the list does not name" in script
+
+
+def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path):
+    import subprocess
+
+    from coordinator_core.ops.ceremony import commit_v2
+
+    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+        ).stdout
+
+    git("init", "-q", "-b", "work/p")
+    git("config", "user.email", "t@local")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "tracked.ts").write_text("a\n", encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+
+    (tmp_path / "tracked.ts").write_text("b\n", encoding="utf-8", newline="\n")
+    (tmp_path / "new_declared.ts").write_text("n\n", encoding="utf-8", newline="\n")
+    (tmp_path / "stray.ts").write_text("s\n", encoding="utf-8", newline="\n")
+
+    declared = ["tracked.ts", "new_declared.ts"]
+    status = git("status", "--porcelain", "-uall", "--", *declared)
+    assert "?? new_declared.ts" in status and " M tracked.ts" in status
+    out = commit_v2._handler(
+        {
+            "paths": declared,
+            "message": "checkpoint(wave 1): 1 rows \u2014 C1\n\nCheckpoint-Plan: docs/plans/p.md\n"
+            f"Checkpoint-Base: {git('rev-parse', 'HEAD').strip()}",
+        },
+        repo_root=tmp_path / ".git",
+    )
+
+    assert out["committed"] is True, out
+    landed = git("ls-tree", "-r", "--name-only", "HEAD").split()
+    assert "new_declared.ts" in landed and "tracked.ts" in landed
+    assert "stray.ts" not in landed
+    assert "?? stray.ts" in git("status", "--porcelain", "-uall")

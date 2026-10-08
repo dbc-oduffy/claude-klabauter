@@ -1115,7 +1115,13 @@ def _selection_flag_note(segments_argv: Sequence[Sequence[str]]) -> str:
     as a misclassification needs the reason and the scoped form, once.
     """
     for argv in segments_argv:
-        if any(a in _SELECTION_FLAGS or a.startswith(("-k=", "-m=")) for a in argv):
+        # Only pytest's own args count: `python -m pytest` carries the interpreter's `-m`.
+        start = next((i + 1 for i, a in enumerate(argv)
+                      if a.replace("\\", "/").rsplit("/", 1)[-1].lower()
+                      in ("pytest", "pytest.exe", "py.test")), None)
+        if start is None:
+            continue
+        if any(a in _SELECTION_FLAGS or a.startswith(("-k=", "-m=")) for a in argv[start:]):
             return (
                 "\n-k/-m/--lf filter selection, not collection: the whole suite is still "
                 "collected. Name the test files or file::node ids to run scoped."

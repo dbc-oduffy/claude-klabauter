@@ -770,7 +770,12 @@ def mint(
 
 
 def _review_only_route(plan_path: Path, run_base: str) -> str:
-    """The `--review-only` remedy clause naming the plan's `coded` rows, or "" when none read."""
+    """The `--review-only` remedy clause naming the plan's `coded` rows, or "" when none read.
+
+    `run_base` is the stamped terminal commit, never the original run base: the late delta
+    is what follows it, and the prep's slice id is keyed on the base, so the original base
+    collides with that run's frozen diff ("review prep returned no slices").
+    """
     from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
 
     try:
@@ -850,7 +855,7 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
                 return (
                     f"review-stamp: a later commit touches a declared write of this plan "
                     f"since the stamped terminal commit {terminal}"
-                    + _review_only_route(plan_path, stamp.get("run_base_sha") or terminal)
+                    + _review_only_route(plan_path, terminal)
                 )
 
     return None

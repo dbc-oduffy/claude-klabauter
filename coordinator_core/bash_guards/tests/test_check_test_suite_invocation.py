@@ -379,6 +379,18 @@ def test_a_suite_deny_with_no_selection_flag_carries_no_selection_note(repo, fre
     assert "filter selection, not collection" not in reason
 
 
+def test_the_interpreters_dash_m_is_not_a_selection_flag(repo, free_mutex):
+    reason = _reason(guard.check(_payload("python -m pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    assert "Detected:" in reason
+    assert "filter selection, not collection" not in reason
+
+
+def test_python_dash_m_pytest_with_a_selection_flag_still_carries_the_note(repo, free_mutex):
+    reason = _reason(guard.check(
+        _payload('python -m pytest coordinator_core/ -k "expr"', repo, agent_id=_AGENT_ID)))
+    assert "filter selection, not collection" in reason
+
+
 def test_bare_dash_k_with_no_positional_stays_tier_t(repo, free_mutex):
     """The BARE form (`-k` with no positional at all) is unaffected -- the
     flag-derived `scoped` bit still governs when there is nothing to

@@ -42,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import next_action_parts
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
+    NO_SLICES_HALT,
     compose_criterion_judge,
     compose_execute_review,
 )
@@ -271,6 +272,7 @@ def _single_exit_review(blocks: list[str]) -> str:
         raise AskComposeRefused("review prep block no longer has the no-op exit shape single-exit composition rewrites")
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(_reviewPrep.slices ?? []).length && !_verifyOnly))) {", 1)
+    prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
     rest = "\n\n".join(blocks[1:])
     return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
 
