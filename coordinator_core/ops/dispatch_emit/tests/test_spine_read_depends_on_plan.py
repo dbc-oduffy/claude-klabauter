@@ -202,3 +202,50 @@ def test_held_first_edge_does_not_stop_a_later_dangling_edge_raising(tmp_path):
 
     with pytest.raises(DanglingPlanDependencyError):
         unlanded_plan_edges("row 'D1'", [_EDGE, absent], repo, {})
+
+
+def _archive(repo, name="pred.md", status="implemented"):
+    src = repo / "docs" / "plans" / name
+    dest = repo / "archive" / "specs" / "2026-10" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dest)
+    dest.write_text(f"---\nstatus: {status}\n---\n" + dest.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def test_chunk_edge_to_archived_plan_is_satisfied(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+    _archive(repo)
+
+    res = resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+    assert res.hold is None and res.named_row["id"] == "P1"
+    dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
+    assert [r.id for r in read_spine(dep)] == ["D1", "D2", "D3"]
+
+
+def test_status_edge_to_archived_plan_is_satisfied(tmp_path):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+    _archive(repo)
+    edge = {"plan": "docs/plans/pred.md", "status": "implemented", "gate_kind": "epistemic-premise"}
+
+    assert resolve_plan_edge("row 'D1'", edge, repo, {}).hold is None
+
+
+@pytest.mark.parametrize("status", ["abandoned", "superseded"])
+def test_archived_dead_plan_is_still_dangling(tmp_path, status):
+    repo = _repo(tmp_path)
+    _predecessor(repo, "open")
+    _archive(repo, status=status)
+
+    with pytest.raises(DanglingPlanDependencyError):
+        resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+
+def test_plan_absent_everywhere_stays_dangling(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "archive" / "specs" / "2026-10").mkdir(parents=True)
+
+    with pytest.raises(DanglingPlanDependencyError):
+        resolve_plan_edge("row 'D1'", _EDGE, repo, {})

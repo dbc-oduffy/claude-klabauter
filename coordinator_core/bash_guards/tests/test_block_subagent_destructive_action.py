@@ -14,6 +14,8 @@ since they need no git_root at all.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
@@ -4230,3 +4232,93 @@ def test_git_apply_writing_forms_deny(cmd):
     result = guard.check(_payload(cmd, agent_type="coordinator:executor"))
     assert result is not None
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# ---- process-kill by explicit PID inside the session tree ----
+
+_EXEC = "coordinator:executor"
+
+
+@pytest.fixture
+def tree_pids(monkeypatch):
+    """Pin which PIDs count as inside the session tree: 4242 and 4243."""
+    monkeypatch.setattr(guard, "_pid_in_session_tree", lambda pid: pid in (4242, 4243))
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    ["kill 4242", "kill -9 4242", "kill -TERM 4242 4243", "kill -s KILL 4242", "kill -- 4242"],
+)
+def test_kill_of_session_tree_pid_allows(tree_pids, cmd):
+    assert guard.check(_payload(cmd, agent_type=_EXEC)) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "kill 9999",
+        "kill -9 4242 9999",
+        "kill -9 -1",
+        "kill 0",
+        "kill $!",
+        "kill %1",
+        "kill -9 $(pgrep node)",
+        "pkill -f node",
+        "pkill 4242",
+        "kill",
+    ],
+)
+def test_kill_outside_tree_or_unprovable_denies(tree_pids, cmd):
+    _assert_denies(_payload(cmd, agent_type=_EXEC))
+
+
+@requires_powershell_grammar
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "Stop-Process -Id 4242",
+        "Stop-Process -Id 4242 -Force",
+        "Stop-Process -Id 4242,4243 -Force -ErrorAction SilentlyContinue",
+        "Stop-Process -Id:4242",
+    ],
+)
+def test_powershell_stop_process_of_session_tree_pid_allows(tree_pids, cmd):
+    assert guard.check(_ps_payload(cmd, agent_type=_EXEC)) is None
+
+
+@requires_powershell_grammar
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "Stop-Process -Id 9999",
+        "Stop-Process -Id 4242,9999",
+        "Stop-Process -Name node",
+        "Stop-Process -Name node -Id 4242",
+        "Stop-Process -Id $p.Id",
+        "Stop-Process 4242",
+        "Get-Process node | Stop-Process -Id 4242",
+        "Stop-Process -Id 4242 -InputObject $x",
+    ],
+)
+def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cmd):
+    _assert_denies(_ps_payload(cmd, agent_type=_EXEC))
+
+
+def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
+    import subprocess
+    import sys
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        monkeypatch.setenv("CLAUDE_PID", str(os.getpid()))
+        assert guard._pid_in_session_tree(child.pid) is True
+        assert guard._pid_in_session_tree(os.getppid()) is False
+        assert guard._pid_in_session_tree(os.getpid()) is False
+        monkeypatch.delenv("CLAUDE_PID")
+        assert guard._pid_in_session_tree(child.pid) is False
+    finally:
+        child.kill()
+        child.wait()

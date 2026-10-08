@@ -314,3 +314,43 @@ class TestCleanPathNarrowing:
             ["committed.py", "dirty.py", "brand-new.py"], str(root)
         )
         assert len(calls) == 1, calls
+
+
+class TestOneRefusalNamesEveryBlocker:
+    def test_every_held_path_is_named_in_a_single_refusal(self, monkeypatch, capsys):
+        mod = _load_cli_module()
+        held = {f"pkg/m{i}.py": [f"peer-{i}"] for i in range(4)}
+        _stub_session(mod, monkeypatch, contested=held)
+        monkeypatch.setattr(mod, "_paths_with_no_uncommitted_content", lambda p, r: set())
+        monkeypatch.setattr(mod, "_unknown_paths", lambda r, p: [])
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(sorted(held), "/repo")
+
+        err = capsys.readouterr().err
+        for path, (holder,) in held.items():
+            assert path in err and holder in err, err
+
+    def test_a_path_in_neither_worktree_nor_head_rides_the_same_refusal(
+        self, monkeypatch, capsys
+    ):
+        mod = _load_cli_module()
+        _stub_session(mod, monkeypatch, contested={"pkg/held.py": ["peer-a"]})
+        monkeypatch.setattr(mod, "_paths_with_no_uncommitted_content", lambda p, r: set())
+        monkeypatch.setattr(mod, "_unknown_paths", lambda r, p: ["pkg/never.py"])
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(["pkg/held.py", "pkg/never.py"], "/repo")
+
+        err = capsys.readouterr().err
+        assert "pkg/held.py is held by" in err
+        assert "pkg/never.py is neither in the worktree nor in HEAD" in err
+
+
+class TestCrlfPathList:
+    def test_trailing_cr_is_stripped_from_each_pathspec(self):
+        mod = _load_cli_module()
+
+        args = mod.parse_args(["subject text", "--", "pkg/a.py\r", "pkg/b.py\r"])
+
+        assert args.paths == ["pkg/a.py", "pkg/b.py"]

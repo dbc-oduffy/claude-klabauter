@@ -19,6 +19,7 @@ that rots into an allow fails loudly rather than making the property vacuous.
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
@@ -131,8 +132,49 @@ def _perforce_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
         return block_perforce_submit.check(_bash(cmd))
 
 
+def _dirty_repo(ctx: _Ctx) -> str:
+    """A tmp repo with five commits, a modified tracked load-bearing file and an
+    untracked handoff, entered as the process cwd: the git-state guards deny
+    here regardless of the live repo's state."""
+    root = ctx.tmp_path / "dirty-repo"
+    root.mkdir(exist_ok=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=root, check=True, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    for i in range(5):
+        (root / f"f{i}.txt").write_text("x", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-qm", f"c{i}")
+    (root / "state" / "handoffs").mkdir(parents=True)
+    (root / "state" / "a.md").write_text("x", encoding="utf-8")
+    git("add", "state/a.md")
+    git("commit", "-qm", "state")
+    (root / "state" / "a.md").write_text("y", encoding="utf-8")
+    (root / "state" / "handoffs" / "new.md").write_text("n", encoding="utf-8")
+    ctx.monkeypatch.chdir(root)
+    return str(root)
+
+
 def _git_revert(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
-    return dc._check_destructive_git_revert_full(cmd, "sess", hook_payload=_bash(cmd))[0]
+    root = _dirty_repo(ctx)
+    return dc._check_destructive_git_revert_full(cmd, "sess", hook_payload=_bash(cmd, cwd=root))[0]
+
+
+def _git_clean(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    root = _dirty_repo(ctx)
+    return dc.check_destructive_git_clean(cmd, "sess", payload=_bash(cmd, cwd=root))
+
+
+def _git_orphan(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    root = _dirty_repo(ctx)
+    return dc.check_destructive_git_orphan(cmd, "sess", payload=_bash(cmd, cwd=root))
 
 
 def _blanket_add(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
@@ -191,9 +233,9 @@ Runner = Callable[[str, _Ctx], Optional[Dict[str, Any]]]
 # tests where one exists, else the shape its module docstring names.
 _DENIED: List[Tuple[str, str, Runner]] = [
     ("no-verify", "git commit --no-verify -m wip", lambda c, x: dc.check_no_verify(c, "sess", hook_payload=_bash(c))),
-    ("destructive-git-orphan", "git reset --hard HEAD~3", lambda c, x: dc.check_destructive_git_orphan(c, "sess", payload=_bash(c))),
-    ("destructive-git-orphan", 'gi"a b"t reset --hard HEAD~3', lambda c, x: dc.check_destructive_git_orphan(c, "sess", payload=_bash(c))),
-    ("destructive-git-clean", "git clean -fdx", lambda c, x: dc.check_destructive_git_clean(c, "sess", payload=_bash(c))),
+    ("destructive-git-orphan", "git reset --hard HEAD~3", _git_orphan),
+    ("destructive-git-orphan", 'gi"a b"t reset --hard HEAD~3', _git_orphan),
+    ("destructive-git-clean", "git clean -fdx", _git_clean),
     ("destructive-git-revert", "git reset --hard HEAD~3", _git_revert),
     ("blanket-git-add", "git add -A", _blanket_add),
     ("destructive-rm", "rm -rf $(cat targets.txt)", _rm),

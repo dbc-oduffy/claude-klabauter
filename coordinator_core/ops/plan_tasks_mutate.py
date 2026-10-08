@@ -596,7 +596,7 @@ def _carry_prep_certificate(old_text: str, new_text: str) -> str:
         return new_text
     from coordinator_core.frontmatter.primitives import (
         APPROVED_BODY_OK,
-        canonical_body_sha,
+        approval_body_sha,
         check_approved_body,
         rebuild,
         replace_fm_field,
@@ -609,7 +609,7 @@ def _carry_prep_certificate(old_text: str, new_text: str) -> str:
         new_text = stamp_approved_body_sha(new_text)
     if read_stamp(old_text)["state"] != CERTIFIED:
         return new_text
-    new_sha = canonical_body_sha(new_text)
+    new_sha = approval_body_sha(new_text)
     split = split_frontmatter(new_text)
     if not new_sha or split is None:
         return new_text
@@ -1436,6 +1436,14 @@ def _resolve(
         for r in resolutions:
             if rows_by_id.get(r["id"]) is None:
                 raise MutateAbort(f"resolve: task id not found: {r['id']!r}")
+
+        for r in resolutions:
+            deferred = rows_by_id[r["id"]].get("deferred_until")
+            if deferred not in (None, ""):
+                raise MutateAbort(
+                    f"resolve: row {r['id']} is deferred (deferred_until: {deferred}); "
+                    f"lift deferred_until first"
+                )
 
         # Authorization gate: a CLOSED disposition is a scope decision and
         # needs the PM's recorded assent. resolve never grants that itself —

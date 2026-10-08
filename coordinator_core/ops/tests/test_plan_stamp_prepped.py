@@ -23,7 +23,7 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.benchmarks.budget import resolve_budget
-from coordinator_core.frontmatter.primitives import canonical_body_sha
+from coordinator_core.frontmatter.primitives import approval_body_sha
 from coordinator_core.frontmatter.schema_validate import validate
 from coordinator_core.ops import plan_stamp_prepped as mod
 from coordinator_core.roadmap import prep_gate as pg
@@ -235,13 +235,13 @@ def test_the_recorded_sha_is_the_body_sha_and_survives_its_own_write(tmp_path):
     common = _repo(tmp_path)
     _plan(tmp_path)
     path = tmp_path / REL
-    body_sha_before = canonical_body_sha(path.read_text(encoding="utf-8"))
+    body_sha_before = approval_body_sha(path.read_text(encoding="utf-8"))
 
     result = _stamp({"plan": REL, "by": BY}, common)
     text_after = path.read_text(encoding="utf-8")
 
     assert result["mise_prepped_sha"] == body_sha_before
-    assert canonical_body_sha(text_after) == body_sha_before
+    assert approval_body_sha(text_after) == body_sha_before
     assert pg.read_stamp(text_after)["state"] == pg.CERTIFIED
 
 

@@ -758,6 +758,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ):
         return _error("params.declared_reverts must be a list of strings")
 
+    # A list copied from CRLF output carries a trailing CR no path can end in.
+    raw_paths = [p.rstrip("\r") for p in raw_paths]
+    raw_deleted = [p.rstrip("\r") for p in raw_deleted]
+    raw_untracked = [p.rstrip("\r") for p in raw_untracked]
+    raw_prefer_staged = [p.rstrip("\r") for p in raw_prefer_staged]
+    raw_declared_reverts = [p.rstrip("\r") for p in raw_declared_reverts]
+
     worktree_root = main_worktree_root(repo_root)
 
     raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)

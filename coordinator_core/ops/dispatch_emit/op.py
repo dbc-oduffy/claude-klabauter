@@ -676,7 +676,7 @@ _PARAM_FIELDS = (
         Field(name, "str")
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
-            "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256",
+            "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256", "box_terms_path",
             "inventory_repo_root", "pipeline", "brief", "scratch_dir", "validator", "part", "baton", "deliverable_id",
         )
     ),
@@ -685,6 +685,7 @@ _PARAM_FIELDS = (
     Field("overrides", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
+    Field("box_terms", "str_list"),
     Field("run_base_sha", "str"),
     Field("flags", "dict"),
     Field("lists", "dict"),
@@ -867,6 +868,11 @@ def _dispatch_emit(
             alongside ``preamble_sha256``, never resolved or re-read here.
         preamble_sha256 (str, optional): the caller-computed digest of the
             preamble file's bytes -- recorded verbatim, never recomputed.
+        box_terms (list[str], optional), box_terms_path (str, optional): the
+            driver's binding box constraints (``--box-terms FILE``, one term per
+            line). The caller splices them into ``preamble``; this op records them
+            in the emission receipt and, on the plan route, the script's
+            ``meta.boxTerms``.
         lanes (bool, optional): with ``inventory_path`` -- partition the
             inventory into write-disjoint lanes and byte-bounded sequential
             parts, pin ``<run-id>.lanes.json``, and emit one script per ready
@@ -1170,6 +1176,14 @@ def _dispatch_emit(
             "preamble_sha256": params.get("preamble_sha256"),
         }
 
+    box_terms = tuple(params.get("box_terms") or ())
+    if box_terms:
+        receipt_extras = {
+            **(receipt_extras or {}),
+            "box_terms": list(box_terms),
+            "box_terms_path": params.get("box_terms_path"),
+        }
+
     review_route = (
         EMIT_ROUTE_QUEUE if is_queue_route
         else EMIT_ROUTE_INVENTORY if inventory_path
@@ -1281,6 +1295,7 @@ def _dispatch_emit(
             review_stage_schemas=review_stage_schemas,
             agent_type_host=agent_type_host,
             preamble=preamble,
+            box_terms=box_terms,
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
             landed_rows=frozenset(params.get("landed_rows") or ()),

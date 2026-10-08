@@ -1452,3 +1452,34 @@ def test_an_empty_superseded_by_leaves_the_baton_a_candidate(tmp_path):
     report = pg.assemble_plan_gate(tmp_path)
     assert report["counts"]["superseded"] == 0
     assert report["counts"]["candidates"] == 1
+
+
+def test_a_cleared_hold_is_offered_and_listed_under_hold_cleared(tmp_path):
+    _baton(tmp_path, "cleared-1", plan_blitz_hold_reason="not yet", plan_blitz_hold_cleared_by="abc1234")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["held"] == 0
+    assert report["counts"]["hold_cleared"] == 1
+    assert report["hold_cleared"][0]["baton"] == "cleared-1"
+    assert report["hold_cleared"][0]["cleared_by"] == "abc1234"
+    assert _by_id(report, "cleared-1")["candidate"] is True
+
+
+def test_an_uncleared_hold_stays_held_and_lists_nothing_cleared(tmp_path):
+    _baton(tmp_path, "held-2", plan_blitz_hold_reason="not yet")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["held"] == 1
+    assert report["hold_cleared"] == []
+    assert report["counts"]["hold_cleared"] == 0
+
+
+def test_superseded_wins_over_a_cleared_hold(tmp_path):
+    _baton(
+        tmp_path, "folded-2", superseded_by="target-1",
+        plan_blitz_hold_reason="x", plan_blitz_hold_cleared_by="abc1234",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["superseded"] == 1
+    assert report["hold_cleared"] == []

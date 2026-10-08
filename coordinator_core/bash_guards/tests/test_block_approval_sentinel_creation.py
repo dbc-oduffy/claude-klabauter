@@ -1101,3 +1101,33 @@ class TestPythonOptionValueIsNotTheScript:
 
     def test_missing_script_still_denies(self, tmp_path):
         _reason(guard.check(_payload("python3 -W ignore nope.py", cwd=str(tmp_path))))
+
+
+class TestReadOnlyPythonProbeMentioningSentinel:
+    """A `python3 <script>` whose text only inspects the sentinel is not a
+    creation; one carrying any write/spawn/dynamic-exec token still denies."""
+
+    def _run(self, tmp_path, body):
+        (tmp_path / "probe.py").write_text(body, encoding="utf-8")
+        return guard.check(_payload("python3 sub/../probe.py", cwd=str(tmp_path)))
+
+    def test_inspect_only_probe_allows(self, tmp_path):
+        body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
+        assert self._run(tmp_path, body) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "open(%r, 'w').close()\n",
+            "from pathlib import Path\nPath(%r).touch()\n",
+            "import os\nos.mkdir(%r)\n",
+            "import subprocess\nsubprocess.run(['touch', %r])\n",
+            "exec('open(%r)')\n",
+        ],
+    )
+    def test_probe_with_write_shape_denies(self, tmp_path, body):
+        _reason(self._run(tmp_path, body % SENTINEL))
+
+    def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path):
+        (tmp_path / "probe.sh").write_text("test -f %s\n" % SENTINEL, encoding="utf-8")
+        _reason(guard.check(_payload("bash probe.sh", cwd=str(tmp_path))))

@@ -132,9 +132,33 @@ class TestFailsOpen:
         def _boom(*args, **kwargs):
             raise OSError("sink unreadable")
 
-        monkeypatch.setattr(touch_record, "project_live_claims", _boom)
+        monkeypatch.setattr(scope.claim_index, "lookup", _boom)
 
         assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) is None
+
+    def test_a_backslash_pathspec_still_meets_the_forward_slash_claim(self, repo, monkeypatch):
+        monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+        for sid in ("mine", "peer-a"):
+            core.init(sid, cwd=repo)
+        _claim(repo, "peer-a", "pkg/mod.py")
+
+        result = scope.contested_by_live_peers(["pkg\\mod.py"], "mine", repo)
+
+        assert result == {"pkg\\mod.py": ["peer-a"]}
+
+    def test_gate_and_who_claims_path_read_the_same_claimants(self, repo, monkeypatch):
+        monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+        for sid in ("mine", "peer-a", "peer-b"):
+            core.init(sid, cwd=repo)
+        _claim(repo, "peer-a", "pkg/mod.py")
+        _claim(repo, "peer-b", "pkg/mod.py")
+        _claim(repo, "peer-b", "pkg/mod.py", verb=touch_record.VERB_RELEASE)
+
+        indexed = scope.claim_index.lookup(["pkg/mod.py"], cwd=repo)["pkg/mod.py"]
+        gate = scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo)
+
+        assert indexed == ["peer-a"]
+        assert gate == {"pkg/mod.py": indexed}
 
     def test_no_peer_sinks_is_a_genuine_empty_result(self, repo, monkeypatch):
         monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)

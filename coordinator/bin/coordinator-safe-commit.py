@@ -467,7 +467,7 @@ def parse_args(argv: Sequence[str]) -> Args:
             # positional token(s) were already collected before `--`.
             i += 1
             saw_pathspec_separator = True
-            args.paths = list(argv[i:])
+            args.paths = [p.rstrip("\r") for p in argv[i:]]
             i = n
             break
         elif tok.startswith("-"):
@@ -1166,6 +1166,12 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         "each one's kind. " + unnamed_remedy,
         file=sys.stderr,
     )
+    # Every blocker in one refusal: a path in neither the worktree nor HEAD
+    # would otherwise surface only after the holders are dropped.
+    unknown = _unknown_paths(worktree_root, paths)
+    if unknown:
+        for line in _unknown_path_refusal_lines(unknown):
+            print(line, file=sys.stderr)
     sys.exit(1)
 
 
@@ -1291,19 +1297,35 @@ def _split_paths_for_commit_v2(worktree_root: str, paths: Sequence[str]) -> "tup
     deleted = [p for p in missing if p in tracked]
     unknown = [p for p in missing if p not in tracked]
     if unknown:
-        for p in unknown:
-            print(
-                f"BLOCKED: {p} is neither in the worktree nor in HEAD -- "
-                "refusing to commit it as a deletion.",
-                file=sys.stderr,
-            )
-        print(
-            "Check the path, or run from the repo root. To commit a real "
-            "deletion the path must exist in HEAD.",
-            file=sys.stderr,
-        )
+        for line in _unknown_path_refusal_lines(unknown):
+            print(line, file=sys.stderr)
         sys.exit(1)
     return present, deleted
+
+
+def _unknown_path_refusal_lines(unknown: Sequence[str]) -> List[str]:
+    """One refusal line per path absent from both the worktree and HEAD, then the remedy."""
+    lines = [
+        f"BLOCKED: {p} is neither in the worktree nor in HEAD -- "
+        "refusing to commit it as a deletion."
+        for p in unknown
+    ]
+    lines.append(
+        "Check the path, or run from the repo root. To commit a real "
+        "deletion the path must exist in HEAD."
+    )
+    return lines
+
+
+def _unknown_paths(worktree_root: str, paths: Sequence[str]) -> List[str]:
+    """`paths` absent from both the worktree and HEAD; fails open to none."""
+    missing = [
+        p for p in paths if p and not os.path.exists(os.path.join(worktree_root, p))
+    ]
+    if not missing:
+        return []
+    tracked = _paths_tracked_at_head(worktree_root, missing)
+    return [p for p in missing if p not in tracked]
 
 
 def _classify_paths_for_commit_v2(

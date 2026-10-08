@@ -45,6 +45,12 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_session_id(monkeypatch):
+    for var in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+
 def _init_repo(repo: Path) -> None:
     repo.mkdir(parents=True, exist_ok=True)
     _git(repo, "init", "-b", "work/test/2026-01-01")
@@ -1653,3 +1659,81 @@ def test_sizing_arm_apm_acceptance_authorizes_ceo_and_not_hands_on(tmp_path: Pat
     plan2, _ = _sizing_fixture(tmp_path / "b", apm("hands-on"))
     code, result = stamp_sizing_authorization(plan2, sizing, repo_root=tmp_path / "b")
     assert code == EXIT_BUSINESS_FAIL and "hands-on" in result["error"]
+
+
+def _deadlocked_plan(tmp_path: Path) -> Path:
+    """Approved-body-bound plan with no execution-auth quartet whose body then changed."""
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    _init_repo(tmp_path)
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    plan_path = plan_dir / "2026-07-24-test-plan.md"
+    plan_path.write_text(stamp_approved_body_sha(_PLAN_TEXT) + "\nAmended after claim.\n", encoding="utf-8")
+    return plan_path
+
+
+def test_restamp_no_quartet_with_delegation_source_breaks_the_deadlock(tmp_path: Path) -> None:
+    from coordinator_core.frontmatter.primitives import (
+        APPROVED_BODY_CHANGED, APPROVED_BODY_OK, check_approved_body,
+    )
+
+    plan_path = _deadlocked_plan(tmp_path)
+    assert check_approved_body(plan_path.read_text(encoding="utf-8"))[0] == APPROVED_BODY_CHANGED
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "coordinator:eng-director", "re-reviewed per APM ruling",
+        at="2026-10-08", repo_root=tmp_path,
+        delegation="Group EM", delegation_source="memo-2026-10-08",
+    )
+    assert exit_code == EXIT_OK and result["applied"] is True, result
+    written = plan_path.read_text(encoding="utf-8")
+    assert check_approved_body(written)[0] == APPROVED_BODY_OK
+    fm = yaml.safe_load(written.split("---")[1])
+    assert fm["execution_authorized_by"] == "Group EM"
+    assert fm["execution_authorized_sha"] == result["sha"]
+    assert "authorized by delegation: Group EM (source: memo-2026-10-08)" in fm["execution_authorized_note"]
+    assert "re-reviewed per APM ruling" in fm["execution_authorized_note"]
+    assert "execution_restamped_by" not in fm
+
+
+def test_restamp_no_quartet_without_delegation_source_names_the_flag(tmp_path: Path) -> None:
+    plan_path = _deadlocked_plan(tmp_path)
+    before = plan_path.read_text(encoding="utf-8")
+
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "coordinator:eng-director", "re-review", repo_root=tmp_path
+    )
+    assert exit_code == EXIT_BUSINESS_FAIL
+    assert "--authorized-by-delegation" in result["error"]
+    assert plan_path.read_text(encoding="utf-8") == before
+
+
+def test_restamp_delegation_args_validated_like_the_mint(tmp_path: Path) -> None:
+    plan_path = _deadlocked_plan(tmp_path)
+    exit_code, result = restamp_execution_authorization(
+        str(plan_path), "EM:s", "r", repo_root=tmp_path, delegation="Group EM", delegation_source=" "
+    )
+    assert exit_code == EXIT_USAGE and "--delegation-source" in result["error"]
+
+
+def test_authorize_invocation_typed_command_refused_in_autonomous_session(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from coordinator_core.session.autonomous_sentinel import sentinel_path
+
+    plan_path = _deadlocked_plan(tmp_path)
+    sid = "test-autonomous-sid-4f2a"
+    sentinel = sentinel_path(sid)
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.write_text("1", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    try:
+        rc = main(["authorize-invocation", str(plan_path), "--typed-command", "/execute-plan"])
+    finally:
+        sentinel.unlink(missing_ok=True)
+    assert rc == EXIT_USAGE
+    assert "--authorized-by-delegation" in capsys.readouterr().err
+    assert "execution_authorized_by" not in plan_path.read_text(encoding="utf-8")

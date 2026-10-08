@@ -299,10 +299,19 @@ def resolve_plan_edge(
         return PlanEdgeResolution(
             None, f"depends_on_plan {label}: no repo root to resolve it against"
         )
+    from coordinator_core.roadmap.plan_gate import archived_plan_path
+
     target = repo_root / rel
+    archived = False
+    if not target.is_file():
+        moved = archived_plan_path(repo_root, rel)
+        if moved is not None:
+            target, archived = moved, True
     if not chunk:
-        hold = _status_edge_hold(owner, label, str(edge["status"]), _plan_status(target))
-        return PlanEdgeResolution(None, hold)
+        actual = _plan_status(target)
+        if archived and actual not in ("abandoned", "superseded"):
+            actual = str(edge["status"])
+        return PlanEdgeResolution(None, _status_edge_hold(owner, label, str(edge["status"]), actual))
     if target not in plan_cache:
         try:
             loaded = load_rows(target.read_text(encoding="utf-8"))
@@ -319,6 +328,12 @@ def resolve_plan_edge(
                 else None
             )
     rows_by_id = plan_cache[target]
+    if archived:
+        if _plan_status(target) in ("abandoned", "superseded"):
+            raise DanglingPlanDependencyError(
+                f"{owner} depends_on_plan {label}: archived plan is {_plan_status(target)}, never coded"
+            )
+        return PlanEdgeResolution((rows_by_id or {}).get(chunk), None)
     if rows_by_id is None:
         raise DanglingPlanDependencyError(
             f"{owner} depends_on_plan {label}: plan is absent or has no spine"
@@ -756,8 +771,28 @@ def frontmatter_plan_edges(source: str):
     return doc.get("depends_on_plan") if isinstance(doc, dict) else None
 
 
-def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
+def coded_row_ids(plan_path) -> frozenset:
+    """Ids of the rows whose canonical ``disposition`` is ``coded``."""
+    with open(plan_path, encoding="utf-8") as handle:
+        result = load_rows_memo(handle.read())
+    if result.status is not LocateStatus.LOCATED:
+        raise SpineReadError(
+            f"plan {plan_path!r} task-spine block is {result.status.name}, not LOCATED"
+        )
+    return frozenset(
+        raw["id"]
+        for raw in map(with_canonical_disposition, result.rows)
+        if isinstance(raw, dict) and raw.get("disposition") == "coded" and isinstance(raw.get("id"), str)
+    )
+
+
+def read_spine(
+    plan_path, exclusions: Optional[list] = None, keep_coded: frozenset = frozenset()
+) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    ``keep_coded`` names ``coded`` rows to return as rows anyway (a review of
+    hand-landed work needs the row the dispatch would otherwise skip).
 
     Raises ``SpineReadError`` if the spine block is absent or malformed,
     ``InvalidRowIdError`` if any row's ``id`` is missing/non-string or
@@ -1138,6 +1173,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 }
             )
 
+    satisfied_ids -= keep_coded
     excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
     for i, row in enumerate(dispatchable_rows):

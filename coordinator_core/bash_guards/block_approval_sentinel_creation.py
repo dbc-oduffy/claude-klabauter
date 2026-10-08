@@ -365,6 +365,18 @@ def _has_module_flag(interpreter_args: List[str]) -> bool:
     return False
 
 
+#: Tokens that let a python script write a file, spawn a process, or execute
+#: dynamic code. A mention-positive `python3 <script>` with none of them only
+#: inspects the sentinel (`.exists()`, `.stat()`); lexical like the rest of
+#: this module, so string assembly and the documented open gaps still apply.
+_PY_WRITE_HINT_RE = re.compile(
+    r"open\s*\(|write|touch|mkdir|makedirs|copy|move|rename|replace|link|"
+    r"subprocess|os\.system|os\.exec|os\.spawn|popen|shutil|exec\s*\(|eval\s*\(|"
+    r"compile\s*\(|__import__|importlib|ctypes|\.save|dump|truncate|utime|chmod|"
+    r"fdopen|os\.open",
+    re.IGNORECASE,
+)
+
 _PARAM_EXPANSION_RE = re.compile(
     r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)"
 )
@@ -1054,12 +1066,31 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             )
         if mentions is None:
             return fallback
+        if mentions and norm_head == "python3" and path_token != "-":
+            if not self._python_script_may_write(read_path, effective_cwd):
+                return None
         if mentions:
             return (
                 "command shape that would create or overwrite %s" % self.target_basename,
                 REASON_DIRECT,
             )
         return None  # clean read -- allow this segment's indirection check
+
+    def _python_script_may_write(self, read_path: Optional[str], cwd: Any) -> bool:
+        """True unless the (already read, mention-positive) python script has
+        no file-writing, process-spawning or dynamic-execution token at all,
+        i.e. it only inspects the sentinel. Fails closed on any read problem."""
+        if read_path is None or cwd is _UNRESOLVED_CWD:
+            return True
+        candidate = read_path
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(cwd or self._cwd or ".", candidate)
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return True
+        return bool(_PY_WRITE_HINT_RE.search(text))
 
     def _next_heredoc_body(self) -> Optional[str]:
         """F3: pop the next not-yet-consumed heredoc body (left-to-right

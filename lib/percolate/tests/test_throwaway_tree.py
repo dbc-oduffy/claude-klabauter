@@ -209,3 +209,44 @@ def test_throwaway_parent_is_never_a_drive_root(tmp_path, monkeypatch):
     parent = tt._throwaway_parent(repo)
     assert parent.parent != parent
     assert parent != anchor and parent.parent != anchor
+
+
+def _fake_objects(root: Path, count: int) -> None:
+    fan = root / ".git" / "objects" / "17"
+    fan.mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        (fan / f"{i:038x}").write_bytes(b"")
+
+
+def test_loose_object_backlog_triggers_repack_and_prune(dest_repo: Path, monkeypatch) -> None:
+    from percolate import throwaway_tree as tt
+
+    _fake_objects(dest_repo, 20)
+    calls = []
+    real = tt.run_git
+
+    def spy(args, **kw):
+        calls.append(list(args))
+        if args[2:3] in (["repack"], ["prune-packed"]):
+            return tt.GitResult(0, "", "", False)
+        return real(args, **kw)
+
+    monkeypatch.setattr(tt, "run_git", spy)
+    tt._compact_loose_objects(dest_repo)
+    assert [c[2:] for c in calls] == [["repack", "-d", "-q"], ["prune-packed"]]
+
+
+def test_loose_object_count_below_threshold_skips_repack(dest_repo: Path, monkeypatch) -> None:
+    from percolate import throwaway_tree as tt
+
+    _fake_objects(dest_repo, 3)
+    monkeypatch.setattr(tt, "run_git", lambda *a, **k: pytest.fail("spawned"))
+    tt._compact_loose_objects(dest_repo)
+
+
+def test_clone_timeout_error_says_timed_out(dest_repo: Path, monkeypatch) -> None:
+    from percolate import throwaway_tree as tt
+
+    monkeypatch.setattr(tt, "run_git", lambda *a, **k: tt.GitResult(-1, "", "", True))
+    with pytest.raises(tt.ThrowawayTreeError, match=r"timed out \(dest has ~\d+ loose objects"):
+        tt.build_throwaway_tree(dest_repo, overlays=[], deletions=[])

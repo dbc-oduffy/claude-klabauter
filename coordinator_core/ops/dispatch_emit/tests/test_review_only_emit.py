@@ -138,11 +138,19 @@ def test_conflicting_flags_refused(tmp_path, capsys, extra):
     assert "exclusive of" in err
 
 
+_PLAN = (
+    "---\nplan_id: pln-x\n---\n\n## Tasks\n\n"
+    "```yaml plan-tasks\n- id: C1\n  title: t\n  writes: [a.py]\n```\n"
+)
+
+
 def test_empty_landed_set_refused(tmp_path, capsys):
     run = tmp_path / "run.txt"
     run.write_text("no checkpoint subjects here", encoding="utf-8")
+    plan = tmp_path / "p.md"
+    plan.write_text(_PLAN, encoding="utf-8")
 
-    code, err = _run(["--plan", "p.md", "--review-only", str(run), "--run-base", _BASE], capsys)
+    code, err = _run(["--plan", str(plan), "--review-only", str(run), "--run-base", _BASE], capsys)
 
     assert code == cli.EXIT_DATA_ERROR
-    assert "names no landed row" in err
+    assert "names no row" in err

@@ -1464,3 +1464,45 @@ def test_pass_carries_no_repair() -> None:
     finding = pg._pass("ok")
     assert finding["mechanical"] is False
     assert finding["repair"] is None
+
+
+def _certified_text(sha_of) -> str:
+    spine = (
+        "- id: C1\n  title: one\n  surface: s\n  writes: [a.py]\n  disposition: open\n"
+        "- id: C2\n  title: two\n  surface: s\n  writes: [b.py]\n  disposition: open\n"
+    )
+    fm = "title: t\nstatus: approved\n"
+    text = f"---\n{fm}---\n\n# P\n\n## Tasks\n\n```yaml plan-tasks\n{spine}```\n"
+    sha = sha_of(text)
+    return text.replace(
+        fm,
+        fm + f'mise_prepped_by: s\nmise_prepped_at: "2026-09-07T00:00:00Z"\n'
+        f'mise_prepped_sha: "{sha}"\nmise_prepped_findings: []\n',
+        1,
+    )
+
+
+def test_a_coded_flip_keeps_the_stamp_certified():
+    from coordinator_core.frontmatter.primitives import approval_body_sha
+
+    text = _certified_text(approval_body_sha)
+    assert pg.read_stamp(text)["state"] == pg.CERTIFIED
+
+    coded = text.replace("writes: [a.py]\n  disposition: open", "writes: [a.py]\n  disposition: coded\n  disposition_ref: abc1234", 1)
+    assert coded != text
+    assert pg.read_stamp(coded)["state"] == pg.CERTIFIED
+
+
+def test_a_real_body_edit_still_reads_stale():
+    from coordinator_core.frontmatter.primitives import approval_body_sha
+
+    text = _certified_text(approval_body_sha)
+
+    assert pg.read_stamp(text.replace("title: two", "title: three", 1))["state"] == pg.STALE
+    assert pg.read_stamp(text.replace("disposition: open", "disposition: wont_do", 1))["state"] == pg.STALE
+
+
+def test_a_stamp_minted_over_the_raw_body_hash_still_certifies():
+    from coordinator_core.frontmatter.primitives import canonical_body_sha
+
+    assert pg.read_stamp(_certified_text(canonical_body_sha))["state"] == pg.CERTIFIED

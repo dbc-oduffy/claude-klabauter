@@ -181,3 +181,66 @@ def test_status_field_not_done_is_not_delivered(line):
 def test_undone_summary_prefers_not_done_lines_over_the_cause_section():
     text = _STATUS_FIELD_PARTIAL + "Not done: rebuild\n"
     assert terminal_commit._undone_summary(text) == "Not done: rebuild"
+
+
+_GATE_PARTIAL = (
+    "PARTIAL: edits done\n"
+    "gate-blocker: outside-footprint: src/sibling.ts(3,1): error TS2304\n"
+)
+
+
+def _passed_review(slice_files=("a.py",), **over):
+    review = {
+        **_REVIEWED,
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [],
+                 "slice_files": list(slice_files)},
+        "delivery": {"verdict": "PASS", "product_files": 1},
+        "integration": {"sidecar": "s", "unresolved": [], "confinement_violations": 0},
+    }
+    review.update(over)
+    return review
+
+
+def _call_with(repo: Path, script: str, review: dict) -> dict:
+    return terminal_commit._handler(
+        {"script_path": script, "incomplete_chunks": ["C1"], "inline_review": review},
+        repo_root=repo / ".git",
+    )
+
+
+def test_gate_blocked_partial_row_in_the_reviewed_slice_commits_and_regrades(repo):
+    out = _call_with(repo, _run(repo, _GATE_PARTIAL), _passed_review())
+    assert out["committed"] is True, out
+    assert out["chunks_committed"] == ["C1"]
+    assert out["partial_committed"] == []
+    assert out["stranded"] == {}
+    assert out["regraded"]["C1"].startswith("outside-footprint: src/sibling.ts")
+    assert out["incomplete_chunks"] == []
+    assert "incomplete_reasons" not in out
+    assert _git(["status", "--porcelain", "--", "a.py"], repo) == ""
+
+
+@pytest.mark.parametrize(
+    "review",
+    [
+        _passed_review(slice_files=("other.py",)),
+        _passed_review(delivery={"verdict": "FAIL", "product_files": 1}),
+        _passed_review(integration={"sidecar": "s", "unresolved": ["F1"], "confinement_violations": 0}),
+        _passed_review(integration={"sidecar": "s", "unresolved": [], "confinement_violations": 2}),
+        _REVIEWED,
+    ],
+    ids=["file-outside-slice", "delivery-fail", "unresolved", "confinement", "no-prep"],
+)
+def test_gate_blocked_partial_row_stays_withheld_without_a_passing_covering_review(repo, review):
+    out = _call_with(repo, _run(repo, _GATE_PARTIAL), review)
+    assert out["nothing_to_commit"] is True
+    assert out["stranded"] == {"C1": ["a.py"]}
+    assert "regraded" not in out
+    assert "a.py" not in _git(["ls-files"], repo)
+
+
+def test_partial_row_without_the_gate_blocker_line_is_not_regraded(repo):
+    prose = "PARTIAL: edits done\nNot done: tsc red from files OUTSIDE my footprint\n"
+    out = _call_with(repo, _run(repo, prose), _passed_review())
+    assert out["nothing_to_commit"] is True
+    assert "regraded" not in out

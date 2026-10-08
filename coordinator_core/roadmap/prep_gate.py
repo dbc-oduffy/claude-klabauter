@@ -2330,15 +2330,16 @@ def read_stamp(text: str) -> Dict[str, Any]:
     different from an absent key, exactly as ``writes: []`` is. Treating it as
     absent would report every clean certification MALFORMED.
 
-    The recipe is ``primitives.canonical_body_sha`` — the plan BODY, frontmatter
-    excluded, which is what lets a stamp survive its own write and every later
-    ``status`` flip. Never ``blitz_land :: _git_blob_sha``, which hashes the
+    The recipe is ``primitives.approval_body_sha`` — the plan BODY, frontmatter
+    excluded, spine disposition bookkeeping neutralised, which is what lets a stamp
+    survive its own write, every later ``status`` flip and a ``--coded`` resolve.
+    A stamp minted over ``canonical_body_sha`` still reads CERTIFIED. Never ``blitz_land :: _git_blob_sha``, which hashes the
     whole file.
     """
-    from coordinator_core.frontmatter.primitives import canonical_body_sha
+    from coordinator_core.frontmatter.primitives import approval_body_sha, canonical_body_sha
 
     fm = plan_frontmatter(text)
-    body_sha = canonical_body_sha(text)
+    body_sha = approval_body_sha(text)
     present = [f for f in STAMP_FIELDS if f in fm]
     recorded_sha = fm.get("mise_prepped_sha")
     recorded_sha = str(recorded_sha).strip() if recorded_sha is not None else None
@@ -2355,6 +2356,6 @@ def read_stamp(text: str) -> Dict[str, Any]:
     if len(present) != len(STAMP_FIELDS):
         base["missing"] = [f for f in STAMP_FIELDS if f not in fm]
         return {"state": MALFORMED, **base}
-    if recorded_sha and body_sha and recorded_sha.lower() == body_sha.lower():
+    if recorded_sha and body_sha and recorded_sha.lower() in (body_sha.lower(), (canonical_body_sha(text) or "").lower()):
         return {"state": CERTIFIED, **base}
     return {"state": STALE, **base}

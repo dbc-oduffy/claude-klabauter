@@ -1787,12 +1787,110 @@ def _row_build_gate_commands(row: WaveRow, gates: tuple) -> list:
     return matched
 
 
+_GATE_BASE_VAR = "_gateBase"
+
+#: Script-scope declarations every gated script carries: ``_gateBase`` maps a gate
+#: command to its run_base ``{red, errors}`` (filled by the pre-dispatch baseline
+#: agents, empty without them), and ``_gateBaselineText`` renders the row-prompt tail.
+_GATE_BASELINE_JS = (
+    f"  const {_GATE_BASE_VAR} = {{}};\n"
+    "  function _gateBaselineText(cmds) {\n"
+    "    const lines = [];\n"
+    "    for (const c of cmds) {\n"
+    f"      const b = {_GATE_BASE_VAR}[c];\n"
+    "      if (!b || !b.red) continue;\n"
+    "      const errs = (Array.isArray(b.errors) ? b.errors : []).slice(0, 40).map(String);\n"
+    "      lines.push('- `' + c + '` was RED at run_base (' + errs.length + ' recorded error(s)):\\n'"
+    " + errs.map(e => '    ' + e).join('\\n'));\n"
+    "    }\n"
+    "    return lines.length ? '\\n\\nBaseline at run_base, errors present before any row ran:\\n'"
+    " + lines.join('\\n') : '';\n"
+    "  }"
+)
+
+_GATE_BASELINE_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "red": {"type": "boolean"},
+            "errors": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["red", "errors"],
+    },
+    sort_keys=True,
+)
+
+_GATE_BASELINE_PHASE_TITLE = "Gate baseline"
+
+
+def _gate_baseline_prompt(command: str) -> str:
+    return (
+        "Gate baseline. Run this build-gate command ONCE from the repo root, exactly as "
+        f"written, and change nothing (edit no file, fix no error):\n\n`{command}`\n\n"
+        "Return red=true when it exits non-zero or prints errors, else red=false with an "
+        "empty list. errors: each distinct error line verbatim (path, position, code, "
+        "message), at most 200."
+    )
+
+
+def _gate_baseline_blocks(commands: list, agent_type_host: Optional[str]) -> list[str]:
+    """Pre-dispatch blocks running each distinct row-gate command once at run_base.
+
+    One read-only agent per command, in parallel, before the first row registers: the
+    emit op itself spawns nothing (a build gate runs for seconds, far past the engine's
+    process budget). A failed or malformed baseline agent leaves the command out of
+    ``_gateBase``, so its rows fall back to the plain gate rule.
+    """
+    thunks = ",\n".join(
+        "    async () => { try { return await agent("
+        f"{_js_string_literal(_gate_baseline_prompt(c))}, {{ "
+        f"label: {_js_string_literal(f'gatebase:{i}')}, "
+        f"phase: {_js_string_literal(_GATE_BASELINE_PHASE_TITLE)}, "
+        f"{_model_opt('', 'sonnet')}, "
+        f"schema: {_GATE_BASELINE_SCHEMA} }}); "
+        "} catch (e) { return null; } }"
+        for i, c in enumerate(commands)
+    )
+    cmds = "[" + ", ".join(_js_string_literal(c) for c in commands) + "]"
+    return [
+        f"  phase({_js_string_literal(_GATE_BASELINE_PHASE_TITLE)});",
+        f"  const _gateBaseResults = await parallel([\n{thunks}\n  ]);",
+        f"  {cmds}.forEach((c, i) => {{\n"
+        "    const r = _gateBaseResults[i];\n"
+        "    if (r && typeof r.red === 'boolean' && Array.isArray(r.errors)) "
+        f"{_GATE_BASE_VAR}[c] = {{ red: r.red, errors: r.errors }};\n"
+        "  });\n"
+        f"  const _gateRed = Object.keys({_GATE_BASE_VAR}).filter(c => {_GATE_BASE_VAR}[c].red);\n"
+        "  if (_gateRed.length) log('row_build_gate red at run_base: ' + _gateRed.map(c => c + ' ('"
+        f" + {_GATE_BASE_VAR}[c].errors.length + ' errors)').join('; ')"
+        " + '. Rows pass the gate when they add no new errors.');",
+    ]
+
+
+def _distinct_gate_commands(rows, plan_context: Optional["PlanContext"]) -> list:
+    if plan_context is None:
+        return []
+    out: list = []
+    for row in rows:
+        for c in _row_build_gate_commands(row, plan_context.row_build_gates):
+            if c not in out:
+                out.append(c)
+    return out
+
+
 def _build_gate_clause(commands: list) -> str:
     lines = "\n".join(f"- `{c}`" for c in commands)
+    marker = _SHARED_PATH_MARKER_DELIM
     return (
         "Build gate (mandatory): after your edits, run each command below and "
-        "read its output. If any fails, return PARTIAL naming the failing "
-        "command and its error, never DONE.\n" + lines
+        "read its output. The gate passes when your row adds no NEW error: an error "
+        "inside your footprint, or one absent from the baseline below, fails it. If it "
+        "fails, return PARTIAL naming the failing command and its error, never DONE. "
+        "If every remaining error sits OUTSIDE your footprint (a sibling's file, or "
+        "present at run_base), your row is delivered: return PARTIAL with the report "
+        "line `gate-blocker: outside-footprint: <first error>` and nothing else undone.\n"
+        + lines
+        + f"{marker}_gateBaselineText({json.dumps(commands)}){marker}"
     )
 
 
@@ -3057,10 +3155,18 @@ _NODE_CHECK_DOES_NOT_APPLY_COMMENT = (
 
 
 def _meta_block(
-    name: str, description: str, phase_titles: list[str], chatty: bool = False
+    name: str,
+    description: str,
+    phase_titles: list[str],
+    chatty: bool = False,
+    box_terms: Sequence[str] = (),
 ) -> str:
+    """The script's ``meta`` literal. ``box_terms`` are the driver's binding box
+    constraints, recorded as ``boxTerms`` for a guard to read."""
     phases_literal = ", ".join(_js_string_literal(t) for t in phase_titles)
     chatty_line = "  chatty: true,\n" if chatty else ""
+    if box_terms:
+        chatty_line += f"  boxTerms: [{', '.join(_js_string_literal(t) for t in box_terms)}],\n"
     return (
         "export const meta = {\n"
         f"  name: {_js_string_literal(name)},\n"
@@ -3724,6 +3830,7 @@ def compose_script(
     predecessor_state: Optional[str] = None,
     precredited_rows: Optional[Sequence[str]] = None,
     review_only: bool = False,
+    box_terms: Sequence[str] = (),
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3950,8 +4057,14 @@ def compose_script(
         )
         body_blocks.append(_run_row_helper_js(agent_type_host))
 
+    gate_commands_all = _distinct_gate_commands(flat_rows, plan_context)
+    if gate_commands_all and not review_only:
+        body_blocks.append(_GATE_BASELINE_JS)
     pre_check_specs: list[AgentSpec] = []
     if predispatch:
+        if gate_commands_all and not review_only:
+            phase_titles.append(_GATE_BASELINE_PHASE_TITLE)
+            body_blocks.extend(_gate_baseline_blocks(gate_commands_all, agent_type_host))
         pre_check_specs = check_specs(flat_rows)
         phase_titles.append(CHECK_PHASE_TITLE)
         if review_specs:
@@ -4329,7 +4442,7 @@ def compose_script(
         )
     )
 
-    meta_block = _meta_block(name, description, phase_titles, chatty)
+    meta_block = _meta_block(name, description, phase_titles, chatty, box_terms)
     path_list_declaration = shared.path_list_declaration() if shared is not None else None
     if path_list_declaration is not None:
         body_blocks.insert(0, path_list_declaration)
@@ -4822,8 +4935,12 @@ def emit_script(
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
     credit_rows: Optional[Callable[[Path, str, Optional[str]], Sequence[str]]] = None,
+    box_terms: Sequence[str] = (),
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``box_terms`` are recorded in the script's ``meta.boxTerms``; the caller
+    also splices them into ``preamble`` so every brief carries them.
 
     ``landed_rows`` drops those rows from the emission and treats every edge
     onto them as satisfied, so the remaining rows are re-waved by file overlap
@@ -4907,7 +5024,9 @@ def emit_script(
     # silently dropped one leaves a plan reading fully executed with a step
     # nobody performed.
     exclusions: list = []
-    rows = read_spine(plan_path, exclusions=exclusions)
+    rows = read_spine(
+        plan_path, exclusions=exclusions, keep_coded=frozenset(review_only_rows or ())
+    )
     review_only = bool(review_only_rows)
     if review_only:
         if landed_rows:
@@ -5006,6 +5125,7 @@ def emit_script(
         session_id=session_id,
         agent_type_host=agent_type_host,
         preamble=preamble,
+        box_terms=box_terms,
         script_path=script_path,
         expected_branch=expected_branch,
         chatty=chatty,

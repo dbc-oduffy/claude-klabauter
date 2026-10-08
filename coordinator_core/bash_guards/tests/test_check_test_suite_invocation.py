@@ -2764,3 +2764,17 @@ def test_pytest_info_only_flags_are_not_a_suite_run(flag):
 
 def test_bare_pytest_is_still_suite_shaped():
     assert guard._classify_python_module(["python", "-m", "pytest"], ["tests"], None) == "python -m pytest"
+
+
+@pytest.mark.parametrize("flag", ["--rootdir", "--confcutdir", "--config-file"])
+def test_value_flag_dot_does_not_unscope_explicit_test_file(repo, free_mutex, flag):
+    command = "python -m pytest %s . coordinator_core/x/tests/test_y.py -q" % flag
+    assert guard.classify_command(command, cwd=str(repo)) == []
+    _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+
+
+def test_rootdir_dot_alone_is_still_unscoped(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    command = "python -m pytest --rootdir ."
+    assert guard.classify_command(command, cwd=str(repo)) != []
+    assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None

@@ -97,3 +97,19 @@ def test_case_insensitive_uuid_is_accepted(monkeypatch, tmp_path):
             {"paths": ["a.md"], "message": "m", "session_id": upper},
         )
     assert seen["session_id_override"] == upper
+
+
+def test_trailing_cr_is_stripped_from_every_path_list(monkeypatch, tmp_path):
+    seen: dict = {}
+
+    def fake_ignored(worktree_root, paths):
+        seen["paths"] = list(paths)
+        raise AssertionError("stop-after-capture")
+
+    monkeypatch.setattr(commit_v2, "_ignored_untracked", fake_ignored)
+    with pytest.raises(AssertionError, match="stop-after-capture"):
+        _call(
+            tmp_path / ".git",
+            {"paths": ["a.md\r", "b.md\r"], "deleted_paths": ["c.md\r"], "message": "m"},
+        )
+    assert seen["paths"] == ["a.md", "b.md"]

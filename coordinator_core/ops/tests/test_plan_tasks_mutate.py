@@ -1090,6 +1090,31 @@ def test_resolve_coded_no_pm_approved_needed(tmp_path):
     assert "disposition_detail: shipped in abc1234" in text
 
 
+def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    deferred = _PLAN_WITH_TASKS.replace(
+        "  deferred: false\n", "  deferred: true\n  deferred_until: 2026-12-01\n"
+    )
+    plan = _seed_plan(repo, "resolve-deferred.md", deferred)
+    before = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "coded",
+            "disposition_ref": "abc1234",
+            "disposition_detail": "shipped in abc1234",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert "row C1 is deferred (deferred_until: 2026-12-01); lift deferred_until first" in result["error"]
+    assert plan.read_text(encoding="utf-8") == before
+
+
 def test_resolve_governed_admits_on_approved_grouping(tmp_path, monkeypatch):
     """On a governed plan the per-row pm_approved boolean is absent by
     design, and an approved grouping whose digest covers this write is what

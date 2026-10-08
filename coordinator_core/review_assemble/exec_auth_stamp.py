@@ -573,6 +573,9 @@ def restamp_execution_authorization(
     *,
     at: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    delegation: Optional[str] = None,
+    delegation_source: Optional[str] = None,
+    standing_quote: Optional[str] = None,
 ) -> tuple[int, dict[str, Any]]:
     """Record a non-PM witness of the CURRENT plan body without disturbing
     the PM's own `execution_authorized_{by,at,note}` words
@@ -601,9 +604,19 @@ def restamp_execution_authorization(
 
     Refuses (`EXIT_USAGE`): a PM-shaped `by` (see `_is_pm_shaped`), or a
     *reason* containing a real newline.
-    Refuses (`EXIT_BUSINESS_FAIL`, exit 1): a plan with no complete prior
-    authorization (`execution_authorized_by` and `execution_authorized_sha`
-    both needed) -- there is nothing to restamp, and `stamp` is the route.
+    A plan with NO complete prior authorization (`execution_authorized_by`
+    and `execution_authorized_sha` both needed) restamps only when given a
+    delegation source (*delegation* + *delegation_source*, optional
+    *standing_quote* -- `authorize-invocation --authorized-by-delegation`'s
+    fields and validation). That is the executing-plan deadlock: a plan
+    claimed without minting whose body then changed legitimately, which
+    `stamp`/`authorize-invocation` refuse (APPROVED_BODY_CHANGED). One locked
+    write then mints the delegated `execution_authorized_*` quartet over the
+    live body and rebinds `approved_body_sha`. No `execution_restamped_*`
+    quartet is written: there is no earlier witnessed body to name as
+    `_from_sha`, and the delegated mint is itself the witness of the live
+    body. Without a delegation source the no-quartet case refuses
+    (`EXIT_BUSINESS_FAIL`) naming `--authorized-by-delegation`.
 
     Returns `(exit_code, result_dict)` in `stamp_execution_authorization`'s
     own shape (`applied`, `sha`, `message`).
@@ -626,6 +639,14 @@ def restamp_execution_authorization(
         )
     except ArgvFidelityError as exc:
         return EXIT_USAGE, {"error": str(exc)}
+
+    delegated = delegation is not None or delegation_source is not None
+    if delegated or standing_quote is not None:
+        refusal = _delegation_args_refusal(
+            "restamp", delegation or "", delegation_source or "", standing_quote
+        )
+        if refusal is not None:
+            return EXIT_USAGE, {"error": refusal}
 
     root = repo_root or resolve_repo_root()
     if root is None:
@@ -670,10 +691,34 @@ def restamp_execution_authorization(
         existing_by = read_fm_field_unquoted(fm, "execution_authorized_by")
         existing_sha = read_fm_field_unquoted(fm, "execution_authorized_sha")
         if not existing_by or not existing_sha:
-            raise MutateAbort(
-                f"{plan_path}: no prior execution authorization to restamp -- use "
-                f"`stamp` instead"
+            if not delegated:
+                raise MutateAbort(
+                    f"{plan_path}: no prior execution authorization to restamp -- "
+                    f"pass --authorized-by-delegation <authority> --delegation-source "
+                    f"<ref> (stamp and authorize-invocation refuse a changed body)"
+                )
+            note = _compose_delegation_note(
+                delegation.strip(), delegation_source.strip(), standing_quote
             )
+            note = f"{note}; restamped over changed body: {reason}"
+            new_fm = fm
+            mint = {
+                "execution_authorized_by": delegation.strip(),
+                "execution_authorized_at": at_value,
+                "execution_authorized_sha": sha,
+                "execution_authorized_note": note,
+            }
+            for field, value in mint.items():
+                numeric = field == "execution_authorized_sha"
+                try:
+                    if read_fm_field_unquoted(new_fm, field) is not None:
+                        new_fm = replace_fm_field(new_fm, field, value, numeric_quoting=numeric)
+                    else:
+                        new_fm = insert_fm_field(new_fm, field, value, numeric_quoting=numeric)
+                except ValueError as exc:
+                    raise MutateAbort(f"{plan_path}: cannot write {field} -- {exc}") from exc
+            state["applied"] = True
+            return rebuild(split, new_fm)
 
         if sha == existing_sha:
             state["applied"] = False
@@ -1030,6 +1075,24 @@ def _compose_delegation_note(
     return f"authorized by delegation: {authority} (source: {source})"
 
 
+def _delegation_args_refusal(
+    verb: str, authority: str, source: str, standing_quote: Optional[str]
+) -> Optional[str]:
+    """The refusal message for a malformed delegation triple, else None."""
+    for label, value in (("--authorized-by-delegation", authority), ("--delegation-source", source)):
+        if not value or not value.strip():
+            return f"refusing to {verb}: {label} must not be empty"
+    if standing_quote is not None and not standing_quote.strip():
+        return f"refusing to {verb}: --standing-direction-quote must not be empty"
+    for value in (authority, source, standing_quote or ""):
+        if any(ch in value for ch in (chr(10), chr(13))):
+            return (
+                f"refusing to {verb}: a real line break cannot be held by a "
+                "single-line frontmatter field -- pass each value as one line"
+            )
+    return None
+
+
 def stamp_delegation_authorization(
     plan_path: str,
     authority: str,
@@ -1049,17 +1112,9 @@ def stamp_delegation_authorization(
     whitespace *authority* or *source*, an empty/whitespace *standing_quote*,
     and any value carrying a real line break.
     """
-    for label, value in (("--authorized-by-delegation", authority), ("--delegation-source", source)):
-        if not value or not value.strip():
-            return EXIT_USAGE, {"error": f"refusing to mint: {label} must not be empty"}
-    if standing_quote is not None and not standing_quote.strip():
-        return EXIT_USAGE, {"error": "refusing to mint: --standing-direction-quote must not be empty"}
-    for value in (authority, source, standing_quote or ""):
-        if any(ch in value for ch in (chr(10), chr(13))):
-            return EXIT_USAGE, {
-                "error": "refusing to mint: a real line break cannot be held by a "
-                "single-line frontmatter field -- pass each value as one line"
-            }
+    refusal = _delegation_args_refusal("mint", authority, source, standing_quote)
+    if refusal is not None:
+        return EXIT_USAGE, {"error": refusal}
 
     root = repo_root or resolve_repo_root()
     if root is None:
@@ -1203,7 +1258,9 @@ USAGE = (
     "[--standing-direction-quote <PM's verbatim words>]) [--at <YYYY-MM-DD>]\n"
     "       review-exec-auth-stamp mark-reviewed <plan-path>\n"
     "       review-exec-auth-stamp restamp <plan-path> --by <witness> "
-    "--reason <one line> [--at <YYYY-MM-DD>]"
+    "--reason <one line> [--at <YYYY-MM-DD>] "
+    "[--authorized-by-delegation <authority> --delegation-source <ref> "
+    "[--standing-direction-quote <PM verbatim words>]]"
 )
 
 
@@ -1222,6 +1279,9 @@ def _main_restamp(rest: list[str]) -> int:
     by: Optional[str] = None
     reason: Optional[str] = None
     at: Optional[str] = None
+    delegation: Optional[str] = None
+    delegation_source: Optional[str] = None
+    standing_quote: Optional[str] = None
     i = 1
     while i < len(rest):
         arg = rest[i]
@@ -1234,9 +1294,28 @@ def _main_restamp(rest: list[str]) -> int:
         elif arg == "--at" and i + 1 < len(rest):
             at = rest[i + 1]
             i += 2
+        elif arg == "--authorized-by-delegation" and i + 1 < len(rest):
+            delegation = rest[i + 1]
+            i += 2
+        elif arg == "--delegation-source" and i + 1 < len(rest):
+            delegation_source = rest[i + 1]
+            i += 2
+        elif arg == "--standing-direction-quote" and i + 1 < len(rest):
+            standing_quote = rest[i + 1]
+            i += 2
         else:
             print(f"review-exec-auth-stamp: unrecognized argument: {arg}", file=sys.stderr)
             return EXIT_USAGE
+
+    if (delegation is None) != (delegation_source is None) or (
+        standing_quote is not None and delegation is None
+    ):
+        print(
+            "review-exec-auth-stamp: --authorized-by-delegation and --delegation-source "
+            "are required together (--standing-direction-quote needs both)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
 
     if by is None or reason is None:
         print(
@@ -1245,7 +1324,15 @@ def _main_restamp(rest: list[str]) -> int:
         )
         return EXIT_USAGE
 
-    exit_code, result = restamp_execution_authorization(plan_path, by, reason, at=at)
+    exit_code, result = restamp_execution_authorization(
+        plan_path,
+        by,
+        reason,
+        at=at,
+        delegation=delegation,
+        delegation_source=delegation_source,
+        standing_quote=standing_quote,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return exit_code
 
@@ -1303,6 +1390,26 @@ def _main_mark_reviewed(rest: list[str]) -> int:
     # does not make.
     rc = plan_status_transition.main(["stamp-reviewed", "--plan", plan_path])
     return EXIT_OK if rc == 0 else EXIT_BUSINESS_FAIL
+
+
+_SESSION_ID_ENV_VARS = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
+
+
+def _autonomous_session_active(env: Optional[Any] = None) -> bool:
+    """True when the invoking session (session-id env var) has an
+    autonomous-run sentinel file. Env lookup plus stat; no spawn. An
+    unresolvable session id reads as not autonomous."""
+    import os
+
+    from coordinator_core.session.autonomous_sentinel import sentinel_read_path
+
+    env = os.environ if env is None else env
+    for var in _SESSION_ID_ENV_VARS:
+        sid = env.get(var)
+        if sid:
+            path = sentinel_read_path(sid)
+            return path is not None and path.is_file()
+    return False
 
 
 def _main_authorize_invocation(rest: list[str]) -> int:
@@ -1395,6 +1502,15 @@ def _main_authorize_invocation(rest: list[str]) -> int:
     if typed_command is None:
         print(
             "review-exec-auth-stamp: --typed-command is required",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if _autonomous_session_active():
+        print(
+            "review-exec-auth-stamp: refusing --typed-command: this session is autonomous, "
+            "so the command was not a PM act; use --authorized-by-delegation <authority> "
+            "--delegation-source <ref>",
             file=sys.stderr,
         )
         return EXIT_USAGE

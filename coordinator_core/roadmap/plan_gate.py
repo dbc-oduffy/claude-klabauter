@@ -221,6 +221,8 @@ _BATON_FIELDS = frozenset(
         # scanner cannot read one — the constraint the schema's own field
         # descriptions record so nobody tidies them into a map later.
         "plan_blitz_hold_reason", "plan_blitz_hold_cite", "plan_blitz_hold_until",
+        # A non-empty value re-offers a pulled baton: the hold is cleared.
+        "plan_blitz_hold_cleared_by",
         # Terminal: the baton's work was folded into the baton this names.
         "superseded_by",
         # The OWNER's own declared gate. `deployment_state: awaiting_gate` above is
@@ -695,6 +697,27 @@ def _archived_sizing_index(worktree_root: Path) -> "Dict[str, str]":
     except OSError:
         return index
     return index
+
+
+def archived_plan_path(worktree_root: Path, rel: str) -> Optional[Path]:
+    """The `archive/specs/**` file a `docs/plans/<name>.md` path was archived to, or None.
+
+    The archive move keeps the basename and adds a `YYYY-MM/` folder (older moves
+    were flat), so the location is predicted, not indexed. Only a `docs/plans/`
+    path is eligible; a name filed in several months resolves to the newest.
+    """
+    parts = rel.replace("\\", "/").split("/")
+    if len(parts) < 3 or parts[0] != "docs" or parts[1] != "plans":
+        return None
+    name = parts[-1]
+    base = worktree_root / "archive" / "specs"
+    try:
+        found = sorted(p for p in base.glob(f"*/{name}") if p.is_file())
+        if not found and (base / name).is_file():
+            found = [base / name]
+    except OSError:
+        return None
+    return found[-1] if found else None
 
 
 def _iter_record_paths(root: Path, subdir: Sequence[str], recursive: bool) -> List[Path]:
@@ -2047,6 +2070,15 @@ def assemble_plan_gate(
         reason = str(record["_fm"].get("plan_blitz_hold_reason") or "").strip()
         if not reason:
             return None
+        cleared_by = str(record["_fm"].get("plan_blitz_hold_cleared_by") or "").strip()
+        if cleared_by:
+            hold_cleared_rows.append({
+                "baton": record["id"],
+                "path": record["path"],
+                "title": record["title"],
+                "cleared_by": cleared_by,
+            })
+            return None
         record["held"] = True
         return {
             "baton": record["id"],
@@ -2102,6 +2134,8 @@ def assemble_plan_gate(
                 "on a plan to be written"
             ),
         }
+
+    hold_cleared_rows: List[Dict[str, Any]] = []
 
     #: (bucket, rule), in precedence order. `bucket` is None for a rule whose
     #: withdrawal is the caller's own narrowing, and so reports nothing.
@@ -2450,6 +2484,7 @@ def assemble_plan_gate(
         "deliverable_id_collisions": deliverable_id_collision_rows,
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
+        "hold_cleared": hold_cleared_rows,
         "superseded": superseded_rows,
         "gated": gated_rows,
         "inert_fields": inert_rows,
@@ -2459,6 +2494,7 @@ def assemble_plan_gate(
             resurrected=len(resurrected_rows),
             replanned=len(replanned_rows),
             superseded=len(superseded_rows),
+            hold_cleared=len(hold_cleared_rows),
             superseded_deliverable=len(superseded_deliverable_rows),
             deliverable_id_collisions=len(deliverable_id_collision_rows),
             shared_wave_slot=len(shared_wave_slot_rows),

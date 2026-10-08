@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Literal, Mapping, NamedTuple, Optional, Set, Tuple
 
 from coordinator_core.git.run import GitResult, run_git
-from coordinator_core.session import core, liveness, touch_record
+from coordinator_core.session import claim_index, core, liveness, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
 _LOG = logging.getLogger(__name__)
@@ -1595,8 +1595,9 @@ def contested_by_live_peers(
     unchanged; only the return value now says which thing happened. This
     sits on the commit hot path every live session shares, where turning a
     read failure into a refusal would wedge the fleet on a bookkeeping
-    outage. ``project_live_claims`` already drops a RELEASE and a dead
-    session's TOUCH, so liveness needs no second gate here.
+    outage. The claim set is ``claim_index.lookup``'s (last-event-wins, so a
+    RELEASE drops the claim); a dead claimant is dropped here by
+    ``session_live``. An ``UNANSWERABLE`` path (aborted rebuild) is ``None``.
 
     A READ-KIND HOLD IS NOT A CONTEST, and filtering it out is this
     function's job rather than the record's. ``project_live_claims`` keeps
@@ -1629,56 +1630,37 @@ def contested_by_live_peers(
         base = core.sessions_dir(cwd)
         if not base or not os.path.isdir(base):
             return None
-        peer_sinks: List[str] = []
-        for entry in sorted(os.listdir(base)):
-            if entry == sid or entry in liveness._NON_SESSION_DIR_NAMES:
-                continue
-            peer_dir = os.path.join(base, entry)
-            if not os.path.isdir(peer_dir):
-                continue
-            sink = os.path.join(peer_dir, touch_record.RECORD_FILENAME)
-            if os.path.isfile(sink):
-                peer_sinks.append(sink)
-        if not peer_sinks:
-            return {}
     except Exception:
         return None
 
-    # Two passes, because the cheap answer and the complete answer are not
-    # the same read. `project_live_claims` folds its inputs last-verb-wins
-    # ACROSS streams, so ONE merged call over every peer sink answers "is
-    # anything contested at all" for 78ms (measured, this repo 2026-08-31)
-    # but names only the most recent claimant -- and the incident this gate
-    # exists for had TWO peers holding one file, where a refusal naming one
-    # of them sends the caller to coordinate with half the people it needs
-    # to. The per-sink pass below costs 140ms and names all of them, so it
-    # runs ONLY once the merged pass has proved there is something to name.
-    # Uncontested is the overwhelmingly common case and pays the 78ms only.
+    # One reader: `claim_index.lookup` is the same read `session-claim-cli
+    # who-claims-path` and the commit_v2 peer-claim warning use, so the gate
+    # cannot hold a claim set those two do not show. It keys on the claimant's
+    # session directory (agent sinks fold into their owner), normalises each
+    # path, and answers every requested path in one pass.
     try:
-        merged = touch_record.project_live_claims(*peer_sinks, cwd=cwd)
+        found = claim_index.lookup(sorted(wanted), sessions_dir=base)
     except Exception:
         return None
-    if not any(
-        path in wanted
-        and event.session_id != sid
-        and touch_record.kind_blocks_a_peer_commit(event.kind)
-        for path, event in merged.claims.items()
-    ):
-        return {}
 
     contested: Dict[str, List[str]] = {}
-    for sink in peer_sinks:
-        try:
-            projection = touch_record.project_live_claims(sink, cwd=cwd)
-        except Exception:
-            continue
-        for path, event in projection.claims.items():
-            if (
-                path in wanted
-                and event.session_id != sid
-                and touch_record.kind_blocks_a_peer_commit(event.kind)
-            ):
-                contested.setdefault(path, []).append(event.session_id)
+    live_by_sid: Dict[str, bool] = {}
+    kinds_by_path = found.recorded_kind or {}
+    for path in wanted:
+        claimants = found.get(path, [])
+        if claim_index.UNANSWERABLE in claimants:
+            return None
+        kinds = kinds_by_path.get(path, {})
+        for owner in claimants:
+            if owner == sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(owner)):
+                continue
+            if owner not in live_by_sid:
+                try:
+                    live_by_sid[owner] = bool(touch_record.session_live(owner, cwd))
+                except Exception:
+                    return None
+            if live_by_sid[owner]:
+                contested.setdefault(path, []).append(owner)
     return {path: sorted(set(owners)) for path, owners in contested.items()}
 
 

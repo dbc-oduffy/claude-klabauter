@@ -1330,6 +1330,102 @@ def _evaluate_docker_surface(cmd_norm: str) -> Optional[str]:
 _KILL_LIVENESS_ONLY_RE = re.compile(r"^-0$")
 
 
+def _pid_in_session_tree(pid: int) -> bool:
+    """True when `pid` is a live descendant of this session's `claude`
+    process (`CLAUDE_PID`, exported to every hook). psutil's `parents()`
+    validates each link by create time, so a recycled parent PID breaks the
+    chain and the answer is False. No spawn; psutil is imported only when a
+    subagent names an explicit PID. Session-scoped: a subagent's own launch
+    and a peer's are indistinguishable here."""
+    try:
+        claude_pid = int(os.environ.get("CLAUDE_PID", ""))
+    except ValueError:
+        return False
+    if pid <= 1 or claude_pid <= 1 or pid == claude_pid:
+        return False
+    try:
+        import psutil
+
+        return any(p.pid == claude_pid for p in psutil.Process(pid).parents())
+    except Exception:
+        return False
+
+
+def _all_pids_in_session_tree(values: List[str]) -> bool:
+    if not values:
+        return False
+    pids = []
+    for value in values:
+        if not value.isdigit():
+            return False
+        pids.append(int(value))
+    return all(_pid_in_session_tree(p) for p in pids)
+
+
+_KILL_SIGNAL_FLAG_RE = re.compile(r"^-(?:\d{1,2}|(?:SIG)?[A-Za-z]{2,8})$")
+
+
+def _kill_targets_session_pids(args: List[str]) -> bool:
+    """`kill [-SIGNAL | -s SIGNAL | -n NUM] [--] <numeric pid>...` where every
+    pid is in the session tree. Anything else (job specs, `$!`, negative or
+    zero pids, name-based `pkill`) is not provable."""
+    pids: List[str] = []
+    i = 0
+    seen_signal = False
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            pids.extend(args[i + 1 :])
+            break
+        if tok in ("-s", "-n") and not seen_signal and i + 1 < len(args):
+            seen_signal = True
+            i += 2
+            continue
+        if _KILL_SIGNAL_FLAG_RE.match(tok) and not seen_signal and not pids:
+            seen_signal = True
+            i += 1
+            continue
+        pids.append(tok)
+        i += 1
+    return _all_pids_in_session_tree(pids)
+
+
+_PS_STOP_PROCESS_SAFE_SWITCHES = frozenset({"-force", "-passthru", "-whatif"})
+_PS_STOP_PROCESS_SAFE_VALUED = frozenset({"-erroraction", "-ea"})
+
+
+def _ps_stop_process_targets_session_pids(rest: List[str]) -> bool:
+    """`Stop-Process -Id <n>[,<n>...]` (plus `-Force`/`-PassThru`/`-WhatIf`/
+    `-ErrorAction x`) where every pid is in the session tree. `-Name`,
+    `-InputObject`, positional or pipeline-fed targets are not provable."""
+    values: List[str] = []
+    i = 0
+    while i < len(rest):
+        low = rest[i].lower()
+        if low in _PS_STOP_PROCESS_SAFE_SWITCHES:
+            i += 1
+        elif low in _PS_STOP_PROCESS_SAFE_VALUED and i + 1 < len(rest):
+            i += 2
+        elif low == "-id" or low.startswith("-id:"):
+            tail = low[4:]
+            i += 1
+            if tail:
+                values.extend(v for v in tail.split(",") if v)
+            else:
+                if i < len(rest) and rest[i] == ":":
+                    i += 1
+                while i < len(rest):
+                    values.extend(v for v in rest[i].split(",") if v)
+                    i += 1
+                    if i < len(rest) and rest[i] == ",":
+                        i += 1
+                        continue
+                    break
+        else:
+            return False
+    return _all_pids_in_session_tree(values)
+
+
 def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
     """Deny `kill`/`pkill` UNLESS the only flag token present is the bare
     liveness-check `-0`. Scoping "a process this subagent itself launched"
@@ -1352,6 +1448,8 @@ def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
             continue
         flags = [tok for tok in working[1:] if tok.startswith("-") and tok != "--"]
         if flags == ["-0"] or (len(flags) == 1 and _KILL_LIVENESS_ONLY_RE.match(flags[0])):
+            continue
+        if head_base == "kill" and _kill_targets_session_pids(working[1:]):
             continue
         return f"{head_base} (process signal -- scoping deferred, see memo D2)"
     return None
@@ -3510,6 +3608,8 @@ def _evaluate_legacy_powershell_verbs(text):
         elif head in _PS_ICACLS_VERBS:
             return "PowerShell icacls (permission modification)"
         elif head in _PS_STOP_PROCESS_VERBS:
+            if _ps_stop_process_targets_session_pids(rest):
+                continue
             return "PowerShell stop-process (process termination)"
     return None
 
@@ -3567,7 +3667,8 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
             return f"PowerShell {head} (permission modification)"
 
         if head in _PS_STOP_PROCESS_VERBS:
-            return f"PowerShell {head} (process termination)"
+            if pipe_before or not _ps_stop_process_targets_session_pids(rest):
+                return f"PowerShell {head} (process termination)"
 
     return None
 

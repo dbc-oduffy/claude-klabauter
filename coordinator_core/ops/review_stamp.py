@@ -581,6 +581,17 @@ def mint(
             reverified_tests = latest_tests_supersession(repo_root, run_rel)
             if reverified_tests is not None:
                 integration_data = {**integration_data, "tests": reverified_tests}
+    prior_criterion = integration_data.get("criterion")
+    if isinstance(prior_criterion, dict) and prior_criterion.get("status") in _UNMET_CRITERION:
+        from datetime import datetime, timezone
+
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import _instant, latest_criterion_record
+
+        floor = _instant(integration_data.get("recorded_at")) or datetime.min
+        rejudged = latest_criterion_record(repo_root, plan_id, floor.replace(tzinfo=floor.tzinfo or timezone.utc))
+        verdict = rejudged["criterion"] if rejudged else None
+        if verdict and verdict["status"] == "met" and str(verdict.get("observation") or "").strip():
+            integration_data = {**integration_data, "criterion": {**verdict, "sidecar": rejudged["record_path"]}}
     delivery_verdict = delivery_data.get("verdict")
 
     fixes_applied = integration_data.get("fixes_applied")

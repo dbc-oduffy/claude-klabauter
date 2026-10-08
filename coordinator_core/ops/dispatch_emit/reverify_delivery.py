@@ -698,6 +698,30 @@ def compose_rejudge_script(
     )
 
 
+def recorded_unmet_criterion(
+    repo_root: Path, plan_id: Optional[str], plan_path: Optional[str] = None
+) -> Optional[dict]:
+    """`{status, run_base_sha}` when the delivery verdict in force for a plan records its exit
+    criterion `not_met`/`indeterminate` (the newest superseding verdict's, else the run record's
+    frozen one); `None` when nothing resolves or the criterion is not unmet."""
+    path, _block = resolve_delivery_in_force(repo_root, plan_id, plan_path)
+    fm = _frontmatter(path) if path else None
+    if not fm:
+        return None
+    criterion = latest_criterion_supersession(repo_root, _run_rel(repo_root, path))
+    if criterion is None:
+        for holder in (fm, fm.get("inline_review"), fm.get("review")):
+            block = holder.get("criterion") if isinstance(holder, dict) else None
+            if isinstance(block, dict) and block.get("status"):
+                criterion = block
+                break
+    status = criterion.get("status") if criterion else None
+    if status not in ("not_met", "indeterminate"):
+        return None
+    prep = prep_of(repo_root, fm)
+    return {"status": status, "run_base_sha": prep.get("run_base_sha") if isinstance(prep, dict) else None}
+
+
 def emit_rejudge(
     *, repo_root: Path, plan_path: str, out_path: str, agent_type_host: Optional[str] = None
 ) -> dict:
@@ -714,15 +738,24 @@ def emit_rejudge(
         fm = {}
     stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
     criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
-    if not isinstance(criterion, dict) or criterion.get("status") == "met":
-        raise ReverifyRefused(f"rejudge: {plan_path} carries no unmet review_stamp criterion to re-judge")
+    plan_id = str(fm.get("plan_id") or "") or None if isinstance(fm, dict) else None
+    if isinstance(criterion, dict) and criterion.get("status") != "met":
+        run_base_sha = stamp.get("run_base_sha")
+    else:
+        recorded = recorded_unmet_criterion(repo_root, plan_id, plan_path)
+        if recorded is None:
+            raise ReverifyRefused(
+                f"rejudge: {plan_path} carries no unmet review_stamp criterion and no recorded "
+                "delivery verdict with an unmet exit criterion to re-judge"
+            )
+        run_base_sha = recorded.get("run_base_sha")
     fragment, schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
     script = compose_rejudge_script(
         fragment=fragment,
         stage_schemas=schemas,
         plan_path=plan_path,
-        plan_id=str(fm.get("plan_id") or "") or None,
-        run_base_sha=stamp.get("run_base_sha"),
+        plan_id=plan_id,
+        run_base_sha=run_base_sha,
         head_sha=_head_sha(repo_root),
         repo_root=repo_root,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,

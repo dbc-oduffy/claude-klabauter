@@ -245,11 +245,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--review-only",
+        nargs="?",
+        const="",
         default=None,
         metavar="RUN_TEXT",
         help="with --plan and --run-base: emit a script that only reviews and tests the rows "
-        "RUN_TEXT's `checkpoint(wave N): ... — ids` subjects name as landed, over the "
-        "diff from --run-base to the worktree; no row, commit or push step is emitted",
+        "named by --rows and by RUN_TEXT's `checkpoint(wave N): ... — ids` subjects; with neither, "
+        "the plan's `coded` rows. Reviews the diff from --run-base to the worktree; "
+        "no row, commit or push step is emitted",
+    )
+    parser.add_argument(
+        "--rows",
+        default=None,
+        metavar="IDS",
+        help="with --review-only: comma-separated row ids to review (e.g. C1,C2); coded rows allowed",
     )
     parser.add_argument(
         "--run-base",
@@ -380,6 +389,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="repo root anchoring the op's containment/prompt resolution (default: the "
         "queue route derives one by walking up from cwd to the nearest .git; the "
         "plan/inventory route stays unanchored unless given explicitly)",
+    )
+    parser.add_argument(
+        "--box-terms",
+        dest="box_terms_path",
+        default=None,
+        metavar="FILE",
+        help="the box's binding constraints, plain text one term per line; appended to every "
+        "dispatched brief as `Box terms (from the driver; binding)` and recorded in the "
+        "emission receipt and the plan script's meta.boxTerms",
     )
     parser.add_argument(
         "--preamble",
@@ -724,6 +742,8 @@ def _do_resume(args: argparse.Namespace) -> int:
 
 def _review_only_refusal(args) -> "Optional[str]":
     """The usage error for a bad ``--review-only``/``--run-base`` combination, or None."""
+    if args.rows is not None and args.review_only is None:
+        return "--rows is accepted only with --review-only"
     if args.review_only is None and args.run_base is None:
         return None
     if args.review_only is None or args.run_base is None:
@@ -1096,6 +1116,27 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         preamble_text = preamble_bytes.decode("utf-8")
         preamble_sha256 = hashlib.sha256(preamble_bytes).hexdigest()
 
+    box_terms: "list[str]" = []
+    if args.box_terms_path:
+        try:
+            raw_terms = Path(args.box_terms_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"emit-dispatch-workflow: ERROR — --box-terms {args.box_terms_path!r} "
+                f"unreadable: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        box_terms = [ln.strip() for ln in raw_terms.splitlines() if ln.strip()]
+        if not box_terms:
+            print(
+                f"emit-dispatch-workflow: ERROR — --box-terms {args.box_terms_path!r} names no term",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        terms_block = "Box terms (from the driver; binding):" + "".join(f"\n- {t}" for t in box_terms)
+        preamble_text = f"{preamble_text}\n\n{terms_block}" if preamble_text else terms_block
+
     repo_root = Path(args.repo_root).resolve() if args.repo_root else None
     if repo_root is None and is_queue_route:
         repo_root = _default_repo_root_from_cwd()
@@ -1154,23 +1195,33 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["landed_rows"] = sorted(
                 landed_rows_from_text(Path(args.only_incomplete).read_text(encoding="utf-8"))
             )
-        if args.review_only:
+        if args.review_only is not None:
             from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
+            from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
 
-            try:
-                text = Path(args.review_only).read_text(encoding="utf-8")
-            except OSError as exc:
-                print(
-                    f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
-                    f"unreadable: {exc}",
-                    file=sys.stderr,
-                )
-                return EXIT_USAGE
-            review_rows = sorted(landed_rows_from_text(text))
+            review_set = {r.strip() for r in (args.rows or "").split(",") if r.strip()}
+            if args.review_only:
+                try:
+                    text = Path(args.review_only).read_text(encoding="utf-8")
+                except OSError as exc:
+                    print(
+                        f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
+                        f"unreadable: {exc}",
+                        file=sys.stderr,
+                    )
+                    return EXIT_USAGE
+                review_set |= landed_rows_from_text(text)
+            if not review_set:
+                try:
+                    review_set = set(coded_row_ids(args.plan))
+                except (OSError, SpineReadError) as exc:
+                    print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+                    return EXIT_DATA_ERROR
+            review_rows = sorted(review_set)
             if not review_rows:
                 print(
-                    f"emit-dispatch-workflow: ERROR — --review-only {args.review_only!r} "
-                    "names no landed row",
+                    "emit-dispatch-workflow: ERROR — --review-only names no row: pass --rows, "
+                    "RUN_TEXT with checkpoint subjects, or a plan with coded rows",
                     file=sys.stderr,
                 )
                 return EXIT_DATA_ERROR
@@ -1188,6 +1239,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         inventory_root = repo_root or _default_repo_root_from_cwd()
         if inventory_root is not None:
             params["inventory_repo_root"] = str(inventory_root)
+    if box_terms:
+        params["box_terms"] = box_terms
+        params["box_terms_path"] = args.box_terms_path
     if preamble_text is not None:
         params["preamble"] = preamble_text
         params["preamble_path"] = args.preamble_path

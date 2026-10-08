@@ -62,7 +62,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.git.run import run_git
+from coordinator_core.git.run import GitResult, run_git
 
 
 class ThrowawayTreeError(RuntimeError):
@@ -186,6 +186,52 @@ def _throwaway_parent(dest_repo_root: Path) -> Path:
     return parent
 
 
+LOOSE_OBJECT_THRESHOLD = 2000
+
+
+def _estimated_loose_objects(dest_repo_root: Path) -> int:
+    """Spawn-free loose-object estimate: git's own `gc --auto` heuristic,
+    one fan-out directory (`17`) scaled by 256. Returns 0 when the dest has
+    no plain `.git/objects` directory."""
+    try:
+        with os.scandir(Path(dest_repo_root) / ".git" / "objects" / "17") as it:
+            return sum(1 for _ in it) * 256
+    except OSError:
+        return 0
+
+
+def _compact_loose_objects(dest_repo_root: Path) -> None:
+    """Pack the dest's loose objects before the clone hardlinks them one by
+    one. Best effort: a failed or timed-out leg only warns, because the
+    clone still works, merely slowly.
+
+    Trap: `run_git` has no long-running lane (`remote=True` is the widest
+    bound, 40s wall); a repack of ~10k loose objects measured 36s, so a
+    heavier backlog times out here and is finished by the next round."""
+    estimate = _estimated_loose_objects(dest_repo_root)
+    if estimate <= LOOSE_OBJECT_THRESHOLD:
+        return
+    for args in (["repack", "-d", "-q"], ["prune-packed"]):
+        result = run_git(["-C", str(dest_repo_root), *args], remote=True)
+        if result.returncode != 0:
+            why = "timed out" if result.timed_out else f"exit {result.returncode}"
+            print(
+                f"[warn] build_throwaway_tree: git {args[0]} on {dest_repo_root} "
+                f"{why} (~{estimate} loose objects); continuing",
+                file=sys.stderr,
+            )
+            return
+
+
+def _clone_failure_detail(result, dest_repo_root: Path) -> str:
+    if result.timed_out:
+        return (
+            f"timed out (dest has ~{_estimated_loose_objects(dest_repo_root)} "
+            "loose objects; run `git repack -d && git prune-packed` there)"
+        )
+    return f"exit {result.returncode}: {result.stderr.strip()}"
+
+
 def build_throwaway_tree(
     dest_repo_root: Path,
     overlays: "list[tuple[Path, Path]]",
@@ -222,6 +268,7 @@ def build_throwaway_tree(
     """
     dest_repo_root = Path(dest_repo_root)
     build_start = time.perf_counter()
+    _compact_loose_objects(dest_repo_root)
     try:
         tmp_dir = Path(tempfile.mkdtemp(prefix="claude-klabauter-throwaway-tree-", dir=_throwaway_parent(dest_repo_root)))
     except OSError:
@@ -246,8 +293,8 @@ def build_throwaway_tree(
             )
         if result.returncode != 0:
             raise ThrowawayTreeError(
-                f"git clone --local --no-checkout failed for {dest_repo_root} "
-                f"(exit {result.returncode}): {result.stderr.strip()}"
+                f"git clone --local --no-checkout failed for {dest_repo_root}: "
+                f"{_clone_failure_detail(result, dest_repo_root)}"
             )
 
         # Trap: a clone does not inherit the dest's local line-ending config, so

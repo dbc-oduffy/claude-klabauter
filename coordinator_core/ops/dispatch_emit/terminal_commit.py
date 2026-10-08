@@ -814,6 +814,63 @@ def _partial_chunks(
     return out
 
 
+_GATE_BLOCKER_RE = re.compile(
+    r"^[ \t>#-]*[*_`]{0,2}gate-blocker[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*outside-footprint\b(?P<rest>[^\n]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _reviewed_files_if_passed(inline_review: dict) -> Optional[set]:
+    """The files the review wave covered (``prep.slice_files``), or ``None`` when the
+    review did not pass: delivery verdict PASS, no unresolved finding, no confinement
+    violation. Absent evidence is not a pass."""
+    prep = inline_review.get("prep")
+    delivery = inline_review.get("delivery")
+    integration = inline_review.get("integration")
+    if not (isinstance(prep, dict) and isinstance(delivery, dict) and isinstance(integration, dict)):
+        return None
+    files = prep.get("slice_files")
+    if (
+        delivery.get("verdict") != "PASS"
+        or integration.get("unresolved")
+        or integration.get("confinement_violations")
+        or not isinstance(files, list)
+    ):
+        return None
+    return {f for f in files if isinstance(f, str)}
+
+
+def _regradable_chunks(
+    worktree_root: Path, request: CommitRequest, incomplete: set, inline_review: dict,
+    report_cache: dict,
+) -> dict:
+    """``{chunk id: gate-blocker text}`` for executor-PARTIAL chunks the run's own review
+    clears: the report carries a ``gate-blocker: outside-footprint`` line (the row's build
+    gate went red only from errors outside its footprint), every declared and own-prefix
+    file sits in ``prep.slice_files``, and the review passed. Prose that merely resembles
+    the cause does not qualify; a chunk with no files never does."""
+    reviewed = _reviewed_files_if_passed(inline_review)
+    if reviewed is None:
+        return {}
+    out: dict = {}
+    for chunk in request.chunks:
+        if chunk.id not in incomplete or not chunk.report:
+            continue
+        text = _read_rel(worktree_root, chunk.report)
+        if text is None or not _PARTIAL_REPORT_RE.search(text):
+            continue
+        blocker = _GATE_BLOCKER_RE.search(text)
+        if blocker is None:
+            continue
+        prefix_files = _own_prefix_files(worktree_root, chunk, report_cache)
+        if prefix_files is None:
+            continue
+        files = set(chunk.paths) | set(prefix_files)
+        if files and files <= reviewed:
+            out[chunk.id] = f"outside-footprint{blocker.group('rest').rstrip()}"[:_UNDONE_CAP]
+    return out
+
+
 def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     """The subset of ``paths`` whose worktree bytes differ from HEAD (modified,
     added, untracked or deleted): the files a commit over them can carry. One
@@ -994,6 +1051,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``entangled: ...``; land the pair by hand once the definer is finished.
     ``blockers`` (present only when non-empty) maps each executor-PARTIAL row, whose
     files stay uncommitted, to the undone work its report names.
+    ``regraded`` (present only when non-empty) maps each executor-PARTIAL row, re-graded
+    complete, to its blocker: the report's ``gate-blocker: outside-footprint`` line, every
+    file of the row in the passed review's ``prep.slice_files``. It commits with the run,
+    leaves ``incomplete_chunks``, and is coded like a DONE row.
     Once the run reaches its commit (every refusal and no-op before that omits it),
     the reply also carries ``undeclared_dirty`` -- the
     dirty files (modified or untracked) in the directories of the run's declared
@@ -1005,19 +1066,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     scope: dict = {}
     gated_ids: set = set()
     blockers: dict = {}
-    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers)
+    regraded: dict = {}
+    reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers, regraded)
     reply["stranded"] = stranded
     if blockers:
         reply["blockers"] = blockers
+    if regraded:
+        reply["regraded"] = regraded
     if scope:
         reply.update(_undeclared_dirty(scope["root"], scope["request"]))
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
-    if landed and isinstance(incomplete, list) and isinstance(landed, list):
-        reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed))
+    if (landed or regraded) and isinstance(incomplete, list) and isinstance(landed, list):
+        reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
     if isinstance(incomplete, list) and isinstance(landed, list):
         entangled = reply.get("entangled") or {}
-        open_ids = (set(incomplete) - set(landed)) | set(entangled)
+        open_ids = (set(incomplete) - set(landed) - set(regraded)) | set(entangled)
         reasons = {}
         for i in sorted(open_ids):
             if i in gated_ids:
@@ -1053,6 +1117,7 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
 def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     gated_ids: Optional[set] = None, blockers: Optional[dict] = None,
+    regraded: Optional[dict] = None,
 ) -> dict:
     if repo_root is None:
         return _error(
@@ -1269,6 +1334,14 @@ def _terminal_commit(
             bookkeeping_record_path = None
 
     known_ids = {chunk.id for chunk in request.chunks}
+    report_cache: dict = {}
+    regraded_here = _regradable_chunks(
+        worktree_root, request, incomplete_chunks, inline_review, report_cache
+    )
+    if regraded_here:
+        incomplete_chunks = incomplete_chunks - set(regraded_here)
+        if regraded is not None:
+            regraded.update(regraded_here)
     # The wake digest lists every unfinished row, including rows that never
     # started and so never reached the marker; those carry no paths to hold
     # back, so they are reported, not refused.
@@ -1277,7 +1350,6 @@ def _terminal_commit(
         {c.id: list(c.paths) for c in request.chunks if c.id in incomplete_chunks}
     )
 
-    report_cache: dict = {}
     withheld_partial: dict = {}
     partial_chunks = _partial_chunks(worktree_root, request, incomplete_chunks, withheld_partial)
     partial_ids = {c.id for c in partial_chunks}

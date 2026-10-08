@@ -717,6 +717,11 @@ _PYTEST_VALUE_FLAGS = frozenset({
     "--override-ini", "--import-mode", "--basetemp", "--capture", "--dist",
     "--numprocesses", "--cov", "--cov-report", "--cov-config", "--result-log",
     "--confcutdir", "--assert", "--doctest-glob", "--pdbcls", "--color",
+    "--config-file", "--durations", "--durations-min", "--junit-prefix",
+    "--log-file", "--log-file-level", "--log-format", "--log-date-format",
+    "--log-cli-format", "--log-cli-date-format", "--show-capture",
+    "--code-highlight", "--timeout", "--reruns", "--maxprocesses",
+    "--max-worker-restart", "--pythonwarnings", "--doctest-report",
 })
 
 _PYTEST_SCOPING_FLAGS = frozenset({
