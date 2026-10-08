@@ -3661,6 +3661,9 @@ _GROUPING_APPROVAL_HINT = (
 )
 
 
+_SPINE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def _plan_tasks_spine_rows(source: str) -> list[dict] | None:
     """The plan's spine rows, or None when the spine cannot be read cleanly.
 
@@ -3675,8 +3678,11 @@ def _plan_tasks_spine_rows(source: str) -> list[dict] | None:
     if result.status is not LocateStatus.LOCATED:
         return None
 
+    # The C loader `spine_read._parse_rows` already uses for this same block,
+    # so the lints and the emitter read one answer; the pure-Python loader
+    # cost ~10ms a plan, paid twice per `read_spine`.
     try:
-        rows = yaml.safe_load(result.body) or []
+        rows = yaml.load(result.body, Loader=_SPINE_LOADER) or []
     except yaml.YAMLError:
         return None
 

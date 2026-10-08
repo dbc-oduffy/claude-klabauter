@@ -15,8 +15,7 @@ stage runs per subject and `{{scratch_dir}}` is that subject's own directory.
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
@@ -41,7 +40,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
 )
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
-__all__ = ["compose_pipeline_script", "compose_chain_script"]
+__all__ = ["compose_pipeline_script"]
 
 _FAN_TRAILER = (
     "const fanTrailer = (item, i, n, out) => "
@@ -84,7 +83,6 @@ def _fill(
     errors: list[str],
     item: Mapping | str | None = None,
     scratch: str | None = None,
-    brief: str | None = None,
     _seen: tuple[str, ...] = (),
 ) -> str:
     """One `re.sub` pass; an unresolvable token is recorded in `errors` and left in place."""
@@ -92,7 +90,7 @@ def _fill(
     def value(match) -> str:
         token = match.group(1)
         if token == "brief":
-            return inputs.brief if brief is None else brief
+            return inputs.brief
         if token == VALIDATOR_TOKEN:
             return inputs.validator
         if token == "scratch_dir":
@@ -139,7 +137,6 @@ def _fill(
                 errors=errors,
                 item=_ITEM_SLOT if stages[parts[1]].fan_out.kind == FAN_OUT_OVER else item,
                 scratch=scratch,
-                brief=brief,
                 _seen=_seen + (parts[1],),
             )
         errors.append(f"unknown placeholder {{{{{token}}}}}")
@@ -294,7 +291,6 @@ def _level_lines(
     stages: Mapping[str, Stage],
     agent_type_host: str | None,
     indent: str,
-    tag: str = "",
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -314,29 +310,8 @@ def _level_lines(
             for k, stage_id in enumerate(level):
                 lines.append(f"{indent}  {target}[{_js_string_literal(stage_id)}] = level[{k}];")
             lines.append(f"{indent}}}")
-        for stage_id in level:
-            lines += _halt_lines(stages[stage_id], scope, manifest.pipeline, indent, tag)
         lines.append("")
     return lines
-
-
-def _halt_lines(stage: Stage, scope: str, pipeline: str, indent: str, tag: str) -> list[str]:
-    """The early return of a `halts_unless` stage: its recorded boolean is false, so the run ends carrying the stage's remedy."""
-    if stage.halts_unless is None:
-        return []
-    ref = f"{_RETURN_NAME[scope]}[{_js_string_literal(stage.id)}]"
-    push = (
-        f"results.push({{ subject: s.subject, returns: ret{tag} }});"
-        if scope == SCOPE_SUBJECT
-        else f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});"
-    )
-    halted = _js_string_literal(f"{pipeline}.{stage.id}")
-    return [
-        f"{indent}if ({ref} && {ref}[{_js_string_literal(stage.halts_unless)}] === false) {{",
-        f"{indent}  {push}",
-        f"{indent}  return {{ halted: {halted}, decision_required: {ref}.remedy || [], results }};",
-        f"{indent}}}",
-    ]
 
 
 def _element_value(element: object) -> object:
@@ -344,28 +319,23 @@ def _element_value(element: object) -> object:
     return element["slug"] if isinstance(element, dict) and "slug" in element else element
 
 
-Segment = tuple[Manifest, PipelineInputs, Schedule]
-
-
-def _segment(
+def compose_pipeline_script(
     manifest: Manifest,
     inputs: PipelineInputs,
     schedule: Schedule,
-    agent_type_host: str | None,
-    errors: list[str],
     *,
-    chained: bool,
-) -> tuple[list[str], list[str], list[Stage]]:
-    """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline."""
+    run_id: str,
+    agent_type_host: str | None,
+) -> str:
+    """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
     stages = {stage.id: stage for stage in manifest.stages}
+    errors: list[str] = []
     if (
         ITEM_MARK in inputs.brief
         or ITEM_MARK in (inputs.validator or "")
         or any(ITEM_MARK in json.dumps(sub) for sub in inputs.subjects)
     ):
         errors.append("the brief, the validator or a subject carries the reserved item marker")
-    first = manifest.stages[0] if manifest.stages else None
-    rebinds = first is not None and first.produces_brief and first.id not in schedule.skipped
 
     def fill_stage(stage: Stage, subject: str | None, item: Mapping | str | None = None) -> tuple[str, str]:
         template = manifest.templates[stage.template]
@@ -377,8 +347,6 @@ def _segment(
             manifest=manifest, inputs=inputs, stages=stages, subject=subject, errors=errors,
             item=item, scratch=scratch,
         )
-        if rebinds and stage.id != first.id:
-            kwargs["brief"] = _fill(first.output, **{**kwargs, "item": None})
         return _fill(template, **kwargs), _fill(stage.output, **kwargs)
 
     def scoped(scope: str, subject: str | dict | None) -> dict[str, dict]:
@@ -412,75 +380,18 @@ def _segment(
     common = {
         scope: scoped(scope, None) for scope in (SCOPE_PRE, SCOPE_POST)
     }
+    if errors:
+        raise PipelineEmitRefused(sorted(set(errors)))
+
+    prefix = f"{RUN_ID_PREFIX}{manifest.pipeline}-"
+    name = run_id if run_id.startswith(prefix) else prefix + run_id
     active = [stage for stage in manifest.stages if stage.id not in schedule.skipped]
+    phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(stage_phase(s) for s in active))
+    description = manifest.description or f"Pipeline {manifest.pipeline} over {len(inputs.subjects)} subject(s), run sequentially"
     has_common = any(common[s]["prompts"] or common[s].get("items") for s in common)
     roster_names = sorted({
         s.agent_type_from.split(".", 1)[1] for s in active if s.agent_type_from is not None
     })
-    data = [f"const subjects = {json.dumps(subject_data, ensure_ascii=True, indent=1)};"]
-    if has_common:
-        merged = {
-            "prompts": {**common[SCOPE_PRE]["prompts"], **common[SCOPE_POST]["prompts"]},
-            "outputs": {**common[SCOPE_PRE]["outputs"], **common[SCOPE_POST]["outputs"]},
-        }
-        merged_items = {**common[SCOPE_PRE].get("items", {}), **common[SCOPE_POST].get("items", {})}
-        if merged_items:
-            merged["items"] = merged_items
-        data.append(f"const common = {json.dumps(merged, ensure_ascii=True, indent=1)};")
-    if roster_names:
-        roster = {n: {e["slug"]: e["agent_type"] for e in inputs.lists[n]} for n in roster_names}
-        data.append(f"const rosterTypes = {json.dumps(roster, ensure_ascii=True, indent=1)};")
-
-    tag = f", pipeline: {_js_string_literal(manifest.pipeline)}" if chained else ""
-    body = ["const pre = {};", "const post = {};", "const subjRets = [];"]
-    if not chained:
-        body.append("const results = [];")
-    body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag)
-    body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag)
-    body += [
-        f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
-        "  } catch (err) {",
-        f"    results.push({{ subject: s.subject, returns: ret, error: String(err && err.message || err){tag} }});",
-        "  }",
-        "}",
-        "",
-    ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag)
-    for scope in (SCOPE_PRE, SCOPE_POST):
-        if schedule.levels.get(scope):
-            body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
-    return data, body, active
-
-
-def compose_chain_script(
-    segments: Sequence[Segment],
-    *,
-    run_id: str,
-    agent_type_host: str | None,
-) -> str:
-    """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first writes under `{{scratch_dir}}/<pipeline>/`."""
-    if not segments:
-        raise PipelineEmitRefused(["a chain needs at least one segment"])
-    chained = len(segments) > 1
-    errors: list[str] = []
-    parts = []
-    for index, (manifest, inputs, schedule) in enumerate(segments):
-        if chained and index > 0:
-            inputs = replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{manifest.pipeline}")
-        parts.append((manifest, inputs, _segment(
-            manifest, inputs, schedule, agent_type_host, errors, chained=chained,
-        )))
-    if errors:
-        raise PipelineEmitRefused(sorted(set(errors)))
-
-    manifest, inputs, _ = parts[0]
-    prefix = f"{RUN_ID_PREFIX}{manifest.pipeline}-"
-    name = run_id if run_id.startswith(prefix) else prefix + run_id
-    active = [stage for _, _, (_, _, act) in parts for stage in act]
-    phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(stage_phase(s) for s in active))
-    description = manifest.description or f"Pipeline {manifest.pipeline} over {len(inputs.subjects)} subject(s), run sequentially"
     out = [
         "export const meta = {",
         f"  name: {_js_string_literal(name)},",
@@ -489,34 +400,43 @@ def compose_chain_script(
         "};",
         "",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
+        f"const subjects = {json.dumps(subject_data, ensure_ascii=True, indent=1)};",
     ]
-    if not chained:
-        out += parts[0][2][0]
-    fanned = [(m, s) for m, _, (_, _, act) in parts for s in act if s.fan_out.kind == FAN_OUT_OVER]
-    if any(s.max_concurrent is None for _, s in fanned):
+    if has_common:
+        merged = {
+            "prompts": {**common[SCOPE_PRE]["prompts"], **common[SCOPE_POST]["prompts"]},
+            "outputs": {**common[SCOPE_PRE]["outputs"], **common[SCOPE_POST]["outputs"]},
+        }
+        merged_items = {**common[SCOPE_PRE].get("items", {}), **common[SCOPE_POST].get("items", {})}
+        if merged_items:
+            merged["items"] = merged_items
+        out.append(f"const common = {json.dumps(merged, ensure_ascii=True, indent=1)};")
+    if roster_names:
+        roster = {n: {e["slug"]: e["agent_type"] for e in inputs.lists[n]} for n in roster_names}
+        out.append(f"const rosterTypes = {json.dumps(roster, ensure_ascii=True, indent=1)};")
+    fanned = [s for s in active if s.fan_out.kind == FAN_OUT_OVER]
+    if any(s.max_concurrent is None for s in fanned):
         out += ["", _FAN_OUT]
-    if any(s.max_concurrent is not None for _, s in fanned):
+    if any(s.max_concurrent is not None for s in fanned):
         out += ["", _IN_CHUNKS]
-    if any(not s.fan_out.emit_time and _uses_item(s, m) for m, s in fanned):
+    if any(not s.fan_out.emit_time and _uses_item(s, manifest) for s in fanned):
         out += ["", _WITH_ITEM]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
-    if chained:
-        out += ["const results = [];", ""]
-        for _, _, (data, body, _) in parts:
-            out += ["{"] + data + body + ["}", ""]
-    else:
-        out += parts[0][2][1]
+    out += ["const pre = {};", "const post = {};", "const subjRets = [];", "const results = [];", ""]
+    out += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "")
+    out += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
+    out += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ")
+    out += [
+        "    results.push({ subject: s.subject, returns: ret });",
+        "  } catch (err) {",
+        "    results.push({ subject: s.subject, returns: ret, error: String(err && err.message || err) });",
+        "  }",
+        "}",
+        "",
+    ]
+    out += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "")
+    for scope in (SCOPE_PRE, SCOPE_POST):
+        if schedule.levels.get(scope):
+            out.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]} }});")
     out += ["return results;", ""]
     return "\n".join(out)
-
-
-def compose_pipeline_script(
-    manifest: Manifest,
-    inputs: PipelineInputs,
-    schedule: Schedule,
-    *,
-    run_id: str,
-    agent_type_host: str | None,
-) -> str:
-    """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
-    return compose_chain_script([(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host)

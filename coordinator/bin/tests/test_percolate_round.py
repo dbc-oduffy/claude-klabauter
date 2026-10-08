@@ -692,19 +692,46 @@ def test_commit_pathspec_derived_from_real_run_not_dry_run(tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def test_round_spawns_no_run_all_checks_even_when_the_script_exists(tmp_path, monkeypatch):
-    """The in-round CI smoke is deleted: a landed commit, no run-all-checks
-    spawn, and no ci-smoke verdict line."""
+def test_commit_ordered_after_ci_smoke_is_false_ci_runs_after_commit(tmp_path, monkeypatch):
+    """AC8: CI smoke is ordered AFTER the commit."""
     commit_calls = _install_commit_pipeline_stub(monkeypatch)
     monkeypatch.setattr(Path, "exists", lambda self: True)
 
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
     assert rc == _mod._EXIT_OK
 
+    # Re-derived: the commit leg is now an in-process `commit_paths` call,
+    # so it no longer shares CI smoke's subprocess call-order list to
+    # compare indices against. `_cmd_round_default`'s own Step 4 comment
+    # ("CI smoke (after the commit)") is the ordering guarantee -- the
+    # commit block runs and returns, unconditionally, before that step is
+    # reached in the same linear function body. One landed commit plus one
+    # CI-smoke subprocess call IS that claim.
     assert len(commit_calls) == 1
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
-    assert ci_calls == []
-    assert "ci-smoke" not in out
+    assert len(ci_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC8 — a red CI exit means no push command is printed and exit is non-zero.
+# ---------------------------------------------------------------------------
+
+def test_red_ci_prints_no_push_command_and_fails(tmp_path, monkeypatch):
+    commit_calls = _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=1)
+    assert rc == _mod._EXIT_FAIL
+    assert "git -C" not in out
+    assert f"git -C {dest} push" not in out
+    assert "percolate-push alpha" not in out
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+    # The commit itself must still have landed (locally) before the red CI
+    # was even observed -- CI-after-commit ordering holds on the FAIL path
+    # too, not just the PASS path.
+    assert len(commit_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1411,6 +1438,21 @@ def test_review_warnings_yield_pass_with_warnings_verdict(tmp_path, monkeypatch)
     assert "Phase 4 audit found REVIEW items" in out2
 
 
+@pytest.mark.pending_fix
+def test_no_ci_script_at_dest_skips_ci_smoke(tmp_path, monkeypatch):
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_exists=False)
+
+    assert rc == _mod._EXIT_OK
+    assert "(no .github/scripts/run-all-checks.py at dest" in out
+    assert "ci-smoke:  n/a (no run-all-checks.py)" in out
+
+    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    assert ci_calls == []
+
+
 def test_gate_fires_without_yes_accepted_proceeds(tmp_path, monkeypatch):
     """gate_fires=True, no --yes, operator accepts: input() is consulted
     and the round proceeds through commit. Re-derived (C12): the commit leg
@@ -1730,6 +1772,7 @@ def test_failed_row_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         real_returncode=1,
         declined_paths=[],
         has_review_warnings=False,
+        ci_exit=None,
     ) == "the real publish run did not succeed"
 
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
@@ -1792,6 +1835,7 @@ def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         real_returncode=0,
         declined_paths=[{"path": "some/declined.md", "reason": material_reason}],
         has_review_warnings=False,
+        ci_exit=None,
     ) == "1 path(s) were declined during commit"
     # A gitignored-only decline batch is partitioned away inside
     # `_round_refusal_reason` itself and must NOT refuse on its own.
@@ -1799,10 +1843,35 @@ def test_declined_paths_refuses_with_reason_and_no_push(tmp_path, monkeypatch):
         real_returncode=0,
         declined_paths=[{"path": "cache/ignored.pyc", "reason": "excluded by .gitignore"}],
         has_review_warnings=False,
+        ci_exit=None,
     ) is None
 
     ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
     assert ci_calls == []
+    for call in spy.calls:
+        assert not any(str(token) == "push" for token in call)
+
+
+def test_ci_red_refuses_with_named_reason_and_no_push(tmp_path, monkeypatch):
+    """CI-red is the one refusing condition that actually reaches
+    `_round_refusal_reason`'s own call site in `_cmd_round` (the other two
+    already returned early) — the terminal message names the CI failure
+    instead of a generic "not clean"."""
+    _install_commit_pipeline_stub(monkeypatch)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+    rc, out, spy, dest = _run_round(tmp_path, monkeypatch, ci_returncode=1)
+
+    assert rc == _mod._EXIT_FAIL
+    assert "percolate-round: publish refused — CI smoke came back red (exit 1)" in out
+
+    assert _mod._round_refusal_reason(
+        real_returncode=0,
+        declined_paths=[],
+        has_review_warnings=False,
+        ci_exit=1,
+    ) == "CI smoke came back red (exit 1)"
+
     for call in spy.calls:
         assert not any(str(token) == "push" for token in call)
 
@@ -1848,6 +1917,25 @@ def test_declined_paths_failure_writes_round_failure_marker(tmp_path, monkeypatc
     assert "timestamp" in data
 
 
+def test_ci_red_failure_writes_round_failure_marker(tmp_path, monkeypatch):
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True)
+    _install_commit_pipeline_stub(monkeypatch, result=_default_commit_outcome(sha="deadbeef0001"))
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+    rc, out, spy, dest = _run_round(
+        tmp_path, monkeypatch, ci_returncode=1, percolate_root=percolate_root
+    )
+    assert rc == _mod._EXIT_FAIL
+
+    marker = _marker_path(percolate_root)
+    assert marker.is_file()
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["reason"] == "ci_red"
+    assert data["sha"] == "deadbeef0001"
+    assert "timestamp" in data
+
+
 def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkeypatch):
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup" / "percolate-state").mkdir(parents=True)
@@ -1889,16 +1977,22 @@ def test_subsequent_clean_round_clears_marker_before_publishing(tmp_path, monkey
 # itself pushes.
 # ---------------------------------------------------------------------------
 
-def test_crash_after_commit_before_clear_leaves_marker_standing(tmp_path, monkeypatch):
-    """A process death between the commit landing and the clean-verdict
-    clear must leave the marker in place -- simulated by making
-    `_clear_round_failure_marker` raise. The commit outcome is driven via
-    `_install_commit_pipeline_stub`."""
+def test_crash_after_commit_before_ci_smoke_leaves_marker_standing(tmp_path, monkeypatch):
+    """A process death between the commit landing and CI smoke completing
+    must leave the marker in place — simulated here by making the CI-smoke
+    subprocess call raise, so the round never reaches the clear-marker
+    branch at all. Re-derived (C12): the commit leg is now an in-process
+    `commit_paths` call, so its outcome is driven via §
+    `_install_commit_pipeline_stub` rather than a `commit_stdout` JSON
+    payload the killed subprocess sentinel used to answer."""
     percolate_root = tmp_path / "percolate-root"
     (percolate_root / "setup").mkdir(parents=True)
 
     dest = tmp_path / "dest"
     dest.mkdir()
+    ci_dir = dest / ".github" / "scripts"
+    ci_dir.mkdir(parents=True)
+    (ci_dir / "run-all-checks.py").write_text("", encoding="utf-8")
     source_dir = tmp_path / "source"
     source_dir.mkdir()
 
@@ -1915,11 +2009,13 @@ def test_crash_after_commit_before_clear_leaves_marker_standing(tmp_path, monkey
     class _SimulatedCrash(Exception):
         pass
 
-    def _crash_on_clear(*_a, **_k):
-        raise _SimulatedCrash("process died before the clean-verdict clear")
+    def _crash_on_ci(cmd, **kwargs):
+        joined = " ".join(str(c) for c in cmd)
+        if "run-all-checks.py" in joined:
+            raise _SimulatedCrash("process died mid CI-smoke")
+        return spy(cmd, **kwargs)
 
-    monkeypatch.setattr(_mod.subprocess, "run", spy)
-    monkeypatch.setattr(_mod, "_clear_round_failure_marker", _crash_on_clear)
+    monkeypatch.setattr(_mod.subprocess, "run", _crash_on_ci)
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source_dir))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(dest))
     monkeypatch.setattr(_mod, "_resolve_central_state", lambda: None)
@@ -2296,6 +2392,7 @@ _DECLARED_LEG_BOUNDS = {
     "_REGISTRY_CLI_TIMEOUT_SECS",
     "_ROUND_SCAN_LEG_TIMEOUT_SECS",
     "_PUBLISH_LEG_TIMEOUT_SECS",
+    "_EXTERNAL_CI_TIMEOUT_SECS",
 }
 #: `_COMMIT_LEG_TIMEOUT_SECS` (was 300.0) is retired, not merely renamed:
 #: chunk C6 (docs/plans/2026-08-25-the-dispatchable-committer-comes-back-
@@ -2327,12 +2424,14 @@ def test_local_bounds_are_cost_plus_the_named_scheduling_term():
 
 #: Legs allowed to sit on a value that was once a blanket, each for a
 #: reason recorded at the constant, not for the value's own sake.
+#:   `_EXTERNAL_CI_TIMEOUT_SECS` (600) — DR-349's named test-runner
+#:     carve-out; the leg is consumer-owned code containing a pytest run.
 #:   `_PUBLISH_LEG_TIMEOUT_SECS` (3600) — held on measurement: one row's
 #:     `publish.py --dry-run` costs 88.75s of process time over 211
 #:     spawns, and a nine-row mirror publish extrapolates past 1,200s, so
 #:     lowering it hard-kills working publishes. That is a PM scope call
 #:     (DR-349 § "What this record does not decide"), not this rebuild's.
-_BLANKET_VALUE_EXEMPT = {"_PUBLISH_LEG_TIMEOUT_SECS"}
+_BLANKET_VALUE_EXEMPT = {"_EXTERNAL_CI_TIMEOUT_SECS", "_PUBLISH_LEG_TIMEOUT_SECS"}
 
 
 def test_no_leg_silently_inherits_a_retired_blanket_value():
@@ -2508,9 +2607,10 @@ def test_commit_uses_resolved_worktree_root_not_dest(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_OK
 
 
-def test_worktree_root_ci_script_is_never_spawned_for_a_dest_subdir_row(tmp_path, monkeypatch):
-    """A `run-all-checks.py` at the worktree root is not run: the in-round CI
-    smoke is deleted."""
+def test_ci_smoke_runs_the_worktree_root_script_for_a_dest_subdir_row(tmp_path, monkeypatch):
+    """`.github/` lives at the worktree root, never under a `dest_subdir` row's
+    dest: Step 4 runs `<repo_root>/.github/scripts/run-all-checks.py` with
+    cwd=repo_root, and a script present only under `dest` is not consulted."""
     worktree_root = tmp_path
     script = worktree_root / ".github" / "scripts" / "run-all-checks.py"
     script.parent.mkdir(parents=True)
@@ -2522,9 +2622,17 @@ def test_worktree_root_ci_script_is_never_spawned_for_a_dest_subdir_row(tmp_path
         tmp_path, monkeypatch, ci_exists=False, toplevel_stdout=f"{worktree_root}\n",
     )
 
-    ci_calls = [c for c in spy.calls if "run-all-checks.py" in " ".join(str(x) for x in c)]
+    ci_calls = [
+        (c, kw)
+        for c, kw in zip(spy.calls, spy.call_kwargs)
+        if "run-all-checks.py" in " ".join(str(x) for x in c)
+    ]
     assert rc == _mod._EXIT_OK
-    assert ci_calls == []
+    assert len(ci_calls) == 1
+    argv, kwargs = ci_calls[0]
+    assert Path(str(argv[-1])) == script
+    assert str(kwargs.get("cwd")) == str(worktree_root)
+    assert "ci-smoke:  exit 0" in out
 
 
 def test_repo_root_resolution_failure_returns_fail(tmp_path, monkeypatch):
@@ -3212,17 +3320,62 @@ def test_a_failed_diff_probe_names_tracked_paths_rather_than_dropping_them(tmp_p
     assert "updated.md" in _mod._pathspec_from_manifest(manifest, str(repo))[0]
 
 
-def test_removed_is_taken_verbatim_for_the_deletions(tmp_path):
-    """A path gone from the worktree, tracked at HEAD and named in
-    `manifest.removed` is deleted; nothing is derived from HEAD absence."""
+def test_removal_side_is_live_at_the_shipped_flag_value(tmp_path):
+    """The removal side is ON (§ `_REMOVAL_SIDE_ENABLED`, PM 2026-08-26). This
+    test guarded the closed gate and now guards the open one -- inverted in
+    place rather than deleted, so the flip stays legible here.
+
+    Both operands the old gate named as mis-scoped are fixed: `row_scope`
+    bounds width (§ `manifest.published_dest_dirs`), `_walk_published_payload`
+    bounds narrowness. A path gone from the worktree, tracked at HEAD and
+    declared by nobody is exactly what this leg exists to carry."""
+    assert _mod._REMOVAL_SIDE_ENABLED is True
+
     repo = _init_head_repo(
         tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
     )
-    (repo / "gone.md").unlink()
+    (repo / "gone.md").unlink()  # physically gone from the worktree already
 
     manifest = _mod._RoundManifest(
         round_id="r1",
-        removed=frozenset({"gone.md"}),
+        declared_payload=frozenset({"kept.md"}),
+        published_dest_dirs=frozenset({"."}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
+    assert "gone.md" in pathspec, (
+        "removal side did not fire while enabled -- see _REMOVAL_SIDE_ENABLED"
+    )
+    assert "kept.md" not in pathspec
+
+
+def test_pathspec_from_manifest_names_head_only_path_for_removal(tmp_path, monkeypatch):
+    """AC2b, with the gate opened for this test only: a path deleted from
+    source, already absent from dest's worktree (Step 4's real run already
+    removed it from disk), but still present (tracked) in dest HEAD, is named
+    for removal -- the worktree baseline hides this outright (nothing on disk
+    to compare); only a HEAD-vs-declared-payload set difference finds it.
+
+    Kept green while the gate is shut so the derivation itself stays under
+    test: what is gated is whether the round ACTS on this set, never whether
+    the set is computed correctly.
+
+    `published_dest_dirs` is now REQUIRED for this to name anything: the
+    removal rule is `(head_tree n row_scope) - declared_payload`, and a
+    manifest carrying no fourth set yields an empty `row_scope` and therefore
+    an empty removal set, always (§ `RoundManifest.published_dest_dirs`). This
+    fixture publishes into the mirror root, the flat-mirror row shape, which
+    `rel_id` renders as "." -- see
+    `test_removal_side_scopes_whole_tree_for_a_root_published_row` for the
+    matching that keeps that entry from reading as a directory named `.`."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
+    repo = _init_head_repo(
+        tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
+    )
+    (repo / "gone.md").unlink()  # physically gone from the worktree already
+
+    manifest = _mod._RoundManifest(
+        round_id="r1",
         declared_payload=frozenset({"kept.md"}),
         published_dest_dirs=frozenset({"."}),
     )
@@ -3231,50 +3384,43 @@ def test_removed_is_taken_verbatim_for_the_deletions(tmp_path):
     assert "kept.md" not in pathspec
 
 
-def test_empty_declared_payload_deletes_only_removed(tmp_path):
-    """The old `head_tree - declared_payload` derivation would delete every
-    tracked path here; a diff-scaled manifest declares nothing."""
+def test_removal_side_scopes_whole_tree_for_a_root_published_row(tmp_path, monkeypatch):
+    """A row publishing into the mirror root records `published_dest_dirs`
+    as `{"."}` (`rel_id` of a path against itself), and every dest-HEAD path
+    is beneath it. Read as a literal directory prefix, "." matches nothing --
+    so the removal side would fire on NOTHING for exactly the flat mirrors it
+    was built for (`coordinator-claude`, `claude-klabauter`), and the round
+    would report a clean pass rather than a mis-scope. Pinned against a
+    subdirectory path, not just a root-level one, since the prefix form is
+    what a nested path would have needed."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
     repo = _init_head_repo(
         tmp_path,
-        {"a.md": "a\n", "b.md": "b\n", "gone.md": "g\n"},
-    )
-    (repo / "a.md").unlink()
-    (repo / "gone.md").unlink()
-
-    manifest = _mod._RoundManifest(
-        round_id="r1",
-        removed=frozenset({"gone.md"}),
-        published_dest_dirs=frozenset({"."}),
-    )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
-    assert pathspec == ["gone.md"]
-
-
-def test_nested_removed_path_is_deleted_and_a_head_only_path_is_not(tmp_path):
-    """A nested `removed` path is deleted; a HEAD-tracked path absent from the
-    worktree and from `removed` is left alone."""
-    repo = _init_head_repo(
-        tmp_path,
-        {"whoami/cli.py": "retired package\n", "LICENSE": "license\n", "stray.md": "s\n"},
+        {
+            "whoami/cli.py": "retired package\n",
+            "LICENSE": "license\n",
+        },
     )
     (repo / "whoami" / "cli.py").unlink()
-    (repo / "stray.md").unlink()
 
     manifest = _mod._RoundManifest(
         round_id="r1",
-        removed=frozenset({"whoami/cli.py"}),
         declared_payload=frozenset({"LICENSE"}),
         published_dest_dirs=frozenset({"."}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo))[0]
     assert "whoami/cli.py" in pathspec
-    assert "stray.md" not in pathspec
     assert "LICENSE" not in pathspec
 
 
-def test_head_only_path_is_not_derived_into_a_removal(tmp_path):
-    """A manifest naming nothing in `removed` yields no deletion, whatever
-    `published_dest_dirs` holds."""
+def test_removal_side_still_fires_on_nothing_without_published_dest_dirs(tmp_path, monkeypatch):
+    """The complement, so the root-scope widening above cannot be mistaken for
+    "an empty scope means the whole tree": a manifest with NO fourth set (one
+    written before the field existed, or a round that published nothing) still
+    yields an empty removal set, gate open or not."""
+    monkeypatch.setattr(_mod, "_REMOVAL_SIDE_ENABLED", True)
+
     repo = _init_head_repo(
         tmp_path, {"gone.md": "will be deleted from source\n", "kept.md": "kept\n"}
     )

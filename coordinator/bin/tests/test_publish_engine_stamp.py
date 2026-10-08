@@ -70,12 +70,10 @@ def test_publisher_and_skew_agree_on_engine_touching_paths():
 
 
 def test_publisher_writes_the_stamp_only_for_the_engine_package_row():
-    """Scoped by the same predicate as the import-closure gate, on the cold row
-    stage and on the warm derived writes alike. A stamp in a `bin/` or `lib/`
-    row would name a generation nothing reads."""
+    """Scoped by the same predicate as the import-closure gate. A stamp in a
+    `bin/` or `lib/` row would name a generation nothing reads."""
     src = _PUBLISH_PY.read_text(encoding="utf-8")
-    assert "if target.source_dir.name == _CLOSURE_PACKAGE_NAME and only_paths is None:" in src
-    assert "if t.source_dir.name == _CLOSURE_PACKAGE_NAME and t.name in succeeded_row_names" in src
+    assert "if target.source_dir.name == _CLOSURE_PACKAGE_NAME:" in src
     assert "_ENGINE_STAMP_FILENAME" in src
 
 

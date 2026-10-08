@@ -37,19 +37,18 @@ _ITEM_TOKEN_RE = re.compile(r"^item\.([A-Za-z_][A-Za-z0-9_]*)$")
 _FLAG_TOKEN_RE = re.compile(r"^flags\.([A-Za-z0-9_-]+)$")
 _STAGE_OUT_RE = re.compile(r"^stage\.([a-z0-9][a-z0-9_-]*)\.output$")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
-_HALT_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
-_SCHEMA = json.loads(
-    (Path(__file__).parent / "schemas" / "pipeline-manifest.schema.json").read_text(encoding="utf-8")
-)
-_TOP_KEYS = set(_SCHEMA["properties"])
-_INPUT_KEYS = set(_SCHEMA["properties"]["inputs"]["properties"])
+_TOP_KEYS = {"schema_version", "pipeline", "description", "subjects_mode", "inputs", "stages"}
+_INPUT_KEYS = {"brief", "subjects", "scratch_dir", "flags", "lists"}
 _FLAG_KEYS = {"allowed", "default"}
 _LIST_KINDS = ("strings", "roster")
 _MODELS = ("haiku", "sonnet", "opus")
 _EFFORTS = ("low", "medium", "high")
 _WHEN_KEYS = {"flag", "return", "nonempty", "equals"}
-_STAGE_KEYS = set(_SCHEMA["$defs"]["stage"]["properties"])
+_STAGE_KEYS = {
+    "id", "agent_type", "model", "template", "schema", "web_caller", "depends_on", "fan_out",
+    "output", "phase", "agent_type_from", "effort", "max_concurrent", "when", "optional",
+}
 _STAGE_REQUIRED = ("id", "template", "output")
 _SCOPE_RANK = {SCOPE_PRE: 0, SCOPE_SUBJECT: 1, SCOPE_POST: 2}
 
@@ -239,14 +238,6 @@ def _load_stage(
     if not isinstance(optional, bool):
         reasons.append(f"{label}: optional must be true or false")
         optional = False
-    produces_brief = raw.get("produces_brief", False)
-    if not isinstance(produces_brief, bool):
-        reasons.append(f"{label}: produces_brief must be true or false")
-        produces_brief = False
-    halts_unless = raw.get("halts_unless")
-    if halts_unless is not None and not (isinstance(halts_unless, str) and _HALT_FIELD_RE.match(halts_unless)):
-        reasons.append(f"{label}: halts_unless must be a field name matching ^[A-Za-z][A-Za-z0-9_]*$")
-        halts_unless = None
     when = _load_when(raw["when"], label, reasons) if "when" in raw else None
 
     depends = raw.get("depends_on") or []
@@ -292,7 +283,6 @@ def _load_stage(
         schema=schema, web_caller=web_caller, depends_on=tuple(depends), fan_out=fan_out,
         output=raw["output"], phase=raw.get("phase"), agent_type_from=from_ref,
         effort=raw.get("effort"), max_concurrent=max_concurrent, when=when, optional=optional,
-        produces_brief=produces_brief, halts_unless=halts_unless,
     )
 
 
@@ -341,26 +331,6 @@ def _return_field_type(by_id: dict[str, Stage], schemas: dict[str, dict], stage_
     return prop.get("type") if isinstance(prop, dict) else None
 
 
-def _check_halts_unless(stage: Stage, schemas: dict[str, dict], reasons: list[str]) -> None:
-    name = stage.halts_unless
-    if stage.fan_out.kind == FAN_OUT_OVER:
-        reasons.append(f"stage {stage.id!r}: halts_unless is not legal on a stage fanned over a list")
-    schema = schemas.get(stage.schema or "") if stage.schema and stage.schema.startswith("<inline:") else None
-    if schema is None:
-        reasons.append(f"stage {stage.id!r}: halts_unless needs an inline object schema")
-        return
-    props = schema.get("properties") or {}
-    field = props.get(name)
-    if name not in (schema.get("required") or []) or not isinstance(field, dict) or field.get("type") != "boolean":
-        reasons.append(f"stage {stage.id!r}: halts_unless {name!r} is not a required boolean field of its schema")
-    remedy = props.get("remedy")
-    if not (
-        isinstance(remedy, dict) and remedy.get("type") == "array"
-        and isinstance(remedy.get("items"), dict) and remedy["items"].get("type") == "string"
-    ):
-        reasons.append(f"stage {stage.id!r}: halts_unless needs a remedy property typed array of string")
-
-
 def _check_graph_shape(
     stages: list[Stage], schemas: dict[str, dict], flags: dict[str, FlagSpec],
     lists: dict[str, str], reasons: list[str],
@@ -382,10 +352,6 @@ def _check_graph_shape(
                 reasons.append(f"stage {stage.id!r}: agent_type_from {stage.agent_type_from!r} is not a declared roster list")
             if stage.fan_out.kind != FAN_OUT_OVER:
                 reasons.append(f"stage {stage.id!r}: agent_type_from needs a fan_out over a list")
-        if stage.produces_brief and (position[stage.id] != 0 or stage.fan_out.kind != FAN_OUT_NONE):
-            reasons.append(f"stage {stage.id!r}: produces_brief is legal only on stages[0] with fan_out none")
-        if stage.halts_unless is not None:
-            _check_halts_unless(stage, schemas, reasons)
         if stage.fan_out.over_inputs and stage.fan_out.inputs not in lists:
             reasons.append(f"stage {stage.id!r}: fan_out.over names undeclared list {stage.fan_out.inputs!r}")
         when = stage.when

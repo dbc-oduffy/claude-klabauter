@@ -571,10 +571,9 @@ def test_check_process_time_bounded(tmp_path):
     plan_path = repo / "docs" / "plans" / "example.md"
     m.mint(plan_path, repo, build_test_path=str(build_test))
 
-    # Process time, not wall: wall clock measures peer load (CLAUDE.md § brightline).
-    start = time.process_time()
+    start = time.perf_counter()
     m.check(plan_path, repo, supersession=True)
-    elapsed_ms = (time.process_time() - start) * 1000
+    elapsed_ms = (time.perf_counter() - start) * 1000
     assert elapsed_ms <= 200, f"review_stamp.check took {elapsed_ms:.1f}ms, budget is 200ms"
 
 
@@ -1161,23 +1160,3 @@ def test_superseding_refusal_names_the_real_record_sharing_the_stem(tmp_path):
         m.mint(plan_path, repo, build_test_path=None, superseding_record=share_copy)
 
     assert f"state/superseding-reviews/2026-10/{stem}.md" in str(exc.value)
-
-
-def test_whitespace_only_commit_is_not_late_delta(tmp_path):
-    repo = _setup_repo(tmp_path)
-    _, build_test = _mint_success_fixture(repo)
-    plan_path = repo / "docs" / "plans" / "example.md"
-    m.mint(plan_path, repo, build_test_path=str(build_test))
-    (repo / "coordinator_core" / "foo.py").write_text("x  =  1\n\n", encoding="utf-8")
-    _commit(repo, "reformat")
-    assert m.check(plan_path, repo, supersession=True) is None
-
-
-def test_content_change_still_blocks_late_delta(tmp_path):
-    repo = _setup_repo(tmp_path)
-    _, build_test = _mint_success_fixture(repo)
-    plan_path = repo / "docs" / "plans" / "example.md"
-    m.mint(plan_path, repo, build_test_path=str(build_test))
-    (repo / "coordinator_core" / "foo.py").write_text("x = 2\n", encoding="utf-8")
-    _commit(repo, "real change")
-    assert "later commit" in m.check(plan_path, repo, supersession=True)

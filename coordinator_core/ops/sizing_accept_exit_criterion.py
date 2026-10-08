@@ -86,12 +86,6 @@ def _validate_sizing_fm(fm_dict: dict) -> list:
     return validate_frontmatter(fm_dict, _SIZING_SCHEMA_PATH)
 
 
-def _click_paths(existing: object) -> dict:
-    """The criterion's `click_paths`, carried through acceptance unchanged."""
-    paths = existing.get("click_paths") if isinstance(existing, dict) else None
-    return {"click_paths": paths} if paths else {}
-
-
 def _render_exit_criterion(mapping: dict) -> str:
     dumped = yaml.safe_dump(
         mapping,
@@ -296,14 +290,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                             "statement": new_statement,
                             "accepted": existing_accepted,
                             "amendments": amendments,
-                            **_click_paths(existing),
                         }
                     ),
                 )
                 return _finish(new_text)
 
         rendered = _render_exit_criterion(
-            {"statement": new_statement, "accepted": new_accepted, **_click_paths(existing)}
+            {"statement": new_statement, "accepted": new_accepted}
         )
         new_text = write_fm_nested_field(old_text, "exit_criterion", rendered)
         if record_mode:

@@ -14,7 +14,7 @@ from coordinator_core.session import core, scope, touch_record
 def _git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
-        cwd=root, check=True, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        cwd=root, check=True, capture_output=True,
     )
 
 

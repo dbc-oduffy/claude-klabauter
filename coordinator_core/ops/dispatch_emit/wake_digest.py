@@ -32,6 +32,9 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wak
 #: Emitted only by a script composed with an operator hold: `{row id: reason}`.
 HELD_VAR = "_heldRows"
 
+#: Emitted only by a script composed with a seam leg: `[{wave, plans, path}]`, one per drifted-contract finding.
+SEAM_DRIFT_VAR = "_seamDrift"
+
 RUNTIME_VARS = (
     "_incompleteChunks",
     "_unansweredBriefs",
@@ -445,6 +448,7 @@ def completion_return_js(
     anchor_plan_path: Optional[str] = None,
     predispatch: Optional[dict] = None,
     held: bool = False,
+    seam: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -506,8 +510,15 @@ def completion_return_js(
     )
     completed_expr = f"({outcome_expr} === 'completed')"
 
+    seam_drift_expr = (
+        f"({SEAM_DRIFT_VAR}.length ? {SEAM_DRIFT_VAR}.map(d => d.failed ? 'seam check failed at wave ' + d.wave + ': ' + d.failed + ' (' + d.plans.join(', ') + ')' : "
+        "'drifted-contract: ' + d.plans.join(' and ') + (d.path ? ' at ' + d.path : '') + ' (wave ' + d.wave + ')').join('; ') : "
+        if seam
+        else ""
+    )
     decision_required_expr = (
         f"({RUNTIME_VARS[4]} ? {RUNTIME_VARS[4]} : "
+        + seam_drift_expr
         + (
             f"({delivery_var} && {delivery_var}.verdict === 'FAIL' ? 'review delivery verdict FAIL"
             + ("; landed rows are UNCOMMITTED: next_action dispatch.terminal_commit commits them" if has_commit_request else "")
@@ -523,6 +534,7 @@ def completion_return_js(
         + f"({RUNTIME_VARS[0]}.length ? 'incomplete chunks' : "
         + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null))"
         + ")))))))"
+        + (")" if seam else "")
     )
 
     # A row an executor reported PARTIAL/BLOCKED (or answered without a status)

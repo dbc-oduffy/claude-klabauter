@@ -1,0 +1,375 @@
+"""plan.seam_check / plan.seam_record: finding classes, verdict rules, named_set splits, sidecar shape.
+
+Git is faked at the module's ``run_git`` seam; no process is spawned.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import jsonschema
+import pytest
+import yaml
+
+from coordinator_core.ops import plan_seam_check as op
+
+HEAD = "a" * 40
+RANGE = "b" * 40 + ".." + "c" * 40
+
+_SCHEMA = json.loads(
+    (Path(op.__file__).resolve().parents[1] / "frontmatter" / "schemas" / "seam-check.schema.json")
+    .read_text(encoding="utf-8")
+)
+
+
+def _validate(doc: dict) -> None:
+    """The sidecar against the vendored seam-check schema."""
+    jsonschema.validate(instance=doc, schema=_SCHEMA)
+
+
+class FakeGit:
+    def __init__(self):
+        self.tracked: set = set()
+        self.touched: list = []
+        self.calls: list = []
+
+    def __call__(self, args, **kw):
+        self.calls.append(list(args))
+        if "cat-file" in args:
+            out = []
+            for line in kw["input"].decode().split("\n"):
+                if not line:
+                    continue
+                if line == "HEAD":
+                    out.append(f"{HEAD} commit 10")
+                elif line.split(":", 1)[1] in self.tracked:
+                    out.append(f"{'d' * 40} blob 1")
+                else:
+                    out.append(f"{line} missing")
+            return SimpleNamespace(ok=True, stdout="\n".join(out) + "\n")
+        return SimpleNamespace(ok=True, stdout="\0".join(self.touched) + "\0")
+
+
+@pytest.fixture
+def git(monkeypatch):
+    fake = FakeGit()
+    monkeypatch.setattr(op, "run_git", fake)
+    return fake
+
+
+def _row(rid, writes=None, consumes=None, extra=""):
+    r = f"- id: {rid}\n  title: t\n  surface: s\n  change_kind: code-edit\n"
+    if writes is not None:
+        r += f"  writes: {writes}\n"
+    if consumes is not None:
+        r += f"  consumes: {consumes}\n"
+    return r + extra
+
+
+def _plan(root: Path, name: str, rows: str, fm: str = "capabilities: []\n") -> str:
+    rel = f"docs/plans/{name}.md"
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\ntitle: t\nstatus: approved\n{fm}---\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n",
+                 encoding="utf-8")
+    return rel
+
+
+def _root(tmp_path):
+    (tmp_path / ".git").mkdir()
+    return tmp_path
+
+
+def _check(root, plans, phase="prep", named=True, **extra):
+    return op._check_handler({"plans": plans, "phase": phase, "named_set": named, **extra}, repo_root=root)
+
+
+def _classes(reply, blocking=None):
+    return sorted(f["class"] for f in reply["findings"] if blocking is None or f["blocking"] is blocking)
+
+
+def test_clean_single_plan(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    r = _check(root, [a])
+    assert r["verdict"] == "CLEAN" and r["per_plan"] == {a: "CLEAN"} and r["set"] == [a]
+
+
+def test_capabilities_undeclared_split(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"), fm="")
+    r = _check(root, [a], "prep", True)
+    assert r["verdict"] == "REFUSED" and r["findings"][0]["blocking"] is True
+    r = _check(root, [a], "prep", False)
+    assert r["verdict"] == "CLEAN" and r["findings"][0]["blocking"] is False
+    assert _check(root, [a], "fire", False)["verdict"] == "REFUSED"
+    wb = _check(root, [a], "wave-boundary", True, landed_range=RANGE, landed_rows=[], wave=1)
+    assert wb["verdict"] == "CLEAN" and wb["findings"][0]["blocking"] is False
+
+
+def _cap(extra):
+    return "capabilities:\n  - id: cap1\n    statement: s\n    role: admin\n    click_path: A > B\n" + extra
+
+
+def test_ui_consumer_in_set_resolves_and_in_other_plan_must_be_coded(tmp_path, git):
+    root = _root(tmp_path)
+    ui = _plan(root, "ui", _row("C4", "[ui.tsx]"))
+    a = _plan(root, "a", _row("R1", "[x.py]"),
+              fm=_cap(f"    ui_consumer: {{plan: {ui}, chunk: C4}}\n"))
+    assert _check(root, [a, ui])["verdict"] == "CLEAN"
+    r = _check(root, [a])
+    assert r["verdict"] == "REFUSED"
+    f = r["findings"][0]
+    assert f["class"] == "capability-without-ui-consumer" and f["capability"] == "cap1"
+    assert "A > B" in f["missing_consumer"] and "admin" in f["missing_consumer"] and "C4" in f["missing_consumer"]
+    _plan(root, "ui", _row("C4", "[ui.tsx]", extra="  disposition: coded\n"))
+    assert _check(root, [a])["verdict"] == "CLEAN"
+
+
+@pytest.mark.parametrize("row,why", [
+    (_row("C4", "[ui.tsx]", extra="  disposition: wont_do\n"), "wont_do"),
+    (_row("C4", "[ui.tsx]", extra="  disposition: voided\n"), "voided"),
+    (_row("C4"), "declares no write"),
+    (_row("C9", "[ui.tsx]"), "no row"),
+])
+def test_ui_consumer_unresolved(tmp_path, git, row, why):
+    root = _root(tmp_path)
+    ui = _plan(root, "ui", row)
+    a = _plan(root, "a", _row("R1", "[x.py]"), fm=_cap(f"    ui_consumer: {{plan: {ui}, chunk: C4}}\n"))
+    r = _check(root, [a, ui])
+    assert r["per_plan"] == {a: "REFUSED", ui: "CLEAN"}
+    assert why in r["findings"][0]["detail"]
+
+
+def test_own_plan_chunk_and_shipped_path(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("C4", "[ui.tsx]"), fm=_cap("    ui_consumer: {chunk: C4}\n"))
+    assert _check(root, [a])["verdict"] == "CLEAN"
+    b = _plan(root, "b", _row("R1", "[x.py]"), fm=_cap("    ui_consumer: {shipped: web/p.tsx}\n"))
+    r = _check(root, [b])
+    assert r["verdict"] == "REFUSED" and "not tracked at HEAD" in r["findings"][0]["detail"]
+    git.tracked.add("web/p.tsx")
+    assert _check(root, [b])["verdict"] == "CLEAN"
+
+
+def test_empty_role_or_click_path_blocks(tmp_path, git):
+    root = _root(tmp_path)
+    fm = "capabilities:\n  - id: c\n    statement: s\n    role: ''\n    click_path: A\n    ui_consumer: {chunk: R1}\n"
+    a = _plan(root, "a", _row("R1", "[x.py]"), fm=fm)
+    assert _check(root, [a])["verdict"] == "REFUSED"
+
+
+def test_ui_carve_out_passes_and_is_recorded(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"), fm=_cap("    ui_carve_out: 'no UI, the PM said so'\n"))
+    r = _check(root, [a])
+    f = r["findings"][0]
+    assert r["verdict"] == "CLEAN" and f["blocking"] is False
+    assert f["class"] == "capability-without-ui-consumer" and "no UI, the PM said so" in f["detail"]
+
+
+def test_unpromised_export_and_its_exemptions(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", "[gone.py]"))
+    r = _check(root, [a])
+    assert r["verdict"] == "REFUSED"
+    f = r["findings"][0]
+    assert f["class"] == "unpromised-export" and f["path"] == "gone.py" and f["row"] == "R1"
+    git.tracked.add("gone.py")
+    assert _check(root, [a])["verdict"] == "CLEAN"
+    git.tracked.clear()
+    own = _plan(root, "own", _row("W", "[gone.py]") + _row("R1", "[y.py]", "[gone.py]"))
+    assert _check(root, [own])["verdict"] == "CLEAN"
+    writer = _plan(root, "writer", _row("W", "[gone.py]"))
+    assert _check(root, [a, writer])["verdict"] == "CLEAN"
+    r = _check(root, [a])
+    assert r["per_plan"] == {a: "REFUSED"}
+
+
+def test_depends_on_plan_promised_path_is_not_unpromised(tmp_path, git):
+    root = _root(tmp_path)
+    writer = _plan(root, "writer", _row("W", "[gone.py]"), fm="capabilities: []\nstatus_x: 1\n")
+    pred = f"capabilities: []\ndepends_on_plan:\n  - {{plan: {writer}, status: approved, gate_kind: k}}\n"
+    a = _plan(root, "a", _row("R1", "[x.py]", "[gone.py]"), fm=pred)
+    r = _check(root, [a])
+    assert "unpromised-export" not in _classes(r)
+
+
+def test_writes_collision_named_and_default(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/x.py]"))
+    b = _plan(root, "b", _row("R2", "[s/x.py]"))
+    r = _check(root, [a, b], named=True)
+    assert r["verdict"] == "REFUSED" and r["per_plan"] == {a: "REFUSED", b: "REFUSED"}
+    by_plan = {f["plan"]: f for f in r["findings"]}
+    assert by_plan[a]["counterpart_plan"] == b and by_plan[b]["counterpart_plan"] == a
+    assert by_plan[a]["path"] == "s/x.py"
+    r = _check(root, [a, b], named=False)
+    assert r["verdict"] == "CLEAN" and all(f["blocking"] is False for f in r["findings"])
+    assert len(r["findings"]) == 2
+
+
+def test_writes_under_collision(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/x.py]"))
+    b = _plan(root, "b", _row("R2", "[other.py]", extra="  writes_under: [s/]\n"))
+    assert _check(root, [a, b])["verdict"] == "REFUSED"
+
+
+def test_ordered_pair_is_clean(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/x.py]"))
+    edge = f"capabilities: []\ndepends_on_plan:\n  - {{plan: {a}, status: approved, gate_kind: k}}\n"
+    b = _plan(root, "b", _row("R2", "[s/x.py]"), fm=edge)
+    r = _check(root, [a, b])
+    assert r["verdict"] == "CLEAN" and not any(f["class"] == "writes-collision" for f in r["findings"])
+
+
+def test_undeclared_writes_recorded_as_undetermined(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1"))
+    r = _check(root, [a])
+    f = r["findings"][0]
+    assert r["verdict"] == "CLEAN" and f["class"] == "writes-collision"
+    assert f["blocking"] is False and f["detail"] == "undetermined" and f["row"] == "R1"
+
+
+def test_unimplicated_set_mate_stays_clean(tmp_path, git):
+    root = _root(tmp_path)
+    bad = _plan(root, "bad", _row("R1", "[x.py]", "[gone.py]"))
+    ok = _plan(root, "ok", _row("R2", "[y.py]"))
+    r = _check(root, [bad, ok])
+    assert r["verdict"] == "REFUSED" and r["per_plan"] == {bad: "REFUSED", ok: "CLEAN"}
+
+
+def _wb(root, plans, landed, **kw):
+    return _check(root, plans, "wave-boundary", True, landed_range=RANGE,
+                  landed_rows=[{"plan": p, "row": r} for p, r in landed], wave=2, **kw)
+
+
+def test_drift_promised_path_absent(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    r = _wb(root, [a, b], [(a, "A1")])
+    assert r["verdict"] == "DRIFT" and r["per_plan"] == {a: "CLEAN", b: "DRIFT"}
+    f = r["findings"][0]
+    assert f["class"] == "drifted-contract" and f["blocking"] and f["counterpart_plan"] == a
+    assert f["path"] == "lib.py" and f["row"] == "B1"
+    git.tracked.add("lib.py")
+    assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def test_drift_undeclared_touch_on_remaining_write_and_reads_at_head(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[a.py]"))
+    b = _plan(root, "b", _row("B1", "[hot.py]"))
+    git.touched = ["hot.py", "a.py"]
+    r = _wb(root, [a, b], [(a, "A1")])
+    assert r["verdict"] == "DRIFT" and r["per_plan"] == {a: "CLEAN", b: "DRIFT"}
+    assert [f["path"] for f in r["findings"] if f["class"] == "drifted-contract"] == ["hot.py"]
+    c = _plan(root, "c", _row("C1", "[c.py]", extra="  reads_at_head: [hot.py]\n"))
+    r = _wb(root, [a, c], [(a, "A1")])
+    f = [x for x in r["findings"] if x["class"] == "drifted-contract"]
+    assert r["verdict"] == "CLEAN" and len(f) == 1 and f[0]["blocking"] is False
+    assert any("--no-renames" in c for c in git.calls)
+
+
+def test_wave_params_required_and_refused(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    with pytest.raises(ValueError):
+        _check(root, [a], "wave-boundary", True)
+    with pytest.raises(ValueError):
+        _check(root, [a], "prep", True, wave=1)
+    with pytest.raises(ValueError):
+        op._check_handler({"plans": [a], "phase": "prep"}, repo_root=root)
+
+
+def test_git_batched_one_call_for_tracked_questions(tmp_path, git):
+    root = _root(tmp_path)
+    plans = [_plan(root, f"p{i}", _row("R", f"[w{i}.py]", f"[gone{i}.py]")) for i in range(6)]
+    _check(root, plans)
+    assert len(git.calls) == 1 and "cat-file" in git.calls[0]
+
+
+def test_record_writes_one_valid_sidecar_per_plan_and_check_writes_none(tmp_path, git):
+    root = _root(tmp_path)
+    bad = _plan(root, "bad", _row("R1", "[x.py]", "[gone.py]"))
+    ok = _plan(root, "ok", _row("R2", "[y.py]"))
+    params = {"plans": [bad, ok], "phase": "prep", "named_set": True}
+    _check(root, [bad, ok])
+    assert not list((root / "docs/plans").glob("*.seam.yaml"))
+    r = op._record_handler(params, repo_root=root)
+    assert sorted(r["sidecars"]) == ["docs/plans/bad.seam.yaml", "docs/plans/ok.seam.yaml"]
+    docs = {p: yaml.safe_load((root / p).read_text()) for p in r["sidecars"]}
+    for d in docs.values():
+        _validate(d)
+    assert docs["docs/plans/bad.seam.yaml"]["verdict"] == "REFUSED"
+    assert docs["docs/plans/bad.seam.yaml"]["findings"][0]["class"] == "unpromised-export"
+    assert docs["docs/plans/ok.seam.yaml"]["verdict"] == "CLEAN" and docs["docs/plans/ok.seam.yaml"]["findings"] == []
+    assert docs["docs/plans/ok.seam.yaml"]["wave"] is None
+    assert docs["docs/plans/ok.seam.yaml"]["checked_at_sha"] == HEAD
+    assert not any(p.name.startswith(".atomic-write") for p in (root / "docs/plans").iterdir())
+
+
+def test_record_wave_boundary_sidecar_validates(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    r = op._record_handler({"plans": [a, b], "phase": "wave-boundary", "named_set": True, "landed_range": RANGE,
+                            "landed_rows": [{"plan": a, "row": "A1"}], "wave": 3}, repo_root=root)
+    d = yaml.safe_load((root / "docs/plans/b.seam.yaml").read_text())
+    _validate(d)
+    assert d["verdict"] == "DRIFT" and d["wave"] == 3 and r["verdict"] == "DRIFT"
+
+
+def test_seam_sidecar_travels_with_its_plan_on_archive(tmp_path):
+    from coordinator_core.ops.fleet.archive_plans import collect_live_plan_paths
+
+    plans = tmp_path / "docs" / "plans"
+    plans.mkdir(parents=True)
+    for name in ("2026-10-08-x.md", "2026-10-08-x.seam.yaml"):
+        (plans / name).write_text("x\n", encoding="utf-8")
+    names = {p.name for p in collect_live_plan_paths(tmp_path)}
+    assert "2026-10-08-x.seam.yaml" in names
+
+
+def test_default_set_collisions_are_one_record_per_plan_and_path(tmp_path, git):
+    root = _root(tmp_path)
+    plans = [_plan(root, n, _row("R1", "[s/x.py]")) for n in ("a", "b", "c")]
+    named = _check(root, plans, named=True)
+    assert len([f for f in named["findings"] if f["class"] == "writes-collision"]) == 6
+    r = _check(root, plans, named=False)
+    records = [f for f in r["findings"] if f["class"] == "writes-collision"]
+    assert r["verdict"] == "CLEAN"
+    assert sorted(f["plan"] for f in records) == sorted(plans)
+    for f in records:
+        assert f["blocking"] is False and f["path"] == "s/x.py"
+        assert f["counterpart_plan"] in plans and f["counterpart_plan"] != f["plan"]
+        assert f["detail"].startswith("3 plans declare writes to s/x.py")
+
+
+def test_unreadable_spine_implicates_only_its_plan_in_a_named_set(tmp_path, git):
+    root = _root(tmp_path)
+    bad = _plan(root, "bad", _row("R1", "[x.py]") + _row("R1", "[y.py]"))
+    good = _plan(root, "good", _row("R1", "[z.py]"))
+    r = _check(root, [bad, good], named=True)
+    assert r["per_plan"] == {bad: "REFUSED", good: "CLEAN"}
+    f = next(f for f in r["findings"] if f["plan"] == bad)
+    assert f["class"] == "writes-collision" and f["detail"].startswith("undetermined: spine unreadable")
+    r = _check(root, [bad, good], named=False)
+    assert r["verdict"] == "CLEAN"
+    assert any(f["plan"] == bad and f["blocking"] is False for f in r["findings"])
+
+
+def test_a_sibling_repo_consume_is_not_an_unpromised_export(tmp_path, git, monkeypatch):
+    from coordinator_core.roadmap import prep_gate
+
+    monkeypatch.setattr(prep_gate, "fleet_siblings", lambda _root: ("coordinator-content-repo",))
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", "[coordinator-content-repo/coordinator/hooks/hooks.json, gone.py]"))
+    r = _check(root, [a])
+    assert [f["path"] for f in r["findings"] if f["class"] == "unpromised-export"] == ["gone.py"]

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/seam-check.schema.json",
+  "x-schema-name": "seam-check",
+  "x-schema-version": "1.0.0",
+  "applies_to": "docs/plans/*.seam.yaml",
+  "description": "Per-plan seam-check sidecar written by plan.seam_record beside the plan. Overwritten on each run. Bare verdict enum values live only here and in the op reply; caller-facing text spells them SEAM-REFUSED / SEAM-DRIFT.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "plan",
+    "phase",
+    "wave",
+    "checked_at_sha",
+    "set",
+    "verdict",
+    "findings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "seam-check"
+    },
+    "schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "plan": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path of the plan this sidecar sits beside."
+    },
+    "phase": {
+      "enum": [
+        "prep",
+        "fire",
+        "wave-boundary"
+      ]
+    },
+    "wave": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Null outside wave-boundary."
+    },
+    "checked_at_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "set": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Repo-relative paths of every plan in the checked set."
+    },
+    "verdict": {
+      "enum": [
+        "CLEAN",
+        "REFUSED",
+        "DRIFT"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "description": "This plan's findings only.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "class",
+          "blocking",
+          "detail"
+        ],
+        "properties": {
+          "class": {
+            "enum": [
+              "capability-without-ui-consumer",
+              "capabilities-undeclared",
+              "unpromised-export",
+              "writes-collision",
+              "drifted-contract"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "counterpart_plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capability": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing_consumer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "row": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

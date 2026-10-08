@@ -42,7 +42,7 @@ def _baton_errors(fm: dict) -> list:
 
 def test_schema_declares_baton_at_1_25_0():
     schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
-    assert schema["x-schema-version"] == "1.26.0"
+    assert schema["x-schema-version"] == "1.28.0"
     assert "baton" in schema["properties"]
 
 

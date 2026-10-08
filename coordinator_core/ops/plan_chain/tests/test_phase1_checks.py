@@ -27,7 +27,7 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(p1, "_write_baseline", rec("baseline", None))
     monkeypatch.setattr(p1, "_check_plan", rec("spine", VALID))
-    monkeypatch.setattr(p1, "_spine_read", rec("gates", (["row"], [])))
+    monkeypatch.setattr(p1, "_spine_exclusions", rec("gates", []))
     monkeypatch.setattr(p1, "_falsifier_defect", rec("falsifier", None))
     monkeypatch.setattr(p1, "_plan_targets", rec("targets", ["a"]))
     return log
@@ -69,26 +69,19 @@ def test_falsifier_finding_in_spine_report_defers_to_falsifier_owed(calls, monke
 def test_external_gate_uncleared_names_row(calls, monkeypatch):
     monkeypatch.setattr(
         p1,
-        "_spine_read",
-        lambda *a: ([], [{"id": "C2", "reason": "deferred"}, {"id": "C7", "reason": "external_gate"}]),
+        "_spine_exclusions",
+        lambda *a: [{"id": "C2", "reason": "deferred"}, {"id": "C7", "reason": "external_gate"}],
     )
     h = _run()
     assert "C7" in h.reason and "C2" not in h.reason
     assert "falsifier" not in calls
 
 
-def test_partly_gated_plan_runs_its_dispatchable_rows(calls, monkeypatch):
-    monkeypatch.setattr(p1, "_spine_read", lambda *a: (["C1"], [{"id": "C7", "reason": "external_gate"}]))
-
-    assert _run() is None
-    assert "targets" in calls
-
-
 def test_unreadable_spine_halts(calls, monkeypatch):
     def boom(*a):
         raise ValueError("dangling")
 
-    monkeypatch.setattr(p1, "_spine_read", boom)
+    monkeypatch.setattr(p1, "_spine_exclusions", boom)
     assert "dangling" in _run().reason
 
 

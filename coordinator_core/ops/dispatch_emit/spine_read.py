@@ -705,9 +705,12 @@ class EmitterRow(NamedTuple):
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-_MEMO_LIMIT = 256
+# Above one repo's plan corpus (~300): a set check reads every plan, and a
+# full clear at the limit made each read of a larger set miss.
+_MEMO_LIMIT = 1024
 _FM_DOCS: dict = {}
 _ROWS_MEMO: dict = {}
+_SCHEMA_ERRORS: dict = {}
 
 
 def _remember(memo: dict, key: str, value):
@@ -742,6 +745,18 @@ def _parse_rows(source: str) -> RowsResult:
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
     return RowsResult(status=LocateStatus.LOCATED, rows=rows)
+
+
+def _schema_error_memo(source: str):
+    """``check_plan_tasks_source(source)`` memoised per process by text; read-only.
+
+    It is a pure function of the text and, with jsonschema row validation,
+    the dearest part of a spine read; a set check reads every plan.
+    """
+    try:
+        return _SCHEMA_ERRORS[source]
+    except KeyError:
+        return _remember(_SCHEMA_ERRORS, source, check_plan_tasks_source(source))
 
 
 def load_rows_memo(source: str):
@@ -921,7 +936,7 @@ def read_spine(
     raw_rows = [with_canonical_disposition(raw) for raw in result.rows]
 
     if any(isinstance(raw, dict) and raw.get("depends_on") for raw in raw_rows):
-        schema_error = check_plan_tasks_source(source)
+        schema_error = _schema_error_memo(source)
         if schema_error is not None and schema_error["field"].startswith("depends_on"):
             raise MalformedDependencyEdgeError(
                 f"plan {plan_path!r} spine field {schema_error['field']}: "

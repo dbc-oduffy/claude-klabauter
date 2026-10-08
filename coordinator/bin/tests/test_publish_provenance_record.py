@@ -265,8 +265,21 @@ def test_unwritable_target_warns_without_raising(monkeypatch, tmp_path):
     assert not (settings_home / "machine-local" / "publish-provenance.json").exists()
 
 
-def test_a_skipped_row_name_is_accepted_and_claims_nothing(monkeypatch, tmp_path):
+def test_does_not_touch_delta_record_helpers(monkeypatch, tmp_path):
+    """Anti-scope 1 — a smoke check that writing the provenance record never
+    calls into the delta-record optimization cache."""
     _settings_home(monkeypatch, tmp_path)
+    for fn_name in (
+        "write_delta_record",
+        "_delta_state_path",
+        "delta_row_unchanged",
+        "_delta_row_source_sha",
+    ):
+
+        def _fail(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError(f"{fn_name} must not be called by write_publish_provenance_record")
+
+        monkeypatch.setattr(publish, fn_name, _fail)
 
     publish.write_publish_provenance_record(
         succeeded_row_names=[],

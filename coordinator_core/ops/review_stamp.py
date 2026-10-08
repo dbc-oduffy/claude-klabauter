@@ -51,13 +51,11 @@ against the reviewed tree.
     legitimately touch the same file in a later, unrelated plan.
 
 Zero git spawns in `mint` beyond the one commit-trailer walk plus one `%T`
-read. `check` makes at most four spawns, all argv-only:
+read. `check` makes at most three spawns, all argv-only:
   - `git log -1 --format=%T <terminal>` (tree equality)
   - `git merge-base --is-ancestor <terminal> HEAD` (ancestry)
   - `git log --format=%H <terminal>..HEAD -- <writes>` (supersession, only
     when `supersession=True`)
-  - `git diff --quiet -w --ignore-blank-lines <terminal> HEAD -- <writes>` (only
-    when that log is non-empty: a whitespace-only delta does not block)
 
 Negative-spec:
   - `--override-reason` does not reach this refusal anywhere it is wired
@@ -794,7 +792,7 @@ def _review_only_route(plan_path: Path, run_base: str) -> str:
 
 def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Optional[str]:
     """Returns `None` when the plan's `review_stamp` is still valid, or a
-    one-line refusal string. At most four git spawns (see module
+    one-line refusal string. At most three git spawns (see module
     docstring)."""
     text = plan_path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     split = split_frontmatter(text)
@@ -854,12 +852,6 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
             except _GitUnavailable as exc:
                 return f"review-stamp: could not check supersession: {exc}"
             if out.strip():
-                ws = run_git(
-                    ["diff", "--quiet", "-w", "--ignore-blank-lines", terminal, "HEAD", "--", *spec],
-                    cwd=str(repo_root),
-                )
-                if ws.returncode == 0:
-                    return None
                 return (
                     f"review-stamp: a later commit touches a declared write of this plan "
                     f"since the stamped terminal commit {terminal}"

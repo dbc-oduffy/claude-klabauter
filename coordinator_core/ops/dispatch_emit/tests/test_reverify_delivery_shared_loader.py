@@ -39,12 +39,3 @@ def test_resolver_and_claims_see_sidecar_only_delivery(tmp_path):
     assert path == run and block["verdict"] == "FAIL"
     _, claims = rd.prior_unbacked_claims(run, repo)
     assert claims == [{"claim": "c", "anchor": "a"}]
-
-
-def test_load_delivery_reads_delivery_verdict_alias(tmp_path):
-    _write(tmp_path / "a.md", {"delivery_verdict": "PASS"})
-    record = {"prep": {"whole_diff_sidecars": {"delivery": "a.md"}}}
-    assert rd.load_delivery(tmp_path, record)["verdict"] == "PASS"
-    _write(tmp_path / "b.md", {"verdict": "FAIL", "delivery_verdict": "PASS"})
-    record = {"prep": {"whole_diff_sidecars": {"delivery": "b.md"}}}
-    assert rd.load_delivery(tmp_path, record)["verdict"] == "FAIL"

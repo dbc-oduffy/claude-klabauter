@@ -68,7 +68,6 @@ argument (review: overengineering-reviewer Finding 2, 2026-08-30).
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import os
 import re
@@ -91,8 +90,6 @@ from coordinator_core.git.git_objects import (
     cas_ref,
     packed_contains,
     read_object,
-    flush_object_batch,
-    object_batch,
     write_object,
 )
 from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_tree_spine
@@ -935,16 +932,6 @@ def _attach_session_id_trailer(message: str, repo: Union[str, Path]) -> str:
     )
 
 
-def _in_object_batch(fn):
-    @functools.wraps(fn)
-    def run(*args, **kwargs):
-        with object_batch():
-            return fn(*args, **kwargs)
-
-    return run
-
-
-@_in_object_batch
 def commit_paths(
     repo: Union[str, Path] = _REQUIRED,  # type: ignore[assignment]
     paths: Sequence[str] = _REQUIRED,  # type: ignore[assignment]
@@ -960,13 +947,8 @@ def commit_paths(
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
     detect_rollback: bool = False,
     declared_reverts: Sequence[str] = (),
-    modes: Optional[Mapping[str, int]] = None,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
-
-    `modes` declares a path's tree-entry mode (e.g. 0o100755), taking
-    precedence over the index entry and `_mode_for`. None leaves every
-    path's mode to those two.
 
     `untracked_paths` names files this commit removes from HEAD and the index
     while the worktree keeps them (`git rm --cached`). It is the only way to
@@ -1216,7 +1198,6 @@ def commit_paths(
     # materialises an entry outside `paths`.
     staged = parse_index_identity(repo, wanted=set(path_list))
 
-    declared_modes = {k.replace("\\", "/"): v for k, v in (modes or {}).items()}
     assembled: Dict[str, object] = {}
     # Blobs this call placed as new loose objects: the rollback check's novelty oracle.
     created_blobs: set = set()
@@ -1243,7 +1224,7 @@ def commit_paths(
         entry = staged.get(p)
         if p in supplied:
             blob = supplied[p]
-            mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
+            mode = entry.mode if entry is not None else _mode_for(root / p)
         elif p in prefer_staged_set and entry is not None:
             # INVARIANT 1, and it is DECLARED, never inferred. "The index
             # differs from the worktree" does NOT identify a deliberate
@@ -1293,7 +1274,7 @@ def commit_paths(
                 # per path (and zero if nothing is refused).
                 refused.append(p)
                 continue
-            mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
+            mode = entry.mode if entry is not None else _mode_for(root / p)
             if entry is not None and blob != entry.sha:
                 # CANDIDATE ONLY -- the worktree differs from the index, which
                 # is NOT yet evidence that anything was deliberately staged.
@@ -1324,7 +1305,7 @@ def commit_paths(
                     "module refused. Nothing was written."
                 )
             entry = staged.get(p)
-            mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
+            mode = entry.mode if entry is not None else _mode_for(root / p)
             if entry is not None and blob != entry.sha:
                 # SAME CANDIDACY CHECK as the direct-blob branch above -- a
                 # path refused to `blob_fallback` (LFS/CRLF-pinned/`[attr]`)
@@ -1503,10 +1484,6 @@ def commit_paths(
             "caller reading the success line. Pass allow_empty=True for a "
             "deliberate marker commit."
         )
-
-    # Every blob and tree lands here as one pack: signing spawns git, and the
-    # ref below must point at objects already on disk.
-    flush_object_batch()
 
     name, email = _identity(repo)
     when = _stamp()

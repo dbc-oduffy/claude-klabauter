@@ -54,8 +54,6 @@ def _load_publish_module():
 
 publish = _load_publish_module()
 
-from round_stage_fake import make_stage_fake  # noqa: E402
-
 
 def _write_clean_tree(root: Path) -> None:
     (root / "scripts").mkdir(parents=True)
@@ -174,6 +172,10 @@ class _StubClaudeKlabauter:
         return ()
 
 
+def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
+    totals.processed += 1
+
+
 def _stub_dest_refresh(monkeypatch) -> None:
     publish._bootstrap_engine()
     from percolate import dest_refresh as _dest_refresh
@@ -187,9 +189,36 @@ def _stub_dest_refresh(monkeypatch) -> None:
     )
 
 
+def _stub_assembled_mirror_leg(monkeypatch) -> None:
+    monkeypatch.setattr(
+        publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
+    )
+
+
+def _stub_throwaway_tree(monkeypatch) -> None:
+    """These tests pin gate wiring, not the throwaway clone (covered by its own
+    tests), so the throwaway is a plain copy of the destination tree and its
+    git delta is empty: no `git` spawn, and the destination need not be a
+    committed repo."""
+
+    def _copy_tree(dest_repo_root, overlays, deletions):
+        tree = Path(tempfile.mkdtemp(prefix="claude-klabauter-throwaway-tree-"))
+        if Path(dest_repo_root).is_dir():
+            shutil.copytree(
+                dest_repo_root, tree, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git")
+            )
+        return tree
+
+    publish._bootstrap_engine()
+    monkeypatch.setattr(publish, "build_throwaway_tree", _copy_tree)
+    monkeypatch.setattr(publish, "_throwaway_delta_paths", lambda throwaway_root: ([], []))
+
+
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
+    _stub_throwaway_tree(monkeypatch)
     monkeypatch.setattr(publish, "write_publish_provenance_record", lambda **kwargs: None)
     _stub_dest_refresh(monkeypatch)
+    _stub_assembled_mirror_leg(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kwargs: (percolate_root, "test-rung")
@@ -209,7 +238,7 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     )
     monkeypatch.setattr(publish, "_import_publish_sync", lambda setup_dir: object())
     monkeypatch.setattr(publish, "check_publish_sync_contract", lambda *a, **k: None)
-    monkeypatch.setattr(publish, "process_target", make_stage_fake(publish))
+    monkeypatch.setattr(publish, "process_target", _fake_process_target_succeeds)
 
 
 def _single_row(name: str, repo_root: Path) -> list:

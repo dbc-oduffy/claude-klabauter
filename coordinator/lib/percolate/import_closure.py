@@ -120,7 +120,8 @@ published mirror `c587c774`, where `coordinator/lib/percolate/allowlist.py`,
 union and not in any single row's restricted tree, so grading them per-row
 manufactures false positives — the same defect as the 372 measured on
 `-coordinator-bin` (2026-08-13) that this gate's row scoping exists to
-avoid.
+avoid. The assembled union is `assembled_mirror_gate`'s question, not this
+one's.
 
 `scripts/` publishes only `setup.py`/`setup.cmd` and `bin/` is not a
 first-party import root in any row, so neither can produce that false

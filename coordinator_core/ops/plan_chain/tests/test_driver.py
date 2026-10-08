@@ -236,29 +236,3 @@ def test_default_runner_parses_envelope_result(tmp_path, monkeypatch):
     result = driver._default_runner(str(tmp_path))(Path("s.mjs"), session_id="sid")
     assert result.digest == PLAN_DIGEST
     assert captured["wait"] is True and captured["session_id"] == "sid"
-
-
-def test_execute_halt_names_terminal_commit_as_the_next_action(world):
-    manifest, calls, _s, _root = world
-    ex = {**EXEC_DIGEST, "deviations": [{"chunk": "C1", "kind": "blocked", "anchor": ""}]}
-
-    def runner(script, *, session_id):
-        d = PLAN_DIGEST if Path(script).stem == "plan" else ex
-        return WorkflowResult(d, "", session_id, task_output_path="tasks/exec.output")
-
-    digest = driver.run(manifest, runner=runner, invoke_terminal_commit=make_commit(calls))
-
-    action = digest["next_action"]
-    assert action["kind"] == "terminal_commit" and action["op"] == "dispatch.terminal_commit"
-    assert action["params"]["paths"] == ["a"]
-    assert action["params"]["script_path"].endswith("exec.mjs")
-    assert action["params"]["task_output_path"] == "tasks/exec.output"
-    assert digest["outcome"] == "indeterminate"
-    assert digest["chain"]["halt_reason"].startswith("chunk C1 blocked: the executor gave no reason")
-
-
-def test_plan_stage_halt_names_no_next_action(world):
-    manifest, calls, _s, _root = world
-    pulled = {**PLAN_DIGEST, "outcome": "pulled"}
-    digest = driver.run(manifest, runner=make_runner(calls, plan=pulled), invoke_terminal_commit=make_commit(calls))
-    assert digest["next_action"]["kind"] == "none"

@@ -282,7 +282,7 @@ def build_tier_u_grant_flow(
 def build_tier_u_grant_check(
     *,
     id: str,
-    depends_on: str,
+    depends_on: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build the confirm-green `check` directive a caller fires against the
     session-scoped token `build_tier_u_grant_flow`'s write directive already
@@ -302,6 +302,8 @@ def build_tier_u_grant_check(
 
     The directive shells out to `tier-u-grant-cli check` — the same CLI
     `build_tier_u_grant_flow`'s write directive already targets by name.
+    `depends_on` is None only when the cloud-box basis holds: the readers then
+    emit no grant write, so there is no edge to order against.
     Failure disposition (raise-on-denied-check) is the dispatch handler's
     job (C3), not this builder's — this module only returns dicts.
     """

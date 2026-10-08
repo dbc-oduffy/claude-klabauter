@@ -287,6 +287,24 @@ def _source_rows_by_plan(
     return out
 
 
+#: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan.
+_SEAM_SIDECAR_SUFFIX = ".seam.yaml"
+
+
+def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: list) -> list:
+    """Worktree-relative `.seam.yaml` sidecars on disk beside the run's plan and each
+    source plan its committed rows came from, in sorted order."""
+    if not plan_path:
+        return []
+    plans = {plan_path, *_source_rows_by_plan(worktree_root, plan_path, chunk_ids)}
+    found = []
+    for plan in sorted(plans):
+        rel = str(PurePosixPath(plan).with_name(PurePosixPath(plan).stem + _SEAM_SIDECAR_SUFFIX))
+        if (worktree_root / rel).is_file():
+            found.append(rel)
+    return found
+
+
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
     """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
 
@@ -780,6 +798,27 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
     if len(dirty) > _UNDECLARED_DIRTY_CAP:
         out["undeclared_dirty_total"] = len(dirty)
+    return out
+
+
+def _commit_siblings(
+    sibling_paths: dict, subject: str, home_sha: Optional[str], session_id: Optional[str]
+) -> list:
+    """One ``ceremony.commit_v2`` per sibling repo, scoped to that repo's
+    declared paths. A refusal is reported per repo, never raised."""
+    out: list = []
+    for root, paths in sibling_paths.items():
+        message = subject + (f"\n\nCross-Repo-Of: {home_sha}" if home_sha else "")
+        params: dict = {"paths": list(paths), "message": message}
+        if session_id is not None:
+            params["session_id"] = session_id
+        try:
+            reply = reentrant_dispatch("ceremony.commit_v2", params, repo_root=Path(root) / ".git")
+        except OpUnavailableError:
+            reply = {"committed": False, "error": "ceremony.commit_v2 is not registered"}
+        if not isinstance(reply, dict):
+            reply = {"committed": False, "error": f"unexpected commit_v2 reply: {reply!r}"}
+        out.append({"repo": Path(root).name, "paths": list(paths), **reply})
     return out
 
 
@@ -1482,8 +1521,21 @@ def _terminal_commit(
     if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
 
+    # A sibling-checkout path never reaches the home commit (it would drop as
+    # absent-at-HEAD); each sibling repo lands its own commit after the home one.
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
+
+    all_paths, sibling_paths = split_sibling_paths(all_paths, worktree_root)
+
+    def _with_siblings(reply: dict) -> dict:
+        if sibling_paths:
+            reply["sibling_commits"] = _commit_siblings(
+                sibling_paths, _subject(done_chunks, "review trail"), reply.get("sha"), session_id
+            )
+        return reply
+
     if not all_paths:
-        return {"committed": False, "nothing_to_commit": True}
+        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     if not anchor_only:
         cited_sizing = _cited_sizing(worktree_root, request.plan_path)
@@ -1499,6 +1551,11 @@ def _terminal_commit(
             )
             if (worktree_root / evidence_rel).is_file() and evidence_rel not in all_paths:
                 all_paths.append(evidence_rel)
+        for seam_rel in _seam_sidecars(
+            worktree_root, request.plan_path, [c.id for c in done_chunks + partial_chunks]
+        ):
+            if seam_rel not in all_paths:
+                all_paths.append(seam_rel)
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
@@ -1526,7 +1583,7 @@ def _terminal_commit(
         all_paths = [p for p in all_paths if p not in removed]
 
     if not all_paths and not deleted_paths:
-        return {"committed": False, "nothing_to_commit": True}
+        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     scope.update(root=worktree_root, request=request)
     final_paths_set = set(all_paths)
@@ -1759,4 +1816,12 @@ def _terminal_commit(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
+    if reply.get("committed") or reply.get("nothing_to_commit"):
+        _with_siblings(reply)
+    elif sibling_paths:
+        reply["sibling_commits"] = [
+            {"repo": root.name, "paths": paths, "committed": False,
+             "error": "home commit did not land; sibling commit withheld"}
+            for root, paths in sibling_paths.items()
+        ]
     return reply

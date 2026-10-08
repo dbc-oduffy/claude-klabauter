@@ -67,13 +67,12 @@ def _check_plan(plan_path: Path) -> dict[str, Any]:
     return mod.check_plan(plan_path, for_execution=True)
 
 
-def _spine_read(plan_path: Path) -> tuple[list[Any], list[dict[str, Any]]]:
-    """``(dispatchable rows, exclusions)``, as the emit reads them."""
+def _spine_exclusions(plan_path: Path) -> list[dict[str, Any]]:
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
     exclusions: list[dict[str, Any]] = []
-    rows = read_spine(plan_path, exclusions=exclusions)
-    return rows, exclusions
+    read_spine(plan_path, exclusions=exclusions)
+    return exclusions
 
 
 def _falsifier_defect(plan_path: Path, repo_root: Path) -> str | None:
@@ -190,15 +189,14 @@ def run(manifest: ChainManifest, plan_path: str | Path, *, repo_root: str | Path
         return _spine_failed(failure)
 
     try:
-        rows, exclusions = _spine_read(plan)
+        exclusions = _spine_exclusions(plan)
     except ValueError as exc:
         return _spine_failed(f"spine unreadable: {exc}")
     dead = _dead_session_gate(plan, root)
     if dead is not None:
         return halt("external-gate-uncleared", dead)
     gated = [e["id"] for e in exclusions if e.get("reason") == "external_gate"]
-    # A partly-gated plan runs its dispatchable rows; the emit withholds the gated ones.
-    if gated and not rows:
+    if gated:
         return halt(
             "external-gate-uncleared",
             f"row(s) {', '.join(str(g) for g in gated)} carry an uncleared external_gate blocking execution",

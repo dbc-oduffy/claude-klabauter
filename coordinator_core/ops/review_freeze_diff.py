@@ -596,7 +596,7 @@ def _freeze_diff_worktree(
     sha_path = diffs_dir / f"{slice_id}.head.sha"
     sha_content = f"{base} worktree"
 
-    diff_unchanged = diff_path.exists() and diff_path.read_bytes().decode("utf-8") == diff_text
+    diff_unchanged = diff_path.exists() and diff_path.read_text(encoding="utf-8", newline="") == diff_text
     if diff_path.exists() and not diff_unchanged:
         return _error(
             f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
@@ -892,7 +892,7 @@ def freeze_diffs_batch(
         diff_path = diffs_dir / f"{slice_id}.diff"
         sha_path = diffs_dir / f"{slice_id}.head.sha"
 
-        diff_unchanged = diff_path.exists() and diff_path.read_bytes().decode("utf-8") == diff_text
+        diff_unchanged = diff_path.exists() and diff_path.read_text(encoding="utf-8", newline="") == diff_text
         if diff_path.exists() and not diff_unchanged:
             results[i] = _error(
                 f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "

@@ -2,12 +2,17 @@
 regression guard (`docs/plans/2026-09-11-publish-build-verify-swap-one-staging-pa.md`
 chunk C1).
 
-`process_target`'s dry-run leg runs through the SAME staging code path a real
-run uses (`sync_target.dest_dir` is a fresh empty staging directory in both
-modes): a dry run runs the standalone guards and every percolate-engine phase
-against the staging directory and discards it, never touching the real
-destination. `dispatch_percolate_pre_rsync` is not dispatched in either mode:
-its backup leg needs the prior destination tree, which the round never copies.
+Before this fix, `process_target`'s dry-run leg was a hard `if dry_run: ...
+skip ... ` branch that never created a staging tree, never dispatched
+`dispatch_percolate_pre_rsync`/`dispatch_standalone_guards`, and never ran
+the post_rsync/inject/pre_ci percolate phases — the stated reason being "the
+engine has no non-mutating preview mode ... dispatching it under --dry-run
+would actually mutate the destination tree". That reasoning is retired by
+routing dry-run through the SAME staging-tree code path a real run uses
+(`sync_target.dest_dir` is a throwaway copy in both modes): a dry run now
+runs every percolate-engine phase against the staging copy and discards it,
+never touching the real destination. Only the swap of that staging copy
+into the real destination stays real-run-only (§ P079-C2).
 
 This file drives the REAL `process_target` (never a stub of the staging
 fork itself), with the percolate-engine dispatch functions monkeypatched to
@@ -97,7 +102,7 @@ def _wire_common_fakes(monkeypatch, *, src_dir: Path, pre_rsync_calls: list, gua
         lambda *a, **k: guard_calls.append(a),
     )
     monkeypatch.setattr(
-        publish, "sync_manifest", lambda src, dst, totals, dry_run, out, **kwargs: True
+        publish, "sync_manifest", lambda src, dst, totals, dry_run, out: True
     )
     monkeypatch.setattr(publish, "write_lastsync_marker", lambda *a, **k: None)
     monkeypatch.setattr(publish, "dispatch_preswap_function_gate", lambda *a, **k: True)
@@ -162,6 +167,13 @@ def test_dry_run_builds_staging_with_post_transform_bytes_and_leaves_dest_byte_i
     monkeypatch.setattr(publish, "dispatch_percolate_inject", lambda *a, **k: ())
     monkeypatch.setattr(publish, "dispatch_percolate_pre_ci", lambda *a, **k: None)
 
+    swap_calls: list = []
+    monkeypatch.setattr(
+        publish,
+        "_swap_all_rows_into_dest",
+        lambda *a, **k: swap_calls.append((a, k)),
+    )
+
     totals = publish.RunTotals()
     out = io.StringIO()
     engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=object(), store={})
@@ -178,9 +190,10 @@ def test_dry_run_builds_staging_with_post_transform_bytes_and_leaves_dest_byte_i
         out=out,
     )
 
-    # The standalone-guard phase dispatches under dry-run; pre_rsync needs the
-    # prior destination tree and is dispatched in neither mode.
-    assert pre_rsync_calls == []
+    # The pre_rsync/standalone-guard percolate phases now dispatch under
+    # dry-run too (P079-C1's whole point) — the pre-fix behaviour never
+    # called either.
+    assert len(pre_rsync_calls) == 1
     assert len(guard_calls) == 1
 
     # A staging tree was created and reached post_rsync, and it holds the
@@ -189,6 +202,9 @@ def test_dry_run_builds_staging_with_post_transform_bytes_and_leaves_dest_byte_i
     staging_dir = staging_dirs_seen[0]
     assert staging_dir != dest_dir
     assert staged_bytes_seen == [fixed_bytes]
+
+    # The swap into the real destination was never attempted under dry-run.
+    assert swap_calls == []
 
     # The real destination is byte-identical before and after — tracked
     # paths AND untracked residue.
@@ -228,6 +244,13 @@ def test_dry_run_staging_tree_reclaimed_on_exception_path(tmp_path, monkeypatch)
 
     monkeypatch.setattr(publish, "dispatch_percolate_post_rsync", failing_post_rsync)
 
+    swap_calls: list = []
+    monkeypatch.setattr(
+        publish,
+        "_swap_all_rows_into_dest",
+        lambda *a, **k: swap_calls.append((a, k)),
+    )
+
     totals = publish.RunTotals()
     out = io.StringIO()
     engine_ctx = publish.PercolateEngineContext(engine_claude_klabauter=object(), store={})
@@ -244,9 +267,10 @@ def test_dry_run_staging_tree_reclaimed_on_exception_path(tmp_path, monkeypatch)
         out=out,
     )
 
-    # The standalone guards still ran before the failure below them.
-    assert pre_rsync_calls == []
+    # pre_rsync/standalone-guards still ran before the failure below them.
+    assert len(pre_rsync_calls) == 1
     assert len(guard_calls) == 1
+    assert swap_calls == []
 
     assert publish._git_head(dest_dir) == original_head
     assert (dest_dir / "payload.txt").read_text(encoding="utf-8") == "original\n"

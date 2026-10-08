@@ -2,7 +2,8 @@
 coordinator_core.workstream_complete.test_terminal_sweep_directive_ordering
 — pins the one property neither the generic cross-consistency guard nor any
 existing test asserted: the terminal-handoff and terminal-sizings sweep
-directives are emitted LAST, in that order, from `build_directives`.
+directives are emitted after everything that stamps, in that order, from
+`build_directives`, followed only by the close-ceremony reindex.
 
 Purpose: the C3 commit that added `d-sweep-terminal-sizings`
 (docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md) calls
@@ -18,8 +19,8 @@ newer one.
 
 Negative-spec: does NOT assert anything about the OTHER directives'
 ordering, relative positions, or presence/absence — only that the two
-terminal sweeps are the final two entries, handoffs immediately before
-sizings.
+terminal sweeps and the reindex are the final three entries, handoffs
+immediately before sizings, the reindex last.
 """
 
 from __future__ import annotations
@@ -44,16 +45,27 @@ def _gate() -> wsc.SessionShapeGate:
     )
 
 
-def test_terminal_sweeps_are_last_handoffs_then_sizings(tmp_path: Path) -> None:
+def test_terminal_sweeps_are_last_in_the_main_pass_then_post_close(tmp_path: Path) -> None:
     directives = wsc.build_directives(_gate(), {}, tmp_path)
+    key = wsc.directives_session_hygiene.AFTER_CLOSE_COMMIT_KEY
 
-    ids = [d["id"] for d in directives]
-    assert ids[-2:] == ["d-sweep-terminal-handoffs", "d-sweep-terminal-sizings"], (
-        f"expected the handoffs sweep immediately followed by the sizings "
-        f"sweep as the final two directives; got {ids!r}"
-    )
+    main_pass = [d for d in directives if not d.get(key)]
+    post_close = [d for d in directives if d.get(key)]
 
-    handoffs = directives[-2]
-    sizings = directives[-1]
-    assert handoffs["cli"] == "sweep-terminal-handoffs"
-    assert sizings["cli"] == "sweep-terminal-sizings"
+    assert [d["id"] for d in main_pass[-2:]] == [
+        "d-sweep-terminal-handoffs",
+        "d-sweep-terminal-sizings",
+    ], f"got {[d['id'] for d in main_pass]!r}"
+    assert main_pass[-2]["cli"] == "sweep-terminal-handoffs"
+    assert main_pass[-1]["cli"] == "sweep-terminal-sizings"
+
+    assert [d["id"] for d in post_close] == ["d-structural-index-refresh", "d-ceremony-reindex"]
+    assert directives[-2:] == post_close
+    assert post_close[0]["args"] == ["--root", str(tmp_path), "--timeout", "0"]
+    assert post_close[1]["args"] == [
+        "--ceremony", "workstream-complete", "--repo-root", str(tmp_path),
+    ]
+    assert all(d["best_effort"] for d in post_close)
+    # The post-close pass runs no gate check, so a held-back directive may
+    # never depend on a judgment point or claim to be already satisfied.
+    assert all(d["depends_on"] is None and not d["already_satisfied"] for d in post_close)
