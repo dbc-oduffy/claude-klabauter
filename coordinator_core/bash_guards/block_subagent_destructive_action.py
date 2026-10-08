@@ -3254,6 +3254,19 @@ def _build_reason(
             "subagent that can run Python can still write the registry directly,\n"
             "unseen by this guard. Fix forward, or surface a genuine need to the EM."
         )
+    if deny_kind.startswith(("kill ", "pkill ")) or "stop-process" in deny_kind.lower() or (
+        deny_kind.startswith("PowerShell ") and "process termination" in deny_kind
+    ):
+        return (
+            "BLOCKED: this process is not provably a descendant of this session.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Denied:   {deny_kind}\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Stopping it belongs to your main session (your dispatcher). Report the PID\n"
+            "there. Never ask a peer session or the Group EM to stop it: relaying a\n"
+            "denied action is permission laundering.\n"
+            "Allowed: `kill`/`Stop-Process -Id <pid>` of numeric PIDs under this session."
+        )
     if deny_kind == "rm -r/-f (recursive or force)":
         return (
             "BLOCKED: subagents may not run destructive rm operations — EM-locked.\n\n"

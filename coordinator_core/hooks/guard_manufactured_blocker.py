@@ -115,9 +115,37 @@ def _quote_parity_odd(span: str) -> bool:
     return sum(1 for ch in span if ch in _QUOTE_CHARS) % 2 == 1
 
 
+# Reported speech: the call is attributed to a named party or an existing
+# ruling ("Angelique ruled ...", "per the APM ruling", "the APM's call was")
+# or sits in past tense ("was your call"). Scoped to the text since the last
+# sentence/semicolon/contrast boundary so a fresh handoff after "; but" fires.
+_ATTRIBUTION_RE = re.compile(
+    r"\b(?:ruled|rules|ruling|rulings|decided|determined|signed\s+off|"
+    r"approved|answered)\b"
+    r"|\bper\s+(?:the\s+)?[\w'-]+(?:\s+[\w'-]+)?\s+(?:call|decision|answer)\b"
+    r"|['’]s\s+(?:call|decision)\b",
+    re.IGNORECASE,
+)
+_PAST_COPULA_TAIL_RE = re.compile(r"\b(?:was|were|had\s+been)\s+$", re.IGNORECASE)
+_ATTRIBUTION_SCOPE_BOUNDARY_RE = re.compile(
+    r"[.!?;\n]|\b(?:but|however|though|although)\b", re.IGNORECASE
+)
+
+
+def _reported_speech(prefix: str) -> bool:
+    if _PAST_COPULA_TAIL_RE.search(prefix):
+        return True
+    boundaries = list(_ATTRIBUTION_SCOPE_BOUNDARY_RE.finditer(prefix))
+    scope = prefix[boundaries[-1].end():] if boundaries else prefix
+    return bool(_ATTRIBUTION_RE.search(scope))
+
+
 def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
-    """True iff `pattern` fires in `text` outside any negated clause or
-    quoted span -- the shared trigger predicate for the hand-up patterns."""
+    """True iff `pattern` fires in `text` outside any negated clause, quoted
+    span, or reported-speech attribution -- the shared trigger predicate for
+    the hand-up patterns. Undecidable cases stay silent: the guard fires at
+    most once per session, so a missed handoff is cheaper than a false stop."""
+    offset = 0
     for clause in _CLAUSE_SPLIT_RE.split(text):
         for m in pattern.finditer(clause):
             prefix = clause[: m.start()]
@@ -125,7 +153,10 @@ def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
                 continue
             if _quote_parity_odd(prefix):
                 continue
+            if _reported_speech(text[: offset + m.start()]):
+                continue
             return True
+        offset += len(clause) + 1
     return False
 
 

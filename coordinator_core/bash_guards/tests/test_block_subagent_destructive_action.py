@@ -4304,6 +4304,20 @@ def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cm
     _assert_denies(_ps_payload(cmd, agent_type=_EXEC))
 
 
+def test_kill_deny_message_names_main_session_and_forbids_peer_relay(tree_pids):
+    out = guard.check(_payload("kill -9 9999", agent_type=_EXEC))
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "main session" in reason
+    assert "Group EM" in reason and "permission laundering" in reason
+
+
+@requires_powershell_grammar
+def test_stop_process_deny_message_names_main_session(tree_pids):
+    out = guard.check(_ps_payload("Stop-Process -Id 9999", agent_type=_EXEC))
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "main session" in reason and "permission laundering" in reason
+
+
 def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
     import subprocess
     import sys

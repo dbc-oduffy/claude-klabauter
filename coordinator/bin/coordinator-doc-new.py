@@ -6661,6 +6661,88 @@ def _default_output_path(
 
 
 # ---------------------------------------------------------------------------
+# --from-body: put canonical frontmatter around an already-written body
+# ---------------------------------------------------------------------------
+
+_TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):")
+
+
+def _split_frontmatter(text: str) -> tuple[str | None, str]:
+    """Split `text` into (frontmatter lines joined by \\n, body). Frontmatter is
+    None when the text does not open with a `---` fence closed by a later one;
+    the body is then the whole text, byte for byte."""
+    for opener in ("---\r\n", "---\n"):
+        if text.startswith(opener):
+            m = re.search(r"^---[ \t]*\r?$", text[len(opener):], re.MULTILINE)
+            if m is None:
+                return None, text
+            fm = text[len(opener):len(opener) + m.start()]
+            rest = text[len(opener) + m.end():]
+            rest = rest[2:] if rest.startswith("\r\n") else rest[1:] if rest.startswith("\n") else rest
+            return fm.replace("\r\n", "\n").rstrip("\n"), rest
+    return None, text
+
+
+def _frontmatter_blocks(fm: str) -> list[tuple[str | None, list[str]]]:
+    """Group frontmatter lines into (top-level key, lines) blocks; indented,
+    blank and comment lines ride with the key line above them."""
+    blocks: list[tuple[str | None, list[str]]] = []
+    for line in fm.split("\n"):
+        m = _TOP_LEVEL_KEY_RE.match(line)
+        if m or not blocks:
+            blocks.append((m.group(1) if m else None, [line]))
+        else:
+            blocks[-1][1].append(line)
+    return blocks
+
+
+def _adopted_title_and_id(text: str) -> tuple[str | None, str | None, str]:
+    """(title, id, body) read from an existing document so the generator can be
+    seeded with them; title falls back to the body's first H1."""
+    fm, body = _split_frontmatter(text)
+    title = doc_id = None
+    for key, lines in _frontmatter_blocks(fm) if fm is not None else []:
+        value = lines[0].split(":", 1)[1].strip().strip("\"'") if key else ""
+        if key == "title" and value:
+            title = value
+        elif key == "id" and value:
+            doc_id = value
+    if title is None:
+        h1 = re.search(r"^#[ \t]+(.+?)[ \t]*$", body, re.MULTILINE)
+        title = h1.group(1) if h1 else None
+    return title, doc_id, body
+
+
+def _adopt_body(generated: str, existing: str) -> str:
+    """Wrap `existing`'s body in the generator's canonical frontmatter.
+
+    `generated` is the fresh scaffold for the type; its frontmatter decides
+    which fields exist and in what order. A field the existing document already
+    carries keeps its own value; fields the document lacks keep the generator's
+    default; fields only the document carries trail the block so schema
+    validation, not this function, judges them.
+    """
+    gen_fm, _skeleton = _split_frontmatter(generated)
+    if gen_fm is None:
+        raise ValueError("generated scaffold has no frontmatter to adopt around")
+    old_fm, body = _split_frontmatter(existing)
+    old_blocks = {
+        key: lines for key, lines in (_frontmatter_blocks(old_fm) if old_fm else []) if key
+    }
+    out: list[str] = []
+    used: set[str] = set()
+    for key, lines in _frontmatter_blocks(gen_fm):
+        if key and key in old_blocks:
+            lines = old_blocks[key]
+            used.add(key)
+        out.extend(lines)
+    for key, lines in old_blocks.items():
+        if key not in used:
+            out.extend(lines)
+    return "---\n" + "\n".join(out) + "\n---\n" + body
+
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -6757,6 +6839,19 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             ".coordinator-local/subagent-share/<session-id>/YYYY-MM-DD-codereview-sliceID-SLUG.md (review-findings), "
             "state/strategic/self-description.yaml (strategic-self-description — single canonical per-repo path, not date/slug-derived). "
             "run-report (and its flight-recorder alias) has NO default — --out is REQUIRED."
+        ),
+    )
+
+    parser.add_argument(
+        "--from-body",
+        dest="from_body",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Wrap the existing file at PATH in this --type's canonical frontmatter, "
+            "keeping its body bytes. Partial frontmatter it already carries is "
+            "conformed through the same generator (its values win per field). "
+            "Writes back to PATH unless --out names another file."
         ),
     )
 
@@ -7700,6 +7795,23 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"error: {_early_error}\n  Nothing was written.", file=sys.stderr)
         return 1
 
+    _adopt_existing: str | None = None
+    _adopt_id: str | None = None
+    if args.from_body:
+        try:
+            with open(args.from_body, "r", encoding="utf-8", newline="") as _fh:
+                _adopt_existing = _fh.read()
+        except OSError as exc:
+            print(f"error: cannot read --from-body {args.from_body}: {exc}", file=sys.stderr)
+            return 1
+        _adopt_title, _adopt_id, _ = _adopted_title_and_id(_adopt_existing)
+        if not args.title and _adopt_title:
+            args.title = _adopt_title
+        if not args.out:
+            args.out = args.from_body
+        if os.path.realpath(args.out) == os.path.realpath(args.from_body):
+            args.force = True
+
     # Resolve title default.
     title = args.title
     if not title:
@@ -8483,7 +8595,9 @@ def main(argv: "list[str] | None" = None) -> int:
     # numbering namespace, not the write target of this particular invocation.
     # Spec backlink: cross-repo/inbox/2026-07-20-example-game-repo-em-dr-number-allocator-collision.md
     _resolved_dr_id: str | None = None
-    if doc_type == "decision":
+    if doc_type == "decision" and _adopt_id:
+        _resolved_dr_id = _adopt_id
+    elif doc_type == "decision":
         _dr_repo_root = _current_repo_root() or "."
         _decisions_dir = os.path.join(_dr_repo_root, "docs", "decisions")
         # Unprefixed ids go through the shared mint, whose reservation is
@@ -8923,6 +9037,9 @@ def main(argv: "list[str] | None" = None) -> int:
             )
             return 2
         raise AssertionError(f"unreachable doc_type: {doc_type!r}")
+
+    if _adopt_existing is not None:
+        content = _adopt_body(content, _adopt_existing)
 
     # Resolve output path.
     out_path = args.out

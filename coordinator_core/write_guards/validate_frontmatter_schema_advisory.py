@@ -445,11 +445,18 @@ def build_scaffold_offer_payload_advisory(
     derived_args: Optional[str],
     authoring_hint: Optional[str],
     resolved_kind: Optional[str] = None,
+    flagged_path: Optional[str] = None,
 ) -> Optional[dict]:
     if _is_strict():
         return None
     args = f" {derived_args}" if derived_args else ""
     cmd = f"coordinator-doc-new --type {type_}{args}"
+    adopt_line = ""
+    if flagged_path:
+        adopt_line = (
+            "Body already written? Add the frontmatter in place:\n\n"
+            f"  {cmd} --from-body {flagged_path}\n\n"
+        )
     schema_label = (
         f"schema: {schema_name}, resolved by kind: {resolved_kind}"
         if resolved_kind
@@ -459,6 +466,7 @@ def build_scaffold_offer_payload_advisory(
         f"This is a new schema-matching document ({schema_label}). "
         "Use the scaffolder to generate conformant frontmatter:\n\n"
         f"  {cmd}\n\n"
+        f"{adopt_line}"
         "Then fill the body via Edit. The scaffolder creates the file via Python "
         "open() (structurally exempt from this PreToolUse Write-tool hook — see "
         "new-file-only rationale below), so subsequent body-fill edits stay silent. "
@@ -869,7 +877,12 @@ def _scaffold_offer_decision(
         derived_args = f"--plan {stem}" if stem else "--plan <stem>"
 
     payload = build_scaffold_offer_payload_advisory(
-        schema_name, type_, derived_args, authoring_hint, kind_value if override else None
+        schema_name,
+        type_,
+        derived_args,
+        authoring_hint,
+        kind_value if override else None,
+        flagged_path=repo_rel.replace("\\", "/"),
     )
     return ("advisory", payload)
 

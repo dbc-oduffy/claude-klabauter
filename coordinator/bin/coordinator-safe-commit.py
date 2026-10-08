@@ -297,6 +297,25 @@ class UsageError(RuntimeError):
     """Raised for CLI usage errors; caught at the top level, prints to stderr, exit 1."""
 
 
+class MissingSeparatorError(UsageError):
+    """Extra positionals with no `--`: renders fact, usage line, and (when every
+    token after the subject is an existing file) the corrected command."""
+
+    SYNTAX = 'coordinator-safe-commit [--body-file F] "<subject>" -- <path>...'
+
+    def __init__(self, positionals: Sequence[str]) -> None:
+        super().__init__("paths need a `--` separator.")
+        self.positionals = list(positionals)
+
+    def render(self) -> str:
+        lines = [f"ERROR: paths need a `--` separator.", f"Usage: {self.SYNTAX}"]
+        subject, rest = self.positionals[0], self.positionals[1:]
+        if rest and all(Path(p).is_file() for p in rest):
+            quoted = " ".join(f'"{p}"' if " " in p else p for p in rest)
+            lines.append(f'Try: coordinator-safe-commit "{subject}" -- {quoted}')
+        return "\n".join(lines)
+
+
 def _import_session():
     """Resolve claude-klabauter root (cc_invoke.require_engine_on_path seam, wrapping
     resolve_engine_root's ladder, DR-047) and import the four
@@ -539,6 +558,8 @@ def parse_args(argv: Sequence[str]) -> Args:
             )
         raise UsageError("Commit subject is required.")
     if len(positionals) > 1:
+        if not saw_pathspec_separator:
+            raise MissingSeparatorError(positionals)
         raise UsageError("Too many positional arguments. Quote your subject.")
     args.subject = positionals[0]
     if not args.subject:
@@ -3703,6 +3724,9 @@ def main(argv: Sequence[str]) -> None:
 
     try:
         args = parse_args(argv)
+    except MissingSeparatorError as exc:
+        print(exc.render(), file=sys.stderr)
+        sys.exit(1)
     except UsageError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         usage()

@@ -630,6 +630,19 @@ class TestScaffoldOffer:
         assert "[scaffold offer]" in text
         assert "coordinator-doc-new --type handoff" in text
 
+    def test_scaffold_offer_names_the_adopt_command_with_the_flagged_path(self, tmp_path):
+        d = tmp_path / "state" / "handoffs"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / "brand-new.md"
+        result = guard.check(
+            _payload("Write", str(fp), str(tmp_path), content="---\ntitle: t\n---\nbody")
+        )
+        assert result is not None
+        assert (
+            "coordinator-doc-new --type handoff --from-body state/handoffs/brand-new.md"
+            in _advisory_text(result)
+        )
+
     def test_scaffold_offer_strict_mode_yields_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         d = tmp_path / "state" / "handoffs"
