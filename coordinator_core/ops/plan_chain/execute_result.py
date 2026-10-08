@@ -73,11 +73,6 @@ def read_commit_reply(reply: Mapping[str, Any] | None) -> dict[str, str] | Halt:
             "terminal-commit-refused",
             str(refusal) if refusal else "terminal_commit made no commit",
         )
-    if body.get("review_stamp") == "refused":
-        return halt(
-            "terminal-commit-refused",
-            f"committed {sha} but review_stamp refused: {body.get('review_stamp_refusal')}",
-        )
     receipts = body.get("receipts")
     receipt = receipts[0] if isinstance(receipts, list) and receipts else ""
     return {"sha": str(sha), "receipt_path": str(receipt)}

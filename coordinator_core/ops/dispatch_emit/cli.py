@@ -218,7 +218,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="a file in the ask's footprint (repeatable; --ask/--sizing only); "
-        "a path outside the repo root is refused at emit",
+        "a path in a sibling checkout is a cross-repo write (see --cross-repo-approved); "
+        "a path outside every checkout is refused at emit",
     )
     parser.add_argument(
         "--restamp",
@@ -387,6 +388,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="overwrite an --out path already holding a different session's emission",
+    )
+    parser.add_argument(
+        "--cross-repo-approved",
+        action="store_true",
+        help="plan/ask route: the PM approved this run's sibling-repo writes (the "
+        "approve_cross_repo_write touchpoint); implied on a remote venue",
     )
     parser.add_argument(
         "--chatty",
@@ -1169,6 +1176,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force}
+    # Venue is read here, in the dispatching session's own env: the op body may
+    # run warm-served, where os.environ belongs to whoever spawned the server.
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
+
+    if args.cross_repo_approved or is_remote_venue():
+        params["cross_repo_approved"] = True
     if args.out_path:
         params["output_path"] = args.out_path
     if is_ask_route:

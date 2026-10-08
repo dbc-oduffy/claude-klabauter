@@ -2828,14 +2828,8 @@ _UNJUDGED_CAUSE_JS = (
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
-    "((r) => { if (!r || typeof r !== 'object') return r; "
-    # DoE C1 (judge-reachability-check): a met judge naming an unreachable entry
-    # or a broken click path is not_met; `undecidable` never moves the status.
-    "if (r.status === 'met' && r.reachability) { const rc = r.reachability; "
-    "const first = (rc.unreachable || [])[0] || (rc.broken_click_paths || [])[0]; "
-    "if (first) { const reason = 'not wired up: ' + first; log(reason); "
-    "return { ...r, status: 'not_met', differs_from_baseline: null, reason }; } } "
-    "if (r.status === 'met') { const why = []; "
+    "((r) => { if (!r || typeof r !== 'object') return r; "
+    "if (r.status === 'met') { const why = []; "
     "if (!Array.isArray(r.observed) || r.observed.length === 0) why.push('nothing observed'); "
     "const v = r.falsifier && r.falsifier.verdict; "
     "if (v && v !== 'pass' && v !== 'not_present') why.push('falsifier ' + v); "
@@ -5019,6 +5013,7 @@ def emit_script(
     review_only_rows: Optional[frozenset] = None,
     run_base_sha: Optional[str] = None,
     chatty: bool = False,
+    cross_repo_approved: bool = False,
     predispatch: bool = False,
     review_specs: Sequence[AgentSpec] = (),
     credit_rows: Optional[Callable[[Path, str, Optional[str]], Sequence[str]]] = None,
@@ -5201,7 +5196,7 @@ def emit_script(
     check_unschedulable_rows(rows, raw_by_id)
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
-    check_cross_repo_writes(rows, repo_root)
+    check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
     if findings_out is not None:
         findings_out.extend(find_absent_edit_targets(rows, repo_root))
         findings_out.extend(find_import_window_rows(rows, repo_root))

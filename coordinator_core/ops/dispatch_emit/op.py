@@ -1016,7 +1016,8 @@ def _dispatch_emit(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
             ask_sizing = _gate_sizing_at_emit(
-                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton
+                ask_root, sizing_rel, list(params.get("writes") or []), baton=ask_baton,
+                cross_repo_approved=bool(params.get("cross_repo_approved")),
             )
         else:
             given_root = repo_root or params.get("target_root")
@@ -1274,6 +1275,7 @@ def _dispatch_emit(
             script_path=_script_path_under(guarded_path, ask_ctx["root"]),
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
+            cross_repo_approved=bool(params.get("cross_repo_approved")),
             agent_type_host=agent_type_host,
             baton=ask_ctx.get("baton"),
             accept_pending=bool(ask_ctx.get("accept_pending")),
@@ -1310,6 +1312,7 @@ def _dispatch_emit(
             review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
             run_base_sha=params.get("run_base_sha"),
             chatty=bool(params.get("chatty")),
+            cross_repo_approved=bool(params.get("cross_repo_approved")),
             predispatch=bool(inventory_path),
             review_specs=inventory_review_specs,
             credit_rows=rows_backed_before_base,
@@ -1932,7 +1935,11 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
 
 
 def _gate_sizing_at_emit(
-    root: Path, sizing_rel: str, writes: list, baton: Optional[dict] = None
+    root: Path,
+    sizing_rel: str,
+    writes: list,
+    baton: Optional[dict] = None,
+    cross_repo_approved: bool = False,
 ) -> dict:
     """Run the in-run gate and the footprint check before any script is composed.
 
@@ -1943,8 +1950,10 @@ def _gate_sizing_at_emit(
     is derived from whether the sizing already named a baton, never from git.
     """
     from coordinator_core.ops.dispatch_emit.ask_gate import gate
+    from types import SimpleNamespace
+
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_TOUCHPOINT
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import paths_outside_repo_root
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import CrossRepoWriteError, check_cross_repo_writes
     from coordinator_core.ops.dispatch_emit.sizing_fire import (
         ARM_M_PLUS,
         ARM_ROADMAP,
@@ -1955,11 +1964,13 @@ def _gate_sizing_at_emit(
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES
 
-    outside = paths_outside_repo_root(writes, root)
-    if outside:
-        raise SizingFireRefused(
-            [f"writes outside repo root {Path(root).as_posix()}: {', '.join(outside)}"]
+    try:
+        check_cross_repo_writes(
+            [SimpleNamespace(id="--writes", writes=list(writes), writes_under=())],
+            Path(root), approved=cross_repo_approved,
         )
+    except CrossRepoWriteError as exc:
+        raise SizingFireRefused([str(exc)]) from exc
     sizing = load_sizing(root, sizing_rel)
     had_baton = bool(sizing.get("baton"))
     # An XS footprint is authored at run time when --writes is absent; the gate's

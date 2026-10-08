@@ -783,6 +783,27 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     return out
 
 
+def _commit_siblings(
+    sibling_paths: dict, subject: str, home_sha: Optional[str], session_id: Optional[str]
+) -> list:
+    """One ``ceremony.commit_v2`` per sibling repo, scoped to that repo's
+    declared paths. A refusal is reported per repo, never raised."""
+    out: list = []
+    for root, paths in sibling_paths.items():
+        message = subject + (f"\n\nCross-Repo-Of: {home_sha}" if home_sha else "")
+        params: dict = {"paths": list(paths), "message": message}
+        if session_id is not None:
+            params["session_id"] = session_id
+        try:
+            reply = reentrant_dispatch("ceremony.commit_v2", params, repo_root=Path(root) / ".git")
+        except OpUnavailableError:
+            reply = {"committed": False, "error": "ceremony.commit_v2 is not registered"}
+        if not isinstance(reply, dict):
+            reply = {"committed": False, "error": f"unexpected commit_v2 reply: {reply!r}"}
+        out.append({"repo": Path(root).name, "paths": list(paths), **reply})
+    return out
+
+
 _STATUS_FIELD = r'^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
 _DELIVERED_REPORT_RE = re.compile(
     r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>'
@@ -1482,8 +1503,21 @@ def _terminal_commit(
     if bookkeeping_record_path is not None and bookkeeping_record_path not in all_paths:
         all_paths.append(bookkeeping_record_path)
 
+    # A sibling-checkout path never reaches the home commit (it would drop as
+    # absent-at-HEAD); each sibling repo lands its own commit after the home one.
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
+
+    all_paths, sibling_paths = split_sibling_paths(all_paths, worktree_root)
+
+    def _with_siblings(reply: dict) -> dict:
+        if sibling_paths:
+            reply["sibling_commits"] = _commit_siblings(
+                sibling_paths, _subject(done_chunks, "review trail"), reply.get("sha"), session_id
+            )
+        return reply
+
     if not all_paths:
-        return {"committed": False, "nothing_to_commit": True}
+        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     if not anchor_only:
         cited_sizing = _cited_sizing(worktree_root, request.plan_path)
@@ -1526,7 +1560,7 @@ def _terminal_commit(
         all_paths = [p for p in all_paths if p not in removed]
 
     if not all_paths and not deleted_paths:
-        return {"committed": False, "nothing_to_commit": True}
+        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
     scope.update(root=worktree_root, request=request)
     final_paths_set = set(all_paths)
@@ -1759,4 +1793,12 @@ def _terminal_commit(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
+    if reply.get("committed") or reply.get("nothing_to_commit"):
+        _with_siblings(reply)
+    elif sibling_paths:
+        reply["sibling_commits"] = [
+            {"repo": root.name, "paths": paths, "committed": False,
+             "error": "home commit did not land; sibling commit withheld"}
+            for root, paths in sibling_paths.items()
+        ]
     return reply

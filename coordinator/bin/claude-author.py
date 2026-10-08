@@ -115,6 +115,8 @@
 #                                  `exec claude`; exits 0 instead. Testing seam for exercising
 #                                  clone resolution without launching the real binary.
 
+from __future__ import annotations
+
 import ntpath
 import os
 import shutil
@@ -752,8 +754,6 @@ binary's own help text, resolve --print-plugin-dir yourself and invoke
 `claude --plugin-dir <dir> --help` directly.
 """
 
-_USAGE = _USAGE.replace("@@ALIAS@@", _ROOT_FLAG_ALIAS)
-
 
 def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
     """Hand the terminal to `claude`: exec where the OS has exec(2), a waited child otherwise."""
@@ -825,7 +825,7 @@ def main(argv: list[str]) -> int:
     # install with no DoE clone registered must still answer --help.
     # -------------------------------------------------------------------
     if "--help" in argv or "-h" in argv:
-        print(_USAGE, end="")
+        print(_USAGE.replace("@@ALIAS@@", _ROOT_FLAG_ALIAS), end="")
         return 0
 
     # Before any resolution: `--vanilla` must work on a box where every rung

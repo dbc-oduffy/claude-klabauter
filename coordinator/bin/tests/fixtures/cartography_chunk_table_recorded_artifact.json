@@ -1,0 +1,29 @@
+{
+  "_fixture_note": "Hand-derived fixture, not a byte-for-byte recording and not regenerable by re-running the recorded op call (run_id and file lists below are synthetic). Shape hand-derived from a live `cartography.chunk_table` call (target_root=coordinator-content-repo, systems={hooks-scripts:[coordinator/hooks/scripts]}, chunk_size=10, emit=true) run against claude-klabauter on 2026-08-06, then trimmed to a small deterministic sample for test_cartography_chunk_table_consume_gate_smoke.py leg (a). See that module's docstring for the mirrored consumer logic this fixture exercises.",
+  "schema_version": 1,
+  "run_id": "2026-08-05-recorded01",
+  "target_root": "/recorded/example-repo",
+  "systems": {
+    "alpha": ["src/alpha"],
+    "beta": ["src/beta"]
+  },
+  "chunk_size": 10,
+  "buckets": {
+    "alpha": {
+      "files": ["src/alpha/a.py", "src/alpha/b.py", "src/alpha/sub/c.py"],
+      "chunks": [["src/alpha/a.py", "src/alpha/b.py", "src/alpha/sub/c.py"]]
+    },
+    "beta": {
+      "files": ["src/beta/d.py", "src/beta/e.py"],
+      "chunks": [["src/beta/d.py", "src/beta/e.py"]]
+    }
+  },
+  "unbucketed": ["README.md"],
+  "counts": {
+    "tracked_total": 6,
+    "source_total": 6,
+    "bucketed_total": 5,
+    "unbucketed_total": 1,
+    "system_count": 2
+  }
+}

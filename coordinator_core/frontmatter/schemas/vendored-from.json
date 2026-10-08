@@ -144,8 +144,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "sizing-object.schema.json": {
-    "blob": "fec45ee3b347a30a0e9080ec168a46fbb6535a88",
-    "doe_commit": "4cf66d39225d02fe7459051551b5dcbcd698b422"
+    "blob": "dc82c53df27d78c325319de9b0e6158f0b2d751c",
+    "doe_commit": "b1aa0d205ac9eef1ba1a1552ead9ae8df640d10c"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",
