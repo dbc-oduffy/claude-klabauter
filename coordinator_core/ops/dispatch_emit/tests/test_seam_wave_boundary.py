@@ -96,7 +96,7 @@ def test_the_gate_releases_after_the_wave_commit_and_leg_settle():
 def test_the_digest_names_class_both_plans_and_path():
     script = _compose(_two_plan_waves())
     digest = script.split("decision_required:", 1)[1].splitlines()[0]
-    assert "'drifted-contract: ' + d.plans.join(' and ')" in digest
+    assert "d.class + ': ' + d.plans.join(' and ')" in digest
     assert "'seam check failed at wave '" in digest
     assert "d.path" in digest
 
@@ -162,12 +162,13 @@ _HARNESS = textwrap.dedent(
     const src = fs.readFileSync(process.argv[2], 'utf8')
       .replace(/export const meta = \\{[\\s\\S]*?\\n\\};\\n/, '');
     const reply = JSON.parse(process.env.SEAM_REPLY);
+    const commitReply = JSON.parse(process.env.COMMIT_REPLY);
     const calls = [];
     const seamParams = [];
     const agent = async (prompt, opts = {}) => {
       const label = opts.label || '';
       calls.push(label);
-      if (label.startsWith('commit:')) return { outcome: 'committed', sha: 'c0ffee1' };
+      if (label.startsWith('commit:')) return commitReply;
       if (label.startsWith('seam:')) { seamParams.push(prompt); return reply; }
       if (label.startsWith('checkpoint-push')) return { pushed: true };
       return label.startsWith('work:') ? 'DONE: ok' : null;
@@ -189,7 +190,10 @@ DRIFT_REPLY = {
 CLEAN_REPLY = {"verdict": "CLEAN", "per_plan": {}, "findings": []}
 
 
-def _run_script(tmp_path, script: str, reply: dict) -> dict:
+COMMITTED = {"outcome": "committed", "sha": "c0ffee1"}
+
+
+def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -201,7 +205,7 @@ def _run_script(tmp_path, script: str, reply: dict) -> dict:
         capture_output=True,
         text=True,
         timeout=60,
-        env={"SEAM_REPLY": json.dumps(reply), "PATH": ""},
+        env={"SEAM_REPLY": json.dumps(reply), "COMMIT_REPLY": json.dumps(commit), "PATH": ""},
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert done.returncode == 0, done.stderr
@@ -215,7 +219,7 @@ def test_drift_keeps_the_consuming_row_from_dispatching_and_lets_unimplicated_ro
     assert "work:P3-C2" in out["calls"]
     assert out["notStarted"] == ["P2-C1"]
     assert sorted(out["haltedPlans"]) == [P1, P2]
-    assert out["drift"][0] == {"wave": 1, "plans": [P2, P1], "path": "a.py"}
+    assert out["drift"][0] == {"wave": 1, "class": "drifted-contract", "plans": [P2, P1], "path": "a.py"}
     params = json.loads(out["seamParams"][0].split("Params, verbatim: `", 1)[1].split("`.", 1)[0])
     assert params["phase"] == "wave-boundary" and params["wave"] == 1
     assert params["landed_range"] == "a" * 40 + "..c0ffee1"
@@ -250,7 +254,7 @@ def test_a_finding_plan_is_the_owner_and_per_plan_is_the_fallback(tmp_path):
         "findings": [{"class": "drifted-contract", "blocking": True, "plan": P2, "counterpart_plan": P1, "path": "a.py"}],
     }
     out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
-    assert out["drift"][0] == {"wave": 1, "plans": [P2, P1], "path": "a.py"}
+    assert out["drift"][0] == {"wave": 1, "class": "drifted-contract", "plans": [P2, P1], "path": "a.py"}
     assert out["haltedPlans"] == [P2]
     bare = {"verdict": "DRIFT", "per_plan": {P2: "DRIFT"}, "findings": [{"class": "drifted-contract", "blocking": True, "path": "a.py"}]}
     assert _run_script(tmp_path, _compose(_two_plan_waves()), bare)["drift"][0]["plans"] == [P2]
@@ -261,6 +265,79 @@ def test_an_edge_free_row_dispatches_before_any_leg_settles(tmp_path):
     out = _run_script(tmp_path, _compose(_two_plan_waves()), DRIFT_REPLY)
     assert "work:P3-C2" in out["calls"]
     assert "_seamGates" not in _registration(_compose(_two_plan_waves()), "P3-C2")
+
+
+@_NODE
+def test_a_commit_reporting_committed_without_a_sha_records_nothing_and_releases_the_gate(tmp_path):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), DRIFT_REPLY, {"outcome": "committed"})
+    assert not any(c.startswith("seam:") for c in out["calls"])
+    assert "work:P2-C1" in out["calls"]
+    assert out["drift"] == [] and out["failures"] == [] and out["haltedPlans"] == []
+
+
+@_NODE
+def test_a_failed_wave_commit_fails_the_held_plans_closed(tmp_path):
+    out = _run_script(
+        tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, {"outcome": "commit-failed", "reason": "refused"}
+    )
+    assert not any(c.startswith("seam:") for c in out["calls"])
+    assert "work:P2-C1" not in out["calls"] and "work:P3-C2" in out["calls"]
+    assert out["haltedPlans"] == [P2]
+    assert out["failures"][0] == "wave 1: no commit landed"
+    assert out["drift"] == [{"wave": 1, "plans": [P2], "path": "", "failed": "no commit landed"}]
+
+
+@_NODE
+def test_an_op_error_relay_fails_closed_and_an_empty_drift_does_too(tmp_path):
+    for reply in (
+        {"verdict": "REFUSED", "per_plan": {}, "findings": [{"class": "op-error"}]},
+        {"verdict": "DRIFT", "per_plan": {}, "findings": []},
+    ):
+        out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
+        assert "work:P2-C1" not in out["calls"]
+        assert out["haltedPlans"] == [P2] and out["failures"]
+
+
+def test_the_relay_prompt_says_refused_for_an_op_error():
+    assert "REFUSED for any op refusal or error" in _compose(_two_plan_waves())
+
+
+def test_a_run_without_a_base_sha_does_not_qualify_for_the_leg():
+    script = compose_script(
+        _two_plan_waves(),
+        name="n",
+        description="d",
+        plan_path="state/mise-inventory/x.spine.md",
+        expected_branch="work/x",
+        seam=ABSENT_EDGES,
+        **REVIEW_KW,
+    )
+    assert "_seam" not in script
+
+
+@_NODE
+def test_the_digest_renders_the_class_and_collapses_repeats():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = _compose(_two_plan_waves())
+    expr = "(_seamDrift.length ? " + script.split("(_seamDrift.length ? ", 1)[1].split("})() : ", 1)[0] + "})() : '')"
+    drift = [
+        {"wave": 1, "class": "unpromised-export", "plans": [P2, P1], "path": "a.py"},
+        {"wave": 1, "class": "unpromised-export", "plans": [P2, P1], "path": "b.py"},
+        {"wave": 1, "class": "path-collision", "plans": [P2, P1], "path": "c.py"},
+    ]
+    done = subprocess.run(
+        [node, "-e", f"const _seamDrift = {json.dumps(drift)}; console.log({expr});"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == (
+        f"unpromised-export: {P2} and {P1} at a.py x2 (wave 1); path-collision: {P2} and {P1} at c.py (wave 1)"
+    )
 
 
 def _seed_plan(root, rel: str, with_sidecar: bool):

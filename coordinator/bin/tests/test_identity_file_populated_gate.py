@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -59,19 +60,6 @@ class _StubClaudeKlabauter:
 
 def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
     totals.processed += 1
-    staging_dir = Path(
-        tempfile.mkdtemp(prefix=f".{target.dest_dir.name}.publish-staging-", dir=str(target.dest_dir.parent))
-    )
-    return publish.StagedRowResult(
-        staging_dir=staging_dir,
-        row_visited=set(),
-        row_changed_files=None,
-        row_removed_files=set(),
-        row_published_files=set(),
-        report_text="",
-        synced=0,
-        deleted=0,
-    )
 
 
 def _stub_dest_refresh(monkeypatch) -> None:
@@ -87,7 +75,27 @@ def _stub_dest_refresh(monkeypatch) -> None:
     )
 
 
+def _stub_throwaway_tree(monkeypatch) -> None:
+    """These tests pin gate wiring, not the throwaway clone (covered by its own
+    tests), so the throwaway is a plain copy of the destination tree and its
+    git delta is empty: no `git` spawn, and the destination need not be a
+    committed repo."""
+
+    def _copy_tree(dest_repo_root, overlays, deletions):
+        tree = Path(tempfile.mkdtemp(prefix="claude-klabauter-throwaway-tree-"))
+        if Path(dest_repo_root).is_dir():
+            shutil.copytree(
+                dest_repo_root, tree, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git")
+            )
+        return tree
+
+    publish._bootstrap_engine()
+    monkeypatch.setattr(publish, "build_throwaway_tree", _copy_tree)
+    monkeypatch.setattr(publish, "_throwaway_delta_paths", lambda throwaway_root: ([], []))
+
+
 def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, rows: list) -> None:
+    _stub_throwaway_tree(monkeypatch)
     _stub_dest_refresh(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
@@ -108,7 +116,6 @@ def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, ro
     monkeypatch.setattr(publish, "dispatch_end_of_run_unscanned_published_check", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_function_gate", lambda *a, **k: True)
     monkeypatch.setattr(publish, "dispatch_end_of_run_entrypoint_gate", lambda *a, **k: True)
-    monkeypatch.setattr(publish, "dispatch_end_of_run_argv_parity_gate", lambda *a, **k: True)
 
 
 def _row(name: str, repo_root: Path) -> str:

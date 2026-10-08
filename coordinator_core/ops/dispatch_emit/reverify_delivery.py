@@ -100,10 +100,7 @@ def load_delivery(repo_root: Optional[Path], record: dict, prep: Optional[dict] 
     prep = prep if isinstance(prep, dict) else prep_of(repo_root, record)
     sidecars = prep.get("whole_diff_sidecars") if isinstance(prep, dict) else None
     rel = sidecars.get("delivery") if isinstance(sidecars, dict) else None
-    fm = _frontmatter(repo_root / rel) if rel else None
-    if isinstance(fm, dict) and fm.get("verdict") is None and fm.get("delivery_verdict") is not None:
-        fm = {**fm, "verdict": fm["delivery_verdict"]}
-    return fm
+    return _frontmatter(repo_root / rel) if rel else None
 
 
 def _criterion_unsettled(record: dict) -> bool:

@@ -36,16 +36,13 @@ Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk 
 """
 from __future__ import annotations
 
-import binascii
 import hashlib
 import mmap
 import os
 import struct
-import threading
 import time
 import zlib
 from collections import OrderedDict
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
@@ -112,130 +109,14 @@ def _obj_path(gitdir: Path, sha: str) -> Path:
     return Path(gitdir, "objects", sha[:2], sha[2:])
 
 
-#: The open object batch for this thread: `[gitdir, {sha: (kind, payload)}]`,
-#: bound to the gitdir of its first write.
-#: Thread-local because the warm engine serves concurrent ops on threads.
-_BATCH = threading.local()
-
-#: A v2 idx carries 4-byte offsets; a pack past this needs the large-offset
-#: table, which `_build_pack` does not write -- such a batch goes loose.
-_PACK_OFFSET_LIMIT = 0x7FFFFFFF
-
-
-@contextmanager
-def object_batch():
-    """Queue every `write_object` on this thread for one gitdir and write them as
-    ONE pack at `flush_object_batch`, not one loose file each: a loose write
-    is an `os.replace`, and on Windows that rename is ~24ms of filesystem
-    latency per object. Leaving without a flush discards the queue -- nothing
-    a ref points at can be in it, since a ref only moves after the flush.
-    Nested use joins the outer batch."""
-    if getattr(_BATCH, "state", None) is not None:
-        yield
-        return
-    _BATCH.state = [None, {}]
-    try:
-        yield
-    finally:
-        _BATCH.state = None
-
-
-def flush_object_batch() -> None:
-    """Write the queued objects as one pack and end the batch; later writes go
-    loose. Call before anything outside this process (a git spawn, a ref)
-    must see the objects."""
-    state = getattr(_BATCH, "state", None)
-    if state is None:
-        return
-    _BATCH.state = None
-    gitdir, pending = state
-    if not pending:
-        return
-    if sum(len(p) for _, p in pending.values()) >= _PACK_OFFSET_LIMIT:
-        for kind, payload in pending.values():
-            write_object(gitdir, kind, payload)
-        return
-    _write_pack(gitdir, pending)
-
-
-def _build_pack(pending: dict) -> tuple[bytes, bytes, str]:
-    entries = sorted((bytes.fromhex(sha), kind, payload) for sha, (kind, payload) in pending.items())
-    out = bytearray(b"PACK" + struct.pack(">II", 2, len(entries)))
-    meta = []
-    for raw_sha, kind, payload in entries:
-        offset = len(out)
-        size = len(payload)
-        first = (_PACK_TYPE_NUMS[kind.decode("ascii")] << 4) | (size & 0x0F)
-        size >>= 4
-        header = bytearray()
-        while size:
-            header.append(first | 0x80)
-            first = size & 0x7F
-            size >>= 7
-        header.append(first)
-        entry = bytes(header) + zlib.compress(payload)
-        out += entry
-        meta.append((raw_sha, binascii.crc32(entry), offset))
-    pack_sum = hashlib.sha1(out).digest()
-    out += pack_sum
-    fanout = [0] * 256
-    for raw_sha, _, _ in meta:
-        fanout[raw_sha[0]] += 1
-    idx = bytearray(b"\xfftOc" + struct.pack(">I", 2))
-    running = 0
-    for count in fanout:
-        running += count
-        idx += struct.pack(">I", running)
-    idx += b"".join(raw_sha for raw_sha, _, _ in meta)
-    idx += b"".join(struct.pack(">I", crc) for _, crc, _ in meta)
-    idx += b"".join(struct.pack(">I", offset) for _, _, offset in meta)
-    idx += pack_sum
-    idx += hashlib.sha1(idx).digest()
-    return bytes(out), bytes(idx), pack_sum.hex()
-
-
-def _write_pack(gitdir: Path, pending: dict) -> None:
-    """Pack first, idx last: git and `_iter_pack_files` find a pack only by its
-    idx, so a reader never sees a pack whose idx is torn. The name is the
-    content hash, so a peer racing the same objects writes identical bytes and
-    an idx already present is success."""
-    pack, idx, name = _build_pack(pending)
-    pack_dir = Path(gitdir, "objects", "pack")
-    base = pack_dir / f"pack-{name}"
-    idx_path = base.with_suffix(".idx")
-    if idx_path.exists():
-        return
-    pack_dir.mkdir(parents=True, exist_ok=True)
-    pid = os.getpid()
-    for data, final in ((pack, base.with_suffix(".pack")), (idx, idx_path)):
-        tmp = final.with_name(f"{final.name}.tmp{pid}")
-        tmp.write_bytes(data)
-        if not _replace_with_retry(tmp, final):
-            if not final.exists():
-                raise OSError(f"write_object: could not place {final} -- the destination stayed locked")
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-
 def write_object(
     gitdir: Path, kind: bytes, payload: bytes, *, created: Optional[set] = None
 ) -> str:
-    """`created`, when given, receives `sha` iff this call placed (or, inside an
-    `object_batch`, queued) a new object not already loose. Not proof of
-    novelty on its own -- the object may already sit in a pack."""
+    """`created`, when given, receives `sha` iff this call placed a new LOOSE object.
+    Not proof of novelty on its own -- the object may already sit in a pack."""
     body = kind + b" " + str(len(payload)).encode("ascii") + b"\x00" + payload
     sha = hashlib.sha1(body).hexdigest()
     path = _obj_path(gitdir, sha)
-    state = getattr(_BATCH, "state", None)
-    if state is not None and state[0] in (None, Path(gitdir)):
-        state[0] = Path(gitdir)
-        if sha not in state[1] and not path.exists():
-            if created is not None:
-                created.add(sha)
-            state[1][sha] = (kind, payload)
-        return sha
     if not path.exists():
         if created is not None:
             created.add(sha)
@@ -671,10 +552,6 @@ def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     search across every pack in `objects/pack/`), loose second. Cached per
     (common_dir, sha), bounded (see `_OBJECT_CACHE` above)."""
     sha = sha.lower()
-    state = getattr(_BATCH, "state", None)
-    if state is not None and sha in state[1]:
-        kind, payload = state[1][sha]
-        return kind.decode("ascii"), payload
     key = (str(common_dir), sha)
     cached = _object_cache_get(key)
     if cached is not _CACHE_MISS:

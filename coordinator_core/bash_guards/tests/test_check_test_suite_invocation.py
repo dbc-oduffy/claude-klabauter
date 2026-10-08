@@ -44,10 +44,83 @@ def _workstation_leg(monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: False)
 
 
-def test_cloud_box_allows_the_em_a_broad_suite_command(repo, free_mutex, monkeypatch):
+def _reason(result):
+    return result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_cloud_box_em_bare_suite_denied_wrapper_required_without_grant_ask(
+    repo, free_mutex, monkeypatch
+):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    assert guard.check(_payload("pytest", repo)) is None
+    reason = _reason(guard.check(_payload("pytest", repo)))
+    assert "with-suite-mutex" in reason
+    assert "grant" not in reason.lower()
+
+
+def test_cloud_box_em_wrapped_suite_allowed(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
+
+
+def test_cloud_box_em_wrapped_suite_denied_when_mutex_held(repo, held_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    result = guard.check(_payload("with-suite-mutex -- pytest", repo))
+    assert result is not None
+    assert "Route this through the suite mutex" not in _reason(result)
+
+
+def test_box_em_without_grant_denied_with_grant_reason(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    result = guard.check(_payload("with-suite-mutex -- pytest", repo))
+    assert result is not None
+    assert "grant" in _reason(result).lower()
+
+
+def test_forged_marker_on_attended_machine_is_not_cloud(monkeypatch):
+    from coordinator_core import env_locality
+    from coordinator_core.session import suite_authority
+
+    monkeypatch.undo()
+    rung = types.SimpleNamespace(call="attended")
+    monkeypatch.setattr(env_locality, "machine_rung", lambda *a, **k: rung)
+    assert guard._is_cloud_box({"env": {"CLAUDE_CODE_REMOTE": "true"}}) is False
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    assert guard._is_cloud_box({}) is False
+    rung.call = "cloud"
+    assert guard._is_cloud_box({"env": {"CLAUDE_CODE_REMOTE": "true"}}) is True
+    assert suite_authority.cloud_box_basis({}) is None
+
+
+@pytest.mark.parametrize("cloud", [True, False])
+@pytest.mark.parametrize("command", [
+    "validate-fast-and-packageability",
+    "python coordinator/bin/validate-fast-and-packageability.py",
+    "coordinator/bin/workday-complete-step1-validate.cmd",
+    "pwsh -File bin/workday-complete-step1-validate.ps1",
+    "python3 coordinator/bin/workday-complete-step1-validate.py --x",
+])
+def test_subagent_suite_cli_denied(repo, free_mutex, monkeypatch, cloud, command):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: cloud)
+    result = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    assert result is not None
+    assert "subagent" in _reason(result).lower()
+
+
+@pytest.mark.parametrize("command", [
+    "validate-fast-and-packageability",
+    "python coordinator/bin/workday-complete-step1-validate.py",
+])
+def test_em_suite_cli_not_denied_by_identity_leg(repo, free_mutex, command):
+    assert guard.check(_payload(command, repo)) is None
+
+
+def test_subagent_cloud_wrapped_suite_denied_with_subagent_reason(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
+    result = guard.check(_payload("with-suite-mutex -- pytest", repo, agent_id=_AGENT_ID))
+    assert "subagent" in _reason(result).lower()
 
 
 def test_cloud_box_still_denies_a_subagent_broad_suite_command(repo, free_mutex, monkeypatch):

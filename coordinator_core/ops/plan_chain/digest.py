@@ -109,10 +109,7 @@ def assemble_final_digest(
     else:
         kind = "close"
         outcome = "indeterminate" if halt is not None else "complete"
-        if halt is not None and state.resume is not None:
-            next_action = {"kind": "terminal_commit", "op": "dispatch.terminal_commit", "params": dict(state.resume)}
-        else:
-            next_action = {"kind": "none", "op": None, "params": None}
+        next_action = {"kind": "none", "op": None, "params": None}
 
     review = (execute_digest or {}).get("review")
     review = review if isinstance(review, Mapping) else {}

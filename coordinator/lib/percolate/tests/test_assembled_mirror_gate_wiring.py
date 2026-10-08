@@ -1,0 +1,507 @@
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import sys
+from pathlib import Path
+
+import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_BIN_DIR = _REPO_ROOT / "coordinator" / "bin"
+
+
+def _load_publish_module():
+    spec = importlib.util.spec_from_file_location(
+        "publish_assembled_mirror_gate_under_test", _BIN_DIR / "publish.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+publish = _load_publish_module()
+
+
+class _ResolvedTargetStub:
+
+    def __init__(self, name, source_dir=None):
+        self.name = name
+        self.source_dir = source_dir if source_dir is not None else Path("does-not-exist")
+
+
+def _write_collectable_tree(root: Path) -> None:
+    """A tree whose own fast-tier command collects cleanly: one passing
+    test, a `pytest.ini` declaring the marker vocabulary the gate's own
+    `MARKER_EXPRESSION` selects against, and no `cadence`/`pending_fix`/
+    `designed_red` marker registration needed since none is used.
+
+    Also carries an empty `coordinator_core/` directory at its root --
+    `_verify_isolation_precondition` (assembled_mirror_gate.py) refuses to
+    spawn the collection subprocess against a tree missing this directory,
+    since cwd-shadowing of the ambient editable install is what the gate's
+    own isolation guarantee rests on (see that function's docstring). A
+    synthetic scratch tree without it is REFUSED before any subprocess
+    runs, not collected cleanly -- this fixture is standing in for a real
+    assembled mirror, which always has this directory.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    (root / "pytest.ini").write_text(
+        "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+    )
+    (root / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _write_colliding_tree(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    (root / "pytest.ini").write_text(
+        "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+    )
+    (root / "test_broken.py").write_text(
+        "import this_module_does_not_exist_anywhere_c3_wiring\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+class TestEndOfRunAssembledMirrorGateLeg:
+    def test_clean_tree_passes(self, tmp_path):
+        repo_root = tmp_path / "repo"
+        _write_collectable_tree(repo_root)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root], rows_by_repo_root={}, target_filtered=False
+        )
+        assert ok is True
+
+    def test_clean_tree_with_no_source_rows_skips_coverage_leg(self, tmp_path):
+        import io
+
+        repo_root = tmp_path / "repo"
+        _write_collectable_tree(repo_root)
+        buf = io.StringIO()
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root], rows_by_repo_root={}, target_filtered=False, out=buf
+        )
+
+        assert ok is True
+        out = buf.getvalue()
+        assert "coverage leg: SKIPPED" in out
+        assert str(repo_root) in out
+        assert "assembled-mirror-gate: WARN" not in out
+
+    def test_colliding_tree_with_no_exemption_is_fatal(self, tmp_path, monkeypatch, capsys):
+        repo_root = tmp_path / "repo"
+        _write_colliding_tree(repo_root)
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", lambda: {})
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" in captured.err
+        assert "claude-klabauter" in captured.err
+
+    def test_target_filtered_collision_still_hard_fails(self, tmp_path, monkeypatch, capsys):
+        repo_root = tmp_path / "repo"
+        _write_colliding_tree(repo_root)
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", lambda: {})
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=True,
+        )
+        assert ok is False
+
+    def test_declared_exemption_downgrades_to_warning(self, tmp_path, monkeypatch):
+        import io
+
+        repo_root = tmp_path / "repo"
+        _write_colliding_tree(repo_root)
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"claude-klabauter": "known debt, tracked separately"},
+        )
+
+        out_buffer = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+            out=out_buffer,
+        )
+        assert ok is True
+        assert "known debt, tracked separately" in out_buffer.getvalue()
+
+    def test_exemption_on_a_different_row_does_not_cover_this_root(self, tmp_path, monkeypatch, capsys):
+        repo_root = tmp_path / "repo"
+        _write_colliding_tree(repo_root)
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"some-other-row": "unrelated debt"},
+        )
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" in captured.err
+
+    def test_exempted_row_with_incomplete_timed_out_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """C3: an exemption waives a KNOWN-BAD tree; a load-driven timeout
+        makes no claim about the tree at all, so a declared exemption on the
+        row must NOT absorb it -- `ok` stays False and the operator text
+        says the exemption did not apply, rather than being silently folded
+        into declared content debt."""
+        import percolate.assembled_mirror_gate as gate_module
+
+        repo_root = tmp_path / "repo"
+        _write_collectable_tree(repo_root)
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"claude-klabauter": "known debt, tracked separately"},
+        )
+
+        def _fake_timed_out(tree_root, **kwargs):
+            return gate_module.MirrorCollectionResult(
+                passed=False,
+                collected_count=0,
+                errored=True,
+                exit_code=None,
+                timed_out=True,
+                elapsed_s=60.1,
+                command=("python", "-m", "pytest"),
+                tree_root=str(tree_root),
+                stdout_tail="",
+                stderr_tail="",
+                timeout_s=60.0,
+            )
+
+        monkeypatch.setattr(publish, "run_assembled_mirror_gate", _fake_timed_out)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "known debt, tracked separately" not in captured.err
+        assert "known debt, tracked separately" not in captured.out
+        assert "no claim about the tree" in captured.err
+
+    def test_exempted_row_with_isolation_unverified_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_load_assembled_mirror_gate_exemptions",
+            lambda: {"claude-klabauter": "non-engine mirror, declared"},
+        )
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is False
+        assert "non-engine mirror, declared" not in sink.getvalue()
+        assert "no claim about the tree" in capsys.readouterr().err
+
+    def test_unexempted_isolation_unverified_result_still_fails(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The declaration is what reopens the lane, never the refusal shape
+        itself: an undeclared root refusing ISOLATION UNVERIFIED stays
+        fatal. `is_incomplete` gates the exemption-lookup skip directly now
+        (no `is_load_indeterminate` sub-predicate), so this reads as an
+        incomplete result carrying no claim, not as a missed exemption."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "no claim about the tree" in captured.err
+
+    def test_declared_scope_excludes_engine_and_tree_lacks_it_is_not_applicable(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The new discriminator's first arm: declared scope never claimed
+        coordinator_core, the tree carries none either -- NOT-APPLICABLE,
+        never a refusal, `ok` stays True."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: (set(), {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("some-oss-row")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is True
+        assert "NOT APPLICABLE" in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "assembled-mirror gate FAILED" not in captured.err
+
+    def test_declared_scope_includes_engine_and_tree_lacks_it_still_refuses(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: ({repo_root}, {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "no claim about the tree" in captured.err
+
+    def test_narrow_door_regression_declared_scope_ignores_this_runs_row_subset(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """THE point of the whole change: `rows_by_repo_root` here holds only
+        ONE non-engine row (as a `--target`-filtered invocation would), but
+        the UNFILTERED declared scope still claims coordinator_core for this
+        repo_root -- must still refuse, never read as not-applicable just
+        because this invocation's own row subset omits the engine row.
+        Fails without the fix (a per-invocation reading of `rows_by_repo_
+        root` would have called this not-applicable)."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+        monkeypatch.setattr(
+            publish,
+            "_declared_repo_roots_carrying_coordinator_core",
+            lambda: ({repo_root}, {repo_root}),
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter-bin")]},
+            target_filtered=True,
+            out=sink,
+        )
+        assert ok is False
+        assert "NOT APPLICABLE" not in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "no claim about the tree" in captured.err
+
+    def test_declared_scope_lookup_failure_is_incomplete_never_not_applicable(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = .\n", encoding="utf-8", newline="\n"
+        )
+
+        def _raise(*args, **kwargs):
+            raise publish.TargetsError("boom: targets file unreadable", 2)
+
+        monkeypatch.setattr(
+            publish, "_declared_repo_roots_carrying_coordinator_core", _raise
+        )
+        monkeypatch.setattr(publish, "_load_assembled_mirror_gate_exemptions", dict)
+
+        sink = io.StringIO()
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root],
+            rows_by_repo_root={repo_root: [_ResolvedTargetStub("claude-klabauter")]},
+            target_filtered=False,
+            out=sink,
+        )
+        assert ok is False
+        assert "NOT APPLICABLE" not in sink.getvalue()
+        captured = capsys.readouterr()
+        assert "could not resolve the declared target row set" in captured.err
+        assert "no claim about the tree" in captured.err
+
+    def test_missing_repo_root_is_a_hard_failure(self, tmp_path, capsys):
+        repo_root = tmp_path / "does-not-exist"
+
+        ok = publish.dispatch_end_of_run_assembled_mirror_gate(
+            [repo_root], rows_by_repo_root={}, target_filtered=False
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "not a directory" in captured.err
+
+
+class TestLoadAssembledMirrorGateExemptions:
+    def test_missing_file_returns_empty(self, tmp_path):
+        exemptions = publish._load_assembled_mirror_gate_exemptions(tmp_path / "absent.yaml")
+        assert exemptions == {}
+
+    def test_reads_declared_entries(self, tmp_path):
+        path = tmp_path / "declarations.yaml"
+        path.write_text(
+            "assembled_mirror_gate_exemptions:\n"
+            "  - name: claude-klabauter\n"
+            "    reason: known debt\n",
+            encoding="utf-8",
+        )
+        exemptions = publish._load_assembled_mirror_gate_exemptions(path)
+        assert exemptions == {"claude-klabauter": "known debt"}
+
+    def test_malformed_entry_is_skipped_not_fatal(self, tmp_path):
+        path = tmp_path / "declarations.yaml"
+        path.write_text(
+            "assembled_mirror_gate_exemptions:\n"
+            "  - name: claude-klabauter\n"
+            "  - name: valid-row\n"
+            "    reason: a real reason\n",
+            encoding="utf-8",
+        )
+        exemptions = publish._load_assembled_mirror_gate_exemptions(path)
+        assert exemptions == {"valid-row": "a real reason"}
+
+    def test_absent_key_returns_empty(self, tmp_path):
+        path = tmp_path / "declarations.yaml"
+        path.write_text("rows:\n  some-row: {}\n", encoding="utf-8")
+        exemptions = publish._load_assembled_mirror_gate_exemptions(path)
+        assert exemptions == {}
+
+    def test_real_declarations_file_loads_without_raising(self):
+        real_path = _REPO_ROOT / "setup" / "publish-allowlist-declarations.yaml"
+        exemptions = publish._load_assembled_mirror_gate_exemptions(real_path)
+        assert isinstance(exemptions, dict)
+        assert all(name and reason.strip() for name, reason in exemptions.items())
+
+
+class TestCoverageLegHonoursRatifiedDenials:
+    """The coverage WARN leg must not report a test the row DELIBERATELY denies.
+
+    `assembled_mirror_gate` is mechanism-only and says so: it "does not itself
+    read `setup/publish-allowlist-declarations.yaml` or any exemption ledger --
+    that wiring is `coordinator/bin/publish.py`'s job (C3)". The refusal path
+    got its ledger; the coverage leg never got its filter, so every round
+    warned about `ops/tests/test_sizing_spike_verdict.py` -- a denial dated
+    2026-08-14 (dc3eb5cb9) with a written reason -- as though it were an
+    accidental payload gap.
+    """
+
+    @staticmethod
+    def _row(allowlist: str):
+        class _Row:
+            def __init__(self, allowlist: str) -> None:
+                self.allowlist = allowlist
+
+        return _Row(allowlist)
+
+    def test_denied_test_is_not_reported_as_missing(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=1674,
+            missing=("coordinator_core/ops/sizing_spike_verdict.py",),
+        )
+        rows = [self._row("ops,!ops/tests/test_sizing_spike_verdict.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ()
+        assert filtered.examined_count == 1674, "denominator must survive the filter"
+
+    def test_undenied_gap_still_reported(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=2,
+            missing=(
+                "coordinator_core/ops/sizing_spike_verdict.py",
+                "coordinator_core/ops/really_missing.py",
+            ),
+        )
+        rows = [self._row("ops,!ops/tests/test_sizing_spike_verdict.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ("coordinator_core/ops/really_missing.py",)
+
+    def test_denial_only_silences_the_subject_it_names(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=2,
+            missing=("pkg/foo.py", "pkg/foo_helper.py"),
+        )
+        rows = [self._row("pkg,!pkg/tests/test_foo.py")]
+
+        filtered = publish._drop_ratified_test_denials(coverage, rows)
+
+        assert filtered.missing == ("pkg/foo_helper.py",)
+
+    def test_no_denials_returns_report_unchanged(self):
+        from percolate.assembled_mirror_gate import ModuleTestCoverageReport
+
+        coverage = ModuleTestCoverageReport(
+            examined_count=3, missing=("pkg/a.py",)
+        )
+        rows = [self._row("pkg")]
+
+        assert publish._drop_ratified_test_denials(coverage, rows) is coverage
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

@@ -119,8 +119,6 @@ class Stage:
     max_concurrent: int | None = None
     when: When | None = None
     optional: bool = False
-    produces_brief: bool = False
-    halts_unless: str | None = None
 
 
 @dataclass(frozen=True)

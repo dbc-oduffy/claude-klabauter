@@ -15,19 +15,20 @@ The measurement is not the guard. Nothing stops a later edit from adding
 each one locally reasonable, and the count is back at eight with no single
 commit to blame. This file is the guard.
 
-One leg is ALLOWED to spawn and is named here rather than pattern-matched,
-so adding another is a deliberate act that edits this list and says why:
+Two legs are ALLOWED to spawn and are named here rather than pattern-matched,
+so adding a third is a deliberate act that edits this list and says why:
 
   `_PUBLISH`   -- the real run. Its `_run` bound guards actual work rather
                   than spawn scheduling (`_PUBLISH_LEG_TIMEOUT_SECS`, 3600s),
                   it needs a distinct child environment, and an in-process
                   call cannot be timed out because there is no killable unit.
+  `ci_script`  -- `<dest>/.github/scripts/run-all-checks.py`, which is FOREIGN
+                  code living in the publish mirror. Running another repo's
+                  script inside the round driver is a different objection
+                  entirely, and process isolation is the whole point.
 
-The in-round CI smoke (`<dest>/.github/scripts/run-all-checks.py`) is deleted;
-`test_round_runs_no_ci_smoke` pins its absence.
-
-Negative-spec: this file asserts nothing about how many processes that
-leg or `git` cost, and nothing about wall-clock (§ CLAUDE.md -- process time
+Negative-spec: this file asserts nothing about how many processes those two
+legs or `git` cost, and nothing about wall-clock (§ CLAUDE.md -- process time
 and spawn count, never wall clock). It reads source, never runs a round.
 
 Run: python -m pytest coordinator/bin/tests/test_percolate_round_step_legs_do_not_spawn_interpreters.py -q
@@ -131,23 +132,3 @@ def test_the_display_only_reproduction_line_is_still_display_only():
                 "PRINT; executing it reintroduces the spawn this module removed, "
                 "and this file's scan skips it by name."
             )
-
-
-def test_round_runs_no_ci_smoke():
-    """The in-round CI smoke leg and its interpreter ladder stay deleted."""
-    source = _ROUND_PY.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-    assigned = {
-        t.id
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Assign)
-        for t in n.targets
-        if isinstance(t, ast.Name)
-    }
-    assert "_resolve_python" not in defined
-    assert "_EXTERNAL_CI_TIMEOUT_SECS" not in assigned
-    assert not [
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.Constant) and n.value == "run-all-checks.py"
-    ]

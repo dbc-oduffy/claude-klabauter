@@ -63,13 +63,36 @@ def _negated(clause_head: str) -> bool:
     return bool(_TIER_NEGATOR.search(" ".join(head.split()[-3:])))
 
 
+#: The text between two mentions that joins them into one list: a
+#: coordinator, then at most a determiner. A mention after one of these shares
+#: its predecessor's polarity, so the negator before the first mention of
+#: "never the fast tier or the full suite" covers the second. ", or" / ", nor"
+#: continue a list; ", and" opens a new clause ("never X, and Y passes").
+_COORDINATED = re.compile(
+    r"(?:\s*,?\s*(?:or|nor)|\s+and)\s+(?:(?:the|a|any)\s+|\S+'s\s+)?", re.IGNORECASE
+)
+
+
 def suite_tier_refusal(statement: object) -> Optional[str]:
     """Refusal message when the statement names a suite tier (fast/full/broad tier or suite, tier-U), else None.
 
     Shared by `sizing-assemble --exit-criterion` and `sizing.accept_exit_criterion`.
     """
     text = " ".join(str(statement or "").split())
-    m = next((x for x in _SUITE_TIER.finditer(text) if not _negated(text[: x.start()])), None)
+    m = None
+    prev = None
+    prev_negated = False
+    for x in _SUITE_TIER.finditer(text):
+        inherited = (
+            prev is not None
+            and prev_negated
+            and _COORDINATED.fullmatch(text[prev.end() : x.start()]) is not None
+        )
+        prev_negated = inherited or _negated(text[: x.start()])
+        prev = x
+        if not prev_negated:
+            m = x
+            break
     if m is None:
         return None
     return (

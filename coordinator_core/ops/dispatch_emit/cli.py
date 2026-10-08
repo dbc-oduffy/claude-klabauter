@@ -218,7 +218,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="a file in the ask's footprint (repeatable; --ask/--sizing only); "
-        "a path outside the repo root is refused at emit",
+        "a path in a sibling checkout is a cross-repo write (see --cross-repo-approved); "
+        "a path outside every checkout is refused at emit",
     )
     parser.add_argument(
         "--restamp",
@@ -389,6 +390,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="overwrite an --out path already holding a different session's emission",
     )
     parser.add_argument(
+        "--cross-repo-approved",
+        action="store_true",
+        help="plan/ask route: the PM approved this run's sibling-repo writes (the "
+        "approve_cross_repo_write touchpoint); implied on a remote venue",
+    )
+    parser.add_argument(
         "--chatty",
         action="store_true",
         help="plan route: compose an opt-in chatty workflow (roster, mailbox briefs, overseer wake stage)",
@@ -452,20 +459,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--scratch-dir", default=None, metavar="PATH", help="pipeline route: repo-relative scratch dir"
-    )
-    parser.add_argument(
-        "--from-sizing",
-        dest="from_sizing",
-        default=None,
-        metavar="PATH",
-        help="research route: emit the research pipelines the sizing's research block shapes to; "
-        "emit-only, exclusive of every other route selector",
-    )
-    parser.add_argument(
-        "--research",
-        action="store_true",
-        help="with --ask PROMPT: the scouts express lane -- write the ask to <scratch>/ask.md and "
-        "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
     )
     parser.add_argument(
         "--resume-missing",
@@ -802,21 +795,6 @@ def _review_only_refusal(args) -> "Optional[str]":
     return None
 
 
-def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
-    """Print a --rejudge/--reverify-delivery emission; under --fire, fire it and print the
-    handle. Trap: a close route that drops --fire returns no handle, and a headless caller
-    reads that silence as a fire."""
-    print(json.dumps(result, indent=2, sort_keys=True))
-    if not args.fire:
-        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
-        return EXIT_OK
-    from coordinator_core.ops.workflow_fire.fire import fire_workflow
-
-    fire_record = fire_workflow(result["path"], cwd=args.repo_root or None)
-    print(json.dumps(fire_record, indent=2, sort_keys=True))
-    return EXIT_OK
-
-
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -863,7 +841,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         except (ReverifyRefused, *_DATA_ERRORS) as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
-        return _report_close_route_emit(result, args)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
+        return EXIT_OK
 
     if args.reverify_delivery is not None:
         if args.plan and not args.out_path:
@@ -893,7 +873,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         except (ReverifyRefused, *_DATA_ERRORS) as exc:
             print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
             return EXIT_DATA_ERROR
-        return _report_close_route_emit(result, args)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        print(f"\n  Workflow({{ scriptPath: {json.dumps(result['path'])} }})", file=sys.stderr)
+        return EXIT_OK
 
     if args.restamp:
         if args.plan or args.inventory or args.out_path or args.fire:
@@ -922,44 +904,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return _do_resume(args)
 
     is_pipeline_route = args.pipeline is not None
-    if args.research and not isinstance(args.ask, str):
-        print("emit-dispatch-workflow: ERROR — --research needs --ask PROMPT", file=sys.stderr)
-        return EXIT_USAGE
-    is_research_route = bool(args.from_sizing) or args.research
-    if is_research_route:
-        others = [
-            flag
-            for flag, value in (
-                ("--plan", args.plan),
-                ("--inventory", args.inventory),
-                ("--queue", args.queue),
-                ("--profile", args.profile),
-                ("--sizing", args.sizing),
-                ("--pipeline", is_pipeline_route),
-                ("--writes", args.writes),
-                ("--baton", args.baton),
-                ("--deliverable-id", args.deliverable_id),
-                ("--fire", args.fire),
-                ("--ask", args.from_sizing and args.ask is not None),
-                ("--research", args.from_sizing and args.research),
-            )
-            if value
-        ]
-        if others:
-            print(
-                f"emit-dispatch-workflow: ERROR — the research route is exclusive of {', '.join(others)}",
-                file=sys.stderr,
-            )
-            return EXIT_USAGE
     pipeline_only = [
         flag
         for flag, value in (
             ("--brief", args.brief),
             ("--subjects", args.subjects),
-            ("--scratch-dir", args.scratch_dir if not is_research_route else None),
+            ("--scratch-dir", args.scratch_dir),
             ("--resume-missing", args.resume_missing),
             ("--flag", args.flag),
-            ("--list", args.list if not is_research_route else None),
+            ("--list", args.list),
             ("--validator", args.validator),
         )
         if value
@@ -1000,7 +953,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     is_queue_route = bool(args.queue) or bool(args.profile)
 
-    is_ask_route = (args.ask is not None or bool(args.sizing)) and not is_research_route
+    is_ask_route = args.ask is not None or bool(args.sizing)
 
     if args.writes and not is_ask_route:
         print(
@@ -1055,13 +1008,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if (
-        not is_queue_route and not args.plan and not args.inventory and not is_ask_route
-        and not is_pipeline_route and not is_research_route
-    ):
+    if not is_queue_route and not args.plan and not args.inventory and not is_ask_route and not is_pipeline_route:
         print(
             "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --ask, --sizing, "
-            "--pipeline, --from-sizing, or --restamp is required",
+            "--pipeline, or --restamp is required",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -1167,7 +1117,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         not args.out_path
         and not is_ask_route
         and not is_pipeline_route
-        and not is_research_route
         and not args.lanes
         and not (args.inventory and not is_queue_route)
     ):
@@ -1227,6 +1176,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         repo_root = _default_repo_root_from_cwd()
 
     params: dict = {"force": args.force}
+    # Venue is read here, in the dispatching session's own env: the op body may
+    # run warm-served, where os.environ belongs to whoever spawned the server.
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
+
+    if args.cross_repo_approved or is_remote_venue():
+        params["cross_repo_approved"] = True
     if args.out_path:
         params["output_path"] = args.out_path
     if is_ask_route:
@@ -1239,23 +1194,6 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["baton"] = args.baton
         if args.deliverable_id:
             params["deliverable_id"] = args.deliverable_id
-        if repo_root is None:
-            repo_root = _default_repo_root_from_cwd()
-    if is_research_route:
-        if args.from_sizing:
-            params["from_sizing"] = args.from_sizing
-        else:
-            params["research"] = True
-            params["ask"] = args.ask
-        try:
-            if args.list:
-                params["lists"] = _parse_lists(args.list)
-        except PipelineEmitRefused as exc:
-            for reason in exc.reasons:
-                print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)
-            return EXIT_DATA_ERROR
-        if args.scratch_dir:
-            params["scratch_dir"] = args.scratch_dir
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_pipeline_route:

@@ -67,6 +67,7 @@ _PARAMS = (
     Field("commit_sizing_path", "str"),
     Field("writes", "str_list"),
     Field("gated", "list"),
+    Field("cross_repo_approved", "bool"),
     Field("session_id", "str"),
 )
 
@@ -127,6 +128,7 @@ def stage(
     sizing_rel: Optional[str] = None,
     writes: Sequence[str] = (),
     gated: Sequence[Mapping] = (),
+    cross_repo_approved: bool = False,
     session_id: Optional[str] = None,
     commit_sizing_rel: Optional[str] = None,
 ) -> StageManifest:
@@ -170,7 +172,7 @@ def stage(
     check_unschedulable_rows(rows, raw_by_id)
     gated = gated_rows(exclusions, raw_by_id)
     try:
-        check_cross_repo_writes(rows, root)
+        check_cross_repo_writes(rows, root, approved=cross_repo_approved)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
     waves = build_waves(rows)
@@ -282,6 +284,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             sizing_rel=params.get("sizing_path") or None,
             writes=writes,
             gated=[g for g in (params.get("gated") or []) if isinstance(g, dict)],
+            cross_repo_approved=bool(params.get("cross_repo_approved")),
             session_id=params.get("session_id") or None,
             commit_sizing_rel=params.get("commit_sizing_path") or None,
         )

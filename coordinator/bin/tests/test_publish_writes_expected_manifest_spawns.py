@@ -1,4 +1,4 @@
-"""The diff-scaled round's `.coordinator/expected-manifest.json` is built from a real dest repo's HEAD.
+"""The DR-445 throwaway route commits `.coordinator/expected-manifest.json` against a real dest repo.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_writes_expected_manifest_spawns.py -q
 """
@@ -18,7 +18,6 @@ from test_publish_writes_expected_manifest import _blob  # noqa: E402
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 publish = base.publish
-_MANIFEST_REL = ".coordinator/expected-manifest.json"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -30,81 +29,57 @@ def _git(root: Path, *args: str) -> str:
     ).stdout
 
 
-def _dest_repo(tmp_path: Path) -> Path:
+def _dr445_round(tmp_path, *, rows_feeding):
+    """Real dest repo + `git clone` throwaway driven through `_swap_all_rows_into_dest` (the DR-445 route)."""
     dest = tmp_path / "dest-repo"
     dest.mkdir()
     _git(dest, "init", "-b", "main")
     for k, v in (("user.email", "t@t.test"), ("user.name", "t"), ("commit.gpgsign", "false")):
         _git(dest, "config", k, v)
     (dest / "seed.txt").write_text("seed\n", encoding="utf-8")
-    (dest / "gone.txt").write_text("gone\n", encoding="utf-8")
     _git(dest, "add", ".")
     _git(dest, "commit", "-m", "seed")
+    throwaway = tmp_path / "throwaway"
+    _git(tmp_path, "clone", "--local", str(dest), str(throwaway))
+    (throwaway / "sub").mkdir()
+    (throwaway / "sub" / "b.txt").write_bytes(b"hello\n")
+    target = type("T", (), {"name": "row-a", "dest_dir": dest})()
+    staged = type("S", (), {"staging_dir": tmp_path / "unused"})()
+    outcomes = publish._swap_all_rows_into_dest(
+        {dest: [(target, staged)]},
+        {dest: throwaway},
+        commit_now=True,
+        succeeded_row_names=["row-a"],
+        round_pinned_shas={str(publish._REPO_ROOT): base._PINNED},
+        rows_feeding_root={dest: rows_feeding},
+    )
+    assert outcomes == {"row-a": None}
     return dest
 
 
-def _write(rel: str, data: bytes):
-    publish._bootstrap_engine()
-    from percolate.diff_commit import DestWrite  # type: ignore[import-not-found]
-
-    return DestWrite(rel, data, publish._GIT_FILE_MODE)
-
-
-def test_cold_manifest_is_the_head_tree_plus_the_round_writes(tmp_path):
-    dest = _dest_repo(tmp_path)
-    survivors = {"sub/b.txt": _write("sub/b.txt", b"hello\n")}
-
-    raw = publish._expected_manifest_bytes(
-        dest, survivors, ["gone.txt"], base._PINNED, head_paths=publish._head_tree_blob_shas(dest)
-    )
-
-    assert raw is not None and b"\r" not in raw
-    doc = json.loads(raw)
+def test_dr445_round_commits_the_manifest(tmp_path):
+    dest = _dr445_round(tmp_path, rows_feeding=frozenset({"row-a"}))
+    assert ".coordinator/expected-manifest.json" in _git(dest, "ls-files").split()
+    doc = json.loads(_git(dest, "show", "HEAD:.coordinator/expected-manifest.json"))
     assert set(doc) == {"schema", "source_head", "paths"}
     assert doc["source_head"] == base._PINNED
-    assert doc["paths"] == {"seed.txt": _blob(b"seed\n"), "sub/b.txt": _blob(b"hello\n")}
-    assert _MANIFEST_REL not in doc["paths"]
-    assert list(doc) == sorted(doc)
+    assert doc["paths"]["sub/b.txt"] == _blob(b"hello\n")
+    assert ".coordinator/expected-manifest.json" not in doc["paths"]
+    assert _git(dest, "status", "--porcelain") == ""
 
 
-def test_warm_manifest_updates_the_committed_copy_by_the_round_writes(tmp_path):
-    dest = _dest_repo(tmp_path)
-    cold = publish._expected_manifest_bytes(
-        dest, {}, [], base._PINNED, head_paths=publish._head_tree_blob_shas(dest)
-    )
-    (dest / ".coordinator").mkdir()
-    (dest / _MANIFEST_REL).write_bytes(cold)
-    _git(dest, "add", ".")
-    _git(dest, "commit", "-m", "manifest")
-
-    warm = publish._expected_manifest_bytes(
-        dest, {"seed.txt": _write("seed.txt", b"changed\n")}, ["gone.txt"], "f" * 40, head_paths=None
-    )
-
-    doc = json.loads(warm)
-    assert doc["source_head"] == "f" * 40
-    assert doc["paths"] == {"seed.txt": _blob(b"changed\n")}
+def test_dr445_partial_root_commits_no_manifest(tmp_path):
+    dest = _dr445_round(tmp_path, rows_feeding=frozenset({"row-a", "row-b"}))
+    assert ".coordinator/expected-manifest.json" not in _git(dest, "ls-files").split()
 
 
-def test_manifest_is_the_committed_tree_with_written_byte_shas(tmp_path):
-    dest = _dest_repo(tmp_path)
-
-    doc = json.loads(
-        publish._expected_manifest_bytes(
-            dest, {}, [], base._PINNED, head_paths=publish._head_tree_blob_shas(dest)
-        )
-    )
-
+def test_dr445_manifest_is_the_committed_tree_with_written_byte_shas(tmp_path):
+    dest = _dr445_round(tmp_path, rows_feeding=frozenset({"row-a"}))
+    doc = json.loads(_git(dest, "show", "HEAD:.coordinator/expected-manifest.json"))
     committed = {
         row.partition("\t")[2]: row.split()[2]
         for row in _git(dest, "ls-tree", "-r", "HEAD").splitlines()
     }
+    committed.pop(".coordinator/expected-manifest.json")
     assert doc["paths"] == committed
     assert doc["paths"]["seed.txt"] == _blob(b"seed\n")
-
-
-def test_a_partially_published_root_gets_no_manifest(tmp_path):
-    dest = _dest_repo(tmp_path)
-
-    assert publish._root_fully_published(dest, ["row-a"], {dest: frozenset({"row-a"})})
-    assert not publish._root_fully_published(dest, ["row-a"], {dest: frozenset({"row-a", "row-b"})})

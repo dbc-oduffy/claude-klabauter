@@ -67,9 +67,7 @@ def _result_from_record(record: Mapping[str, Any], session_id: str) -> WorkflowR
     if not raw and text:
         raw = text[-2000:]
     digest = _parse_json_object(raw) if raw and not envelope.get("is_error") else None
-    return WorkflowResult(
-        digest=digest, raw_result=raw, child_session_id=session_id, task_output_path=str(log_path or "")
-    )
+    return WorkflowResult(digest=digest, raw_result=raw, child_session_id=session_id)
 
 
 def _default_runner(repo_root: str) -> WorkflowRunner:
@@ -177,7 +175,6 @@ def _drive(
         _enter(state, stage)
     params = execute_result.read_execute_result(ran)
     if isinstance(params, Halt):
-        state.resume = execute_result.resume_params(ran, exec_script)
         return params
 
     _enter(state, "terminal-commit")
@@ -210,11 +207,11 @@ def run(
     if state.halt is not None and state.halt.halted_at not in state.stages_run:
         state.stages_run.append(state.halt.halted_at)
 
-    trail = Path(manifest.trail_dir)
-    if not trail.is_absolute():
-        trail = Path(manifest.repo_root) / trail
     digest = digest_mod.assemble_final_digest(
         state, manifest, plan_digest=seen.get("plan"), execute_digest=seen.get("execute")
     )
+    trail = Path(manifest.trail_dir)
+    if not trail.is_absolute():
+        trail = Path(manifest.repo_root) / trail
     digest_mod.write_final_digest(digest, trail, chain_id)
     return digest

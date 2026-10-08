@@ -62,6 +62,8 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
 from coordinator_core.ops.dispatch_emit.wave_map import _normalize_path
 
 
+_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
 GENERATES: list = []
 MUTATES = ["docs/plans/*.seam.yaml"]
 
@@ -102,9 +104,9 @@ def _ancestors_or_self(norm: str):
 class _Plan:
     """One plan of the set (or a plan it names): text, frontmatter, raw rows, live rows."""
 
-    def __init__(self, rel: str, root: Path):
+    def __init__(self, rel: str, root: Path, path: Optional[Path] = None):
         self.rel = rel
-        self.path = root / rel
+        self.path = path if path is not None else root / rel
         self.text = self.path.read_text(encoding="utf-8")
         split = split_frontmatter(self.text)
         doc = None
@@ -125,10 +127,13 @@ class _Plan:
 
     @property
     def live_rows(self) -> list:
+        return self.load_rows()
+
+    def load_rows(self) -> list:
         """`read_spine`'s rows; empty, with `unreadable` set, when it rejects the spine."""
         if self._live is None:
             try:
-                self._live = read_spine(self.path)
+                self._live = read_spine(self.path, schema_preflight=False)
             except SpineReadError as exc:
                 self._live = []
                 self.unreadable = str(exc)
@@ -138,27 +143,35 @@ class _Plan:
         edges = list(frontmatter_plan_edges(self.text) or [])
         for row in self.raw_rows:
             edges.extend(row.get("depends_on_plan") or [])
-        return {
-            str(e["plan"]).replace("\\", "/")
+        targets = {
+            posixpath.normpath(str(e["plan"]).replace("\\", "/"))
             for e in edges
-            if isinstance(e, dict) and isinstance(e.get("plan"), str)
+            if isinstance(e, dict) and isinstance(e.get("plan"), str) and e["plan"].strip()
         }
+        return {t for t in targets if ".." not in t.split("/") and not t.startswith("/")}
 
     def promised_paths(self) -> tuple:
         """(exact normalized paths, normalized prefixes) of every row not closed as wont_do/voided."""
         if self._promised is None:
-            rows = [
-                SimpleNamespace(writes=_declared(r), writes_under=r.get("writes_under") or ())
-                for r in self.raw_rows
-                if r.get("disposition") not in ("wont_do", "voided")
-            ]
-            self._promised = _paths_and_prefixes(rows)
+            paths: set = set()
+            prefixes: set = set()
+            for r in self.raw_rows:
+                if r.get("disposition") not in ("wont_do", "voided"):
+                    p, q = _raw_promises(r)
+                    paths |= p
+                    prefixes |= q
+            self._promised = (paths, prefixes)
         return self._promised
 
 
 def _declared(raw: dict):
     writes = raw.get("writes")
     return writes if isinstance(writes, list) and writes else UNDECLARED
+
+
+def _raw_promises(raw: dict) -> tuple:
+    """(exact paths, prefixes) one raw row declares."""
+    return _paths_and_prefixes([SimpleNamespace(writes=_declared(raw), writes_under=raw.get("writes_under") or ())])
 
 
 def _paths_and_prefixes(rows) -> tuple:
@@ -219,7 +232,18 @@ class _Tree:
         return f"{rev}:{path}" in (self.present or ())
 
 
-def _parse_params(params: dict, root: Path) -> dict:
+def _contained_rel(raw: str, root: Path) -> Optional[str]:
+    """``raw`` as a normalized repo-relative posix path, or None when it escapes ``root``."""
+    path = Path(raw.strip())
+    if not path.is_absolute():
+        path = root / path
+    resolved = contained_path(path, [root])
+    if resolved is None:
+        return None
+    return resolved.relative_to(contained_path(root, [root]) or root).as_posix()
+
+
+def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
     plans_raw = params.get("plans")
     if not isinstance(plans_raw, list) or not plans_raw or not all(
         isinstance(p, str) and p.strip() for p in plans_raw
@@ -228,15 +252,13 @@ def _parse_params(params: dict, root: Path) -> dict:
     plans: List[str] = []
     passed: Dict[str, str] = {}
     for raw in plans_raw:
-        path = Path(raw.strip())
-        if not path.is_absolute():
-            path = root / path
-        resolved = contained_path(path, [root])
-        if resolved is None:
+        rel = _contained_rel(raw, root)
+        if rel is None:
             raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
-        if not resolved.is_file() or resolved.suffix != ".md":
+        if not (root / rel).is_file() or not rel.endswith(".md"):
             raise ValueError(f"no such plan: {raw!r}")
-        rel = resolved.relative_to(contained_path(root, [root]) or root).as_posix()
+        if record and posixpath.dirname(rel) != "docs/plans":
+            raise ValueError(f"plan.seam_record writes beside docs/plans/ plans only: {raw!r}")
         if rel not in plans:
             plans.append(rel)
             passed[rel] = raw.strip()
@@ -268,11 +290,13 @@ def _parse_params(params: dict, root: Path) -> dict:
         for r in rows
     ):
         raise ValueError("landed_rows must be a list of {plan, row}")
-    out.update(
-        landed_range=params["landed_range"],
-        landed_rows=[(r["plan"].replace("\\", "/"), r["row"]) for r in rows],
-        wave=wave,
-    )
+    landed = []
+    for r in rows:
+        rel = _contained_rel(r["plan"], root)
+        if rel is None:
+            raise ValueError(f"landed row plan escapes the resolved worktree: {r['plan']!r}")
+        landed.append((rel, r["row"]))
+    out.update(landed_range=params["landed_range"], landed_rows=landed, wave=wave)
     return out
 
 
@@ -361,29 +385,21 @@ def _load_outside(ctx: dict, rel: str) -> Optional[_Plan]:
         if not path.is_file():
             from coordinator_core.roadmap.plan_gate import archived_plan_path
 
-            moved = archived_plan_path(root, rel)
-            path = moved if moved is not None else path
-        cache[rel] = _Plan(rel, root) if path == root / rel and path.is_file() else (
-            _archived(path, rel) if path.is_file() else None
-        )
+            path = archived_plan_path(root, rel) or path
+        cache[rel] = _Plan(rel, root, path) if path.is_file() else None
     return cache[rel]
-
-
-def _archived(path: Path, rel: str) -> _Plan:
-    plan = _Plan.__new__(_Plan)
-    plan.rel, plan.path = rel, path
-    plan.text = path.read_text(encoding="utf-8")
-    loaded = load_rows_memo(plan.text)
-    plan.fm = {}
-    plan.raw_rows = list(loaded.rows) if loaded.status is LocateStatus.LOCATED else []
-    plan.raw_by_id = {r["id"]: with_canonical_disposition(r) for r in plan.raw_rows if r.get("id")}
-    plan._live = None
-    return plan
 
 
 def _promised_by(rel: str, pset: Dict[str, _Plan], ctx: dict) -> tuple:
     plan = pset.get(rel) or _load_outside(ctx, rel)
     return plan.promised_paths() if plan is not None else (set(), set())
+
+
+def _consumed(plan: _Plan, row) -> set:
+    """Normalized paths the raw row declares under ``consumes:`` (``row.reads`` also folds in legacy ``reads:``)."""
+    raw = plan.raw_by_id.get(row.id) or {}
+    items = raw.get("consumes")
+    return {_normalize_path(p) for p in items if isinstance(p, str) and p} if isinstance(items, list) else set()
 
 
 def _export_findings(plan: _Plan, pset, ctx, tree: _Tree, pending: list) -> None:
@@ -406,6 +422,7 @@ def _export_findings(plan: _Plan, pset, ctx, tree: _Tree, pending: list) -> None
         ctx["siblings"] = {n.casefold() for n in fleet_siblings(ctx["root"])}
     dep_plans = plan.edge_plans()
     for row in plan.live_rows:
+        consumed = _consumed(plan, row)
         for raw in row.reads or ():
             if not isinstance(raw, str) or not raw:
                 continue
@@ -421,7 +438,23 @@ def _export_findings(plan: _Plan, pset, ctx, tree: _Tree, pending: list) -> None
             ):
                 continue
             tree.want(raw)
-            pending.append((plan, row, raw))
+            pending.append((plan, row, raw, norm not in consumed))
+
+
+def _edge_closure(pset: Dict[str, _Plan]) -> Dict[str, set]:
+    """Per plan, every set member it reaches through ``depends_on_plan`` edges, transitively."""
+    direct = {rel: {d for d in p.edge_plans() if d in pset} for rel, p in pset.items()}
+    closure: Dict[str, set] = {}
+    for rel in pset:
+        seen: set = set()
+        stack = list(direct[rel])
+        while stack:
+            cur = stack.pop()
+            if cur not in seen:
+                seen.add(cur)
+                stack.extend(direct[cur])
+        closure[rel] = seen
+    return closure
 
 
 def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
@@ -434,7 +467,7 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
             exact.setdefault(p, set()).add(rel)
         for p in prefixes:
             prefix.setdefault(p, set()).add(rel)
-    ordered = {rel: pset[rel].edge_plans() for rel in pset}
+    ordered = _edge_closure(pset)
     seen: set = set()
     for rel, (paths, prefixes) in sets.items():
         for item in sorted(paths | prefixes):
@@ -486,57 +519,47 @@ def _grouped_collisions(findings: list) -> list:
 
 
 def _landed_writes(ctx: dict, pset) -> tuple:
-    """Rows named landed: their declared paths/prefixes, and plan by (plan,row)."""
-    paths, prefixes, plans = set(), set(), set()
+    """Rows named landed: their declared paths and prefixes, and the first landing plan per exact path."""
+    paths, prefixes = set(), set()
+    exact_by_path: Dict[str, str] = {}
     for rel, row_id in ctx["landed_rows"]:
-        plans.add(rel)
         plan = pset.get(rel) or _load_outside(ctx, rel)
         raw = plan.raw_by_id.get(row_id) if plan is not None else None
         if raw is None:
             continue
-        p, q = _paths_and_prefixes([SimpleNamespace(writes=_declared(raw), writes_under=raw.get("writes_under") or ())])
+        p, q = _raw_promises(raw)
         paths |= p
         prefixes |= q
-    return paths, prefixes, plans
+        for item in p:
+            exact_by_path.setdefault(item, rel)
+    return paths, prefixes, exact_by_path
 
 
 def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> list:
     findings: list = []
     landed = set(ctx["landed_rows"])
-    land_paths, land_prefixes, land_plans = _landed_writes(ctx, pset)
-    landed_by_path: Dict[str, str] = {}
-    for rel, row_id in ctx["landed_rows"]:
-        plan = pset.get(rel) or _load_outside(ctx, rel)
-        raw = plan.raw_by_id.get(row_id) if plan is not None else None
-        if raw is None:
-            continue
-        p, q = _paths_and_prefixes([SimpleNamespace(writes=_declared(raw), writes_under=raw.get("writes_under") or ())])
-        for item in p | q:
-            landed_by_path.setdefault(item, rel)
+    land_paths, land_prefixes, landed_by_path = _landed_writes(ctx, pset)
     touched_norm = {_normalize_path(t): t for t in touched}
     for rel, plan in pset.items():
         for row in plan.live_rows:
             if (rel, row.id) in landed:
                 continue
+            consumed = _consumed(plan, row)
             for raw in row.reads or ():
                 if not isinstance(raw, str) or not raw:
                     continue
                 norm = _normalize_path(raw)
-                promiser = next((landed_by_path[a] for a in _ancestors_or_self(norm) if a in landed_by_path), None)
+                promiser = landed_by_path.get(norm) if norm in consumed else None
                 if promiser is not None and not tree.at(landed_head, raw):
                     findings.append(_finding(
                         rel, DRIFT_CLASS, True,
                         f"{raw} was promised by a landed row of {promiser} and is absent from the tree",
                         counterpart=promiser, path=raw, row=row.id))
-            if rel in land_plans:
-                continue
             row_writes, row_prefixes = _paths_and_prefixes([row])
             row_reads = {_normalize_path(p) for p in (row.reads or ()) if isinstance(p, str) and p}
             row_head = {_normalize_path(p) for p in (row.reads_at_head or ()) if isinstance(p, str) and p}
             for tnorm, traw in touched_norm.items():
-                if _covers(land_paths, land_prefixes, tnorm) and any(
-                    a in land_paths or a in land_prefixes for a in _ancestors_or_self(tnorm)
-                ):
+                if tnorm in land_paths or any(a in land_prefixes for a in _ancestors_or_self(tnorm)):
                     continue
                 blocking_hit = _hits(tnorm, row_writes | row_reads, row_prefixes)
                 head_hit = _hits(tnorm, row_head, set())
@@ -553,8 +576,8 @@ def _hits(touched: str, paths: set, prefixes: set) -> bool:
     return any(a in paths or a in prefixes for a in _ancestors_or_self(touched))
 
 
-def _evaluate(params: dict, root: Path) -> dict:
-    ctx = _parse_params(params, root)
+def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
+    ctx = _parse_params(params, root, record=record)
     ctx.update(root=root, outside={})
     pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in ctx["plans"]}
     landed_head = "HEAD"
@@ -574,7 +597,7 @@ def _evaluate(params: dict, root: Path) -> dict:
     # It blocks only in a set someone chose; over the default backlog one
     # malformed plan must not refuse every other plan's certification.
     for plan in pset.values():
-        plan.live_rows  # noqa: B018 - populates `unreadable`
+        plan.load_rows()
         if plan.unreadable is not None:
             findings.append(_finding(
                 plan.rel, COLLISION, ctx["named_set"],
@@ -605,12 +628,13 @@ def _evaluate(params: dict, root: Path) -> dict:
             label = f"{cap.get('click_path')} (role {cap.get('role')}): shipped {path}"
             findings.append(_finding(plan.rel, CAP, True, f"shipped path {path} is not tracked at HEAD",
                                      capability=str(cap.get("id") or ""), missing=label))
-    for plan, row, raw in pending:
+    for plan, row, raw, legacy in pending:
         if tree.at("HEAD", raw):
             continue
+        source = "reads: (legacy, not consumes:)" if legacy else "consumes"
         findings.append(_finding(
-            plan.rel, EXPORT, True,
-            f"row {row.id} consumes {raw}, which no row of its plan or of another plan in the set writes "
+            plan.rel, EXPORT, not legacy,
+            f"row {row.id} {source} {raw}, which no row of its plan or of another plan in the set writes "
             "and which is not tracked at HEAD",
             path=raw, row=row.id))
     if ctx["phase"] == "wave-boundary":
@@ -635,7 +659,7 @@ def _evaluate(params: dict, root: Path) -> dict:
     }
 
 
-def _sidecar(reply: dict, rel: str) -> dict:
+def _sidecar(reply: dict, rel: str, findings: list) -> dict:
     keys = ("class", "blocking", "counterpart_plan", "capability", "missing_consumer", "path", "row", "detail")
     return {
         "schema": "seam-check",
@@ -646,7 +670,7 @@ def _sidecar(reply: dict, rel: str) -> dict:
         "checked_at_sha": reply["checked_at_sha"],
         "set": reply["set"],
         "verdict": reply["per_plan"][rel],
-        "findings": [{k: f[k] for k in keys} for f in reply["findings"] if f["plan"] == rel],
+        "findings": [{k: f[k] for k in keys} for f in findings],
     }
 
 
@@ -664,11 +688,14 @@ def _record_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.seam_record requires a resolved repo_root")
     root = Path(main_worktree_root(repo_root))
-    reply = _evaluate(params, root)
+    reply = _evaluate(params, root, record=True)
     written: List[str] = []
+    by_plan: Dict[str, list] = {}
+    for f in reply["findings"]:
+        by_plan.setdefault(f["plan"], []).append(f)
     for rel in reply["set"]:
         target = (root / rel).with_name(Path(rel).stem + ".seam.yaml")
-        body = yaml.safe_dump(_sidecar(reply, rel), sort_keys=False, allow_unicode=True)
+        body = yaml.dump(_sidecar(reply, rel, by_plan.get(rel, [])), Dumper=_DUMPER, sort_keys=False, allow_unicode=True)
         atomic_write_bytes(target, body.encode("utf-8"))
         written.append(target.resolve().relative_to(root.resolve()).as_posix())
     return {**reply, "sidecars": written}

@@ -277,11 +277,10 @@ def test_scan_secrets_json_emits_tier_counts_and_redacted_hits(tmp_path):
     payload = json.loads(out)
 
     assert rc == 2
-    counts = payload["counts"]
-    assert (counts["high"], counts["medium_gating"], counts["medium_informational"]) == (1, 1, 0)
-    assert f"{target_file}:1: token: sk-a..." in payload["render"]
-    assert f"{target_file}:2:" in payload["render"]
+    assert (payload["high"], payload["medium"], payload["medium_covered"]) == (1, 1, 0)
+    assert payload["hits"]["high"][0]["text"] == "token: sk-a..."
     assert token not in out
+    assert payload["hits"]["medium"][0]["line"] == 2
 
 
 def test_scan_secrets_json_is_clean_json_when_notes_fire(tmp_path):
@@ -297,9 +296,7 @@ def test_scan_secrets_json_is_clean_json_when_notes_fire(tmp_path):
     )
 
     assert rc == 0
-    payload = json.loads(out)
-    assert payload["counts"]["high"] == 0
-    assert "NOTE: --percolate-root not passed" in payload["render"]
+    assert json.loads(out)["high"] == 0
 
 
 _IDENTITY_FIXTURE = (

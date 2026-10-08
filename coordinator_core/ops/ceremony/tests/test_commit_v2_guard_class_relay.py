@@ -270,7 +270,6 @@ def test_commit_semantics_unchanged_by_relay_step(tmp_path):
         "guard_class_relay",
         "index_stale",
         "dropped_ignored",
-        "skipped_missing",
     }
     assert result["committed"] is True
     assert result["index_stale"] == []

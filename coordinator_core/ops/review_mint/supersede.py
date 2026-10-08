@@ -42,7 +42,7 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, ShareStagesMissing, assemble_from_share
+from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, assemble_from_share
 from coordinator_core.ops.review_mint.wave_bookkeeping import (
     bookkeep_wave,
     review_wave_bookkeeping_stem,
@@ -192,7 +192,7 @@ def record_superseding_review(
                     raise
                 _write_range_prep(repo_root, session_id, plan, base, head)
                 assembled = assemble()
-        except (ShareStageMissing, ShareStagesMissing, ValueError) as exc:
+        except (ShareStageMissing, ValueError) as exc:
             raise SupersedeRefused(str(exc))
         prep_sidecar = assembled["prep_sidecar"]
         wave_sidecar_paths = assembled["wave_sidecar_paths"]

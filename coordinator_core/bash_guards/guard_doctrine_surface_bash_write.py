@@ -742,6 +742,118 @@ def _has_stdin_program_var_write(cmd: str, identifiers_lower: Tuple[str, ...]) -
     return False
 
 
+_PY_STDIN_DASH_RE = re.compile(r"(?:^|[;&|]|\s)python3?\s+-(?=\s|$)")
+_SHELL_WORD_RE = re.compile(r"'[^']*'|\"[^\"]*\"|[^\s'\"]+")
+_ARGV_REF_RE = re.compile(r"\bargv\b")
+_ARGV_INDEX_RE = re.compile(r"\bsys\s*\.\s*argv\s*\[\s*(\d+)\s*\]")
+_PY_STATEMENT_SPLIT_RE = re.compile(r"[;\n]")
+_PY_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*=(?!=)(.*)$")
+_PATH_WRAPPER_RE = re.compile(r"(?:(?:pathlib\s*\.\s*)?Path|os\s*\.\s*path\s*\.\s*\w+|str)\s*\(")
+_PY_MOVE_SINK_RE = re.compile(r"\bshutil\s*\.\s*(?:copy\w*|move)\s*\(|\bos\s*\.\s*(?:replace|rename)\s*\(")
+
+
+def _stdin_program_argv_pairs(cmd: str) -> "list[tuple[list[str], str]]":
+    """(argv words after ``-``, body) for every ``python -`` heredoc in ``cmd``,
+    with this command's own literal assignments expanded into the words."""
+    pairs: "list[tuple[list[str], str]]" = []
+    lines = _expand_local_assignments(cmd).split("\n")
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        match = _HEREDOC_START_RE.search(line)
+        idx += 1
+        if not match:
+            continue
+        terminator = match.group(2)
+        scan = idx
+        while scan < len(lines) and lines[scan].strip() != terminator:
+            scan += 1
+        body = "\n".join(lines[idx:scan]) if scan < len(lines) else ""
+        if scan < len(lines):
+            idx = scan + 1
+        dash = None
+        for dash in _PY_STDIN_DASH_RE.finditer(line[: match.start()]):
+            pass
+        if dash is None or not body:
+            continue
+        words = [w.strip("'\"") for w in _SHELL_WORD_RE.findall(line[dash.end() : match.start()])]
+        pairs.append((words, body))
+    return pairs
+
+
+def _path_alias(expr: str, targets: "set[str]") -> bool:
+    """``expr`` is one of ``targets`` with only path-preserving wrappers around it."""
+    expr = expr.strip()
+    while True:
+        match = _PATH_WRAPPER_RE.match(expr)
+        if not match:
+            break
+        expr = expr[match.end():].strip()
+        if not expr.endswith(")"):
+            return False
+        expr = expr[:-1].strip()
+    return expr in targets
+
+
+def _writes_through(statement: str, target: str) -> bool:
+    t = r"(?<![\w.])%s(?![\w\[])" % re.escape(target)
+    wrapped = r"(?:(?:pathlib\s*\.\s*)?Path|os\s*\.\s*path\s*\.\s*\w+|str)\s*\(\s*%s\s*\)" % t
+    subject = r"(?:%s|%s)" % (t, wrapped)
+    mode = r"\s*['\"][^'\"]*[wax]"
+    return bool(
+        re.search(r"\bopen\s*\(\s*%s\s*,%s" % (subject, mode), statement)
+        or re.search(r"%s\s*\.\s*(?:write_text|write_bytes|touch)\s*\(" % subject, statement)
+        or re.search(r"%s\s*\.\s*open\s*\(%s" % (subject, mode), statement)
+        or re.search(
+            r"\b(?:shutil\s*\.\s*(?:copy\w*|move)|os\s*\.\s*(?:replace|rename))\s*\([^,]*,\s*%s\s*[,)]"
+            % subject,
+            statement,
+        )
+    )
+
+
+def _has_stdin_program_argv_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
+    """A governed path passed as argv to a ``python -`` heredoc and written through.
+
+    ``F=<governed> && python3 - "$F" <<'EOF'`` then ``p = sys.argv[1]`` and
+    ``open(p, 'w')``: the governed name sits only in the argv word and the
+    write only in the body, so no segment holds both. Denies when a write or
+    move sink TARGETS the governed ``sys.argv[i]`` or a name bound to it
+    through path-preserving wrappers (``Path(...)``, ``os.path.*(...)``,
+    ``str(...)``). Content read from it and written elsewhere is not a
+    governed write. Argv read in any non-indexed form (a slice, a loop,
+    ``from sys import argv``) is unresolvable and fails closed against any
+    write marker in the body."""
+    for words, body in _stdin_program_argv_pairs(cmd):
+        governed = {
+            i + 1 for i, word in enumerate(words) if _mentions_governed_identifier(word, identifiers_lower)
+        }
+        if not governed:
+            continue
+        if len(_ARGV_REF_RE.findall(body)) != len(_ARGV_INDEX_RE.findall(body)):
+            if _has_write_marker(body) or _PY_MOVE_SINK_RE.search(body):
+                return True
+            continue
+        body = _ARGV_INDEX_RE.sub(lambda m: "sys.argv[%s]" % m.group(1), body)
+        targets = {"sys.argv[%d]" % i for i in governed}
+        statements = [s for s in _PY_STATEMENT_SPLIT_RE.split(body) if s.strip()]
+        # Two passes so a name rebound from a bound name is followed too.
+        for _ in range(2):
+            for statement in statements:
+                match = _PY_ASSIGN_RE.match(statement)
+                if not match:
+                    continue
+                names = [n.strip() for n in match.group(1).split(",")]
+                values = match.group(2).split(",")
+                if len(names) == len(values):
+                    targets.update(n for n, v in zip(names, values) if _path_alias(v, targets))
+                elif any(_path_alias(v, targets) for v in values):
+                    targets.update(names)
+        if any(_writes_through(s, t) for s in statements for t in targets):
+            return True
+    return False
+
+
 _PY_STRING_LITERAL_RE = re.compile(r"('''|\"\"\")[\s\S]*?\1|'[^'\n]*'|\"[^\"\n]*\"")
 
 
@@ -1434,6 +1546,9 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         return True
 
     if _has_stdin_program_var_write(cmd, identifiers_lower):
+        return True
+
+    if _has_stdin_program_argv_write(cmd, identifiers_lower):
         return True
 
     if _has_xargs_pipe_indirection(segments, identifiers_lower):

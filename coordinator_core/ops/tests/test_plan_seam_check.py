@@ -32,6 +32,7 @@ def _validate(doc: dict) -> None:
 class FakeGit:
     def __init__(self):
         self.tracked: set = set()
+        self.landed: set = set()
         self.touched: list = []
         self.calls: list = []
 
@@ -44,7 +45,7 @@ class FakeGit:
                     continue
                 if line == "HEAD":
                     out.append(f"{HEAD} commit 10")
-                elif line.split(":", 1)[1] in self.tracked:
+                elif line.split(":", 1)[1] in (self.tracked if line.startswith("HEAD:") else self.landed):
                     out.append(f"{'d' * 40} blob 1")
                 else:
                     out.append(f"{line} missing")
@@ -258,8 +259,125 @@ def test_drift_promised_path_absent(tmp_path, git):
     f = r["findings"][0]
     assert f["class"] == "drifted-contract" and f["blocking"] and f["counterpart_plan"] == a
     assert f["path"] == "lib.py" and f["row"] == "B1"
-    git.tracked.add("lib.py")
+    git.landed.add("lib.py")
     assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def test_drift_asks_the_landed_head_not_head(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    git.tracked.add("lib.py")
+    assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "DRIFT"
+    git.tracked.clear()
+    git.landed.add("lib.py")
+    assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def test_export_lens_asks_head_even_at_wave_boundary(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[x.py]", "[gone.py]"))
+    git.landed.add("gone.py")
+    r = _wb(root, [a], [])
+    assert "unpromised-export" in _classes(r, True)
+    git.tracked.add("gone.py")
+    assert "unpromised-export" not in _classes(_wb(root, [a], []))
+
+
+def _archive(root, rel, rows, fm="capabilities: []\n"):
+    live = _plan(root, Path(rel).stem, rows, fm)
+    moved = root / "archive" / "specs" / "2026-09" / Path(rel).name
+    moved.parent.mkdir(parents=True, exist_ok=True)
+    (root / live).rename(moved)
+
+
+def test_archived_dependency_that_writes_the_consumed_path_promises_it(tmp_path, git):
+    root = _root(tmp_path)
+    _archive(root, "docs/plans/dep.md", _row("W", "[lib/x.py]"))
+    edge = "capabilities: []\ndepends_on_plan:\n  - {plan: docs/plans/dep.md, status: approved, gate_kind: k}\n"
+    a = _plan(root, "a", _row("R1", "[y.py]", "[lib/x.py]"), fm=edge)
+    r = _check(root, [a])
+    assert "unpromised-export" not in _classes(r) and r["verdict"] == "CLEAN"
+
+
+def test_archived_dependency_that_does_not_write_it_leaves_the_export_unpromised(tmp_path, git):
+    root = _root(tmp_path)
+    _archive(root, "docs/plans/dep.md", _row("W", "[other.py]"))
+    edge = "capabilities: []\ndepends_on_plan:\n  - {plan: docs/plans/dep.md, status: approved, gate_kind: k}\n"
+    a = _plan(root, "a", _row("R1", "[y.py]", "[lib/x.py]"), fm=edge)
+    r = _check(root, [a])
+    assert [f["path"] for f in r["findings"] if f["class"] == "unpromised-export"] == ["lib/x.py"]
+
+
+def test_drift_clause_two_still_checks_a_plan_that_has_landed_a_row(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[a.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]") + _row("B2", "[hot.py]"))
+    git.touched = ["hot.py"]
+    r = _wb(root, [a, b], [(a, "A1"), (b, "B1")])
+    hits = [f for f in r["findings"] if f["class"] == "drifted-contract"]
+    assert [(f["plan"], f["row"], f["path"]) for f in hits] == [(b, "B2", "hot.py")]
+
+
+def test_a_landed_prefix_is_not_a_promise_of_every_file_under_it(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[a.py]", extra="  writes_under: [src/]\n"))
+    b = _plan(root, "b", _row("B2", "[b.py]", "[src/gen.py]"))
+    r = _wb(root, [a, b], [(a, "A1")])
+    assert not [f for f in r["findings"] if "was promised by a landed row" in f["detail"]]
+
+
+def test_landed_rows_plan_is_normalised_and_escapes_are_refused(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    r = _wb(root, [a, b], [(f"./{a}", "A1")])
+    assert r["per_plan"] == {a: "CLEAN", b: "DRIFT"}
+    assert r["findings"][0]["counterpart_plan"] == a
+    with pytest.raises(ValueError, match="escapes"):
+        _wb(root, [a], [("../outside.md", "A1")])
+
+
+def test_depends_on_plan_escape_is_dropped_before_any_read(tmp_path, git):
+    root = _root(tmp_path)
+    edge = ("capabilities: []\ndepends_on_plan:\n  - {plan: ../evil.md, status: approved, gate_kind: k}\n"
+            "  - {plan: /etc/hosts, status: approved, gate_kind: k}\n"
+            "  - {plan: ./docs/plans/ok.md, status: approved, gate_kind: k}\n")
+    a = _plan(root, "a", _row("R1", "[y.py]"), fm=edge)
+    assert op._Plan(a, root).edge_plans() == {"docs/plans/ok.md"}
+
+
+def test_a_path_only_in_legacy_reads_is_a_non_blocking_export(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", extra="  reads: [old.py]\n"))
+    r = _check(root, [a])
+    f = [x for x in r["findings"] if x["class"] == "unpromised-export"]
+    assert r["verdict"] == "CLEAN" and len(f) == 1 and f[0]["blocking"] is False
+    assert "reads:" in f[0]["detail"] and f[0]["path"] == "old.py"
+
+
+def test_collision_ordering_follows_transitive_edges(tmp_path, git):
+    root = _root(tmp_path)
+    c = _plan(root, "c", _row("R3", "[s/x.py]"))
+    b = _plan(root, "b", _row("R2", "[b.py]"),
+              fm=f"capabilities: []\ndepends_on_plan:\n  - {{plan: {c}, status: approved, gate_kind: k}}\n")
+    a = _plan(root, "a", _row("R1", "[s/x.py]"),
+              fm=f"capabilities: []\ndepends_on_plan:\n  - {{plan: {b}, status: approved, gate_kind: k}}\n")
+    r = _check(root, [a, b, c])
+    assert not any(f["class"] == "writes-collision" for f in r["findings"])
+
+
+def test_record_refuses_plans_outside_docs_plans_but_check_accepts_them(tmp_path, git):
+    root = _root(tmp_path)
+    inv = root / "state" / "mise-inventory"
+    inv.mkdir(parents=True)
+    _plan(root, "x", _row("R1", "[x.py]"))
+    rel = "state/mise-inventory/x.spine.md"
+    (inv / "x.spine.md").write_text((root / "docs/plans/x.md").read_text(), encoding="utf-8")
+    assert _check(root, [rel])["verdict"] == "CLEAN"
+    with pytest.raises(ValueError, match="docs/plans"):
+        op._record_handler({"plans": [rel], "phase": "prep", "named_set": True}, repo_root=root)
+    assert not list(inv.glob("*.seam.yaml"))
 
 
 def test_drift_undeclared_touch_on_remaining_write_and_reads_at_head(tmp_path, git):

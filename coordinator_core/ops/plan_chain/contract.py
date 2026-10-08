@@ -100,8 +100,6 @@ class ChainState:
     halt: Halt | None = None
     commit: dict[str, str] | None = None
     plan_path: str | None = None
-    # `dispatch.terminal_commit` params for a run that halted after its execute child returned.
-    resume: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -111,7 +109,6 @@ class WorkflowResult:
     digest: dict[str, Any] | None
     raw_result: str
     child_session_id: str
-    task_output_path: str = ""
 
 
 class WorkflowRunner(Protocol):

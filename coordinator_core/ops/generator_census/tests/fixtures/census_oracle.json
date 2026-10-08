@@ -1337,6 +1337,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/plan_seam_check.py declares GENERATES = [] (declared-empty, no artifacts); coordinator_core/ops/plan_seam_check.py MUTATES pattern(s) match no currently-tracked path: ['docs/plans/*.seam.yaml']",
+    "generator": "coordinator_core/ops/plan_seam_check.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/plan_stamp_prepped.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/plan_stamp_prepped.py",
     "mutates": [

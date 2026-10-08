@@ -84,6 +84,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _no_pending_store_writes_outside_real_repos(monkeypatch):
+    """Tests using a fictional worktree root must not create directories there."""
+    from coordinator_core.ops.fleet import _common, _index_resync_pending
+
+    def _guarded(worktree_root, records):
+        if (Path(worktree_root) / ".git").exists():
+            _index_resync_pending.record_pending(worktree_root, records)
+
+    monkeypatch.setattr(_common, "record_pending", _guarded)
+
+
 # ---------------------------------------------------------------------------
 # Part 1 — spawn-free fakes: _resync_main_index_for_moves
 # ---------------------------------------------------------------------------

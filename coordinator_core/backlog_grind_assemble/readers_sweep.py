@@ -12,6 +12,7 @@ from coordinator_core.contract.decision_object.judgment import (
 )
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
 from coordinator_core.ops.queue_family import load_family_records
+from coordinator_core.session.suite_authority import cloud_box_basis
 
 #: This reader's own cadence name — one of the five surfaces enumerated by
 #: `coordinator_core.test_backlog_grind_assemble._CADENCES`
@@ -92,6 +93,17 @@ def _tier_u_grant_flow(open_count: int) -> ReaderResult:
     can be revoked or its session can die between the two points this
     mandates re-checking.
     """
+    if cloud_box_basis() is not None:
+        return ReaderResult(
+            directives=[
+                directives.build_tier_u_grant_check(
+                    id="d-bug-sweep-tier-u-grant-check-pre-track-b"
+                ),
+                directives.build_tier_u_grant_check(
+                    id="d-bug-sweep-tier-u-grant-check-post-fix"
+                ),
+            ]
+        )
     jp, write_directive = directives.build_tier_u_grant_flow(
         jp_id="j-bug-sweep-tier-u-grant",
         write_directive_id="d-bug-sweep-tier-u-grant-write",

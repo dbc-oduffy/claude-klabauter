@@ -55,7 +55,7 @@ def _section(src: Path) -> dict:
 
 def test_inject_materializes_at_the_round_pinned_sha(monkeypatch, tmp_path):
     """The pin already in the round's dict is what inject materializes at —
-    `_inject_src_shadow` must receive it as `ref`, never fall back to HEAD."""
+    `_git_materialize_ref` must receive it as `ref`, never fall back to HEAD."""
     src_dir = tmp_path / "content-root"
     src_dir.mkdir()
     materialize_calls: "list[tuple[Path, str]]" = []
@@ -63,12 +63,12 @@ def test_inject_materializes_at_the_round_pinned_sha(monkeypatch, tmp_path):
     def _fake_pin(root, pinned_shas, *, out=None, late=False):
         return pinned_shas.setdefault(str(root), "PINNED_SHA")
 
-    def _fake_materialize(src, ref):
-        materialize_calls.append((src, ref))
+    def _fake_materialize(root, ref="HEAD"):
+        materialize_calls.append((root, ref))
         return src_dir
 
     monkeypatch.setattr(publish, "_round_pin_source_sha", _fake_pin)
-    monkeypatch.setattr(publish, "_inject_src_shadow", _fake_materialize)
+    monkeypatch.setattr(publish, "_git_materialize_ref", _fake_materialize)
 
     pins: "dict[str, str]" = {}
     publish._materialize_inject_srcs(_section(src_dir), tmp_path, pins)
@@ -93,8 +93,8 @@ def test_inject_reuses_a_pin_the_round_already_resolved(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         publish,
-        "_inject_src_shadow",
-        lambda src, ref: (seen_refs.append(ref), src_dir)[1],
+        "_git_materialize_ref",
+        lambda root, ref="HEAD": (seen_refs.append(ref), src_dir)[1],
     )
 
     pins = {str(src_dir): "ROUND_START_SHA"}
@@ -148,7 +148,7 @@ def test_absent_pin_still_works_for_direct_callers(monkeypatch, tmp_path):
             str(root), "CALL_SCOPED_SHA"
         ),
     )
-    monkeypatch.setattr(publish, "_inject_src_shadow", lambda src, ref: src_dir)
+    monkeypatch.setattr(publish, "_git_materialize_ref", lambda root, ref="HEAD": src_dir)
 
     result = publish._materialize_inject_srcs(_section(src_dir), tmp_path)
 
