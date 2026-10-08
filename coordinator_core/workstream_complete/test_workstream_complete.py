@@ -219,7 +219,9 @@ def test_directives_only_name_known_real_clis_and_never_invoke_them(monkeypatch,
         # key stays optional here for any other future stamper.) The
         # required set is what this guard pins; an optional key landing
         # later must not silently widen it.
-        assert set(directive.keys()) - {"best_effort", "advisory", "_gate_memo_key_parts"} == {
+        assert set(directive.keys()) - {
+            "best_effort", "advisory", "_gate_memo_key_parts", "after_close_commit",
+        } == {
             "id",
             "cli",
             "args",

@@ -45,25 +45,27 @@ def _gate() -> wsc.SessionShapeGate:
     )
 
 
-def test_terminal_sweeps_are_last_handoffs_then_sizings(tmp_path: Path) -> None:
+def test_terminal_sweeps_are_last_in_the_main_pass_then_post_close(tmp_path: Path) -> None:
     directives = wsc.build_directives(_gate(), {}, tmp_path)
+    key = wsc.directives_session_hygiene.AFTER_CLOSE_COMMIT_KEY
 
-    ids = [d["id"] for d in directives]
-    assert ids[-3:] == [
+    main_pass = [d for d in directives if not d.get(key)]
+    post_close = [d for d in directives if d.get(key)]
+
+    assert [d["id"] for d in main_pass[-2:]] == [
         "d-sweep-terminal-handoffs",
         "d-sweep-terminal-sizings",
-        "d-ceremony-reindex",
-    ], (
-        f"expected the handoffs sweep, the sizings sweep, then the reindex "
-        f"as the final three directives; got {ids!r}"
-    )
+    ], f"got {[d['id'] for d in main_pass]!r}"
+    assert main_pass[-2]["cli"] == "sweep-terminal-handoffs"
+    assert main_pass[-1]["cli"] == "sweep-terminal-sizings"
 
-    handoffs = directives[-3]
-    sizings = directives[-2]
-    reindex = directives[-1]
-    assert reindex["cli"] == "scip-rebuild-at-ceremony"
-    assert reindex["args"] == [
+    assert [d["id"] for d in post_close] == ["d-structural-index-refresh", "d-ceremony-reindex"]
+    assert directives[-2:] == post_close
+    assert post_close[0]["args"] == ["--root", str(tmp_path), "--timeout", "0"]
+    assert post_close[1]["args"] == [
         "--ceremony", "workstream-complete", "--repo-root", str(tmp_path),
     ]
-    assert handoffs["cli"] == "sweep-terminal-handoffs"
-    assert sizings["cli"] == "sweep-terminal-sizings"
+    assert all(d["best_effort"] for d in post_close)
+    # The post-close pass runs no gate check, so a held-back directive may
+    # never depend on a judgment point or claim to be already satisfied.
+    assert all(d["depends_on"] is None and not d["already_satisfied"] for d in post_close)

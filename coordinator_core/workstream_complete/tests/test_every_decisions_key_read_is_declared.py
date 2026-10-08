@@ -67,6 +67,12 @@ _NOT_FREE_VALUES: dict[str, str] = {
         "point fires, per __init__.py's own comment beside "
         "_JP_SESSION_SHAPE_ID"
     ),
+    # `apply._decided_nature` reads this judgment point's answer as the
+    # fallback for the free value `nature`; `judgments.py` raises it by id.
+    "completion-nature-classification": (
+        "not a free value: a judgment point id, discoverable via "
+        "judgment_points[].id (judgments.py)"
+    ),
 }
 
 

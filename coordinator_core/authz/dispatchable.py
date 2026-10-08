@@ -106,6 +106,7 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "sweep-terminal-handoffs",
         "sweep-terminal-sizings",
         "scip-rebuild-at-ceremony",
+        "structural-index-refresh",
         "review-brightline-gate",
         "freeze-review-diff",
         "classify-dispatch-shape",
