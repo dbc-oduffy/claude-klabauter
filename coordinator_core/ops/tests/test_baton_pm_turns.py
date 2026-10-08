@@ -94,3 +94,19 @@ def test_recent_window_cuts_an_oversized_newest_turn(tmp_path, monkeypatch):
     PT.append_turn("z" * 100, session_id="sid-big")
     win = PT.recent_window(session_id="sid-big", budget=40)
     assert win == [{"turn": 1, "ts": win[0]["ts"], "text": "z" * 40, "truncated": True}]
+
+
+def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-u")
+    prompt = "a b c\u0085d"
+    PT.append_turn(prompt, session_id="sid-u")
+    assert PT.read_turns(session_id="sid-u")["text"] == prompt
+
+
+def test_torn_multibyte_tail_is_skipped_not_raised(tmp_path, monkeypatch):
+    sdir = _session(tmp_path, monkeypatch, "sid-mb")
+    PT.append_turn("zero", session_id="sid-mb")
+    with open(sdir / PT.PM_TURNS_FILENAME, "ab") as fh:
+        fh.write(b'{"turn": 1, "ts": "x", "prompt": "caf\xc3')
+    assert [e["turn"] for e in PT.recent_window(session_id="sid-mb")] == [0]
+    assert PT.append_turn("two", session_id="sid-mb")["turn"] == 2

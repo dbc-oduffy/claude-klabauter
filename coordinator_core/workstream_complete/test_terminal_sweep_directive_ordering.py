@@ -2,7 +2,8 @@
 coordinator_core.workstream_complete.test_terminal_sweep_directive_ordering
 — pins the one property neither the generic cross-consistency guard nor any
 existing test asserted: the terminal-handoff and terminal-sizings sweep
-directives are emitted LAST, in that order, from `build_directives`.
+directives are emitted after everything that stamps, in that order, from
+`build_directives`, followed only by the close-ceremony reindex.
 
 Purpose: the C3 commit that added `d-sweep-terminal-sizings`
 (docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md) calls
@@ -18,8 +19,8 @@ newer one.
 
 Negative-spec: does NOT assert anything about the OTHER directives'
 ordering, relative positions, or presence/absence — only that the two
-terminal sweeps are the final two entries, handoffs immediately before
-sizings.
+terminal sweeps and the reindex are the final three entries, handoffs
+immediately before sizings, the reindex last.
 """
 
 from __future__ import annotations
@@ -48,12 +49,21 @@ def test_terminal_sweeps_are_last_handoffs_then_sizings(tmp_path: Path) -> None:
     directives = wsc.build_directives(_gate(), {}, tmp_path)
 
     ids = [d["id"] for d in directives]
-    assert ids[-2:] == ["d-sweep-terminal-handoffs", "d-sweep-terminal-sizings"], (
-        f"expected the handoffs sweep immediately followed by the sizings "
-        f"sweep as the final two directives; got {ids!r}"
+    assert ids[-3:] == [
+        "d-sweep-terminal-handoffs",
+        "d-sweep-terminal-sizings",
+        "d-ceremony-reindex",
+    ], (
+        f"expected the handoffs sweep, the sizings sweep, then the reindex "
+        f"as the final three directives; got {ids!r}"
     )
 
-    handoffs = directives[-2]
-    sizings = directives[-1]
+    handoffs = directives[-3]
+    sizings = directives[-2]
+    reindex = directives[-1]
+    assert reindex["cli"] == "scip-rebuild-at-ceremony"
+    assert reindex["args"] == [
+        "--ceremony", "workstream-complete", "--repo-root", str(tmp_path),
+    ]
     assert handoffs["cli"] == "sweep-terminal-handoffs"
     assert sizings["cli"] == "sweep-terminal-sizings"

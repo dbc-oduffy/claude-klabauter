@@ -68,6 +68,7 @@ POPULATION: Mapping[str, tuple] = {
     "standup": ("not_a_gate", "emits a standup report"),
     "sweep-terminal-handoffs": ("not_a_gate", "sweeps handoffs"),
     "sweep-terminal-sizings": ("not_a_gate", "sweeps sizings"),
+    "scip-rebuild-at-ceremony": ("not_a_gate", "spawns the index rebuild"),
     "tier-u-grant-cli": ("not_a_gate", "mints a grant"),
     "validate-fast-and-packageability": ("pending_replay", "validation verdict vs exit code unreplayed"),
     "workday-complete-args-and-validate": ("pending_replay", "validates args; verdict vs exit unreplayed"),

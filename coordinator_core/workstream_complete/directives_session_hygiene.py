@@ -301,6 +301,7 @@ cases fail closed.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
@@ -494,6 +495,38 @@ def build_terminal_sizing_sweep_directive() -> dict[str, Any]:
         "id": "d-sweep-terminal-sizings",
         "cli": _TERMINAL_SIZING_SWEEP_CLI,
         "args": [],
+        "depends_on": None,
+        "already_satisfied": False,
+    }
+
+
+_CEREMONY_REINDEX_CLI = "scip-rebuild-at-ceremony"
+
+
+def build_ceremony_reindex_directive(root: Path) -> dict[str, Any]:
+    """The close ceremony's structural-index rebuild, fired after every commit
+    the ceremony makes.
+
+    UNCONDITIONAL here: whether this box can take a reindex is the CLI's own
+    decision (example-retrieval-repo binary resolvable, available memory above the
+    rebuild floor), and it prints `scip-rebuild: skipped -- <reason>` on
+    stdout when it cannot, which `apply` relays. A predicate in this builder
+    would skip silently, which is the outcome this directive exists to end.
+
+    The CLI spawns the rebuild detached and returns; it always exits 0, so
+    this directive can never fail a close. `already_satisfied` stays `False`:
+    example-retrieval-repo's own cadence arm decides whether a rebuild is due.
+
+    `--repo-root` is passed explicitly: the CLI's default is the cwd's git
+    toplevel, and `apply` dispatches in-process without a chdir.
+
+    Emitted LAST, after both terminal sweeps, because each sweep commits its
+    own moves and the rebuild should index the tree the ceremony leaves.
+    """
+    return {
+        "id": "d-ceremony-reindex",
+        "cli": _CEREMONY_REINDEX_CLI,
+        "args": ["--ceremony", "workstream-complete", "--repo-root", str(root)],
         "depends_on": None,
         "already_satisfied": False,
     }

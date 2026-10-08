@@ -274,3 +274,23 @@ def test_write_embeds_pm_verbatims_once_and_keeps_em_curation(repo: Path, monkey
     path.write_text(curated, encoding="utf-8")
     sizing_assemble.write_back(repo, rel, _decision("M"))
     assert [e["turn"] for e in _load(path)["pm_verbatims"]] == [1, 9]
+
+
+def test_pm_verbatims_round_trip_yaml_hostile_prompts_from_the_real_log(
+    repo: Path, monkeypatch
+) -> None:
+    import coordinator_core.ops.baton_pm_turns as pm_turns
+    from coordinator_core.session_baton import store
+
+    sdir = repo / ".git" / "coordinator-sessions" / "sid-wb"
+    sdir.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-wb")
+    prompts = ["# not a comment", "---\nkey: value", 'he said "no": \'never\'', "a b", "  padded  "]
+    for prompt in prompts:
+        pm_turns.append_turn(prompt, session_id="sid-wb")
+
+    path = _sizing(repo)
+    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    sizing_assemble.write_back(repo, rel, _decision("M"))
+    assert [e["text"] for e in _load(path)["pm_verbatims"]] == prompts[::-1]

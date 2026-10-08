@@ -929,7 +929,21 @@ def _machine_local(*args: str) -> str:
 
 def fleet_repos() -> Dict[str, Path]:
     out: Dict[str, Path] = {}
-    for key, val in json.loads(_machine_local("dump")).items():
+    try:
+        registry = json.loads(_machine_local("dump"))
+    except (RuntimeError, ValueError):
+        # `dump` exits non-zero when any one key is unresolvable; ask per key so
+        # only that key is skipped.
+        registry = {}
+        for key in _machine_local("keys").splitlines():
+            key = key.strip()
+            if not key.startswith("repos."):
+                continue
+            try:
+                registry[key] = _machine_local("get", key)
+            except RuntimeError:
+                continue
+    for key, val in registry.items():
         if not key.startswith("repos.") or not isinstance(val, str):
             continue
         if val and Path(val).is_dir() and Path(val).resolve() not in {p.resolve() for p in out.values()}:

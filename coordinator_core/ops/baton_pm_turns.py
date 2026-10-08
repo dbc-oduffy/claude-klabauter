@@ -96,13 +96,15 @@ def append_turn(prompt: str, session_id: Optional[str] = None,
 
 def _load(path: Path) -> List[Dict[str, Any]]:
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
     except OSError:
         return []
     turns = []
-    for line in raw.splitlines():
+    # Bytes split on "\n" only: str.splitlines also breaks on U+2028/U+0085,
+    # which a verbatim prompt may contain. A torn line fails to decode or parse.
+    for line in raw.split(b"\n"):
         try:
-            entry = json.loads(line)
+            entry = json.loads(line.decode("utf-8"))
         except ValueError:
             continue
         if isinstance(entry, dict) and isinstance(entry.get("turn"), int) \
@@ -122,7 +124,8 @@ def read_turns(session_id: Optional[str] = None, cwd: Optional[str] = None, *,
                turn: Optional[int] = None, start: Optional[int] = None,
                end: Optional[int] = None, all_turns: bool = False) -> dict:
     """Select by ``all_turns``, else ``start``/``end`` (inclusive, either
-    open), else ``turn`` (negative counts from the latest), else turn 0. One
+    open), else ``turn`` (negative is positional from the latest recorded
+    turn, so it skips index gaps), else turn 0. One
     turn renders as its verbatim prompt; several render as headed sections."""
     empty = {"ok": False, "text": "", "turns": [], "count": 0,
              "log_path": None, "session_id": session_id, "reason": None}

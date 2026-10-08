@@ -4705,6 +4705,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "baton.carry_forward": OpClass.MUTATING,
     "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
 
+    # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
+    # appends one line to `.git/coordinator-sessions/<sid>/pm_turns.jsonl`
+    # under `held_lock`.
+    #
+    # baton.pm_turns — COMPUTE_ONLY: `read_turns` reads that file through
+    # `_load` only; no lock, no write primitive on this path.
+    "baton.pm_turn_append": OpClass.MUTATING,
+    "baton.pm_turns": OpClass.COMPUTE_ONLY,
+
     # warm.request_status — COMPUTE_ONLY (D5, docs/plans/2026-09-23-warm-
     # dispatch-reconcile.md § C4): a pure poll read of the accept process's
     # in-memory AckStore (or, on this registered handler's own cold/pool

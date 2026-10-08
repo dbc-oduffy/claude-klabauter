@@ -425,6 +425,7 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "check-machine-local-regeneratability",
     "sweep-terminal-handoffs",
     "sweep-terminal-sizings",
+    "scip-rebuild-at-ceremony",
     "review-brightline-gate",
     "freeze-review-diff",
     "classify-dispatch-shape",
@@ -1846,6 +1847,11 @@ def build_directives(
     # last-in-list reasoning. See
     # `build_terminal_sizing_sweep_directive`'s own docstring.
     directives.append(directives_session_hygiene.build_terminal_sizing_sweep_directive())
+
+    # -- The close-ceremony reindex --
+    # After both drains: each commits its own moves. See
+    # `build_ceremony_reindex_directive`'s own docstring.
+    directives.append(directives_session_hygiene.build_ceremony_reindex_directive(repo_root))
 
     return directives
 
