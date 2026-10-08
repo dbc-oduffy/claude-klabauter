@@ -3383,3 +3383,23 @@ def test_named_persona_commit_must_name_its_paths(monkeypatch, tmp_path, cmd, al
     monkeypatch.setattr(guard, "resolve_git_root", lambda _cwd: str(tmp_path))
     result = guard.check(_payload(cmd, agent_type="coordinator:staff-eng"))
     assert (result is None) is allowed, result
+
+
+def test_plan_chain_run_subagent_denies(monkeypatch):
+    _denies(monkeypatch, "plan-chain-run --manifest x.json")
+
+
+def test_plan_chain_run_cmd_spelling_subagent_denies(monkeypatch):
+    _denies(monkeypatch, "plan-chain-run.cmd --manifest x.json")
+
+
+def test_plan_chain_run_windows_backslash_argv0_subagent_denies(monkeypatch):
+    _denies(
+        monkeypatch,
+        r"C:\Users\x\.coordinator-claude-settings\bin\plan-chain-run --manifest x.json",
+    )
+
+
+def test_plan_chain_run_main_loop_allows():
+    payload = _payload("plan-chain-run --manifest x.json", agent_id=None)
+    assert guard.check(payload) is None

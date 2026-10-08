@@ -1,0 +1,4 @@
+emit-wave-fire: single-plan fire for hnd-1 (mode=single).
+  uncommitted pair for the EM: state/handoffs/b1.md  state/sizings/s1.yaml
+
+  Workflow({ scriptPath: "<ROOT>/trail/fire-0-1.mjs" })   # no args — they are bound

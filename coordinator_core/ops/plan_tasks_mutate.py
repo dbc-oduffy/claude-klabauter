@@ -318,9 +318,12 @@ Negative-spec:
 from __future__ import annotations
 
 import asyncio
+import copy
+import fnmatch
 import glob
 import importlib.util
 import logging
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -1323,6 +1326,104 @@ def _reposition_rows_for_d5(rows: list) -> list:
     return repositioned
 
 
+_HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+
+
+def _writes_match(changed: str, write: str) -> bool:
+    write = write.strip().replace("\\", "/").rstrip("/")
+    if not write:
+        return False
+    if any(ch in write for ch in "*?["):
+        return fnmatch.fnmatchcase(changed, write)
+    return changed == write or changed.startswith(write + "/")
+
+
+def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> Optional[str]:
+    """Refusal text when a `coded` resolution cites a sha touching none of the
+    row's declared `writes`, else None. Rows with no `writes` are exempt.
+    ONE `git show` spawn covers every distinct sha in the batch; git failing
+    (unknown sha, no repo) skips the check rather than blocking the resolve."""
+    checks = []
+    for r in resolutions:
+        sha = str(r.get("disposition_ref") or "").strip()
+        writes = rows_by_id[r["id"]].get("writes")
+        if r["disposition"] != "coded" or not _HEX_SHA_RE.match(sha):
+            continue
+        if not isinstance(writes, list) or not any(isinstance(w, str) and w.strip() for w in writes):
+            continue
+        checks.append((r["id"], sha.lower(), [w for w in writes if isinstance(w, str)]))
+    if not checks:
+        return None
+    from coordinator_core.git.run import run_git
+
+    distinct = sorted({sha for _, sha, _ in checks})
+    shown = run_git(
+        ["show", "--no-renames", "-m", "--first-parent", "--name-only", "--format=\x02%H", *distinct, "--"],
+        cwd=str(worktree),
+    )
+    if shown.timed_out or shown.returncode != 0:
+        return None
+    files_by_full: dict = {}
+    for block in shown.stdout.split("\x02")[1:]:
+        full, _, names = block.partition("\n")
+        files_by_full.setdefault(full.strip().lower(), set()).update(
+            n.strip() for n in names.splitlines() if n.strip()
+        )
+    for task_id, sha, writes in checks:
+        changed: set = set()
+        for full, names in files_by_full.items():
+            if full.startswith(sha):
+                changed |= names
+        if not any(_writes_match(c, w) for c in changed for w in writes):
+            first = next(w for w in writes if w.strip())
+            return f"resolve: row {task_id}: {sha[:12]} touches none of its writes ({first}...)"
+    return None
+
+
+def _uses_crlf(path: Path) -> bool:
+    """True when every line break in the file is CRLF (a mixed file is not)."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False
+    crlf = raw.count(b"\r\n")
+    return crlf > 0 and crlf == raw.count(b"\n")
+
+
+def _split_row_chunks(body: str) -> tuple:
+    """`(preamble, [chunk, ...])`: the fenced body cut at each top-level `- ` row start."""
+    lines = body.splitlines(keepends=True)
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("- ") or ln.rstrip("\r\n") == "-"]
+    if not starts:
+        return body, []
+    preamble = "".join(lines[: starts[0]])
+    bounds = starts + [len(lines)]
+    return preamble, ["".join(lines[a:b]) for a, b in zip(bounds, bounds[1:])]
+
+
+def _patch_body(body: str, original_rows: list, rows: list) -> str:
+    """The spine body with only the rows that changed re-serialized; every
+    untouched row keeps its on-disk bytes. Falls back to a whole-body dump
+    when the body's chunks do not map one-to-one onto the parsed rows."""
+    preamble, chunks = _split_row_chunks(body)
+    ids = [r.get("id") if isinstance(r, dict) else None for r in original_rows]
+    if (
+        len(chunks) != len(original_rows)
+        or None in ids
+        or len(set(ids)) != len(ids)
+        or any(yaml.safe_load(chunk) != [orig] for chunk, orig in zip(chunks, original_rows))
+    ):
+        return _dump_rows(rows)
+    by_id = dict(zip(ids, zip(original_rows, chunks)))
+    out = [preamble]
+    for row in rows:
+        kept = by_id.get(row.get("id")) if isinstance(row, dict) else None
+        text = kept[1] if kept and kept[0] == row else _dump_rows([row])
+        out.append(text if text.endswith("\n") else text + "\n")
+    patched = "".join(out)
+    return patched[:-1] if not body.endswith("\n") and patched.endswith("\n") else patched
+
+
 def _resolve(
     plan_path: str,
     resolutions: list,
@@ -1430,12 +1531,17 @@ def _resolve(
         # stood before this call, which is the half of the old contract
         # that was unsatisfiable.
         rows = _parse_rows_or_abort(result.body, "resolve")
+        original_rows = copy.deepcopy(rows)
 
         rows_by_id = {row.get("id"): row for row in rows if isinstance(row, dict)}
 
         for r in resolutions:
             if rows_by_id.get(r["id"]) is None:
                 raise MutateAbort(f"resolve: task id not found: {r['id']!r}")
+
+        sha_refusal = _coded_sha_refusal(resolutions, rows_by_id, worktree)
+        if sha_refusal is not None:
+            raise MutateAbort(sha_refusal)
 
         for r in resolutions:
             deferred = rows_by_id[r["id"]].get("deferred_until")
@@ -1561,7 +1667,7 @@ def _resolve(
         # spine as ACTUALLY mutated+repositioned above, before any
         # exists to prevent). Retained as a DEFENSIVE invariant assertion,
         mutated_start, mutated_end = result.span
-        mutated_text = old_text[:mutated_start] + _dump_rows(rows) + old_text[mutated_end:]
+        mutated_text = old_text[:mutated_start] + _patch_body(result.body, original_rows, rows) + old_text[mutated_end:]
         mutated_ordering_error = check_plan_tasks_ordering(mutated_text)
         if mutated_ordering_error is not None:
             raise MutateAbort(
@@ -1601,7 +1707,7 @@ def _resolve(
             raise MutateAbort(f"resolve: {exc.args[0] if exc.args else exc}") from exc
         _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
 
-        body_yaml = _dump_rows(rows)
+        body_yaml = _patch_body(result.body, original_rows, rows)
         start, end = result.span
         new_text = old_text[:start] + body_yaml + old_text[end:]
 
@@ -1627,8 +1733,14 @@ def _resolve(
             _state["message"] = f"resolve: resolved {len(resolved_ids)} task(s): {resolved_ids}"
         return new_text
 
+    crlf = _uses_crlf(path)
+
+    def rewrite(old: str) -> str:
+        new = _carry_prep_certificate(old, mutate(old))
+        return new.replace("\n", "\r\n") if crlf and new != old else new
+
     try:
-        locked_rmw(path, lambda old: _carry_prep_certificate(old, mutate(old)), repo_root=repo_root)
+        locked_rmw(path, rewrite, repo_root=repo_root)
     except FileNotFoundError:
         return _err(f"resolve: plan not found: {plan_path}")
     except LockTimeout as exc:

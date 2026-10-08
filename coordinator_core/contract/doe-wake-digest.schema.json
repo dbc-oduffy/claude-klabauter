@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator-content-repo/coordinator/schemas/doe-wake-digest.schema.json",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.1.0 -> 1.2.0 (nested-field-additive) widens `next_action.op`/`params` from null to string-or-null / object-or-null: a ready `plan` digest names the chain's logical op `plan_chain.run` and its params {plan_path, sizing_object, deliverable_id}; `kind: none` keeps both null. Every document valid under 1.1.0 still validates. PRIOR: 1.0.0 -> 1.1.0 (nested-field-additive) declares the optional `chain` block (stages_run, halted_at, halt_reason, commit) the sizing-to-commit chain writes into its final digest. Every document valid under 1.0.0 still validates.",
+  "title": "DoE wake digest",
+  "description": "The code-assembled digest for the two turns DoE assembles itself: `plan` (planDigest, turn 2) and `close` (workstream-complete's Final Summary, turn 4). Named apart from the engine repo's execute digest so two different contracts never share a filename; the execute digest is validated against the engine repo coordinator_core/contract/wake-digest.schema.json at HEAD 9403b9a638f4a985a374235f15381e4d7e5975c3, never restated here. Field names and caps follow that file's Design D1 table wherever they overlap (`criterion`, `decision_required`, `em_may_think_differently`, `deviations`'s per-item shape), per docs/plans/2026-09-27-four-turn-em-loop.md § Pinned interfaces. Two named differences from the execute digest: `em_may_think_differently`/`overflow` are top-level here, not nested under `review`; and `deviations` items are `{line, anchor}`, not `{chunk, kind, anchor}`, because a plan or close digest has no executed chunk to name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "kind", "plan", "outcome", "criterion",
+    "decision_required", "em_may_think_differently", "overflow",
+    "deviations", "counts", "assembled_by", "next_action"
+  ],
+  "properties": {
+    "schema": { "const": "doe-wake-digest" },
+    "version": { "const": 1 },
+    "kind": { "type": "string", "enum": ["plan", "close"] },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "deliverable_id"],
+      "properties": {
+        "path": { "type": ["string", "null"], "maxLength": 300 },
+        "deliverable_id": { "type": ["string", "null"], "maxLength": 200 }
+      }
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["ready", "pulled", "replan", "surfaced", "complete", "indeterminate"]
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observation", "sidecar"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["met", "not_met", "indeterminate", "not_run", "unstructured"]
+        },
+        "observation": { "type": ["string", "null"], "maxLength": 300 },
+        "sidecar": { "type": ["string", "null"], "maxLength": 300 }
+      }
+    },
+    "decision_required": { "type": ["string", "null"], "maxLength": 300 },
+    "em_may_think_differently": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/line_anchor" }
+    },
+    "overflow": { "type": "integer", "minimum": 0 },
+    "deviations": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/line_anchor" }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewers", "findings_applied", "escalations", "preflight_findings"],
+      "properties": {
+        "reviewers": { "type": "integer", "minimum": 0 },
+        "findings_applied": { "type": "integer", "minimum": 0 },
+        "escalations": { "type": "integer", "minimum": 0 },
+        "preflight_findings": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "assembled_by": { "type": "string", "enum": ["code", "fallback"] },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stages_run", "halted_at", "halt_reason", "commit"],
+      "description": "Optional: present only when the engine drove a sizing-to-commit chain. A digest without it is an in-session run. A non-null `halted_at` means the chain stopped before committing, so `commit` is null.",
+      "properties": {
+        "stages_run": {
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/chain_stage" }
+        },
+        "halted_at": {
+          "oneOf": [{ "$ref": "#/$defs/chain_stage" }, { "type": "null" }]
+        },
+        "halt_reason": { "type": ["string", "null"], "maxLength": 300 },
+        "commit": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["sha", "receipt_path"],
+          "properties": {
+            "sha": { "type": "string", "maxLength": 64 },
+            "receipt_path": { "type": "string", "maxLength": 300 }
+          }
+        }
+      },
+      "if": { "properties": { "halted_at": { "type": "string" } }, "required": ["halted_at"] },
+      "then": { "properties": { "commit": { "type": "null" } } }
+    },
+    "next_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "op", "params"],
+      "description": "`kind: none` carries null `op`/`params`. `kind: execute` (a ready `plan` digest) names the chain's logical op `plan_chain.run`, realized as the engine CLI `plan-chain-run`, with its params.",
+      "properties": {
+        "kind": { "type": "string", "enum": ["execute", "none"] },
+        "op": { "type": ["string", "null"], "maxLength": 100 },
+        "params": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["plan_path", "sizing_object", "deliverable_id"],
+          "properties": {
+            "plan_path": { "type": ["string", "null"], "maxLength": 300 },
+            "sizing_object": { "type": ["string", "null"], "maxLength": 300 },
+            "deliverable_id": { "type": ["string", "null"], "maxLength": 200 }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "execute" } } },
+          "then": { "properties": { "op": { "type": "string" }, "params": { "type": "object" } } },
+          "else": { "properties": { "op": { "type": "null" }, "params": { "type": "null" } } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "plan" } } },
+      "then": {
+        "properties": {
+          "outcome": { "enum": ["ready", "pulled", "replan", "surfaced"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "close" } } },
+      "then": {
+        "properties": {
+          "outcome": { "enum": ["complete", "indeterminate"] },
+          "next_action": { "properties": { "kind": { "const": "none" } } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "chain_stage": {
+      "type": "string",
+      "enum": ["plan", "ready-gate", "execute", "review", "terminal-commit"]
+    },
+    "line_anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "anchor"],
+      "properties": {
+        "line": { "type": "string", "maxLength": 200 },
+        "anchor": { "type": "string", "maxLength": 300 }
+      }
+    }
+  }
+}

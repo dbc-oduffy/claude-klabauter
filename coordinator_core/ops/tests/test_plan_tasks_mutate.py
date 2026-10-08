@@ -4053,3 +4053,137 @@ def test_add_task_makes_an_approved_plan_read_changed(tmp_path):
     state, message = check_approved_body(plan.read_text(encoding="utf-8"))
     assert state == APPROVED_BODY_CHANGED
     assert "plan review" in message
+
+
+# ---------------------------------------------------------------------------
+# resolve: minimal in-place edit, EOL preservation, --coded sha vs writes
+# ---------------------------------------------------------------------------
+
+_THREE_ROW_PLAN = """\
+---
+title: "Test Plan"
+status: draft
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First chunk
+  change_kind: script-edit
+  surface: some/path.py
+  queue_scope: project
+  deferred: false
+  writes:
+  - some/path.py
+  body: |
+    Do the first thing.
+
+    Second paragraph.
+- id: C2
+  title: Second chunk
+  change_kind: script-edit
+  surface: some/other.py
+  queue_scope: project
+  deferred: false
+  writes: []
+  body: |
+    Do the second thing.
+- id: C3
+  title: "Third: chunk"
+  change_kind: script-edit
+  surface: some/third.py
+  queue_scope: project
+  deferred: false
+  body: Do the third thing.
+```
+
+## Trailer
+"""
+
+
+def _resolve_coded(repo: Path, plan: Path, task_id: str, ref: str) -> dict:
+    return _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": task_id,
+            "disposition": "coded",
+            "disposition_ref": ref,
+            "disposition_detail": f"shipped in {ref}",
+        },
+        repo_root=repo / ".git",
+    ))
+
+
+def _changed_lines(before: str, after: str) -> list:
+    import difflib
+
+    return [
+        ln for ln in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
+        if ln[:1] in "+-" and not ln.startswith(("+++", "---"))
+    ]
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_resolve_one_row_edits_only_that_rows_lines(tmp_path, eol):
+    repo = _make_git_repo(tmp_path)
+    plan = repo / "docs" / "plans" / "minimal-edit.md"
+    plan.write_bytes(_THREE_ROW_PLAN.replace("\n", eol).encode("utf-8"))
+    before = plan.read_bytes()
+
+    result = _resolve_coded(repo, plan, "C3", "abc1234")
+
+    assert result["exit_code"] == 0, result
+    after = plan.read_bytes()
+    assert after.count(b"\r\n") == (after.count(b"\n") if eol == "\r\n" else 0)
+    changed = _changed_lines(
+        before.decode("utf-8").replace("\r\n", "\n"), after.decode("utf-8").replace("\r\n", "\n")
+    )
+    assert changed, "the resolve wrote nothing"
+    assert changed == [
+        "-  title: \"Third: chunk\"",
+        "+  title: 'Third: chunk'",
+        "+  disposition: coded",
+        "+  disposition_ref: abc1234",
+        "+  disposition_detail: shipped in abc1234",
+    ], changed
+    untouched = before.decode("utf-8").replace("\r\n", "\n").split("- id: C3")[0]
+    assert after.decode("utf-8").replace("\r\n", "\n").startswith(untouched)
+
+
+def test_resolve_coded_sha_touching_none_of_the_writes_is_refused(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "sha-gate.md", _THREE_ROW_PLAN)
+    (repo / "unrelated.txt").write_text("x", encoding="utf-8")
+    for args in (["add", "unrelated.txt"], ["commit", "-m", "unrelated"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    before = plan.read_text(encoding="utf-8")
+
+    result = _resolve_coded(repo, plan, "C1", head)
+
+    assert result["exit_code"] == 1
+    assert f"row C1: {head[:12]} touches none of its writes (some/path.py...)" in result["error"]
+    assert plan.read_text(encoding="utf-8") == before
+
+
+def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "sha-gate-ok.md", _THREE_ROW_PLAN)
+    (repo / "some").mkdir()
+    (repo / "some" / "path.py").write_text("x", encoding="utf-8")
+    for args in (["add", "some/path.py"], ["commit", "-m", "touch writes"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+    assert _resolve_coded(repo, plan, "C1", head[:7])["exit_code"] == 0
+    assert _resolve_coded(repo, plan, "C2", "deadbee")["exit_code"] == 0

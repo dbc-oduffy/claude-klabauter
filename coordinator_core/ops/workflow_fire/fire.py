@@ -475,18 +475,24 @@ def build_fire_command(
     model: str = DEFAULT_MODEL,
     max_turns: int = DEFAULT_MAX_TURNS,
     claude_bin: str = "claude",
+    *,
+    prompt: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> list:
     """Build the argv for the detached firing child.
+
+    ``prompt`` replaces the default fire prompt; ``session_id`` appends
+    ``--session-id``. Both default to the unchanged argv.
 
     ``-p`` is never omitted -- pinned by test, since that flag is the
     entire reason the interactive direct-child invariant
     (docs/reference/interactive-launch-chain.md) stays out of scope: a
     ``-p`` child never attaches a console.
     """
-    return [
+    argv = [
         claude_bin,
         "-p",
-        _PROMPT_TEMPLATE.format(script_path=script_path),
+        prompt if prompt is not None else _PROMPT_TEMPLATE.format(script_path=script_path),
         "--allowedTools",
         *_SESSION_ALLOWED_TOOLS,
         "--plugin-dir",
@@ -498,6 +504,9 @@ def build_fire_command(
         "--output-format",
         "json",
     ]
+    if session_id is not None:
+        argv += ["--session-id", session_id]
+    return argv
 
 
 def _publish_lag_message(cwd: Optional[str] = None) -> Optional[str]:
@@ -989,10 +998,18 @@ def fire_workflow(
     model: str = DEFAULT_MODEL,
     max_turns: Optional[int] = None,
     concurrency_cap: int = DEFAULT_CONCURRENCY_CAP,
+    *,
+    prompt: Optional[str] = None,
+    session_id: Optional[str] = None,
+    wait: bool = False,
 ) -> dict:
     """Fire one detached ``claude -p`` child for ``script_path``.
 
     Returns the fire registry record (the run handle) -- never a bare pid.
+
+    ``wait=True`` blocks on the child's ``Popen.wait()`` after the liveness
+    confirmation and returns the record with ``state: exited`` and the real
+    ``exit_code``, outcome-classified; it never polls pid liveness.
 
     ``cwd`` DOES NOT SET THE CHILD'S WORKING DIRECTORY. It selects which
     repo's bookkeeping this fire is recorded against, and nothing else:
@@ -1099,7 +1116,8 @@ def fire_workflow(
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     command = build_fire_command(
-        str(script), plugin_dir, model=model, max_turns=max_turns, claude_bin=claude_bin
+        str(script), plugin_dir, model=model, max_turns=max_turns, claude_bin=claude_bin,
+        prompt=prompt, session_id=session_id,
     )
 
     popen_kwargs: dict = {
@@ -1163,6 +1181,11 @@ def fire_workflow(
         "log_size_bytes": _log_size_bytes(str(log_path)),
         "publish_lag_message": publish_lag_message,
     }
+    if wait:
+        record["exit_code"] = process.wait()
+        record["state"] = "exited"
+        record["status_checked_at"] = time.time()
+        record["log_size_bytes"] = _log_size_bytes(str(log_path))
     return _write_record(record_path, record)
 
 

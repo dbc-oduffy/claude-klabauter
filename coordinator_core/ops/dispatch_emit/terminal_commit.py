@@ -982,6 +982,50 @@ def _subject(contributing: list, fallback: str) -> str:
     return f"{ids}: {titles}" if titles else ids
 
 
+def _regenerate_landing_allowlist(worktree_root: Path, paths: list) -> Optional[str]:
+    """Repo-relative ``setup/publish-targets.portable`` when the commit's paths
+    add a published-tree top-level name the landing allowlist does not
+    classify and this call regenerated it (written to the worktree, to ride the
+    commit); else ``None``.
+
+    The pre-filter is `commit_paths`' own: a commit touching neither
+    generator-owned dir, or a tree without the declarations yaml, pays no read
+    and no spawn. A generator failure leaves the worktree untouched, so
+    ``commit_paths`` refuses with its own message.
+    """
+    from coordinator_core.git import published_tree_classification as ptc
+
+    touched = ptc.touched_published_names(paths)
+    if not touched or not (worktree_root / ptc.DECLARATIONS_PATH).is_file():
+        return None
+
+    def read_worktree(rel: str) -> Optional[str]:
+        try:
+            return (worktree_root / rel).read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    if not ptc.unclassified(touched, read_worktree):
+        return None
+
+    import importlib.util
+
+    generator = worktree_root / "coordinator" / "bin" / "publish-allowlist-generate.py"
+    try:
+        spec = importlib.util.spec_from_file_location("publish_allowlist_generate", generator)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        pending = tuple(p for p in paths if (worktree_root / p).is_file())
+        regenerated = module.regenerate_portable(worktree_root, pending)
+        portable = worktree_root / ptc.PORTABLE_PATH
+        if regenerated == portable.read_text(encoding="utf-8"):
+            return None
+        portable.write_text(regenerated, encoding="utf-8", newline="\n")
+    except Exception:  # noqa: BLE001 -- commit_paths refuses with its own message
+        return None
+    return ptc.PORTABLE_PATH
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -1502,6 +1546,10 @@ def _terminal_commit(
 
     def commit_v2(params: dict, root: Path):
         return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
+
+    allowlist_path = _regenerate_landing_allowlist(worktree_root, all_paths)
+    if allowlist_path is not None and allowlist_path not in all_paths:
+        all_paths.append(allowlist_path)
 
     commit_params: dict = {"paths": all_paths, "message": message}
     if bookkeeping_record_path is not None and bookkeeping_record_path in all_paths:

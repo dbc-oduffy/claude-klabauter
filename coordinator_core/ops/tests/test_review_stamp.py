@@ -1006,3 +1006,60 @@ def test_mint_refuses_operator_attestation_whose_ran_against_is_not_a_commit(tmp
     _operator_plan(repo, ran_against="0123456789abcdef0123456789abcdef01234567")
     with pytest.raises(m.MintRefusal, match="ran_against 0123456789abcdef0123456789abcdef01234567 does not resolve"):
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
+
+
+def _add_evidence_only_trailer(repo: Path, plan_id: str = "pln-example-abc123") -> str:
+    share = repo / ".coordinator-local" / "subagent-share" / "sess2"
+    _write_sidecar(
+        share / "2026-09-28-prep.md",
+        {"run_base_sha": "deadbeef", "product_files": [], "foreign_claims": [], "slices": [{"id": "B"}]},
+    )
+    _write_sidecar(
+        share / "2026-09-28-integration.md",
+        {
+            "plan_id": plan_id,
+            "prep_sidecar": ".coordinator-local/subagent-share/sess2/2026-09-28-prep.md",
+            "unresolved": [],
+            "confinement_violations": [],
+            "fixes_applied": 0,
+            "em_may_think_differently": [],
+            "brief_conformance": {"items": 1, "met": 1, "unmet": 0},
+        },
+    )
+    return _commit(repo, "evidence only\n\nInline-Review: applies 2026-09-28-integration -- execute-review: 1 slices")
+
+
+def test_resolve_skips_a_newer_zero_file_trailer_for_the_one_that_reviewed_files(tmp_path):
+    repo = _setup_repo(tmp_path)
+    terminal_sha, _ = _mint_success_fixture(repo)
+    _add_evidence_only_trailer(repo)
+
+    sha, sidecar, _ = m._resolve_terminal_commit(repo, "pln-example-abc123")
+
+    assert sha == terminal_sha
+    assert sidecar.name == "2026-09-27-integration.md"
+
+
+def test_resolve_still_returns_a_lone_zero_file_trailer_so_mint_refuses_honestly(tmp_path):
+    repo = _setup_repo(tmp_path)
+    evidence_sha = _add_evidence_only_trailer(repo)
+
+    sha, sidecar, _ = m._resolve_terminal_commit(repo, "pln-example-abc123")
+
+    assert sha == evidence_sha
+    assert sidecar.name == "2026-09-28-integration.md"
+
+
+def test_superseding_refusal_names_the_real_record_sharing_the_stem(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    stem = "2026-10-01-super-rec"
+    share_copy = repo / ".coordinator-local" / "subagent-share" / "sess1" / f"{stem}.md"
+    _write_sidecar(share_copy, {"kind": "run-report"})
+    real = repo / "state" / "superseding-reviews" / "2026-10" / f"{stem}.md"
+    _write_sidecar(real, {"kind": "superseding-review"})
+
+    with pytest.raises(m.MintRefusal, match="not a superseding-review record") as exc:
+        m.mint(plan_path, repo, build_test_path=None, superseding_record=share_copy)
+
+    assert f"state/superseding-reviews/2026-10/{stem}.md" in str(exc.value)

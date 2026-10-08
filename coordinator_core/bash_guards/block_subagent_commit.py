@@ -1376,8 +1376,14 @@ _SCOPED_GIT_COMMIT_BINARY = "scoped-git-commit"
 #: exactly the failure class ``_COMMITTING_OP_NAMES`` already exists to
 #: prevent for the invoke-matcher/prefilter pair (see the module docstring's
 #: part-6 entry).
+_PLAN_CHAIN_RUN_BINARY = "plan-chain-run"
+
 _COMMIT_HELPER_BINARY_NAMES = frozenset(
-    {_COORDINATOR_SAFE_COMMIT_BINARY, _SCOPED_GIT_COMMIT_BINARY}
+    {
+        _COORDINATOR_SAFE_COMMIT_BINARY,
+        _SCOPED_GIT_COMMIT_BINARY,
+        _PLAN_CHAIN_RUN_BINARY,
+    }
 )
 
 #: The binary identities this module's argv0-head normalization passes
@@ -1529,7 +1535,7 @@ def _normalize_windows_git_argv0(cmd: str) -> str:
 _WINDOWS_ARGV0_HEAD_PATH_RE = re.compile(
     r"(?P<sep>\A|[;&|\n])(?P<ws>\s*)(?P<q>[\"']?)"
     r"(?P<path>(?:[A-Za-z]:)?[\\/]{1,2}(?:[^\\/\r\n]+?[\\/])*"
-    r"(?:git(?:\.exe)?|coordinator-safe-commit(?:\.cmd)?|scoped-git-commit(?:\.cmd)?))"
+    r"(?:git(?:\.exe)?|coordinator-safe-commit(?:\.cmd)?|scoped-git-commit(?:\.cmd)?|plan-chain-run(?:\.cmd)?))"
     r"(?P=q)(?=[\s;&|]|\Z)",
     re.IGNORECASE,
 )
@@ -5327,6 +5333,7 @@ def _prefilter_mentions_commit(cmd: str) -> bool:
     return (
         "commit" in cmd
         or any(op in cmd for op in _COMMITTING_OP_NAMES)
+        or _PLAN_CHAIN_RUN_BINARY in cmd
         or _may_carry_python_c_payload(cmd)
     )
 

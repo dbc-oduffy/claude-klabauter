@@ -251,6 +251,22 @@ def _receipt_session_id(plan_path: Path) -> Optional[str]:
     return session_id if isinstance(session_id, str) and session_id else None
 
 
+def _reviewed_file_count(repo_root: Path, integration_data: Dict[str, Any]) -> Optional[int]:
+    """Product files the run's prep recorded; `None` when no prep record is readable."""
+    prep = integration_data.get("prep")
+    if not isinstance(prep, dict):
+        prep_rel = integration_data.get("prep_sidecar")
+        prep = _load_sidecar(repo_root / prep_rel) if prep_rel else None
+    if not isinstance(prep, dict):
+        return None
+    return _count(prep.get("product_files"))
+
+
+def _delivery_verdict(integration_data: Dict[str, Any]) -> Optional[str]:
+    delivery = integration_data.get("delivery")
+    return delivery.get("verdict") if isinstance(delivery, dict) else None
+
+
 def _resolve_terminal_commit(
     repo_root: Path, plan_id: str, plan_path: Optional[Path] = None, *, repair: bool = False
 ):
@@ -291,6 +307,7 @@ def _resolve_terminal_commit(
         repair and receipt_session_id and (share_root / receipt_session_id).is_dir()
     )
     repair_candidate_sha: Optional[str] = None
+    empty_match = None
 
     for record in out.split(_HEADER_SENTINEL)[1:]:
         header, _, body = record.partition("\n")
@@ -323,12 +340,24 @@ def _resolve_terminal_commit(
             if data is None:
                 continue
             sidecar_plan_id = data.get("plan_id")
-            if str(sidecar_plan_id or "") == plan_id:
-                return sha, sidecar_path, data
-            if not sidecar_plan_id and receipt_session_id:
+            matched = str(sidecar_plan_id or "") == plan_id
+            if not matched and not sidecar_plan_id and receipt_session_id:
                 sidecar_session_id = data.get("lead_session_id") or data.get("dispatched_by")
-                if sidecar_session_id and sidecar_session_id == receipt_session_id:
-                    return sha, sidecar_path, data
+                matched = bool(sidecar_session_id) and sidecar_session_id == receipt_session_id
+            if not matched:
+                continue
+            if _reviewed_file_count(repo_root, data) == 0:
+                # An evidence-only run reviews no product hunk; an older trailer may cover the real diff.
+                if empty_match is None:
+                    empty_match = (sha, sidecar_path, data)
+                continue
+            # ...unless that older trailer FAILed delivery: then the newer zero-file run is the
+            # verify-only re-run that supersedes it.
+            if empty_match is not None and _delivery_verdict(data) == "FAIL":
+                return empty_match
+            return sha, sidecar_path, data
+    if empty_match is not None:
+        return empty_match
     if repair and repair_candidate_sha is not None:
         return repair_candidate_sha, None, {}
     raise MintRefusal(
@@ -505,10 +534,13 @@ def mint(
         if record is None:
             raise MintRefusal(f"review-stamp: could not read superseding record {record_path}")
         if record.get("kind") != "superseding-review":
-            raise MintRefusal(
-                f"review-stamp: {record_path} is not a superseding-review record; "
-                "write one with op review_mint.record_superseding_review"
+            real = sorted((repo_root / "state" / "superseding-reviews").glob(f"*/{record_path.stem}.md"))
+            hint = (
+                f"the record with this stem is {real[-1].relative_to(repo_root).as_posix()}"
+                if real
+                else "write one with op review_mint.record_superseding_review"
             )
+            raise MintRefusal(f"review-stamp: {record_path} is not a superseding-review record; {hint}")
         if str(record.get("plan_id") or "") != plan_id:
             raise MintRefusal(
                 f"review-stamp: superseding record plan_id {record.get('plan_id')!r} does not match {plan_id!r}"

@@ -1132,6 +1132,58 @@ def _stamp_fire_hold(baton_path: Path, repo_root: Path, fire_script: Path) -> No
         print(f"  WARNING: could not stamp the fire hold on {baton_path.name}: {exc}", file=sys.stderr)
 
 
+def _emit_chain_from_sizing(
+    args, repo_root: Path, trail_dir: Path, script_source: Path, wave_args: dict,
+    wave_number: int, baton: dict, baton_path: Path, sizing_rel: str,
+    interaction_mode: str, route: object, tshirt: object,
+) -> int:
+    """`--from-sizing --chain`: write the chain manifest and print the one background driver call."""
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from coordinator_core.ops.plan_chain import contract
+
+    refusals = []
+    if interaction_mode not in ("pm", "ceo"):
+        refusals.append(f"`interaction_mode` is {interaction_mode!r}, not pm or ceo")
+    if route != "plan":
+        refusals.append(f"`route` is {route!r}, not 'plan'")
+    if tshirt not in ("M", "L"):
+        refusals.append(f"`estimate.tshirt` is {tshirt!r}, not M or L")
+    if refusals:
+        return _refuse_from_sizing(f"{sizing_rel} cannot be chained: " + "; ".join(refusals))
+
+    def _rel(p: Path) -> str:
+        try:
+            return p.resolve().relative_to(repo_root.resolve()).as_posix()
+        except ValueError:
+            return str(p)
+
+    manifest_file = contract.manifest_path(trail_dir, wave_number)
+    manifest = contract.ChainManifest(
+        sizing_object=sizing_rel,
+        baton=baton["path"],
+        deliverable_id=args.deliverable_id,
+        interaction_mode=interaction_mode,
+        repo_root=str(repo_root),
+        trail_dir=_rel(trail_dir),
+        wave_args=wave_args,
+        script_source=_rel(script_source),
+    )
+    manifest_file.write_text(manifest.to_json(), encoding="utf-8", newline="\n")
+    _stamp_fire_hold(baton_path, repo_root, manifest_file)
+    if args.json:
+        print(json.dumps({"waveIndex": wave_number, "chain": {
+            "manifest": str(manifest_file), "batons": [baton["id"]],
+        }}, indent=2))
+        return EXIT_OK
+    print(f"emit-wave-fire: chain fire for {baton['id']} (mode=single, chain).")
+    print(f"  uncommitted pair for the EM: {baton['path']}  {sizing_rel}")
+    print(
+        f'\n  Bash(run_in_background: true): {contract.CHAIN_BIN} --manifest "{manifest_file}"'
+        "   # its exit is your wake"
+    )
+    return EXIT_OK
+
+
 def _emit_single_from_sizing(
     args,
     repo_root: Path,
@@ -1246,6 +1298,12 @@ def _emit_single_from_sizing(
     if arming_check_cli:
         wave_args["armingCheckCli"] = arming_check_cli
 
+    if args.chain:
+        return _emit_chain_from_sizing(
+            args, repo_root, trail_dir, script_source, wave_args, wave_number,
+            baton, baton_path, sizing_rel, interaction_mode, route, tshirt,
+        )
+
     try:
         text = _bind(script_source, wave_args, args.live_engine_tree)
     except ValueError as exc:
@@ -1285,6 +1343,11 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--baton",
         help="with --from-sizing: repo-relative path of an existing baton to fire instead of minting one",
+    )
+    ap.add_argument(
+        "--chain",
+        action="store_true",
+        help="with --from-sizing: write a chain manifest and print one background plan-chain-run call",
     )
     ap.add_argument(
         "--deliverable-id",
@@ -1399,6 +1462,10 @@ def main(argv=None) -> int:
             "emit-wave-fire: REFUSED — --baton and --deliverable-id apply only with --from-sizing.",
             file=sys.stderr,
         )
+        return EXIT_REFUSED
+
+    if args.chain and not args.from_sizing:
+        print("emit-wave-fire: REFUSED — --chain applies only with --from-sizing.", file=sys.stderr)
         return EXIT_REFUSED
 
     repo_root = Path(args.repo_root).resolve()
