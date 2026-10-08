@@ -1298,7 +1298,10 @@ def _emit_single_from_sizing(
     if arming_check_cli:
         wave_args["armingCheckCli"] = arming_check_cli
 
-    if args.chain:
+    chainable = (
+        interaction_mode in ("pm", "ceo") and route == "plan" and tshirt in ("M", "L")
+    )
+    if args.chain or (chainable and not args.plan_only):
         return _emit_chain_from_sizing(
             args, repo_root, trail_dir, script_source, wave_args, wave_number,
             baton, baton_path, sizing_rel, interaction_mode, route, tshirt,
@@ -1347,7 +1350,14 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--chain",
         action="store_true",
-        help="with --from-sizing: write a chain manifest and print one background plan-chain-run call",
+        help="with --from-sizing: no-op alias kept for callers; a pm/ceo plan M/L sizing chains by "
+        "default. Explicit --chain still refuses a sizing that cannot chain",
+    )
+    ap.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="with --from-sizing: emit the plan-only fire instead of the default plan-chain-run "
+        "chain fire (pm/ceo plan M/L sizings chain by default; hands-on is always plan-only)",
     )
     ap.add_argument(
         "--deliverable-id",
@@ -1464,8 +1474,11 @@ def main(argv=None) -> int:
         )
         return EXIT_REFUSED
 
-    if args.chain and not args.from_sizing:
-        print("emit-wave-fire: REFUSED — --chain applies only with --from-sizing.", file=sys.stderr)
+    if args.chain and args.plan_only:
+        print("emit-wave-fire: REFUSED — --chain and --plan-only are mutually exclusive.", file=sys.stderr)
+        return EXIT_REFUSED
+    if (args.chain or args.plan_only) and not args.from_sizing:
+        print("emit-wave-fire: REFUSED — --chain and --plan-only apply only with --from-sizing.", file=sys.stderr)
         return EXIT_REFUSED
 
     repo_root = Path(args.repo_root).resolve()

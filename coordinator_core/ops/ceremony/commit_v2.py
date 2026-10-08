@@ -535,6 +535,17 @@ def _expand_untracked_dirs(worktree_root: Path, untracked: list) -> list:
     return [p for p in untracked if p not in dir_set] + expanded
 
 
+def _drop_missing(worktree_root: Path, paths: list) -> tuple:
+    absent = [p for p in paths if not (worktree_root / p).exists()]
+    if not absent:
+        return list(paths), []
+    partition = partition_declared_deletions(worktree_root, absent)
+    if partition is None:
+        return list(paths), []
+    gone = set(partition[1])
+    return [p for p in paths if p not in gone], [p for p in paths if p in gone]
+
+
 def _ignored_untracked(worktree_root: Path, paths: list) -> list:
     present = [p for p in paths if (worktree_root / p).is_file()]
     partition = partition_declared_deletions(worktree_root, present)
@@ -681,11 +692,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         untracked files it holds that this commit leaves behind.
         Or
         {"committed": False, "sha": None, "error": str} on any
-        structured refusal (an empty pathspec, a directory in `paths`, an
-        unresolvable CAS ref, a lost CAS race, or a path needing a checkin
-        conversion neither this module nor its `blob_fallback` can
-        reproduce).
+        structured refusal (an empty pathspec, a directory in `paths`, an unresolvable CAS ref, a lost
+        CAS race, or a checkin conversion neither this module nor its `blob_fallback` can reproduce).
 
+    skip_missing (bool, default false) drops `paths` absent from disk and HEAD, as `skipped_missing`.
     Gitignored-untracked `paths` refuse; `force_ignored` (list) commits them, `drop_ignored` (bool) drops them.
 
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
@@ -765,7 +775,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_prefer_staged = [p.rstrip("\r") for p in raw_prefer_staged]
     raw_declared_reverts = [p.rstrip("\r") for p in raw_declared_reverts]
 
+    raw_skip_missing = params.get("skip_missing", False)
+    if not isinstance(raw_skip_missing, bool):
+        return _error("params.skip_missing must be a boolean")
+
     worktree_root = main_worktree_root(repo_root)
+
+    skipped_missing: list = []
+    if raw_skip_missing and raw_paths:
+        raw_paths, skipped_missing = _drop_missing(worktree_root, raw_paths)
+        if not (raw_paths or raw_deleted or raw_untracked):
+            return _error(
+                "every declared path is absent from disk and HEAD, nothing to commit.",
+                nothing_to_commit=True,
+                skipped_missing=skipped_missing,
+            )
 
     raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
 
@@ -1040,4 +1064,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "guard_class_relay": guard_class_relay,
         "index_stale": index_stale_paths,
         "dropped_ignored": dropped_ignored,
+        "skipped_missing": skipped_missing,
     }

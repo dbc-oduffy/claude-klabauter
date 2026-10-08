@@ -1060,6 +1060,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § "New ops default to
     # MUTATING until a reviewer affirms COMPUTE_ONLY."
     "baton.supersede": OpClass.MUTATING,
+    # baton.awaiting_gate_recheck — COMPUTE_ONLY: reads state/handoffs/*.md and returns
+    # the parked-seed rows; at most one batched `git cat-file` spawn, no writes
+    # (ops/baton_awaiting_gate_recheck.py).
+    "baton.awaiting_gate_recheck": OpClass.COMPUTE_ONLY,
+    # baton.seed_split — MUTATING: DR-208-default. Mints one state/handoffs/*.md seed and
+    # narrows the original under locked_rmw (ops/baton_seed_split.py).
+    "baton.seed_split": OpClass.MUTATING,
+    # goal.record_go — MUTATING: DR-208-default. Appends a goal_go record to one
+    # state/goals/*.yaml under locked_rmw (ops/goal_record_go.py).
+    "goal.record_go": OpClass.MUTATING,
     # initiative.serve_set — COMPUTE_ONLY: reads state/initiatives/*.yaml under the
     # main worktree and returns the attachable-initiative set as a JSON payload. No
     # file writes, no git ops, no subprocess spawns. Handler: ops/initiatives_serve.py.
@@ -2043,6 +2053,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DIFFERING content is a refused collision, never last-write-wins — never rotated/deleted here.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "review.freeze_diff": OpClass.MUTATING,
+    # review.partition_slices — MUTATING: freezes each slice through review_freeze_diff.freeze_diff
+    # (worktree mode), writing state/review-trail/diffs/<slice_id>.{diff,head.sha}. DR-208 answers
+    # are those of review.freeze_diff above; it commits nothing and writes no other file.
+    "review.partition_slices": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # Backfill: 3 ops registered by concurrent sessions (records.query / ceremony.*) without a
     # classification entry, leaving the drift-guard gate RED on HEAD.

@@ -149,14 +149,14 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
     every box this suite runs on; `gpg` is not, so this is the format that
     can exercise the real external program rather than a mock of it.
 
-    `GIT_CONFIG_NOSYSTEM` and a cleared `SSH_AUTH_SOCK`: this box's system
+    `GIT_CONFIG_NOSYSTEM` and an `SSH_AUTH_SOCK` naming a nonexistent agent (a cleared one falls back to the real Windows pipe): this box's system
     and global git config route ssh signing through a 1Password agent
     helper, which fails against a throwaway test key -- this isolates the
     test from that ambient machine config, it is not part of the behaviour
     under test.
     """
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "no-such-agent"))
     repo = _repo(tmp_path)
     keyfile = isolated_config / "signing_key"
     keygen = subprocess.run(

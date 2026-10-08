@@ -100,6 +100,18 @@ def test_worktree_freeze_covers_modified_tracked_and_new_untracked_paths(
     assert Path(result["head_sha_path"]).read_text().strip() == f"{base} worktree"
 
 
+def test_worktree_refreeze_of_a_crlf_file_is_unchanged_not_a_collision(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "seed.txt", "seed\n", "seed")
+    (tmp_path / "crlf.txt").write_bytes(b"one\r\ntwo\r\n")
+
+    first = freeze_diff(tmp_path, base, "crlf-refreeze", paths=["crlf.txt"], worktree=True)
+    second = freeze_diff(tmp_path, base, "crlf-refreeze", paths=["crlf.txt"], worktree=True)
+
+    assert first["error"] is None, first["error"]
+    assert second["error"] is None, second["error"]
+
+
 def test_worktree_freeze_spawns_git_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

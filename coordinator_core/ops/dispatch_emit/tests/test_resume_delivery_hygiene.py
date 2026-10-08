@@ -179,5 +179,6 @@ def test_prep_freeze_and_delivery_read_agree_on_the_run_keyed_slice_id():
 def test_delivery_prompt_credits_rows_coded_before_base_and_only_the_verifier_gets_it():
     _, wave = _compose_review("run-a", precredited_rows=["r-old"])[:2]
     block = wave[1]
-    assert block.count("(resume): rows r-old are `coded`") == 1
+    # one per size-gated variant (full and lean) of the verifier prompt
+    assert block.count("(resume): rows r-old are `coded`") == 2
     assert "never list them in claims_unbacked" in block

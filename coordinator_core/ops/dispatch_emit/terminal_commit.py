@@ -65,7 +65,7 @@ from __future__ import annotations
 import ast
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from coordinator_core.git.git_state import head_branch
@@ -97,6 +97,7 @@ _PARAM_FIELDS = (
     Field("task_output_path", "nonempty_str"),
     Field("plan_path", "nonempty_str"),
     Field("falsifier_broken", "list"),
+    Field("held", "list"),
 )
 
 
@@ -1121,6 +1122,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reply.update(_undeclared_dirty(scope["root"], scope["request"]))
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
+    held = params.get("held") if isinstance(params, dict) else None
+    held = {
+        h["chunk"]: h.get("reason") or ""
+        for h in (held if isinstance(held, list) else [])
+        if isinstance(h, dict) and isinstance(h.get("chunk"), str)
+    }
     if (landed or regraded) and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
     if isinstance(incomplete, list) and isinstance(landed, list):
@@ -1128,7 +1135,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         open_ids = (set(incomplete) - set(landed) - set(regraded)) | set(entangled)
         reasons = {}
         for i in sorted(open_ids):
-            if i in gated_ids:
+            if i in held:
+                reasons[i] = f"held: {held[i]}"
+            elif i in gated_ids:
                 reasons[i] = "external_gate"
             elif i in entangled:
                 reasons[i] = "entangled: imports stranded " + ", ".join(entangled[i])
@@ -1262,13 +1271,15 @@ def _terminal_commit(
     if inline_review is None:
         return _error(
             "params.inline_review is absent -- the run carries no review-stage "
-            "output; re-emit with a review stage and re-fire",
+            "output. Run the digest's `terminal_commit_cli` line verbatim (or pass "
+            "task_output_path); else re-emit with a review stage and re-fire",
             refused="unreviewed",
         )
     if not inline_review.get("integration_stem") or inline_review.get("slices") is None:
         return _error(
             "params.inline_review is missing integration_stem and/or slices -- "
-            f"no review-stage output to land against (got: {inline_review!r})",
+            f"no review-stage output to land against (got: {inline_review!r}). "
+            "Use the digest's `terminal_commit_cli` line verbatim",
             refused="unreviewed",
         )
 
@@ -1438,6 +1449,16 @@ def _terminal_commit(
         cited_sizing = _cited_sizing(worktree_root, request.plan_path)
         if cited_sizing is not None and cited_sizing not in all_paths:
             all_paths.append(cited_sizing)
+        if request.plan_path:
+            from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+
+            evidence_rel = str(
+                PurePosixPath(request.plan_path).with_name(
+                    evidence_sidecar_path(Path(request.plan_path)).name
+                )
+            )
+            if (worktree_root / evidence_rel).is_file() and evidence_rel not in all_paths:
+                all_paths.append(evidence_rel)
 
     declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]

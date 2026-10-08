@@ -666,6 +666,110 @@ def _gpgsign_enabled(repo: Union[str, Path, None]) -> bool:
     return enabled
 
 
+_SSH_CONFIG_WANTED = ("gpg.format", "gpg.ssh.program", "user.signingkey", "i18n.commitencoding")
+# Present when any config file has an include/includeIf section: the in-process signer
+# cannot see what it overrides (e.g. a per-directory user.signingkey), so it defers to git.
+_CONFIG_HAS_INCLUDE = "include"
+
+
+def _signing_config(repo: Union[str, Path, None]) -> "dict[str, str]":
+    """``gpg.format``, ``gpg.ssh.program`` and ``user.signingkey`` as git's precedence
+    order resolves them (later file wins), ZERO spawns. Absent keys are absent.
+    Same negative-spec as `_gpgsign_enabled`: includes are not followed."""
+    found: "dict[str, str]" = {}
+    for candidate in _gpgsign_config_files(repo):
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        prefix = ""
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line[0] in "#;":
+                continue
+            if line.startswith("["):
+                close = line.find("]")
+                header = line[1:close].strip() if close != -1 else ""
+                parts = header.split(None, 1)
+                if parts and parts[0].lower() in ("include", "includeif"):
+                    found[_CONFIG_HAS_INCLUDE] = "1"
+                if not parts:
+                    prefix = ""
+                elif len(parts) == 2:
+                    prefix = f"{parts[0].lower()}.{parts[1].strip().strip(chr(34))}."
+                else:
+                    prefix = parts[0].lower() + "."
+                continue
+            key_name, eq, value = line.partition("=")
+            full = prefix + key_name.strip().lower()
+            if eq and full in _SSH_CONFIG_WANTED:
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] == chr(34):
+                    value = value[1:-1]
+                found[full] = value
+    return found
+
+
+def _env_overrides_signing_config() -> bool:
+    """True when ``git -c`` / ``GIT_CONFIG_KEY_<n>`` injects a key the file reader
+    would otherwise answer (or an include), so only git can resolve it."""
+    watched = _SSH_CONFIG_WANTED + ("include.path",)
+    injected = os.environ.get("GIT_CONFIG_PARAMETERS", "").lower()
+    if any(k in injected for k in watched) or "includeif." in injected:
+        return True
+    try:
+        count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or 0)
+    except ValueError:
+        return True
+    for n in range(count):
+        key = os.environ.get(f"GIT_CONFIG_KEY_{n}", "").lower()
+        if key in watched or key.startswith("includeif."):
+            return True
+    return False
+
+
+def _sign_commit_in_process(
+    repo: Union[str, Path],
+    tree_sha: str,
+    parent_sha: Optional[str],
+    name: str,
+    email: str,
+    when: str,
+    message: Union[str, bytes],
+) -> Optional[str]:
+    """Signed commit for ``gpg.format=ssh`` via the ssh-agent, 0 spawns; the loose
+    object is written here. None means "use the git path": not ssh format, a custom
+    ``gpg.ssh.program``, no resolvable public key, no agent, key not loaded, or refusal."""
+    from coordinator_core.git import sshsig
+
+    if _env_overrides_signing_config():
+        return None
+    cfg = _signing_config(repo)
+    if cfg.get("gpg.format", "").lower() != "ssh" or cfg.get("gpg.ssh.program"):
+        return None
+    if _CONFIG_HAS_INCLUDE in cfg:
+        return None
+    if cfg.get("i18n.commitencoding", "utf-8").lower().replace("-", "") != "utf8":
+        return None  # git would add an `encoding` header this writer does not emit
+    pub = sshsig.load_signing_key(cfg.get("user.signingkey", ""))
+    if pub is None:
+        return None
+    who = f"{name} <{email}> {when}"
+    head = f"tree {tree_sha}\n"
+    if parent_sha:
+        head += f"parent {parent_sha}\n"
+    head += f"author {who}\ncommitter {who}\n"
+    head_b = head.encode("utf-8", "surrogateescape")
+    msg = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
+    try:
+        armored = sshsig.sign_via_agent(head_b + b"\n" + msg, pub)
+    except sshsig.AgentUnavailable:
+        return None
+    gpgsig = "gpgsig " + armored.rstrip("\n").replace("\n", "\n ") + "\n"
+    signed = head_b + gpgsig.encode("ascii") + b"\n" + msg
+    return write_object(resolve_git_dir(repo), b"commit", signed)
+
+
 def _sign_commit_tree(
     repo: Union[str, Path],
     tree_sha: str,
@@ -706,6 +810,15 @@ def _sign_commit_tree(
     no way to satisfy it.
     """
     from coordinator_core.git.run import run_git
+
+    try:
+        in_process = _sign_commit_in_process(
+            repo, tree_sha, parent_sha, name, email, when, message,
+        )
+    except Exception:  # noqa: BLE001 -- any in-process failure answers with the git path
+        in_process = None
+    if in_process is not None:
+        return in_process, None
 
     args = ["commit-tree", "-S", tree_sha]
     if parent_sha:

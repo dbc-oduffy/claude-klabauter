@@ -126,12 +126,79 @@ def test_push_failures_are_collected_and_logged_after_pushes_settle():
     assert "slice(-300)" in script
 
 
-def test_committer_is_told_to_include_untracked_declared_files():
+def test_committer_passes_the_declared_list_verbatim_with_skip_missing():
     script = _script(expected_branch="work/run")
 
-    assert "git status --porcelain -uall -- <the list>" in script
-    assert "UNTRACKED (`??`, a file the row created)" in script
-    assert "never add an untracked file the list does not name" in script
+    assert "Pass the list VERBATIM as `paths` with `skip_missing` true" in script
+    assert 'skip_missing' in script and 'true' in script
+    assert "Do not run `git status` and do not filter" in script
+    assert "git status --porcelain" not in script
+
+
+def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tmp_path):
+    import subprocess
+
+    from coordinator_core.ops.ceremony import commit_v2
+
+    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+        ).stdout
+
+    git("init", "-q", "-b", "work/p")
+    git("config", "user.email", "t@local")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "tracked.ts").write_text("a\n", encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    (tmp_path / "tracked.ts").write_text("b\n", encoding="utf-8", newline="\n")
+    (tmp_path / "new_declared.ts").write_text("n\n", encoding="utf-8", newline="\n")
+    declared = ["tracked.ts", "new_declared.ts", "never_written.ts"]
+
+    refused = commit_v2._handler({"paths": declared, "message": "cp"}, repo_root=tmp_path / ".git")
+    assert refused["committed"] is False
+
+    out = commit_v2._handler(
+        {"paths": declared, "skip_missing": True, "message": "cp"}, repo_root=tmp_path / ".git"
+    )
+
+    assert out["committed"] is True, out
+    assert out["skipped_missing"] == ["never_written.ts"]
+    landed = git("ls-tree", "-r", "--name-only", "HEAD").split()
+    assert "new_declared.ts" in landed and "tracked.ts" in landed
+    assert "never_written.ts" not in landed
+
+
+def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refuse(tmp_path):
+    import subprocess
+
+    from coordinator_core.ops.ceremony import commit_v2
+
+    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, **flags
+        ).stdout
+
+    git("init", "-q", "-b", "work/p")
+    git("config", "user.email", "t@local")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "t.ts").write_text("a\n", encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    (tmp_path / "t.ts").unlink()
+
+    out = commit_v2._handler(
+        {"paths": ["t.ts"], "skip_missing": True, "message": "cp"}, repo_root=tmp_path / ".git"
+    )
+
+    assert out["committed"] is False
+    assert "gone from the worktree but still tracked" in out["error"]
 
 
 def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path):

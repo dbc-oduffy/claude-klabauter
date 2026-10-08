@@ -50,6 +50,8 @@ EXCLUDED_MODULES = {
         "package marker; not a narration holder.",
     "coordinator_core/git/action_guard.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/literal_pathspec.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/argv_batch.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/checkpoint_guard.py":
@@ -65,6 +67,8 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_signing.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/sshsig.py":
+        "in-process ssh-agent signer: socket/pipe I/O only, zero process spawns and no git narration.",
     "coordinator_core/git/commit_delta.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/commit_trailers.py":

@@ -812,6 +812,100 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
+EVIDENCE_SIDECAR_SUFFIX = ".evidence.yaml"
+
+
+def evidence_sidecar_path(plan_file: Path) -> Path:
+    """The per-plan row-evidence sidecar: ``<plan-stem>.evidence.yaml`` beside the plan.
+
+    Outside the plan body, so appending evidence never moves ``approved_body_sha``.
+    Non-``.md`` so plan scans never mistake it for a plan.
+    """
+    return plan_file.with_name(plan_file.stem + EVIDENCE_SIDECAR_SUFFIX)
+
+
+def read_row_evidence(plan_file: Path, row_id: Optional[str] = None):
+    """Evidence entries recorded by ``evidence-append``.
+
+    ``row_id`` given: that row's list of ``{recorded_at, text}`` (empty when none).
+    ``row_id`` None: the whole ``{row_id: [entries]}`` mapping. A missing or
+    unparsable sidecar reads as empty; this reader never raises.
+    """
+    try:
+        loaded = yaml.safe_load(evidence_sidecar_path(plan_file).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        loaded = None
+    rows = loaded.get("rows") if isinstance(loaded, dict) else None
+    if not isinstance(rows, dict):
+        rows = {}
+    if row_id is None:
+        return rows
+    entries = rows.get(row_id)
+    return entries if isinstance(entries, list) else []
+
+
+def _evidence_append(
+    plan_path: str, row_id: str, text: str, worktree: Path, repo_root: Path
+) -> dict:
+    """Apply the evidence-append verb: record ``text`` against ``row_id`` in the sidecar.
+
+    Never reads or writes the plan body. The row id is checked against the
+    plan's spine when one exists; a plan without a parsable spine accepts any id.
+    """
+    try:
+        path = _resolve_path(plan_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"evidence-append: {exc}")
+    if not row_id:
+        return _err("evidence-append: 'id' is required")
+    if not isinstance(text, str) or not text.strip():
+        return _err("evidence-append: 'text' must be a non-empty string")
+    try:
+        plan_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _err(f"evidence-append: plan not found: {plan_path}")
+    located = locate_fenced_block(plan_text)
+    if located.status is LocateStatus.LOCATED:
+        try:
+            spine_ids = {
+                r.get("id") for r in yaml.safe_load(located.body) or [] if isinstance(r, dict)
+            }
+        except yaml.YAMLError:
+            spine_ids = set()
+        if spine_ids and row_id not in spine_ids:
+            return _err(f"evidence-append: task id not found: {row_id!r}")
+
+    import datetime
+
+    entry = {
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "text": text,
+    }
+
+    def mutate(old_text: str) -> str:
+        try:
+            loaded = yaml.safe_load(old_text) if old_text.strip() else None
+        except yaml.YAMLError as exc:
+            raise MutateAbort(f"evidence-append: sidecar is not valid YAML: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict) or not isinstance(loaded.get("rows", {}), dict):
+            raise MutateAbort("evidence-append: sidecar has an unexpected shape")
+        rows = loaded.setdefault("rows", {})
+        rows.setdefault(row_id, []).append(entry)
+        return yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True, width=4096)
+
+    sidecar = evidence_sidecar_path(path)
+    try:
+        locked_rmw(sidecar, mutate, repo_root=repo_root, missing_ok=True)
+    except LockTimeout as exc:
+        return _err(f"evidence-append: timed out waiting for file lock on {sidecar.name}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "evidence-append: mutation aborted")
+
+    return _ok(True, f"evidence-append: recorded evidence for {row_id!r} in {sidecar.name}")
+
+
 def _gate_matches(entry: object, owner_repo: str) -> bool:
     return (
         isinstance(entry, dict)
@@ -1791,6 +1885,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         clear-gate : id (str), owner_repo (str), evidence (str, non-empty) —
                    sets cleared: true + closure_evidence on the one matching
                    external_gate entry (row-level, or frontmatter with row: id).
+        evidence-append : id (str), text (str, non-empty) — appends a
+                   {recorded_at, text} entry for row `id` to the sidecar
+                   `<plan-stem>.evidence.yaml` beside the plan. Never touches
+                   the plan body, so `approved_body_sha` is unchanged. Read
+                   back with `read_row_evidence`.
         add-task : task   (dict) — the new row; must carry a non-empty 'id'.
         stamp    : updates (list[dict]) — [{"id": <id>, ...field-updates}, ...].
                    Refuses the WHOLE batch if any entry carries
@@ -1853,7 +1952,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | clear-gate)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | clear-gate | evidence-append)")
     if not plan_path:
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
@@ -1910,6 +2009,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             ]
         return await asyncio.to_thread(_resolve, plan_path, resolutions, worktree, repo_root)
 
+    if verb == "evidence-append":
+        return await asyncio.to_thread(
+            _evidence_append,
+            plan_path,
+            (params.get("id") or "").strip(),
+            params.get("text"),
+            worktree,
+            repo_root,
+        )
+
     if verb == "clear-gate":
         return await asyncio.to_thread(
             _clear_gate,
@@ -1922,5 +2031,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, clear-gate"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, clear-gate, evidence-append"
     )

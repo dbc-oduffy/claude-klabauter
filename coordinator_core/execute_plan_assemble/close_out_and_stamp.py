@@ -3184,6 +3184,12 @@ def close_out_and_stamp(
     # rationale refers to.
     wrote_anything = stamped or partial_evaluation_stamped
     stage_paths = [plan_path_rel]
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
+
+    _evidence_file = evidence_sidecar_path(root / plan_path_rel)
+    row_evidence = read_row_evidence(root / plan_path_rel)
+    if _evidence_file.is_file():
+        stage_paths.append(f"{plan_path_rel.rsplit('/', 1)[0] + '/' if '/' in plan_path_rel else ''}{_evidence_file.name}")
     origin_stub_result: dict = {"acted": [], "skipped": [], "failed": []}
     if wrote_anything and dry_run:
         # `--dry-run`: a commit/push is owed on the live path, but there is
@@ -3487,6 +3493,8 @@ def close_out_and_stamp(
     # ABSENT, not merely `None`-valued, for the grandfathered corpus.
     if goal_gate is not None:
         result["goal_gate"] = goal_gate
+    if row_evidence:
+        result["row_evidence"] = row_evidence
     # `contradiction_gate` follows the same "key absent, not merely `None`"
     # posture as `goal_gate` just above -- present only on a plan that
     # reached the check (would otherwise have shipped `implemented`) AND

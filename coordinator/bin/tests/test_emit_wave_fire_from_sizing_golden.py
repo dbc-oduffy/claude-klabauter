@@ -87,7 +87,7 @@ def _capture(tmp_path, monkeypatch, capsys, mode):
     rc = ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
         "--plugin-root", str(plugin), "--from-sizing", SIZING_REL, "--live-engine-tree",
-        "--provision-sidecar-cli", "golden-sidecar-cli", "--spine-check-cli", "golden-spine-check-cli",
+        "--plan-only", "--provision-sidecar-cli", "golden-sidecar-cli", "--spine-check-cli", "golden-spine-check-cli",
     ])
     assert rc == ewf.EXIT_OK
     out = capsys.readouterr().out

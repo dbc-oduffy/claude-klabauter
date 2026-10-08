@@ -68,15 +68,20 @@ def clean_sys_modules_coordinator_core():
     a `find_spec` probe on a dotted name imports the parent package as a
     side effect and deliberately does NOT restore `sys.modules` — a case
     exercising that must not leak the resulting import into sibling tests."""
-    sentinel = object()
-    prior = sys.modules.get("coordinator_core", sentinel)
+    def _family():
+        return {
+            k: v
+            for k, v in sys.modules.items()
+            if k == "coordinator_core" or k.startswith("coordinator_core.")
+        }
+
+    prior = _family()
     try:
         yield
     finally:
-        if prior is sentinel:
-            sys.modules.pop("coordinator_core", None)
-        else:
-            sys.modules["coordinator_core"] = prior
+        for k in _family():
+            sys.modules.pop(k, None)
+        sys.modules.update(prior)
 
 
 def _record_calls(monkeypatch):
@@ -505,7 +510,10 @@ def test_a_sys_modules_state_left_by_seam_present_is_not_restored(
     (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
     (pkg_dir / "invoke.py").write_text("", encoding="utf-8")
 
-    sys.modules.pop("coordinator_core", None)
+    # find_spec short-circuits on an already-imported dotted submodule and
+    # then never imports the parent, so the whole family must be absent.
+    for name in [k for k in sys.modules if k == "coordinator_core" or k.startswith("coordinator_core.")]:
+        sys.modules.pop(name)
     assert "coordinator_core" not in sys.modules
 
     result = _mod._seam_present(str(fake_root))

@@ -172,6 +172,9 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.baton_supersede", 'registers "baton.supersede"'),
+    ("coordinator_core.ops.baton_awaiting_gate_recheck", 'registers "baton.awaiting_gate_recheck"'),
+    ("coordinator_core.ops.baton_seed_split", 'registers "baton.seed_split"'),
+    ("coordinator_core.ops.goal_record_go", 'registers "goal.record_go"'),
     ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
     ("coordinator_core.ops.artifact_adopt", 'registers "artifact.adopt"'),
     ("coordinator_core.ops.goals_match", 'registers "goal.match_candidates"'),
@@ -355,6 +358,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "review.freeze_diff" (cross-repo/inbox/2026-07-23-claude-central-em-'
         "review-diff-freeze-op-wanted.md)",
     ),
+    ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
     (
         "coordinator_core.ops.fleet.backfill_memo_disposition",
         'registers "fleet.backfill_dispositionless_memos"',

@@ -182,7 +182,7 @@
             "type": "string",
             "enum": [
               "partial", "blocked", "no_answer", "stop_rule", "not_started",
-              "already_done", "routed_out"
+              "already_done", "routed_out", "held"
             ]
           },
           "anchor": { "type": "string", "maxLength": 300 }
@@ -239,6 +239,10 @@
       ]
     },
     "decision_required": { "type": ["string", "null"], "maxLength": 300 },
+    "terminal_commit_cli": {
+      "type": ["string", "null"],
+      "description": "The ready-to-run `coordinator-invoke dispatch.terminal_commit` line carrying next_action.params verbatim (a stdin heredoc when the params are too large for argv); null when next_action.params is null."
+    },
     "next_action": {
       "type": "object",
       "additionalProperties": false,
@@ -262,6 +266,19 @@
                 "incomplete_chunks": { "type": "array", "items": { "type": "string" } },
                 "script_path": { "type": "string" },
                 "session_id": { "type": "string" },
+                "held": {
+                  "type": "array",
+                  "description": "Each row an operator hold (emit-dispatch-workflow --hold) kept out of this script, with its reason; such rows are also in incomplete_chunks.",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["chunk", "reason"],
+                    "properties": {
+                      "chunk": { "type": "string" },
+                      "reason": { "type": "string" }
+                    }
+                  }
+                },
                 "falsifier_broken": {
                   "type": "array",
                   "description": "One entry per plan the pre-dispatch falsifier-integrity review called BROKEN, with its fired tells. Advisory: the plan executes, and dispatch.terminal_commit withholds its implemented stamp.",

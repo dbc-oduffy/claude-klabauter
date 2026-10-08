@@ -81,6 +81,11 @@ def _top_level_returns(script: str) -> list[int]:
             pending_body = script[j] == "{"
             i += 2
             continue
+        elif script.startswith("get ", i) and script[i - 1] in " ,{" and script[i + 4 :].lstrip()[:1].isalpha():
+            j = script.index("{", script.index(")", i))
+            pending_body = True
+            i = j
+            continue
         elif script.startswith("function", i) and not (script[i - 1].isalnum() or script[i - 1] == "_"):
             j = script.index("{", script.index(")", i))
             pending_body = True

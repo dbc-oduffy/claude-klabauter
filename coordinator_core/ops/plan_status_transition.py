@@ -597,6 +597,12 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
     # OTHER kind's empty-corpus result is suppressed entirely -- printing it
     # unconditionally would inject a new stderr line into the handoff-only path
     # that no test, and no prior behaviour, ever produced.
+    from coordinator_core.ops.goal_kr_cascade import discharge_goal_kr
+
+    kr_note = discharge_goal_kr(Path(plan_path), Path(git_common_dir).parent)
+    if kr_note:
+        print(f"{_PROG}: goal cascade: {kr_note}", file=sys.stderr)
+
     results: List["tuple[str, dict]"] = []
     any_advanced = False
     for target_kind in target_kinds:

@@ -244,6 +244,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "edges onto landed rows count as satisfied",
     )
     parser.add_argument(
+        "--hold",
+        default=None,
+        metavar="ROW[,ROW...]",
+        help="with --plan: leave these rows, and every row depending on one, out of the waves "
+        "without touching the plan; the digest lists them incomplete. Needs --hold-reason. "
+        "Re-emit with --only-incomplete once the hold clears",
+    )
+    parser.add_argument(
+        "--hold-reason",
+        default=None,
+        metavar="TEXT",
+        help="why the --hold rows wait; recorded in the .emitted.json receipt and the digest",
+    )
+    parser.add_argument(
         "--review-only",
         nargs="?",
         const="",
@@ -1026,6 +1040,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    if (args.hold or args.hold_reason) and (not args.plan or args.inventory or args.review_only is not None):
+        print(
+            "emit-dispatch-workflow: ERROR — --hold/--hold-reason apply to --plan alone "
+            "(not --inventory or --review-only)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if (args.where or args.where_file) and not is_queue_route:
         print(
             "emit-dispatch-workflow: ERROR — --where/--where-file requires "
@@ -1194,6 +1216,16 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["plan_path"] = args.plan
         if args.chatty:
             params["chatty"] = True
+        hold_ids = [r.strip() for r in (args.hold or "").split(",") if r.strip()]
+        if hold_ids:
+            if not (args.hold_reason or "").strip():
+                print("emit-dispatch-workflow: ERROR — --hold requires --hold-reason", file=sys.stderr)
+                return EXIT_USAGE
+            params["hold_rows"] = hold_ids
+            params["hold_reason"] = args.hold_reason.strip()
+        elif args.hold_reason:
+            print("emit-dispatch-workflow: ERROR — --hold-reason requires --hold", file=sys.stderr)
+            return EXIT_USAGE
         if args.only_incomplete:
             from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
 
@@ -1340,6 +1372,15 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     else:
         _print_workflow_invocation(
             result, is_queue_route=is_queue_route, profile_dir=args.profile_dir, repo_root=repo_root
+        )
+
+    hold = result.get("hold")
+    if hold:
+        print(
+            f"emit-dispatch-workflow: held {', '.join(hold['rows'])} ({hold['reason']}); "
+            f"dependents also held: {json.dumps(hold['dependents'], sort_keys=True)}; "
+            "re-emit with --only-incomplete once the hold clears",
+            file=sys.stderr,
         )
 
     for key in ("batons", "uncommitted"):

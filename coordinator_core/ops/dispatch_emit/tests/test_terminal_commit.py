@@ -833,7 +833,22 @@ def test_a_run_with_no_review_stage_output_refuses_before_any_write(repo, inline
     )
     assert out["committed"] is False
     assert out["refused"] == "unreviewed"
+    assert "terminal_commit_cli" in out["error"]
     assert _head(repo) == before
+
+
+def test_held_rows_are_open_with_the_hold_reason(repo):
+    script = _branch_request(repo, None)
+    out = terminal_commit._handler(
+        {
+            "script_path": script,
+            "incomplete_chunks": ["C8", "C9"],
+            "inline_review": None,
+            "held": [{"chunk": "C8", "reason": "peer deploy lane"}, {"chunk": "C9", "reason": "depends on C8"}],
+        },
+        repo_root=repo / ".git",
+    )
+    assert out["incomplete_reasons"] == {"C8": "held: peer deploy lane", "C9": "held: depends on C8"}
 
 
 def test_matching_branch_commits_with_branch_check_ok(repo):

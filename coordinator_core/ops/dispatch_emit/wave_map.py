@@ -504,6 +504,27 @@ def _compute_held_out(
     return reasons
 
 
+def transitive_dependents(rows: list[EmitterRow], seeds: set[str]) -> dict[str, list[str]]:
+    """Row id -> the held ids it directly depends on, for every row that
+    (transitively, over declared and read-after-write edges) depends on a
+    row in ``seeds``. ``seeds`` themselves are not keys."""
+    preds = _predecessors(rows)
+    held = set(seeds)
+    out: dict[str, list[str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for row in rows:
+            if row.id in held:
+                continue
+            blockers = sorted(preds[row.id] & held)
+            if blockers:
+                out[row.id] = blockers
+                held.add(row.id)
+                changed = True
+    return out
+
+
 def _report_held_out(held: dict[str, str]) -> None:
     for row_id in sorted(held):
         _logger.warning(

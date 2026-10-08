@@ -685,6 +685,8 @@ _PARAM_FIELDS = (
     Field("overrides", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
+    Field("hold_rows", "str_list"),
+    Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
     Field("run_base_sha", "str"),
     Field("flags", "dict"),
@@ -1285,6 +1287,12 @@ def _dispatch_emit(
         if not inventory_path:
             _refuse_unapproved_body(plan_path)
         review_roster_fragment, review_stage_schemas = _load_review_inputs(review_route)
+        hold_rows = frozenset(params.get("hold_rows") or ())
+        if hold_rows and inventory_path:
+            raise ValueError("dispatch.emit hold_rows is a plan-route option and does not take inventory_path")
+        if params.get("hold_reason") and not hold_rows:
+            raise ValueError("dispatch.emit hold_reason requires hold_rows")
+        held_out: dict = {}
         script = emit_script(
             plan_path,
             name=params.get("name"),
@@ -1305,7 +1313,19 @@ def _dispatch_emit(
             predispatch=bool(inventory_path),
             review_specs=inventory_review_specs,
             credit_rows=rows_backed_before_base,
+            hold_rows=hold_rows or None,
+            hold_reason=params.get("hold_reason"),
+            held_out=held_out,
         )
+        if held_out:
+            receipt_extras = {
+                **(receipt_extras or {}),
+                "hold": {
+                    **held_out,
+                    "by": emitting_session_id,
+                    "at": datetime.now().isoformat(timespec="seconds"),
+                },
+            }
 
     check_agent_types_resolve(
         script,
@@ -1393,6 +1413,8 @@ def _dispatch_emit(
 
     if receipt_extras and NOT_ADMITTED_EXTRA_KEY in receipt_extras:
         reply[NOT_ADMITTED_EXTRA_KEY] = receipt_extras[NOT_ADMITTED_EXTRA_KEY]
+    if receipt_extras and "hold" in receipt_extras:
+        reply["hold"] = receipt_extras["hold"]
 
     if ask_ctx is not None:
         reply["run_id"] = ask_ctx["run_id"]

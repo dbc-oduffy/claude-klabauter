@@ -467,6 +467,24 @@ class TestCloseOutAndStamp:
         assert "plan-status-transition" in _head_subject(root)
         assert _committed_files_at_head(root) == ["plan.md"]
 
+    def test_close_out_reports_and_commits_the_row_evidence_sidecar(self, tmp_path, monkeypatch):
+        root = tmp_path
+        _init_repo(root)
+        _seed_plan(root, _FIXTURE_VALID_SPINE)
+        for chunk_id in ("C1", "C2a", "C2b"):
+            _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
+        (root / "plan.evidence.yaml").write_text(
+            "rows:\n  C1:\n  - recorded_at: '2026-10-08T00:00:00Z'\n    text: 14 passed\n",
+            encoding="utf-8",
+        )
+
+        exit_code, result, _pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["row_evidence"]["C1"][0]["text"] == "14 passed"
+        tracked = _run_git(["ls-files", "plan.evidence.yaml"], root).stdout.strip()
+        assert tracked == "plan.evidence.yaml"
+
 
 class TestCloseOutReachesSharedCascadeEntrypoint:
     """docs/plans/2026-08-04-terminal-state-propagation-join-keys.md § C6
@@ -514,7 +532,7 @@ class TestCloseOutReachesSharedCascadeEntrypoint:
 
         calls: list[tuple[str, Optional[str]]] = []
 
-        def _spy(plan_path: str, deliverable_id: Optional[str]) -> int:
+        def _spy(plan_path: str, deliverable_id: Optional[str], ship_sha: str = "") -> int:
             calls.append((plan_path, deliverable_id))
             return 0
 

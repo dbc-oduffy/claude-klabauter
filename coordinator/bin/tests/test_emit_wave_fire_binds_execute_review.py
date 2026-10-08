@@ -82,7 +82,7 @@ def _fire(tmp_path):
     (tmp_path / ".git").mkdir()
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
-        "--plugin-root", str(root), "--from-sizing", SIZING_REL, "--live-engine-tree",
+        "--plugin-root", str(root), "--from-sizing", SIZING_REL, "--live-engine-tree", "--plan-only",
     ])
 
 

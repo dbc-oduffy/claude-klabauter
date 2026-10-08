@@ -66,6 +66,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from coordinator_core.completion_record_integrity import (
+    PLACEHOLDER_TITLE,
+    PROSE_PLACEHOLDER_MARKERS,
     REASON_EMPTY_COMMITS,
     HollowCompletionRecordError,
     hollow_reasons_for_fields,
@@ -74,6 +76,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field,
     rebuild,
     replace_fm_field,
+    replace_fm_field_raw,
     split_frontmatter,
 )
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
@@ -383,4 +386,86 @@ def fill_completion_entry_residues(
     except (LockTimeout, MutateAbort, OSError):
         return dict(empty_result)
 
+    return filled
+
+
+class AuthoredSurfaceMissing(Exception):
+    """Raised when a placeholder surface has no authored value to replace it."""
+
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__(f"completion entry still placeholder; decisions missing key: {', '.join(keys)}")
+        self.keys = keys
+
+
+_NATURE_VALUES = ("roadmap", "bugfix", "tech-debt", "infra")
+_PROSE_MARKER_RE = re.compile(r"<!-- PROSE:.*?-->", re.DOTALL)
+_NATURE_INFER_RE = re.compile(r"\n*<!-- NATURE-INFER.*?-->\n*", re.DOTALL)
+
+
+def fill_authored_surfaces(
+    worktree_root: Path,
+    completion_entry_path: str,
+    *,
+    title: str | None,
+    nature: str | None,
+    prose: str | None,
+) -> Dict[str, bool]:
+    """Replace the title, nature and prose placeholders of a
+    ``coordinator-complete-entry`` scaffold with authored values.
+
+    Only a surface still carrying its placeholder is touched, so a re-run over
+    a filled entry is a no-op. A placeholder surface with no supplied value
+    raises ``AuthoredSurfaceMissing`` naming every missing key; nothing is
+    written in that case. Returns which surfaces were filled.
+    """
+    entry_abs = Path(completion_entry_path)
+    if not entry_abs.is_absolute():
+        entry_abs = worktree_root / completion_entry_path
+    filled = {"title": False, "nature": False, "prose": False}
+
+    def _mutate(text: str) -> str:
+        split = split_frontmatter(text)
+        if split is None:
+            raise MutateAbort(f"no valid YAML frontmatter block in: {completion_entry_path}")
+        fm = split.fm_text
+        body = split.body_with_leading_newline
+
+        cur_title = read_fm_field(fm, "title") or ""
+        cur_nature = (read_fm_field(fm, "nature") or "").split("#")[0].strip()
+        need_title = PLACEHOLDER_TITLE in cur_title
+        need_nature = cur_nature in ("", "null", "~")
+        need_prose = any(m in body for m in PROSE_PLACEHOLDER_MARKERS)
+
+        missing = []
+        if need_title and not (title or "").strip():
+            missing.append("title")
+        if need_nature and (nature or "").strip() not in _NATURE_VALUES:
+            missing.append("nature")
+        if need_prose and not (prose or "").strip():
+            missing.append("prose")
+        if missing:
+            raise AuthoredSurfaceMissing(missing)
+
+        if need_title:
+            fm = replace_fm_field_raw(fm, "title", _yaml_quote((title or "").strip()))
+            filled["title"] = True
+        if need_nature:
+            fm = replace_fm_field(fm, "nature", (nature or "").strip())
+            if read_fm_field(fm, "nature_inferred") is not None:
+                fm = replace_fm_field(fm, "nature_inferred", "false")
+            filled["nature"] = True
+        if need_prose:
+            body = "\n\n" + (prose or "").strip() + "\n"
+            filled["prose"] = True
+        body = _NATURE_INFER_RE.sub("\n", body) if filled["nature"] else body
+        if not any(filled.values()):
+            return text
+        return rebuild(split._replace(body_with_leading_newline=body), fm)
+
+    try:
+        locked_rmw(entry_abs, _mutate, repo_root=worktree_root)
+    except AuthoredSurfaceMissing:
+        raise
+    except (LockTimeout, MutateAbort, OSError):
+        return {"title": False, "nature": False, "prose": False}
     return filled

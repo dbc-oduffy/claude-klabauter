@@ -38,7 +38,11 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing,
     resolve_arm,
 )
-from coordinator_core.ops.dispatch_emit.wake_digest import next_action_parts
+from coordinator_core.ops.dispatch_emit.wake_digest import (
+    TERMINAL_COMMIT_CLI_HELPER_JS,
+    TERMINAL_COMMIT_CLI_PROPERTY_JS,
+    next_action_parts,
+)
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
@@ -150,14 +154,16 @@ _MANIFEST_SCHEMA = _obj(
 _SCOPE_SLOT = "SCOPE_SLOT_X"
 
 
-def _scoped_test_call(agent_type_host: Optional[str]) -> str:
+def _scoped_test_call(agent_type_host: Optional[str], review_edits_base: str = "HEAD") -> str:
     """The plan route's terminal test agent call, scoped at run time to the manifest's declared paths.
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the
     stage's `review_declared_paths` stand in. Trap: no falsifier leg -- the plan's falsifier
     is unknown until the plan exists.
     """
-    call = _emit._test_agent_call_expr([_SCOPE_SLOT], agent_type_host=agent_type_host)
+    call = _emit._test_agent_call_expr(
+        [_SCOPE_SLOT], agent_type_host=agent_type_host, review_edits_base=review_edits_base
+    )
     return call.replace(f"[{_SCOPE_SLOT}]", "[' + _manifest.review_declared_paths.join(', ') + ']")
 
 
@@ -623,7 +629,7 @@ def compose_ask_script(
         b.append(f"  if (!_halted && {test_guard}) {{")
         b.append(f"    phase({_lit(_emit._TEST_PHASE_TITLE)});")
         b.append("    try {")
-        b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host)};")
+        b.append(f"    {_emit._TEST_RESULT_VAR} = await {_scoped_test_call(agent_type_host, run_base_sha or 'HEAD')};")
         b.append("    } catch (e) { _haltOnUsageLimit(e); }")
         b.append("  }")
     else:
@@ -632,7 +638,7 @@ def compose_ask_script(
         b.append("    try {")
         b.append(
             f"    [{_emit._TEST_RESULT_VAR}, {_emit._FALSIFIER_RESULT_VAR}] = await parallel([\n"
-            f"      () => ({test_guard}) ? {_scoped_test_call(agent_type_host)} : null,\n"
+            f"      () => ({test_guard}) ? {_scoped_test_call(agent_type_host, run_base_sha or 'HEAD')} : null,\n"
             f"      () => {_emit._never_stranding_criterion(judge_expr, judge=True)},\n"
             "    ]);"
         )
@@ -654,6 +660,7 @@ def compose_ask_script(
         session_id=session_id,
     )
     b.append(
+        f"  {TERMINAL_COMMIT_CLI_HELPER_JS}\n"
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
         "incomplete: _incompleteChunks, "
@@ -663,7 +670,8 @@ def compose_ask_script(
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
         f"next_action: {{ kind: {na_kind}, op: {na_op}, params: {na_params} }}, "
-        "...((_manifest && !_manifest.error) ? {} : { next_action: { kind: 'none', op: null, params: null } }) };"
+        "...((_manifest && !_manifest.error) ? {} : { next_action: { kind: 'none', op: null, params: null } }),"
+        f"{TERMINAL_COMMIT_CLI_PROPERTY_JS} }};"
     )
 
     meta = _emit._meta_block(

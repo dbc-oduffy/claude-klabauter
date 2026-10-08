@@ -1661,7 +1661,60 @@ def contested_by_live_peers(
                     return None
             if live_by_sid[owner]:
                 contested.setdefault(path, []).append(owner)
+    if contested:
+        dirty = _paths_with_uncommitted_state(sorted(contested), cwd)
+        if dirty is not None:
+            contested = {p: o for p, o in contested.items() if p in dirty}
     return {path: sorted(set(owners)) for path, owners in contested.items()}
+
+
+def _paths_with_uncommitted_state(
+    paths: List[str], cwd: Optional[str]
+) -> Optional[Set[str]]:
+    """Which of *paths* differ from ``HEAD`` in the worktree or the index
+    (modified, staged, deleted, renamed, untracked, ignored). One chunked
+    ``git status`` over every path, never one call per path.
+
+    A claim on a path ABSENT from this set protects nothing: the file equals
+    ``HEAD``, so there is no uncommitted work for the claim to guard and it
+    lapses without its holder releasing it. ``None`` on any git failure --
+    the caller then keeps every claim (fail-safe RETAIN, never lapse on a
+    guess).
+    """
+    from coordinator_core.ops.ceremony.git_native import _chunk_paths
+
+    dirty: Set[str] = set()
+    for chunk in _chunk_paths(list(paths)):
+        out = _git_output(
+            [
+                "--no-optional-locks",
+                "-c",
+                "core.quotepath=false",
+                "status",
+                "--porcelain",
+                "-z",
+                "--untracked-files=all",
+                "--ignored=matching",
+                "--",
+                *(_literal_pathspec(p) for p in chunk),
+            ],
+            cwd,
+        )
+        if out is None:
+            return None
+        tokens = out.split("\0")
+        i = 0
+        while i < len(tokens):
+            entry = tokens[i]
+            i += 1
+            if len(entry) < 4:
+                continue
+            dirty.add(entry[3:])
+            if entry[0] in "RC" or entry[1] in "RC":
+                if i < len(tokens):
+                    dirty.add(tokens[i])
+                i += 1
+    return dirty
 
 
 def project_self_scope(lines: List[str]) -> Set[str]:

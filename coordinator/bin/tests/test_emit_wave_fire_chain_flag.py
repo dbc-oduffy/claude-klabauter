@@ -1,4 +1,4 @@
-"""`emit-wave-fire --from-sizing --chain`: manifest, printed driver call, trigger refusals."""
+"""`emit-wave-fire --from-sizing`: chain by default for pm/ceo, `--plan-only` escape; manifest, printed driver call, trigger refusals."""
 
 from __future__ import annotations
 
@@ -54,6 +54,38 @@ def _fire(tmp_path, sizing, *extra):
     ])
 
 
+def test_pm_chains_by_default(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing()) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "chain-0-1.json").is_file()
+    assert not list((tmp_path / "trail").glob("*.mjs"))
+
+
+def test_ceo_chains_by_default(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(mode="ceo")) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "chain-0-1.json").is_file()
+
+
+def test_hands_on_is_plan_only(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(mode="hands-on")) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+    assert not (tmp_path / "trail" / "chain-0-1.json").exists()
+
+
+def test_pm_plan_only_flag_keeps_the_plan_only_fire(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(), "--plan-only") == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+    assert not (tmp_path / "trail" / "chain-0-1.json").exists()
+
+
+def test_pm_xl_falls_back_to_plan_only_by_default(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(tshirt="XL")) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+
+
+def test_chain_and_plan_only_conflict(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(), "--chain", "--plan-only") == ewf.EXIT_REFUSED
+
+
 def test_chain_writes_manifest_and_prints_the_call(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(), "--chain") == ewf.EXIT_OK
     manifest = (tmp_path / "trail" / "chain-0-1.json").resolve()
@@ -93,7 +125,7 @@ def test_chain_without_from_sizing_is_refused(tmp_path, capsys):
     assert "--from-sizing" in capsys.readouterr().err
 
 
-def test_unflagged_fire_still_writes_the_mjs(tmp_path, capsys):
-    assert _fire(tmp_path, _sizing()) == ewf.EXIT_OK
+def test_plan_only_fire_still_writes_the_mjs(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(), "--plan-only") == ewf.EXIT_OK
     assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
     assert "single-plan fire for hnd-1" in capsys.readouterr().out

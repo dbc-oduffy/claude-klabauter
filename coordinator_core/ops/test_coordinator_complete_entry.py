@@ -1436,3 +1436,25 @@ class TestOracleParity:
         oracle_fields = [ln.split(":", 1)[0] for ln in oracle_text.splitlines() if ":" in ln and not ln.startswith("#")]
         port_fields = [ln.split(":", 1)[0] for ln in port_text.splitlines() if ":" in ln and not ln.startswith("#")]
         assert oracle_fields == port_fields
+
+
+def test_loe_tshirt_is_measured_session_effort_not_the_cited_sizing(tmp_path, monkeypatch):
+    """`loe.tshirt` is the measured session altitude (completion-entry schema:
+    one enum, two altitudes); a cited sizing's planned `estimate.tshirt: L` never feeds it."""
+    sid = "sess-measured"
+    (tmp_path / sid).mkdir()
+    (tmp_path / sid / "dispatched-agents.txt").write_text(
+        "".join(f"t\tagent-{i}\n" for i in range(71)), encoding="utf-8"
+    )
+    monkeypatch.setattr(m._session_core, "resolve_session_id", lambda *a, **k: sid)
+    monkeypatch.setattr(m._session_core, "sessions_dir", lambda *a, **k: str(tmp_path))
+    monkeypatch.delenv("CLAUDE_SESSION_INPUT_TOKENS", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_OUTPUT_TOKENS", raising=False)
+    sizing = tmp_path / "sizing.yaml"
+    sizing.write_text("estimate:\n  tshirt: L\n", encoding="utf-8")
+
+    block = m._native_single_session_loe()
+
+    assert "agent_dispatches: 71" in block
+    assert 'tshirt: "XL"' in block
+    assert "sizing" not in Path(m.__file__).read_text(encoding="utf-8").lower().replace("sizing-object", "")

@@ -617,8 +617,12 @@ def test_completion_return_is_last_so_no_phase_follows_it():
     # that has anything to act on.
     noop = "return { halted: 'no-op'"
     assert script.count(noop) <= 1
-    completion = script.replace(noop, "", 1).index("return {")
-    script = script.replace(noop, "", 1)
+    # The other: a prep that produced no slices (and is not verify-only) halts
+    # with a result, since the wave has nothing to review.
+    no_slices = "return { halted: 'review prep returned no slices'"
+    assert script.count(no_slices) <= 1
+    script = script.replace(noop, "", 1).replace(no_slices, "", 1)
+    completion = script.index("return {")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
 

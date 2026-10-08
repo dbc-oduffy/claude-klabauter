@@ -29,6 +29,9 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wak
 
 # The script-level arrays and flag C12 declares; completion_return_js references only
 # these (plus stage-result bindings and emitter literals) — never an executor's own reply.
+#: Emitted only by a script composed with an operator hold: `{row id: reason}`.
+HELD_VAR = "_heldRows"
+
 RUNTIME_VARS = (
     "_incompleteChunks",
     "_unansweredBriefs",
@@ -57,6 +60,28 @@ _CAP_HELPER_JS = (
     "s = String(s); "
     "return s.length > n ? s.slice(0, n) : s; "
     "}"
+)
+
+
+#: argv ceiling for the digest's inline `terminal_commit_cli`; larger params go through a
+#: stdin heredoc (`--params-file -`), which neither ARG_MAX nor an apostrophe can break.
+TERMINAL_COMMIT_CLI_ARGV_MAX = 8000
+
+TERMINAL_COMMIT_CLI_HELPER_JS = (
+    "function _terminalCommitCli(p) { "
+    "if (!p) return null; "
+    "const s = JSON.stringify(p); "
+    "const head = 'coordinator-invoke dispatch.terminal_commit'; "
+    f"return s.length <= {TERMINAL_COMMIT_CLI_ARGV_MAX} "
+    + r"""? head + " '" + s.split("'").join("'\\''") + "'" """
+    + r""": head + " --params-file - <<'JSON'\n" + s + "\nJSON"; """
+    "}"
+)
+
+#: The digest property that reads `next_action.params` back as a command line; a getter so
+#: the params expression is emitted once.
+TERMINAL_COMMIT_CLI_PROPERTY_JS = (
+    "get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); },"
 )
 
 
@@ -231,6 +256,7 @@ def next_action_parts(
     session_id: Optional[str] = None,
     anchor_plan_path: Optional[str] = None,
     predispatch: bool = False,
+    held: bool = False,
 ) -> tuple:
     """`(kind, op, params)` JS source for a script's `next_action`; the one composer both the
     plan route's wake-digest and the ask script's return render, so the params are
@@ -378,6 +404,11 @@ def next_action_parts(
             + (f"session_id: {_js_lit(session_id)}, " if session_id else "")
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
             + "inline_review: " + inline_review_expr
+            # {row id: reason} for rows an operator hold kept out of this script.
+            + (
+                f", held: Object.entries({HELD_VAR}).map(([chunk, reason]) => ({{ chunk, reason }}))"
+                if held else ""
+            )
             # [{plan, tells}] for each plan the pre-dispatch review called BROKEN.
             # terminal_commit reads it to withhold that plan's `implemented` stamp.
             + (
@@ -413,6 +444,7 @@ def completion_return_js(
     session_id: Optional[str] = None,
     anchor_plan_path: Optional[str] = None,
     predispatch: Optional[dict] = None,
+    held: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -463,6 +495,7 @@ def completion_return_js(
         session_id=session_id,
         anchor_plan_path=anchor_plan_path,
         predispatch=predispatch is not None,
+        held=held,
     )
 
     routed_out_var, skipped_done_var = RUNTIME_VARS[9], RUNTIME_VARS[10]
@@ -512,6 +545,13 @@ def completion_return_js(
         deviation_kind_expr = (
             f"({skipped_done_var}.includes(id) ? 'already_done' : "
             f"({routed_out_var}.includes(id) ? 'routed_out' : {deviation_kind_expr}))"
+        )
+    deviation_anchor_expr = "''"
+    if held:
+        deviation_kind_expr = f"({HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
+        deviation_anchor_expr = (
+            f"({HELD_VAR}[id] !== undefined ? _cap({HELD_VAR}[id], "
+            f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
         )
     reviews_var = RUNTIME_VARS[12]
 
@@ -616,7 +656,7 @@ def completion_return_js(
         "deviations[].chunk": f"{deviation_ids_expr}[0]",
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
-        "deviations[].anchor": "''",
+        "deviations[].anchor": deviation_anchor_expr,
         "run_base_sha": _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
@@ -659,7 +699,7 @@ def completion_return_js(
     if missing:
         raise AssertionError(f"completion_return_js field table missing schema paths: {sorted(missing)}")
 
-    lines = [_CAP_HELPER_JS, ""]
+    lines = [_CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
     lines.append("return {")
     lines.append(f"  schema: {table['schema']},")
     lines.append(f"  version: {table['version']},")
@@ -772,6 +812,7 @@ def completion_return_js(
         "  next_action: { kind: %s, op: %s, params: %s },"
         % (table["next_action.kind"], table["next_action.op"], table["next_action.params"])
     )
+    lines.append(f"  {TERMINAL_COMMIT_CLI_PROPERTY_JS}")
     lines.append("};")
     return "\n".join(lines)
 

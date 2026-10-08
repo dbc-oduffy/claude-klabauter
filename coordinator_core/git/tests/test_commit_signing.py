@@ -19,6 +19,11 @@ def _write_config(root: Path, body: str) -> None:
     (root / ".git" / "config").write_text(body, encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "no-such-agent"))
+
+
 @pytest.fixture
 def no_global_config(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "nohome"))

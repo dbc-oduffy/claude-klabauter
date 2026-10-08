@@ -153,6 +153,25 @@ def _prompt_literal(prompt: str) -> str:
     return _js_string_literal(prompt)
 
 
+#: A frozen diff touching at most this many product files is a small diff (APM ruling
+#: 2026-10-08, file count not LOC); the count is prep's `product_files`, known only at run time.
+SMALL_DIFF_PRODUCT_FILES = 3
+
+#: Unknown or missing `product_files` reads as large, so the full brief is the fallback.
+_SMALL_DIFF_JS = f"((_reviewPrep?.product_files ?? {SMALL_DIFF_PRODUCT_FILES + 1}) <= {SMALL_DIFF_PRODUCT_FILES})"
+
+_LEAN_READ_CLAUSE = (
+    "Small diff: read only the frozen diff named below and, where a hunk needs it, the touched "
+    "files themselves. Do not read the plan body or any other file; the plan's own task rows "
+    "for this run's rows are the only plan text you may open."
+)
+
+
+def _size_gated(full_prompt: str, lean_prompt: str) -> str:
+    """A JS expression choosing ``lean_prompt`` over ``full_prompt`` when prep froze a small diff."""
+    return f"({_SMALL_DIFF_JS} ? {_prompt_literal(lean_prompt)} : {_prompt_literal(full_prompt)})"
+
+
 def _degrading(call: str) -> str:
     """``call`` (``agent(...)`` or ``() => agent(...)``) rewritten so a
     rejection resolves to ``null`` instead of throwing the run past its
@@ -298,16 +317,17 @@ def compose_execute_review(
         f"and EM's own commits, and every `.coordinator-local/subagent-share/` sidecar. Count a "
         f"commit foreign only when a live peer session claims the path "
         f"(`session-claim-cli who-claims-path <path>`, on the settings-home bin); "
-        f"an empty list is the usual answer. Take the verdict from "
-        f"`review-brightline-gate --worktree-base {run_base_sha or 'run_base_sha'} --paths "
-        f"<every declared path>` (settings-home bin; its stdout line carries VERDICT=). When the verdict is "
-        f"single-reviewer-ok, slices is exactly ONE slice spanning every product file, with "
-        f"diff_path equal to whole_diff_path. When it is PARTITION-MANDATORY, group the product "
-        f"files by their first two path segments (merge groups to at most 6), freeze each group "
-        f"with `freeze-review-diff --worktree --range {run_base_sha or 'run_base_sha'} "
-        f"--slice-id {prep_slice_id}-<n> --paths <that group's files>`, and return one slice per "
-        f"group (id, files, diff_path from the launcher, sidecar_path = whole_diff_sidecars.personas[0]). "
-        f"Every launcher named here is on PATH; never report a missing binary in place of slices. "
+        f"an empty list is the usual answer. Take the verdict and the slices from ONE engine call, "
+        f"never your own grouping: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
+        f"review.partition_slices '{{\"worktree\":true,\"base\":\"{run_base_sha or 'run_base_sha'}\","
+        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}'` -- it returns "
+        f"verdict, product_paths and slices already frozen as [{{slice_id, paths, diff_path}}]. "
+        f"Report its verdict as verdict. When the verdict is single-reviewer-ok its slices is empty: "
+        f"return exactly ONE slice spanning every product file, with diff_path equal to whole_diff_path. "
+        f"When it is PARTITION-MANDATORY, return one slice per returned slice (id = slice_id, files = paths, "
+        f"diff_path as returned, sidecar_path = whole_diff_sidecars.personas[0]); freeze nothing "
+        f"further. A non-null error in its result is a refusal: put it verbatim in your result and return "
+        f"no slices. Every launcher named here is on PATH; never report a missing binary in place of slices. "
         f"slices is never empty while product_files > 0.\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}\n"
@@ -396,6 +416,12 @@ def compose_execute_review(
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
         ).strip()
+        lean_prompt = (
+            f"{prompt_head}\n\n{slice_role}"
+            f"Review your assigned slice of this run's diff.\n{_LEAN_READ_CLAUSE}\n"
+            f"plan_path: {plan_path}\n"
+            f"run_base_sha: {run_base_sha}"
+        ).strip()
         call = _agent_call_literal(
             slice_type,
             base_prompt,
@@ -411,7 +437,7 @@ def compose_execute_review(
         prefix = f"agent({_prompt_literal(base_prompt)}, "
         assert call.startswith(prefix)
         spliced_call = (
-            f"agent({_prompt_literal(base_prompt)} + "
+            f"agent({_size_gated(base_prompt, lean_prompt)} + "
             f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + "
             f"JSON.stringify(s), " + call[len(prefix):]
         )
@@ -445,6 +471,14 @@ def compose_execute_review(
             f"{credit_note if is_delivery_verifier else ''}"
             f"{role_note}"
         ).strip()
+        lean_wave_prompt = (
+            f"{prompt_head}\n\n{whole_role}"
+            f"Review this run's whole diff.\n{_LEAN_READ_CLAUSE}\n"
+            f"plan_path: {plan_path}\n"
+            f"run_base_sha: {run_base_sha}"
+            f"{credit_note if is_delivery_verifier else ''}"
+            f"{role_note}"
+        ).strip()
         emitted_agent_type = (
             _DELIVERY_VERIFIER_HOST_NATIVE_TYPE if is_delivery_verifier else whole_type
         )
@@ -471,7 +505,7 @@ def compose_execute_review(
                 else ""
             )
         )
-        call = f"() => agent({_prompt_literal(wave_prompt)} + {frozen}, " + call[len(prefix):]
+        call = f"() => agent({_size_gated(wave_prompt, lean_wave_prompt)} + {frozen}, " + call[len(prefix):]
         degraded = _degrading(call)
         item_lines.append(
             f"    {degraded}" if is_delivery_verifier else f"    () => _verifyOnly ? null : ({degraded})()"
@@ -690,9 +724,11 @@ def compose_criterion_judge(
     criterion: Optional[OperativeCriterion] = None,
     host_degraded: bool = False,
     prompt_suffix_js: Optional[str] = None,
+    evidence_path: Optional[str] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
-    ``None`` when the roster declares no judge. ``prompt_suffix_js`` is a JS
+    ``None`` when the roster declares no judge. ``evidence_path`` names the
+    plan's row-evidence sidecar, passed only when it holds entries. ``prompt_suffix_js`` is a JS
     string expression appended to the prompt at run time, for a path the
     script learns only then. Pointers only: the engine
     never inlines or summarises the PM's words, the judge reads them from the
@@ -715,6 +751,7 @@ def compose_criterion_judge(
         f"weigh one only for a leg you are denied, and mark it provenance em-recorded)"
         f"{_criterion_clause(criterion)}"
         f"{falsifier_clause}"
+        + (f"\nrow_evidence: {evidence_path} (operator-recorded per-row evidence; weigh it, cite it)" if evidence_path else "")
     ).strip()
     call = _agent_call_literal(
         judge_type,

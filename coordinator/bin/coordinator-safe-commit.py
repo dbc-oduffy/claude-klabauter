@@ -1597,7 +1597,18 @@ def _resolve_pre_sha_for_reconcile(worktree_root: str) -> Optional[str]:
     call itself timed out/errored) — that function's own fallback path
     already handles a missing `pre_sha` safely via an unfiltered, walk-
     bounded `git rev-list --max-count` probe, so failing open to `None`
-    here is correct, not a gap."""
+    here is correct, not a gap.
+
+    Reads HEAD and its ref from disk first (zero spawns); the `git rev-parse`
+    spawn answers only when that read cannot (reftable, odd layouts)."""
+    try:
+        from coordinator_core.git.git_state import head_sha
+
+        sha = head_sha(worktree_root)
+        if sha and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+            return sha
+    except Exception:
+        pass
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],

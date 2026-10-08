@@ -101,6 +101,17 @@ def write_signed_commit_object(
     email: str,
     stamp: str,
 ) -> Tuple[Optional[str], Optional[str]]:
+    raw = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
+    body = raw if raw.endswith(b"\n") else raw + b"\n"
+    try:
+        from coordinator_core.git.commit import _sign_commit_in_process
+
+        in_process = _sign_commit_in_process(repo, root_tree, old_head, name, email, stamp, body)
+    except Exception:  # noqa: BLE001 -- any in-process failure answers with the git path
+        in_process = None
+    if in_process is not None:
+        return in_process, None
+
     env = dict(os.environ)
     for role in ("AUTHOR", "COMMITTER"):
         env[f"GIT_{role}_NAME"] = name
@@ -110,8 +121,6 @@ def write_signed_commit_object(
     if old_head:
         args += ["-p", old_head]
     args += ["-F", "-"]
-    raw = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
-    body = raw if raw.endswith(b"\n") else raw + b"\n"
     try:
         proc = subprocess.run(
             args,

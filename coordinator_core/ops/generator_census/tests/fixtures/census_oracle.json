@@ -846,6 +846,24 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/baton_seed_split.py declares MUTATES = ['state/handoffs/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/baton_seed_split.py",
+    "mutates": [
+      "state/handoffs/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
+    "detail": "coordinator_core/ops/baton_supersede.py declares MUTATES = ['state/handoffs/*.md'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/baton_supersede.py",
+    "mutates": [
+      "state/handoffs/*.md"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
     "detail": "coordinator_core/ops/bootstrap_orchestrate.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/bootstrap_orchestrate.py",
     "mutates": [],
@@ -1184,6 +1202,15 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
+    "detail": "coordinator_core/ops/goal_record_go.py declares MUTATES = ['state/goals/*.yaml'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/goal_record_go.py",
+    "mutates": [
+      "state/goals/*.yaml"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
+  },
+  {
     "detail": "coordinator_core/ops/handoff_repoint_origin.py declares MUTATES = ['state/handoffs/*.md'] (corpus mutator, no staleness contract)",
     "generator": "coordinator_core/ops/handoff_repoint_origin.py",
     "mutates": [
@@ -1405,6 +1432,16 @@
     "mutates": [],
     "pairs": [],
     "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/review_partition_slices.py declares MUTATES = ['state/review-trail/diffs/*.diff', 'state/review-trail/diffs/*.head.sha'] (corpus mutator, no staleness contract)",
+    "generator": "coordinator_core/ops/review_partition_slices.py",
+    "mutates": [
+      "state/review-trail/diffs/*.diff",
+      "state/review-trail/diffs/*.head.sha"
+    ],
+    "pairs": [],
+    "verdict": "MUTATES_DECLARED"
   },
   {
     "detail": "coordinator_core/ops/roadmap_blitz_land.py declares GENERATES = [] (declared-empty, no artifacts)",
@@ -1855,6 +1892,13 @@
   {
     "detail": "coordinator_core/write_guards/block_foreign_family_sidecar_write.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/write_guards/block_foreign_family_sidecar_write.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/write_guards/block_hand_set_test_verdict.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/write_guards/block_hand_set_test_verdict.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

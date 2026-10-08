@@ -744,6 +744,18 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/baton_supersede.py",
         ("_handler",),
     ),
+    "baton.awaiting_gate_recheck": (
+        "coordinator_core/ops/baton_awaiting_gate_recheck.py",
+        ("_handler",),
+    ),
+    "baton.seed_split": (
+        "coordinator_core/ops/baton_seed_split.py",
+        ("_handler",),
+    ),
+    "goal.record_go": (
+        "coordinator_core/ops/goal_record_go.py",
+        ("_handler",),
+    ),
     "hooks.agent_completion_log": (
         "coordinator_core/hooks/agent_completion_log.py",
         ("_handler",),
@@ -1932,6 +1944,21 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "read from the manifest's plan.stamp_prepped `census_python_target_tracking`); the attribution is "
         "itself asserted on every run.",
     ),
+    (
+        "plan.tasks.mutate",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_plan_tasks_mutate_spawn_budget.py",
+        executed="Measured 2026-10-08: attributed by stack to git/run.py::run_git under "
+        "`test_resolve_of_two_coded_rows_spawns_one_batched_git_show` (`assert len(spawns) == "
+        "CODED_SHA_CHECK_SPAWNS`, 1 for two coded rows with distinct shas; `_coded_sha_refusal`'s "
+        "batched `git show`); the attribution is itself asserted on every run, and a resolve with no "
+        "coded rows is asserted to spawn 0.",
+    ),
 }
 
 #: Sites this gate keeps RED that a static reading would wrongly clear. EMPTY as of 2026-08-19,
@@ -2297,6 +2324,10 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
+    "review.partition_slices": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
+        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
+    ),
     "review.snapshot_diff_and_head": (
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
@@ -2356,6 +2387,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "research.archive_workdir": ("coordinator_core/ops/research_archive_workdir.py", "_handler"),
     "research.restructure_for_repeat_topic": ("coordinator_core/ops/research_dir_restructure.py", "_handler"),
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
+    "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
     "review.snapshot_diff_and_head": ("coordinator_core/ops/ceremony/snapshot_diff_and_head.py", "_handler"),
     "session.commits": ("coordinator_core/ops/session_commits.py", "_handler"),
     "session_ledger.aggregate_chain_loe": (
@@ -2455,9 +2487,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # `git_state.head_blobs` (the ls-tree fallback memo.send's legitimation names): 56 + 1 = 57.
     # 57 -> 56 (2026-10-03): `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py` and no longer reaches `git_native.py::_git._invoke`: -1.
-    assert total_pairs == 56, (
+    assert total_pairs == 58, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "56 measured 2026-10-03 (see the comment above). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "58 measured 2026-10-08 (56 on 2026-10-03; +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -6839,6 +6871,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo_setup.validate_target_root": 1,
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
     "review.freeze_diff": 2,
+    "review.partition_slices": 3,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
     "session.commits": 1,

@@ -490,7 +490,7 @@ def test_empty_slices_without_single_reviewer_ok_over_product_files_still_refuse
 
 def test_prep_prompt_says_single_reviewer_ok_returns_one_whole_diff_slice():
     _, phases = _compose()
-    assert "single-reviewer-ok, slices is exactly ONE slice" in phases[0][1]
+    assert "return exactly ONE slice spanning every product file" in phases[0][1]
 
 
 def test_single_reviewer_ok_over_no_product_file_is_a_no_op_not_a_refusal():
@@ -583,8 +583,68 @@ def test_halt_names_the_prep_verdict():
     assert result["prep"]["verdict"] == "PARTITION-MANDATORY"
 
 
-def test_prep_brief_names_resolvable_launchers_for_gate_and_claims():
+def test_prep_brief_runs_the_partition_op_and_carries_no_grouping_procedure():
     prep = _compose()[1][0][1]
     assert "session-claim-cli who-claims-path" in prep
-    assert "review-brightline-gate --worktree-base" in prep
-    assert "PARTITION-MANDATORY, group the product files" in prep
+    assert "coordinator-invoke" in prep and "review.partition_slices" in prep
+    for gone in ("first two path segments", "merge groups", "review-brightline-gate", "that group"):
+        assert gone not in prep
+
+
+def _wave_prompts(product_files, *, whole=True) -> list:
+    """Run the emitted review-wave block under node with agent stubbed; returns every prompt."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    _, phases = _compose()
+    prep = {
+        "verdict": "single-reviewer-ok",
+        "product_files": product_files,
+        "slices": [{"id": "s1", "files": ["a.py"], "diff_path": "d/slice.diff", "sidecar_path": "s.md"}],
+        "whole_diff_path": "d/whole.diff",
+        "whole_diff_sidecars": {"kira": "k.md", "personas": ["p.md"], "delivery": "d.md"},
+    }
+    body = "\n".join(ln for ln in phases[1][1].splitlines() if not ln.lstrip().startswith("phase("))
+    script = (
+        f"const _reviewPrep = {json.dumps(prep)}; const _verifyOnly = false; const _out = [];\n"
+        "const agent = async (p) => { _out.push(p); return null; };\n"
+        "const parallel = (fns) => Promise.all(fns.map(f => f()));\n"
+        f"(async () => {{ {body}\n console.log(JSON.stringify(_out)); }})();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def test_one_file_review_briefs_carry_the_diff_only_clause_and_the_diff_path():
+    prompts = _wave_prompts(1)
+    assert len(prompts) >= 3
+    for p in prompts:
+        assert "Small diff: read only the frozen diff" in p
+        assert "Read only the frozen diff named by whole_diff_path" not in p
+        assert "d/slice.diff" in p or "d/whole.diff" in p
+
+
+def test_ten_file_review_briefs_are_the_full_briefs():
+    prompts = _wave_prompts(10)
+    assert len(prompts) >= 3
+    for p in prompts:
+        assert "Small diff" not in p
+        assert "plan_path: docs/plans/example.md" in p
+
+
+def test_three_files_is_small_and_four_is_not():
+    assert all("Small diff" in p for p in _wave_prompts(3))
+    assert not any("Small diff" in p for p in _wave_prompts(4))
+
+
+def test_small_diff_keeps_kira_and_delivery_verifier_in_the_wave():
+    small, large = _wave_prompts(1), _wave_prompts(10)
+    assert len(small) == len(large)
+    assert any("delivery-verifier" in p for p in small)
+

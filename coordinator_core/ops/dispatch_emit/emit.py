@@ -331,6 +331,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     _normalize_path,
     build_waves,
     dag_from_waves,
+    transitive_dependents,
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import completion_return_js, stage_schema_literal
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
@@ -2866,6 +2867,7 @@ def _test_agent_call_expr(
     repo_root: Optional[Path] = None,
     plan_path: Optional[str] = None,
     typecheck: Optional[TypecheckLeg] = None,
+    review_edits_base: Optional[str] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2875,6 +2877,9 @@ def _test_agent_call_expr(
     ``sidecar_path`` (D1.MK1 -- the build/test carrier ``tests.sidecar``
     copies verbatim). ``typecheck`` (``typecheck_leg``) folds a ``tsc --noEmit``
     leg into the same prompt; an empty ``scope`` with a leg runs only the leg.
+    ``review_edits_base`` (a sha, or ``"HEAD"``) widens both to the files review
+    stages edited: the emitter cannot know them, so the prompt has the runner
+    derive them from the tree diff against that base.
     """
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
@@ -2884,6 +2889,7 @@ def _test_agent_call_expr(
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         f"{run_clause}"
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
+        + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")
         + f"{_SKIP_REPORT_CLAUSE} "
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
@@ -2899,6 +2905,25 @@ def _test_agent_call_expr(
         f"{_model_opt(_TEST_AGENT_TYPE)}, "
         f"schema: {stage_schema_literal('test_result')} "
         "})"
+    )
+
+
+def _review_edits_clause(base: str) -> str:
+    """The prompt sentences that widen the terminal phase to review-applied edits.
+
+    Review stages run before this phase and apply their own fixes, so the rows'
+    declared writes are not the whole edited set; a file a reviewer touched
+    (a constant it judged unused, an import it dropped) is checked here too.
+    """
+    return (
+        "Review stages ran before this phase and may have edited files beyond the "
+        f"rows' writes. Run `git diff --name-only {base}` and `git ls-files --others "
+        "--exclude-standard` from the repo root; that union is the edited set. "
+        "For every edited source file not already covered above, add its test target "
+        "to the run, and for every edited `.ts`/`.tsx` file whose governing tsconfig "
+        "directory has no typecheck command above, run `tsc --noEmit -p <that dir>` "
+        "the same way and under the same pass/fail rules. "
+        "Name the extra targets and directories you added at the head of summary."
     )
 
 
@@ -3457,17 +3482,15 @@ def _checkpoint_commit_js(
 
     commit_tail = (
         " You are the only stage that stages or commits anything. Commit exactly this "
-        "declared path list and nothing else. Resolve it with ONE call, "
-        "`git status --porcelain -uall -- <the list>`: pass every entry that exists on "
-        "disk as `paths` -- modified, staged or UNTRACKED (`??`, a file the row created) "
-        "alike. Never narrow the list to tracked or `git diff` output, and never add an "
-        "untracked file the list does not name. Drop only an entry that neither exists "
-        "on disk nor is tracked at HEAD: ["
+        "declared path list and nothing else. Pass the list VERBATIM as `paths` with "
+        "`skip_missing` true: the engine drops entries that are neither on disk nor "
+        "tracked and keeps untracked files. Do not run `git status` and do not filter, "
+        "narrow or add any entry: ["
     )
     route = (
-        "] -- then commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
+        "] -- commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
-        "'{\"paths\":[...],\"message\":\"<message>\"}'` -- the only committer route. "
+        "'{\"paths\":[...],\"skip_missing\":true,\"message\":\"<message>\"}'` -- the only committer route. "
         "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
         "If every listed path already matches HEAD, commit nothing and report outcome "
         "committed without a sha. If the outcome is indeterminate, reconcile it against "
@@ -3835,6 +3858,7 @@ def compose_script(
     precredited_rows: Optional[Sequence[str]] = None,
     review_only: bool = False,
     box_terms: Sequence[str] = (),
+    held_rows: Sequence[tuple[str, str]] = (),
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -3980,6 +4004,12 @@ def compose_script(
     body_blocks.append("  const _unansweredBriefs = [];")
     body_blocks.append("  const _stoppedBy = [];")
     body_blocks.append("  const _notStarted = [];")
+    if held_rows:
+        body_blocks.append(
+            "  const _heldRows = "
+            + json.dumps({row_id: reason for row_id, reason in held_rows}, sort_keys=True)
+            + ";\n  _notStarted.push(...Object.keys(_heldRows));"
+        )
     body_blocks.append("  let _halted = null;")
     body_blocks.append("  const _verifications = [];")
 
@@ -4324,6 +4354,15 @@ def compose_script(
     ):
         phase_titles.append(title)
         guarded_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
+    judge_evidence_path: Optional[str] = None
+    if plan_path:
+        from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
+
+        _plan_file = Path(plan_path)
+        if not _plan_file.is_absolute() and repo_root is not None:
+            _plan_file = Path(repo_root) / _plan_file
+        if read_row_evidence(_plan_file):
+            judge_evidence_path = str(Path(plan_path).with_name(evidence_sidecar_path(_plan_file).name)).replace("\\", "/")
     judge_expr = compose_criterion_judge(
         review,
         stage_schemas=review_stage_schemas,
@@ -4333,6 +4372,7 @@ def compose_script(
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+        evidence_path=judge_evidence_path,
     )
     if judge_expr:
         phase_titles.append(CRITERION_JUDGE_PHASE_TITLE)
@@ -4400,7 +4440,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg)},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=run_base_sha or 'HEAD')},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -4411,7 +4451,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=run_base_sha or 'HEAD')};"
             )
             test_var = _TEST_RESULT_VAR
 
@@ -4443,6 +4483,7 @@ def compose_script(
             script_path=script_path,
             session_id=session_id if session_id and _UUID_RE.fullmatch(session_id) else None,
             predispatch={"checks_run": len(pre_check_specs)} if predispatch else None,
+            held=bool(held_rows),
         )
     )
 
@@ -4963,8 +5004,18 @@ def emit_script(
     review_specs: Sequence[AgentSpec] = (),
     credit_rows: Optional[Callable[[Path, str, Optional[str]], Sequence[str]]] = None,
     box_terms: Sequence[str] = (),
+    hold_rows: Optional[frozenset] = None,
+    hold_reason: Optional[str] = None,
+    held_out: Optional[dict] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``hold_rows`` (with a ``hold_reason``) keeps those rows, and every row that
+    depends on one over declared or read-after-write edges, out of the waves
+    without touching the plan: the script lists them as incomplete in its digest.
+    ``held_out``, when given, receives ``{"rows": [...], "dependents": {id: [held
+    ids]}, "reason": str}``. A named id absent from the dispatchable rows raises
+    ``ValueError``.
 
     ``box_terms`` are recorded in the script's ``meta.boxTerms``; the caller
     also splices them into ``preamble`` so every brief carries them.
@@ -5079,6 +5130,30 @@ def emit_script(
         if not rows:
             raise ValueError("every dispatchable row is already landed; nothing to re-emit")
 
+    held_rows: list = []
+    if hold_rows:
+        if not hold_reason or not hold_reason.strip():
+            raise ValueError("hold_rows requires a hold_reason")
+        if review_only:
+            raise ValueError("hold_rows and review_only_rows are mutually exclusive")
+        unknown = set(hold_rows) - {r.id for r in rows}
+        if unknown:
+            raise ValueError(f"held row id(s) not dispatchable in this emission: {sorted(unknown)}")
+        dependents = transitive_dependents(rows, set(hold_rows))
+        held_rows = [(i, hold_reason.strip()) for i in sorted(hold_rows)] + [
+            (i, f"depends on held row(s) {', '.join(by)} (hold: {hold_reason.strip()})")
+            for i, by in sorted(dependents.items())
+        ]
+        held_ids = {i for i, _ in held_rows}
+        rows = [r for r in rows if r.id not in held_ids]
+        if not rows:
+            raise ValueError("every dispatchable row is held; nothing to emit")
+        exclusions.extend(
+            {"id": i, "reason": "held", "detail": f"held by the operator: {why}"} for i, why in held_rows
+        )
+        if held_out is not None:
+            held_out.update(rows=sorted(hold_rows), dependents=dependents, reason=hold_reason.strip())
+
     resolved_name = name or plan_path.stem
     resolved_description = description or (
         f"Emitted executor/commit/test workflow for {plan_path.stem}"
@@ -5171,6 +5246,7 @@ def emit_script(
         ),
         precredited_rows=precredited_rows,
         review_only=review_only,
+        held_rows=held_rows,
     )
 
 

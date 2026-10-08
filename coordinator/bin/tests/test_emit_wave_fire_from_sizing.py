@@ -74,6 +74,7 @@ def _fire(tmp_path):
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
         "--plugin-root", str(_plugin(tmp_path)), "--from-sizing", SIZING_REL, "--live-engine-tree",
+        "--plan-only",
     ])
 
 
@@ -202,7 +203,7 @@ def _real_fire_baton_text(tmp_path, monkeypatch, sizing):
     assert ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
         "--plugin-root", str(_plugin(tmp_path)), "--live-engine-tree",
-        "--from-sizing", str(tmp_path / SIZING_REL),
+        "--from-sizing", str(tmp_path / SIZING_REL), "--plan-only",
     ]) == ewf.EXIT_OK
     return (tmp_path / _bound(tmp_path)["path"]).read_text(encoding="utf-8")
 
@@ -246,7 +247,7 @@ def _fire_with(tmp_path, *extra):
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
         "--plugin-root", str(_plugin(tmp_path)), "--from-sizing", SIZING_REL,
-        "--live-engine-tree", *extra,
+        "--live-engine-tree", "--plan-only", *extra,
     ])
 
 

@@ -142,10 +142,17 @@ def _disposition(row: dict) -> str:
     return value if isinstance(value, str) and value else _OPEN
 
 
-def spine_projection(rows: list, *, governed: bool = False) -> dict:
+def spine_projection(rows: list, *, governed: bool = False, evidence: dict | None = None) -> dict:
+    """``evidence`` (``{row_id: [entries]}``, from ``read_row_evidence``) attaches an
+    ``evidence`` list to each open row that has entries; rows are copied, never mutated."""
     from coordinator_core.frontmatter.schema_validate import is_unratified_deferral
 
     open_rows = [row for row in rows if _disposition(row) == _OPEN]
+    if evidence:
+        open_rows = [
+            {**row, "evidence": evidence[row.get("id")]} if evidence.get(row.get("id")) else row
+            for row in open_rows
+        ]
     unratified_deferrals = [
         row.get("id") for row in rows if is_unratified_deferral(row, governed=governed)
     ]
@@ -190,6 +197,38 @@ def _render_row_bullet(row: dict) -> str:
     if detail:
         parts.append(f"— {detail}")
     return "- " + " ".join(parts)
+
+
+def render_row_evidence(rows: list, evidence: dict) -> str:
+    """The "Row evidence" markdown section: one bullet per spine row (spine order)
+    with entries in ``evidence`` (``{row_id: [{recorded_at, text}]}``), its entries
+    nested beneath. Empty string when no row has evidence."""
+    lines: list = []
+    for row in rows:
+        entries = evidence.get(row.get("id")) if isinstance(evidence, dict) else None
+        if not isinstance(entries, list) or not entries:
+            continue
+        lines.append(f"- **{row.get('id', '?')}** — {row.get('title', '')}")
+        for entry in entries:
+            if isinstance(entry, dict):
+                lines.append(f"  - {entry.get('recorded_at', '?')}: {entry.get('text', '')}")
+    if not lines:
+        return ""
+    return "## Row evidence\n\n" + "\n".join(lines) + "\n"
+
+
+def render_plan_row_evidence(plan_file) -> str:
+    """``render_row_evidence`` over the plan at ``plan_file`` and its evidence sidecar."""
+    from pathlib import Path
+
+    from coordinator_core.ops.plan_tasks_mutate import read_row_evidence
+
+    path = Path(plan_file)
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return render_row_evidence(load_rows(source).rows, read_row_evidence(path))
 
 
 def render_closed_items(rows: list) -> str:

@@ -128,6 +128,6 @@ def test_pipeline_emit_declares_the_run_scratch_dir_as_a_reader_output_root(repo
     declaration = json.loads(
         (applicability.run_output_roots_dir() / f"{reply['run_id']}.json").read_text(encoding="utf-8")
     )
-    assert declaration["root"] == reply["run_output_root"]
+    assert Path(declaration["root"]) == Path(reply["run_output_root"])
     assert applicability.target_is_under_declared_run_output_root(str(repo / "scratch/run/batch-b1.json"))
     assert not applicability.target_is_under_declared_run_output_root(str(repo / "brief.md"))

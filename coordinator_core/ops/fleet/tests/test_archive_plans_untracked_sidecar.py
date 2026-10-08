@@ -241,3 +241,46 @@ def test_sibling_dest_exists_rolls_back_the_sidecar_already_moved(tmp_path: Path
     assert script.is_file() and receipt.is_file()
     assert not first.dst.exists()
     assert blocked_dst.read_text(encoding="utf-8") == "already here\n"
+
+
+def test_untracked_evidence_sidecar_follows_its_plan_into_the_archive(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    _write_and_commit_plan(root, "2026-08-24-ev.md", "implemented")
+    evidence = root / "docs" / "plans" / "2026-08-24-ev.evidence.yaml"
+    evidence.write_text("rows:\n  C1:\n  - recorded_at: '2026-10-08T00:00:00Z'\n    text: ok\n", encoding="utf-8")
+
+    result = m._handle_act(
+        "already-terminal",
+        root,
+        root,
+        ["docs/plans/2026-08-24-ev.md", "docs/plans/2026-08-24-ev.evidence.yaml"],
+        cap=10,
+    )
+
+    assert not result["failed"], result["failed"]
+    dest = root / "archive" / "specs" / "2026-08" / "2026-08-24-ev.evidence.yaml"
+    assert dest.is_file()
+    assert not evidence.exists()
+
+
+def test_tracked_evidence_sidecar_rides_the_archive_commit(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    _write_and_commit_plan(root, "2026-08-25-ev.md", "implemented")
+    (root / "docs" / "plans" / "2026-08-25-ev.evidence.yaml").write_text("rows: {}\n", encoding="utf-8")
+    _git(["add", "-A"], root)
+    _git(["commit", "-q", "-m", "evidence"], root)
+
+    result = m._handle_act(
+        "already-terminal",
+        root,
+        root,
+        ["docs/plans/2026-08-25-ev.md", "docs/plans/2026-08-25-ev.evidence.yaml"],
+        cap=10,
+    )
+
+    assert not result["failed"], result["failed"]
+    ls_tree = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout
+    assert "archive/specs/2026-08/2026-08-25-ev.evidence.yaml" in ls_tree
+    assert "docs/plans/2026-08-25-ev.evidence.yaml" not in ls_tree

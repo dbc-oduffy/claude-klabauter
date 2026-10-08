@@ -33,8 +33,9 @@ def _next_action(script: str) -> str:
 def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     na = _next_action(_script(monkeypatch))
     assert na.startswith("next_action: { kind: 'terminal_commit', op: 'dispatch.terminal_commit'")
-    override = f"...({_GUARD} ? {{}} : {{ next_action: {{ kind: 'none', op: null, params: null }} }}) }};"
-    assert na.rstrip().endswith(override)
+    override = f"...({_GUARD} ? {{}} : {{ next_action: {{ kind: 'none', op: null, params: null }} }}),"
+    assert override in na
+    assert na.rstrip().endswith("get terminal_commit_cli() { return _terminalCommitCli(this.next_action.params); }, };")
 
 
 def test_gated_ids_are_pushed_after_stage_and_before_execute(monkeypatch):

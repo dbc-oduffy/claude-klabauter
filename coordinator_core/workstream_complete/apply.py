@@ -887,6 +887,51 @@ def _emit_progress(message: str) -> None:
     sys.stderr.flush()
 
 
+def _decided_nature(decisions: dict[str, Any]) -> Optional[str]:
+    """`decisions["nature"]`, else the `completion-nature-classification`
+    judgment's disposition."""
+    nature = decisions.get("nature")
+    if nature:
+        return str(nature)
+    judgment = decisions.get("completion-nature-classification")
+    if isinstance(judgment, dict):
+        return judgment.get("disposition")
+    return None
+
+
+def _fill_completion_entry_surfaces(
+    repo_root: Optional[Path], stdout: str, decisions: dict[str, Any]
+) -> Optional[str]:
+    """Writes the decided title/nature/prose into the entry `d-complete-entry`
+    printed. Returns an error naming the missing `decisions` key(s) when a
+    placeholder surface has no decided value, else `None`. An entry the CLI
+    did not leave on disk is not this function's to judge."""
+    lines = (stdout or "").strip().splitlines()
+    if repo_root is None or not lines:
+        return None
+    entry = Path(lines[0].strip())
+    if not entry.is_absolute():
+        entry = repo_root / entry
+    if not entry.is_file():
+        return None
+    from coordinator_core.ops.ceremony.completion_entry import (
+        AuthoredSurfaceMissing,
+        fill_authored_surfaces,
+    )
+
+    try:
+        fill_authored_surfaces(
+            repo_root,
+            str(entry),
+            title=decisions.get("title"),
+            nature=_decided_nature(decisions),
+            prose=decisions.get("prose"),
+        )
+    except AuthoredSurfaceMissing as exc:
+        return f"{entry.name} left placeholder; set decisions key(s): {', '.join(exc.keys)}"
+    return None
+
+
 def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
@@ -1149,6 +1194,14 @@ def _execute_directives(
                 failed.append(entry)
             results.append(result)
             continue
+        if directive["id"] == _COMPLETE_ENTRY_DIRECTIVE_ID:
+            fill_error = _fill_completion_entry_surfaces(
+                _lazy_repo_root(), result.get("stdout", ""), decisions
+            )
+            if fill_error is not None:
+                failed.append({"id": directive["id"], "error": fill_error})
+                results.append(result)
+                continue
         results.append(result)
         landed.append(directive["id"])
         stdout_by_id[directive["id"]] = result.get("stdout", "")
