@@ -56,7 +56,7 @@ view, discovered executing this change and its follow-up:
 name each other on purpose so the synthesizer can address them, and the
 nine deep-research teammate types (`_DEEP_RESEARCH_NAMING_CARVE_OUT`) that
 four shipped ceremonies (the repo, web and structured deep-research drivers
-under `pipelines/deep-research/`, plus `/notebooklm-research`) dispatch by
+under `pipelines/deep-research/`, plus its NotebookLM pipeline) dispatch by
 name so specialists can wake each other
 via `SendMessage`/`ListAgents` -- see docs/plans/2026-09-12-restore-deep-
 research-teammate-naming.md. Stripping either would silently break its
@@ -185,7 +185,7 @@ _STAFF_SESSION_NAMING_CARVE_OUT = (
 #:   - `coordinator/pipelines/deep-research/structured-driver.md:188,206,223`
 #:     (`coordinator:research-scout`, `coordinator:research-specialist`,
 #:     `coordinator:structured-synthesizer`)
-#:   - `coordinator/commands/notebooklm-research.md:96-97`
+#:   - `coordinator/pipelines/deep-research/notebooklm/notebooklm.manifest.yaml` (`agent_type`)
 #:     (`coordinator:notebooklm-research-scout`, `coordinator:research-worker`,
 #:     `coordinator:research-sweep`)
 #: DR-190 § 2 recorded this naming route as a use case a driver *might*

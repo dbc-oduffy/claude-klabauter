@@ -2019,8 +2019,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "895530db586fbbe82c22ce0706340b9b1a2c793f",
-    "coordinator_core/_engine_stamp": "f452fd872256ddddea44562d02320b70e6cec4d1",
+    "coordinator_core/_engine_published_at": "40d10b55fd0b5df42bed1d23fd4c7541ed17a8d2",
+    "coordinator_core/_engine_stamp": "64df9884d5899465ca951b8ee691fb5a2d5c8a8f",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3346,7 +3346,7 @@
     "coordinator_core/hooks/support/guard_runner.py": "20cf2a90ff7dafdf7f61e51a164e361f45b910d9",
     "coordinator_core/hooks/support/guard_runner_contract.py": "31f5a84451f251ee8efb4437b1a402b6476edebe",
     "coordinator_core/hooks/support/message_envelope.py": "6f9edb184b08c326c7810b0e28e773a2e8538d54",
-    "coordinator_core/hooks/support/named_dispatch_strip.py": "5400dcb26f8b858b34724a212e87caf12aa02fe6",
+    "coordinator_core/hooks/support/named_dispatch_strip.py": "0991a70f90cb72cf925a9e70969e0a4865dc90d4",
     "coordinator_core/hooks/support/next_move_ledger.py": "00d039932f1847913997da9ae966b582176ee40a",
     "coordinator_core/hooks/support/plan_path_bridge.py": "cc3908b0cde283ee6ad44fe99f5f5b8b61907807",
     "coordinator_core/hooks/support/posture.py": "926f344267f4b19842e4c227f50579cfe46442bd",
@@ -7114,5 +7114,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "785fcd03b7bb8bb8b16d13fd5d875a645228e7da"
+  "source_head": "5794bdb4962f98a3da657549b15687901a0d941d"
 }
