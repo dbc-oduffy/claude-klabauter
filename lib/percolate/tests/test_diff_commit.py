@@ -84,6 +84,14 @@ def test_dirty_path_refuses_without_writing(tmp_path):
     assert (root / "d1" / "f1.txt").read_bytes() == b"local edit\n"
 
 
+def test_a_derived_path_overwrites_its_own_stale_worktree_copy(tmp_path):
+    root = _dest(tmp_path, 5)
+    rel = _w(1, "").rel
+    (root / rel).write_bytes(b"a prior round's uncommitted output\n")
+    out = land_diff(root, [_w(1, "new\n")], [], "m", commit=True, derived=frozenset({rel}))
+    assert out.commit_sha is not None and (root / rel).read_bytes() == b"new\n" and _status(root) == ""
+
+
 def test_failure_mid_write_restores_clean(tmp_path, monkeypatch):
     root = _dest(tmp_path, 5)
     real = diff_commit._atomic_write
@@ -119,7 +127,14 @@ def test_lost_cas_race_restores_and_raises(tmp_path, monkeypatch):
 
 def test_exec_mode_lands_as_100755_on_nt(tmp_path, monkeypatch):
     root = _dest(tmp_path, 2)
-    monkeypatch.setattr(os, "name", "nt")
+    # Patch only the two modules' view of `os`: a process-wide `os.name = "nt"`
+    # makes pathlib build WindowsPath, which POSIX refuses to instantiate.
+    import types
+
+    from coordinator_core.git import commit as git_commit
+
+    for module in (diff_commit, git_commit):
+        monkeypatch.setattr(module, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"}))
     land_diff(root, [DestWrite("bin/tool.sh", b"#!/bin/sh\n", 0o100755)], [], "m", commit=True)
     monkeypatch.undo()
     assert _git(root, "ls-tree", "HEAD", "bin/tool.sh").split()[0] == "100755"

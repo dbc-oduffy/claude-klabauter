@@ -148,11 +148,13 @@ def land_diff(
     message: str,
     *,
     commit: bool,
+    derived: frozenset = frozenset(),
 ) -> LandOutcome:
     """Write `writes`, remove `deletions`, and (if `commit`) commit exactly those paths.
 
     Raises `DestDirtyError` before any write when a surviving path's worktree bytes differ
-    from HEAD. A lost CAS race or any failure after the first write restores the worktree
+    from HEAD -- except a path in `derived`, which only the publish writes: its worktree
+    drift is a prior round's uncommitted output, never a hand edit. A lost CAS race or any failure after the first write restores the worktree
     and re-raises. Returns `commit_sha=None` when nothing differs from HEAD or `commit` is False.
     """
     root = Path(dest_repo_root)
@@ -178,7 +180,7 @@ def land_diff(
         if not have and entry is None:
             continue
         if not have or entry is None or entry[1] not in have:
-            if rel in todo and _blob_sha(todo[rel].data) in have:
+            if rel in todo and (_blob_sha(todo[rel].data) in have or rel in derived):
                 continue
             raise DestDirtyError(f"{rel}: destination worktree differs from HEAD; nothing written")
 

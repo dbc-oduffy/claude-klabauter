@@ -87,3 +87,14 @@ def test_manifest_omits_unpublished_source_and_hashes_written_bytes(monkeypatch,
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_a_cold_round_declares_the_expected_manifest_for_the_commit(tmp_path):
+    from types import SimpleNamespace
+
+    union = tmp_path / "union"
+    (union / "pkg").mkdir(parents=True)
+    (union / "pkg" / "m.py").write_text("x\n")
+    u = SimpleNamespace(cold=True, union_root=union, survivors={"pkg/m.py": None, ".coordinator/expected-manifest.json": None})
+    assert publish._declared_payload(u) == {"pkg/m.py", ".coordinator/expected-manifest.json"}
+    assert publish._declared_payload(SimpleNamespace(cold=False, union_root=union, survivors={})) == frozenset()
