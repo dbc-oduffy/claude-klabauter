@@ -396,6 +396,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "install.write_identity_file":            "coordinator_core.ops.write_identity_file",
     "research.archive_workdir":               "coordinator_core.ops.research_archive_workdir",
     "research.restructure_for_repeat_topic":  "coordinator_core.ops.research_dir_restructure",
+    "research.close":                         "coordinator_core.ops.research_close",
+    "research.shape":                         "coordinator_core.ops.research_shape",
     "session.rotate_orphan_sweep_log":        "coordinator_core.ops.session.rotate_orphan_sweep_log",
     "repo.create_and_push_remote":            "coordinator_core.ops.create_github_remote",
     "branch.merge_into_workstream":           "coordinator_core.ops.merge_branch_into_workstream",

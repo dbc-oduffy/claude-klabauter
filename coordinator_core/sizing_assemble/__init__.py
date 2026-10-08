@@ -1362,6 +1362,7 @@ def write_back(
     premise_evidence: Optional[str] = None,
     scout_evidence: Optional[list[str]] = None,
     deliverable_id: Optional[str] = None,
+    research: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Apply a `route()` decision to an existing `state/sizings/` sizing under
     `locked_rmw`, schema-validated before the write.
@@ -1465,6 +1466,8 @@ def write_back(
                 if click_paths:
                     existing["click_paths"] = click_paths
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
+        if research:
+            text = write_fm_nested_field(text, "research", _render_block(research))
         if interaction_mode and not doc.get("interaction_mode"):
             text = _set_scalar(text, "interaction_mode", interaction_mode)
         intent_now = doc.get("intent")
@@ -1499,6 +1502,57 @@ def write_back(
     return {"path": str(target), "status": "written"}
 
 
+def build_research_block(
+    value_class: Optional[str],
+    appetite: Optional[str],
+    sources: list[str],
+    depth: Optional[str],
+    targets: list[str],
+) -> tuple[Optional[dict[str, Any]], list[str]]:
+    """The sizing-object `research:` block from the --research-* flag values, with
+    one refusal string per bad value. `(None, [])` when no research flag was given."""
+    if not (value_class or appetite or sources or depth or targets):
+        return None, []
+    from coordinator_core.ops import _research_contract as rc
+
+    errors: list[str] = []
+    if value_class is None:
+        errors.append("--research-class is required whenever another --research-* flag is given")
+    elif value_class not in rc.VALUE_CLASSES:
+        errors.append(f"--research-class must be one of {rc.VALUE_CLASSES}, got {value_class!r}")
+    if appetite is not None and appetite not in rc.APPETITES:
+        errors.append(f"--research-appetite must be one of {rc.APPETITES}, got {appetite!r}")
+    ordered_sources: list[str] = []
+    for src in sources:
+        if src not in rc.SOURCES:
+            errors.append(f"--research-source must be one of {rc.SOURCES}, got {src!r}")
+        elif src not in ordered_sources:
+            ordered_sources.append(src)
+    if depth is not None and depth not in rc.DEPTHS:
+        errors.append(f"--research-depth must be one of {rc.DEPTHS}, got {depth!r}")
+    parsed_targets: list[dict[str, str]] = []
+    for raw in targets:
+        source, sep, ref = raw.partition("=")
+        if not sep or not ref.strip():
+            errors.append(f"--research-target {raw!r}: expected <source>=<ref>")
+        elif source not in rc.SOURCES:
+            errors.append(f"--research-target source must be one of {rc.SOURCES}, got {source!r}")
+        else:
+            parsed_targets.append({"source": source, "ref": ref.strip()})
+    if errors:
+        return None, errors
+    block: dict[str, Any] = {"value_class": value_class}
+    if appetite is not None:
+        block["appetite"] = appetite
+    if ordered_sources:
+        block["sources"] = ordered_sources
+    if depth is not None:
+        block["depth"] = depth
+    if parsed_targets:
+        block["targets"] = parsed_targets
+    return block, []
+
+
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
@@ -1523,6 +1577,11 @@ def _usage(prog: str, stream=None) -> int:
         "[--probe-raise-basis ask-scope|substrate-condition|breadth] "
         "[--exit-criterion <str>] "
         "[--interaction-mode hands-on|pm|ceo] "
+        "[--research-class scouts|corpus|deep (required with any other --research-*)] "
+        "[--research-appetite small|medium|large (research budget; distinct from --appetite)] "
+        "[--research-source web|repo|structured|notebooklm ...] "
+        "[--research-depth standard|deeper|deepest] "
+        "[--research-target <source>=<ref> ...] "
         "[--write <state/sizings/x.yaml>] "
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
         "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
@@ -1589,6 +1648,11 @@ def main(argv: list[str]) -> int:
     supersede = False
     pm_quote = None
     decided_on = None
+    research_class = None
+    research_appetite = None
+    research_sources: list[str] = []
+    research_depth = None
+    research_targets: list[str] = []
 
     i = 0
     while i < len(argv):
@@ -1674,6 +1738,21 @@ def main(argv: list[str]) -> int:
         elif tok == "--decided-on" and i + 1 < len(argv):
             decided_on = argv[i + 1]
             i += 2
+        elif tok == "--research-class" and i + 1 < len(argv):
+            research_class = argv[i + 1]
+            i += 2
+        elif tok == "--research-appetite" and i + 1 < len(argv):
+            research_appetite = argv[i + 1]
+            i += 2
+        elif tok == "--research-source" and i + 1 < len(argv):
+            research_sources.append(argv[i + 1])
+            i += 2
+        elif tok == "--research-depth" and i + 1 < len(argv):
+            research_depth = argv[i + 1]
+            i += 2
+        elif tok == "--research-target" and i + 1 < len(argv):
+            research_targets.append(argv[i + 1])
+            i += 2
         elif tok == "--json":
             i += 1
         else:
@@ -1728,6 +1807,17 @@ def main(argv: list[str]) -> int:
     if tshirt is None:
         return _usage(prog)
 
+    research_block, research_errors = build_research_block(
+        research_class, research_appetite, research_sources, research_depth, research_targets
+    )
+    if research_errors:
+        for message in research_errors:
+            print(f"{prog}: {message}", file=sys.stderr)
+        return EXIT_USAGE
+    if research_block is not None and write_path is None:
+        print(f"{prog}: --research-* requires --write <state/sizings/x.yaml>", file=sys.stderr)
+        return EXIT_USAGE
+
     interaction_mode, interaction_mode_source = _resolve_interaction_mode_and_source(
         interaction_mode_flag
     )
@@ -1775,6 +1865,7 @@ def main(argv: list[str]) -> int:
                 premise_evidence=premise_evidence,
                 scout_evidence=scout_evidence,
                 deliverable_id=deliverable_id,
+                research=research_block,
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)

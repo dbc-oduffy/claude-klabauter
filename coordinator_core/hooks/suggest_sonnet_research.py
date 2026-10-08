@@ -23,34 +23,29 @@ def _deep_research_plugin_dir() -> str | None:
 
 _MSG_WITH_PLUGIN = (
     "DELEGATION REQUIRED: web research as Opus. Use instead:\n"
-    "  /coordinator:research --mode=web <topic>\n"
-    "  /coordinator:research --mode=repo <path> [--deepest]\n"
-    "  /coordinator:research --mode=structured <spec-path>\n"
+    "  /coordinator:research\n"
+    "  emit-dispatch-workflow --research --ask \"<question>\"\n"
+    "  emit-dispatch-workflow --from-sizing <path>\n"
     "  Agent subagent_type='Explore'\n"
     "  Agent subagent_type='coordinator:enricher'\n"
-    "{notebooklm}\n"
     "Direct web calls: single URL/fact only, never a generic search Agent."
 )
 
 _MSG_WITHOUT_PLUGIN = (
     "DELEGATION REQUIRED: web research as Opus. Use instead:\n"
-    "  install deep-research plugin, then /coordinator:research --mode=...\n"
+    "  install deep-research plugin, then /coordinator:research\n"
+    "  emit-dispatch-workflow --research --ask \"<question>\"\n"
+    "  emit-dispatch-workflow --from-sizing <path>\n"
     "  Agent subagent_type='Explore'\n"
-    "  Agent subagent_type='coordinator:enricher'\n\n"
+    "  Agent subagent_type='coordinator:enricher'\n"
     "Direct web calls: single URL/fact only, never a generic search Agent."
 )
 
 
-def _research_plugins() -> tuple[bool, bool]:
-    """(deep-research present, its notebooklm sub-plugin present).
-
-    The /notebooklm-research suggestion is only actionable when the sub-plugin is
-    installed; the parent pipeline alone does not provide it.
-    """
+def _research_plugins() -> bool:
+    """Whether the deep-research plugin directory is present."""
     plugin_dir = _deep_research_plugin_dir()
-    if plugin_dir is None or not os.path.isdir(plugin_dir):
-        return False, False
-    return True, os.path.isdir(os.path.join(plugin_dir, "notebooklm"))
+    return plugin_dir is not None and os.path.isdir(plugin_dir)
 
 
 @register_op("hooks.suggest_sonnet_research")
@@ -63,11 +58,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if resolve_subagent_identity(agent_id, session_id):
         return no_advisory()
 
-    plugin_present, notebooklm_present = await asyncio.to_thread(_research_plugins)
-    if plugin_present:
-        msg = _MSG_WITH_PLUGIN.format(
-            notebooklm="  /notebooklm-research\n" if notebooklm_present else ""
-        )
-    else:
-        msg = _MSG_WITHOUT_PLUGIN
+    plugin_present = await asyncio.to_thread(_research_plugins)
+    msg = _MSG_WITH_PLUGIN if plugin_present else _MSG_WITHOUT_PLUGIN
     return allow_advisory("PreToolUse", msg)

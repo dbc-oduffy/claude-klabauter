@@ -4333,6 +4333,14 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # paper-trail dir; module docstring confirms this is a native replacement
     # for a shell `mv`-based fence. MUTATING.
     "research.restructure_for_repeat_topic": OpClass.MUTATING,
+
+    # research.close — MUTATING: ops/research_close.py copies a run's outputs into
+    # docs/research/<date>-<slug>/ and makes one commit_paths call (scouts: scratch digest only).
+    "research.close": OpClass.MUTATING,
+
+    # research.shape — COMPUTE_ONLY: ops/research_shape.py maps a caller-passed
+    # research block to tier/pipelines; no I/O.
+    "research.shape": OpClass.COMPUTE_ONLY,
     # C17 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md) — the 14
     # registered-but-unclassified ops closing the OP_CLASSIFICATION gap
     # against ipc._REGISTRY (measure after `import coordinator_core.ops`,

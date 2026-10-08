@@ -454,6 +454,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scratch-dir", default=None, metavar="PATH", help="pipeline route: repo-relative scratch dir"
     )
     parser.add_argument(
+        "--from-sizing",
+        dest="from_sizing",
+        default=None,
+        metavar="PATH",
+        help="research route: emit the research pipelines the sizing's research block shapes to; "
+        "emit-only, exclusive of every other route selector",
+    )
+    parser.add_argument(
+        "--research",
+        action="store_true",
+        help="with --ask PROMPT: the scouts express lane -- write the ask to <scratch>/ask.md and "
+        "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
+    )
+    parser.add_argument(
         "--resume-missing",
         action="store_true",
         help="pipeline route: re-emit only the fan-out elements whose expected output is missing or empty "
@@ -908,15 +922,44 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return _do_resume(args)
 
     is_pipeline_route = args.pipeline is not None
+    if args.research and not isinstance(args.ask, str):
+        print("emit-dispatch-workflow: ERROR — --research needs --ask PROMPT", file=sys.stderr)
+        return EXIT_USAGE
+    is_research_route = bool(args.from_sizing) or args.research
+    if is_research_route:
+        others = [
+            flag
+            for flag, value in (
+                ("--plan", args.plan),
+                ("--inventory", args.inventory),
+                ("--queue", args.queue),
+                ("--profile", args.profile),
+                ("--sizing", args.sizing),
+                ("--pipeline", is_pipeline_route),
+                ("--writes", args.writes),
+                ("--baton", args.baton),
+                ("--deliverable-id", args.deliverable_id),
+                ("--fire", args.fire),
+                ("--ask", args.from_sizing and args.ask is not None),
+                ("--research", args.from_sizing and args.research),
+            )
+            if value
+        ]
+        if others:
+            print(
+                f"emit-dispatch-workflow: ERROR — the research route is exclusive of {', '.join(others)}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
     pipeline_only = [
         flag
         for flag, value in (
             ("--brief", args.brief),
             ("--subjects", args.subjects),
-            ("--scratch-dir", args.scratch_dir),
+            ("--scratch-dir", args.scratch_dir if not is_research_route else None),
             ("--resume-missing", args.resume_missing),
             ("--flag", args.flag),
-            ("--list", args.list),
+            ("--list", args.list if not is_research_route else None),
             ("--validator", args.validator),
         )
         if value
@@ -957,7 +1000,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
     is_queue_route = bool(args.queue) or bool(args.profile)
 
-    is_ask_route = args.ask is not None or bool(args.sizing)
+    is_ask_route = (args.ask is not None or bool(args.sizing)) and not is_research_route
 
     if args.writes and not is_ask_route:
         print(
@@ -1012,10 +1055,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
-    if not is_queue_route and not args.plan and not args.inventory and not is_ask_route and not is_pipeline_route:
+    if (
+        not is_queue_route and not args.plan and not args.inventory and not is_ask_route
+        and not is_pipeline_route and not is_research_route
+    ):
         print(
             "emit-dispatch-workflow: ERROR — one of --plan, --inventory, --ask, --sizing, "
-            "--pipeline, or --restamp is required",
+            "--pipeline, --from-sizing, or --restamp is required",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -1121,6 +1167,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         not args.out_path
         and not is_ask_route
         and not is_pipeline_route
+        and not is_research_route
         and not args.lanes
         and not (args.inventory and not is_queue_route)
     ):
@@ -1192,6 +1239,23 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["baton"] = args.baton
         if args.deliverable_id:
             params["deliverable_id"] = args.deliverable_id
+        if repo_root is None:
+            repo_root = _default_repo_root_from_cwd()
+    if is_research_route:
+        if args.from_sizing:
+            params["from_sizing"] = args.from_sizing
+        else:
+            params["research"] = True
+            params["ask"] = args.ask
+        try:
+            if args.list:
+                params["lists"] = _parse_lists(args.list)
+        except PipelineEmitRefused as exc:
+            for reason in exc.reasons:
+                print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)
+            return EXIT_DATA_ERROR
+        if args.scratch_dir:
+            params["scratch_dir"] = args.scratch_dir
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_pipeline_route:

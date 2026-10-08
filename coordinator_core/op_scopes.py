@@ -733,6 +733,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "repo_setup.copy_console_subprocess_tripwire": "show_top",
     "research.archive_workdir":                 "common_dir",
     "research.restructure_for_repeat_topic":    "common_dir",
+    "research.close":                           "common_dir",
+    "research.shape":                           "none",
     "session.resolve_chain_terminal_disposition": "common_dir",
     # session.rotate_orphan_sweep_log — common_dir: must match
     # session.boot_sweep's existing common_dir entry for the SAME

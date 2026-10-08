@@ -677,7 +677,7 @@ _PARAM_FIELDS = (
         for name in (
             "plan_path", "plan", "inventory_path", "profile", "profile_dir", "sizing_path",
             "output_path", "target_root", "preamble", "preamble_path", "preamble_sha256", "box_terms_path",
-            "inventory_repo_root", "pipeline", "brief", "scratch_dir", "validator", "part", "baton", "deliverable_id",
+            "inventory_repo_root", "from_sizing", "pipeline", "brief", "scratch_dir", "validator", "part", "baton", "deliverable_id",
         )
     ),
     Field("inventory_part", "list"),
@@ -785,6 +785,68 @@ def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Pat
         for name in inputs.lists
     }
     return replace(inputs, lists=lists), report
+
+
+def _research_route_setup(
+    params: dict, repo_root: Optional[Path], from_sizing: Optional[str], ask: object
+) -> tuple[dict, dict, dict]:
+    """Resolve the research route: shape, scratch dir, ask file, loaded and validated segments.
+
+    Returns ``(research_ctx, pipeline_ctx, params)``; ``pipeline_ctx`` carries the first
+    segment's inputs so the pipeline route's scratch-root declaration and reply fields apply
+    unchanged, and ``params`` gains the default ``output_path``. ``from_sizing`` takes its
+    research block from the sizing and binds the sizing file as the brief; an ask writes
+    ``<scratch>/ask.md`` and binds that. ``lists['questions']`` are the scout questions.
+    """
+    from coordinator_core.ops import research_shape
+    from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
+    from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
+
+    lists = dict(params.get("lists") or {})
+    questions = [str(q) for q in lists.get("questions") or ()]
+    if from_sizing:
+        root = _sizing_root(params, repo_root, str(from_sizing))
+        brief_rel = _sizing_rel(root, str(from_sizing))
+        research = load_sizing(root, brief_rel).get("research")
+        if not isinstance(research, dict) or not research:
+            raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
+    else:
+        given_root = repo_root or params.get("target_root")
+        if not given_root:
+            raise ValueError("dispatch.emit research route requires repo_root or target_root")
+        root = Path(given_root)
+        research = {"value_class": "scouts", "appetite": "medium"}
+        brief_rel = ""
+    shape = research_shape.shape(research)
+    run_id = f"{RUN_ID_PREFIX}research-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
+    if not from_sizing:
+        brief_rel = research_emit.write_ask(root, scratch_rel, str(ask), questions)
+    pairs = research_emit.segments_for(
+        shape,
+        brief_rel=brief_rel,
+        scratch_rel=scratch_rel,
+        questions=questions,
+        sources=research.get("sources") or (),
+    )
+    content_root = _pipeline_content_root()
+    segments = []
+    for pipeline, inputs in pairs:
+        manifest = load_manifest(content_root, pipeline)
+        inputs = replace(inputs, lists=normalize_lists(manifest.lists, inputs.lists))
+        segments.append((manifest, inputs, validate(manifest, inputs)))
+    if not aliased_param(params, "output_path", "out_path"):
+        params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
+    research_ctx = {
+        "root": root,
+        "run_id": run_id,
+        "brief": brief_rel,
+        "segments": segments,
+        "shape": {"tier": shape["tier"], "reason": shape["reason"], "pipelines": shape["pipelines"]},
+    }
+    pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
+    return research_ctx, pipeline_ctx, params
 
 
 def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
@@ -951,6 +1013,26 @@ def _dispatch_emit(
     if params.get("resume_missing") and not pipeline_name:
         raise ValueError("dispatch.emit resume_missing is a pipeline-route option and needs pipeline")
 
+    from_sizing = params.get("from_sizing")
+    research_flag = params.get("research", False)
+    if not isinstance(research_flag, bool):
+        raise ValueError("dispatch.emit research must be a boolean")
+    research_route = bool(from_sizing) or research_flag
+    research_ctx: Optional[dict] = None
+    if research_route:
+        if research_flag and not (isinstance(ask, str) and ask):
+            raise ValueError("dispatch.emit research needs an ask prompt string")
+        if (
+            plan_path or inventory_path or queue or profile_name or pipeline_name or sizing_path
+            or params.get("cloud_spawn") is not None or (from_sizing and ask)
+        ):
+            raise PipelineParamConflictError(
+                "dispatch.emit research route accepts from_sizing, or research with an ask, "
+                "alone -- not with plan_path/inventory_path/queue/profile/pipeline/sizing_path/cloud_spawn"
+            )
+        research_ctx, pipeline_ctx, params = _research_route_setup(params, repo_root, from_sizing, ask)
+        repo_root = repo_root or research_ctx["root"]
+
     if pipeline_name:
         if plan_path or inventory_path or queue or profile_name or ask or sizing_path or params.get("cloud_spawn") is not None:
             raise PipelineParamConflictError(
@@ -1000,7 +1082,7 @@ def _dispatch_emit(
             params = {**params, "output_path": str(pipeline_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
         repo_root = repo_root or pipeline_root
 
-    if ask or sizing_path:
+    if (ask or sizing_path) and research_ctx is None:
         if plan_path or inventory_path or queue or profile_name:
             raise SizingPathConflictError(
                 "dispatch.emit accepts ask/sizing_path alone, not with plan_path/"
@@ -1224,6 +1306,19 @@ def _dispatch_emit(
         script = emission.script
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
+    elif research_ctx is not None:
+        from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script
+
+        script = compose_chain_script(
+            research_ctx["segments"], run_id=research_ctx["run_id"], agent_type_host=agent_type_host
+        )
+        receipt_extras = {
+            **(receipt_extras or {}),
+            "run_id": research_ctx["run_id"],
+            "brief": research_ctx["brief"],
+            **research_ctx["shape"],
+        }
+        receipt_plan_path = None
     elif pipeline_ctx is not None:
         from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
         from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
@@ -1429,6 +1524,9 @@ def _dispatch_emit(
         reply["run_output_root"] = pipeline_output_root.as_posix()
         if pipeline_ctx["resume_missing"]:
             reply["resume_missing"] = pipeline_ctx["resume_report"]
+
+    if research_ctx is not None:
+        reply.update(research_ctx["shape"])
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

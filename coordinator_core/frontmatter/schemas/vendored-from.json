@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "7200cb51a80330f427077b96ed6ff0a73e025ca5",
-    "doe_commit": "45430c385b9ef62239362bfe914120b0e8fcd25b"
+    "blob": "dcbb016865e444a123e22239937918af9289df54",
+    "doe_commit": "c986b17470096d33938d180eaff16c6a2d6fd794"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -144,8 +144,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "sizing-object.schema.json": {
-    "blob": "fec45ee3b347a30a0e9080ec168a46fbb6535a88",
-    "doe_commit": "4cf66d39225d02fe7459051551b5dcbcd698b422"
+    "blob": "6d7c31cd0de870f03f077cc161f079f63d0023fc",
+    "doe_commit": "c986b17470096d33938d180eaff16c6a2d6fd794"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

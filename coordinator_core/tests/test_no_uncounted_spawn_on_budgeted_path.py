@@ -944,6 +944,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/records_query.py",
         ("_handler",),
     ),
+    "research.shape": (
+        "coordinator_core/ops/research_shape.py",
+        ("_research_shape",),
+    ),
     "research.verify_scout_inventory_completeness": (
         "coordinator_core/ops/verify_scout_inventory_completeness.py",
         ("_handler",),
@@ -2322,6 +2326,10 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "research.restructure_for_repeat_topic": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
     ),
+    # Clean path spawns nothing; the CRLF-pinned `hash_worktree_blobs_via_spawn` fallback reaches run_git once.
+    "research.close": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
+    ),
     # Deliberate growth: freeze_diffs_batch now commits its writes via `commit_paths`, whose
     # `hash_worktree_blobs_via_spawn` fallback reaches `git/run.py::run_git` (one spawn per batch).
     "review.freeze_diff": (
@@ -2392,6 +2400,7 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "orientation.regenerate_cache": ("coordinator_core/orientation/regenerate_cache.py", "_orientation_regenerate_cache"),
     "priority.drain": ("coordinator_core/ops/priority_drain.py", "_priority_drain"),
     "research.archive_workdir": ("coordinator_core/ops/research_archive_workdir.py", "_handler"),
+    "research.close": ("coordinator_core/ops/research_close.py", "_handler"),
     "research.restructure_for_repeat_topic": ("coordinator_core/ops/research_dir_restructure.py", "_handler"),
     "review.freeze_diff": ("coordinator_core/ops/review_freeze_diff.py", "_handler"),
     "review.partition_slices": ("coordinator_core/ops/review_partition_slices.py", "_handler"),
@@ -2496,9 +2505,10 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # 57 -> 56 (2026-10-03): `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py` and no longer reaches `git_native.py::_git._invoke`: -1.
     # 58 -> 59 (2026-10-08): new op `review.reachability` reaches `git/run.py::run_git`: +1.
-    assert total_pairs == 59, (
+    # 59 -> 60 (2026-10-08): new op `research.close` reaches `git/run.py::run_git` (CRLF blob fallback): +1.
+    assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -6777,6 +6787,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.chunk_table": 1,
     "research.archive_workdir": 1,
     "research.restructure_for_repeat_topic": 1,
+    "research.close": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "changelog.compute_day_fields": 1,

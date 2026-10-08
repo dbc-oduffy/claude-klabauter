@@ -1,4 +1,4 @@
-"""The pipeline route against DoE's manifest dialect: a vendored structured copy always runs; DoE's six manifests run when its tree is present."""
+"""The pipeline route against DoE's manifest dialect: a vendored structured copy always runs; DoE's manifests run when its tree is present."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.pipeline_inputs import subjects_from_value
+from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest
 from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph, subjects
 
 _TESTS = Path(__file__).parent / "fixtures"
@@ -314,6 +315,7 @@ _DOE_CASES = {
     "web": {"lists": {"topics": ["a", "b", "c"]}},
     "web-deepening": {"flags": {"needs_scout": "true"}, "lists": {"gaps": ["d", "e"]}},
     "notebooklm": {"lists": {"notebooks": ["a", "b"]}},
+    "scouts": {"lists": {"questions": ["q-one", "q-two"]}},
     "staff-session": {"flags": {"mode": "plan"}, "lists": {"roster": ["the Staff Engineer=coordinator:the Staff Engineer", "sid=coordinator:sid"]}},
 }
 
@@ -326,6 +328,16 @@ def test_doe_manifest_emits(pipeline, monkeypatch, tmp_path):
     script = _emit(monkeypatch, tmp_path, root, pipeline, **_DOE_CASES[pipeline])
     assert agent_graph(script)
     assert re.search(r"phases: \['[^']+'", script)
+
+
+def test_every_doe_manifest_loads():
+    root = _doe_content_root()
+    if root is None:
+        pytest.skip("coordinator-content-repo tree not present")
+    paths = sorted((root / "pipelines").glob("**/*.manifest.yaml"))
+    assert paths
+    for path in paths:
+        assert load_manifest(root, path.name.removesuffix(".manifest.yaml")).stages, path.name
 
 
 def test_doe_repo_with_every_flag_on_emits(monkeypatch, tmp_path):
