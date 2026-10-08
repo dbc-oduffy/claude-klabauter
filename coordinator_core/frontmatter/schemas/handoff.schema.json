@@ -115,9 +115,6 @@
       "new-project": {
         "group": "setup"
       },
-      "notebooklm-research": {
-        "group": "research"
-      },
       "parallel-code-review": {
         "group": "review"
       },

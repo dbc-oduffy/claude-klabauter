@@ -21,7 +21,10 @@ from coordinator_core.ops.dispatch_emit.tests.pipeline_graph import agent_graph,
 
 _TESTS = Path(__file__).parent / "fixtures"
 _DOE_FIXTURE = _TESTS / "pipeline_doe_structured"
-_ORACLE = _TESTS / "pipeline_structured" / "oracle" / "structured-research-fixture.oracle.mjs"
+# The oracle is a hand-written reference for the structured graph as it stood when the oracle was
+# authored, so it is compared against that frozen manifest; _DOE_FIXTURE tracks DoE's tree instead.
+_ORACLE_FIXTURE = _TESTS / "pipeline_structured"
+_ORACLE = _ORACLE_FIXTURE / "oracle" / "structured-research-fixture.oracle.mjs"
 _VERIFIERS = [
     {"role": "verifier-alpha", "topic": "alpha", "name": "Alpha topic"},
     {"role": "verifier-beta", "topic": "beta", "name": "Beta topic"},
@@ -55,8 +58,9 @@ def _structured(monkeypatch, tmp_path, **params) -> str:
 
 def test_vendored_structured_matches_the_oracle_graph(monkeypatch, tmp_path):
     keys = ["Subject One", "Subject Two", "Subject Three"]
-    emitted = _structured(
-        monkeypatch, tmp_path, subjects=[{"subject": k, "verifiers": _VERIFIERS} for k in keys]
+    emitted = _emit(
+        monkeypatch, tmp_path, _ORACLE_FIXTURE, "structured",
+        subjects=[{"subject": k, "verifiers": _VERIFIERS} for k in keys],
     )
     oracle = _ORACLE.read_text(encoding="utf-8")
     assert agent_graph(emitted) == agent_graph(oracle)
@@ -65,8 +69,10 @@ def test_vendored_structured_matches_the_oracle_graph(monkeypatch, tmp_path):
 
 def test_phase_labels_schema_literal_and_chunk_cap(monkeypatch, tmp_path):
     script = _structured(monkeypatch, tmp_path)
-    assert "phases: ['Scout', 'Verify', 'Rebuttal', 'Synthesize']" in script
-    assert [m for m in re.findall(r"phase\('([^']+)'\)", script)] == ["Scout", "Verify", "Rebuttal", "Synthesize"]
+    assert "phases: ['Scope', 'Scout', 'Verify', 'Rebuttal', 'Synthesize', 'Coverage']" in script
+    assert [m for m in re.findall(r"phase\('([^']+)'\)", script)] == [
+        "Scope", "Scope", "Scout", "Verify", "Rebuttal", "Synthesize", "Coverage"
+    ]
     assert script.count('"required": ["topic", "challenged"]') == 2
     assert "inChunks" not in script and script.count("fanOut(items,") == 2
     assert "description: 'Structured research, one subject at a time" in script
