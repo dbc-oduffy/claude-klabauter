@@ -1685,7 +1685,10 @@ def _prime_exit(
         )
     if repo_root is not None:
         sizing_exit = _read_sizing_exit_criterion(repo_root, str(derived_from).strip())
-        if isinstance(sizing_exit, dict) and isinstance(sizing_exit.get("accepted"), dict):
+        accepted = sizing_exit.get("accepted") if isinstance(sizing_exit, dict) else None
+        # The engine's skip record names no accepted criterion for a plan to inherit; this leaf
+        # stays free of ops imports (test_import_closure_gains_no_ops_module).
+        if isinstance(accepted, dict) and accepted.get("source") != "engine-size-rule":
             sizing_statement = str(sizing_exit.get("statement") or "")
             if " ".join(str(statement).split()) != " ".join(sizing_statement.split()):
                 return _defect(
@@ -2196,7 +2199,19 @@ def refusal_message(
         # part that is derivable from the plan's own body. Naming the converter
         # here is what stops each session rediscovering it — a runnable script,
         # never a slash command, because what fails here may have no session.
-        lines.append(_upgrade_fix_line())
+        # A census command in a refused FORM is stated, not missing: the converter
+        # derives nothing for it, so it is named only when another class owes it work.
+        unscreenable = classes.get("CENSUS", {}).get("kind") == "census-unscreenable"
+        if unscreenable:
+            lines.append(
+                "  fix: rewrite each named census command BY HAND as a read-only pipeline "
+                "(grep/find/wc/jq, git <read>) — mise-prep-upgrade derives missing "
+                "declarations and does not rewrite a stated command"
+            )
+        if not unscreenable or any(
+            k != "CENSUS" and v["status"] != "PASS" for k, v in classes.items()
+        ):
+            lines.append(_upgrade_fix_line())
     return "\n".join(lines)
 
 

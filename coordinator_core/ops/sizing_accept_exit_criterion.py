@@ -70,6 +70,7 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.sizing_acceptance import (
     APM_ADMISSIBLE_MODES,
     SOURCE_APM,
+    SOURCE_ENGINE,
     SOURCE_PM,
     acceptance_source,
     acceptance_words,
@@ -240,6 +241,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         eff_mode = mode or str(doc.get("interaction_mode") or "") or "hands-on"
         existing_source = acceptance_source(existing_accepted)
+        if existing_source == SOURCE_ENGINE:
+            # The engine's skip record is no acceptance: a PM or APM one replaces it outright.
+            existing_accepted, existing_source = None, None
         today = date.today().isoformat()
         if apm_ruling:
             recorded_mode = str(doc.get("interaction_mode") or "")

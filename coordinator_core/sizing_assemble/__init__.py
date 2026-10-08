@@ -1381,7 +1381,9 @@ def write_back(
     resolved one), scout_evidence and premise (only when given), and status
     `draft`/`sized` -> `routed` (terminal statuses are never regressed); a
     scaffold-placeholder `intent` is replaced by the computed one. exit_criterion.statement is written only while
-    `accepted` is null; interaction_mode only while absent. Raises
+    `accepted` is null or the engine's own record; interaction_mode only while absent. Where
+    the size rule skips the acceptance ask (pm/ceo only) and a statement exists, `accepted` is
+    the engine-size-rule record; a re-size out of the rule clears it. Raises
     `SizingAssembleError` on any refusal, with nothing written.
     """
     import json
@@ -1470,14 +1472,44 @@ def write_back(
                     }
                 ),
             )
-        if exit_criterion and exit_criterion.strip():
-            existing = doc.get("exit_criterion")
-            existing = dict(existing) if isinstance(existing, dict) else {}
-            if existing.get("accepted") is None:
-                existing["statement"] = exit_criterion.strip()
-                existing["accepted"] = None
+        existing = doc.get("exit_criterion")
+        existing = dict(existing) if isinstance(existing, dict) else {}
+        prior_accepted = existing.get("accepted")
+        # The engine's own record is the engine's to refresh: a re-size out of the rule
+        # (e.g. to XL) must not leave a stale skip behind. PM and APM records are never touched.
+        engine_owned = (
+            prior_accepted is None
+            or (isinstance(prior_accepted, dict) and prior_accepted.get("source") == ENGINE_SIZE_RULE)
+        )
+        if engine_owned:
+            statement = (exit_criterion or "").strip() or str(existing.get("statement") or "").strip()
+            if exit_criterion and exit_criterion.strip():
+                existing["statement"] = statement
                 if click_paths:
                     existing["click_paths"] = click_paths
+            mode = doc.get("interaction_mode") or interaction_mode
+            route_now, tshirt_now = decision["route"], decision["resolved_estimate"]["tshirt"]
+            skipped = bool(statement) and mode in ("pm", "ceo") and sizing_acceptance_skipped(
+                route_now, tshirt_now
+            )
+            accepted = (
+                {
+                    "source": ENGINE_SIZE_RULE,
+                    "rule": ENGINE_SIZE_RULE,
+                    "route": route_now,
+                    "tshirt": tshirt_now,
+                    "on": date.today().isoformat(),
+                    "mode": mode,
+                }
+                if skipped
+                else None
+            )
+            if skipped and isinstance(prior_accepted, dict) and all(
+                prior_accepted.get(k) == accepted[k] for k in ("route", "tshirt", "mode")
+            ):
+                accepted = prior_accepted  # unchanged skip keeps its original date
+            if (exit_criterion and exit_criterion.strip()) or accepted != prior_accepted:
+                existing["accepted"] = accepted
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if research:
             text = write_fm_nested_field(text, "research", _render_block(research))

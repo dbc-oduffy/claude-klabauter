@@ -856,12 +856,21 @@ def _research_route_setup(
         segments.append((manifest, inputs, validate(manifest, inputs)))
     if not aliased_param(params, "output_path", "out_path"):
         params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
+    close_params = {
+        "scratch_dir": (root / scratch_rel).as_posix(),
+        "tier": shape["tier"],
+        "run_id": run_id,
+        "topic_slug": research_emit.topic_slug(
+            str(ask or ""), brief_rel if from_sizing else ""
+        ),
+    }
     research_ctx = {
         "root": root,
         "run_id": run_id,
         "brief": brief_rel,
         "segments": segments,
         "shape": {"tier": shape["tier"], "reason": shape["reason"], "pipelines": shape["pipelines"]},
+        "next_action": {"op": "research.close", "params": close_params},
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
@@ -1361,7 +1370,10 @@ def _dispatch_emit(
         from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_script
 
         script = compose_chain_script(
-            research_ctx["segments"], run_id=research_ctx["run_id"], agent_type_host=agent_type_host
+            research_ctx["segments"],
+            run_id=research_ctx["run_id"],
+            agent_type_host=agent_type_host,
+            next_action=research_ctx["next_action"],
         )
         receipt_extras = {
             **(receipt_extras or {}),
@@ -1587,6 +1599,7 @@ def _dispatch_emit(
 
     if research_ctx is not None:
         reply.update(research_ctx["shape"])
+        reply["next_action"] = research_ctx["next_action"]
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

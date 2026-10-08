@@ -19,7 +19,11 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_TOUCHPOINT,
     GateVerdict,
 )
-from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped
+from coordinator_core.ops.sizing_acceptance import (
+    ENGINE_SIZE_RULE,
+    lacks_human_acceptance,
+    sizing_acceptance_skipped,
+)
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
@@ -101,7 +105,7 @@ def gate(
     refusals = collect_fire_refusals(
         sizing, sizing_rel=sizing_rel, arm=arm, writes=writes, repo_root=repo_root
     )
-    accepted_null = (sizing.get("exit_criterion") or {}).get("accepted") is None
+    accepted_null = lacks_human_acceptance((sizing.get("exit_criterion") or {}).get("accepted"))
     mode = sizing.get("interaction_mode")
     tshirt = sizing["estimate"]["tshirt"]
     needs_acceptance = False

@@ -2655,7 +2655,7 @@ def _wire_lock_test_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[s
         def resolve_target(self, store, name):
             raise KeyError(name)
 
-        def run_parse_sweep(self, repo_root):
+        def run_parse_sweep(self, repo_root, **_):
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
         def enumerate_gate_entrypoints(self, repo_root):

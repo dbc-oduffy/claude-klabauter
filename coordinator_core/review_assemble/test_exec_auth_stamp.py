@@ -1771,3 +1771,19 @@ def test_sizing_arm_engine_rule_does_not_cover_xl_shape_or_pm_decision(
     plan, sizing = _sizing_fixture(tmp_path, _engine_rule_sizing("pm", route=route, tshirt=tshirt))
     code, result = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
     assert code == EXIT_BUSINESS_FAIL and "accepted" in result["error"]
+
+
+@pytest.mark.parametrize("mode", ["pm", "ceo"])
+def test_sizing_arm_engine_rule_record_authorizes_like_a_null_acceptance(tmp_path: Path, mode: str) -> None:
+    from coordinator_core.review_assemble.exec_auth_stamp import stamp_sizing_authorization
+
+    record = (
+        f"  accepted:\n    source: engine-size-rule\n    rule: engine-size-rule\n    route: plan\n"
+        f"    tshirt: L\n    'on': '2026-10-09'\n    mode: {mode}\n"
+    )
+    sizing_text = _engine_rule_sizing(mode).replace("  accepted: null\n", record)
+    plan, sizing = _sizing_fixture(tmp_path, sizing_text)
+    code, result = stamp_sizing_authorization(plan, sizing, at="2026-10-09", repo_root=tmp_path)
+    assert code == EXIT_OK, result
+    fm = yaml.safe_load((tmp_path / plan).read_text(encoding="utf-8").split("---")[1])
+    assert fm["execution_authorized_by"] == "engine-size-rule"

@@ -80,6 +80,15 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
     assert rel in script
     receipt = json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
     assert receipt["tier"] == "corpus" and receipt["pipelines"] == reply["pipelines"]
+    close = reply["next_action"]
+    assert close["op"] == "research.close"
+    assert close["params"] == {
+        "scratch_dir": (repo / reply["scratch_dir"]).as_posix(),
+        "tier": "corpus",
+        "run_id": reply["run_id"],
+        "topic_slug": "r",
+    }
+    assert f"next_action: {json.dumps(close, sort_keys=True)}" in script
 
 
 def test_research_ask_writes_ask_md_and_binds_it_as_the_brief(repo, capsys):
@@ -93,6 +102,8 @@ def test_research_ask_writes_ask_md_and_binds_it_as_the_brief(repo, capsys):
     script = Path(reply["path"]).read_text(encoding="utf-8")
     assert f"{reply['scratch_dir']}/ask.md" in script
     assert "what-is-x" in script
+    assert reply["next_action"]["params"]["topic_slug"] == "what-is-x"
+    assert reply["next_action"]["params"]["tier"] == "scouts"
 
 
 def test_research_ask_spawns_no_process(repo, capsys, monkeypatch):

@@ -168,6 +168,42 @@ class TestApmAcceptanceShape:
         assert _ec_errors(_APM, [{**_APM, "mode": "hands-on", "statement": "T"}])
 
 
+_ENGINE = {
+    "source": "engine-size-rule", "rule": "engine-size-rule", "route": "plan",
+    "tshirt": "M", "on": "2026-10-09", "mode": "ceo",
+}
+
+
+class TestEngineSizeRuleAcceptanceShape:
+    @pytest.mark.parametrize("extra", [{}, {"route": "spec-dispatch", "tshirt": "XS"}, {"mode": "pm"}])
+    def test_engine_record_is_valid(self, extra):
+        assert not _ec_errors({**_ENGINE, **extra})
+
+    def test_route_and_tshirt_are_optional(self):
+        assert not _ec_errors({k: v for k, v in _ENGINE.items() if k not in ("route", "tshirt")})
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"mode": "hands-on"},
+            {"tshirt": "XL"},
+            {"route": "shape"},
+            {"rule": ""},
+            {"pm_quote": "q"},
+            {"extra": 1},
+        ],
+    )
+    def test_engine_record_rejects(self, bad):
+        assert _ec_errors({**_ENGINE, **bad})
+
+    def test_engine_record_without_required_key_is_rejected(self):
+        assert _ec_errors({k: v for k, v in _ENGINE.items() if k != "on"})
+
+    def test_pm_apm_and_null_acceptances_still_validate(self):
+        pm = {"pm_quote": "go", "on": "2026-10-01", "mode": "hands-on"}
+        assert not _ec_errors(pm) and not _ec_errors(_APM) and not _ec_errors(None)
+
+
 class TestInteractionModeField:
     @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
     def test_each_mode_value_is_valid(self, mode):

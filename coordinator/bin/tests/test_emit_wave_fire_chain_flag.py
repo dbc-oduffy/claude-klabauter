@@ -1,4 +1,4 @@
-"""`emit-wave-fire --from-sizing`: chain by default for pm/ceo, `--plan-only` escape; manifest, printed driver call, trigger refusals."""
+"""`emit-wave-fire --from-sizing`: the in-session fire by default, headless chain only on `--chain` with a warning; manifest, printed driver call, trigger refusals."""
 
 from __future__ import annotations
 
@@ -54,15 +54,16 @@ def _fire(tmp_path, sizing, *extra):
     ])
 
 
-def test_pm_chains_by_default(tmp_path, capsys):
-    assert _fire(tmp_path, _sizing()) == ewf.EXIT_OK
-    assert (tmp_path / "trail" / "chain-0-hnd-1.json").is_file()
-    assert not list((tmp_path / "trail").glob("*.mjs"))
+@pytest.mark.parametrize("mode", ["pm", "ceo"])
+def test_pm_and_ceo_fire_in_session_by_default(tmp_path, capsys, mode):
+    assert _fire(tmp_path, _sizing(mode=mode)) == ewf.EXIT_OK
+    assert (tmp_path / "trail" / "fire-0-1.mjs").is_file()
+    assert not (tmp_path / "trail" / "chain-0-hnd-1.json").exists()
 
 
-def test_ceo_chains_by_default(tmp_path, capsys):
-    assert _fire(tmp_path, _sizing(mode="ceo")) == ewf.EXIT_OK
-    assert (tmp_path / "trail" / "chain-0-hnd-1.json").is_file()
+def test_chain_warns_that_it_runs_headless(tmp_path, capsys):
+    assert _fire(tmp_path, _sizing(), "--chain") == ewf.EXIT_OK
+    assert "WARNING: --chain runs every stage as a headless background child" in capsys.readouterr().err
 
 
 def test_hands_on_is_plan_only(tmp_path, capsys):

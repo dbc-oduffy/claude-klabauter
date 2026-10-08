@@ -103,6 +103,7 @@ import subprocess
 import sys
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -991,6 +992,14 @@ def _startup_log_tail(log_path) -> str:
     return text or "(log empty)"
 
 
+# PM ruling 2026-10-09: no headless background run where an in-session Workflow would do.
+# Warn, never block.
+_HEADLESS_WARNING = (
+    "workflow.fire: WARNING: this runs headless in the background, outside any session's view "
+    "or control. Prefer an in-session Workflow(scriptPath) call."
+)
+
+
 def fire_workflow(
     script_path: str,
     cwd: Optional[str] = None,
@@ -1074,6 +1083,7 @@ def fire_workflow(
     crashes while holding the lock similarly stalls other fires for up to
     ``_CAP_LOCK_STALE_AGE_S`` before the lockfile is reclaimed.
     """
+    warnings.warn(_HEADLESS_WARNING, UserWarning, stacklevel=2)
     script = Path(script_path)
     if not script.is_file():
         raise ScriptNotFoundError(f"workflow.fire: script_path does not exist: {script_path!r}")

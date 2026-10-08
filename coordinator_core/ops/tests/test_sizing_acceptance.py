@@ -36,3 +36,18 @@ def test_admissible_modes_match_the_schema_apm_mode_enum():
     accepted = schema["properties"]["exit_criterion"]["anyOf"][1]["properties"]["accepted"]
     apm_shape = next(s for s in accepted["anyOf"] if s.get("properties", {}).get("source"))
     assert tuple(apm_shape["properties"]["mode"]["enum"]) == APM_ADMISSIBLE_MODES
+
+
+ENGINE = {
+    "source": "engine-size-rule", "rule": "engine-size-rule", "route": "plan",
+    "tshirt": "M", "on": "2026-10-09", "mode": "ceo",
+}
+
+
+def test_engine_record_is_no_one_s_acceptance():
+    from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance
+
+    assert acceptance_source(ENGINE) == "engine-size-rule"
+    assert acceptance_words(ENGINE) is None
+    assert lacks_human_acceptance(None) and lacks_human_acceptance(ENGINE)
+    assert not lacks_human_acceptance(PM) and not lacks_human_acceptance(APM)

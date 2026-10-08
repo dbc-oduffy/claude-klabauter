@@ -1,13 +1,17 @@
 """Tests for `sizing-assemble --write`: `write_back` applies a route() decision to a draft sizing."""
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
 import yaml
 
 import coordinator_core.sizing_assemble as sizing_assemble
+from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.session import record_homes
+
+SCHEMA = Path(sizing_assemble.__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 
 _SIZING_NAME = "2026-10-02-x.yaml"
 
@@ -119,8 +123,80 @@ def test_write_sets_statement_while_unaccepted_and_mode_while_absent(repo: Path)
         interaction_mode="ceo",
     )
     doc = _load(path)
-    assert doc["exit_criterion"] == {"statement": "Ship it", "accepted": None}
+    assert doc["exit_criterion"]["statement"] == "Ship it"
+    assert doc["exit_criterion"]["accepted"]["source"] == "engine-size-rule"
     assert doc["interaction_mode"] == "ceo"
+
+
+def _engine_record(**over) -> dict:
+    return {
+        "source": "engine-size-rule", "rule": "engine-size-rule", "route": "plan",
+        "tshirt": "M", "on": date.today().isoformat(), "mode": "ceo", **over,
+    }
+
+
+@pytest.mark.parametrize("tshirt,route", [("XS", "dispatch"), ("S", "spec-dispatch"), ("M", "plan"), ("L", "plan")])
+@pytest.mark.parametrize("mode", ["pm", "ceo"])
+def test_size_rule_skip_is_recorded_on_the_sizing(repo: Path, tshirt: str, route: str, mode: str) -> None:
+    path = _sizing(repo)
+    decision = _decision(tshirt)
+    assert decision["route"] == route
+    sizing_assemble.write_back(
+        repo, str(path), decision, exit_criterion="Ship it", interaction_mode=mode
+    )
+    ec = _load(path)["exit_criterion"]
+    assert ec["accepted"] == _engine_record(route=route, tshirt=tshirt, mode=mode)
+    assert validate_frontmatter(_load(path), SCHEMA) == []
+
+
+def test_hands_on_keeps_its_acceptance_ask(repo: Path) -> None:
+    path = _sizing(repo)
+    sizing_assemble.write_back(
+        repo, str(path), _decision("M"), exit_criterion="Ship it", interaction_mode="hands-on"
+    )
+    assert _load(path)["exit_criterion"]["accepted"] is None
+
+
+@pytest.mark.parametrize("tshirt,kwargs", [("XL", {}), ("XL", {"jtbd_unclear": True}), ("L", {"jtbd_unclear": True})])
+def test_no_record_at_xl_or_shape(repo: Path, tshirt: str, kwargs: dict) -> None:
+    path = _sizing(repo)
+    decision = _decision(tshirt, **kwargs)
+    assert decision["route"] != "plan" or tshirt == "XL"
+    sizing_assemble.write_back(
+        repo, str(path), decision, exit_criterion="Ship it", interaction_mode="ceo"
+    )
+    assert _load(path)["exit_criterion"]["accepted"] is None
+
+
+def test_no_record_without_a_statement(repo: Path) -> None:
+    path = _sizing(repo)
+    sizing_assemble.write_back(repo, str(path), _decision("M"), interaction_mode="ceo")
+    assert "exit_criterion" not in _load(path) or _load(path)["exit_criterion"] is None
+
+
+def test_resize_out_of_the_rule_clears_the_record_and_rerun_keeps_its_date(repo: Path) -> None:
+    path = _sizing(repo)
+    sizing_assemble.write_back(
+        repo, str(path), _decision("M"), exit_criterion="Ship it", interaction_mode="ceo"
+    )
+    text = path.read_text(encoding="utf-8").replace(date.today().isoformat(), "2026-01-01")
+    path.write_text(text, encoding="utf-8")
+    sizing_assemble.write_back(repo, str(path), _decision("M"))
+    assert _load(path)["exit_criterion"]["accepted"]["on"] == "2026-01-01"
+    sizing_assemble.write_back(repo, str(path), _decision("XL"))
+    assert _load(path)["exit_criterion"]["accepted"] is None
+
+
+def test_pm_and_apm_records_are_never_replaced_by_the_rule(repo: Path) -> None:
+    text = (
+        _DRAFT
+        + "exit_criterion:\n  statement: Original\n  accepted:\n"
+        + "    source: apm\n    apm_ruling: fine\n    'on': '2026-10-01'\n    mode: ceo\n"
+        + "interaction_mode: ceo\n"
+    )
+    path = _sizing(repo, text)
+    sizing_assemble.write_back(repo, str(path), _decision("M"), exit_criterion="X")
+    assert _load(path)["exit_criterion"]["accepted"]["source"] == "apm"
 
 
 def test_write_refuses_path_outside_state_sizings(repo: Path) -> None:

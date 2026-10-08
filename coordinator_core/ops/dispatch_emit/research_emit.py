@@ -32,6 +32,12 @@ def _slug(text: str) -> str:
     return _NON_SLUG_RE.sub("-", text.lower()).strip("-")[:MAX_SLUG_LEN].strip("-")
 
 
+def topic_slug(ask: str = "", sizing_rel: str = "") -> str:
+    """The run's `research.close` topic: the sizing's stem without its date, else the ask's slug."""
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", Path(sizing_rel).stem) if sizing_rel else ""
+    return _slug(stem or ask) or _BARE_SLUG
+
+
 def scout_slugs(questions: Sequence[str]) -> list[str]:
     """The [a-z0-9-] slug of each question, in order.
 

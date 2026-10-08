@@ -138,6 +138,7 @@ from coordinator_core.ops.sizing_acceptance import (
     ENGINE_SIZE_RULE,
     acceptance_source,
     acceptance_words,
+    lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
@@ -1006,7 +1007,7 @@ def stamp_sizing_authorization(
     estimate = doc.get("estimate")
 
     # A null acceptance is the engine's to discharge, from the recorded route and size.
-    engine_rule = accepted is None and sizing_acceptance_skipped(
+    engine_rule = lacks_human_acceptance(accepted) and sizing_acceptance_skipped(
         doc.get("route"), estimate.get("tshirt") if isinstance(estimate, dict) else None
     )
     if not engine_rule and not acceptance_words(accepted):
@@ -1021,7 +1022,7 @@ def stamp_sizing_authorization(
             f"not one of {list(_SIZING_AUTHORIZABLE_STATUS)}"
         }
     mode = str(
-        doc.get("interaction_mode") or (accepted.get("mode") if accepted else "") or ""
+        doc.get("interaction_mode") or (accepted.get("mode") if isinstance(accepted, dict) else "") or ""
     ).strip()
     if engine_rule:
         if mode not in ("hands-on", "pm", "ceo"):

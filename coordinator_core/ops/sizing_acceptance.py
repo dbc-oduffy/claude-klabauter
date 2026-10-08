@@ -1,10 +1,11 @@
-"""Readers for a sizing's `exit_criterion.accepted` record, which is either the PM shape
-(`pm_quote`, no `source`) or the APM shape (`source: apm`, `apm_ruling`), and the engine size
-rule that discharges a null one. No I/O, no imports: every gate consults this leaf."""
+"""Readers for a sizing's `exit_criterion.accepted` record, which is the PM shape
+(`pm_quote`, no `source`), the APM shape (`source: apm`, `apm_ruling`) or the engine's own
+skip record (`source: engine-size-rule`, no words), and the engine size rule that writes it. No I/O, no imports: every gate consults this leaf."""
 from __future__ import annotations
 
 SOURCE_PM = "pm"
 SOURCE_APM = "apm"
+SOURCE_ENGINE = "engine-size-rule"
 APM_ADMISSIBLE_MODES = ("pm", "ceo")
 
 
@@ -18,11 +19,18 @@ def acceptance_words(accepted) -> str | None:
 
 
 def acceptance_source(accepted) -> str | None:
-    """"apm" for an APM record, "pm" for any other non-empty record (a sourceless one is
-    PM), None for null or empty."""
+    """"apm" for an APM record, "engine-size-rule" for the engine's skip record, "pm" for any
+    other non-empty record (a sourceless one is PM), None for null or empty."""
     if not isinstance(accepted, dict) or not accepted:
         return None
-    return SOURCE_APM if accepted.get("source") == SOURCE_APM else SOURCE_PM
+    source = accepted.get("source")
+    return source if source in (SOURCE_APM, SOURCE_ENGINE) else SOURCE_PM
+
+
+def lacks_human_acceptance(accepted) -> bool:
+    """True for a null `accepted` and for the engine's skip record: neither is a PM or APM
+    acceptance, so every gate that keys off "was this accepted by someone" treats them alike."""
+    return accepted is None or acceptance_source(accepted) == SOURCE_ENGINE
 
 
 #: PM ruling 2026-10-08: an agent-run sizing carries plan/dispatch work at XS-L straight

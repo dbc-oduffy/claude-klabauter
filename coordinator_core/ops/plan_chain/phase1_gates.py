@@ -10,7 +10,7 @@ import io
 from pathlib import Path
 
 from coordinator_core.frontmatter.primitives import split_frontmatter
-from coordinator_core.ops.sizing_acceptance import sizing_acceptance_skipped
+from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.ops.plan_chain.contract import ChainManifest, Halt, halt
 from coordinator_core.pickup_assemble import _parse_fm_dict
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
@@ -76,7 +76,7 @@ def _resize_gate(manifest: ChainManifest, repo_root: Path) -> Halt | None:
             f"{tshirt!r}; surface the resize",
         )
     ec = sizing.get("exit_criterion")
-    if isinstance(ec, dict) and ec.get("accepted") is not None:
+    if isinstance(ec, dict) and not lacks_human_acceptance(ec.get("accepted")):
         return None
     if sizing_acceptance_skipped(route, tshirt):
         return None

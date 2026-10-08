@@ -223,6 +223,8 @@ def test_default_runner_prompt_never_names_the_commit():
 def test_default_runner_parses_envelope_result(tmp_path, monkeypatch):
     from coordinator_core.ops.workflow_fire import fire
 
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+
     log = tmp_path / "child.log"
     envelope = {"type": "result", "subtype": "success", "result": "```json\n" + json.dumps(PLAN_DIGEST) + "\n```"}
     log.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
@@ -262,3 +264,22 @@ def test_plan_stage_halt_names_no_next_action(world):
     pulled = {**PLAN_DIGEST, "outcome": "pulled"}
     digest = driver.run(manifest, runner=make_runner(calls, plan=pulled), invoke_terminal_commit=make_commit(calls))
     assert digest["next_action"]["kind"] == "none"
+
+
+def test_the_run_record_wins_over_a_corrupted_relay(tmp_path, monkeypatch):
+    from coordinator_core.ops.workflow_fire import fire
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    script = tmp_path / "chain.plan.mjs"
+    runs = tmp_path / "config" / "projects" / "X--repo" / "sid" / "workflows"
+    runs.mkdir(parents=True)
+    record = {"status": "completed", "scriptPath": str(script), "timestamp": "t", "result": PLAN_DIGEST}
+    (runs / "wf_1.json").write_text(json.dumps(record), encoding="utf-8")
+    other = dict(record, scriptPath=str(tmp_path / "other.mjs"), result={"kind": "other"})
+    (runs / "wf_2.json").write_text(json.dumps(other), encoding="utf-8")
+    log = tmp_path / "child.log"
+    relay = json.dumps(PLAN_DIGEST)[:-3]
+    log.write_text(json.dumps({"type": "result", "result": relay}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(fire, "fire_workflow", lambda script, **kw: {"log_path": str(log)})
+    result = driver._default_runner(str(tmp_path))(script, session_id="sid")
+    assert result.digest == PLAN_DIGEST

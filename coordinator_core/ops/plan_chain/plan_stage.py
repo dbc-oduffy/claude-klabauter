@@ -69,14 +69,32 @@ def plan_digest(result: WorkflowResult) -> dict | None:
     return nested if isinstance(nested, dict) and nested.get("kind") == "plan" else None
 
 
+def _pull_reasons(result: WorkflowResult) -> str:
+    """The wave's own ``pulled`` reasons (a prep gate NOT-PREPPED included), or ""."""
+    top = result.digest
+    pulled = top.get("pulled") if isinstance(top, dict) else None
+    reasons = [
+        f"{p.get('batonId') or p.get('id') or '?'}: {p.get('reason') or '(no reason)'}"
+        + (f" (gate report: {p['prepGateReport']})" if p.get("prepGateReport") else "")
+        for p in pulled or ()
+        if isinstance(p, dict)
+    ]
+    return f"; pulled — {'; '.join(reasons)}" if reasons else ""
+
+
 def read_plan_result(result: WorkflowResult, *, repo_root: str | Path) -> str | Halt:
     """The ready plan's path (as the digest names it), or the Halt that ends the chain."""
     digest = plan_digest(result)
     if digest is None:
-        return halt("plan-no-digest", "plan Workflow returned no kind:plan digest")
+        return halt(
+            "plan-no-digest", f"plan Workflow returned no kind:plan digest{_pull_reasons(result)}"
+        )
     outcome = digest.get("outcome")
     if outcome != "ready":
-        return halt("ready-gate-not-ready", f"plan outcome is {outcome!r}, not 'ready'")
+        return halt(
+            "ready-gate-not-ready",
+            f"plan outcome is {outcome!r}, not 'ready'{_pull_reasons(result)}",
+        )
     action = digest.get("next_action")
     params = action.get("params") if isinstance(action, dict) else None
     plan_path = params.get("plan_path") if isinstance(params, dict) else None

@@ -213,6 +213,23 @@ def _agent_call(
     return f"produced({label}, ((p, l, t) => {chain})({prompt}, {label}, rosterTypes[{_js_string_literal(name)}][{slug}]))"
 
 
+def _roster_guard(stage: Stage) -> str:
+    """Fails a runtime roster fan-out loud, naming each slug the roster lacks, before any agent spawns.
+
+    The slugs arrive from an upstream return (mail addressed by name); an invented name would
+    otherwise reject one agent at a time as an anonymous per-item null.
+    """
+    if stage.agent_type_from is None:
+        return ""
+    roster = f"rosterTypes[{_js_string_literal(stage.agent_type_from.split('.', 1)[1])}]"
+    return (
+        f"      const unknown = items.filter((x) => !Object.hasOwn({roster}, x));\n"
+        f"      if (unknown.length) throw new Error({_js_string_literal(stage.id)} + "
+        f"': slug(s) not on the roster: ' + unknown.join(', ') + "
+        f"' (roster: ' + Object.keys({roster}).join(', ') + ')');\n"
+    )
+
+
 def _has_item(text: str) -> bool:
     return "item" in PLACEHOLDER_RE.findall(text)
 
@@ -265,6 +282,7 @@ def _stage_expression(
             "(async () => {\n"
             f"      const items = {items};\n"
             "      if (items.length === 0) return [];\n"
+            f"{_roster_guard(stage)}"
             f"      return {fan}(items, (item, i) =>\n"
             f"        {call}{size});\n"
             "    })()"
@@ -459,8 +477,12 @@ def compose_chain_script(
     *,
     run_id: str,
     agent_type_host: str | None,
+    next_action: Mapping | None = None,
 ) -> str:
-    """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first writes under `{{scratch_dir}}/<pipeline>/`."""
+    """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first writes under `{{scratch_dir}}/<pipeline>/`.
+
+    With `next_action`, a completed run returns `{results, next_action}` naming the op that closes it.
+    """
     if not segments:
         raise PipelineEmitRefused(["a chain needs at least one segment"])
     chained = len(segments) > 1
@@ -506,7 +528,10 @@ def compose_chain_script(
             out += ["{"] + data + body + ["}", ""]
     else:
         out += parts[0][2][1]
-    out += ["return results;", ""]
+    if next_action is None:
+        out += ["return results;", ""]
+    else:
+        out += [f"return {{ results, next_action: {json.dumps(dict(next_action), sort_keys=True)} }};", ""]
     return "\n".join(out)
 
 

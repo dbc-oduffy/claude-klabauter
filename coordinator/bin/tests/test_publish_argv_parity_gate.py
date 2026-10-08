@@ -351,7 +351,7 @@ class _StubClaudeKlabauter:
     def run_identity_check(self, dest):
         return {"ran": True, "skipped": False, "exit_code": 0, "findings": "clean"}
 
-    def run_parse_sweep(self, repo_root):
+    def run_parse_sweep(self, repo_root, **_):
         return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
     def enumerate_gate_entrypoints(self, repo_root):

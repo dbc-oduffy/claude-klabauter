@@ -545,7 +545,7 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.26.0"
+    pinned = "1.31.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
         f"{pinned!r} — check the vendored x-bump-note chain (1.24.0 "
@@ -574,7 +574,9 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # Re-pinned 1.23.0 -> 1.25.0: engine-ahead 1.24.0 `baton` (7294c51d76) and
     # 1.25.0 `exit_criterion.amendments` (158f9b08a5), both additive and
     # recorded in the x-bump-note chain; upstream reads 1.25.0 as well.
-    ("sizing-object.schema.json", "1.26.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json (engine-ahead at 158f9b08a5)"),
+    # Re-pinned 1.25.0 -> 1.31.0: claude-klabauter-ahead 1.26.0-1.31.0, all additive and recorded in the
+    # x-bump-note chain; 1.31.0 is the `engine-size-rule` acceptance arm (DoE copies after).
+    ("sizing-object.schema.json", "1.31.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json (claude-klabauter-first at 1.31.0)"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch

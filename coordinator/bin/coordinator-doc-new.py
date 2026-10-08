@@ -4103,7 +4103,8 @@ def _scaffold_plan(
         # producer of this block, DoE's `coordinator/templates/plans/plan.md.tmpl`.
     ]
     _accepted = (_cited_exit_criterion or {}).get("accepted") if _cited_exit_criterion else None
-    if _cited_exit_criterion and isinstance(_accepted, dict):
+    # The engine's own skip record is no one's acceptance: the criterion stays proposed here.
+    if _cited_exit_criterion and isinstance(_accepted, dict) and _accepted.get("source") != "engine-size-rule":
         # ACCEPTED — carry the PM's criterion verbatim (Design § Inheritance,
         # C3): no `<REPLACE: ...>` markers, derived_from names the cited
         # sizing. The falsifier stays commented — it is still authored per
