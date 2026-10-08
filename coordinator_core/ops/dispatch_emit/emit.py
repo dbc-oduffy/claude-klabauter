@@ -3737,14 +3737,15 @@ def _checkpoint_commit_js(
     commit_tail = (
         " You are the only stage that stages or commits anything. Commit exactly this "
         "declared path list and nothing else. Pass the list VERBATIM as `paths` with "
-        "`skip_missing` true: the engine drops entries that are neither on disk nor "
-        "tracked and keeps untracked files. Do not run `git status` and do not filter, "
+        "`skip_missing` and `gone_tracked_as_deleted` true: the engine drops entries "
+        "that are neither on disk nor tracked, keeps untracked files, and commits a "
+        "tracked entry gone from the worktree as the row's declared deletion. Do not run `git status` and do not filter, "
         "narrow or add any entry: ["
     )
     route = (
         "] -- commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
-        "'{\"paths\":[...],\"skip_missing\":true,\"message\":\"<message>\"}'` -- the only committer route. "
+        "'{\"paths\":[...],\"skip_missing\":true,\"gone_tracked_as_deleted\":true,\"message\":\"<message>\"}'` -- the only committer route. "
         "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
         "If every listed path already matches HEAD, commit nothing and report outcome "
         "committed without a sha. If the outcome is indeterminate, reconcile it against "

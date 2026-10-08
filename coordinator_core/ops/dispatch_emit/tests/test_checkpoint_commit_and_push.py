@@ -129,7 +129,8 @@ def test_push_failures_are_collected_and_logged_after_pushes_settle():
 def test_committer_passes_the_declared_list_verbatim_with_skip_missing():
     script = _script(expected_branch="work/run")
 
-    assert "Pass the list VERBATIM as `paths` with `skip_missing` true" in script
+    assert "Pass the list VERBATIM as `paths` with `skip_missing` and `gone_tracked_as_deleted` true" in script
+    assert 'gone_tracked_as_deleted' in script.split("coordinator-invoke", 1)[1]
     assert 'skip_missing' in script and 'true' in script
     assert "Do not run `git status` and do not filter" in script
     assert "git status --porcelain" not in script
@@ -197,6 +198,55 @@ def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refu
 
     assert out["committed"] is False
     assert "gone from the worktree but still tracked" in out["error"]
+
+
+def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_path):
+    import subprocess
+
+    from coordinator_core.ops.ceremony import commit_v2
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        ).stdout
+
+    git("init", "-q", "-b", "work/p")
+    git("config", "user.email", "t@local")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "gone.ts").write_text("a\n", encoding="utf-8", newline="\n")
+    (tmp_path / "kept.ts").write_text("a\n", encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    (tmp_path / "gone.ts").unlink()
+    (tmp_path / "kept.ts").write_text("b\n", encoding="utf-8", newline="\n")
+    declared = ["gone.ts", "kept.ts", "never_written.ts"]
+
+    out = commit_v2._handler(
+        {
+            "paths": declared,
+            "skip_missing": True,
+            "gone_tracked_as_deleted": True,
+            "message": "checkpoint(wave 1): removes gone.ts",
+        },
+        repo_root=tmp_path / ".git",
+    )
+
+    assert out["committed"] is True, out
+    assert out["skipped_missing"] == ["never_written.ts"]
+    assert git("ls-tree", "-r", "--name-only", "HEAD").split() == ["kept.ts"]
+
+
+def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path):
+    from coordinator_core.ops.ceremony import commit_v2
+
+    out = commit_v2._handler(
+        {"paths": ["a.ts"], "gone_tracked_as_deleted": "yes", "message": "cp"},
+        repo_root=tmp_path / ".git",
+    )
+
+    assert out["committed"] is False
+    assert "gone_tracked_as_deleted must be a boolean" in out["error"]
 
 
 def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path):

@@ -1800,14 +1800,18 @@ def mint_spine(
             landed=landed,
             dispositions={_strip_backtick(r["id"]): r["disposition"] for r in chunk_rows},
         )
-        tranche_path, tranche_text, run_id = _tranche_inventory(
-            path, text, chunk_rows, set(report["plans"]), run_id
-        )
-        path = tranche_path
+        if part is not None and _TRANCHE_SUFFIX_RE.search(path.stem):
+            # Already a tranche record: its parts share its N, minting no sibling tranche.
+            tranche_text = None
+        else:
+            tranche_path, tranche_text, run_id = _tranche_inventory(
+                path, text, chunk_rows, set(report["plans"]), run_id
+            )
+            path = tranche_path
         report["run_id"] = run_id
-        report["inventory"] = str(tranche_path)
-        if tranche_inventory_out is not None:
-            tranche_inventory_out.update(path=tranche_path, text=tranche_text)
+        report["inventory"] = str(path)
+        if tranche_inventory_out is not None and tranche_text is not None:
+            tranche_inventory_out.update(path=path, text=tranche_text)
         if tranche_out is not None:
             tranche_out.update(report)
     if part is not None:

@@ -1187,6 +1187,7 @@ def _dispatch_emit(
         return _emit_lanes(params, repo_root)
 
     inventory_review_specs: list = []
+    tranche_inventory: dict = {}
     if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
             _refuse_inventory_outside_repo(
@@ -1196,7 +1197,6 @@ def _dispatch_emit(
             resume_skipped: list = []
             tranche_report: dict = {}
             withheld_plans: dict = {}
-            tranche_inventory: dict = {}
             part_items: list = []
             spine_text, spine_path = mint_spine(
                 inventory_path,
@@ -1440,32 +1440,38 @@ def _dispatch_emit(
         if params.get("hold_reason") and not hold_rows:
             raise ValueError("dispatch.emit hold_reason requires hold_rows")
         held_out: dict = {}
-        script = emit_script(
-            plan_path,
-            name=params.get("name"),
-            description=params.get("description"),
-            repo_root=repo_root or _repo_root_for_plan(plan_path),
-            session_id=emitting_session_id,
-            review_roster_fragment=review_roster_fragment,
-            review_stage_schemas=review_stage_schemas,
-            agent_type_host=agent_type_host,
-            preamble=preamble,
-            box_terms=box_terms,
-            script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
-            findings_out=plan_findings,
-            landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
-            review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
-            run_base_sha=params.get("run_base_sha"),
-            chatty=bool(params.get("chatty")),
-            cross_repo_approved=bool(params.get("cross_repo_approved")),
-            predispatch=bool(inventory_path) and params.get("review_only_rows") is None,
-            review_specs=inventory_review_specs,
-            certified_plans=_certified_plans(inventory_path),
-            credit_rows=rows_backed_before_base,
-            hold_rows=hold_rows or None,
-            hold_reason=params.get("hold_reason"),
-            held_out=held_out,
-        )
+        try:
+            script = emit_script(
+                plan_path,
+                name=params.get("name"),
+                description=params.get("description"),
+                repo_root=repo_root or _repo_root_for_plan(plan_path),
+                session_id=emitting_session_id,
+                review_roster_fragment=review_roster_fragment,
+                review_stage_schemas=review_stage_schemas,
+                agent_type_host=agent_type_host,
+                preamble=preamble,
+                box_terms=box_terms,
+                script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
+                findings_out=plan_findings,
+                landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
+                review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
+                run_base_sha=params.get("run_base_sha"),
+                chatty=bool(params.get("chatty")),
+                cross_repo_approved=bool(params.get("cross_repo_approved")),
+                predispatch=bool(inventory_path) and params.get("review_only_rows") is None,
+                review_specs=inventory_review_specs,
+                certified_plans=_certified_plans(inventory_path),
+                credit_rows=rows_backed_before_base,
+                hold_rows=hold_rows or None,
+                hold_reason=params.get("hold_reason"),
+                held_out=held_out,
+            )
+        except ScriptOverCapError as over:
+            # Part emits re-enter on this tranche record, not a fresh one (`_emit_inventory_parts`).
+            if tranche_inventory:
+                over.tranche_inventory = inventory_path
+            raise
         if held_out:
             receipt_extras = {
                 **(receipt_extras or {}),

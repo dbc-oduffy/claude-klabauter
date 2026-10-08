@@ -546,6 +546,19 @@ def _drop_missing(worktree_root: Path, paths: list) -> tuple:
     return [p for p in paths if p not in gone], [p for p in paths if p in gone]
 
 
+def _split_gone_tracked(worktree_root: Path, paths: list) -> tuple:
+    """(kept, deleted): `paths` entries absent from disk but tracked at HEAD move to
+    `deleted`. Never raises; an unresolvable HEAD spine leaves `paths` untouched."""
+    absent = [p for p in paths if not (worktree_root / p).exists()]
+    if not absent:
+        return list(paths), []
+    partition = partition_declared_deletions(worktree_root, absent)
+    if partition is None:
+        return list(paths), []
+    gone = set(partition[0])
+    return [p for p in paths if p not in gone], [p for p in paths if p in gone]
+
+
 def _ignored_untracked(worktree_root: Path, paths: list) -> list:
     present = [p for p in paths if (worktree_root / p).is_file()]
     partition = partition_declared_deletions(worktree_root, present)
@@ -696,6 +709,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         CAS race, or a checkin conversion neither this module nor its `blob_fallback` can reproduce).
 
     skip_missing (bool, default false) drops `paths` absent from disk and HEAD, as `skipped_missing`.
+    gone_tracked_as_deleted (bool, default false) reclassifies `paths` entries gone from the worktree
+    but tracked at HEAD as declared deletions. For a caller whose `paths` is itself the declaration
+    (a wave's landed rows' writes); a caller with undeclared entries must not set it.
     Gitignored-untracked `paths` refuse; `force_ignored` (list) commits them, `drop_ignored` (bool) drops them.
 
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
@@ -779,7 +795,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not isinstance(raw_skip_missing, bool):
         return _error("params.skip_missing must be a boolean")
 
+    raw_gone_as_deleted = params.get("gone_tracked_as_deleted", False)
+    if not isinstance(raw_gone_as_deleted, bool):
+        return _error("params.gone_tracked_as_deleted must be a boolean")
+
     worktree_root = main_worktree_root(repo_root)
+
+    if raw_gone_as_deleted and raw_paths:
+        raw_paths, reclassified = _split_gone_tracked(worktree_root, raw_paths)
+        raw_deleted = list(raw_deleted) + [p for p in reclassified if p not in raw_deleted]
 
     skipped_missing: list = []
     if raw_skip_missing and raw_paths:

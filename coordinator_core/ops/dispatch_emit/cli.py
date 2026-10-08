@@ -684,6 +684,11 @@ def _emit_inventory_parts(
             **params,
             "output_path": str(inventory.parent / f"{run_id}{_REQUIRED_OUT_SUFFIX}"),
         }
+    # Every part, and every retry at a higher count, cuts the ONE tranche record the
+    # over-cap emit minted; re-minting per part numbered sibling parts t8/t9.
+    tranche_record = getattr(over, "tranche_inventory", None)
+    if tranche_record:
+        params = {**params, "inventory_path": str(tranche_record)}
     while True:
         results: list = []
         try:

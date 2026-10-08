@@ -124,6 +124,46 @@ def test_over_cap_inventory_is_split_into_parts_with_distinct_run_ids(tmp_path, 
         assert script.is_file() and _script_size(script) <= cap
 
 
+def test_parts_of_an_existing_tranche_share_its_number(tmp_path):
+    inventory = _repo_with_inventory(tmp_path)
+    report: dict = {}
+    sink: dict = {}
+    im.mint_spine(str(inventory), row_budget=100, tranche_out=report, tranche_inventory_out=sink)
+    tranche = sink["path"]
+    tranche.write_text(sink["text"], encoding="utf-8")
+
+    paths = []
+    for index in (1, 2):
+        part_sink: dict = {}
+        _, spine_path = im.mint_spine(
+            str(tranche), row_budget=100, part=(index, 2), tranche_inventory_out=part_sink
+        )
+        assert part_sink == {}
+        paths.append(spine_path.name)
+
+    assert paths == [f"{_RUN_ID}-t1-p1.spine.md", f"{_RUN_ID}-t1-p2.spine.md"]
+    assert sorted(p.name for p in tranche.parent.glob("*-t*.md") if "spine" not in p.name) == [tranche.name]
+
+
+def test_over_cap_tranche_parts_carry_one_tranche_number(tmp_path, monkeypatch, capsys):
+    cap = _cap_between_whole_and_part(tmp_path, monkeypatch)
+    monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
+    inventory = Path(record_path(str(tmp_path), "mise-inventory", f"{_RUN_ID}.md"))
+    capsys.readouterr()
+
+    rc = cli_module.main([*_argv(tmp_path, inventory), "--row-budget", "100"])
+
+    assert rc == cli_module.EXIT_OK
+    inv_dir = inventory.parent
+    tranches = sorted(
+        p.name for p in inv_dir.glob(f"{_RUN_ID}-t*.md") if ".spine" not in p.name and "-p" not in p.stem
+    )
+    spines = sorted(p.name for p in inv_dir.glob(f"{_RUN_ID}-t*-p*.spine.md"))
+    assert len(tranches) == 1, tranches
+    stem = tranches[0][: -len(".md")]
+    assert spines == [f"{stem}-p1.spine.md", f"{stem}-p2.spine.md"]
+
+
 def test_part_edge_onto_an_earlier_part_is_dropped(tmp_path, monkeypatch):
     inventory = _repo_with_inventory(tmp_path, deps_on_first=True)
 
