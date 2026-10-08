@@ -63,22 +63,6 @@ class ShareStageMissing(ValueError):
         super().__init__(f"no {stage} sidecar: {detail}; produced by {_DISPATCH[stage]}")
 
 
-class ShareStagesMissing(ValueError):
-    """More than one required stage has no usable sidecar; ``stages`` names them all."""
-
-    def __init__(self, problems: List[ShareStageMissing]):
-        self.stages = [p.stage for p in problems]
-        super().__init__("; ".join(str(p) for p in problems))
-
-
-_REVIEW_LENSES = ("review", "staff-eng", "security-audit")
-
-
-def _is_review_lens(agent_type: str) -> bool:
-    """True for a review-wave lens agent_type; the exit-criterion judge is never one."""
-    return "exit-criterion" not in agent_type and any(t in agent_type for t in _REVIEW_LENSES)
-
-
 def _rel(path: Path, repo_root: Path) -> str:
     try:
         return path.relative_to(repo_root).as_posix()
@@ -171,7 +155,7 @@ def _bookkeeping_tests(
 
 _NEAR_MISS_KIND = {
     "prep": lambda fm: "run_base_sha" in fm,
-    "reviewer": lambda fm: _is_review_lens(str(fm.get("agent_type") or "")),
+    "reviewer": lambda fm: "review" in str(fm.get("agent_type") or "") and "exit-criterion" not in str(fm.get("agent_type") or ""),
     "delivery": lambda fm: "delivery" in str(fm.get("agent_type") or ""),
     "tests": lambda fm: "test-runner" in str(fm.get("agent_type") or ""),
     "criterion": lambda fm: "exit-criterion-judge" in str(fm.get("agent_type") or ""),
@@ -193,8 +177,7 @@ def assemble_from_share(
 ) -> Dict[str, Any]:
     """``{prep_sidecar, wave_sidecar_paths, stage_returns, used}`` from the
     session share dir. ``used`` maps each stage to its repo-relative sidecar
-    path(s). Raises ``ShareStageMissing`` for a lone missing stage, ``ShareStagesMissing`` when
-    several of delivery/tests/reviewer are missing, or
+    path(s). Raises ``ShareStageMissing`` for the first missing stage, or
     ``ValueError`` when the newest judge verdict is not ``met``."""
     share = repo_root / ".coordinator-local" / "subagent-share" / session_id
     if not share.is_dir():
@@ -279,7 +262,7 @@ def assemble_from_share(
     for p, fm in bound:
         if "delivery" not in kind(fm) and not _stem(p).endswith(_DELIVERY_SUFFIX):
             continue
-        verdict = fm.get("verdict") or fm.get("delivery_verdict")
+        verdict = fm.get("verdict")
         if verdict not in ("PASS", "FAIL"):
             m = _DELIVERY_HEADING_RE.search(_load_sidecar_text(p) or "")
             verdict = m.group(1) if m else None
@@ -292,9 +275,8 @@ def assemble_from_share(
         delivery = (rec_path, {"verdict": block["verdict"], "claims_unbacked": block.get("unbacked") or []})
     if delivery is None:
         delivery = _bookkeeping_delivery(share, plan_id, plan_stem)
-    problems: List[ShareStageMissing] = []
     if delivery is None:
-        problems.append(missing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict"))
+        raise missing("delivery", "no plan-scoped delivery sidecar records a PASS/FAIL verdict")
 
     tests = _newest([
         (p, fm) for p, fm in bound
@@ -306,16 +288,12 @@ def assemble_from_share(
     if tests is None:
         tests = _bookkeeping_tests(share, plan_id, plan_stem)
     if tests is None:
-        problems.append(missing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status"))
+        raise missing("tests", "no plan-scoped test-runner sidecar carries a pass/fail/not_run status")
 
-    taken = {prep[0], judge_path, delivery[0] if delivery else None, tests[0] if tests else None} - {None}
-    waves = [p for p, fm in bound if p not in taken and _is_review_lens(kind(fm))]
+    taken = {prep[0], judge_path, delivery[0], tests[0]} - {None}
+    waves = [p for p, fm in bound if p not in taken and "review" in kind(fm) and "exit-criterion" not in kind(fm)]
     if not waves:
-        problems.append(missing("reviewer", "no plan-scoped reviewer sidecar"))
-    if len(problems) == 1:
-        raise problems[0]
-    if problems:
-        raise ShareStagesMissing(problems)
+        raise missing("reviewer", "no plan-scoped reviewer sidecar")
 
     d_path, d_fm = delivery
     delivery_ret: Dict[str, Any] = {"verdict": d_fm["verdict"], "sidecar": _rel(d_path, repo_root)}

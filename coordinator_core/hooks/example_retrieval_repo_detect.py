@@ -21,7 +21,7 @@ marker files, a single file-mtime stat, and two `git` subprocess calls. There
 is no pwsh-only primitive (no registry read, no WMI query) anywhere in the
 oracle pair, so this ports cleanly; nothing here falls back to stays-bash.
 
-Kill-switch: env COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED=1 disables.
+Kill-switch: env COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED=1 disables.
 
 Example-Game-Repo dedupe: `.example-game-repo/` or `Saved/ExampleGameRepoProjectRag` found walking up
 from cwd => silent exit; the example-game-repo-specific hook owns that banner.
@@ -97,7 +97,7 @@ def _git(repo_root: str, *args: str) -> str | None:
 
 
 def detect_banner(cwd: str) -> str:
-    if os.environ.get("COORDINATOR_HOOK_EXAMPLE_RETRIEVAL_REPO_DETECT_DISABLED") == "1":
+    if os.environ.get("COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED") == "1":
         return ""
 
     if _find_marker_upward(cwd, ".example-game-repo") is not None:

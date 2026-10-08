@@ -63,18 +63,28 @@ def test_registry_key_missing_reader_skips(tool, monkeypatch, tmp_path):
     assert result.startswith("scip-rebuild: skipped -- machine-local reader not found")
 
 
-def test_registry_key_points_at_missing_file_skips(tool, monkeypatch, tmp_path):
+def test_registry_key_points_at_missing_file_is_a_defect(tool, monkeypatch, tmp_path):
     monkeypatch.setattr(
         tool, "_resolve_registry_key", lambda key: (str(tmp_path / "does-not-exist.exe"), None)
     )
     result = tool.run("workstream-complete", tmp_path)
-    assert result.startswith("scip-rebuild: skipped -- registry key names a file that does not exist")
+    assert result.startswith("scip-rebuild: defect -- registry key names a file that does not exist")
 
 
-def test_registry_key_unresolved_skips(tool, monkeypatch, tmp_path):
+def test_registry_key_unresolved_skips_where_example_retrieval_repo_is_absent(tool, monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (None, "registry key unset"))
     result = tool.run("merge-to-main", tmp_path)
     assert result == "scip-rebuild: skipped -- registry key unset"
+
+
+def test_registry_key_unresolved_is_a_defect_where_example_retrieval_repo_is_registered(tool, monkeypatch, tmp_path, capsys):
+    registry = {"repos.project_rag": str(tmp_path)}
+    monkeypatch.setattr(
+        tool, "_resolve_registry_key", lambda key: (registry.get(key), None if key in registry else "unset")
+    )
+    result = tool.run("workstream-complete", tmp_path)
+    assert result == "scip-rebuild: defect -- unset, but repos.project_rag is registered"
+    assert tool.main(["--ceremony", "workstream-complete", "--repo-root", str(tmp_path)]) == 0
 
 
 def test_happy_path_spawns_with_right_argv_and_cwd(tool, monkeypatch, tmp_path):

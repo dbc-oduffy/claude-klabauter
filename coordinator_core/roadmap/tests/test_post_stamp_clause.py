@@ -115,6 +115,10 @@ SUITE_TIER_PHRASES = (
     "Tier U grant run is green",
     "fast-tier is green",
     "the broad suite passes",
+    # A negated mention covers only what it is coordinated with.
+    "never the fast tier, and the full suite passes",
+    "not the fast tier but the full suite",
+    "the full suite or the fast tier passes, never tier-U",
 )
 
 
@@ -134,6 +138,9 @@ def test_suite_tier_refused(text):
         "the tests for the gate pass and a refusal names the replacement",
         "a test proves the fast path stays under 50ms",
         "the full plan is reviewed",
+        "Targeted tests pass, never the repo's fast tier or full suite.",
+        "never the fast tier or the full suite",
+        "tests covering touched files pass, not the fast tier nor the broad suite",
         "",
         None,
     ],

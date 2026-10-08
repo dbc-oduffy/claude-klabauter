@@ -91,7 +91,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
         def resolve_target(self, store, name):
             raise KeyError(name)
 
-        def run_parse_sweep(self, repo_root, **_):
+        def run_parse_sweep(self, repo_root):
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
         def enumerate_gate_entrypoints(self, repo_root):

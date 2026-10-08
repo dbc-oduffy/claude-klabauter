@@ -204,7 +204,7 @@ def _remount_command(publish_ref: str, band: str, repo_slug: str) -> str:
         f"--target-dir {staging_dir} "
         f"--expected-sha256 <sha256-from-publish> "
         f"--min-schema 1 "
-        f"&& python <example-retrieval-repo-root>/example_retrieval_repo_cli.py import-lance-parquet-consumer "
+        f"&& python <example-retrieval-repo-root>/project_rag_cli.py import-lance-parquet-consumer "
         f"--parquet-dir {staging_dir} "
         f"--repo-slug {repo_slug}"
     )

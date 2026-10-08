@@ -77,7 +77,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, rows):
         def resolve_target(self, store, name):
             raise KeyError(name)
 
-        def run_parse_sweep(self, repo_root, **_):
+        def run_parse_sweep(self, repo_root):
             return type("ParseResult", (), {"ok": True, "failures": [], "scanned": 0})()
 
         def enumerate_gate_entrypoints(self, repo_root):
@@ -275,6 +275,14 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
     _wire_common_fakes(monkeypatch, tmp_path, rows)
 
     def fake_process_target(target, setup_dir, totals, **kwargs):
+        # DR-445 (2026-09-29 revision: git moves the delta): `process_target`
+        # never writes `target.dest_dir` and never raises `PublishSwapPartial`
+        # itself — that exception now comes out of `_commit_throwaway_and_
+        # merge_into_dest`, called once per REPO ROOT (not per row) by
+        # `_swap_all_rows_into_dest`. row-a and row-b share `dest_root`, so
+        # their swap is now ONE atomic commit+merge for the whole root —
+        # the fault is injected below by wrapping that function instead of a
+        # per-row primitive, which no longer exists.
         totals.processed += 1
         return _stage_payload(
             publish, target.dest_dir, {"payload.txt": f"published by {target.name}\n"}
@@ -282,38 +290,39 @@ def test_mutated_root_skipped_nothing_committed(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(publish, "process_target", fake_process_target)
 
-    publish._bootstrap_engine()
-    from percolate import diff_commit
+    def fake_commit_merge(repo_root, throwaway_root, **kwargs):
+        # Simulate content landing on disk (e.g. an external interference
+        # mid-merge) before the operation still fails to complete — the
+        # scenario `PublishSwapPartial(content_swapped=True)` exists to
+        # name: dest IS mutated, but this round's commit did not happen.
+        dest_b.mkdir(parents=True, exist_ok=True)
+        (dest_b / "swapped.txt").write_text("landed\n", encoding="utf-8")
+        raise publish.PublishSwapPartial(
+            "simulated stranded .git re-home failure",
+            prior_backup=repo_root / ".prior",
+            content_swapped=True,
+        )
 
-    real_land_diff = diff_commit.land_diff
-
-    def failing_land_diff(dest_repo_root, writes, deletions, message, *, commit):
-        # The failure lands after the first write: `land_diff` restores the worktree and re-raises.
-        real_commit_paths = diff_commit._gcommit.commit_paths
-
-        def refuse(*args, **kwargs):
-            raise RuntimeError("simulated commit failure after the writes")
-
-        monkeypatch.setattr(diff_commit._gcommit, "commit_paths", refuse)
-        try:
-            return real_land_diff(dest_repo_root, writes, deletions, message, commit=commit)
-        finally:
-            monkeypatch.setattr(diff_commit._gcommit, "commit_paths", real_commit_paths)
-
-    monkeypatch.setattr(diff_commit, "land_diff", failing_land_diff)
+    monkeypatch.setattr(publish, "_commit_throwaway_and_merge_into_dest", fake_commit_merge)
 
     rc = publish.main(["row-a,row-b"])
     out, err = capsys.readouterr()
     combined = out + err
 
     assert rc == 1
-    assert "landing row-a failed" in combined and "landing row-b failed" in combined
     log_count = _git(dest_root, "rev-list", "--count", "HEAD").stdout.strip()
-    assert log_count == "1", "the failed root must gain no new commit this round"
+    assert log_count == "1", "the mutated root must gain no new commit this round"
+    # 2026-09-29 PM ruling (structural restore-or-commit invariant): a
+    # residue root's published bytes are now restored to HEAD before
+    # `main()` returns -- the mutated root is skipped from THIS round's
+    # commit exactly as before, but it is no longer left dirty for a human
+    # to reconcile, it is byte-identical with HEAD again.
     porcelain_after = _porcelain(dest_root)
     assert porcelain_after == "", (
-        f"a failed landing must restore the worktree to HEAD, not leave it dirty: {porcelain_after!r}"
+        f"residue roots must be restored to HEAD, not left dirty: {porcelain_after!r}"
     )
+    assert "publish.py: uncommitted in" in combined
+    assert str(dest_root) in combined
 
 
 def test_gate_failure_alone_still_commits_nothing(monkeypatch, tmp_path, capsys):

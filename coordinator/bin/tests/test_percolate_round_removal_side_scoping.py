@@ -138,7 +138,6 @@ def test_genuinely_stale_path_inside_row_scope_is_named_for_removal(tmp_path, mo
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
-        removed=frozenset({"row_a/stale.txt"}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert any(p.endswith("stale.txt") for p in pathspec)
@@ -160,9 +159,7 @@ def test_empty_published_dest_dirs_yields_empty_removal_set(tmp_path, monkeypatc
     assert pathspec == []
 
 
-def test_head_absence_alone_never_names_a_removal(tmp_path):
-    """Deletions are `manifest.removed` verbatim: a path missing from the
-    worktree and from `declared_payload` but absent from `removed` is not named."""
+def test_removal_side_fires_at_the_shipped_flag_value(tmp_path):
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
         repo_root,
@@ -175,13 +172,13 @@ def test_head_absence_alone_never_names_a_removal(tmp_path):
         published_dest_dirs=frozenset({"row_a"}),
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
-    assert not any(p.endswith("stale.txt") for p in pathspec)
+    assert any(p.endswith("stale.txt") for p in pathspec)
 
 
 @pytest.mark.skipif(
     not _symlinks_supported(), reason="platform cannot create a symlink here (no privilege/Developer Mode)"
 )
-def test_broken_symlink_outside_removed_is_never_named(tmp_path, monkeypatch):
+def test_broken_symlink_is_refused_not_reaped(tmp_path, monkeypatch):
     import os
 
     _no_filter_side_effects(monkeypatch)
@@ -201,8 +198,8 @@ def test_broken_symlink_outside_removed_is_never_named(tmp_path, monkeypatch):
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
-    assert not any(p.endswith("link.txt") for p in pathspec)
+    with pytest.raises(_mod.RemovalCandidateOnDiskError):
+        _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
 
 
 @pytest.mark.skipif(
@@ -240,21 +237,24 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     assert not any(p.endswith("link.txt") for p in pathspec)
 
 
-def test_stranded_root_swap_prior_names_no_removal(tmp_path, monkeypatch):
-    """A stranded root-swap `.prior` leaves a subtree absent from the worktree
-    but tracked at HEAD. Removals come only from `manifest.removed`, so that
-    absence is never read as retired payload."""
+def test_stranded_root_swap_prior_stands_down_the_removal_side(tmp_path, monkeypatch):
+    """AC7: with `_REMOVAL_SIDE_ENABLED` true and a stranded root-swap
+    `.prior` sitting at dest root, the removal side must raise BEFORE naming
+    any removal -- the strand's subtree is absent from the worktree but still
+    tracked at HEAD, which the removal side would otherwise read as retired
+    payload (§ P146-C3, `surface.stranded_swap_priors`)."""
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
-    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello", "docs/x.md": "x"})
-    (repo_root / "docs").rename(repo_root / "docs.prior")
+    _init_repo_with_files(repo_root, {"row_a/foo.txt": "hello"})
+    (repo_root / "docs.prior").mkdir()
     manifest = _mod._RoundManifest(
         round_id="r1",
         declared_payload=frozenset({"row_a/foo.txt"}),
         published_dest_dirs=frozenset({"row_a"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
-    assert not any("docs/x.md" in p.replace("\\", "/") for p in pathspec)
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._pathspec_from_manifest(manifest, str(repo_root))
+    assert "docs.prior" in str(excinfo.value)
 
 
 def test_stranded_prior_removed_lets_the_round_proceed_as_before(tmp_path, monkeypatch):
@@ -282,7 +282,7 @@ def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
     own `.percolate/round-manifest.json` -- which percolate writes into the
     mirror and which is TRACKED at the mirror's HEAD -- fell out of the
     subtraction as a removal candidate, was found present on disk, and refused
-    the round at `diff_commit.refuse_removals_with_live_source` before landing.
+    the round at `_refuse_removals_present_on_disk` before sync.
 
     Measured on `coordinator-claude` 2026-08-31: every round after a
     fail-closed one died this way, which meant a fail-closed round was not
@@ -342,7 +342,7 @@ def test_source_retired_path_still_on_disk_is_left_to_leg_a_not_leg_b(
     assert "3 path(s)" in stderr and "still present in dest's worktree" in stderr
 
 
-def test_undeclared_on_disk_path_not_in_removed_is_never_named(tmp_path, monkeypatch):
+def test_undeclared_on_disk_path_not_in_removed_still_raises(tmp_path, monkeypatch):
     _no_filter_side_effects(monkeypatch)
     repo_root = tmp_path / "repo"
     _init_repo_with_files(
@@ -361,5 +361,10 @@ def test_undeclared_on_disk_path_not_in_removed_is_never_named(tmp_path, monkeyp
         published_dest_dirs=frozenset({"row_a", "whoami"}),
         removed=frozenset({"whoami/a.md", "whoami/b.md", "whoami/c.md"}),
     )
-    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
-    assert not any("live.md" in p for p in pathspec)
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._pathspec_from_manifest(manifest, str(repo_root))
+    message = str(excinfo.value)
+    assert "live.md" in message
+    assert "whoami/a.md" not in message
+    assert "whoami/b.md" not in message
+    assert "whoami/c.md" not in message

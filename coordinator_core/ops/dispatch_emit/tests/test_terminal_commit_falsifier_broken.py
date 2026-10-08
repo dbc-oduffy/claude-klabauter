@@ -14,7 +14,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit import _falsifier_broken
 
 def test_a_marked_plan_returns_its_tells_under_any_path_spelling():
     marks = [{"plan": "docs/plans/p.md", "tells": ["SCOPE-WIDER-THAN-CLAIM"]}]
-    for spelling in ("docs/plans/p.md", "./docs/plans/p.md", r"docs\plans\p.md"):
+    for spelling in ("docs/plans/p.md", "./docs/plans/p.md", "docs\plans\p.md"):
         assert _falsifier_broken_tells(marks, spelling) == ["SCOPE-WIDER-THAN-CLAIM"]
 
 

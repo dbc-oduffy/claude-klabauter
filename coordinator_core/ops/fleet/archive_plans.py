@@ -199,8 +199,7 @@ _SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY = "sidecar-follows-primary: primary is not 
 
 _REASON_SIDECAR_DEST_EXISTS = "sidecar-dest-exists: refusing to overwrite an existing archived sidecar"
 
-_EVIDENCE_SUFFIX = ".evidence.yaml"
-_FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json", _EVIDENCE_SUFFIX)
+_FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json", ".evidence.yaml", ".seam.yaml")
 
 # Single-flight lock — same stale-lock tolerance rationale as
 # archive_terminal_handoffs._SWEEP_LOCK_STALE_S: sized generously above this
@@ -580,13 +579,9 @@ def _partition_untracked_sidecars(
         parent, _, leaf = rel.rpartition("/")
         return spine.get(parent, {}).get(leaf) is not None
 
-    untracked = [m for m in sidecar_moves if not _is_tracked(m)]
-    # Row evidence is a durable record that `evidence-append` writes without committing; it
-    # lands in the archive commit, hashed from disk. Only the gitignored fire scripts move as
-    # plain files.
-    adopted = {m.candidate_id for m in untracked if m.src.name.endswith(_EVIDENCE_SUFFIX)}
-    untracked_sidecar_ids = {m.candidate_id for m in untracked} - adopted
-    moves = [m._replace(restage_src=True) if m.candidate_id in adopted else m for m in moves]
+    untracked_sidecar_ids = {
+        m.candidate_id for m in sidecar_moves if not _is_tracked(m)
+    }
     if not untracked_sidecar_ids:
         return moves, []
 

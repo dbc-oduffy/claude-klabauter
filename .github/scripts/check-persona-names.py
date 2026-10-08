@@ -273,6 +273,10 @@ PROTECTED_LITERALS = (
     '"project_rag"',
     "'project_rag'",
     '"project_rag_ue_addon"',
+    "project_rag.bin.project_rag_cli",
+    "PROJECT_RAG_FOCUS_REPO",
+    "COORDINATOR_HOOK_PROJECT_RAG_DETECT_DISABLED",
+    "project_rag_cli.py",
 )
 PROTECTED_LITERAL_RE = re.compile(
     "|".join(re.escape(literal) for literal in PROTECTED_LITERALS)

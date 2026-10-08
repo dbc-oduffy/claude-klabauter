@@ -3220,3 +3220,132 @@ def test_best_effort_directive_with_empty_stdout_failure_is_degraded(
 
     assert [e["id"] for e in report["degraded"]] == ["d_plugin"]
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.SUCCESS)
+
+
+# ---------------------------------------------------------------------------
+# _run_post_close_directives — the after-the-close-commit pass
+# ---------------------------------------------------------------------------
+
+
+def test_post_close_directives_record_output_and_survive_a_raising_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def skipped_main(argv: list[str]) -> int:
+        print("scip-rebuild: skipped -- 2.0 GB available")
+        return 0
+
+    def silent_main(argv: list[str]) -> int:
+        return 0
+
+    def load(cli_name: str) -> ModuleType:
+        if cli_name == "baton-chain-closure":
+            raise FileNotFoundError(cli_name)
+        return {
+            "scip-rebuild-at-ceremony": _fake_module(skipped_main, "fake_reindex"),
+            "structural-index-refresh": _fake_module(silent_main, "fake_refresh"),
+        }[cli_name]
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", load)
+
+    results = ws_apply._run_post_close_directives(
+        [
+            _directive("d-baton-chain-closure", "baton-chain-closure"),
+            _directive("d-structural-index-refresh", "structural-index-refresh"),
+            _directive("d-ceremony-reindex", "scip-rebuild-at-ceremony"),
+        ]
+    )
+
+    assert results == [
+        {"id": "d-baton-chain-closure", "error": "FileNotFoundError: baton-chain-closure"},
+        {"id": "d-structural-index-refresh", "exit_code": 0},
+        {
+            "id": "d-ceremony-reindex",
+            "exit_code": 0,
+            "output": "scip-rebuild: skipped -- 2.0 GB available",
+        },
+    ]
+
+
+def test_post_close_directives_survive_a_cli_that_exits_at_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def load(cli_name: str) -> ModuleType:
+        raise SystemExit(2)
+
+    monkeypatch.setattr(ws_apply, "_load_cli_module", load)
+
+    results = ws_apply._run_post_close_directives(
+        [_directive("d-baton-chain-closure", "baton-chain-closure")]
+    )
+
+    assert results == [{"id": "d-baton-chain-closure", "error": "SystemExit: 2"}]
+
+
+def _apply_with_stubbed_tail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, close_commit_report: dict[str, Any]
+) -> tuple[list[str], dict[str, Any]]:
+    """Runs `apply` over one main-pass and one held-back directive with every
+    tail seam stubbed, returning the order the seams fired in and the report."""
+    held = dict(_directive("d-ceremony-reindex", "scip-rebuild-at-ceremony"))
+    held[ws_apply.AFTER_CLOSE_COMMIT_KEY] = True
+    envelope = {
+        "directives": [_directive("d_a", "archive-stamp-cli"), held],
+        "judgment_points": [],
+        "decisions": {},
+        "artifact": {"path": str(tmp_path)},
+        "preflight": {"session_shape": {"sid": "sid-post-close"}},
+    }
+    calls: list[str] = []
+
+    def fake_execute(directives, judgment_points, decisions, **_kwargs):
+        calls.append("main:" + ",".join(d["id"] for d in directives))
+        return 0, {"landed": [], "blocked": [], "failed": [], "results": []}
+
+    def fake_post_close(directives):
+        calls.append("post_close:" + ",".join(d["id"] for d in directives))
+        return [{"id": d["id"], "exit_code": 0} for d in directives]
+
+    monkeypatch.setattr(ws_apply, "brief", lambda decisions=None: envelope)
+    monkeypatch.setattr(ws_apply, "_execute_directives", fake_execute)
+    monkeypatch.setattr(ws_apply, "_emit_waiver_receipt", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ws_apply, "_run_close_commit_tail",
+        lambda *a, **k: calls.append("commit") or close_commit_report,
+    )
+    monkeypatch.setattr(ws_apply, "_run_completion_entry_fold", lambda *a, **k: None)
+    monkeypatch.setattr(ws_apply, "_check_completion_entry_landed", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ws_apply, "_run_push_outstanding_tail", lambda *a, **k: calls.append("push") or {}
+    )
+    monkeypatch.setattr(ws_apply, "_run_post_close_directives", fake_post_close)
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail, "_release_committed_path_claims",
+        lambda *a, **k: calls.append("release"),
+    )
+
+    _exit_code, report = ws_apply.apply(decisions={})
+    return calls, report
+
+
+def test_apply_runs_held_back_directives_after_the_commit_and_push(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls, report = _apply_with_stubbed_tail(
+        monkeypatch, tmp_path, {"attempted": True, "commit_failed": False}
+    )
+
+    assert calls == ["main:d_a", "commit", "push", "post_close:d-ceremony-reindex", "release"]
+    assert report["post_close"] == [{"id": "d-ceremony-reindex", "exit_code": 0}]
+
+
+@pytest.mark.parametrize(
+    "close_commit_report",
+    [{"attempted": False, "skipped": "no subject"}, {"attempted": True, "commit_failed": True}],
+)
+def test_apply_skips_post_close_when_no_commit_landed_clean(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, close_commit_report: dict[str, Any]
+) -> None:
+    calls, report = _apply_with_stubbed_tail(monkeypatch, tmp_path, close_commit_report)
+
+    assert calls == ["main:d_a", "commit", "push"]
+    assert "post_close" not in report

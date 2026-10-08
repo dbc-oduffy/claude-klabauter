@@ -1,7 +1,4 @@
-"""The removal side is enabled. The live-source refusal itself is pinned in
-coordinator/lib/percolate/tests/test_removal_live_source_refusal.py.
-
-AC6 history: the removal side refuses to delete a path that exists on disk.
+"""AC6 — the removal side refuses to delete a path that exists on disk.
 
 Condition of assent from claude-central-em (2026-08-26) before the removal side
 may be opened against a mirror this repo does not own, in their words "in the
@@ -34,6 +31,61 @@ _spec = importlib.util.spec_from_file_location("percolate_round_ac6", _MOD_PATH)
 assert _spec and _spec.loader
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
+
+
+def test_refuses_when_a_candidate_is_still_on_disk(tmp_path):
+    (tmp_path / ".github" / "scripts").mkdir(parents=True)
+    live = ".github/scripts/check-persona-names.py"
+    (tmp_path / live).write_text("BANNED = []\n", encoding="utf-8")
+
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._refuse_removals_present_on_disk(tmp_path, [live, "gone/from/disk.py"])
+
+    msg = str(excinfo.value)
+    assert live in msg
+    assert "declared_payload" in msg
+    assert "gone/from/disk.py" not in msg
+
+
+def test_binary_in_a_declared_directory_is_caught(tmp_path):
+    (tmp_path / "coordinator_core" / "warm" / "door").mkdir(parents=True)
+    binary = "coordinator_core/warm/door/door.exe"
+    (tmp_path / binary).write_bytes(b"MZ\x90\x00")
+
+    with pytest.raises(_mod.RemovalCandidateOnDiskError):
+        _mod._refuse_removals_present_on_disk(tmp_path, [binary])
+
+
+def test_genuine_orphans_pass_through(tmp_path):
+    _mod._refuse_removals_present_on_disk(
+        tmp_path, ["bin/migrated-away.py", "skills/repo-setup/residue/x.md"]
+    )
+
+
+def test_empty_candidate_set_is_a_noop(tmp_path):
+    _mod._refuse_removals_present_on_disk(tmp_path, [])
+
+
+def test_refusal_is_loud_not_a_silent_skip(tmp_path):
+    (tmp_path / "live.py").write_text("x\n", encoding="utf-8")
+
+    with pytest.raises(_mod.RemovalCandidateOnDiskError):
+        _mod._refuse_removals_present_on_disk(tmp_path, ["live.py", "orphan.py"])
+
+
+def test_message_caps_the_list_but_reports_the_true_count(tmp_path):
+    names = []
+    for i in range(25):
+        rel = f"payload-{i:02d}.py"
+        (tmp_path / rel).write_text("x\n", encoding="utf-8")
+        names.append(rel)
+
+    with pytest.raises(_mod.RemovalCandidateOnDiskError) as excinfo:
+        _mod._refuse_removals_present_on_disk(tmp_path, names)
+
+    msg = str(excinfo.value)
+    assert "named 25 path(s)" in msg
+    assert "... and 5 more" in msg
 
 
 def test_removal_side_is_enabled(tmp_path):

@@ -58,10 +58,19 @@ def test_cli_override_missing_file_skips(tool, tmp_path):
     assert result.startswith("publish-repo-bundle: skipped -- --cli names a file that does not exist")
 
 
-def test_registry_key_unresolved_skips(tool, monkeypatch, tmp_path):
+def test_registry_key_unresolved_skips_where_example_retrieval_repo_is_absent(tool, monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (None, "registry key unset"))
     result = tool.run("handoff", tmp_path)
     assert result == "publish-repo-bundle: skipped -- registry key unset"
+
+
+def test_registry_key_unresolved_is_a_defect_where_example_retrieval_repo_is_registered(tool, monkeypatch, tmp_path):
+    registry = {"repos.project_rag": str(tmp_path)}
+    monkeypatch.setattr(
+        tool, "_resolve_registry_key", lambda key: (registry.get(key), None if key in registry else "unset")
+    )
+    result = tool.run("handoff", tmp_path)
+    assert result == "publish-repo-bundle: defect -- unset, but repos.project_rag is registered"
 
 
 def _calls_recorder(monkeypatch, tool, results):

@@ -21,9 +21,9 @@ either way:
     defect per the dispatch brief (`--delta` is recorded dead on mirror
     rows and is deliberately not used to drive this test).
 
-Out of remit, per the brief: `.fleet-env.prior` / `.fleet-env.gen-*` are
-fleet-env provisioner artifacts, not publish orphans — ownership belongs to
-that surface, not asserted here.
+Out of remit, per the brief: `.fleet-env.prior` / `.fleet-env.gen-*` match
+`_FLEET_ENV_STAGING_SKIP_RE` and are fleet-env provisioner artifacts, not
+publish orphans — ownership belongs to that surface, not asserted here.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_staging_sweep_on_refused_row.py -x -q
 """

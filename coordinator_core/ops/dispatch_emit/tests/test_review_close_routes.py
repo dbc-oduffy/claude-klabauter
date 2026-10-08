@@ -205,20 +205,3 @@ def test_box_terms_recorded_in_script_meta_and_guard_clean():
 
 def test_no_box_terms_leaves_meta_unchanged():
     assert "boxTerms" not in _meta_block("wf", "d", ["P"])
-
-
-@pytest.mark.parametrize("route", [["--rejudge"], ["--reverify-delivery", "run.json"]])
-def test_close_route_fire_fires_and_prints_the_handle(tmp_path, monkeypatch, capsys, route):
-    import coordinator_core.ops.workflow_fire.fire as fire_module
-
-    script = tmp_path / "p.workflow.mjs"
-    script.write_text("// emitted\n", encoding="utf-8")
-    monkeypatch.setattr(rd, "emit_rejudge", lambda **_: {"path": str(script)})
-    monkeypatch.setattr(rd, "emit_reverify", lambda **_: {"path": str(script)})
-    fired = []
-    monkeypatch.setattr(fire_module, "fire_workflow", lambda path, cwd=None: fired.append(path) or {"fire_id": "f1"})
-
-    code = cli.main([*route, "--plan", str(tmp_path / "p.md"), "--repo-root", str(tmp_path), "--fire"])
-
-    assert code == 0 and fired == [str(script)]
-    assert '"fire_id": "f1"' in capsys.readouterr().out

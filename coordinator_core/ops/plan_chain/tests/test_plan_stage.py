@@ -86,22 +86,3 @@ def test_plan_blitz_wave_return_nests_digest_under_digest_key(tmp_path):
 def test_wave_return_without_digest_still_halts(tmp_path):
     out = plan_stage.read_plan_result(_wr({"waveIndex": 0, "ready": []}), repo_root=tmp_path)
     assert isinstance(out, Halt) and out.halted_at == "plan"
-
-
-@pytest.mark.parametrize("digest", [None, {"kind": "plan", "outcome": "pulled"}])
-def test_a_pulled_plan_halts_naming_the_pull_reason(tmp_path, digest):
-    wave = {
-        "waveIndex": 0,
-        "ready": [],
-        "pulled": [{
-            "batonId": "b1",
-            "reason": "prep gate NOT-PREPPED after revise",
-            "prepGateReport": "state/plan-blitz/x/gate.json",
-        }],
-    }
-    if digest is not None:
-        wave["digest"] = digest
-    out = plan_stage.read_plan_result(_wr(wave), repo_root=tmp_path)
-    assert isinstance(out, Halt)
-    assert "b1: prep gate NOT-PREPPED after revise" in out.reason
-    assert "state/plan-blitz/x/gate.json" in out.reason

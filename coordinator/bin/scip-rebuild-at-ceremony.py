@@ -5,9 +5,11 @@ Purpose: example-retrieval-repo's ceremony-gated SCIP cadence arm fires only whe
 it; this is that call, invoked from `handoff`, `workstream-complete`, and
 `merging-to-main` after each ceremony's own commit lands.
 
-Binary resolution is by `machine-local get example_retrieval_repo.bin.example_retrieval_repo_cli` ONLY -- no
-cwd-relative fallback. A missing key or a key naming a file that no
-longer exists is reported and skipped; this script never guesses a path.
+Binary resolution is by `machine-local get project_rag.bin.project_rag_cli` ONLY -- no
+cwd-relative fallback; this script never guesses a path. A missing key skips only
+on a box without example-retrieval-repo (`repos.project_rag` unset); with example-retrieval-repo registered,
+it -- like a key naming a file that no longer exists -- prints a `defect -- <reason>`
+line instead, still exiting 0.
 
 Detached, best-effort, ALWAYS exits 0. The detached child is now
 `publish-repo-bundle-at-ceremony.py` (docs/plans/2026-09-26-wire-repo-index-bundle-verbs.md
@@ -16,8 +18,8 @@ publishes the freshly-rebuilt structural index via example-retrieval-repo's `pub
 verb only after that rebuild exits 0 -- so the chain now publishes what it rebuilt, still
 detached from this process, still best-effort, and still never a ceremony gate: this
 script's own job ends at a successful spawn, not at the child's exit, exactly as before.
-Never fails a ceremony: every reachable error path prints one `skipped -- <reason>` line
-and exits 0, including a resolution failure, a bad ceremony name, or a spawn failure.
+Never fails a ceremony: every reachable error path prints one `skipped -- <reason>` (or,
+for a broken registry, `defect -- <reason>`) line and exits 0, including a resolution failure, a bad ceremony name, or a spawn failure.
 It also skips when available memory is below the rebuild's floor (default 8 GB); a host
 that cannot report available memory spawns as before.
 
@@ -166,6 +168,17 @@ def _resolve_registry_key(key: str) -> tuple[str | None, str | None]:
     return value, None
 
 
+def _unresolved_cli_line(prefix: str, reason: str | None) -> str:
+    """The line for an unresolved CLI key. A box with `repos.project_rag`
+    registered has example-retrieval-repo installed, so the key not resolving there is a
+    broken registry or a scrubbed publish -- a defect. Only a box without
+    example-retrieval-repo skips."""
+    _, absent = _resolve_registry_key("repos.project_rag")
+    if absent is None:
+        return f"{prefix}: defect -- {reason}, but repos.project_rag is registered"
+    return f"{prefix}: skipped -- {reason}"
+
+
 def _spawn_detached(argv: list[str], cwd: Path, log_path: Path) -> bool:
     """Launch argv as a detached background process, stdout/stderr to `log_path`.
     Returns True on a successful spawn (not a successful rebuild -- this never
@@ -262,12 +275,12 @@ def run(ceremony: str, repo_root: Path) -> str:
     if not _CEREMONY_NAME_RE.match(ceremony):
         return f"scip-rebuild: skipped -- invalid --ceremony name {ceremony!r} (must match [a-z0-9][a-z0-9_-]*)"
 
-    exe, reason = _resolve_registry_key("example_retrieval_repo.bin.example_retrieval_repo_cli")
+    exe, reason = _resolve_registry_key("project_rag.bin.project_rag_cli")
     if exe is None:
-        return f"scip-rebuild: skipped -- {reason}"
+        return _unresolved_cli_line("scip-rebuild", reason)
     exe_path = Path(exe).expanduser()
     if not exe_path.is_file():
-        return f"scip-rebuild: skipped -- registry key names a file that does not exist: {exe_path}"
+        return f"scip-rebuild: defect -- registry key names a file that does not exist: {exe_path}"
 
     available = available_memory_gb()
     floor = _min_available_gb()

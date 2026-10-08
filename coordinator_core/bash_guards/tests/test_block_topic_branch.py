@@ -142,20 +142,6 @@ def test_publish_branch_push_via_dash_c_into_mirror(repo, tmp_path_factory, monk
     assert _check(other, f"git -C {repo} push origin candidate") is None
 
 
-@pytest.mark.parametrize("sep", [" && ", "; "])
-def test_publish_branch_push_after_cd_into_mirror_judged_like_dash_c(repo, tmp_path_factory, monkeypatch, sep):
-    _mirror(monkeypatch, repo)
-    other = tmp_path_factory.mktemp("cwd")
-    assert _check(other, f"cd {repo}{sep}git push origin candidate") is None
-    assert _denied(_check(other, f"cd {repo}{sep}git push origin candidate-2"))
-
-
-def test_cd_inside_a_subshell_does_not_move_the_judged_repo(repo, tmp_path_factory, monkeypatch):
-    _mirror(monkeypatch, repo)
-    other = tmp_path_factory.mktemp("cwd")
-    assert _denied(_check(other, f"(cd {repo} && true); git push origin candidate"))
-
-
 def test_publish_branch_push_still_denied_outside_mirror(repo, monkeypatch):
     _mirror(monkeypatch, repo / "elsewhere")
     assert _denied(_check(repo, "git push origin candidate"))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, ShareStagesMissing, assemble_from_share
+from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, assemble_from_share
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -94,45 +94,3 @@ def test_a_run_that_recorded_tests_pass_is_not_reused(tmp_path):
         plan_id=PLAN, tests={"status": "pass"})
     with pytest.raises(ShareStageMissing):
         _assemble(tmp_path)
-
-
-def _only_lens(root, name, agent_type):
-    share = root / ".coordinator-local" / "subagent-share" / "sess-1"
-    _share(root, status="complete", test_verdict="pass", run=1, failed=0)
-    (share / "coordinator-code-reviewer.a1.md").unlink()
-    _sc(share, name, agent_type=agent_type, target_plan=PLAN)
-    return share
-
-
-def test_staff_eng_sidecar_counts_as_reviewer(tmp_path):
-    share = _only_lens(tmp_path, "coordinator-staff-eng.s1.md", "coordinator:staff-eng")
-    res = _assemble(tmp_path)
-    assert res["used"]["reviewer"] == [f".coordinator-local/subagent-share/sess-1/{(share / 'coordinator-staff-eng.s1.md').name}"]
-
-
-def test_security_audit_sidecar_counts_as_reviewer(tmp_path):
-    _only_lens(tmp_path, "coordinator-security-audit.s1.md", "coordinator:security-audit")
-    assert len(_assemble(tmp_path)["used"]["reviewer"]) == 1
-
-
-def test_delivery_verdict_key_is_read(tmp_path):
-    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
-    _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)
-    (share / "coordinator-delivery-verifier.d1.md").unlink()
-    _sc(share, "coordinator-delivery-verifier.d2.md", agent_type="coordinator:delivery-verifier",
-        plan=PLAN, delivery_verdict="FAIL")
-    assert _assemble(tmp_path)["stage_returns"]["delivery"]["verdict"] == "FAIL"
-
-
-def test_all_missing_stages_listed(tmp_path):
-    share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
-    _share(tmp_path, status="complete", test_verdict="pass")
-    for name in ("coordinator-code-reviewer.a1.md", "coordinator-delivery-verifier.d1.md",
-                 "coordinator-test-runner.t1.md"):
-        (share / name).unlink()
-    with pytest.raises(ShareStagesMissing) as exc:
-        _assemble(tmp_path)
-    assert exc.value.stages == ["delivery", "tests", "reviewer"]
-    assert not isinstance(exc.value, ShareStageMissing)
-    for stage in ("delivery", "tests", "reviewer"):
-        assert f"no {stage} sidecar" in str(exc.value)

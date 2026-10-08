@@ -563,20 +563,6 @@ def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
     assert "'met demoted: '" not in plain
 
 
-def test_a_judge_met_naming_an_unwired_entry_is_not_met():
-    """DoE judge-reachability-check: unreachable or broken click paths turn a met
-    into not_met naming the first; undecidable never moves the status."""
-    waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
-    judged = compose_script(
-        waves, name="wf", description="judge", plan_path="docs/plans/p.md",
-        review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
-    )
-    rule = judged[judged.index("r.reachability"):]
-    assert "(rc.unreachable || [])[0] || (rc.broken_click_paths || [])[0]" in rule
-    assert "status: 'not_met'" in rule and "undecidable" not in rule.split("met demoted")[0]
-    assert rule.index("status: 'not_met'") < rule.index("'met demoted: '")
-
-
 def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}

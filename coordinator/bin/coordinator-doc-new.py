@@ -4167,6 +4167,20 @@ def _scaffold_plan(
         # complete and true declaration; a placeholder criterion is neither.
         "census: []  # counted premises as question/command/result rows; [] declares none —",
         "            # a claim a reviewer can falsify. Bar: coordinator/bin/mise-prep-gate.py.",
+        # `capabilities` is never scaffolded as a live `[]`: that is the positive claim
+        # that the plan delivers no user-facing capability, and a scaffold cannot make it.
+        # A schema-valid entry of `<REPLACE:` markers keeps the plan refused by
+        # plan_scaffold_markers until filled, and still validates as plan frontmatter.
+        "capabilities:",
+        '  - id: "<REPLACE: capability id, unique in this plan; replace this list with [] only if the plan delivers no user-facing capability>"',
+        '    statement: "<REPLACE: what the user can do>"',
+        '    role: "<REPLACE: who reaches it>"',
+        '    click_path: "<REPLACE: nav entry to page>"',
+        '    ui_consumer: {chunk: "<REPLACE: chunk id>"}',
+        "    # ui_consumer takes exactly one form; use one of these in its place, or ui_carve_out:",
+        "    #   ui_consumer: {plan: <plan path, omit for this plan>, chunk: <chunk id>}",
+        "    #   ui_consumer: {shipped: <path tracked at HEAD>}",
+        "    #   ui_carve_out: \"<the PM's own words leaving the UI out>\"",
         # Fleet brightlines — emitted LIVE, deliberately not commented out like
         # the `prime_exit_criterion` block directly above. That block is
         # conditionally owed (read-side keyed on `estimate.tshirt` M/L/XL, which
@@ -4812,38 +4826,6 @@ def _is_placeholder_text(value: object) -> bool:
     return _PLACEHOLDER_RE.match(value.strip()) is not None
 
 
-def _foreign_baton_edge(edge: object, sizing_rel: str, repo_root: str) -> str | None:
-    """The other sizing a `baton:` edge's file cites, when it is not ``sizing_rel``; else None.
-
-    Only a baton that exists and names a different `sizing_object` is provably foreign. A
-    missing file or a baton citing no sizing stays the caller's refusal: an archived baton
-    reads as missing, and minting over it would duplicate shipped work.
-    """
-    if not (isinstance(edge, str) and edge):
-        return None
-    path = os.path.join(repo_root, edge)
-    if not os.path.isfile(path):
-        return None
-    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted  # noqa: PLC0415
-
-    with open(path, encoding="utf-8") as fh:
-        cited = read_fm_field_unquoted(fh.read(), "sizing_object")
-    if _is_null_scalar(cited) or cited.replace("\\", "/") == sizing_rel:
-        return None
-    return cited
-
-
-def _baton_rel_for_sizing(sizing_rel: str) -> str:
-    """`state/handoffs/<sizing stem>.md`: unique per sizing, so sibling sizings never collide.
-
-    A stem without the `YYYY-MM-DD-` lead gets today's date, keeping the handoff naming shape.
-    """
-    stem = os.path.splitext(os.path.basename(sizing_rel))[0]
-    if not re.match(r"\d{4}-\d{2}-\d{2}-", stem):
-        stem = f"{_today()}-{stem}"
-    return f"state/handoffs/{stem}.md"
-
-
 def _write_baton_file(out_abs: str, content: str) -> None:
     """Create the baton exclusively; an existing file at the path is an error."""
     os.makedirs(os.path.dirname(out_abs), exist_ok=True)
@@ -5050,16 +5032,6 @@ def mint_baton_from_sizing(
         fields.append("intent")
         reasons.append("intent is absent")
     existing = meta.get("baton")
-    stray_edge = _foreign_baton_edge(existing, sizing_rel, repo_root)
-    if stray_edge:
-        # Proven stray: the named baton cites another sizing. Treated as edge-less; the edge
-        # write below replaces it, so no write happens ahead of the refusals.
-        print(
-            f"coordinator-doc-new: replacing stray baton edge {existing} on {sizing_rel} "
-            f"(that baton cites {stray_edge})",
-            file=sys.stderr,
-        )
-        existing = None
     existing_abs = None
     join_edge = False
     if baton:
@@ -5158,7 +5130,7 @@ def mint_baton_from_sizing(
     else:
         deliverable_id = _mint_deliverable_id_from_title(title, "session-handoff", repo_root)
     handoff_id = _mint_artifact_id_from_title("hnd", title, "session-handoff", "handoff_id")
-    out_rel = _baton_rel_for_sizing(sizing_rel)
+    out_rel = f"state/handoffs/{_today()}-{_slug_from_title(title)}.md"
     out_abs = os.path.join(repo_root, out_rel)
     if os.path.exists(out_abs):
         raise SizingMintRefused(
@@ -5187,17 +5159,11 @@ def mint_baton_from_sizing(
             ["intent"], f"--from-sizing refused for {sizing_rel}: baton scaffold failed validation ({exc})"
         ) from exc
 
-    # Baton first, created exclusively: a racing mint fails here, before any sizing write.
+    old_text = _write_sizing_baton_edge(sizing_abs, out_rel, repo_root, deliverable_id)
     try:
         _write_baton_file(out_abs, content)
-    except FileExistsError as exc:
-        raise SizingMintRefused(
-            ["baton"], f"--from-sizing refused for {sizing_rel}: {out_rel} already exists"
-        ) from exc
-    try:
-        _write_sizing_baton_edge(sizing_abs, out_rel, repo_root, deliverable_id)
     except Exception:
-        os.remove(out_abs)
+        _revert_sizing_reverse_edge(sizing_abs, old_text, repo_root)
         raise
     try:
         from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415

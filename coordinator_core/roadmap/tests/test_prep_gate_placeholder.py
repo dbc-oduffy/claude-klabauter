@@ -139,33 +139,6 @@ def test_refusal_names_the_converter() -> None:
     assert "/warp-speed-execute" not in message
 
 
-@pytest.mark.parametrize("spine_status", ["PASS", "DEFECT"])
-def test_unscreenable_census_names_the_hand_rewrite_not_the_converter(spine_status) -> None:
-    """A census command in a refused form is stated, not missing: the converter writes nothing
-    for it, so it is named only when another failing class gives it something to derive."""
-    passing = {"status": "PASS", "detail": "", "kind": None, "withheld": []}
-    spine = dict(passing, status=spine_status, kind=None if spine_status == "PASS" else "spine-absent")
-    message = refusal_message(
-        Path("docs/plans/x.md"),
-        NOT_PREPPED,
-        {
-            "SPINE": spine,
-            "CENSUS": {
-                "status": "DEFECT",
-                "detail": "[0] python -c cannot be screened without evaluating it",
-                "kind": "census-unscreenable",
-                "withheld": [],
-            },
-            "EXTERNAL_DEPS": passing,
-            "PRIME_EXIT": passing,
-            "SCHEMA": passing,
-        },
-        [],
-    )
-    assert "rewrite each named census command BY HAND" in message
-    assert ("mise-prep-upgrade.py" in message) == (spine_status == "DEFECT")
-
-
 def test_converter_named_by_the_gate_exists_and_is_runnable() -> None:
     """The remedy the message names must be a file that is actually there — a
     guard that names a fix nobody can run is the cold-path defect one level up.

@@ -139,6 +139,7 @@ from coordinator_core import executor_return_contract
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.contract.decision_object.reader_result import ReaderResult
+from coordinator_core.session.suite_authority import cloud_box_basis
 
 #: This reader's own cadence identity — one of the five surface-identity
 #: cadences `coordinator_core.test_backlog_grind_assemble._CADENCES`
@@ -284,6 +285,10 @@ def _read_executor_dispatch_template() -> ReaderResult:
 
 
 def _tier_u_grant_flow() -> ReaderResult:
+    if cloud_box_basis() is not None:
+        return ReaderResult(
+            directives=[build_tier_u_grant_check(id="d-bug-blitz-tier-u-grant-check")]
+        )
     repo_root_str = _repo_root()
     if repo_root_str is None:
         open_count = 0

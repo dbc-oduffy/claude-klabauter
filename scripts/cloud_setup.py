@@ -207,7 +207,7 @@ SESSION_ORIENTATION_RULE = "cloud-session-orientation.md"
 #: reach this process, so whether a session declares a target is unknowable here.
 #: The orientation surface therefore describes the contract and lets the session,
 #: which can see its own environment, resolve it.
-SESSION_FOCUS_ENV = "EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO"
+SESSION_FOCUS_ENV = "PROJECT_RAG_FOCUS_REPO"
 
 #: The auto-compact window this script pins for a cloud container, in tokens.
 #:
@@ -428,7 +428,7 @@ class Report:
     #: armed. Advisory only — a failure here is recorded, never raised; see
     #: that function's docstring.
     rag_bundle_pull: dict | None = None
-    #: `env.EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` written into `settings.json` by
+    #: `env.PROJECT_RAG_FOCUS_REPO` written into `settings.json` by
     #: `land_example_retrieval_repo_repo_bundle`, or the write's own failure.
     session_focus_env: dict | None = None
     #: `start_work_target_indexing`: the detached readiness worker started for the
@@ -3326,7 +3326,7 @@ def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
     docstring's caller (the memo) says so explicitly. Each repo's verdict is
     recorded individually; one failure does not stop the loop or fail the step.
 
-    Also sets `EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` in the settings.json env block this
+    Also sets `PROJECT_RAG_FOCUS_REPO` in the settings.json env block this
     script writes for the session — to the `repos.*` MACHINE-LOCAL KEY naming
     the project root the install used (`_resolve_rag_project_root`), never a
     filesystem path: example-retrieval-repo's `boot_fallback_ambiguous` resolver
@@ -3455,7 +3455,7 @@ def _focus_repo_machine_local_key(project_root: str, report: Report) -> str | No
 
     example-retrieval-repo's own `boot_fallback_ambiguous` resolver
     (`example_retrieval_repo_mcp/audit.py :: _resolve_focus_repo` / `_resolve_repo_key`)
-    requires `EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO` to be a `repos.` machine-local key —
+    requires `PROJECT_RAG_FOCUS_REPO` to be a `repos.` machine-local key —
     the value it then resolves through machine-local and `projects.json` — NOT
     a filesystem path. A path gets `focus_repo_unknown`, worse than leaving
     the var unset. So this reuses the exact keys THIS script already wrote

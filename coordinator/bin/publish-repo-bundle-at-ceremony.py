@@ -5,11 +5,12 @@ freshly-rebuilt structural index via example-retrieval-repo's `publish-repo-bund
 Spawned (never invoked directly by a ceremony) as the detached argv of
 `scip-rebuild-at-ceremony.py::run`, so its own contract is the mirror of that
 script's: best-effort, ALWAYS exits 0, every reachable error path is one
-`publish-repo-bundle: skipped -- <reason>` or `publish-repo-bundle: refused --
-<fix>` line, never an exception surfaced to the caller.
+`publish-repo-bundle: skipped -- <reason>`, `publish-repo-bundle: refused --
+<fix>`, or (for a broken registry, as in that script) `publish-repo-bundle: defect --
+<reason>` line, never an exception surfaced to the caller.
 
 Contract references, read-only in example-retrieval-repo at 3c6d730fe (work/machine-a/2026-09-25,
-unreleased): `example_retrieval_repo_cli.py` (`cmd_publish_repo_bundle` / `cmd_scip_rebuild` exit
+unreleased): `project_rag_cli.py` (`cmd_publish_repo_bundle` / `cmd_scip_rebuild` exit
 codes) and `example_retrieval_repo_core/repo_bundle/publish.py` (exit-4 refusal text used for the
 fix map below). Both verbs are stub-tested here; an unmatched refusal string is echoed
 verbatim rather than raising, so drift in example-retrieval-repo's wording degrades this script's
@@ -107,6 +108,17 @@ def _resolve_registry_key(key: str) -> tuple[str | None, str | None]:
         stderr = result.stderr.strip()
         return None, f"registry key {key!r} unresolved ({stderr or 'no value'})"
     return value, None
+
+
+def _unresolved_cli_line(prefix: str, reason: str | None) -> str:
+    """The line for an unresolved CLI key. A box with `repos.project_rag`
+    registered has example-retrieval-repo installed, so the key not resolving there is a
+    broken registry or a scrubbed publish -- a defect. Only a box without
+    example-retrieval-repo skips."""
+    _, absent = _resolve_registry_key("repos.project_rag")
+    if absent is None:
+        return f"{prefix}: defect -- {reason}, but repos.project_rag is registered"
+    return f"{prefix}: skipped -- {reason}"
 
 
 def _git_common_dir(repo_root: Path) -> Path | None:
@@ -257,12 +269,12 @@ def run(
         if not exe_path.is_file():
             return f"publish-repo-bundle: skipped -- --cli names a file that does not exist: {exe_path}"
     else:
-        exe, reason = _resolve_registry_key("example_retrieval_repo.bin.example_retrieval_repo_cli")
+        exe, reason = _resolve_registry_key("project_rag.bin.project_rag_cli")
         if exe is None:
-            return f"publish-repo-bundle: skipped -- {reason}"
+            return _unresolved_cli_line("publish-repo-bundle", reason)
         exe_path = Path(exe).expanduser()
         if not exe_path.is_file():
-            return f"publish-repo-bundle: skipped -- registry key names a file that does not exist: {exe_path}"
+            return f"publish-repo-bundle: defect -- registry key names a file that does not exist: {exe_path}"
 
     common_dir = _git_common_dir(repo_root) or repo_root
     record_path = common_dir / "coordinator-sessions" / _RECORD_NAME

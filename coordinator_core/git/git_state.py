@@ -635,167 +635,20 @@ def head_tree_sha(repo: Union[str, Path]) -> Optional[str]:
     sha = head_sha(repo)
     if sha is None:
         return None
-    info = read_commit(repo, sha)
-    return info.tree if info is not None else None
-
-
-class CommitInfo(NamedTuple):
-    tree: str
-    parents: Tuple[str, ...]
-    message: str
-
-
-def read_commit(repo: Union[str, Path], sha: str) -> Optional[CommitInfo]:
-    """Parse commit `sha` in-process: tree, parents, message. `None` -- never
-    raising -- for an unreadable object, a non-commit, or a malformed header.
-    Zero-spawn.
-    """
-    result = _read_object(resolve_git_common_dir(repo), sha)
+    common_dir = resolve_git_common_dir(repo)
+    result = _read_object(common_dir, sha)
     if result is None:
         return None
     otype, payload = result
     if otype != "commit":
         return None
-    header, _, body = payload.partition(b"\n\n")
-    tree: Optional[str] = None
-    parents = []
-    for line in header.split(b"\n"):
-        if line.startswith(b"tree "):
-            tree = line[5:].decode("ascii", errors="replace").strip()
-        elif line.startswith(b"parent "):
-            parents.append(line[7:].decode("ascii", errors="replace").strip())
-    if tree is None or len(tree) != 40 or any(len(p) != 40 for p in parents):
+    first_line, _, _ = payload.partition(b"\n")
+    if not first_line.startswith(b"tree "):
         return None
-    return CommitInfo(tree, tuple(parents), body.decode("utf-8", errors="replace"))
-
-
-class TreeChange(NamedTuple):
-    status: str  # "A" | "M" | "D" | "T"
-    path: str
-    old_mode: Optional[int]
-    old_sha: Optional[str]
-    new_mode: Optional[int]
-    new_sha: Optional[str]
-
-
-_TREE_MODE = 0o40000
-
-
-def diff_commit_trees(
-    repo: Union[str, Path],
-    old_commit: str,
-    new_commit: str,
-) -> Optional[Tuple[TreeChange, ...]]:
-    """Leaf-level changes between two commits' trees (`git diff-tree -r`
-    semantics, no rename detection), sorted by path. Subtrees with equal shas
-    are never opened, so cost is O(changed subtrees). A mode change reports
-    `T`; gitlinks (160000) are leaves. `None` when any object is unreadable. Zero-spawn.
-    """
-    old = read_commit(repo, old_commit)
-    new = read_commit(repo, new_commit)
-    if old is None or new is None:
+    tree_sha = first_line[len(b"tree ") :].decode("ascii", errors="replace").strip()
+    if len(tree_sha) != 40:
         return None
-    common_dir = resolve_git_common_dir(repo)
-    out: list = []
-
-    def load(sha: Optional[str]) -> Optional[Dict[str, Tuple[int, str]]]:
-        if sha is None:
-            return {}
-        res = _read_object(common_dir, sha)
-        if res is None or res[0] != "tree":
-            return None
-        return _parse_tree_entries(res[1])
-
-    def emit_side(path: str, mode: int, sha: str, added: bool) -> bool:
-        if mode == _TREE_MODE:
-            return walk(path, None if added else sha, sha if added else None)
-        out.append(
-            TreeChange("A", path, None, None, mode, sha)
-            if added
-            else TreeChange("D", path, mode, sha, None, None)
-        )
-        return True
-
-    def walk(prefix: str, old_sha: Optional[str], new_sha: Optional[str]) -> bool:
-        if old_sha == new_sha:
-            return True
-        old_entries = load(old_sha)
-        new_entries = load(new_sha)
-        if old_entries is None or new_entries is None:
-            return False
-        for name in old_entries.keys() | new_entries.keys():
-            path = f"{prefix}/{name}" if prefix else name
-            o = old_entries.get(name)
-            n = new_entries.get(name)
-            if o is not None and n is not None and o == n:
-                continue
-            o_tree = o is not None and o[0] == _TREE_MODE
-            n_tree = n is not None and n[0] == _TREE_MODE
-            if o_tree and n_tree:
-                if not walk(path, o[1], n[1]):
-                    return False
-            elif o is not None and n is not None and not o_tree and not n_tree:
-                status = "T" if o[0] != n[0] else "M"
-                out.append(TreeChange(status, path, o[0], o[1], n[0], n[1]))
-            else:
-                if o is not None and not emit_side(path, o[0], o[1], False):
-                    return False
-                if n is not None and not emit_side(path, n[0], n[1], True):
-                    return False
-        return True
-
-    if not walk("", old.tree, new.tree):
-        return None
-    out.sort(key=lambda c: c.path)
-    return tuple(out)
-
-
-PUBLISH_TRAILER_ROUND = "Percolate-Round"
-PUBLISH_TRAILER_SOURCE_HEAD = "Percolate-Source-Head"
-PUBLISH_TRAILER_SIGNATURE = "Percolate-Signature"
-
-
-class PublishTrailers(NamedTuple):
-    round_id: Optional[str]
-    source_head: Optional[str]
-    signature: Optional[str]
-
-
-def format_publish_trailers(
-    *, round_id: str, source_head: Optional[str], signature: Optional[str]
-) -> str:
-    """`"\\n\\n"`-prefixed git-trailer block, one key per line; a falsy
-    `source_head`/`signature` is omitted. Inverse of `parse_publish_trailers`.
-    """
-    lines = [f"{PUBLISH_TRAILER_ROUND}: {round_id}"]
-    if source_head:
-        lines.append(f"{PUBLISH_TRAILER_SOURCE_HEAD}: {source_head}")
-    if signature:
-        lines.append(f"{PUBLISH_TRAILER_SIGNATURE}: {signature}")
-    return "\n\n" + "\n".join(lines)
-
-
-def parse_publish_trailers(message: str) -> PublishTrailers:
-    """Publish trailers from the last two paragraphs of `message` (a
-    `Session-Id` trailer appended after ours sits in the final one). Absent
-    keys are `None`. Last occurrence wins. Zero-spawn.
-    """
-    paragraphs = [p for p in message.strip().split("\n\n") if p.strip()]
-    found: Dict[str, str] = {}
-    for para in paragraphs[-2:]:
-        for line in para.splitlines():
-            key, sep, value = line.partition(": ")
-            if sep and key in (
-                PUBLISH_TRAILER_ROUND,
-                PUBLISH_TRAILER_SOURCE_HEAD,
-                PUBLISH_TRAILER_SIGNATURE,
-            ):
-                found[key] = value.strip()
-    return PublishTrailers(
-        found.get(PUBLISH_TRAILER_ROUND),
-        found.get(PUBLISH_TRAILER_SOURCE_HEAD),
-        found.get(PUBLISH_TRAILER_SIGNATURE),
-    )
+    return tree_sha
 
 
 def _parse_tree_entries(payload: bytes) -> Optional[Dict[str, Tuple[int, str]]]:
