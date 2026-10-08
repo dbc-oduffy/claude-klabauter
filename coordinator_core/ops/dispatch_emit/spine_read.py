@@ -786,6 +786,17 @@ def coded_row_ids(plan_path) -> frozenset:
     )
 
 
+def contradictory_read_paths(reads, reads_at_head) -> list:
+    """Sorted paths a row names in both the ordering set (``reads:`` /
+    ``consumes:``) and ``reads_at_head:``. Non-list or unhashable input yields
+    no overlap; type errors stay ``read_spine``'s to raise. The one predicate
+    behind ``ContradictoryReadDeclarationError`` and the pre-emit lints."""
+    try:
+        return sorted(set(reads or ()) & set(reads_at_head or ()))
+    except TypeError:
+        return []
+
+
 def read_spine(
     plan_path, exclusions: Optional[list] = None, keep_coded: frozenset = frozenset()
 ) -> list[EmitterRow]:
@@ -969,10 +980,10 @@ def read_spine(
         # reads is the ordering set: declared `reads:` union `consumes:`.
         reads = list(dict.fromkeys([*declared_reads, *consumes]))
 
-        overlap = set(reads) & set(reads_at_head)
+        overlap = contradictory_read_paths(reads, reads_at_head)
         if overlap:
             raise ContradictoryReadDeclarationError(
-                f"row {row_id!r} declares {sorted(overlap)!r} in both "
+                f"row {row_id!r} declares {overlap!r} in both "
                 "reads_at_head: (never orders) and consumes:/reads: (orders); "
                 "a path cannot be both"
             )

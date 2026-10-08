@@ -270,7 +270,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reverify-delivery",
         default=None,
         metavar="RUN_RECORD",
-        help="with --plan: emit a one-stage script re-running only the delivery verifier at HEAD "
+        help="with --plan (--out defaults to <plan>.workflow.mjs beside the plan): "
+        "emit a one-stage script re-running only the delivery verifier at HEAD "
         "over RUN_RECORD's frozen delivery FAIL; record its result with "
         "`python -m coordinator_core.ops.dispatch_emit.reverify_delivery record`; "
         "an empty value resolves the record a warp run leaves at "
@@ -793,10 +794,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return _do_mark_landed(args.script_positional, args.mark_landed_phase, args.sha)
 
     if args.rejudge:
+        if args.plan and not args.out_path:
+            args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
         if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):
             print(
-                f"emit-dispatch-workflow: ERROR — --rejudge needs --plan and --out "
-                f"ending {_REQUIRED_OUT_SUFFIX!r}",
+                f"emit-dispatch-workflow: ERROR — --rejudge needs --plan; --out defaults to "
+                f"<plan>{_REQUIRED_OUT_SUFFIX} beside the plan and must end {_REQUIRED_OUT_SUFFIX!r}",
                 file=sys.stderr,
             )
             return EXIT_USAGE
@@ -822,10 +825,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         return EXIT_OK
 
     if args.reverify_delivery is not None:
+        if args.plan and not args.out_path:
+            args.out_path = str(Path(args.plan).parent / f"{Path(args.plan).stem}{_REQUIRED_OUT_SUFFIX}")
         if not args.plan or not args.out_path or not args.out_path.endswith(_REQUIRED_OUT_SUFFIX):
             print(
-                f"emit-dispatch-workflow: ERROR — --reverify-delivery needs --plan and --out "
-                f"ending {_REQUIRED_OUT_SUFFIX!r}",
+                f"emit-dispatch-workflow: ERROR — --reverify-delivery needs --plan; --out defaults to "
+                f"<plan>{_REQUIRED_OUT_SUFFIX} beside the plan and must end {_REQUIRED_OUT_SUFFIX!r}",
                 file=sys.stderr,
             )
             return EXIT_USAGE

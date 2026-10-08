@@ -221,3 +221,33 @@ def test_refusal_text_keeps_the_unconditional_promise_when_no_holder_is_a_ghost(
     assert (
         "it frees when that session commits or releases." in text
     ), text
+
+
+def test_refusal_offers_one_release_request_per_named_holder(tmp_path, monkeypatch, capsys):
+    _stub_session(
+        monkeypatch=monkeypatch,
+        mod=safe_commit,
+        contested={"a/one.py": [_SID], "a/two.py": [_SID]},
+    )
+    _patch_registry(monkeypatch, {_SID: _Rec("example-stats-repo-1f")})
+    _patch_liveness_basis(monkeypatch, {_SID: "stable-pid"})
+
+    with pytest.raises(SystemExit):
+        safe_commit._refuse_contested_pathspec(["a/one.py", "a/two.py"], str(tmp_path))
+
+    lines = [l for l in capsys.readouterr().err.splitlines() if l.startswith("Release request: SendMessage(")]
+    assert len(lines) == 1, lines
+    assert '{to: "example-stats-repo-1f"' in lines[0]
+    assert "release-artifact artifact a/one.py" in lines[0]
+    assert "release-artifact artifact a/two.py" in lines[0]
+
+
+def test_an_unnamed_holder_gets_no_release_request(tmp_path, monkeypatch, capsys):
+    _stub_session(monkeypatch=monkeypatch, mod=safe_commit, contested={"a/one.py": [_SID]})
+    _patch_registry(monkeypatch, {})
+    _patch_liveness_basis(monkeypatch, {_SID: "stable-pid"})
+
+    with pytest.raises(SystemExit):
+        safe_commit._refuse_contested_pathspec(["a/one.py"], str(tmp_path))
+
+    assert "Release request:" not in capsys.readouterr().err

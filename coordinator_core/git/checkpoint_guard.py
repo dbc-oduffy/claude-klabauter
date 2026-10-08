@@ -35,6 +35,24 @@ _WALK_CAP = 500
 _CLOSED = frozenset({"coded", "spun_off", "backlogged", "wont_do", "superseded", "abandoned"})
 
 
+def checkpoint_row_ids(subject: str) -> List[str]:
+    """Row ids a `checkpoint(wave N): k rows -- ids` subject names; `[]` for any other subject."""
+    m = _SUBJECT_RE.match(subject.strip())
+    return [r.strip() for r in m.group("ids").split(",") if r.strip()] if m else []
+
+
+def _drop_repo_key(path: str) -> str:
+    head, sep, tail = path.partition(":")
+    return tail if sep and len(head) > 1 and "/" not in head else path
+
+
+def checkpoint_plan_matches(trailer_value: str, plan: str) -> bool:
+    """True when a `Checkpoint-Plan:` value names `plan`; a `repo_key:` prefix on either side is ignored."""
+    a = trailer_value.strip().replace("\\", "/")
+    b = plan.strip().replace("\\", "/")
+    return a == b or _drop_repo_key(a) == _drop_repo_key(b)
+
+
 def checkpoint_refusal(
     repo_root: Path,
     common_dir: Path,

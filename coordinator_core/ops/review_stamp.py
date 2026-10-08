@@ -706,6 +706,14 @@ def mint(
             from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
 
             refusal += f"; record the runner's verdict: {RECORD_VERB} --result-json <runner result>"
+        elif "build/test verdict is" in refusal:
+            from coordinator_core.completion_receipts.test_verdict import RECORD_VERB
+
+            refusal += (
+                "; re-run the plan's tests with the test-runner, record its verdict "
+                f"({RECORD_VERB} --result-json <runner result>), then re-mint with "
+                "--build-test <test-runner sidecar>"
+            )
         raise MintRefusal(refusal)
 
     try:
@@ -754,6 +762,22 @@ def mint(
 
     _write_stamp(plan_path, split, stamp)
     return stamp
+
+
+def _review_only_route(plan_path: Path, run_base: str) -> str:
+    """The `--review-only` remedy clause naming the plan's `coded` rows, or "" when none read."""
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
+
+    try:
+        rows = sorted(coded_row_ids(plan_path))
+    except (OSError, SpineReadError):
+        return ""
+    if not rows:
+        return ""
+    return (
+        f"; review the late delta: emit-dispatch-workflow --plan {plan_path} "
+        f"--review-only --run-base {run_base} --rows {','.join(rows)}"
+    )
 
 
 def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Optional[str]:
@@ -821,6 +845,7 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
                 return (
                     f"review-stamp: a later commit touches a declared write of this plan "
                     f"since the stamped terminal commit {terminal}"
+                    + _review_only_route(plan_path, stamp.get("run_base_sha") or terminal)
                 )
 
     return None

@@ -4915,6 +4915,29 @@ def landed_rows_from_text(text: str) -> frozenset:
     return frozenset(ids)
 
 
+def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
+    """Row ids named by checkpoint commits whose ``Checkpoint-Plan:`` trailer names ``plan``.
+    One ``git log`` spawn; ``frozenset()`` when git cannot answer."""
+    from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, checkpoint_row_ids
+    from coordinator_core.git.run import run_git
+
+    result = run_git(
+        [
+            "log", "-n", "500", "--grep=^Checkpoint-Plan: ",
+            "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)\x1e",
+        ],
+        cwd=str(repo_root),
+    )
+    if result.returncode != 0:
+        return frozenset()
+    ids: set = set()
+    for record in result.stdout.split("\x1e"):
+        subject, _, trailer = record.strip("\r\n").partition("\x1f")
+        if any(checkpoint_plan_matches(v, plan) for v in trailer.split("\x1d") if v.strip()):
+            ids.update(checkpoint_row_ids(subject))
+    return frozenset(ids)
+
+
 def emit_script(
     plan_path,
     *,
@@ -5036,10 +5059,18 @@ def emit_script(
         rows = _keep_landed_rows(rows, review_only_rows)
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
-    if landed_rows:
+    # `landed_rows is not None` is the --only-incomplete request: a run text naming no rows
+    # still excludes the rows this plan's checkpoints landed.
+    if landed_rows is not None:
         closed_ids = frozenset(
             e["id"] for e in exclusions if e.get("reason") == "disposition"
         )
+        if repo_root is not None:
+            spine_ids = {r.id for r in rows} | set(closed_ids)
+            landed_rows = landed_rows | (
+                checkpoint_landed_rows(Path(repo_root), _spec_path_for_prompt(plan_path, repo_root).as_posix())
+                & spine_ids
+            )
         rows = _drop_landed_rows(rows, landed_rows, closed_ids)
         if not rows:
             raise ValueError("every dispatchable row is already landed; nothing to re-emit")

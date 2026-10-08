@@ -1141,6 +1141,21 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
     # holder may never commit or release: promising that it will, the way the
     # unqualified sentence below still does for every ordinary unnamed
     # holder, sends the caller to wait on an event that cannot occur.
+    # One call per named holder carries every path it blocks: the round trip is
+    # the cost, so a holder never gets asked path by path.
+    import json  # noqa: PLC0415 -- refusal branch only; the common path never pays for it
+
+    by_name: Dict[str, List[str]] = {}
+    for path in sorted(contested):
+        for sid in contested[path]:
+            record = registry_snapshot.get(sid) if registry_snapshot else None
+            name = getattr(record, "name", None) if record is not None else None
+            if name:
+                by_name.setdefault(name, []).append(path)
+    for name, held in sorted(by_name.items()):
+        commands = "; ".join(f"session-claim-cli release-artifact artifact {p}" for p in held)
+        message = f"Release request: if you have no pending edit in these, please run: {commands}"
+        print(f"Release request: SendMessage({{to: {json.dumps(name)}, message: {json.dumps(message)}}})", file=sys.stderr)
     unnamed_remedy = (
         "A holder shown without a name is live but not addressable from "
         "here: drop that path and commit the rest -- it frees when that "

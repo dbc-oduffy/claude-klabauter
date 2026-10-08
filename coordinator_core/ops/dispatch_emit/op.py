@@ -1298,7 +1298,7 @@ def _dispatch_emit(
             box_terms=box_terms,
             script_path=_terminal_commit_script_path(guarded_path, repo_root, plan_path, target_root),
             findings_out=plan_findings,
-            landed_rows=frozenset(params.get("landed_rows") or ()),
+            landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
             review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
             run_base_sha=params.get("run_base_sha"),
             chatty=bool(params.get("chatty")),

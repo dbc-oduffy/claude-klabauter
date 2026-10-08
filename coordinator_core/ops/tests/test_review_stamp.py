@@ -366,6 +366,19 @@ def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
     assert "later commit" in reason
 
 
+def test_review_only_route_names_the_coded_rows(tmp_path):
+    plan = tmp_path / "p.md"
+    plan.write_text(
+        "---\nplan_id: pln-x\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: one\n  writes: [a.py]\n  disposition: coded\n"
+        "- id: C2\n  title: two\n  writes: [b.py]\n```\n",
+        encoding="utf-8",
+    )
+    route = m._review_only_route(plan, "abc1234")
+    assert f"emit-dispatch-workflow --plan {plan} --review-only --run-base abc1234 --rows C1" in route
+    assert m._review_only_route(tmp_path / "missing.md", "abc1234") == ""
+
+
 def test_check_supersession_ignores_the_plans_own_close_out(tmp_path):
     """The close-out writes the falsifier and exit_criterion_met into the plan,
     which is in its own scope; that edit is not a later change to reviewed work."""

@@ -915,8 +915,8 @@ def build_no_governing_plan_judgment_point() -> dict[str, Any]:
         evidence=(
             "preflight.governing_plan_resolution.source == \"none\": no "
             "caller-supplied or handoff-stamped plan reached this close; "
-            "re-run brief with decisions.governing_plan_slug or "
-            "decisions.governing_plan_path to name it"
+            "re-run brief with --plan <path> (or "
+            "decisions.governing_plan_slug / decisions.governing_plan_path) to name it"
         ),
         reason=(
             "whether a plan governed the session is known only to the EM; the "

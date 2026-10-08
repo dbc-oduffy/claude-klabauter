@@ -423,3 +423,25 @@ def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
     f = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
     assert f.read_text(encoding="utf-8").split() == [
         "z.py", "plan.md", "x/a.py", "x/b.py", "y/c.py"]
+
+
+def test_verify_refuses_a_plan_spine_with_consumes_and_reads_at_head_overlap(tmp_path, monkeypatch):
+    calls = _capture_rung_fires(monkeypatch)
+    spine = (
+        "## Tasks\n\n```yaml plan-tasks\n"
+        '- id: C1\n  title: "t"\n  change_kind: doc-edit\n  surface: "docs/a.md"\n'
+        '  writes: []\n  consumes:\n    - "docs/a.md"\n  reads_at_head:\n    - "docs/a.md"\n```\n'
+    )
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nstatus: draft\n---\nnew text\n" + spine, encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"docs/plans/p.md": _sha256("---\nstatus: draft\n---\nold text\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "docs/plans/p.md", "before": "old text", "after": "new text"}],
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert not outcome.ok
+    assert any("both" in f and "reads_at_head" in f for f in outcome.failures), outcome.failures
+    assert calls == []

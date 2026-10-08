@@ -163,6 +163,32 @@ def goal_falsifier_defect(fm: dict, root: Path) -> Optional[str]:
     return GOAL_REFUSAL_FALSIFIER_ABSENT
 
 
+_GREP_BARE_WORD_RE = re.compile(
+    r"""\bgrep\b(?P<opts>(?:\s+-\S+)*)\s+(?P<q>["']?)(?P<word>[A-Za-z_][\w-]*)(?P=q)(?=\s|$|[|)<>;&])"""
+)
+_IN_BARE_WORD_RE = re.compile(
+    r"""(?P<q>["'])(?P<word>[A-Za-z_][\w-]*)(?P=q)\s+in\s+\w+(?:\.(?:lower|strip|casefold)\(\))*(?![\w.(\[])"""
+)
+_ANCHORING_GREP_OPTS = re.compile(r"(?:^|\s)(?:-[A-Za-z]*[wx][A-Za-z]*|--word-regexp|--line-regexp)(?=\s|$)")
+
+
+def falsifier_how_unanchored(how: Any) -> Optional[str]:
+    """Advisory, prove-bad-only: the bare word a falsifier `how` decides on by
+    unanchored substring (`grep -c prior`, `"prior" in line`), else `None`.
+    That match fires on any line merely containing the word, so an
+    indeterminate result can read as a pass. Anything not provably that shape
+    (anchored pattern, `-w`/`-x`, `==`, a split token list) returns `None`."""
+    if not isinstance(how, str):
+        return None
+    for match in _GREP_BARE_WORD_RE.finditer(how):
+        if not _ANCHORING_GREP_OPTS.search(match.group("opts")):
+            return match.group("word")
+    match = _IN_BARE_WORD_RE.search(how)
+    if match is not None:
+        return match.group("word")
+    return None
+
+
 #: A bare `disposition_ref`/`baseline_ref` is always a hex commit sha --
 #: never a symbolic ref, branch name, or tag. Bounding the shape before ever
 #: handing the value to `git rev-parse` is deliberate defense-in-depth.

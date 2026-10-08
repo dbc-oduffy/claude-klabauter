@@ -1983,6 +1983,12 @@ def main(argv: list[str]) -> int:
     apply`'s CLI shape. Invoked via `workstream_complete.__init__._main_apply`
     (C3's `apply` subcommand wiring), never directly by an operator."""
     decisions: Optional[dict[str, Any]] = None
+    from coordinator_core.workstream_complete import merge_plan_flag, take_plan_flag
+
+    argv, plan_arg, plan_error = take_plan_flag(argv)
+    if plan_error is not None:
+        print(f"workstream-complete-apply: {plan_error}", file=sys.stderr)
+        return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         print(f"workstream-complete-apply: {conflict}", file=sys.stderr)
@@ -2000,6 +2006,7 @@ def main(argv: list[str]) -> int:
             print(f"workstream-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
 
+    decisions = merge_plan_flag(decisions, plan_arg)
     exit_code, report = apply(decisions=decisions)
     # STDOUT IS THE JSON AND NOTHING ELSE -- both prose blocks are diagnostics,
     # and on stdout they broke `json.loads(stdout)` for every caller.

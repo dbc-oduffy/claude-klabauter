@@ -77,7 +77,10 @@ Negative-spec (hard-won):
   - Does NOT accept a caller-supplied range/anchor override (AC4) — no
     parameter of `resolve_chunk_commits` or this op's handler can widen the
     query past `<plan's own add-sha>..HEAD`.
-  - Does NOT establish that a matched commit belongs to THIS plan. The range
+  - A commit carrying a `Checkpoint-Plan:` trailer counts only when the
+    trailer names this plan; a checkpoint of this plan whose subject lists
+    the chunk id matches too. The paragraph below is about every other commit.
+  - Does NOT establish that a matched non-checkpoint commit belongs to THIS plan. The range
     is anchored to the plan's own add-commit, but on a shared branch that
     range also carries every peer's commits, and a peer plan's own `C1:`
     subject satisfies the stage-3 prefix test. So the answer is "a commit
@@ -108,10 +111,12 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, checkpoint_row_ids
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git, log_diff_filter
 
 _FIELD_SEP = "\x1f"
+_RECORD_END = "\x1e"
 
 
 def resolve_chunk_commits(
@@ -178,7 +183,11 @@ def resolve_chunk_commits(
 
     range_spec = f"{add_sha}..HEAD"
     log_result = _git(
-        ["log", "--reverse", range_spec, f"--format=%H{_FIELD_SEP}%s"],
+        [
+            "log", "--reverse", range_spec,
+            f"--format=%H{_FIELD_SEP}%s{_FIELD_SEP}"
+            f"%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d){_RECORD_END}",
+        ],
         cwd=root,
     )
     if not log_result.ok:
@@ -189,13 +198,15 @@ def resolve_chunk_commits(
 
     prefix = f"{chunk_id}:"
     commits: List[Dict[str, str]] = []
-    for line in log_result.stdout.splitlines():
-        if not line:
-            continue
-        sha, sep, subject = line.partition(_FIELD_SEP)
+    for record in log_result.stdout.split(_RECORD_END):
+        sha, sep, rest = record.strip("\r\n").partition(_FIELD_SEP)
         if not sep:
             continue
-        if subject.startswith(prefix):
+        subject, _, trailer = rest.partition(_FIELD_SEP)
+        plans = [v for v in trailer.split("\x1d") if v.strip()]
+        if plans and not any(checkpoint_plan_matches(v, plan_path) for v in plans):
+            continue
+        if subject.startswith(prefix) or (plans and chunk_id in checkpoint_row_ids(subject)):
             commits.append({"sha": sha, "subject": subject})
 
     return commits

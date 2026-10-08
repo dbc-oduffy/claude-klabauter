@@ -59,6 +59,26 @@ def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_pat
     assert f"supersedes: .coordinator-local/subagent-share/sid-1/{_PLAN_ID}.review-wave-bookkeeping.md" in text
 
 
+def test_omitted_out_defaults_beside_the_plan(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path)
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)
+    share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
+    share.mkdir(parents=True)
+    (share / f"{_PLAN_ID}.review-wave-bookkeeping.md").write_bytes(record.read_bytes())
+    plan = _plan(repo)
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    argv = ["--repo-root", str(repo), "--plan", str(plan), "--reverify-delivery", ""]
+    rc = cli_module.main(argv)
+    assert rc == cli_module.EXIT_OK, capsys.readouterr().err
+    assert (repo / "docs" / "plans" / "p.workflow.mjs").exists()
+
+
+def test_reverify_without_a_plan_names_the_out_default(capsys):
+    rc = cli_module.main(["--reverify-delivery", ""])
+    assert rc == cli_module.EXIT_USAGE
+    assert "--out defaults to" in capsys.readouterr().err
+
+
 def test_completion_receipt_path_resolves_from_the_plan(tmp_path, monkeypatch, capsys):
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)

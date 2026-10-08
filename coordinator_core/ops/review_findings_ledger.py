@@ -123,6 +123,40 @@ def _normalize_path(value: str) -> str:
     return normalized
 
 
+def _ledger_plan_files(rows: List[Dict[str, Any]]) -> List[str]:
+    return sorted(
+        {
+            _normalize_path(str(row.get("file") or ""))
+            for row in rows
+            if _normalize_path(str(row.get("file") or "")).startswith("docs/plans/")
+            and str(row.get("file") or "").endswith(".md")
+        }
+    )
+
+
+def _reviewed_plan_read_conflicts(rows: List[Dict[str, Any]], repo_root: Path) -> List[str]:
+    """A failure line for every targeted plan whose spine names a path in both
+    `reads_at_head` and `consumes`/`reads` -- the row `dispatch.emit` refuses,
+    caught here before the restamp is owed. Any other spine defect is silent."""
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        ContradictoryReadDeclarationError,
+        read_spine,
+    )
+
+    errors: List[str] = []
+    for plan_rel in _ledger_plan_files(rows):
+        plan_path = repo_root / plan_rel
+        if not plan_path.is_file():
+            continue
+        try:
+            read_spine(plan_path)
+        except ContradictoryReadDeclarationError as exc:
+            errors.append(f"{plan_rel}: {exc} -- dispatch.emit refuses; verify refuses until fixed")
+        except Exception:  # noqa: BLE001 - only the contradiction is this check's to report
+            continue
+    return errors
+
+
 def _reviewed_plan_parse_errors(rows: List[Dict[str, Any]], repo_root: Path) -> List[str]:
     """A parse error, with the parser's own line/column, for every
     `docs/plans/*.md` this ledger's rows touch whose frontmatter no longer
@@ -147,14 +181,7 @@ def _reviewed_plan_parse_errors(rows: List[Dict[str, Any]], repo_root: Path) -> 
 
     import yaml
 
-    plans = sorted(
-        {
-            _normalize_path(str(row.get("file") or ""))
-            for row in rows
-            if _normalize_path(str(row.get("file") or "")).startswith("docs/plans/")
-            and str(row.get("file") or "").endswith(".md")
-        }
-    )
+    plans = _ledger_plan_files(rows)
     errors: List[str] = []
     for plan_rel in plans:
         plan_path = repo_root / plan_rel
@@ -523,6 +550,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     baseline_sha256 = _extract_baseline_sha256_block(head)
 
     failures: List[str] = list(_reviewed_plan_parse_errors(rows, repo_root))
+    failures.extend(_reviewed_plan_read_conflicts(rows, repo_root))
     seen_ids = set()
     applied = em_rejected = suspended = 0
     new_rows: List[Dict[str, Any]] = []

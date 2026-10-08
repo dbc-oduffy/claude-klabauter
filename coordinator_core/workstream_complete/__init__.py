@@ -6393,14 +6393,55 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
 # ---------------------------------------------------------------------------
 
 
+_PLAN_FLAG = "--plan"
+_USAGE_TAIL = "[--plan <path>] [--decisions <json> | --decisions-file <path>]"
+
+
+def take_plan_flag(argv: list[str]) -> tuple[list[str], Optional[str], Optional[str]]:
+    """Splits `--plan <path>` / `--plan=<path>` out of `argv`: `(rest, plan, error)`.
+    The value feeds `decisions["governing_plan_path"]` and never overrides one
+    the decisions payload already names."""
+    rest: list[str] = []
+    plan: Optional[str] = None
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == _PLAN_FLAG:
+            if i + 1 >= len(argv) or not argv[i + 1]:
+                return rest, None, f"{_PLAN_FLAG} requires a path"
+            plan = argv[i + 1]
+            i += 2
+        elif tok.startswith(_PLAN_FLAG + "="):
+            plan = tok.split("=", 1)[1]
+            if not plan:
+                return rest, None, f"{_PLAN_FLAG} requires a path"
+            i += 1
+        else:
+            rest.append(tok)
+            i += 1
+    return rest, plan, None
+
+
+def merge_plan_flag(decisions: Optional[dict[str, Any]], plan: Optional[str]) -> Optional[dict[str, Any]]:
+    if not plan:
+        return decisions
+    merged = dict(decisions or {})
+    merged.setdefault("governing_plan_path", plan)
+    return merged
+
+
 def _usage(prog: str) -> int:
-    print(f"usage: {prog} brief [--decisions <json> | --decisions-file <path>]", file=sys.stderr)
-    print(f"       {prog} apply [--decisions <json> | --decisions-file <path>]", file=sys.stderr)
+    print(f"usage: {prog} brief {_USAGE_TAIL}", file=sys.stderr)
+    print(f"       {prog} apply {_USAGE_TAIL}", file=sys.stderr)
     return EXIT_USAGE
 
 
 def _main_brief(rest: list[str]) -> int:
     decisions: dict[str, Any] = {}
+    rest, plan_arg, plan_error = take_plan_flag(rest)
+    if plan_error is not None:
+        print(f"workstream-complete-assemble: {plan_error}", file=sys.stderr)
+        return EXIT_USAGE
     conflict = detect_conflicting_payload_channels(rest)
     if conflict is not None:
         print(f"workstream-complete-assemble: {conflict}", file=sys.stderr)
@@ -6418,6 +6459,7 @@ def _main_brief(rest: list[str]) -> int:
             print(f"workstream-complete-assemble: unrecognized argument {tok!r}", file=sys.stderr)
             return EXIT_USAGE
 
+    decisions = merge_plan_flag(decisions, plan_arg) or {}
     try:
         decision_object = brief(decisions)
     except SessionIdentityUnresolved as exc:
@@ -6495,8 +6537,8 @@ def main(argv: list[str]) -> int:
         return _usage("workstream-complete-assemble")
 
     if argv[0] in ("--help", "-h"):
-        print("usage: workstream-complete-assemble brief [--decisions <json> | --decisions-file <path>]")
-        print("       workstream-complete-assemble apply [--decisions <json> | --decisions-file <path>]")
+        print(f"usage: workstream-complete-assemble brief {_USAGE_TAIL}")
+        print(f"       workstream-complete-assemble apply {_USAGE_TAIL}")
         return EXIT_OK
 
     subcmd, rest = argv[0], argv[1:]

@@ -46,7 +46,7 @@ def test_complete_sidecar_without_verdict_gets_the_hint(tmp_path):
         _run(repo, bt)
 
 
-def test_recorded_fail_refuses_without_the_hint(tmp_path):
+def test_recorded_fail_refusal_names_the_rerun_route(tmp_path):
     repo, bt = _mint(tmp_path, {"status": "open", "agent_type": "test-runner"})
     record_test_verdict(
         repo, {"status": "fail", "tests_run": 10, "tests_failed": 2, "sidecar_path": str(bt)}
@@ -54,4 +54,5 @@ def test_recorded_fail_refuses_without_the_hint(tmp_path):
     with pytest.raises(m.MintRefusal) as exc:
         _run(repo, bt)
     assert "build/test verdict is 'fail'" in str(exc.value)
-    assert "test-verdict record" not in str(exc.value)
+    assert "re-run the plan's tests with the test-runner" in str(exc.value)
+    assert "--build-test <test-runner sidecar>" in str(exc.value)

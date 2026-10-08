@@ -159,3 +159,52 @@ def test_for_execution_refuses_owed_falsifier_on_m_plan(tmp_path, capsys):
 def test_for_execution_passes_owed_falsifier_on_s_plan(tmp_path):
     path = _goal_plan(tmp_path, "S")
     assert psc.main([str(path), "--for-execution"]) == psc.EXIT_OK
+
+
+def test_path_in_both_consumes_and_reads_at_head_is_structural(tmp_path):
+    rows = (
+        '- id: C1\n  title: "writer"\n  change_kind: doc-edit\n  surface: "docs/a.md"\n'
+        '  writes:\n    - "docs/a.md"\n'
+        '- id: C2\n  title: "both"\n  change_kind: doc-edit\n  surface: "docs/b.md"\n'
+        '  writes: []\n  consumes:\n    - "docs/a.md"\n  reads_at_head:\n    - "docs/a.md"'
+    )
+    path = _plan(tmp_path, rows)
+    report = psc.check_plan(path, for_execution=False)
+    assert report["verdict"] == "INVALID"
+    assert any("CONTRADICTORY-READS" in f["error"] for f in report["rows"])
+    assert psc.main([str(path)]) == psc.EXIT_INVALID
+
+
+def test_disjoint_consumes_and_reads_at_head_stay_valid(tmp_path):
+    rows = (
+        '- id: C1\n  title: "writer"\n  change_kind: doc-edit\n  surface: "docs/a.md"\n'
+        '  writes:\n    - "docs/a.md"\n'
+        '- id: C2\n  title: "ok"\n  change_kind: doc-edit\n  surface: "docs/b.md"\n'
+        '  writes: []\n  consumes:\n    - "docs/a.md"\n  reads_at_head:\n    - "docs/c.md"'
+    )
+    path = _plan(tmp_path, rows)
+    assert psc.check_plan(path)["verdict"] == "VALID"
+
+
+def _plan_with_falsifier(tmp_path: Path, how: str) -> Path:
+    path = tmp_path / "plan.md"
+    path.write_text(
+        "---\ntitle: t\nprime_exit_criterion:\n  falsifier:\n"
+        f"    how: \"{how}\"\n    baseline_output: x\n    baseline_ref: abc1234\n"
+        "    expected_when_true: y\n---\n\n# A plan\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_unanchored_falsifier_how_is_advisory_not_fatal(tmp_path):
+    path = _plan_with_falsifier(tmp_path, "audit | grep -c prior")
+    report = psc.check_plan(path)
+    assert any("UNANCHORED-FALSIFIER" in a["error"] for a in report["advisories"])
+    assert psc.main([str(path)]) == psc.EXIT_OK
+
+
+def test_anchored_falsifier_how_raises_no_advisory(tmp_path):
+    path = _plan_with_falsifier(tmp_path, "audit | grep -x prior")
+    report = psc.check_plan(path)
+    assert not any("UNANCHORED-FALSIFIER" in a["error"] for a in report.get("advisories", []))
