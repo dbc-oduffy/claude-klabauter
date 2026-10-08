@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit import wave_map
 from coordinator_core.ops.dispatch_emit.wave_map import WaveCycleError, build_waves
 
 
-def _row(id_, writes, depends_on=None, reads=None):
+def _row(id_, writes, depends_on=None, reads=None, appends=()):
     return EmitterRow(
         id=id_,
         title=f"title-{id_}",
@@ -24,6 +24,7 @@ def _row(id_, writes, depends_on=None, reads=None):
         writes=writes,
         reads=reads or [],
         depends_on=depends_on or [],
+        appends=tuple(appends),
     )
 
 
@@ -488,39 +489,33 @@ def test_genuinely_circular_depends_on_still_refuses():
 
 
 def test_cycle_message_names_each_legs_provenance():
-    # A cycle of two derived edges: the message must say each leg was
-    # derived and name the colliding path, not just the row ids.
+    # Derived edges never create a cycle, so a refusal's provenance is the
+    # declared legs'.
     rows = [
-        _row("C1", ["a.py"], reads=["b.py"]),
-        _row("C2", ["b.py"], reads=["a.py"]),
+        _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
+        _row("C2", ["b.py"], depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}]),
     ]
     with pytest.raises(WaveCycleError) as excinfo:
         build_waves(rows)
     message = str(excinfo.value)
-    assert "derived:" in message
-    assert "a.py" in message and "b.py" in message
+    assert message.count("declared: depends_on, gate_kind=epistemic-premise") == 2
 
 
-def test_cycle_message_distinguishes_declared_from_derived_legs():
-    # C1 -> C2 declared; C2 -> C3 and C3 -> C1 both derived (read-after-
-    # write). Unlike a cycle where a derived edge closes the loop back
-    # across a declared chain (that pair is now transitively ordered by
-    # declared edges and the derived leg is correctly DROPPED — see
-    # test_declared_edge_outranks_opposing_derived_edge_transitively), here
-    # neither derived edge's endpoints share any declared order (C3 has no
-    # depends_on edge at all), so nothing is dropped and the cycle is real —
-    # the message must attribute each leg.
+def test_derived_legs_of_a_cycle_are_dropped_and_the_declared_leg_stands(caplog):
+    # C1 -> C2 declared; C2 -> C3 and C3 -> C1 derived. The derived legs close
+    # the loop, so both yield and only the declared order remains.
     rows = [
         _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
         _row("C2", ["b.py"], reads=["c.py"]),
         _row("C3", ["c.py"], reads=["a.py"]),
     ]
-    with pytest.raises(WaveCycleError) as excinfo:
-        build_waves(rows)
-    message = str(excinfo.value)
-    assert "declared: depends_on, gate_kind=epistemic-premise" in message
-    assert "derived: C2 reads c.py, written by C3" in message
-    assert "derived: C3 reads a.py, written by C1" in message
+    with caplog.at_level("WARNING", logger=wave_map.__name__):
+        waves = build_waves(rows)
+    order = {w.id: i for i, wave in enumerate(waves) for w in wave}
+    assert order["C2"] < order["C1"]
+    assert "dropped derived edge C2 -> C3" in caplog.text
+    assert "dropped derived edge C3 -> C1" in caplog.text
+    assert "cycle passes through it" in caplog.text
 
 
 def test_self_edge_message_carries_provenance():
@@ -612,3 +607,28 @@ def test_dropped_derived_edge_warns_once_per_build(caplog):
     with caplog.at_level("WARNING", logger=wave_map.__name__):
         build_waves(rows)
     assert caplog.text.count("dropped derived edge C11 -> C12") == 1
+
+
+def test_read_of_a_path_every_writer_only_appends_to_derives_no_edge():
+    rows = [
+        _row("W1", ["hub.ts"], appends=["hub.ts"]),
+        _row("W2", ["hub.ts", "x.py"], appends=["hub.ts"]),
+        _row("R", ["r.py"], reads=["hub.ts"]),
+    ]
+    assert wave_map._predecessors(rows)["R"] == set()
+
+
+def test_read_of_a_hub_with_one_in_place_writer_still_orders():
+    rows = [
+        _row("W1", ["hub.ts"], appends=["hub.ts"]),
+        _row("W2", ["hub.ts"]),
+        _row("R", ["r.py"], reads=["hub.ts"]),
+    ]
+    assert wave_map._predecessors(rows)["R"] == {"W1", "W2"}
+
+
+def test_derived_only_cycle_no_longer_raises(caplog):
+    rows = [_row("C1", ["a.py"], reads=["b.py"]), _row("C2", ["b.py"], reads=["a.py"])]
+    with caplog.at_level("WARNING", logger=wave_map.__name__):
+        build_waves(rows)
+    assert caplog.text.count("dropped derived edge") == 2

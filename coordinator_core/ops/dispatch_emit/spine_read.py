@@ -703,6 +703,7 @@ class EmitterRow(NamedTuple):
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
     reads_at_head: tuple = ()
+    appends: tuple = ()
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -1089,6 +1090,11 @@ def read_spine(
                 ),
                 change_kind=raw.get("change_kind"),
                 reads_at_head=reads_at_head,
+                appends=(
+                    tuple(p for p in raw["appends"] if isinstance(p, str))
+                    if isinstance(raw.get("appends"), list)
+                    else ()
+                ),
             )
         )
 

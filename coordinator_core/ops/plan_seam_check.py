@@ -3,7 +3,8 @@ coordinator_core.ops.plan_seam_check — JSON-RPC "plan.seam_check" and "plan.se
 
 Purpose: the set-level seam check over plans someone means to run together. It
 reports five finding classes (capability-without-ui-consumer, capabilities-undeclared,
-unpromised-export, writes-collision, drifted-contract) and a verdict. The read/write
+unpromised-export, writes-collision, drifted-contract) and a verdict; with ``universe`` on
+it adds a sixth, ``missing-seam``, that never blocks and never moves the verdict. The read/write
 pair mirrors ``plan.prep_gate`` / ``plan.stamp_prepped``: ``plan.seam_check`` evaluates
 and writes nothing; ``plan.seam_record`` evaluates inside the write so the reply and the
 files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan,
@@ -17,25 +18,39 @@ Wire params (both ops):
         capabilities-undeclared findings block.
     landed_range ("<base-sha>..<head-sha>"), landed_rows ([{plan, row}]), wave (int)
         — required at wave-boundary, refused otherwise.
+    universe (bool, optional, default false) — true also checks the set against every
+        open plan under docs/plans/ outside it (status not in PLAN_TERMINAL_STATUS) and
+        adds ``missing-seam`` findings: (1) a set plan and an out-of-set plan write one
+        path with no depends_on_plan edge either way (two append-only writers do not
+        overlap); (2) a set plan ``consumes:`` a path whose only writers are out-of-set
+        rows not ``coded`` and not reached by a depends_on_plan edge; (3) a set plan
+        ``consumes:`` a path untracked at HEAD that no open plan, in or out of the set,
+        writes. At most MISSING_SEAM_CAP are returned, then one summary finding naming
+        the overflow. Off, the reply is identical to a call without the param.
 
 Reply fields:
     {"verdict": "CLEAN"|"REFUSED"|"DRIFT", "set": [plan], "per_plan": {plan: verdict},
      "findings": [{"plan", "class", "blocking", "counterpart_plan", "capability",
                    "missing_consumer", "path", "row", "detail"}],
      "phase", "wave", "checked_at_sha"}
-    plan.seam_record adds "sidecars": [repo-relative paths written].
+    plan.seam_record adds "sidecars": [repo-relative paths written]. ``missing-seam``
+    findings are reply-only: the vendored seam-check schema's class enum does not admit
+    them, so the sidecar omits them until that enum gains the class.
 
 Negative-spec:
   - plan.seam_check opens no file for write.
   - Neither op commits or accepts a caller-supplied root.
   - Two plans that only append to a path (`appends:` on every row writing it)
     do not collide on it; an append against an in-place write still does.
+  - The universe pass adds no git call: it reads plan files and shares the
+    outside-plan cache; its one HEAD question rides the existing batched cat-file.
   - Git is asked twice at most per call: one ``cat-file --batch-check`` for HEAD's
     sha and every path-tracked question, and at wave-boundary one name-only diff.
 """
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -50,6 +65,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _write_paths_from_rows
 from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -78,6 +94,8 @@ UNDECLARED_CAPS = "capabilities-undeclared"
 EXPORT = "unpromised-export"
 COLLISION = "writes-collision"
 DRIFT_CLASS = "drifted-contract"
+MISSING_SEAM = "missing-seam"
+MISSING_SEAM_CAP = 50
 
 
 def _finding(plan, cls, blocking, detail, *, counterpart=None, capability=None,
@@ -289,6 +307,11 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
         if rel not in plans:
             plans.append(rel)
             passed[rel] = raw.strip()
+    universe = params.get("universe", False)
+    if universe is None:
+        universe = False
+    if not isinstance(universe, bool):
+        raise ValueError("universe must be a bool")
     phase = params.get("phase")
     if phase not in _PHASES:
         raise ValueError(f"phase must be one of {', '.join(_PHASES)}")
@@ -298,7 +321,7 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
     wave_keys = ("landed_range", "landed_rows", "wave")
     present = [k for k in wave_keys if params.get(k) is not None]
     out = {"plans": plans, "passed": passed, "phase": phase, "named_set": named_set,
-           "landed_range": None, "landed_rows": [], "wave": None}
+           "universe": universe, "landed_range": None, "landed_rows": [], "wave": None}
     if phase != "wave-boundary":
         if present:
             raise ValueError(f"{', '.join(present)} are accepted only at phase wave-boundary")
@@ -429,24 +452,31 @@ def _consumed(plan: _Plan, row) -> set:
     return {_normalize_path(p) for p in items if isinstance(p, str) and p} if isinstance(items, list) else set()
 
 
+def _set_promises(pset: Dict[str, _Plan]) -> tuple:
+    all_paths: set = set()
+    all_prefixes: set = set()
+    for other in pset.values():
+        paths, prefixes = other.promised_paths()
+        all_paths |= paths
+        all_prefixes |= prefixes
+    return all_paths, all_prefixes
+
+
+def _siblings(ctx: dict) -> set:
+    from coordinator_core.roadmap.prep_gate import fleet_siblings
+
+    return {n.casefold() for n in fleet_siblings(ctx["root"])}
+
+
 def _export_findings(plan: _Plan, pset, ctx, tree: _Tree, pending: list) -> None:
     own_paths, own_prefixes = plan.promised_paths()
-    # Every plan's promises in one index, built once per call: a path the
-    # plan's own rows cover is skipped before this is read, so the union
-    # answers "another plan in the set writes it".
+    # A path the plan's own rows cover is skipped before the set union is read,
+    # so the union answers "another plan in the set writes it".
     if "set_promised" not in ctx:
-        all_paths: set = set()
-        all_prefixes: set = set()
-        for other in pset.values():
-            paths, prefixes = other.promised_paths()
-            all_paths |= paths
-            all_prefixes |= prefixes
-        ctx["set_promised"] = (all_paths, all_prefixes)
+        ctx["set_promised"] = _set_promises(pset)
     set_paths, set_prefixes = ctx["set_promised"]
     if "siblings" not in ctx:
-        from coordinator_core.roadmap.prep_gate import fleet_siblings
-
-        ctx["siblings"] = {n.casefold() for n in fleet_siblings(ctx["root"])}
+        ctx["siblings"] = _siblings(ctx)
     dep_plans = plan.edge_plans()
     for row in plan.live_rows:
         consumed = _consumed(plan, row)
@@ -606,6 +636,170 @@ def _hits(touched: str, paths: set, prefixes: set) -> bool:
     return any(a in paths or a in prefixes for a in _ancestors_or_self(touched))
 
 
+_FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---", re.S)
+_STATUS_RE = re.compile(r"^status:\s*['\"]?([\w-]+)", re.M)
+
+
+def _open_outside_plans(ctx: dict, pset: Dict[str, _Plan]) -> Dict[str, _Plan]:
+    """Every docs/plans/*.md outside the set whose frontmatter status is not terminal.
+
+    Status is read by regex off the frontmatter block so a closed plan costs one
+    file read and no YAML parse; a plan with no status counts as open."""
+    root: Path = ctx["root"]
+    found: Dict[str, _Plan] = {}
+    try:
+        entries = sorted(e.name for e in os.scandir(root / "docs" / "plans") if e.name.endswith(".md"))
+    except OSError:
+        return found
+    for name in entries:
+        rel = f"docs/plans/{name}"
+        if rel in pset:
+            continue
+        try:
+            with open(root / rel, encoding="utf-8") as fh:
+                head = _FM_RE.match(fh.read())
+        except (OSError, UnicodeDecodeError):
+            continue
+        status = _STATUS_RE.search(head.group(1)) if head else None
+        if status and status.group(1).lower() in PLAN_TERMINAL_STATUS:
+            continue
+        plan = _load_outside(ctx, rel)
+        if plan is not None:
+            found[rel] = plan
+    return found
+
+
+def _raw_append_only(plan: _Plan) -> set:
+    """`append_only_paths` over raw rows: an out-of-set plan's spine is never run through `read_spine`."""
+    appended: set = set()
+    in_place: set = set()
+    for row in plan.raw_rows:
+        if row.get("disposition") in ("wont_do", "voided"):
+            continue
+        written = _raw_promises(row)[0]
+        raw = row.get("appends")
+        declared = _write_paths_from_rows([SimpleNamespace(writes=raw, writes_under=())]) if isinstance(raw, list) and raw else set()
+        appended |= written & declared
+        in_place |= written - declared
+    return appended - in_place
+
+
+class _Universe:
+    """Open plans outside the set, indexed by what their rows promise to write."""
+
+    def __init__(self, ctx: dict, pset: Dict[str, _Plan]):
+        self.plans = _open_outside_plans(ctx, pset)
+        self.exact: Dict[str, set] = {}
+        self.prefix: Dict[str, set] = {}
+        self.coded: set = set()
+        self.appends: Dict[str, set] = {}
+        for rel, plan in self.plans.items():
+            self.appends[rel] = _raw_append_only(plan)
+            for row in plan.raw_rows:
+                if row.get("disposition") in ("wont_do", "voided"):
+                    continue
+                paths, prefixes = _raw_promises(row)
+                for p in paths:
+                    self.exact.setdefault(p, set()).add(rel)
+                    if row.get("disposition") == "coded":
+                        self.coded.add((rel, p))
+                for p in prefixes:
+                    self.prefix.setdefault(p, set()).add(rel)
+                    if row.get("disposition") == "coded":
+                        self.coded.add((rel, p))
+
+    def writers(self, item: str) -> set:
+        """Out-of-set plans promising ``item`` exactly, under a prefix, or beneath it (a directory)."""
+        hits = set(self.exact.get(item, ()))
+        for anc in _ancestors_or_self(item):
+            hits |= self.prefix.get(anc, set())
+        stem = item + "/"
+        for index in (self.exact, self.prefix):
+            for p, rels in index.items():
+                if p.startswith(stem):
+                    hits |= rels
+        return hits
+
+    def codes(self, rel: str, item: str) -> bool:
+        """True when a coded row of ``rel`` promises ``item`` or something it covers."""
+        stem = item + "/"
+        ancestors = set(_ancestors_or_self(item))
+        return any(r == rel and (k in ancestors or k.startswith(stem)) for r, k in self.coded)
+
+
+def _overlap_seams(pset: Dict[str, _Plan], uni: _Universe) -> list:
+    out: list = []
+    for rel, plan in pset.items():
+        paths, prefixes = _paths_and_prefixes(plan.live_rows)
+        edges = plan.edge_plans()
+        own_appends = plan.append_only_paths()
+        for item in sorted(paths | prefixes):
+            hits = set(uni.exact.get(item, ()))
+            for anc in _ancestors_or_self(item):
+                hits |= uni.prefix.get(anc, set())
+            if item in prefixes:
+                hits |= uni.prefix.get(item, set())
+            for other in sorted(hits):
+                if other in edges or rel in uni.plans[other].edge_plans():
+                    continue
+                if item in own_appends and item in uni.appends[other]:
+                    continue
+                out.append(_finding(
+                    rel, MISSING_SEAM, False,
+                    f"{rel} and open plan {other} (outside the set) both declare writes to {item} "
+                    "with no depends_on_plan edge between them",
+                    counterpart=other, path=item))
+    return out
+
+
+def _consume_seams(pset: Dict[str, _Plan], ctx: dict, uni: _Universe, unwritten: list) -> list:
+    """Missing seams for set-plan ``consumes:`` rows.
+
+    A path no plan in the set or the universe writes goes on ``unwritten`` as
+    (plan, row, raw): the caller settles it after the batched HEAD read, since a
+    tracked file needs no writer."""
+    out: list = []
+    set_paths, set_prefixes = ctx["set_promised"]
+    for rel, plan in pset.items():
+        own = plan.promised_paths()
+        edges = plan.edge_plans()
+        for row in plan.live_rows:
+            consumed = _consumed(plan, row)
+            for raw in row.reads or ():
+                if not isinstance(raw, str) or not raw:
+                    continue
+                norm = _normalize_path(raw)
+                if norm not in consumed or norm.split("/", 1)[0].casefold() in ctx["siblings"]:
+                    continue
+                if _covers(*own, norm) or _covers(set_paths, set_prefixes, norm):
+                    continue
+                writers = uni.writers(norm)
+                if not writers:
+                    unwritten.append((plan, row, raw))
+                    continue
+                if any(w in edges or uni.codes(w, norm) for w in writers):
+                    continue
+                first = sorted(writers)[0]
+                out.append(_finding(
+                    rel, MISSING_SEAM, False,
+                    f"row {row.id} consumes {raw}, whose only promised writer is open plan {first}"
+                    " (outside the set) and no writing row is coded",
+                    counterpart=first, path=raw, row=row.id))
+    return out
+
+
+def _cap_seams(findings: list, plans: list) -> list:
+    """The first MISSING_SEAM_CAP findings in sort order, then one summary naming the overflow."""
+    if len(findings) <= MISSING_SEAM_CAP:
+        return findings
+    findings.sort(key=lambda f: (plans.index(f["plan"]), f["path"] or "", f["row"] or "", f["counterpart_plan"] or ""))
+    kept = findings[:MISSING_SEAM_CAP]
+    kept.append(_finding(plans[0], MISSING_SEAM, False,
+                         f"{len(findings) - MISSING_SEAM_CAP} further missing-seam findings omitted "
+                         f"(cap {MISSING_SEAM_CAP})"))
+    return kept
+
+
 def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     ctx = _parse_params(params, root, record=record)
     ctx.update(root=root, outside={})
@@ -616,6 +810,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     tree = _Tree(root, landed_head)
 
     findings: list = []
+    seams: list = []
     deferred: list = []
     pending: list = []
     for plan in pset.values():
@@ -647,9 +842,25 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
                 for p in row.reads or ():
                     if isinstance(p, str) and p:
                         tree.want(p)
+    unwritten: list = []
+    if ctx["universe"]:
+        uni = _Universe(ctx, pset)
+        ctx.setdefault("set_promised", _set_promises(pset))
+        ctx.setdefault("siblings", _siblings(ctx))
+        seams += _overlap_seams(pset, uni)
+        seams += _consume_seams(pset, ctx, uni, unwritten)
+        for _, _, raw in unwritten:
+            tree.want(raw)
     tree.resolve()
     if tree.sha is None:
         raise ValueError("cannot resolve HEAD")
+    for plan, row, raw in unwritten:
+        if not tree.at("HEAD", raw):
+            seams.append(_finding(
+                plan.rel, MISSING_SEAM, False,
+                f"row {row.id} consumes {raw}, which no open plan, in or outside the set, writes "
+                "and which is not tracked at HEAD",
+                path=raw, row=row.id))
 
     for plan, consumer, path in deferred:
         if not tree.at("HEAD", path):
@@ -670,6 +881,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     if ctx["phase"] == "wave-boundary":
         findings += _drift_findings(pset, ctx, tree, touched, landed_head)
 
+    findings += _cap_seams(seams, ctx["plans"])
     blocked = {f["plan"] for f in findings if f["blocking"]}
     bad = "DRIFT" if ctx["phase"] == "wave-boundary" else "REFUSED"
     per_plan = {rel: (bad if rel in blocked else "CLEAN") for rel in ctx["plans"]}
@@ -700,7 +912,7 @@ def _sidecar(reply: dict, rel: str, findings: list) -> dict:
         "checked_at_sha": reply["checked_at_sha"],
         "set": reply["set"],
         "verdict": reply["per_plan"][rel],
-        "findings": [{k: f[k] for k in keys} for f in findings],
+        "findings": [{k: f[k] for k in keys} for f in findings if f["class"] != MISSING_SEAM],
     }
 
 

@@ -151,6 +151,43 @@ def _error(message: str, **extra: object) -> dict:
     return result
 
 
+#: Refusals raised before the run's incomplete set is known: ``stranded`` would
+#: read ``{}`` ("nothing left behind") when it is really unknown, so the key is omitted.
+_STRANDED_UNKNOWN_REFUSALS = frozenset({"missing-run-outcome", "unreviewed"})
+
+
+def _missing_run_outcome(params: object) -> Optional[dict]:
+    """Refusal naming every run-outcome param the caller omitted, else ``None``.
+
+    The emitted script's marker records what the run promised (chunks, paths),
+    never how it ended: ``incomplete_chunks`` and the review-stage
+    ``inline_review`` exist only in the run's result digest
+    (``next_action.params``), so a bare ``script_path`` cannot supply them.
+    Deriving them from chunk reports would land code the review wave never saw,
+    which the deterministic-review ruling forbids. Checked once, ahead of the
+    per-field validation, so the caller learns every gap in one reply.
+    """
+    if not isinstance(params, dict) or not isinstance(params.get("script_path"), str):
+        return None
+    absent = [
+        name for name in ("incomplete_chunks", "inline_review") if params.get(name) is None
+    ]
+    if "incomplete_chunks" not in absent:
+        return None
+    return _error(
+        f"params {absent} not passed. The run outcome is not derivable from "
+        f"script_path {params['script_path']!r} (it carries only the commit-request marker: "
+        "chunks and declared paths) and no params.task_output_path was given. Pass "
+        "task_output_path=<the run's task-output file> (its next_action.params supplies "
+        "incomplete_chunks and inline_review), or pass incomplete_chunks and inline_review "
+        "from the digest's terminal_commit_cli line. A run that died before its review "
+        "stage has no inline_review to pass: land its DONE rows by hand via the scoped "
+        "commit route",
+        refused="missing-run-outcome",
+        missing=absent,
+    )
+
+
 _MINTED_SPINE_ORIGIN = "mise inventory record"
 _SPINE_SUFFIX = ".spine.md"
 
@@ -1115,7 +1152,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              marker (D2) out of. Guarded under
                                              the caller's own worktree before
                                              any read.
-        incomplete_chunks (list[str], required, may be empty) -- chunk ids the
+        incomplete_chunks (list[str], required unless task_output_path supplies it; may be empty) -- chunk ids the
                                              run did NOT finish DONE. Any id
                                              not present in the marker's
                                              request refuses the call.
@@ -1167,7 +1204,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     (a peer already landed the bytes) passes through unmodified, as a
     non-error. Every reply also carries ``stranded`` -- ``{chunk id: [declared
     paths]}`` for each ``incomplete_chunks`` id the request marker names, the
-    work the commit left uncommitted; ``{}`` when none, or when no marker was read.
+    work the commit left uncommitted; ``{}`` when none, or when no marker was read. The key is
+    omitted on a ``missing-run-outcome`` or ``unreviewed`` refusal: the incomplete set was not
+    known, so an empty map would falsely read as "nothing stranded".
     ``entangled`` (present only when non-empty) maps each chunk held back from the commit to
     the stranded chunk ids whose uncommitted ``.py`` files it imports (transitively): landing it
     would leave an unresolvable import at that sha. It is stranded with them, its reason
@@ -1191,7 +1230,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     blockers: dict = {}
     regraded: dict = {}
     reply = _terminal_commit(params, repo_root, stranded, scope, gated_ids, blockers, regraded)
-    reply["stranded"] = stranded
+    if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS:
+        reply["stranded"] = stranded
     if blockers:
         reply["blockers"] = blockers
     if regraded:
@@ -1262,6 +1302,10 @@ def _terminal_commit(
                 k: v for k, v in params.items() if k != "task_output_path"}}
         except ValueError as exc:
             return _error(str(exc))
+
+    missing = _missing_run_outcome(params)
+    if missing is not None:
+        return missing
 
     refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
     if refusal is not None:

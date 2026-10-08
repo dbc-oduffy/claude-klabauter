@@ -373,6 +373,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_check.py",
         ("_record_handler",),
     ),
+    "plan.seam_fix": (
+        "coordinator_core/ops/plan_seam_fix.py",
+        ("_handler",),
+    ),
+    "seam.mint_batons": (
+        "coordinator_core/ops/seam_baton_mint.py",
+        ("_mint_handler",),
+    ),
     # Enrolled 2026-10-08: each measures an EMPTY function-granular reachable spawn set.
     "artifact.adopt": (
         "coordinator_core/ops/artifact_adopt.py",

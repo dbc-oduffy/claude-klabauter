@@ -1157,7 +1157,8 @@ def _emit_chain_from_sizing(
         except ValueError:
             return str(p)
 
-    manifest_file = contract.manifest_path(trail_dir, wave_number)
+    manifest_file = contract.manifest_path(
+        trail_dir, wave_number, contract.chain_key(baton["id"], args.deliverable_id))
     manifest = contract.ChainManifest(
         sizing_object=sizing_rel,
         baton=baton["path"],
@@ -1168,7 +1169,10 @@ def _emit_chain_from_sizing(
         wave_args=wave_args,
         script_source=_rel(script_source),
     )
-    manifest_file.write_text(manifest.to_json(), encoding="utf-8", newline="\n")
+    try:
+        contract.write_manifest(manifest_file, manifest)
+    except contract.ChainManifestCollision as exc:
+        return _refuse_from_sizing(str(exc))
     _stamp_fire_hold(baton_path, repo_root, manifest_file)
     if args.json:
         print(json.dumps({"waveIndex": wave_number, "chain": {

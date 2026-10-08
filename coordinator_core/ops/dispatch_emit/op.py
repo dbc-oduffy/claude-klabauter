@@ -681,6 +681,7 @@ _PARAM_FIELDS = (
         )
     ),
     Field("inventory_part", "list"),
+    Field("row_budget", "pos_int"),
     Field("queue", "list"),
     Field("overrides", "dict"),
     Field("writes", "str_list"),
@@ -1176,12 +1177,17 @@ def _dispatch_emit(
             )
             part = params.get("inventory_part")
             resume_skipped: list = []
+            tranche_report: dict = {}
+            withheld_plans: dict = {}
             spine_text, spine_path = mint_spine(
                 inventory_path,
                 max_rows=params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS,
                 part=(int(part[0]), int(part[1])) if part else None,
                 skip_landed=bool(params.get("skip_landed")),
                 skipped_out=resume_skipped,
+                row_budget=params.get("row_budget"),
+                tranche_out=tranche_report,
+                withheld_out=withheld_plans,
             )
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
@@ -1535,6 +1541,10 @@ def _dispatch_emit(
         reply["landed_reconciled"] = landed_reconciled
         if params.get("skip_landed"):
             reply["resume_skipped_landed"] = resume_skipped
+        if tranche_report:
+            reply["tranche"] = tranche_report
+        if withheld_plans:
+            reply["withheld_plans"] = withheld_plans
 
     if not is_queue_route:
         anchor_root = repo_root or (

@@ -353,6 +353,15 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         help="refuse an --inventory minting more live rows than this (default 100)",
     )
+    parser.add_argument(
+        "--row-budget",
+        "--tranche",
+        dest="row_budget",
+        default=None,
+        type=int,
+        help="--inventory: emit the next whole plans (dependency order) fitting N rows "
+        "instead of refusing; the rest are reported as deferred",
+    )
     parser.add_argument("--limit", default=None, type=int, help="limit override (queue route)")
     parser.add_argument(
         "--budget-tokens",
@@ -1356,6 +1365,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["inventory_path"] = args.inventory
         if args.max_rows is not None:
             params["max_rows"] = args.max_rows
+        if args.row_budget is not None:
+            params["row_budget"] = args.row_budget
         if args.lanes:
             params["lanes"] = True
             for name in ("part", "lane_count", "hot_files"):

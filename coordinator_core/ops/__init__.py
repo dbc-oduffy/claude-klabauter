@@ -188,6 +188,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.roadmap_blitz_stage", 'registers "roadmap.blitz_stage"'),
     ("coordinator_core.ops.plan_cross_plan_gate", 'registers "plan.cross_plan_gate"'),
     ("coordinator_core.ops.plan_seam_check", 'registers "plan.seam_check", "plan.seam_record"'),
+    ("coordinator_core.ops.plan_seam_fix", 'registers "plan.seam_fix"'),
+    ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),

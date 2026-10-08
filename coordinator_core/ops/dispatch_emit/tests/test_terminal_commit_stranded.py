@@ -84,6 +84,25 @@ def test_stranded_is_present_on_a_refusal(repo):
     assert out["stranded"] == {}
 
 
+def test_bare_script_path_refuses_naming_the_missing_params_and_omits_stranded(repo):
+    script = _two_chunks(repo)
+    out = terminal_commit._handler({"script_path": script}, repo_root=repo / ".git")
+    assert out["committed"] is False
+    assert out["refused"] == "missing-run-outcome"
+    assert out["missing"] == ["incomplete_chunks", "inline_review"]
+    assert "task_output_path" in out["error"] and script in out["error"]
+    assert "stranded" not in out
+
+
+def test_unreviewed_refusal_omits_stranded(repo):
+    script = _two_chunks(repo)
+    out = terminal_commit._handler(
+        {"script_path": script, "incomplete_chunks": ["C2"]}, repo_root=repo / ".git"
+    )
+    assert out["refused"] == "unreviewed"
+    assert "stranded" not in out
+
+
 def _inline_call(repo: Path, script: str) -> dict:
     return _call(repo, script, [])
 

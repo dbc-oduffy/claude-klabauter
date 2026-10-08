@@ -59,6 +59,16 @@
       "spawn_count_budget": {"prep_fire": 1, "wave_boundary": 2},
       "_rationale": "Measured 2026-10-08, process time, over the real default set (298 approved plans, named_set false, 18795 findings): warm 308ms, COLD 3197ms. The target is the warm figure; the cold figure is a standing breach of DR-344's 500ms bar, not a budget. The cold cost is the pure-Python YAML parse of every spine inside read_spine (scan_block_scalar/scan_plain dominate the profile), a module this op consumes and does not own. One batched `git cat-file --batch-check` answers HEAD's sha and every tracked-at-HEAD question for the whole set; wave-boundary adds one name-only diff of the landed range. Counted by coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py with exact equality."
     },
+    "plan.seam_fix": {
+      "target_ms": 120,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "Measured 2026-10-08, process time: 88ms for a 50-plan named set writing 49 edges (test_plan_seam_fix asserts under 500ms). Spawn-free: plan rows are read and patched in-process under locked_rmw."
+    },
+    "seam.mint_batons": {
+      "target_ms": 200,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "Measured 2026-10-08, process time, this repo's real corpus: 8 flags (5 batons plus one rollup) 172ms cold, 61ms warm. Spawn-free: the branch is read from HEAD in-process and the deliverable id is minted in-process."
+    },
     "plan.seam_record": {
       "target_ms": 760,
       "tolerance": {"kind": "relative", "value": 0.2},

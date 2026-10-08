@@ -1301,6 +1301,28 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      The terminal judge and the next caller read the sidecar back.
     "plan.seam_record": OpClass.MUTATING,
+    # plan.seam_fix — MUTATING: mints depends_on_plan edges onto caller-named docs/plans/*.md
+    # rows so colliding writers are ordered; locked read-modify-write (plan_tasks_mutate's
+    # locked_rmw), only touched rows re-serialized. Never commits.
+    # DR-208 five-question affirmation (citing ops/plan_seam_fix.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Rewrites plan-tasks rows in the named plans.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    "plan.seam_fix": OpClass.MUTATING,
+    # seam.mint_batons — MUTATING: mints staged (awaiting_gate) handoff batons for residual
+    # seam flags, capped with one rollup, and records key->baton in state/seam-baton-index.json
+    # for cross-run dedup. Never commits.
+    # DR-208 five-question affirmation (citing ops/seam_baton_mint.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Creates state/handoffs/*.md and rewrites the dedup index.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    "seam.mint_batons": OpClass.MUTATING,
     # plan.stamp_prepped — MUTATING: the ONLY writer of the four-field mise-prep attest
     # (mise_prepped_by/_at/_sha/_findings) on a caller-named docs/plans/*.md. Locked
     # read-modify-write (coordinator_core.locked_write.locked_rmw) with the gate

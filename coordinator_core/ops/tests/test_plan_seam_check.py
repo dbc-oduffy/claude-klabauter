@@ -543,3 +543,112 @@ def test_git_reads_carry_no_seam_specific_timeout(git, tmp_path, monkeypatch):
     a = _plan(root, "a", _row("R1", "[x.py]"))
     _check(root, [a], "wave-boundary", landed_range=RANGE, landed_rows=[], wave=1)
     assert seen and all(t is None for t in seen)
+
+
+# --- universe: missing-seam findings against open plans outside the set -------------------------
+
+
+def _seams(reply):
+    return [f for f in reply["findings"] if f["class"] == "missing-seam"]
+
+
+def _status(root, rel, status):
+    p = root / rel
+    p.write_text(p.read_text(encoding="utf-8").replace("status: approved", f"status: {status}"), encoding="utf-8")
+
+
+def test_universe_off_is_unchanged(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    _plan(root, "b", _row("R1", "[x.py]"))
+    base = _check(root, [a])
+    assert _check(root, [a], universe=False) == base == _check(root, [a], universe=None)
+    assert _seams(base) == []
+
+
+def test_universe_must_be_a_bool(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    with pytest.raises(ValueError, match="universe must be a bool"):
+        _check(root, [a], universe="yes")
+
+
+def test_universe_write_overlap_is_non_blocking_and_leaves_the_verdict(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    b = _plan(root, "b", _row("R1", "[x.py]"))
+    off = _check(root, [a])
+    r = _check(root, [a], universe=True)
+    assert r["verdict"] == off["verdict"] == "CLEAN" and r["per_plan"] == off["per_plan"]
+    [f] = _seams(r)
+    assert f["plan"] == a and f["blocking"] is False and f["counterpart_plan"] == b and f["path"] == "x.py"
+    assert [x for x in r["findings"] if x["class"] != "missing-seam"] == off["findings"]
+
+
+def test_universe_overlap_ignores_edged_terminal_and_in_set_plans(tmp_path, git):
+    root = _root(tmp_path)
+    b = _plan(root, "b", _row("R1", "[x.py]"))
+    edged = _plan(root, "edged", _row("R1", "[x.py]"), fm=f"capabilities: []\ndepends_on_plan:\n  - plan: {b}\n")
+    assert _seams(_check(root, [edged], universe=True)) == []
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    assert {f["counterpart_plan"] for f in _seams(_check(root, [a], universe=True))} == {b, edged}
+    _status(root, b, "implemented")
+    _status(root, edged, "abandoned")
+    assert _seams(_check(root, [a], universe=True)) == []
+    _status(root, b, "approved")
+    assert _seams(_check(root, [a, b], universe=True)) == []
+
+
+def test_universe_overlap_honours_appends(tmp_path, git):
+    root = _root(tmp_path)
+    app = "  appends: [log.md]\n"
+    a = _plan(root, "a", _row("R1", "[log.md]", extra=app))
+    b = _plan(root, "b", _row("R1", "[log.md]", extra=app))
+    assert _seams(_check(root, [a], universe=True)) == []
+    _plan(root, "b", _row("R1", "[log.md]"))
+    assert len(_seams(_check(root, [a], universe=True))) == 1
+
+
+def test_universe_consumed_path_with_only_an_uncoded_outside_writer(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", consumes="[lib/y.py]"))
+    b = _plan(root, "b", _row("W1", "[lib/y.py]"))
+    r = _check(root, [a], universe=True)
+    [f] = _seams(r)
+    assert f["plan"] == a and f["blocking"] is False and f["counterpart_plan"] == b
+    assert f["path"] == "lib/y.py" and f["row"] == "R1"
+    _plan(root, "b", _row("W1", "[lib/y.py]", extra="  disposition: coded\n"))
+    assert _seams(_check(root, [a], universe=True)) == []
+
+
+def test_universe_consumed_path_nobody_ships(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]", consumes="[lib/z.py]"))
+    r = _check(root, [a], universe=True)
+    [f] = _seams(r)
+    assert f["blocking"] is False and f["path"] == "lib/z.py" and f["counterpart_plan"] is None
+    assert r["verdict"] == _check(root, [a])["verdict"]
+    git.tracked.add("lib/z.py")
+    assert _seams(_check(root, [a], universe=True)) == []
+
+
+def test_universe_caps_findings_and_names_the_overflow(tmp_path, git):
+    root = _root(tmp_path)
+    paths = ", ".join(f"f{i:03d}.py" for i in range(60))
+    a = _plan(root, "a", _row("R1", f"[{paths}]"))
+    _plan(root, "b", _row("R1", f"[{paths}]"))
+    seams = _seams(_check(root, [a], universe=True))
+    assert len(seams) == op.MISSING_SEAM_CAP + 1
+    [summary] = [f for f in seams if "further" in f["detail"]]
+    assert "10 further missing-seam findings omitted" in summary["detail"] and summary["blocking"] is False
+
+
+def test_universe_findings_stay_out_of_the_sidecar(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    _plan(root, "b", _row("R1", "[x.py]"))
+    r = op._record_handler({"plans": [a], "phase": "prep", "named_set": True, "universe": True}, repo_root=root)
+    assert len(_seams(r)) == 1
+    doc = yaml.safe_load((root / "docs/plans/a.seam.yaml").read_text(encoding="utf-8"))
+    assert doc["findings"] == []
+    _validate(doc)

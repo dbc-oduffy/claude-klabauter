@@ -3033,8 +3033,12 @@ def _scaffold_spinoff(
     kind: str = "spinoff",
     governing_plan: str | None = None,
     next_steps: Sequence[str] = (),
+    origin: "SpinoffOrigin | None" = None,
 ) -> str:
     """Generate validator-clean spinoff frontmatter + canonical section skeleton.
+
+    origin, when supplied, replaces the per-call `_resolve_spinoff_origin()` scan: a bulk
+    minter resolves the origin once and passes it to every scaffold. Absent, unchanged.
 
     kind="session-handoff" emits the same work-spec sections under a
     session-handoff header: no origin_* fields, no "What travels with this
@@ -3227,7 +3231,7 @@ def _scaffold_spinoff(
         _authoring_session_line,
     ]
     if not _is_session:
-        _origin = _resolve_spinoff_origin()
+        _origin = origin if origin is not None else _resolve_spinoff_origin()
         _origin_handoff_id = origin_handoff_id or _origin.origin_handoff_id
         lines.append(f"origin_session: {_yaml_quote(_authoring_session_value)}")
         lines.append(

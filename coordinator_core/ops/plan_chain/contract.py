@@ -7,6 +7,7 @@ always one of them.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -87,9 +88,44 @@ class ChainManifest:
         return cls(**json.loads(text))
 
 
-def manifest_path(trail_dir: str | Path, wave_number: int) -> Path:
-    """``<trail>/chain-<n>-1.json``."""
-    return Path(trail_dir) / f"chain-{wave_number}-1.json"
+class ChainManifestCollision(Exception):
+    """A manifest for a different chain already sits at the target path."""
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_") or "x"
+
+
+def chain_key(baton_id: str, deliverable_id: str | None = None) -> str:
+    """The identity a chain runs for: its baton, narrowed by deliverable when one is named."""
+    return _slug(baton_id) + (f".{_slug(deliverable_id)}" if deliverable_id else "")
+
+
+def manifest_path(trail_dir: str | Path, wave_number: int, key: str) -> Path:
+    """``<trail>/chain-<n>-<key>.json``; ``key`` is :func:`chain_key`, so one trail holds many chains."""
+    return Path(trail_dir) / f"chain-{wave_number}-{key}.json"
+
+
+def write_manifest(path: Path, manifest: ChainManifest) -> None:
+    """Write ``manifest`` at ``path``; the same chain rewrites idempotently, another chain is refused.
+
+    Chain identity is (sizing_object, baton, deliverable_id); a manifest at ``path`` that cannot be
+    read is treated as foreign rather than clobbered.
+    """
+    if path.exists():
+        try:
+            prior = ChainManifest.from_json(path.read_text(encoding="utf-8"))
+            same = (prior.sizing_object, prior.baton, prior.deliverable_id) == (
+                manifest.sizing_object, manifest.baton, manifest.deliverable_id)
+            prior_desc = f"sizing {prior.sizing_object} baton {prior.baton}"
+        except (ValueError, TypeError, OSError):
+            same, prior_desc = False, "an unreadable manifest"
+        if not same:
+            raise ChainManifestCollision(
+                f"{path} already holds a different chain ({prior_desc}); "
+                f"refusing to overwrite it with sizing {manifest.sizing_object} baton {manifest.baton}"
+            )
+    path.write_text(manifest.to_json(), encoding="utf-8", newline="\n")
 
 
 @dataclass

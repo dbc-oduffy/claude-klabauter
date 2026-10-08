@@ -313,6 +313,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
 )
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEW_PHASE_TITLE
 from coordinator_core.ops.dispatch_emit.predispatch import (
+    CACHED_SCHEMA,
     ALREADY_DONE_RULE,
     ALREADY_DONE_RULE_MARKER,
     CHECK_PHASE_TITLE,
@@ -3887,6 +3888,8 @@ def _spec_prompt_expr(spec: AgentSpec, shared: SharedBlocks) -> str:
 
 
 def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optional[str]) -> str:
+    if spec.schema == CACHED_SCHEMA:
+        return f"async () => ({spec.prompt})"
     opts = [
         f"label: {_js_string_literal(spec.label)}",
         f"phase: {_js_string_literal(spec.phase)}",
@@ -3904,11 +3907,61 @@ def _spec_thunk_js(spec: AgentSpec, shared: SharedBlocks, agent_type_host: Optio
     )
 
 
+def _verdict_cache_blocks(
+    review_specs: Sequence[AgentSpec], repo_root: Optional[Path], agent_type_host: Optional[str]
+) -> list[str]:
+    """Persist each freshly returned SOUND/BROKEN verdict where ``review_inputs`` looks for
+    it next emit. Best-effort and off the critical path: a failed write only costs a
+    re-review; the agent is awaited at script end through ``_verdictCacheWrites``."""
+    entries = [
+        (
+            "{ path: "
+            + _js_string_literal(
+                (repo_root / spec.cache_path).as_posix() if repo_root else spec.cache_path
+            )
+            + f", falsifier_sha: {_js_string_literal(spec.cache_key[0])}"
+            + f", plan_sha: {_js_string_literal(spec.cache_key[1])} }}"
+        )
+        if spec.cache_path and spec.cache_key
+        else "null"
+        for spec in review_specs
+    ]
+    if all(e == "null" for e in entries):
+        return []
+    agent_type = _js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))
+    return [
+        "  const _verdictCacheWrites = [];",
+        "  {",
+        "    const _reviewCache = [" + ", ".join(entries) + "];",
+        "    const _files = [];",
+        "    _reviewCache.forEach((c, j) => {",
+        "      const r = _preResults[_checkIds.length + j];",
+        "      if (!c || !r || (r.verdict !== 'SOUND' && r.verdict !== 'BROKEN')) return;",
+        "      const tells = Array.isArray(r.tells)",
+        "        ? r.tells.filter(t => t && t.status === 'FIRED').map(t => String(t.tell))",
+        "        : [];",
+        "      _files.push({ path: c.path, text: JSON.stringify("
+        "{ falsifier_sha: c.falsifier_sha, plan_sha: c.plan_sha, verdict: r.verdict, tells }, null, 2) + '\\n' });",
+        "    });",
+        "    if (_files.length) {",
+        "      _verdictCacheWrites.push(agent(",
+        "        'Write each file below with the Write tool: `path` is the absolute file path "
+        "(create its directory if missing), `text` is the exact file content. Do nothing else. "
+        "Files: ' + JSON.stringify(_files),",
+        f"        {{ label: 'verdict-cache', phase: {_js_string_literal(CHECK_PHASE_TITLE)}, "
+        f"agentType: {agent_type}, {_model_opt('', 'haiku')}, effort: 'low' }}",
+        "      ).then(() => null, () => null));",
+        "    }",
+        "  }",
+    ]
+
+
 def _pre_phase_blocks(
     specs: Sequence[AgentSpec],
     review_specs: Sequence[AgentSpec],
     shared: SharedBlocks,
     agent_type_host: Optional[str],
+    repo_root: Optional[Path] = None,
 ) -> list[str]:
     """The script blocks for the pre-dispatch phase: one ``parallel([...])`` of
     every check and review thunk, then the fold into the ``_run_row_helper_js``
@@ -3917,7 +3970,7 @@ def _pre_phase_blocks(
     all_specs = [*specs, *review_specs]
     schemas = ", ".join(
         f"{_js_string_literal(name)}: {stage_schema_literal(name)}"
-        for name in sorted({spec.schema for spec in all_specs})
+        for name in sorted({spec.schema for spec in all_specs if spec.schema != CACHED_SCHEMA})
     )
     thunks = ",\n".join(
         f"    {_spec_thunk_js(spec, shared, agent_type_host)}" for spec in all_specs
@@ -3933,6 +3986,7 @@ def _pre_phase_blocks(
         + ", ".join(_js_string_literal(spec.key) for spec in review_specs)
         + "];",
         _PRE_PHASE_FOLD_JS,
+        *_verdict_cache_blocks(review_specs, repo_root, agent_type_host),
     ]
 
 
@@ -4387,7 +4441,7 @@ def compose_script(
         if review_specs:
             phase_titles.append(REVIEW_PHASE_TITLE)
         body_blocks.extend(
-            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host)
+            _pre_phase_blocks(pre_check_specs, review_specs, shared, agent_type_host, repo_root)
         )
 
     runtime_cap = _runtime_cap_on_host()
@@ -4537,6 +4591,8 @@ def compose_script(
                 "});"
             )
     body_blocks.append("  await Promise.all(_verifications);")
+    if any(spec.cache_path for spec in review_specs):
+        body_blocks.append("  await Promise.all(_verdictCacheWrites);")
     if not review_only:
         body_blocks.append("  await Promise.all(_waveTriggers);")
         body_blocks.append("  await _commitChain;")

@@ -1344,6 +1344,15 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/ops/plan_seam_fix.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/ops/plan_seam_fix.py",
+    "mutates": [
+      "docs/plans/*.md"
+    ],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/ops/plan_stamp_prepped.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/plan_stamp_prepped.py",
     "mutates": [
@@ -1481,6 +1490,13 @@
   {
     "detail": "coordinator_core/ops/scope_warning_resolve.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/ops/scope_warning_resolve.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
+    "detail": "coordinator_core/ops/seam_baton_mint.py declares GENERATES = [] (declared-empty, no artifacts); coordinator_core/ops/seam_baton_mint.py MUTATES pattern 'state/seam-baton-index.json' names a concrete path; a fixed artifact declares GENERATES",
+    "generator": "coordinator_core/ops/seam_baton_mint.py",
     "mutates": [],
     "pairs": [],
     "verdict": null

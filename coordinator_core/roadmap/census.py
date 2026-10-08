@@ -312,6 +312,38 @@ def compare_count(count: int, stdout: str) -> dict:
     return {"state": "DRIFT", "basis": f"recorded count {count}, observed {observed}"}
 
 
+#: The one canonical shape for a count carried inside a value: `count N; v`. The revalidator
+#: DISPLAYS a count-bearing entry this way, so a recorded result may arrive in it. Writers must
+#: not emit it on the observed side; if one does, `split_count` strips it symmetrically.
+_COUNT_PREFIX = re.compile(r"^\s*count\s+(-?\d+)\s*;\s*(.*)\Z", re.DOTALL)
+
+
+def split_count(text: str) -> tuple[Optional[int], str]:
+    """(N, v) for `count N; v`, else (None, text stripped). The value is whitespace-stripped."""
+    m = _COUNT_PREFIX.match(text or "")
+    if m:
+        return int(m.group(1)), m.group(2).strip()
+    return None, (text or "").strip()
+
+
+def same_value(count: Optional[int], recorded: str, observed: str) -> Optional[dict]:
+    """MATCH/DRIFT when recorded and observed agree or contradict on the NORMALISED shape.
+
+    Both sides are reduced to (count, value) first. Two counts that are both present and differ
+    are a DRIFT; an identical non-empty value is a MATCH whatever the declared `count` says,
+    because identical output means nothing moved (a count measuring something other than the
+    output's lines or leading integer is an authoring slip, not drift). None when undecided.
+    """
+    rec_n, rec_v = split_count(recorded)
+    obs_n, obs_v = split_count(observed)
+    rec_n = rec_n if rec_n is not None else count
+    if rec_n is not None and obs_n is not None and rec_n != obs_n:
+        return {"state": "DRIFT", "basis": f"recorded count {rec_n}, observed count {obs_n}"}
+    if rec_v and rec_v == obs_v:
+        return {"state": "MATCH", "basis": "exact (count prefix normalised)"}
+    return None
+
+
 def count_defect(entry: dict) -> Optional[str]:
     """Why an entry's `count` is unusable, or None when absent or a non-negative int."""
     if "count" not in entry:
