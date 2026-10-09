@@ -167,6 +167,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(
             f"missing required param: sizing — {_PARAMS_HINT}"
         )
+    if "statement" in params and params.get("statement") is not None and not statement_param:
+        return _err(
+            "statement is empty: an amendment needs the new criterion text; omit "
+            f"statement to accept the one on record; {_PARAMS_HINT}"
+        )
     if pm_quote and apm_ruling:
         return _err(f"pass exactly one of pm_quote / apm_ruling, not both; {_PARAMS_HINT}")
     if not pm_quote and not apm_ruling:

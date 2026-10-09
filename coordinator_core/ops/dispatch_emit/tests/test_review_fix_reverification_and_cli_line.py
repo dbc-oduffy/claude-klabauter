@@ -58,7 +58,7 @@ def test_terminal_test_phase_runs_after_every_review_stage(script):
 def test_terminal_test_prompt_covers_review_edited_files_beside_the_row_writes(script):
     prompt = _test_prompt(script)
 
-    assert "git diff --name-only ' + _runBase + '" in prompt
+    assert f"git diff --name-only {_BASE}" in prompt
     assert "git ls-files --others --exclude-standard" in prompt
     assert "Review stages ran before this phase" in prompt
     assert "tsc --noEmit -p <that dir>" in prompt

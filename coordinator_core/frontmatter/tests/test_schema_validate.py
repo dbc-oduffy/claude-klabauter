@@ -30,7 +30,11 @@ import yaml
 # above) validates against a real DoE HEAD comparison -- a mocked git cannot
 # exhibit true divergence/match against actual repo state. Per-test
 # isolation for the fixtures that build throwaway repos.
-pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
+pytestmark = [
+    pytest.mark.cadence,
+    pytest.mark.spawns_process,
+    pytest.mark.usefixtures("widened_foreign_git_timeout"),
+]
 
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,

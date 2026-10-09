@@ -200,6 +200,7 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.liveness import resolve_live_session_ids
+from coordinator_core.ops import requirement_register
 from coordinator_core.ops.cascade_baton_rows import resolve_baton_rows
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
@@ -1006,8 +1007,6 @@ def _advance_one_sizing(
 
         if current_status is None:
             raise MutateAbort(f"advance: sizing at {candidate_path} has no 'status' field")
-        fm_text = replace_fm_field(fm_text, "status", "shipped")
-
         # This cascade
         # write holds the terminal fact for the `plan` FK and OVERWRITES an
         # existing, differing value without a collision guard — the opposite
@@ -1024,12 +1023,24 @@ def _advance_one_sizing(
             else:
                 fm_text = insert_fm_field(fm_text, "plan", plan_path, "status")
 
+        # A register-bearing sizing ships only through the register rollup; a
+        # refusal still keeps the plan FK and names the blocking row (DR-263).
+        shipped_text, register_refusal = requirement_register.ship_text(fm_text)
+        if register_refusal:
+            _state["register_refusal"] = register_refusal
+        else:
+            fm_text = shipped_text or replace_fm_field(fm_text, "status", "shipped")
+
         errors = _validate_sizing_fm(fm_text)
         if errors:
+            if register_refusal:
+                # The register itself is schema-invalid (e.g. deferred without a
+                # ruling); name the blocking row and write nothing.
+                raise MutateAbort(f"sizing not shipped: {register_refusal}")
             details = format_validation_errors(errors)
             raise MutateAbort(f"advance: post-mutation schema validation failed: {details}")
 
-        _state["applied"] = True
+        _state["applied"] = not register_refusal
         return fm_text if whole_doc else rebuild(split, fm_text)
 
     try:
@@ -1041,6 +1052,8 @@ def _advance_one_sizing(
     except MutateAbort as exc:
         return False, (exc.args[0] if exc.args else "advance: mutation aborted")
 
+    if _state.get("register_refusal"):
+        return False, f"sizing not shipped: {_state['register_refusal']}"
     return bool(_state["applied"]), None if _state["applied"] else _ALREADY_ADVANCED_MARKER
 
 

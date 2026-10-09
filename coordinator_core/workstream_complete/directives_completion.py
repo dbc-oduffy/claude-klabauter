@@ -535,3 +535,64 @@ def build_directives(
         directives.append(reversibility_directive)
 
     return directives
+
+
+# ---------------------------------------------------------------------------
+# Review-note decisions: a review wave's `em_may_think_differently` notes,
+# carried on the governing plan's `review_stamp`, each need a written decision
+# before the close can commit.
+# ---------------------------------------------------------------------------
+
+REVIEW_NOTE_DECISIONS_KEY = "review_note_decisions"
+_REVIEW_NOTE_VERDICTS = frozenset({"applied", "rejected", "backlogged"})
+
+
+def read_review_notes(plan_path: Optional[Path]) -> list[dict[str, Any]]:
+    """The governing plan's `review_stamp.em_may_think_differently` dict
+    entries, in stamp order. Empty when there is no plan or the plan, its
+    stamp, or the list is unreadable or absent -- never raises."""
+    if plan_path is None:
+        return []
+    try:
+        fm = parse_frontmatter(Path(plan_path).read_text(encoding="utf-8")).get("frontmatter")
+    except (OSError, UnicodeDecodeError):
+        return []
+    stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
+    notes = stamp.get("em_may_think_differently") if isinstance(stamp, dict) else None
+    return [n for n in notes if isinstance(n, dict)] if isinstance(notes, list) else []
+
+
+def review_note_label(note: Mapping[str, Any]) -> str:
+    """One-line text naming a note: its `line`, else its `anchor`."""
+    return " ".join(str(note.get("line") or note.get("anchor") or "(unlabelled note)").split())
+
+
+def review_notes_resolved(notes: list[dict[str, Any]], decisions: Mapping[str, Any]) -> bool:
+    """True when `decisions["review_note_decisions"]` holds exactly one valid
+    entry per note: a known `decision`, a non-empty `why`, and a non-empty
+    `ref` when `backlogged`."""
+    entries = decisions.get(REVIEW_NOTE_DECISIONS_KEY)
+    if not isinstance(entries, list) or len(entries) != len(notes):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("decision") not in _REVIEW_NOTE_VERDICTS:
+            return False
+        if not str(entry.get("why") or "").strip():
+            return False
+        if entry["decision"] == "backlogged" and not str(entry.get("ref") or "").strip():
+            return False
+    return True
+
+
+def render_review_notes_section(
+    notes: list[dict[str, Any]], decisions: Mapping[str, Any]
+) -> str:
+    """The `## Review notes` prose block, one `- <note> -> <decision>: <why>`
+    line per note. Caller guarantees `review_notes_resolved`."""
+    lines = ["## Review notes", ""]
+    for note, entry in zip(notes, decisions[REVIEW_NOTE_DECISIONS_KEY]):
+        why = " ".join(str(entry["why"]).split())
+        if entry["decision"] == "backlogged":
+            why = f"{why} ({' '.join(str(entry['ref']).split())})"
+        lines.append(f"- {review_note_label(note)} -> {entry['decision']}: {why}")
+    return "\n".join(lines) + "\n"

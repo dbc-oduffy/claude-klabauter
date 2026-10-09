@@ -705,6 +705,12 @@ def mint(
                 f"emit-dispatch-workflow --plan <plan> --reverify-delivery {hint}, "
                 "then reverify-delivery record"
             )
+        if "exit criterion is" in refusal:
+            refusal += (
+                f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "
+                "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+                "then mint again (a hand-run judge leaves no record mint can read)"
+            )
         if (
             "build/test verdict is" in refusal
             and build_test_data.get("test_verdict") is None
@@ -906,7 +912,11 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     fm_data = yaml.safe_load(split.fm_text) or {}
     stamp = fm_data.get("review_stamp") if isinstance(fm_data, dict) else None
     if not isinstance(stamp, dict) or not isinstance(stamp.get("criterion"), dict):
-        raise MintRefusal(f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge")
+        raise MintRefusal(
+            f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge; with no stamp, "
+            "record the re-judge (emit-dispatch-workflow --rejudge, fire, reverify_delivery record) "
+            "and run review-stamp mint, which reads the newer met verdict"
+        )
     plan_id = str(fm_data.get("plan_id") or "")
     if not plan_id:
         raise MintRefusal(f"review-stamp: {plan_path} carries no plan_id")

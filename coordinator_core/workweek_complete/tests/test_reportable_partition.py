@@ -49,6 +49,18 @@ def test_predicate_classification_matches_known_pair():
     )
 
 
+def test_register_stall_point_lands_in_reported_never_asked():
+    from coordinator_core.ops.requirement_register import StallReport
+
+    report = StallReport(unclaimed_rows=["state/sizings/s.yaml row r (ui)"])
+    directives = _build_directives()
+    points = _build_judgment_points(register_stall=report)
+    recommendation_carrying = [p for p in points if p.get("recommendation") is not None]
+    asked, reported = partition_reportable(recommendation_carrying, directives)
+    assert "jp_requirement_register_stall" in {p["id"] for p in reported}
+    assert "jp_requirement_register_stall" not in {p["id"] for p in asked}
+
+
 def test_action_class_point_carries_explicit_reportable_false():
     _, points = _built_directives_and_points()
     by_id = {p["id"]: p for p in points}

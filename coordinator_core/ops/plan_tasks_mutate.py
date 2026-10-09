@@ -1434,6 +1434,7 @@ def _reposition_rows_for_d5(rows: list) -> list:
 
 
 _HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+_MEMO_OUTBOX = ".coordinator-local/memo-outbox"
 
 
 def _writes_match(changed: str, write: str) -> bool:
@@ -1442,7 +1443,12 @@ def _writes_match(changed: str, write: str) -> bool:
         return False
     if any(ch in write for ch in "*?["):
         return fnmatch.fnmatchcase(changed, write)
-    return changed == write or changed.startswith(write + "/")
+    if changed == write or changed.startswith(write + "/"):
+        return True
+    # memo.send moves an outbox draft into sent/, so the commit that delivers a memo-send
+    # row touches the receipt, never the draft path the row declares.
+    head, _, name = write.rpartition("/")
+    return head.endswith(_MEMO_OUTBOX) and changed == f"{head}/sent/{name}"
 
 
 def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> Optional[str]:

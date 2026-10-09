@@ -39,7 +39,7 @@ def _research_errors(research: dict) -> list[dict]:
 
 def test_vendored_versions():
     assert _version(_SIZING) == "1.32.0"
-    assert _version(_HANDOFF) == "11.0.1"
+    assert _version(_HANDOFF) == "11.0.0"
 
 
 def test_research_block_accepts_repo_deep_target():

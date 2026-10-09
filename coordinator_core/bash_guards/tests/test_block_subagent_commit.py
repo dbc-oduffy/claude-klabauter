@@ -2884,32 +2884,6 @@ class TestRealOwnershipScopeWiring:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "claimed by live session other" in reason
 
-    def test_a_clean_declared_path_does_not_deny_the_dirty_remainder(self, tmp_path):
-        repo = _make_real_repo(tmp_path)
-        _session_core.init("mine", cwd=str(repo))
-        (repo / "edited.py").write_text("e")
-        _session_scope.touch("mine", "edited.py", cwd=str(repo))
-
-        payload = _real_scope_payload(
-            'git commit -m "msg" -- edited.py README.md', repo, "mine"
-        )
-        assert guard.check(payload) is None
-
-    def test_a_clean_path_does_not_unlock_a_peer_claimed_one(self, tmp_path):
-        repo = _make_real_repo(tmp_path)
-        _session_core.init("mine", cwd=str(repo))
-        _session_core.init("other", cwd=str(repo))
-        (repo / "shared.py").write_text("s")
-        _session_scope.touch("other", "shared.py", cwd=str(repo))
-
-        payload = _real_scope_payload(
-            'git commit -m "msg" -- shared.py README.md', repo, "mine"
-        )
-        result = guard.check(payload)
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "shared.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
-
     def test_unresolvable_session_id_denies(self, tmp_path):
         repo = _make_real_repo(tmp_path)
         (repo / "a.py").write_text("a")

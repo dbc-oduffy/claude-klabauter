@@ -386,11 +386,19 @@ def _is_memo_send_row(raw: dict) -> bool:
 
     A subagent cannot send one (``block-subagent-destructive-action``), so
     the row is an EM step. Decided by ``kind``, by a surface or write that is
-    a staged memo-outbox draft, or by the brief naming the send verb.
+    a staged memo-outbox draft, by a surface or ``writes_under`` that is the
+    outbox directory or inside it, or by the brief naming the send verb.
     """
     if raw.get("kind") in ("memo-send", "memo_send"):
         return True
     paths = [raw.get("surface"), *(raw.get("writes") or ())]
+    from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR, MEMO_OUTBOX_RELDIR
+
+    for p in [raw.get("surface"), *(raw.get("writes_under") or ())]:
+        if isinstance(p, str):
+            posix = p.replace("\\", "/").rstrip("/")
+            if any(posix == d or posix.startswith(d + "/") for d in (MEMO_OUTBOX_RELDIR, LEGACY_MEMO_OUTBOX_RELDIR)):
+                return True
     if any(isinstance(p, str) and "outbox" in p for p in paths):
         from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 

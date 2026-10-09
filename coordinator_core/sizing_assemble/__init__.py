@@ -1666,6 +1666,27 @@ def _resolve_interaction_mode_and_source(cli_value: Optional[str]) -> tuple[str,
     return resolved, source
 
 
+def _open_routed_obligation(write_path: str) -> None:
+    """Queue this session's sizing-routed watchdog obligation for the sizing just written.
+
+    Fail-soft: the sizing is already on disk, and a missed obligation costs a nudge, never the write.
+    """
+    import os
+
+    from coordinator_core.git.repo_root import show_toplevel
+    from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
+
+    root = show_toplevel(str(Path.cwd()))
+    if root is None:
+        return
+    target = Path(write_path) if Path(write_path).is_absolute() else Path.cwd() / write_path
+    try:
+        rel = target.resolve().relative_to(Path(root).resolve()).as_posix()
+        open_sizing_routed(root, rel, os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    except (ValueError, OSError):
+        return
+
+
 def main(argv: list[str]) -> int:
     import json
     import sys
@@ -1919,6 +1940,7 @@ def main(argv: list[str]) -> int:
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
+        _open_routed_obligation(write_path)
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK
