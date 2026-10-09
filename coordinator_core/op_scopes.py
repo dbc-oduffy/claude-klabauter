@@ -407,7 +407,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_xl_exit":                      "common_dir",
     "sizing.record_pm_resolution":                "common_dir",
-    "sizing.record_register":                     "common_dir",
     "sizing.resize":                             "common_dir",
     "sizing.record_spike_verdict":               "common_dir",
     "sizing.read_object_fields":                 "common_dir",
@@ -742,7 +741,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "research.restructure_for_repeat_topic":    "common_dir",
     "research.close":                           "common_dir",
     "research.shape":                           "none",
-    "requirement_register.stall_report":        "show_top",
     "session.resolve_chain_terminal_disposition": "common_dir",
     # session.rotate_orphan_sweep_log — common_dir: must match
     # session.boot_sweep's existing common_dir entry for the SAME

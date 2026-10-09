@@ -6,7 +6,6 @@ always one of them.
 """
 from __future__ import annotations
 
-from coordinator_core.session.declared_writes import declare_write
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -130,7 +129,6 @@ def write_manifest(path: Path, manifest: ChainManifest) -> None:
                 f"refusing to overwrite it with sizing {manifest.sizing_object} baton {manifest.baton}"
             )
     path.write_text(manifest.to_json(), encoding="utf-8", newline="\n")
-    declare_write(path)
 
 
 @dataclass

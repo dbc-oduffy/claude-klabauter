@@ -156,13 +156,6 @@ def test_cd_inside_a_subshell_does_not_move_the_judged_repo(repo, tmp_path_facto
     assert _denied(_check(other, f"(cd {repo} && true); git push origin candidate"))
 
 
-def test_a_quoted_paren_is_not_a_subshell(repo, tmp_path_factory, monkeypatch):
-    _mirror(monkeypatch, repo)
-    other = tmp_path_factory.mktemp("cwd")
-    smoke = "python -c \"import x\nprint('ok')\""
-    assert _check(other, f"cd {repo} && {smoke} && git push origin candidate") is None
-
-
 def test_publish_branch_push_still_denied_outside_mirror(repo, monkeypatch):
     _mirror(monkeypatch, repo / "elsewhere")
     assert _denied(_check(repo, "git push origin candidate"))

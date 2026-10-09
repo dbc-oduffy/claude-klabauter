@@ -5,7 +5,6 @@ lazily by ``validate_final_digest``.
 """
 from __future__ import annotations
 
-from coordinator_core.session.declared_writes import declare_write
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -169,5 +168,4 @@ def write_final_digest(digest: Mapping[str, Any], trail_dir: str | Path, chain_i
     path = Path(trail_dir) / f"chain-{chain_id}.final-digest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(digest, indent=2, sort_keys=True), encoding="utf-8")
-    declare_write(path)
     return path

@@ -1071,34 +1071,6 @@ def build_no_commit_row_disposition_judgment_point(
     )
 
 
-def build_review_notes_undecided_judgment_point(
-    note_labels: list[str],
-) -> dict[str, Any]:
-    """Blocks the whole close while a review wave's `em_may_think_differently`
-    notes lack written decisions. Resolved by `decisions["review_note_decisions"]`
-    (one entry per note, same order), never by a disposition pick -- hence the
-    single empty-`resolves` disposition. Excluded from `JUDGMENT_POINT_BUILDERS`
-    like the no-commit-row point: `apply` gates on its presence."""
-    quoted = "\n".join(f"  {i}. {label}" for i, label in enumerate(note_labels, 1))
-    return build_untrusted_gate_judgment_point(
-        id="jp-review-notes-undecided",
-        question=(
-            "The governing plan's review stamp carries em_may_think_differently notes -- "
-            "reviewer opinions they chose not to apply. Decide each: set "
-            "decisions['review_note_decisions'] to a list with one entry per note, same "
-            "order, each {'decision': 'applied'|'rejected'|'backlogged', 'why': '<one "
-            "line>'} plus 'ref' (queue id or path) when backlogged."
-        ),
-        dispositions=[build_disposition("decide-each-note", resolves=[])],
-        evidence=f"review_stamp.em_may_think_differently ({len(note_labels)}):\n{quoted}",
-        reason=(
-            "A note nobody decided on is an opinion silently dropped; the close "
-            "commits only once each has a written decision."
-        ),
-        revalidate_at_dispatch=False,
-    )
-
-
 #: Every builder in this module, in census emission order (lessons/plan ->
 #: completion -> memo/scratch -> session hygiene -> review -> commit/tail).
 #: `__init__.py` (C3) imports this tuple to populate `judgment_points[]`

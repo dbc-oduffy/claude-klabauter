@@ -229,112 +229,6 @@ def _cited_sizing(worktree_root: Path, plan_path: Optional[str]) -> Optional[str
     return guarded.relative_to(worktree_root.resolve()).as_posix()
 
 
-def _register_gate(worktree_root: Path, plan_path: Optional[str], inline_review: dict) -> Optional[str]:
-    """Demote a ``met`` criterion to ``not_met`` when a row this plan claims in its
-    cited register-bearing sizing is not judged met, wired, on its register surface
-    with an observed entry point. Returns the failure reason (also set on the criterion),
-    or ``None`` when the gate does not apply or every claimed row passes. Reads the
-    judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
-    """
-    criterion = inline_review.get("criterion")
-    if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
-        return None
-    sizing_rel = _cited_sizing(worktree_root, plan_path)
-    if sizing_rel is None:
-        return None
-    from coordinator_core.ops import requirement_register as rr
-
-    sizing_text = _read_rel(worktree_root, sizing_rel)
-    register = rr.read_register(sizing_text) if sizing_text is not None else None
-    if register is None:
-        return None
-    claimed = rr.claimed_rows(register, plan_path)
-    if not claimed:
-        return None
-    judged = {
-        str(r.get(rr.ROW_ID)): r
-        for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
-        if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
-    }
-    for row in claimed:
-        rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
-        got = judged.get(str(rid))
-        if got is None:
-            why = "not judged"
-        elif got.get(rr.ROW_STATUS) != rr.STATUS_MET:
-            why = f"judged status {got.get(rr.ROW_STATUS)!r}, not met"
-        elif got.get(rr.ROW_WIRED) is not True:
-            why = "judged wired: false"
-        elif got.get(rr.ROW_SURFACE) != surface:
-            why = f"judged surface {got.get(rr.ROW_SURFACE)!r} differs from register surface {surface!r}"
-        elif not str(got.get(rr.JUDGE_OBSERVED_REF) or "").strip():
-            why = "no observed entry point (observed_ref is empty)"
-        else:
-            continue
-        reason = f"register row {rid} (surface {surface}): {why}"
-        criterion["status"] = "not_met"
-        criterion["reason"] = reason
-        criterion["observation"] = reason
-        return reason
-    return None
-
-
-def _register_writeback(
-    worktree_root: Path, plan_path: Optional[str], inline_review: Optional[dict], sha: str,
-) -> dict:
-    """Cascade the judge's per-row verdicts into the cited sizing's register and recompute its
-    rollup, in place; the caller adds ``sizing`` to the coded-stamp commit's paths.
-
-    Returns ``{}`` when nothing applies, ``{"register_sizing": rel}`` on a write, or
-    ``{"register_writeback_error": reason}`` when the result fails the sizing schema (the file is
-    left untouched). Never raises: the run's own commit has already landed.
-    """
-    criterion = inline_review.get("criterion") if isinstance(inline_review, dict) else None
-    if not plan_path or not isinstance(criterion, dict):
-        return {}
-    from coordinator_core.ops import requirement_register as rr
-
-    judged = [
-        r for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
-        if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
-    ]
-    sizing_rel = _cited_sizing(worktree_root, plan_path) if judged else None
-    if sizing_rel is None:
-        return {}
-    from datetime import datetime, timezone
-
-    import yaml
-
-    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
-    from coordinator_core.locked_write import MutateAbort, locked_rmw
-
-    schema_path = Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
-    now = datetime.now(timezone.utc)
-
-    def mutate(old: str) -> str:
-        if rr.read_register(old) is None:
-            raise MutateAbort("")
-        new = rr.apply_verdicts(old, judged, plan_path, sha, now)
-        if new == old:
-            raise MutateAbort("")
-        try:
-            errors = validate_frontmatter(yaml.safe_load(new) or {}, schema_path)
-        except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
-            raise MutateAbort(f"register write-back refused: {exc}")
-        if errors:
-            raise MutateAbort(f"register write-back refused: {format_validation_errors(errors)}")
-        return new
-
-    try:
-        locked_rmw(worktree_root / sizing_rel, mutate, repo_root=worktree_root)
-    except MutateAbort as exc:
-        reason = str(exc.args[0]) if exc.args else ""
-        return {"register_writeback_error": reason} if reason else {}
-    except Exception as exc:  # noqa: BLE001 -- lock timeout, I/O: refuse, keep the commit
-        return {"register_writeback_error": f"register write-back refused: {exc!r}"}
-    return {"register_sizing": sizing_rel}
-
-
 def _spine_row_ids(plan_text: str) -> Optional[set]:
     import yaml
 
@@ -907,20 +801,6 @@ def _scope_pathspecs(request: CommitRequest) -> list:
     return list(specs)
 
 
-def _peer_held(worktree_root: Path, session_id: Optional[str], paths: list) -> set:
-    """The paths another session's touch claim holds: a peer's in-flight edit sitting in
-    one of this run's directories, not this run's residue. No git spawn."""
-    if not session_id or not paths:
-        return set()
-    from coordinator_core.session import claim_index
-
-    try:
-        answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
-    except Exception:
-        return set()
-    return {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
-
-
 def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -953,11 +833,7 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
         }
         - declared
     )
-    peer_held = _peer_held(worktree_root, request.session_id, dirty)
-    dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
-    if peer_held:
-        out["undeclared_dirty_peer_held"] = len(peer_held)
     if len(dirty) > _UNDECLARED_DIRTY_CAP:
         out["undeclared_dirty_total"] = len(dirty)
     return out
@@ -1595,9 +1471,6 @@ def _terminal_commit(
     # no JS-callable "invoke a Python op" primitive
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
-    register_failure = (
-        None if anchor_only else _register_gate(worktree_root, request.plan_path, inline_review)
-    )
     record_abs: Optional[Path] = None
     record: Optional[dict] = None
     stage_returns = _stage_returns(inline_review) if inline_review is not None else None
@@ -1923,22 +1796,11 @@ def _terminal_commit(
                     worktree_root, request.plan_path, str(reply["sha"]), record_abs, record
                 )
             )
-        writeback = {} if anchor_only else _register_writeback(
-            worktree_root, request.plan_path, inline_review, str(reply["sha"])
-        )
-        register_sizing = writeback.pop("register_sizing", None)
-        reply.update(writeback)
-        also_commit = tuple(
-            p for p in (
-                request.plan_path if reply.get("review_stamp") == "minted" else None,
-                register_sizing,
-            ) if p
-        )
         reply.update(
             _stamp_coded_commit(
                 commit_v2, worktree_root, repo_root, source_rows,
                 str(reply["sha"]), session_id,
-                also_commit=also_commit,
+                also_commit=(request.plan_path,) if reply.get("review_stamp") == "minted" else (),
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
             )
         )
@@ -1954,9 +1816,6 @@ def _terminal_commit(
                 + "): a met judge on this falsifier is not self-stamped; close it through the EM "
                 "re-judge route (terminal-judge.md § Closing a plan whose run judged not_met)"
             )
-        elif register_failure and reply.get("review_stamp") == "minted":
-            reply["plan_status"] = "not-stamped"
-            reply["plan_status_reason"] = register_failure
         elif (
             request.plan_path
             and reply.get("review_stamp") == "minted"

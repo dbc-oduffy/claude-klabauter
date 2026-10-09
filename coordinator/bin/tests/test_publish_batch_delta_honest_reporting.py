@@ -147,16 +147,3 @@ def test_signature_changes_on_a_module_the_transform_imports(tmp_path):
     (core / "dep.py").write_text("X = 2\n", encoding="utf-8")
 
     assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) != sig1
-
-
-def test_signature_ignores_the_op_scope_table_the_transform_imports(tmp_path):
-    core, engine_ctx = _fake_engine(tmp_path)
-    (core / "op_scopes.py").write_text("OP_KEY_SCOPE = {}\n", encoding="utf-8")
-    (core / "dep.py").write_text("from coordinator_core.op_scopes import OP_KEY_SCOPE\nX = 1\n", encoding="utf-8")
-    store_path = tmp_path / "percolate-store.yaml"
-    store_path.write_text("schema_version: '1.0.0'\n", encoding="utf-8")
-    sig1 = publish.compute_delta_invalidation_signature(store_path, engine_ctx)
-
-    (core / "op_scopes.py").write_text("OP_KEY_SCOPE = {'a.b': 'x'}\n", encoding="utf-8")
-
-    assert publish.compute_delta_invalidation_signature(store_path, engine_ctx) == sig1

@@ -6162,19 +6162,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             directives, "d-stamp-plan-implemented", "jp-review-receipt-block-stamp"
         )
 
-    # `apply` refuses the whole close while this point is present (it gates no
-    # directive, so it must be checked there); resolved when every note has a
-    # valid entry in `decisions["review_note_decisions"]`.
-    review_notes = directives_completion.read_review_notes(
-        governing_plan.path if governing_plan else None
-    )
-    if review_notes and not directives_completion.review_notes_resolved(review_notes, decisions):
-        judgment_points.append(
-            _judgments.build_review_notes_undecided_judgment_point(
-                [directives_completion.review_note_label(n) for n in review_notes]
-            )
-        )
-
     directives_review.wire_stranded_run_superseding_review(
         directives,
         judgment_points,

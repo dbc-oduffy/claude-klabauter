@@ -47,7 +47,7 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
         "schema": "sizing-object",
         "name": "gate fixture",
         "intent": "exercise the gate",
-        "estimate": {"tshirt": "XL", "provisional": True},
+        "estimate": {"tshirt": "M", "provisional": True},
         "route": "plan",
         "detents": [],
         "fork": None,

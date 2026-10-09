@@ -56,9 +56,7 @@ def shape(research: Mapping) -> dict[str, Any]:
     if tier == "scouts":
         pipelines = [rc.SCOUTS_PIPELINE]
     elif tier == "deep":
-        # A named source with no deep specialist runs its own corpus ahead of the team, or deep
-        # would drop it while the preflight still runs (named sources are honoured above scouts).
-        pipelines = [s for s in sources if s not in rc.SOURCE_SPECIALIST] + [rc.DEEP_PIPELINE]
+        pipelines = [rc.DEEP_PIPELINE]
     else:
         pipelines = list(sources)
     if "notebooklm" in sources:

@@ -122,8 +122,6 @@ def test_mint_refuses_a_fail_delivery_with_mints_exact_message(tmp_path):
         m.mint(_plan(repo), repo, build_test_path=None, superseding_record=record)
     assert str(exc.value).startswith("review-stamp: refusing to mint: delivery verdict is 'FAIL', not PASS;")
     assert "--reverify-delivery" in str(exc.value)
-    assert "<plan>" not in str(exc.value)
-    assert f"--plan {_plan(repo).relative_to(repo).as_posix()} " in str(exc.value)
 
 
 def _count_spawns(monkeypatch) -> list:

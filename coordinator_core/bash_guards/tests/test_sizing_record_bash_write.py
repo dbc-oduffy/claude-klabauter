@@ -12,7 +12,6 @@ def test_append_redirect_into_sizings_is_refused():
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "sizing-assemble --write" in reason
     assert "sizing.record_pm_resolution" in reason
-    assert "sizing-assemble --register <yaml> --write <sizing>" in reason
 
 
 def test_tee_into_sizings_is_refused():

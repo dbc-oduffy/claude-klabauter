@@ -58,7 +58,7 @@ def test_terminal_test_phase_runs_after_every_review_stage(script):
 def test_terminal_test_prompt_covers_review_edited_files_beside_the_row_writes(script):
     prompt = _test_prompt(script)
 
-    assert f"git diff --name-only {_BASE}" in prompt
+    assert "git diff --name-only ' + _runBase + '" in prompt
     assert "git ls-files --others --exclude-standard" in prompt
     assert "Review stages ran before this phase" in prompt
     assert "tsc --noEmit -p <that dir>" in prompt
@@ -89,7 +89,7 @@ def _digest(tmp_path, *, inline_note: str = "") -> dict:
     js = wd.completion_return_js(**_kwargs(script_path="wf.mjs", session_id="s" * 8, anchor_plan_path="p.md"))
     harness = tmp_path / "cli.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
         "_blockedChunks = [], _stoppedBy = [];\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
@@ -157,7 +157,7 @@ def test_a_digest_with_no_next_action_params_has_a_null_line(tmp_path):
         pytest.skip("node unavailable to execute the generated script")
     harness = tmp_path / "null.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
         "_blockedChunks = [], _stoppedBy = [], _verifications = [], _testResult = null, _falsifier = null;\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",

@@ -11,7 +11,7 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
-_FIND = "find /mnt/c -maxdepth 4 -name '*.py'"
+_FIND = "find ~ -maxdepth 4 -name '*.py'"
 _CLEAN = "git clean -fdx"
 _PYTEST = "python -m pytest -q"
 

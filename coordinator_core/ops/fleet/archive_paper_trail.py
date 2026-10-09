@@ -104,9 +104,6 @@ _RESEARCH_SUBDIR = ("docs", "research")
 _ARCHIVE_SUBDIR = ("docs", "research", "archive")
 
 
-_EMISSION_SUFFIXES = (".workflow.mjs", ".emitted.json")
-
-
 def _validate_component(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field_name} must be a non-empty string, got {value!r}")
@@ -213,11 +210,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return preview
 
     files = sorted(p for p in src.rglob("*") if p.is_file())
-    # An emitted script and its receipt are untracked run ephemera: git mv
-    # cannot move them, and the archive has no use for them.
-    for f in [f for f in files if f.name.endswith(_EMISSION_SUFFIXES)]:
-        f.unlink(missing_ok=True)
-    files = [f for f in files if not f.name.endswith(_EMISSION_SUFFIXES)]
     collisions = []
     if resuming:
         free = []

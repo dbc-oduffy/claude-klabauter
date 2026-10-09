@@ -38,10 +38,6 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  fleet-wide.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
-  REGISTER       A plan carrying ``register_claims`` names a sizing that carries
-                 a ``requirement_register``, every claimed row id exists in it,
-                 and every deferred/waived row in it carries a ``ruling``. No
-                 ``register_claims`` is a pass; a malformed claim is SCHEMA's.
 
 Domain vocabulary: the bar, a report class, a verdict (PREPPED / NOT-PREPPED),
 a withheld row, a declared-empty.
@@ -152,7 +148,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
-CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "SCHEMA", "REGISTER")
+CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "SCHEMA")
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -1924,61 +1920,6 @@ def _with_canonical_disposition(row: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-_REGISTER_SIZING_RE = re.compile(r"^state/sizings/.+\.yaml$")
-
-_REGISTER_FIX = (
-    "  fix: write the register with `sizing-assemble --register <yaml> --write <sizing>`, "
-    "correct `register_claims.rows`, or record the missing ruling; mise-prep-upgrade "
-    "derives none of these"
-)
-
-
-def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
-    """REGISTER: `register_claims` resolves against the named sizing's register."""
-    if "register_claims" not in fm:
-        return _pass("not applicable: no register_claims")
-    if repo_root is None:
-        return _pass("not checked: no repo root")
-    claims = fm.get("register_claims")
-    sizing = claims.get("sizing") if isinstance(claims, dict) else None
-    rows = claims.get("rows") if isinstance(claims, dict) else None
-    if (
-        not isinstance(sizing, str)
-        or not _REGISTER_SIZING_RE.match(sizing)
-        or not isinstance(rows, list)
-        or not rows
-    ):
-        return _pass("not checked: register_claims malformed — SCHEMA reports it")
-    from coordinator_core.ops import requirement_register as rr
-
-    try:
-        root = repo_root.resolve()
-        candidate = (root / sizing).resolve()
-        candidate.relative_to(root)
-        data = candidate.read_bytes()
-    except (OSError, ValueError):
-        return _defect(
-            "register-sizing-missing",
-            f"register_claims names {sizing}, which is absent, unreadable or outside the repo",
-        )
-    register = rr.read_register(data.decode("utf-8", errors="replace"))
-    if register is None:
-        return _defect(
-            "register-absent",
-            f"register_claims names {sizing}, which carries no requirement_register",
-        )
-    unknown = rr.unknown_row_ids(register, rows)
-    unruled = rr.unruled_rows(register.rows)
-    if unknown or unruled:
-        parts = []
-        if unknown:
-            parts.append(f"claimed row id(s) absent from {sizing}: {', '.join(unknown)}")
-        if unruled:
-            parts.append(f"deferred/waived row(s) with no ruling: {', '.join(unruled)}")
-        return _defect("register-row-unknown" if unknown else "register-row-unruled", "; ".join(parts))
-    return _pass(f"{len(rows)} claimed row(s) resolve in {sizing}")
-
-
 def evaluate_plan(
     plan_path: Path,
     *,
@@ -2025,7 +1966,6 @@ def evaluate_plan(
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
-            "REGISTER": _register(fm, repo_root),
         }
     except Exception as exc:  # noqa: BLE001 - defense in depth, see ENGINE_ERROR
         # A predicate raising anything OTHER than its own documented exception
@@ -2161,8 +2101,6 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
             "  fix: declare `prime_exit_criterion.statement` and `.derived_from` "
             "(a sizing object or goal KR, never a self-declaration)"
         )
-    if "REGISTER" in failing_classes:
-        lines.append(_REGISTER_FIX)
     return lines
 
 
@@ -2209,9 +2147,6 @@ def refusal_message(
         if value is None or value["status"] == "PASS":
             continue
         lines.append(f"  {key:<14} {value['detail']}")
-    register_failing = classes.get("REGISTER", {}).get("status", "PASS") != "PASS"
-    if register_failing and verdict != REFUSED and not terminal:
-        lines.append(_REGISTER_FIX)
     if verdict == REFUSED:
         lines.append("  route: PM, not the plan author.")
     elif terminal:
@@ -2273,11 +2208,9 @@ def refusal_message(
                 "(grep/find/wc/jq, git <read>) — mise-prep-upgrade derives missing "
                 "declarations and does not rewrite a stated command"
             )
-        if (not unscreenable or any(
+        if not unscreenable or any(
             k != "CENSUS" and v["status"] != "PASS" for k, v in classes.items()
-        )) and not (register_failing and all(
-            k == "REGISTER" or v["status"] == "PASS" for k, v in classes.items()
-        )):
+        ):
             lines.append(_upgrade_fix_line())
     return "\n".join(lines)
 

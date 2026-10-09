@@ -310,19 +310,6 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
-    'coordinator_core/git/sshsig.py': ('outside-repo', 'request frames written to the ssh-agent socket, never a file: _agent_requests'),
-    'coordinator_core/hooks/nudge_hand_written_plan.py': ('outside-repo', 'exclusive-create one-shot sentinel under tempfile.gettempdir()'),
-    'coordinator_core/ops/baton_pm_turns.py': ('git-internal', 'pm-turns log appended under <git-common-dir>/coordinator-sessions/<sid>: append_turn'),
-    'coordinator_core/ops/dispatch_emit/research_emit.py': ('ignored-target', 'ask.md and brief.md under the caller-named run scratch dir (gitignored scratch/): write_ask, bind_context'),
-    'coordinator_core/ops/dispatch_emit/terminal_commit.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run'),
-    'coordinator_core/ops/plan_chain/contract.py': ('claims-explicitly', 'chain manifest under the caller-named trail dir, declared through declare_write'),
-    'coordinator_core/ops/plan_chain/digest.py': ('claims-explicitly', 'final digest under the trail dir, declared through declare_write: write_final_digest'),
-    'coordinator_core/ops/plan_chain/phase1_checks.py': ('ignored-target', 'completeness sidecar under .coordinator-local/plan-sidecars (gitignored)'),
-    'coordinator_core/ops/plan_chain/plan_stage.py': ('claims-explicitly', 'bound plan script under the trail dir, declared through declare_write'),
-    'coordinator_core/ops/research_close.py': ('ignored-target', 'scouts digest.md under the run scratch dir (gitignored scratch/): _close_scouts'),
-    'coordinator_core/ops/seam_baton_mint.py': ('claims-explicitly', 'exclusive-create staged batons under state/handoffs/ and state/seam-baton-index.json, declared through declare_write'),
-    'coordinator_core/percolate/guard_cache.py': ('git-internal', 'publish parse cache under the destination repo git dir'),
-    'coordinator_core/workstream_complete/apply.py': ('in-repo-non-state', 'review-notes section appended to the completion entry under archive/completed/'),
     'coordinator_core/content_root.py': ('outside-repo', 'content-root pointer under settings_home()/machine-local, outside every repo: migrate'),
     'coordinator_core/sizing_assemble/__init__.py': ('claims-explicitly', 'exclusive-create sizing scaffold under state/sizings/, declared through declare_write: _scaffold_missing'),
     'coordinator_core/completion_receipts/store.py': ('claims-explicitly', 'exclusive-create receipt under state/completion-receipts/, declared through declare_write: write_receipt'),
