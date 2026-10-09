@@ -301,7 +301,10 @@ def test_add_task_happy_path(tmp_path):
 def test_add_task_lands_an_open_row_above_closed_rows_without_moving_them(tmp_path):
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "ordered.md", _PLAN_WITH_TASKS)
-    closed = {**_valid_task("C9"), "disposition": "coded", "disposition_ref": "abc1234"}
+    closed = {
+        **_valid_task("C9"), "disposition": "wont_do", "pm_approved": True,
+        "disposition_detail": "PM ruled it out of scope.", "case_against": "Nothing depends on it.",
+    }
     for task in (closed, _valid_task("C2")):
         result = _run(_handler(
             {"verb": "add-task", "plan_path": str(plan), "task": task}, repo_root=repo / ".git",

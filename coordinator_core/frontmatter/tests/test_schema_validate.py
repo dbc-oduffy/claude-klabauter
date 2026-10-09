@@ -3119,22 +3119,9 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_open_row_after_coded_row_rejected_again(self):
-        """Re-tightened at the 2026-07-29 DoE sub-order ask, one commit
-        after this same test asserted the opposite.
-
-        The 2026-07-29 grouping widening moved `coded` from the old
-        two-group closed band into `do` alongside `open`, and for one
-        commit this test asserted that ordering WITHIN `do` was free — so
-        open-after-coded read as valid. DoE flagged that as a silent
-        regression: under the retired two-group rule `coded` counted as
-        closed, so open-after-coded was already rejected, and dropping that
-        lint was widening the rule further than the band merge required.
-        `_PLAN_TASKS_SUBORDER_BY_DISPOSITION` restores it as a sub-order
-        inside `do` alone — `defer` and `ruled_out` stay internally
-        unordered, only `do` carries the extra rank. The principle is the
-        same one level down: live work reads first, shipped work sinks.
-        """
+    def test_open_row_after_coded_row_ok(self):
+        """Order inside `do` is free (DoE ruling 2026-10-09 retired the 2026-07-29
+        open-above-coded sub-order): coding a row must never force it to move."""
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3142,12 +3129,7 @@ class TestPlanTasksOrdering:
             "- id: C2\n"
             "  title: two\n"
         )
-        error = check_plan_tasks_ordering(source)
-        assert error is not None
-        assert error['field'] == 'plan-tasks'
-        assert "'C2'" in error['error']
-        assert "'C1'" in error['error']
-        assert 'do' in error['error']
+        assert check_plan_tasks_ordering(source) is None
 
     def test_coded_row_after_open_row_ok(self):
         """The correct order within `do`: open before coded."""

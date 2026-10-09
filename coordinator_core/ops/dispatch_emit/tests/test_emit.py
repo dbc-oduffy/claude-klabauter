@@ -1063,6 +1063,19 @@ def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
     assert preamble not in baseline
 
 
+def test_plan_standing_rules_reach_every_executor_prompt_once(tmp_path):
+    plan_path = tmp_path / "fixture-plan.md"
+    rule = "never run UBT without the EM's slot"
+    text = _FIXTURE_PLAN.replace("---\n", f"---\nstanding_rules:\n  - \"{rule}\"\n", 1)
+    assert text != _FIXTURE_PLAN
+    plan_path.write_text(text, encoding="utf-8")
+
+    script = emit_script(plan_path, preamble="RUN POSTURE: resumed run.", **REVIEW_KW)
+
+    assert_zero_errors(script)
+    assert script.count(rule) == 1
+    assert script.index("RUN POSTURE") < script.index(rule)
+
 
 
 def _write_plan_with_sizing(tmp_path, tshirt: str):

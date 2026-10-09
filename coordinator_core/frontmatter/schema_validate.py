@@ -3477,22 +3477,10 @@ def check_plan_tasks_ordering(source: str) -> ErrorDict | None:
     precedes every `defer` row, which precedes every `ruled_out` row (C3,
     2026-08-05: `spun_off` split out of `defer` into its own grouping — see
     `_PLAN_TASKS_GROUPING_BY_DISPOSITION`'s own comment for why). Rows may
-    appear in any relative order WITHIN `spun_off`, `defer`, and
-    `ruled_out`; the ONE exception is a sub-order inside `do` itself (DoE's
-    finding 2, 2026-07-29): every `open` row must precede every `coded`
-    row. Groupings are derived from `disposition` and stored nowhere — see
-    `_PLAN_TASKS_GROUPING_BY_DISPOSITION`; the `do` sub-order is
-    `_PLAN_TASKS_SUBORDER_BY_DISPOSITION`.
-
-    Rank is a `(band_rank, sub_rank)` tuple, and Python tuple comparison
-    does the rest: a later band always outranks an earlier one regardless
-    of sub_rank, and within the same band only sub_rank decides. This is
-    deliberately the same function widened twice (first from a two-group
-    to a three-group partition, now with a sub-rank) rather than gaining a
-    second, independent placement checker beside it: two placement
-    authorities over the same spine can disagree, and the disagreement
-    surfaces as an unfixable plan (each checker demanding an order the
-    other rejects).
+    appear in any relative order WITHIN a grouping, `do` included: nothing reads
+    position inside a band, so an `open`/`coded` sub-order only moved rows on every
+    coded transition (DoE ruling 2026-10-09 retired the 2026-07-29 sub-order).
+    Groupings are derived from `disposition` and stored nowhere.
 
     Returns `None` (nothing to check) when the fenced block is absent,
     malformed, fails to parse as YAML, or does not parse to a list of
@@ -3502,37 +3490,14 @@ def check_plan_tasks_ordering(source: str) -> ErrorDict | None:
     if rows is None:
         return None
 
-    seen_rank = (-1, -1)
+    seen_rank = -1
     seen_id: Any = None
     seen_grouping = ''
-    seen_disposition = ''
     for row in rows:
         row_id = row.get('id', '?')
-        disposition = _plan_tasks_row_disposition(row)
         grouping = _plan_tasks_row_grouping(row)
-        rank = (
-            _PLAN_TASKS_GROUPING_ORDER.index(grouping),
-            _PLAN_TASKS_SUBORDER_BY_DISPOSITION.get(disposition, 0),
-        )
+        rank = _PLAN_TASKS_GROUPING_ORDER.index(grouping)
         if rank < seen_rank:
-            if rank[0] == seen_rank[0]:
-                return {
-                    'field': 'plan-tasks',
-                    'error': (
-                        f'row {row_id!r} is disposition {disposition!r} but '
-                        f'appears after row {seen_id!r} (disposition '
-                        f'{seen_disposition!r}) within the {grouping!r} '
-                        f'grouping — an open row must sort above a coded '
-                        f'row inside do (D5 sub-order)'
-                    ),
-                    'hint': (
-                        "Within the ```yaml plan-tasks``` `do` grouping, "
-                        "every row with disposition 'open' must precede "
-                        "every row with disposition 'coded' — live work "
-                        "reads first, shipped work sinks, same as the "
-                        "band partition one level up."
-                    ),
-                }
             return {
                 'field': 'plan-tasks',
                 'error': (
@@ -3555,7 +3520,6 @@ def check_plan_tasks_ordering(source: str) -> ErrorDict | None:
             seen_rank = rank
             seen_id = row_id
             seen_grouping = grouping
-            seen_disposition = disposition
     return None
 
 
@@ -3626,18 +3590,6 @@ _PLAN_TASKS_GROUPING_BY_DISPOSITION = {
     'spun_off': 'spun_off',
     'backlogged': 'defer',
     'wont_do': 'ruled_out',
-}
-
-# Sub-order WITHIN the `do` grouping only (2026-07-29, DoE's finding 2):
-# `open` must sort above `coded` — live work reads first, shipped work
-# sinks, the same principle the three-band partition already applies one
-# level up. Every disposition not named here defaults to 0 via `.get`, so
-# `defer` and `ruled_out` stay unordered internally; only `do` has more
-# than one disposition mapped into it, so it is the only band a sub-order
-# can mean anything for.
-_PLAN_TASKS_SUBORDER_BY_DISPOSITION = {
-    'open': 0,
-    'coded': 1,
 }
 
 _GROUPING_DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')

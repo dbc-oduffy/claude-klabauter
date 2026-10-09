@@ -2030,6 +2030,30 @@ def _plan_id(plan_text: str) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _standing_rules_block(plan_text: str) -> Optional[str]:
+    """The plan's frontmatter ``standing_rules`` as a block every row executor reads,
+    or ``None`` when the plan declares none (fail-soft like ``_plan_id``)."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = load_frontmatter_doc(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    rules = doc.get("standing_rules") if isinstance(doc, dict) else None
+    lines = [f"- {r.strip()}" for r in rules or [] if isinstance(r, str) and r.strip()]
+    if not lines:
+        return None
+    return "Standing rules for every row of this plan -- obey each one:\n" + "\n".join(lines)
+
+
+def _with_standing_rules(preamble: Optional[str], plan_text: Optional[str]) -> Optional[str]:
+    block = _standing_rules_block(plan_text) if plan_text else None
+    if block is None:
+        return preamble
+    return f"{preamble}\n\n{block}" if preamble else block
+
+
 def _plan_context_preamble(context: PlanContext) -> str:
     """Compose the plan-context preamble spliced ahead of a row's own
     dispatch prompt (AC12/AC13), bounded to
@@ -5611,6 +5635,7 @@ def emit_script(
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
     plan_id = _plan_id(plan_text) if plan_text else None
     falsifier = _prime_exit_criterion_falsifier(plan_text) if plan_text else None
+    preamble = _with_standing_rules(preamble, plan_text)
 
     # Zero-spawn (git/git_state.py :: head_sha reads .git/HEAD directly) --
     # the run's own observed starting point, narrated into the script (see

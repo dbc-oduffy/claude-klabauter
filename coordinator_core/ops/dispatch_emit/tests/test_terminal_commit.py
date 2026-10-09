@@ -678,7 +678,7 @@ def test_stamps_committed_rows_coded_in_a_second_plan_only_commit(repo):
     committed = _show(repo, "HEAD:docs/plan.md")
     assert committed == (repo / "docs" / "plan.md").read_text(encoding="utf-8")
     rows = _spine(committed)
-    assert [r["id"] for r in rows] == ["C5", "C3", "C4", "C9"]
+    assert [r["id"] for r in rows] == ["C3", "C4", "C5", "C9"]  # coding a row never moves it
     by_id = {r["id"]: r for r in rows}
     assert by_id["C5"]["disposition"] == "open"  # incomplete: untouched
     assert by_id["C3"]["disposition"] == "coded"

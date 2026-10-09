@@ -488,18 +488,13 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
     return out
 
 
-def _row_rank(row: dict) -> tuple:
+def _row_rank(row: dict) -> int:
     from coordinator_core.frontmatter.schema_validate import (
         _PLAN_TASKS_GROUPING_ORDER,
-        _PLAN_TASKS_SUBORDER_BY_DISPOSITION,
-        _plan_tasks_row_disposition,
         _plan_tasks_row_grouping,
     )
 
-    return (
-        _PLAN_TASKS_GROUPING_ORDER.index(_plan_tasks_row_grouping(row)),
-        _PLAN_TASKS_SUBORDER_BY_DISPOSITION.get(_plan_tasks_row_disposition(row), 0),
-    )
+    return _PLAN_TASKS_GROUPING_ORDER.index(_plan_tasks_row_grouping(row))
 
 
 _NOOP_DETAIL = (
@@ -569,7 +564,7 @@ def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[d
         head = lines[: spans[0][0]]
         chunks = [(chunk_id, lines[s:e]) for s, e, chunk_id in spans]
 
-        def rank(item: tuple) -> tuple:
+        def rank(item: tuple) -> int:
             row = dict(row_by_id.get(item[0], {}))
             if item[0] in targets:
                 row["disposition"] = "coded"

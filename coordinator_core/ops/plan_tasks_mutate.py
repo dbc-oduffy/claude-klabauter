@@ -171,12 +171,12 @@ Verb contracts:
     `resolve` actually writes.
 
     `_reposition_rows_for_d5` is a STABLE sort (Python's `sorted()`) keyed
-    by the same `(grouping rank, do-suborder rank)` tuple
+    by the same grouping rank
     `check_plan_tasks_ordering` itself computes — never an independent
     reimplementation, so the two can never disagree about what "correct
     order" means. Stability is what keeps this narrow: a stable sort only
     ever reorders rows whose RANK differs; two rows that already shared a
-    rank (same grouping, same do-suborder) keep their existing relative
+    rank (same grouping) keep their existing relative
     order untouched, so a batch that touches one row's disposition can
     relocate that row without shuffling any row the batch did not touch —
     an untouched row's rank never changes, so its position relative to
@@ -348,7 +348,6 @@ from coordinator_core.frontmatter.schema_validate import (
     _PLAN_TASKS_GROUPING_ORDER,
     _PLAN_TASKS_SCHEMA_DICT,
     _PLAN_TASKS_SCHEMA_GOVERNED_DICT,
-    _PLAN_TASKS_SUBORDER_BY_DISPOSITION,
     _plan_tasks_row_disposition,
     check_plan_tasks_ordering,
     compute_grouping_digest,
@@ -1348,39 +1347,13 @@ def _dispatch_backlogged(row: dict, task_id: str, plan_text: str, worktree: Path
     return _to_repo_relative(found, worktree)
 
 
-def _plan_tasks_row_rank(row: dict) -> tuple:
-    """D5 sort key for one task-spine row: `(grouping rank, do-suborder rank)`.
-
-    Deliberately computed the SAME way `check_plan_tasks_ordering`
-    (`coordinator_core.frontmatter.schema_validate`) computes rank for its
-    own lint — same grouping table (`_PLAN_TASKS_GROUPING_BY_DISPOSITION`),
-    same grouping order (`_PLAN_TASKS_GROUPING_ORDER`), same do-suborder
-    table (`_PLAN_TASKS_SUBORDER_BY_DISPOSITION`), same `'open'`/`'do'`/`0`
-    defaults for a row with no `disposition` or an unrecognized one — never
-    an independent reimplementation. Two placement authorities computing
-    rank differently is exactly the failure mode `check_plan_tasks_ordering`
-    itself warns against (a spine each authority orders differently,
-    surfacing as an unfixable plan): this function and that lint must never
-    be able to disagree about what "correct order" means.
-
-    The `open` default is resolved by calling
-    `schema_validate._plan_tasks_row_disposition` directly (Review:
-    code-reviewer — near-miss fix: this function used to default via
-    `row.get("disposition") or "open"`, a falsy-check, while
-    `_plan_tasks_row_disposition` defaults via an `isinstance(value, str)
-    and value` type-check; the two agree on every value the vendored
-    schema's enum permits, so this was not currently reachable, but
-    "cannot drift" must not depend on that coincidence). Calling the same
-    private helper the rest of this module already imports across the
-    same boundary (see the module import block) makes the two literally
-    the same rule rather than two hand-matched ones.
-    """
+def _plan_tasks_row_rank(row: dict) -> int:
+    """D5 sort key for one task-spine row: its grouping's rank. Computed off the same
+    tables `check_plan_tasks_ordering` reads, so the reposition and the lint can never
+    disagree about what "correct order" means."""
     disposition = _plan_tasks_row_disposition(row)
     grouping = _PLAN_TASKS_GROUPING_BY_DISPOSITION.get(disposition, "do")
-    return (
-        _PLAN_TASKS_GROUPING_ORDER.index(grouping),
-        _PLAN_TASKS_SUBORDER_BY_DISPOSITION.get(disposition, 0),
-    )
+    return _PLAN_TASKS_GROUPING_ORDER.index(grouping)
 
 
 def _reposition_rows_for_d5(rows: list) -> list:
@@ -1396,8 +1369,8 @@ def _reposition_rows_for_d5(rows: list) -> list:
     c223a7208a5a.yaml` for the exact deadlock this fixes).
 
     Uses Python's `sorted()` — guaranteed STABLE — specifically so this
-    stays narrow: rows that already share a rank (same grouping, same
-    do-suborder) keep their existing relative order, untouched. A row not
+    stays narrow: rows that already share a rank (same grouping;
+    and no sub-order) keep their existing relative order, untouched. A row not
     named in this batch keeps its existing disposition, hence its
     existing rank, so its position relative to every OTHER untouched row
     is unchanged no matter how the spine was ordered before this call —
