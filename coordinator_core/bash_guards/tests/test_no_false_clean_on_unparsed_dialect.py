@@ -128,6 +128,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "block_subagent_destructive_action": (
         lambda mod: "Remove-Item -Recurse -Force C:/scratch/target"
     ),
+    "guard_subagent_heavy_ue_launch": (
+        lambda mod: "& UnrealEditor-Cmd.exe Proj.uproject -run=Cook"
+    ),
     # The two grant guards entered this test's population on 2026-08-19 with
     # the same subagent-boundary MATCHERS widening. Each fixture is the
     # `_MODULE_M_GRANT` constant from that guard's OWN test file, which its

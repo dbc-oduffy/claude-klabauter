@@ -147,6 +147,11 @@ _REDIR_PRECEDING_OK = set(" \t\n0123456789&")
 #: "filename". ``(``/``)`` (review: NIT-1) keep a process-substitution body
 #: (``tee >(grep foo) < in``) from becoming a candidate at all.
 _REDIR_TARGET_STOP = set(" \t\n\r>|;&()")
+#: Inside `[[ ... ]]` and `(( ... ))`/`$(( ... ))` a bare `>` is a comparison, never a
+#: redirect: `[[ "$m" > "2026-10-09T12:17:36" ]]` compares strings, and rewriting its ':'
+#: changed the comparison's result. Opener -> closer, matched at quote-depth 0.
+_COMPARISON_SPANS = {"[[": "]]", "((": "))"}
+_SPAN_OPEN_PRECEDING_OK = set(" \t\n;&|($")
 
 _OUT_RE = re.compile(r"(?<![^ \t])(?:--out|-o)[ \t]+(\"[^\"]*\"|'[^']*'|[^ \t]+)", re.MULTILINE)
 
@@ -331,6 +336,7 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
     n = len(cmd)
     i = 0
     in_quote: Optional[str] = None
+    span_closers: List[str] = []
     while i < n:
         ch = cmd[i]
         if ch == "\\" and i + 1 < n and in_quote != "'":
@@ -345,7 +351,16 @@ def _extract_redir_candidates(cmd: str) -> List[str]:
             in_quote = ch
             i += 1
             continue
-        if ch != ">":
+        pair = cmd[i : i + 2]
+        if span_closers and pair == span_closers[-1]:
+            span_closers.pop()
+            i += 2
+            continue
+        if pair in _COMPARISON_SPANS and (i == 0 or cmd[i - 1] in _SPAN_OPEN_PRECEDING_OK):
+            span_closers.append(_COMPARISON_SPANS[pair])
+            i += 2
+            continue
+        if ch != ">" or span_closers:
             i += 1
             continue
         prev = cmd[i - 1] if i > 0 else "\n"
@@ -537,7 +552,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 continue
             basename, hint = result
             safe_suggestion = _safe_suggestion(basename)
-            if safe_suggestion and basename in raw_candidate and raw_candidate in cmd:
+            if safe_suggestion and basename in raw_candidate and cmd.count(raw_candidate) == 1:
                 new_candidate = raw_candidate.replace(basename, safe_suggestion, 1)
                 new_cmd = cmd.replace(raw_candidate, new_candidate, 1)
                 updated_input = dict(tool_input)
@@ -560,7 +575,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if basename and safe_basename and basename != safe_basename:
                 original_cmd = tool_input.get("command") or ""
                 new_candidate = raw_candidate.replace(basename, safe_basename, 1)
-                if raw_candidate in original_cmd and new_candidate != raw_candidate:
+                if original_cmd.count(raw_candidate) == 1 and new_candidate != raw_candidate:
                     new_cmd = original_cmd.replace(raw_candidate, new_candidate, 1)
                     updated_input = dict(tool_input)
                     updated_input["command"] = new_cmd

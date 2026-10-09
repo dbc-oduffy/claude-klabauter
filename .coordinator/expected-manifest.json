@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "88713b760a6a715c0122491d2738deec23d1fb84",
-    "coordinator_core/_engine_stamp": "eaffd59bb1d3bb9fff7d7c40d5908b302a9a8139",
+    "coordinator_core/_engine_published_at": "3cdd93f7d1d25daaf0e4790c6ee38901f5127cd3",
+    "coordinator_core/_engine_stamp": "290f4c514296df89175343d014ea3ae39408ed6a",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2144,7 +2144,7 @@
     "coordinator_core/bash_guards/block_editor_kill_by_name.py": "8f8a8c18d52970c5850798185cfc1d0afafd9cf6",
     "coordinator_core/bash_guards/block_fleet_delegation_creation.py": "837369bf2e8c33a0cdbfb3e88160fffdbf377813",
     "coordinator_core/bash_guards/block_hand_authored_handoff_creation.py": "1ae526a82643c1bf483ed411b09934c9fe34d9d3",
-    "coordinator_core/bash_guards/block_illegal_filename.py": "679d441cf0d927aa9f54beaf1385876bdc0fb998",
+    "coordinator_core/bash_guards/block_illegal_filename.py": "bf5ff9f30669703fc365f3776f74019bdb492231",
     "coordinator_core/bash_guards/block_noncanonical_branch_creation.py": "56b5ff75220fcd88552faa78ceae0bbb7c55495f",
     "coordinator_core/bash_guards/block_perforce_submit.py": "9477b9e64d0d98591fd6e6074ff1a0c4cbc3ec44",
     "coordinator_core/bash_guards/block_reviewer_bash_outside_allowlist.py": "1821504386ced334ad9285da70c0e73e5b443036",
@@ -2220,7 +2220,7 @@
     "coordinator_core/bash_guards/tests/test_block_disarm_marker_sentinel_creation.py": "98e3d193e14c7db64914094f2cb548438493a296",
     "coordinator_core/bash_guards/tests/test_block_editor_kill_by_name.py": "6e8a19913eef3a889def05f0d083bef123a2fbc6",
     "coordinator_core/bash_guards/tests/test_block_fleet_delegation_creation.py": "4a98c8b187bbf723cf5405a77bb8a13fd00e6e35",
-    "coordinator_core/bash_guards/tests/test_block_illegal_filename_bash_arm.py": "b87b6dbb2e7e5c0300d98fb09e6258a91a5e76c4",
+    "coordinator_core/bash_guards/tests/test_block_illegal_filename_bash_arm.py": "bce2dcbc3f03e1e78a617ae4507337b7d4b5ef28",
     "coordinator_core/bash_guards/tests/test_block_illegal_filename_pattern_args.py": "3e36eca7c44465fd1131c652f6696ba72c04f4b1",
     "coordinator_core/bash_guards/tests/test_block_noncanonical_branch_creation.py": "220e5dfd72bb46e6e41cfe2df0a693c04f0a6f98",
     "coordinator_core/bash_guards/tests/test_block_perforce_submit.py": "a58fd3967c169bfeff826ea749b1338afb39f206",
@@ -2388,7 +2388,7 @@
     "coordinator_core/bash_guards/tests/test_machinery_root_boundary.py": "c2998a864effa355b44cfa0fdad55b38bc671b1e",
     "coordinator_core/bash_guards/tests/test_message_size.py": "0c63d6a17799afb0a3e99d124165321051e7751f",
     "coordinator_core/bash_guards/tests/test_mutable_state_never_answered_stale.py": "e904669dded08ebbd1f478443ff736c74fabd918",
-    "coordinator_core/bash_guards/tests/test_no_false_clean_on_unparsed_dialect.py": "f48eb9b06f8f8e94387d631a7a2b2235a5bcbd33",
+    "coordinator_core/bash_guards/tests/test_no_false_clean_on_unparsed_dialect.py": "c8563bd479be53217868c3c1644ddbbfaef47696",
     "coordinator_core/bash_guards/tests/test_no_handwritten_override_clauses.py": "6934e0d530814709493a24c102d9c0694dd4b221",
     "coordinator_core/bash_guards/tests/test_no_machine_absolute_path_in_guard_messages.py": "2a74160d180cf733f776288146c632ca28a83373",
     "coordinator_core/bash_guards/tests/test_no_optional_locks_rewrite.py": "20d8e9bcc609ac50650dc914afa4e2790ef1fd70",
@@ -7183,5 +7183,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "74c18c98e6fc1b6cda9b28af24e18d40bbd1ac2b"
+  "source_head": "daa7f4f28b9ddc5e2efbba783b5424f65c883c5f"
 }

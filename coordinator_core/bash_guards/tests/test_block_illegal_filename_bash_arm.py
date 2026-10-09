@@ -386,3 +386,25 @@ def test_sort_dash_o_output_path_still_fires():
 
 def test_dash_o_inside_a_word_is_not_a_flag():
     assert m._extract_out_candidates("echo foo-o bad?x > ok.txt") == []
+
+
+def _rewritten(command: str):
+    out = m.check(_payload(command))
+    return None if out is None else out.get("hookSpecificOutput", {}).get("updatedInput", {}).get("command")
+
+
+def test_a_string_comparison_against_an_iso_timestamp_is_never_rewritten():
+    # example-game-repo-2a: the ':' rewrite moved a freshness gate's comparison literal, letting a
+    # stale artifact pass. Inside [[ ]] the '>' is a comparison, not a redirect.
+    cmd = 'if [[ "$m" > "2026-10-09T12:17:36" ]]; then echo fresh; fi'
+    assert m.check(_payload(cmd)) is None
+
+
+def test_an_arithmetic_comparison_does_not_hide_a_real_redirect_after_it():
+    assert _rewritten("(( a > b )) && echo x > out:1.txt") == "(( a > b )) && echo x > out-1.txt"
+
+
+def test_a_candidate_repeated_elsewhere_in_the_command_is_advised_not_rewritten():
+    cmd = "echo 2026-10-09T12:17:36.log; echo x > 2026-10-09T12:17:36.log"
+    out = m.check(_payload(cmd))
+    assert out is not None and _rewritten(cmd) is None
