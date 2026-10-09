@@ -49,7 +49,6 @@ RUNTIME_VARS = (
     "_skippedDone",
     "_unusableChecks",
     "_reviews",
-    "_runBase",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -58,7 +57,8 @@ _CRITERION_CONTRADICTION_RE_JS = (
     r"/\bnot (?:yet )?met\b|\bbaseline (?:still )?match(?:es|ed)\b|\bmatch(?:es|ed)? (?:the )?baseline\b/i"
 )
 
-_CAP_HELPER_JS = (
+#: Every script that renders `next_action_parts` or `completion_return_js` must emit this.
+CAP_HELPER_JS = (
     "function _cap(s, n) { "
     "if (s === null || s === undefined) return null; "
     "s = String(s); "
@@ -347,7 +347,8 @@ def next_action_parts(
                 + (
                     f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
-                    f"sidecar: {falsifier_var}.sidecar_path ?? null }} "
+                    f"sidecar: {falsifier_var}.sidecar_path ?? null, "
+                    f"register_rows: {falsifier_var}.register_rows ?? null }} "
                     ": { status: 'not_run', observation: null, sidecar: null })"
                     if falsifier_present
                     else "{ status: 'not_run', observation: null, sidecar: null }"
@@ -450,7 +451,6 @@ def completion_return_js(
     predispatch: Optional[dict] = None,
     held: bool = False,
     seam: bool = False,
-    run_base_runtime: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -674,7 +674,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
-        "run_base_sha": RUNTIME_VARS[13] if run_base_runtime else _js_lit(run_base_sha),
+        "run_base_sha": _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),
@@ -716,7 +716,7 @@ def completion_return_js(
     if missing:
         raise AssertionError(f"completion_return_js field table missing schema paths: {sorted(missing)}")
 
-    lines = [_CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
+    lines = [CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
     lines.append("return {")
     lines.append(f"  schema: {table['schema']},")
     lines.append(f"  version: {table['version']},")

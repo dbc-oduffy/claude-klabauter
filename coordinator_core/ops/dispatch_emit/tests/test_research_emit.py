@@ -96,6 +96,14 @@ def test_deep_yields_the_roster_roles_plus_a_specialist_per_source():
     _validate_all(segs)
 
 
+def test_notebooklm_targets_become_its_notebooks_list():
+    targets = [{"source": "notebooklm", "ref": "A"}, {"source": "web", "ref": "x"}, {"source": "notebooklm", "ref": "B"}]
+    _, segs = _segments({"value_class": "corpus", "sources": ["notebooklm"]}, targets=targets)
+    lists = dict(segs)["notebooklm"].lists
+    assert lists["notebooks"] == ("A", "B")
+    _validate_all(segs)
+
+
 def test_deep_with_no_sources_defaults_to_the_web_specialist():
     _, segs = _segments({"value_class": "deep"})
     assert [m["slug"] for m in segs[0][1].lists["roster"]][-1] == "web"
@@ -106,3 +114,13 @@ def test_deepest_depth_sets_the_repo_flag_only():
     assert shape["pipelines"] == ["web", "repo"]
     assert dict(segs[0][1].flags) == {}
     assert dict(segs[1][1].flags) == {"deepest": "true"}
+
+
+def test_the_deep_roster_carries_its_member_prompt_once():
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
+
+    manifest = load_manifest(CONTENT, "unblock")
+    _, segs = _segments({"value_class": "deep"}, sources=["web", "repo"])
+    inputs = segs[0][1]
+    script = compose_pipeline_script(manifest, inputs, validate(manifest, inputs), run_id="r", agent_type_host=None)
+    assert script.count("You are roster member") == 1

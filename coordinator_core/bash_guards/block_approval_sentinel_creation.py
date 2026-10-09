@@ -652,7 +652,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     """
 
     _SAFE_ARGV0 = frozenset(
-        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
+        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo", "printf"}
     )
 
     #: `git` subcommands that only read repo state. Anything else under
@@ -669,6 +669,10 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     #: own boundary holds. `check-attr` is admitted alongside it as the
     #: identical query shape rather than waiting for its own false positive.
     #:
+    #: `rm` writes, but it can only remove: `git rm --cached <sentinel>` untracks a
+    #: committed sentinel, which re-arms every fresh checkout, and was denied as
+    #: creation. `checkout`/`restore`, which can materialise one, stay out.
+    #:
     #: Deliberately NOT widened past demonstrated need: this set is an
     #: enumerate-the-harmless allowlist by construction (see the class
     #: docstring's "THE INVERSION ITSELF"), so it grows one justified entry at
@@ -678,7 +682,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     _SAFE_GIT_SUBCOMMANDS = frozenset(
         {
             "status", "diff", "log", "show", "ls-files", "rev-parse", "describe",
-            "check-ignore", "check-attr",
+            "check-ignore", "check-attr", "rm",
         }
     )
 

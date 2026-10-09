@@ -814,7 +814,8 @@ def _research_route_setup(
     segment's inputs so the pipeline route's scratch-root declaration and reply fields apply
     unchanged, and ``params`` gains the default ``output_path``. ``from_sizing`` takes its
     research block from the sizing and binds the sizing file as the brief; an ask writes
-    ``<scratch>/ask.md`` and binds that. ``lists['questions']`` are the scout questions.
+    ``<scratch>/ask.md`` and binds that. ``lists['questions']`` are the scout questions; any other
+    given list fills a segment whose manifest declares it and the shape left unset.
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
@@ -847,12 +848,19 @@ def _research_route_setup(
         scratch_rel=scratch_rel,
         questions=questions,
         sources=research.get("sources") or (),
+        targets=[t for t in research.get("targets") or () if isinstance(t, dict)],
     )
     content_root = _pipeline_content_root()
     segments = []
     for pipeline, inputs in pairs:
         manifest = load_manifest(content_root, pipeline)
-        inputs = replace(inputs, lists=normalize_lists(manifest.lists, inputs.lists))
+        given = {k: tuple(v) for k, v in lists.items() if k in manifest.lists and k not in inputs.lists}
+        inputs = replace(inputs, lists=normalize_lists(manifest.lists, {**inputs.lists, **given}))
+        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
+            raise PipelineEmitRefused([
+                f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
+                "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B"
+            ])
         segments.append((manifest, inputs, validate(manifest, inputs)))
     if not aliased_param(params, "output_path", "out_path"):
         params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}

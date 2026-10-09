@@ -122,6 +122,7 @@ def _branch_create_target(args: List[str]) -> Optional[str]:
 
 _COMMAND_ENDS = frozenset({"|", "||", "&&", ";", "&"})
 # A shell redirection token: `2>&1`, `>file`, `2>/dev/null`, `&>log`, `<in`, or a bare `>`.
+_QUOTED_RE = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", re.S)
 _REDIRECT_RE = re.compile(r"^(?:\d*|&)(?:>>?|<)&?")
 
 
@@ -476,9 +477,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # The repo a git segment acts on is the one an earlier top-level `cd` entered, exactly as
     # `git -C` names it. Trap: the tokenizer flattens a subshell, so a `cd` inside `( ... )`
     # would leak past its `)`; a command with any subshell keeps the payload cwd.
-    follow_cd = not any(
-        t.startswith("(") or t.endswith(")") for seg in segments for t in seg.raw_tokens
-    )
+    # Only an unquoted paren opens a subshell: a quoted `python -c "...f(x)"` body is an argument.
+    follow_cd = not any(c in _QUOTED_RE.sub("", cmd) for c in "()")
     for resolved in segments:
         if follow_cd and resolved.depth == 0 and resolved.tokens[:1] == ["cd"]:
             cwd = _cd_target(cwd, resolved.tokens[1:])

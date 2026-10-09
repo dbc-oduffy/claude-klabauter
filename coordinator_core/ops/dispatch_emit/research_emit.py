@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
@@ -26,6 +26,8 @@ _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _BARE_SLUG = "question"
 _ROSTER_LIST = "roster"
 _QUESTIONS_LIST = "questions"
+_NOTEBOOKS_LIST = "notebooks"
+_NOTEBOOKLM_PIPELINE = "notebooklm"
 
 
 def _slug(text: str) -> str:
@@ -96,13 +98,15 @@ def segments_for(
     scratch_rel: str,
     questions: Sequence[str] = (),
     sources: Sequence[str] = (),
+    targets: Sequence[Mapping[str, str]] = (),
 ) -> list[tuple[str, PipelineInputs]]:
     """One `(pipeline, PipelineInputs)` per manifest in `shape["pipelines"]`, in order.
 
     Every segment binds `brief_rel` and `scratch_rel` and the flags `shape["flags"]` names for its
     pipeline. The scouts segment carries the slugs of `questions` (with none, the one entry
     `question`, the bare ask); the unblock segment carries the deep roster, three role members plus
-    one specialist per `sources` entry that has one.
+    one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
+    the `targets` whose source is notebooklm as its notebooks.
     """
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []
@@ -113,6 +117,10 @@ def segments_for(
             lists[_QUESTIONS_LIST] = tuple(scout_slugs(questions) if questions else [_BARE_SLUG])
         elif pipeline == rc.DEEP_PIPELINE:
             lists[_ROSTER_LIST] = tuple(_deep_roster(sources))
+        elif pipeline == _NOTEBOOKLM_PIPELINE:
+            refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
+            if refs:
+                lists[_NOTEBOOKS_LIST] = refs
         segments.append(
             (pipeline, PipelineInputs(brief=brief_rel, subjects=(), scratch_dir=scratch_rel, flags=flags, lists=lists))
         )

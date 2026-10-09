@@ -264,7 +264,8 @@ def _stage_expression(
     if not fanned:
         expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item")
     elif stage.fan_out.emit_time:
-        call = _agent_call(stage, manifest, inputs, agent_type_host, "item.prompt", item_label, "item.slug")
+        item_prompt = f"(item.prompt ?? withItem({prompt}, item.slug))"
+        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug")
         expr = (
             "(async () => {\n"
             f"      const items = {holder}.items[{_js_string_literal(stage.id)}];\n"
@@ -414,6 +415,19 @@ def _segment(
                     items[stage.id].append(
                         {"prompt": prompt, "output": output, "slug": value if isinstance(value, str) else None}
                     )
+                # One shared prompt when every roster item's prompt differs only by its slug: N copies
+                # of a multi-KB template otherwise ride in the script.
+                if not elements or not all(isinstance(e, dict) and "slug" in e for e in elements):
+                    continue
+                seen = len(errors)
+                shared, _ = fill_stage(stage, name, ITEM_MARK)
+                probe_failed = len(errors) > seen
+                del errors[seen:]
+                if not probe_failed and all(
+                    e["prompt"] == shared.replace(ITEM_MARK, e["slug"]) for e in items[stage.id]
+                ):
+                    prompts[stage.id] = shared
+                    items[stage.id] = [{"slug": e["slug"]} for e in items[stage.id]]
             else:
                 runtime_item = ITEM_MARK if stage.fan_out.kind == FAN_OUT_OVER else None
                 prompts[stage.id], outputs[stage.id] = fill_stage(stage, name, runtime_item)
@@ -519,7 +533,7 @@ def compose_chain_script(
         out += ["", _FAN_OUT]
     if any(s.max_concurrent is not None for _, s in fanned):
         out += ["", _IN_CHUNKS]
-    if any(not s.fan_out.emit_time and _uses_item(s, m) for m, s in fanned):
+    if any(s.fan_out.emit_time or _uses_item(s, m) for m, s in fanned):
         out += ["", _WITH_ITEM]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
     if chained:

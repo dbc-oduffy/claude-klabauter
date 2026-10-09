@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.contract.decision_object.judgment import partition_reportable
+from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workday_complete import brief as wc_brief
 
 _NONEMPTY_OPEN_DAY_GOALS = {
@@ -64,6 +65,18 @@ def test_asked_points_include_action_class_points_regardless_of_resolves():
         assert not (resolves_ids & directive_ids), jid
 
 
+def test_register_stall_point_lands_in_reported_never_asked():
+    directives = wc_brief._build_directives({}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
+    points = wc_brief._build_judgment_points(
+        _NONEMPTY_OPEN_DAY_GOALS,
+        _DIRTY_TREE,
+        register_stall=StallReport(unclaimed_rows=["state/sizings/x.yaml row R1 (ui)"]),
+    )
+    asked, reported = partition_reportable(points, directives)
+    assert "jp_requirement_register_stall" in {p["id"] for p in reported}
+    assert "jp_requirement_register_stall" not in {p["id"] for p in asked}
+
+
 def test_reported_narration_suffix_empty_when_nothing_reported():
     assert wc_brief._reported_narration_suffix([]) == ""
 
@@ -84,6 +97,7 @@ def _stub_operator_config(monkeypatch) -> None:
 def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypatch):
     _stub_operator_config(monkeypatch)
     monkeypatch.setattr(wc_brief, "_compute_open_day_goals", lambda: _EMPTY_OPEN_DAY_GOALS)
+    monkeypatch.setattr(wc_brief, "_compute_register_stall", lambda: StallReport())
     monkeypatch.setattr(
         wc_brief,
         "_compute_dirty_tree_verdict",

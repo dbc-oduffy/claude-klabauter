@@ -233,3 +233,9 @@ def test_a_roster_without_a_judge_leaves_the_criterion_unrun():
 def test_the_judge_script_validates_with_zero_errors():
     findings = run_checks(_compose(**_JUDGE_KW))
     assert [f for f in findings if f.severity is Severity.ERROR] == []
+
+
+def test_a_script_that_calls_cap_defines_it():
+    script = _compose()
+    assert "_cap(" in script
+    assert "function _cap(" in script

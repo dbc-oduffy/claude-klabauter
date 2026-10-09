@@ -1,0 +1,60 @@
+# Replay fixture: example-stats-repo' 2026-10-07 all-requirements sizing, pre-ratification shape.
+# Source: example-stats-repo 20d0ed7f28, archive/sizings/2026-10/2026-10-07-all-requirements-and-roadmap-remainder.yaml
+# (status routed there; the ratification commit ae003ee696 flipped it to shipped).
+# The register is seeded with one row per coverage class from example-stats-repo
+# docs/specs/requirements-coverage-2026-10-08.md @ 6bdcba5387.
+schema: sizing-object
+intent: "I want to size fixing ALL of these issues and delivering ALL of the remainder of the roadmap, including implementing it in the UI/UX!"
+estimate:
+  tshirt: XXL
+  provisional: true
+route: goal-setting
+detents: []
+fork: null
+xl_exit: null
+status: routed
+interaction_mode: ceo
+deliverable_id: "dlv-i-want-to-size-fixing-all-of-these-26d8fe"
+premise:
+  provenance: read
+  evidence: replay fixture of the example-stats-repo 2026-10-07 sizing
+requirement_register:
+  sources:
+    - doc: docs/specs/requirements-coverage-2026-10-08.md
+      ref: example-stats-repo@6bdcba5387
+  rows:
+    - id: R-wired
+      source_text: Covered and wired from the UI.
+      anchor: coverage §covered
+      surface: ui
+      status: met
+      claimed_by: [docs/plans/2026-10-07-fifa-gap-closure.md]
+      wired: true
+      met_by: ["docs/plans/2026-10-07-fifa-gap-closure.md@6bdcba5387"]
+      last_progress_at: "2026-10-08T00:00:00Z"
+    - id: R-partial
+      source_text: Partially built requirement.
+      anchor: coverage §partial
+      surface: api
+      status: partial
+      claimed_by: [docs/plans/2026-10-07-fifa-gap-closure.md]
+      wired: false
+    - id: R-unreachable
+      source_text: Built but unreachable from the UI.
+      anchor: coverage §unreachable
+      surface: ui
+      status: met
+      claimed_by: [docs/plans/2026-10-07-fifa-gap-closure.md]
+      wired: false
+    - id: R-unclaimed
+      source_text: Never claimed by any plan.
+      anchor: coverage §not-started
+      surface: cli
+      status: open
+      claimed_by: []
+    - id: R-deferred
+      source_text: Deferred with no recorded ruling.
+      anchor: coverage §deferred
+      surface: internal
+      status: deferred
+      claimed_by: []

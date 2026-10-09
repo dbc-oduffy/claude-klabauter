@@ -39,6 +39,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     resolve_arm,
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import (
+    CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
     next_action_parts,
@@ -665,6 +666,7 @@ def compose_ask_script(
         session_id=session_id,
     )
     b.append(
+        f"  {CAP_HELPER_JS}\n"
         f"  {TERMINAL_COMMIT_CLI_HELPER_JS}\n"
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
