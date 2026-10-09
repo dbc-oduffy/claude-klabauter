@@ -64,6 +64,7 @@ from coordinator_core.ops.plan_seam_check import (
     _Plan,
     _collision_findings,
     _contained_rel,
+    _declared_append_hubs,
     _covers,
     _paths_and_prefixes,
 )
@@ -145,10 +146,10 @@ def _reaches(graph: Dict[str, set], src: str, dst: str) -> bool:
     return False
 
 
-def _collision_pairs(pset: Dict[str, _Plan]) -> List[Tuple[str, str, str]]:
+def _collision_pairs(pset: Dict[str, _Plan], hubs: set) -> List[Tuple[str, str, str]]:
     """Distinct (later plan, earlier plan, path), sorted, over the named-set collisions."""
     pairs = set()
-    for f in _collision_findings(pset, {"named_set": True}):
+    for f in _collision_findings(pset, {"named_set": True, "hubs": hubs}):
         other, path = f["counterpart_plan"], f["path"]
         if f["class"] == COLLISION and other and path and other in pset and f["plan"] in pset:
             earlier, later = sorted((f["plan"], other))
@@ -213,7 +214,8 @@ def _write_edges(root: Path, rel: str, edges: List[dict]) -> bool:
 def _fix(params: dict, root: Path) -> dict:
     plans, dry_run = _parse_params(params, root)
     pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in plans}
-    pairs = _collision_pairs(pset)
+    hubs = _declared_append_hubs(root)
+    pairs = _collision_pairs(pset, hubs)
 
     graph = _plan_edges(pset)
     orders: Dict[str, List[str]] = {}
@@ -251,7 +253,7 @@ def _fix(params: dict, root: Path) -> dict:
             if _write_edges(root, rel, per_plan[rel]):
                 files.append(rel)
         fresh = {rel: _Plan(rel, root) for rel in plans}
-        converged = not _collision_pairs(fresh)
+        converged = not _collision_pairs(fresh, hubs)
     else:
         converged = all(
             _reaches(graph, a, b) or _reaches(graph, b, a) for a, b, _ in pairs

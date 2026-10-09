@@ -75,7 +75,6 @@ from __future__ import annotations
 
 import re
 import sys
-from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -195,23 +194,6 @@ def _compute_doc_staleness_report() -> list[dict[str, Any]]:
             file=sys.stderr,
         )
         return []
-
-
-def _compute_register_stall() -> Any:
-    """The requirement-register stall report for the main worktree; empty on any failure."""
-    from coordinator_core.ops import requirement_register  # noqa: PLC0415
-
-    try:
-        repo_root = _resolve_repo_root_for_doc_staleness()
-        if repo_root is None:
-            return requirement_register.StallReport()
-        return requirement_register.stall_report(Path(repo_root), date.today())
-    except Exception as exc:  # noqa: BLE001 - never fail the ceremony
-        print(
-            f"workweek_complete.brief: register stall scan unavailable: {exc}",
-            file=sys.stderr,
-        )
-        return requirement_register.StallReport()
 
 
 def _stale_doc_entries(report: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -562,7 +544,6 @@ def _build_directives(
 def _build_judgment_points(
     stale_docs: Optional[list[dict[str, Any]]] = None,
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
-    register_stall: Any = None,
 ) -> list[dict[str, Any]]:
     """Tier-2 (judgment, recommendation required) and Tier-3 (your-call, no
     recommendation) judgment-point entries.
@@ -678,7 +659,7 @@ def _build_judgment_points(
         )
         for doc_path, findings in doc_verify_findings_by_doc.items()
     ]
-    points = [
+    return [
         build_judgment_point(
             {
                 "disposition": "dispatch",
@@ -814,17 +795,6 @@ def _build_judgment_points(
             round_trip="terminal",
         ),
     ] + doc_staleness_points + doc_verify_points
-    if register_stall is not None:
-        from coordinator_core.ops.requirement_register import (  # noqa: PLC0415
-            stall_judgment_point,
-        )
-
-        stall_point = stall_judgment_point(
-            register_stall, id="jp_requirement_register_stall"
-        )
-        if stall_point is not None:
-            points.append(stall_point)
-    return points
 
 
 def _reported_narration(reported_points: list[dict[str, Any]]) -> str:
@@ -850,9 +820,7 @@ def brief(
     stale_docs = _stale_doc_entries(_compute_doc_staleness_report())
     doc_verify_findings_by_doc = _verify_findings_by_doc(_compute_doc_verify_findings())
     directives = _build_directives(stale_docs, doc_verify_findings_by_doc)
-    all_judgment_points = _build_judgment_points(
-        stale_docs, doc_verify_findings_by_doc, _compute_register_stall()
-    )
+    all_judgment_points = _build_judgment_points(stale_docs, doc_verify_findings_by_doc)
 
     recommendation_carrying = [
         point for point in all_judgment_points if point.get("recommendation") is not None

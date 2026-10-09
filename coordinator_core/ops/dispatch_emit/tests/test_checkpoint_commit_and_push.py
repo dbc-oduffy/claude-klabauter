@@ -227,7 +227,7 @@ def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_
             "paths": declared,
             "skip_missing": True,
             "gone_tracked_as_deleted": True,
-            "message": "checkpoint(wave 1): removes gone.ts",
+            "message": "wave 1: 1 rows — r1",
         },
         repo_root=tmp_path / ".git",
     )
@@ -235,6 +235,7 @@ def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_
     assert out["committed"] is True, out
     assert out["skipped_missing"] == ["never_written.ts"]
     assert git("ls-tree", "-r", "--name-only", "HEAD").split() == ["kept.ts"]
+    assert "Removes: gone.ts" in git("log", "-1", "--format=%B")
 
 
 def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path):

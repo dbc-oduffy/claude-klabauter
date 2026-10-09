@@ -5,7 +5,6 @@ The plan digest is read by field and never schema-validated: DoE's plan digest e
 """
 from __future__ import annotations
 
-from coordinator_core.session.declared_writes import declare_write
 import asyncio
 import re
 from pathlib import Path
@@ -52,7 +51,6 @@ def bind_plan_script(
     cid = _SAFE_ID.sub("_", chain_id or child_session_id)
     out = trail / f"chain-{cid}.plan.mjs"
     out.write_text(script, encoding="utf-8", newline="\n")
-    declare_write(out)
     receipt = _write_emission_receipt(out, None, {"session_id": child_session_id})
     if receipt is None:
         out.unlink(missing_ok=True)

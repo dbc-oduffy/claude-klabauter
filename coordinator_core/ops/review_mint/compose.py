@@ -8,6 +8,24 @@ from typing import Dict, Optional
 
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+#: Delimits a script-scope JS expression spliced into prompt text (the run base, resolved at
+#: fire). Restated from `dispatch_emit/emit.py :: _SHARED_PATH_MARKER_DELIM` (cycle).
+PROMPT_MARKER_DELIM = "\x01"
+
+
+def prompt_literal(prompt: str) -> str:
+    """``prompt`` as one JS expression: text between marker pairs is spliced as bare JS,
+    the rest is a string literal. Plain ``_js_string_literal`` when no marker is present."""
+    if PROMPT_MARKER_DELIM not in prompt:
+        return _js_string_literal(prompt)
+    pieces = [
+        part if i % 2 else _js_string_literal(part)
+        for i, part in enumerate(prompt.split(PROMPT_MARKER_DELIM))
+        if i % 2 or part
+    ]
+    return " + ".join(pieces) if pieces else "''"
+
+
 # AC5's exact abort-object field names -- also the structured-output schema
 # field names stamped on every gated agent call, so a `gate_policy` closure
 # can read them straight off the captured result (`result.verdict`,
@@ -101,5 +119,5 @@ def _agent_call_literal(
         opts += f", schema: {schema_literal}"
     opts += " }"
 
-    call = f"agent({_js_string_literal(prompt)}, {opts})"
+    call = f"agent({prompt_literal(prompt)}, {opts})"
     return f"() => {call}" if as_arrow else call

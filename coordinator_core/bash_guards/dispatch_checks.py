@@ -190,7 +190,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _bt_exceeds_tokenizable_ceiling,
     segments_from_tokens_simple as _bt_segments_from_tokens_simple,
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
-    split_unquoted_newlines as _bt_split_unquoted_newlines,
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
@@ -3900,10 +3899,7 @@ def check_destructive_rm(
     # (not a delete-flavored verb) and what it closes.
     _pending_rm_touch_paths: List[str] = []
 
-    # A bare newline separates commands; unsplit, `rm a` + newline + `cd <repo>` reads
-    # `cd` and `<repo>` as rm targets and denies the repo root.
-    _rm_cmd = _bt_split_unquoted_newlines(cmd)
-    _rm_segments = list(_split_segments(_rm_cmd))
+    _rm_segments = list(_split_segments(cmd))
     #: Segment string -> the flag token that declared recursion, or None when
     #: the segment was parsed and declared none. Only PowerShell-synthesized
     #: segments get an entry; a bash segment is absent and falls through to the
@@ -3941,7 +3937,7 @@ def check_destructive_rm(
         # whether the caller also passed a flag -- matching that posture is
         # the safe direction, not a widening of it.
         _ps_segments = resolve_segments_for_dialect(
-            _rm_cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
+            cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
         )
         if _ps_segments:
             for _ps_tokens, _ps_pipe_before in _ps_segments:

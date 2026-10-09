@@ -154,7 +154,7 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     js = wd.completion_return_js(**_kwargs())
     harness = tmp_path / "harness.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
         "_blockedChunks = [];\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
@@ -205,7 +205,7 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
     harness = tmp_path / "harness2.js"
     harness.write_text(
         "let _halted = 'stop rule fired', _incompleteChunks = [], "
-        "_unansweredBriefs = [], _notStarted = [], _blockedChunks = [];\n"
+        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _blockedChunks = [];\n"
         "let _verifications = [];\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
@@ -238,7 +238,7 @@ def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **override
     harness = tmp_path / "criterion.js"
     harness.write_text(
         f"let _halted = null, _incompleteChunks = {json.dumps(list(incomplete))}, "
-        "_unansweredBriefs = [], _notStarted = [], _stoppedBy = [], "
+        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _stoppedBy = [], "
         f"_blockedChunks = {json.dumps(list(blocked))};\n"
         "let _testResult = {status:'pass', tests_run:1, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
@@ -384,7 +384,7 @@ def _digest_for(tmp_path, *, test_js, verifications_js):
         pytest.skip("node unavailable to execute the generated script")
     harness = tmp_path / "skips.js"
     harness.write_text(
-        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], "
+        "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
         "_stoppedBy = [], _blockedChunks = [];\n"
         f"let _testResult = {test_js};\n"
         f"let _verifications = {verifications_js};\n"

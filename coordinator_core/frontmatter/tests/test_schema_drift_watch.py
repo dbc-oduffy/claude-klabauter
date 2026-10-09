@@ -60,7 +60,6 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
-    pytest.mark.usefixtures("widened_foreign_git_timeout"),
 ]
 
 _SCHEMA_A = "handoff.schema.json"

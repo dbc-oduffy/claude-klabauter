@@ -123,7 +123,6 @@ from coordinator_core.op_budget_suspension import is_suspended, refusal_message
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.goal_close_day import collect_open_day_goals
-from coordinator_core.ops.requirement_register import StallReport, stall_judgment_point, stall_report
 from coordinator_core.ops.workday_complete_step2_5_dirty_tree import (
     classify_dirty_tree,
 )
@@ -187,14 +186,6 @@ def _compute_open_day_goals() -> dict[str, Any]:
             file=sys.stderr,
         )
         return {"today": [], "stale": [], "unreadable_error": str(exc)}
-
-
-def _compute_register_stall() -> StallReport:
-    """Register stall scan from the main worktree; an unreadable tree reports nothing."""
-    try:
-        return stall_report(Path(_main_worktree_root_for_directive()), date.today())
-    except Exception:  # noqa: BLE001 - never fail the ceremony
-        return StallReport()
 
 
 def _compute_completion_receipts_gate(for_date: Optional[str]) -> dict[str, Any]:
@@ -616,12 +607,8 @@ def _build_judgment_points(
     open_day_goals: dict[str, Any],
     dirty_tree_verdict: dict[str, Any],
     for_date: Optional[str] = None,
-    register_stall: Optional[StallReport] = None,
 ) -> list[dict[str, Any]]:
     """Tier-2/3 (open-question) judgment-point entries.
-
-    - `jp_requirement_register_stall` — reportable, appended only when
-      `register_stall` is non-empty.
 
     - `jp_day_goal_closeout` — C4, conditional (see
       `_build_day_goal_closeout_judgment_point`): emitted only when C2
@@ -854,8 +841,6 @@ def _build_judgment_points(
             reportable=False,
         ),
     ]
-    if register_stall:
-        points.append(stall_judgment_point(register_stall, id="jp_requirement_register_stall"))
     return points
 
 
@@ -967,10 +952,7 @@ def brief(
             scope_summary=scope_summary,
         )
         judgment_points = _build_judgment_points(
-            open_day_goals,
-            dirty_tree_verdict,
-            for_date=for_date,
-            register_stall=_compute_register_stall(),
+            open_day_goals, dirty_tree_verdict, for_date=for_date
         )
         recommendation_carrying = [
             point for point in judgment_points if point.get("recommendation") is not None

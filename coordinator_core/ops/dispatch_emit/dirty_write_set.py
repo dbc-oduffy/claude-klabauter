@@ -110,31 +110,18 @@ def _matches_any(path: str, globs: list[str], ignorecase: bool) -> bool:
     return any(fnmatchcase(folded, g.lower() if ignorecase else g) for g in globs)
 
 
-def guard_against_dirty_write_set(
-    plan_path, repo_root: Path, *, run=None, ignorecase=None, hold=frozenset(), landed=frozenset()
-) -> Optional[dict]:
+def guard_against_dirty_write_set(plan_path, repo_root: Path, *, run=None, ignorecase=None) -> Optional[dict]:
     """Refuse emission when a path the dispatchable rows will write and commit
     is already dirty or untracked — before any script or brief reaches disk.
 
     Dirty paths matching a declared `generated_outputs` glob do not refuse;
     they come back as `{"count", "examples", "note"}` (else `None`).
 
-    Rows this emit will not dispatch are out of the write set: `hold` rows and
-    their transitive dependents, and `landed` rows (an `--only-incomplete` re-emit).
-
     Negative spec: reads only the write-set union through one scoped porcelain
     call — never the unscoped tree, never claims.
     """
-    rows = read_spine(Path(plan_path))
-    skipped = set(hold) | set(landed)
-    if hold:
-        from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
-
-        skipped.update(transitive_dependents(rows, set(hold)))
     union: set[str] = set()
-    for row in rows:
-        if row.id in skipped:
-            continue
+    for row in read_spine(Path(plan_path)):
         union.update(_declared_paths(row))
         union.update(row.writes_under)
     dirty = _dirty_in_write_set(sorted(union), Path(repo_root), run=run, ignorecase=ignorecase)

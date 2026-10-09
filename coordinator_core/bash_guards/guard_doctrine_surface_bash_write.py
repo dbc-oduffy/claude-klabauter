@@ -229,8 +229,7 @@ _SIZING_RECORD_IDENTIFIERS = (Path(record_homes.home_dir("", "sizings")).as_posi
 _SIZING_RECORD_DENY = (
     "Shell write into state/sizings bypasses the sizing-object schema check. "
     "New record: `sizing-assemble --write`. Amend: `sizing.record_pm_resolution` "
-    "or `sizing-accept-exit-criterion`. "
-    "Register: `sizing-assemble --register <yaml> --write <sizing>`."
+    "or `sizing-accept-exit-criterion`."
 )
 
 

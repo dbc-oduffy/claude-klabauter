@@ -4,9 +4,6 @@ description: Fixture notebooklm pipeline, one stage.
 inputs:
   brief: required
   scratch_dir: optional
-  lists:
-    notebooks:
-      kind: strings
 stages:
   - id: ask
     phase: Ask

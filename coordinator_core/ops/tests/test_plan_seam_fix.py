@@ -137,7 +137,7 @@ def test_converges_against_seam_check(root):
     r = _fix(root, names)
     assert len(r["edges_added"]) == 4 and r["converged"] is True
     pset = {n: plan_seam_check._Plan(n, root) for n in names}
-    assert not [f for f in plan_seam_check._collision_findings(pset, {"named_set": True}) if f["path"]]
+    assert not [f for f in plan_seam_check._collision_findings(pset, {"named_set": True, "hubs": set()}) if f["path"]]
     assert _fix(root, names)["edges_added"] == []
 
 
