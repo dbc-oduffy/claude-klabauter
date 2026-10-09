@@ -1419,6 +1419,12 @@ def _row_item_ids(rows: List[dict], item_ids: List[str]) -> List[str]:
     return owners
 
 
+def part_run_id(run_id: str, index: int) -> str:
+    """The run id of part ``index`` (1-based) of an over-cap inventory: the sole
+    source of the ``-pN`` suffix on the part's spine run id and its script name."""
+    return f"{run_id}-p{index}"
+
+
 def select_part(rows: List[dict], item_ids: List[str], index: int, count: int) -> List[dict]:
     """The rows of part `index` (1-based) of `count`: whole plan items in table
     order, balanced by row count. An edge onto a row in an EARLIER part is
@@ -1916,7 +1922,7 @@ def mint_spine(
     if part is not None:
         index, count = part
         rows = select_part(rows, [_strip_backtick(r["id"]) for r in chunk_rows], index, count)
-        run_id = f"{run_id}-p{index}"
+        run_id = part_run_id(run_id, index)
         if part_items_out is not None:
             part_items_out.extend(
                 dict.fromkeys(_row_item_ids(rows, [_strip_backtick(r["id"]) for r in chunk_rows]))

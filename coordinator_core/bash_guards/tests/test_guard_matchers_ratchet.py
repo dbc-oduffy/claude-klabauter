@@ -172,6 +172,7 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-doctrine-surface-bash-write": _Expected(("Bash", "PowerShell")),
     "guard-repo-setup-claude-home-refusal": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
+    "guard-subagent-heavy-ue-launch": _Expected(("Bash", "PowerShell")),
     # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
     # dialect-reading -- resolves its dialect via `_dialect.dialect_from_
     # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
@@ -294,6 +295,9 @@ EXPECTED: Dict[str, _Expected] = {
         ("Bash", "PowerShell"),
     ),
     "git-no-optional-locks": _Expected(
+        ("Bash", "PowerShell"),
+    ),
+    "deploy-dirty-tree": _Expected(
         ("Bash", "PowerShell"),
     ),
     "background-publish": _Expected(
@@ -470,7 +474,7 @@ def test_discovery_found_the_expected_scope():
     declaring, PM directive 2026-09-29), and 29 -> 30 with
     `guard_headless_claude_plugin_dir`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 37, sorted(stems)
+    assert len(stems) == 39, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -493,7 +497,7 @@ def test_every_registered_guard_is_classified():
     54 -> 55 with `block-venv-creation` (PM directive 2026-09-29); 55 -> 56
     with `background-publish`."""
     actual = _actual_matchers()
-    assert len(actual) == 65, sorted(actual)
+    assert len(actual) == 67, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -534,7 +538,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 65
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 67
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

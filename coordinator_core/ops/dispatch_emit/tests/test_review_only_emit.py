@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from coordinator_core.ops.dispatch_emit import cli
@@ -12,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.spine_read import EmitterRow
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.wake_digest import PLAN_HELD_VAR, RUNTIME_VARS
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 
 _BASE = "abc1234def"
@@ -48,6 +51,15 @@ def test_no_row_commit_or_push_machinery(host):
         assert needle not in script
     assert "Review-only: rows C1, C2, base " + _BASE in script
     assert_zero_errors(script)
+
+
+@pytest.mark.parametrize("host", ["coordinator", "host"])
+def test_every_digest_var_read_is_declared(host):
+    script = _script(host)
+
+    for name in (*RUNTIME_VARS, PLAN_HELD_VAR):
+        if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", script):
+            assert re.search(rf"\b(const|let) {re.escape(name)}\b", script), name
 
 
 def test_landed_seed_stands_outside_any_commit_wave():

@@ -385,7 +385,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.check_claude_md_size": OpClass.MUTATING,
     "hooks.derive_global_doctrine_live_copy": OpClass.MUTATING,
     "hooks.derive_setup_copies": OpClass.MUTATING,
-    "hooks.guard_doctrine_surface_bash_write": OpClass.MUTATING,
     "hooks.guard_doctrine_surface_ratio": OpClass.MUTATING,
     "hooks.guard_doctrine_changelog_prose": OpClass.MUTATING,
     "hooks.preuse_write_dispatch": OpClass.MUTATING,

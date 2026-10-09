@@ -77,6 +77,9 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
+from typing import Optional
+
 _EXTENDED_LENGTH_UNC_PREFIX_BACKSLASH = "\\\\?\\UNC\\"
 _EXTENDED_LENGTH_PREFIX_BACKSLASH = "\\\\?\\"
 _EXTENDED_LENGTH_UNC_PREFIX_SLASH = "//?/unc/"
@@ -100,3 +103,32 @@ def casefold_path(raw: str) -> str:
     normalized = raw.replace("\\", "/")
     stripped = strip_extended_length_prefix(normalized)
     return stripped.casefold()
+
+
+def _lexical_repo_relative(abs_path: str, repo_root: str) -> Optional[str]:
+    normal_abs = abs_path.replace("\\", "/")
+    normal_root = repo_root.replace("\\", "/").rstrip("/")
+    # Comparison-only fold: the returned path keeps `abs_path`'s case, and
+    # callers use it for pattern matching and schema lookup, never disk I/O.
+    if not casefold_path(normal_abs).startswith(casefold_path(normal_root)):
+        return None
+    rel = normal_abs[len(normal_root):]
+    # A prefix is not containment: `/repo` must not claim `/repo2/x`.
+    if rel and not rel.startswith("/"):
+        return None
+    return rel[1:] if rel.startswith("/") else rel
+
+
+def repo_relative(abs_path: str, repo_root: str) -> Optional[str]:
+    """`abs_path` relative to `repo_root` in posix form, or None when outside.
+
+    TRAP: a cwd reached through a symlink (macOS `/tmp`, `/var`) and a root
+    from git's resolved toplevel name one directory by two strings, so a
+    lexical miss is retried on both realpaths before reporting outside."""
+    rel = _lexical_repo_relative(abs_path, repo_root)
+    if rel is not None:
+        return rel
+    real_abs, real_root = os.path.realpath(abs_path), os.path.realpath(repo_root)
+    if (real_abs, real_root) == (abs_path, repo_root):
+        return None
+    return _lexical_repo_relative(real_abs, real_root)

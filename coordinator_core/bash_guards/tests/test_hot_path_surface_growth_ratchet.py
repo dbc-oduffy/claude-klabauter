@@ -75,7 +75,7 @@ _EAGER_IMPORT_CEILING = 21
 # 11312 -> 11315: check_destructive_rm resolves a relative rm target against the payload cwd
 # (the warm engine's process cwd is not the session's); EM ruling, break-class fix.
 _DISPATCH_CHECKS_LINE_CEILING = 11315
-_REGISTERED_ENTRY_CEILING = 66  # + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
+_REGISTERED_ENTRY_CEILING = 67  # + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
 def _count_module_scope_imports(source: str) -> int:

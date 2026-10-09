@@ -334,7 +334,11 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     dag_from_waves,
     transitive_dependents,
 )
-from coordinator_core.ops.dispatch_emit.wake_digest import completion_return_js, stage_schema_literal
+from coordinator_core.ops.dispatch_emit.wake_digest import (
+    PLAN_HELD_VAR,
+    completion_return_js,
+    stage_schema_literal,
+)
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.git.git_state import head_branch, head_sha
 from coordinator_core.executor_return_contract import (
@@ -3407,7 +3411,6 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  const _unusableChecks = [];\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
-        "  const _planHeld = {};\n"
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
@@ -4469,6 +4472,8 @@ def compose_script(
     body_blocks.append("  const _unansweredBriefs = [];")
     body_blocks.append("  const _stoppedBy = [];")
     body_blocks.append("  const _notStarted = [];")
+    # Read by the wake digest on every shape; review-only never emits `_runRow`.
+    body_blocks.append(f"  const {PLAN_HELD_VAR} = {{}};")
     if held_rows:
         body_blocks.append(
             "  const _heldRows = "
