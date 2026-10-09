@@ -88,3 +88,19 @@ def test_every_row_head_carries_the_heavy_launch_floor():
     # The subagent heavy-UE guard denies these launches everywhere, so the brief says so up front.
     assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None)
     assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None, verification=True)
+
+
+def _js_re(rx: str):
+    import re
+
+    return re.compile(rx[1 : rx.rindex("/")].replace("<\/", "</"))
+
+
+def test_a_blocked_status_after_prose_is_not_read_as_done():
+    import json
+
+    non_done, blocked = _js_re(emit._NON_DONE_STATUS_JS_RE), _js_re(emit._BLOCKED_STATUS_JS_RE)
+    for reply in ("Read the plan.\n\nBLOCKED: gate C3 first", "Summary\n**BLOCKED**: x", "Status: BLOCKED"):
+        assert non_done.search(json.dumps(reply)) and blocked.search(json.dumps(reply)), reply
+    for reply in ("DONE: a.py; PREFLIGHT-BLOCKED fine, no PARTIAL chunks", "DONE: a.py\n- blocked nothing"):
+        assert not non_done.search(json.dumps(reply)), reply

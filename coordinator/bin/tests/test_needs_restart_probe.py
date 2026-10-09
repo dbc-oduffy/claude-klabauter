@@ -104,6 +104,7 @@ def test_write_snapshot_unwritable_is_silent(env, monkeypatch, tmp_path):
     snap.write_snapshot("sid2", "startup")
 
 
+@pytest.mark.cadence
 def test_cli_prints_one_verdict_and_exits_zero(env):
     (env[1] / "hooks" / "hooks.json").write_text('{"x": 1}')
     r = subprocess.run([sys.executable, str(PROBE), "--session-id", "sid1"],
@@ -114,6 +115,7 @@ def test_cli_prints_one_verdict_and_exits_zero(env):
     assert len(r.stdout.strip().splitlines()) == 1
 
 
+@pytest.mark.cadence
 def test_cli_broken_environment_exits_zero(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "nothing"))
     r = subprocess.run([sys.executable, str(PROBE)], capture_output=True, text=True,

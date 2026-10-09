@@ -13,7 +13,7 @@ import pytest
 
 from coordinator_core.ops.research_close import _handler
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

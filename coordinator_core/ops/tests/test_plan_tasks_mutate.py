@@ -4291,3 +4291,40 @@ def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(t
 )
 def test_memo_send_row_matches_its_sent_receipt(changed, write, hit):
     assert plan_tasks_mutate._writes_match(changed, write) is hit
+
+
+def test_reopen_returns_a_wrong_coded_row_to_open(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "reopen.md", _PLAN_WITH_TASKS)
+    assert _resolve_coded(repo, plan, "C1", "abc1234")["exit_code"] == 0
+
+    result = _run(_handler(
+        {"verb": "reopen", "plan_path": str(plan), "id": "C1",
+         "disposition_detail": "executor BLOCKED; coded by terminal_commit in error"},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    text = plan.read_text(encoding="utf-8")
+    assert "disposition: coded" not in text
+    assert "disposition_ref: abc1234" not in text
+    assert "executor BLOCKED; coded by terminal_commit in error" in text
+
+
+def test_reopen_refuses_a_row_that_is_not_coded_or_has_no_reason(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "reopen-refused.md", _PLAN_WITH_TASKS)
+    before = plan.read_text(encoding="utf-8")
+
+    open_row = _run(_handler(
+        {"verb": "reopen", "plan_path": str(plan), "id": "C1", "disposition_detail": "x"},
+        repo_root=repo / ".git",
+    ))
+    no_reason = _run(_handler(
+        {"verb": "reopen", "plan_path": str(plan), "id": "C1", "disposition_detail": "  "},
+        repo_root=repo / ".git",
+    ))
+
+    assert open_row["exit_code"] == 1 and "not 'coded'" in open_row["error"]
+    assert no_reason["exit_code"] == 1 and "disposition_detail" in no_reason["error"]
+    assert plan.read_text(encoding="utf-8") == before

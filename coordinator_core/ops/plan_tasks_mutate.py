@@ -833,6 +833,76 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
 
 
+def _reopen(plan_path: str, task_id: str, detail: str, worktree: Path, repo_root: Path) -> dict:
+    """Apply the reopen verb: a `coded` row back to `open`, `disposition_ref` dropped,
+    `disposition_detail` naming why the coded stamp was wrong.
+
+    The only way back from a wrong `coded`: an emit selects open rows, so a row coded
+    over undelivered work is otherwise dropped from every later run. Refuses any
+    disposition but `coded` -- a closed one (spun_off/backlogged/wont_do) is a scope
+    decision with its own sign-off, never undone here."""
+    try:
+        path = _resolve_path(plan_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"reopen: {exc}")
+    if not task_id:
+        return _err("reopen: 'id' is required")
+    if not isinstance(detail, str) or not detail.strip():
+        return _err("reopen: 'disposition_detail' is required: why the coded stamp was wrong")
+
+    _state: dict = {"applied": False, "message": "", "warnings": []}
+
+    def mutate(old_text: str) -> str:
+        result = locate_fenced_block(old_text)
+        if result.status is LocateStatus.MALFORMED:
+            raise MutateAbort("reopen: task spine is malformed")
+        if result.status is LocateStatus.ABSENT:
+            raise MutateAbort("reopen: task spine is absent — nothing to reopen")
+
+        plan_fm = parse_frontmatter(old_text).get("frontmatter")
+        plan_created = plan_fm.get("created") if isinstance(plan_fm, dict) else None
+        governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
+
+        rows = _parse_rows_or_abort(result.body, "reopen")
+        original_rows = copy.deepcopy(rows)
+        row = next((r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None)
+        if row is None:
+            raise MutateAbort(f"reopen: task id not found: {task_id!r}")
+        if _plan_tasks_row_disposition(row) != "coded":
+            raise MutateAbort(
+                f"reopen: row {task_id} is {_plan_tasks_row_disposition(row)!r}, not 'coded'; "
+                "only a coded stamp is undone here"
+            )
+        row["disposition"] = "open"
+        row.pop("disposition_ref", None)
+        row["disposition_detail"] = detail.strip()
+        rows = _reposition_rows_for_d5(rows)
+
+        try:
+            untouched_invalid = _validate_all(
+                rows, governed=governed, touched_ids={task_id}, plan_created=plan_created,
+            )
+        except MutateAbort as exc:
+            raise MutateAbort(f"reopen: {exc.args[0] if exc.args else exc}") from exc
+
+        start, end = result.span
+        _state["applied"] = True
+        _state["message"] = f"reopen: {task_id} coded -> open"
+        _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
+        return old_text[:start] + _patch_body(result.body, original_rows, rows) + old_text[end:]
+
+    try:
+        locked_rmw(path, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"reopen: plan not found: {plan_path}")
+    except LockTimeout as exc:
+        return _err(f"reopen: timed out waiting for file lock on {plan_path}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "reopen: mutation aborted")
+
+    return _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
+
+
 EVIDENCE_SIDECAR_SUFFIX = ".evidence.yaml"
 
 
@@ -1980,7 +2050,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | clear-gate | evidence-append)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | clear-gate | evidence-append)")
     if not plan_path:
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
@@ -2041,6 +2111,16 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             ]
         return await asyncio.to_thread(_resolve, plan_path, resolutions, worktree, repo_root)
 
+    if verb == "reopen":
+        return await asyncio.to_thread(
+            _reopen,
+            plan_path,
+            (params.get("id") or "").strip(),
+            params.get("disposition_detail"),
+            worktree,
+            repo_root,
+        )
+
     if verb == "evidence-append":
         return await asyncio.to_thread(
             _evidence_append,
@@ -2063,5 +2143,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, clear-gate, evidence-append"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, clear-gate, evidence-append"
     )

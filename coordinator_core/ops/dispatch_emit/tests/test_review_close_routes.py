@@ -18,6 +18,9 @@ from coordinator_core.ops.review_stamp import MintRefusal, mint
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _plan, _record, _repo
 from coordinator_core.session import record_homes
 
+# Real git repo built by the _unmet_run helper; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BASE = "abc1234def"
 _SPINE = (
     "---\nplan_id: pln-x\nstatus: executing\n---\n\n# P\n\n## Tasks\n\n```yaml plan-tasks\n"

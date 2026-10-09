@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from coordinator_core.ops import review_stamp as m
@@ -13,6 +14,9 @@ from coordinator_core.ops.plan_status_transition import main
 from coordinator_core.ops.tests.test_plan_status_transition import _write
 from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import _init_repo
 from coordinator_core.ops.tests.test_plan_status_transition_records_exit_criterion import _FLAGS, _seed
+
+# _plan/_seeded build real git repos; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN_ID = "pln-fixture-spineless-000001"
 STAMPED_AT = "2026-10-01T00:00:00Z"

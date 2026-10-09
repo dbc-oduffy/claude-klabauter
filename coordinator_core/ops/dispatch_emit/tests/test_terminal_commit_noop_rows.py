@@ -10,6 +10,10 @@ import yaml
 from coordinator_core.execute_plan_assemble.row_spans import _row_disposition
 from coordinator_core.frontmatter.body_blocks import locate_fenced_block
 from coordinator_core.ops.dispatch_emit import terminal_commit
+import pytest
+
+# The _git helper drives a real git repo; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _PLAN = """---
 title: p

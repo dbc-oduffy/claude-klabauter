@@ -13,6 +13,9 @@ from coordinator_core.ops.dispatch_emit.emit import _run_base_blocks, compose_sc
 from .conftest import REVIEW_KW
 from .test_emit import _wave_row
 
+# _run_block executes the emitted block under a real node process; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 EMIT = "a" * 40
 FIRE = "b" * 40
 

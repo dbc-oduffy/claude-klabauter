@@ -115,6 +115,8 @@ def test_non_memo_rows_never_held_by_the_receipt_gate(tmp_path):
     assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {}
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_terminal_commit_reply_names_the_unsent_memo(tmp_path):
     import subprocess
 

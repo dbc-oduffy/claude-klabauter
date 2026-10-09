@@ -5036,21 +5036,29 @@ def compose_script(
     return script
 
 
-#: A non-DONE status in the position the executor return contract puts it:
-#: the reply's leading `<STATUS>:` (``executor_return_contract.
-#: done_summary_constraint``) or an `<exit-status>` tag. Matched against the
-#: JSON-stringified agent result, so a string reply begins with `"`. Anchored,
-#: never a bare word match: a DONE reply mentioning `PREFLIGHT-BLOCKED` or
-#: "no PARTIAL chunks" is still DONE.
+#: A non-DONE status leading the reply or ANY line of it (`BLOCKED:`,
+#: `**PARTIAL**:`, `Status: BLOCKED`) or an `<exit-status>` tag -- the same
+#: positions ``_ANY_STATUS_JS_RE`` admits and terminal_commit's
+#: ``_UNDELIVERED_REPORT_RE`` reads. Matched against the JSON-stringified agent
+#: result, where a line break is a literal backslash-n.
+#: Trap: reply-anchored only, prose ahead of a `BLOCKED:` line read as DONE and
+#: terminal_commit coded the row. Still never a bare word match: a DONE reply
+#: mentioning `PREFLIGHT-BLOCKED` or "no PARTIAL chunks" is DONE.
+_LINE_START_JS = r'(?:^"?|\n|\\n)'
+_STATUS_FIELD_JS = r'[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
 _NON_DONE_STATUS_JS_RE = (
-    r'/^"?\s*(?:PARTIAL|BLOCKED):|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
+    rf'/{_LINE_START_JS}\s*[*_`]{{0,2}}(?:PARTIAL|BLOCKED)[*_`]{{0,2}}:'
+    rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
+    r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
 )
 
 #: The BLOCKED subset of ``_NON_DONE_STATUS_JS_RE``: a chunk matching it goes
 #: to ``_blockedChunks``; the remaining non-DONE match (PARTIAL) stays in
 #: ``_incompleteChunks``.
 _BLOCKED_STATUS_JS_RE = (
-    r'/^"?\s*BLOCKED:|<exit-status>BLOCKED<\/exit-status>/'
+    rf'/{_LINE_START_JS}\s*[*_`]{{0,2}}BLOCKED[*_`]{{0,2}}:'
+    rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}BLOCKED\b'
+    r'|<exit-status>BLOCKED<\/exit-status>/'
 )
 
 #: Any contract status, DONE included, leading the reply or any line of it.

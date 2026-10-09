@@ -4,6 +4,8 @@ run's own work branch, so a run cut off mid-way strands nothing."""
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit.emit import (
     _SHARED_PATH_ARRAY_THRESHOLD,
     compose_script,
@@ -250,6 +252,8 @@ def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path):
     assert "gone_tracked_as_deleted must be a boolean" in out["error"]
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path):
     import subprocess
 

@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+# Real git repos built by the _git/_commit helpers; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _SPEC = importlib.util.spec_from_file_location(
     "collab_detect", Path(__file__).resolve().parents[2] / "lib" / "collab_detect.py"
 )

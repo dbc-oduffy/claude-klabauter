@@ -16,6 +16,9 @@ from coordinator_core.ops.dispatch_emit import cli, plan_blitz_args
 from coordinator_core.ops.dispatch_emit.tests.test_op_sizing_emit import REL, _mjs, _put, repo  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real git repo built in _arrange; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _REQUIRED = (
     "provisionSidecarCli",
     "spineCheckCli",

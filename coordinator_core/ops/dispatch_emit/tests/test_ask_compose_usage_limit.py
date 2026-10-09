@@ -40,6 +40,8 @@ def test_test_call_is_guarded_by_the_limit_catch(monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_helper_halts_on_limit_and_rethrows_other_errors(monkeypatch):
     helper = ask_compose._usage_limit_helper_js()
     js = (

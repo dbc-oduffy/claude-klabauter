@@ -389,3 +389,70 @@ def test_cut_tag_never_force_pushes() -> None:
     src = (_BIN_DIR / "merge-recovery-and-tag-cut.py").read_text(encoding="utf-8")
     for flag in ("--force", "-f\"", "+refs", "--force-with-lease"):
         assert flag not in src
+
+
+clone_merge = _mod.clone_merge
+
+
+def _diverge(work: Path) -> str:
+    """A side branch with one commit, then a different commit on main."""
+    _git(["checkout", "-b", "side"], cwd=work)
+    (work / "side.txt").write_text("side\n", encoding="utf-8")
+    _git(["add", "side.txt"], cwd=work)
+    _git(["commit", "-m", "side"], cwd=work)
+    _git(["checkout", "main"], cwd=work)
+    (work / "main.txt").write_text("main\n", encoding="utf-8")
+    _git(["add", "main.txt"], cwd=work)
+    _git(["commit", "-m", "main"], cwd=work)
+    return _head_sha(work, "side")
+
+
+def test_clone_merge_lands_despite_staged_files_in_the_shared_tree(tmp_path: Path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _git(["push", "origin", "main"], cwd=work)
+    side = _diverge(work)
+    _git(["checkout", "side"], cwd=work)
+    (work / "peer.txt").write_text("a peer's staged work\n", encoding="utf-8")
+    _git(["add", "peer.txt"], cwd=work)
+
+    assert clone_merge(work, "main", "side", push=True) == 0
+
+    out = capsys.readouterr().out
+    merge_sha = out.split("MERGE_SHA=")[1].strip()
+    assert _head_sha(work, "main") == merge_sha
+    assert _git(["rev-parse", "main"], cwd=tmp_path / "origin.git").stdout.strip() == merge_sha
+    assert _git(["rev-parse", f"{merge_sha}^2"], cwd=work).stdout.strip() == side
+    assert "peer.txt" in _git(["diff", "--cached", "--name-only"], cwd=work).stdout
+    assert not list((work / "scratch").glob("clone-merge-*"))
+
+
+def test_clone_merge_into_the_checked_out_branch_leaves_a_fast_forward(tmp_path: Path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _diverge(work)
+    before = _head_sha(work, "main")
+
+    assert clone_merge(work, "main", "side", push=False) == 0
+
+    out = capsys.readouterr().out
+    assert "FF_PENDING=git merge --ff-only" in out
+    assert _head_sha(work, "main") == before
+
+
+def test_clone_merge_conflict_keeps_the_clone_and_touches_nothing(tmp_path: Path, capsys) -> None:
+    work = _init_repo_with_origin(tmp_path)
+    _git(["checkout", "-b", "side"], cwd=work)
+    (work / "f.txt").write_text("side\n", encoding="utf-8")
+    _git(["commit", "-am", "side"], cwd=work)
+    _git(["checkout", "main"], cwd=work)
+    (work / "f.txt").write_text("main\n", encoding="utf-8")
+    _git(["commit", "-am", "main"], cwd=work)
+    _git(["checkout", "side"], cwd=work)
+    before = _head_sha(work, "main")
+
+    with pytest.raises(SystemExit):
+        clone_merge(work, "main", "side", push=True)
+
+    out = capsys.readouterr().out
+    assert "CLONE=" in out
+    assert _head_sha(work, "main") == before
+    assert list((work / "scratch").glob("clone-merge-*"))

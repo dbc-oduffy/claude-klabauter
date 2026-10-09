@@ -11,6 +11,9 @@ import pytest
 
 from coordinator_core.roadmap import census, prep_gate
 
+# The repo fixture runs real git; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 @pytest.mark.parametrize(
     "command",

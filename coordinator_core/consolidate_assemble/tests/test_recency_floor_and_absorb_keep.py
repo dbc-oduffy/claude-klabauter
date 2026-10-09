@@ -12,6 +12,9 @@ from coordinator_core import consolidate_assemble as ca
 from coordinator_core.consolidate_assemble import apply as apply_mod
 from coordinator_core.win_portability import no_console_creationflags
 
+# Real git repos built by the _git/repo helpers; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 NOW = 1_800_000_000.0
 FRESH = int(NOW - 600)
 OLD = int(NOW - ca.RECENCY_FLOOR_SECONDS - 3600)
@@ -37,8 +40,14 @@ def _fake_git(tip_time: int, commits: str):
             rc = 0 if args[-1] == "main" else 1
         elif args[0] == "for-each-ref":
             out = rows
-        elif args[:2] == ["log", "--oneline"]:
-            out = commits
+        elif args[0] == "log" and args[1].startswith("--format="):
+            # unique_commits_by_ref's batched walk: one chain, tip first, parent next.
+            lines = [ln for ln in commits.splitlines() if ln.strip()]
+            shas = [f"{i:040x}" for i in range(1, len(lines) + 1)]
+            parents = shas[1:] + [""]
+            out = "".join(f"{s}\x1f{p}\x1f{ln}\n" for s, p, ln in zip(shas, parents, lines))
+        elif args[0] == "rev-parse" and args[-1].endswith("^{commit}"):
+            out = f"{1:040x}\n" * (len(args) - 1)
         elif args[0] == "worktree":
             out = "worktree /repo\nHEAD abc\nbranch refs/heads/current\n"
         elif args[0] == "merge-base":

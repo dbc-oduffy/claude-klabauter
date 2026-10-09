@@ -144,3 +144,26 @@ def test_help_documents_clear_gate_beside_the_exits():
     assert rc == 0
     for flag in ("--coded", "--wont-do", "--clear-gate", "--owner-repo", "--evidence"):
         assert flag in out
+
+
+def test_reopen_flag_forwards_to_the_reopen_verb():
+    seen = {}
+
+    def route(op, params, repo_root, legacy_fn):
+        seen.update(params)
+        return {"message": "reopen: C4 coded -> open"}
+
+    rc, out, _ = _run(
+        ["--id", "C4", "--plan", "docs/plans/p.md", "--reopen", "--disposition-detail", "executor BLOCKED"],
+        route,
+    )
+
+    assert rc == 0
+    assert seen == {"verb": "reopen", "plan_path": "docs/plans/p.md", "id": "C4",
+                    "disposition_detail": "executor BLOCKED"}
+    assert "coded -> open" in out
+
+
+def test_reopen_flag_requires_a_reason():
+    rc, _, err = _run(["--id", "C4", "--plan", "docs/plans/p.md", "--reopen"], lambda *a: {})
+    assert rc == 2 and "--disposition-detail" in err

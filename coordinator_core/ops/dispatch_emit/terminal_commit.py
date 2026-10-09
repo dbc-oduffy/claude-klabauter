@@ -1881,6 +1881,13 @@ def _terminal_commit(
             kept = {c.id for c in coded_chunks}
             reply["no_product_hunk"] = [c.id for c in contributing_chunks if c.id not in kept]
         noop_chunks = [c for c in done_chunks if c not in coded_chunks]
+        # A no-hunk row whose every declared write is absent delivered nothing to
+        # close against: coding it drops it from every later emit.
+        absent = set(dropped_absent)
+        unbuilt = [c for c in noop_chunks if c.paths and set(c.paths) <= absent]
+        if unbuilt:
+            reply["uncoded_absent"] = [c.id for c in unbuilt]
+            noop_chunks = [c for c in noop_chunks if c not in unbuilt]
         checkpoint_of = (
             {} if anchor_only or not noop_chunks
             else _checkpoint_attribution(worktree_root, str(reply["sha"]), request.plan_path, noop_chunks)

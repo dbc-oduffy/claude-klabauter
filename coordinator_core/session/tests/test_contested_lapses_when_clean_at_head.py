@@ -10,6 +10,9 @@ import pytest
 
 from coordinator_core.session import core, scope, touch_record
 
+# _git and the repo fixture run real git; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(root: Path, *args: str) -> None:
     subprocess.run(

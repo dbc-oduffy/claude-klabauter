@@ -18,7 +18,7 @@ from coordinator_core.git.git_state import (  # noqa: E402
 )
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SHA_A = "a" * 40
 SHA_B = "b" * 64

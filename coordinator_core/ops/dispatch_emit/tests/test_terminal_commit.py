@@ -385,6 +385,22 @@ def test_drops_absent_untracked_path_and_reports_it(repo):
     assert "never-created.py" in out["dropped_absent"]
 
 
+def test_a_row_whose_every_write_is_absent_is_not_coded(repo):
+    # example-game-repo a65064d8: a BLOCKED executor's row, missed as incomplete, was
+    # coded against the run's sha and silently left every later emit.
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C3", title="t3", paths=("a.py",)),
+            ChunkCommit(id="C4", title="t4", paths=("never-a.py", "never-b.py")),
+        ),
+    )
+    script = _write_script(repo, request)
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+    assert out["committed"] is True
+    assert out["uncoded_absent"] == ["C4"]
+
+
 def test_commits_a_literal_wrapped_bracketed_path(repo):
     """content-root-em memo 2026-10-05-...-drops-literal-wrapped-paths: emit
     hands the marker `as_git_pathspec`-wrapped paths, and a tracked, modified

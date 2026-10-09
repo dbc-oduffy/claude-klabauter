@@ -4318,6 +4318,8 @@ def test_stop_process_deny_message_names_main_session(tree_pids):
     assert "main session" in reason and "permission laundering" in reason
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
     import subprocess
     import sys

@@ -128,6 +128,7 @@ def test_absent_census_is_not_this_tools_finding(cr, tmp_path):
     assert cr.recheck_plan(plan, tmp_path, 10)["verdict"] == cr.NO_CENSUS
 
 
+@pytest.mark.cadence
 def test_exit_codes_are_verdicts(cr, tmp_path):
     """Exit status routes: 1 DRIFT goes to the premise owner, 5 UNDIFFABLE to the census
     author, 2 UNRUNNABLE to whoever wrote the command. A caller that cannot tell them

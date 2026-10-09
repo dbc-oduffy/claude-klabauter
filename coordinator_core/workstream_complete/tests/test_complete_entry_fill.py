@@ -11,6 +11,9 @@ import pytest
 from coordinator_core.ops import coordinator_complete_entry as cce
 from coordinator_core.workstream_complete import apply as ws_apply
 
+# _scaffold runs a real git init; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _LOE = "loe:\n  agent_dispatches: null\n  opus_dispatches: null\n  em_tokens: null\n  tshirt: null"
 _PROSE = "Shipped the thing. It matters because of reasons."
 

@@ -12,7 +12,7 @@ from coordinator_core import push_hold
 from coordinator_core.ops.ceremony.push import PushOutcome
 from coordinator_core.warm import push_cadence
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(args, cwd) -> None:

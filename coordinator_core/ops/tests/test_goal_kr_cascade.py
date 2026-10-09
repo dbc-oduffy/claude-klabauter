@@ -3,9 +3,13 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from coordinator_core.ops.goal_kr_cascade import discharge_goal_kr
+
+# _goal runs a real git init; needs a real process.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 GOAL = """schema: goal
 id: "goal-x"

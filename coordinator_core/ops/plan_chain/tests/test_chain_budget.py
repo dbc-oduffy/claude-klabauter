@@ -8,6 +8,7 @@ import time
 import pytest
 
 from coordinator_core.ops.plan_chain import driver
+from coordinator_core.ops.plan_chain.tests._chain_repo import chain  # noqa: F401 -- fixture
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

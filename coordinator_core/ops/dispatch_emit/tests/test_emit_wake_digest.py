@@ -23,7 +23,7 @@ import re
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.emit import compose_script
+from coordinator_core.ops.dispatch_emit.emit import _BLOCKED_STATUS_JS_RE, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 
@@ -165,7 +165,10 @@ def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     script = compose_script(waves, name="wf", description="b", **REVIEW_KW)
     assert "const _blockedChunks = [];" in script
-    assert "if (/^\"?\\s*BLOCKED:|<exit-status>BLOCKED<\\/exit-status>/.test(_text)) _blockedChunks.push(id);\n      _incompleteChunks.push(id);" in script
+    assert (
+        f"if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n      _incompleteChunks.push(id);"
+        in script
+    )
 
 
 def test_a_prose_only_spine_still_runs_its_falsifier():

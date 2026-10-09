@@ -9,7 +9,8 @@ import pytest
 
 from coordinator_core.ops.plan_chain import digest as digest_mod, driver
 from coordinator_core.ops.plan_chain.contract import ChainManifest
-from coordinator_core.ops.plan_chain.tests.conftest import CHUNK_FILE, Spy, _git, head
+from coordinator_core.ops.plan_chain.tests._chain_repo import _git, chain, head  # noqa: F401 -- chain is a fixture
+from coordinator_core.ops.plan_chain.tests.conftest import CHUNK_FILE, Spy
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
