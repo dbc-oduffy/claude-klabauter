@@ -254,24 +254,6 @@ def _sizing_open_ledger_action(tmp_path, route: str, skill: str):
         return [json.loads(line) for line in fh if line.strip()]
 
 
-def _written_ledger(tmp_path, route: str, detents=None, session_id="sid-sizing"):
-    """Write a sizing, open its obligation as `sizing-assemble --write` does, then let one
-    unrelated PostToolUse drain the intake; the ledger rows, or None."""
-    from coordinator_core.hooks.watchdog_undischarged_next_move import _handler, open_sizing_routed
-
-    repo_root = _make_repo(tmp_path)
-    rel_path = "state/sizings/thing.yaml"
-    _write_sizing(repo_root, rel_path, route, detents=detents)
-    open_sizing_routed(repo_root, rel_path, session_id)
-    payload = {"session_id": session_id, "cwd": repo_root, "tool_name": "Bash", "tool_input": {"command": "ls"}}
-    assert _handler({"payload": payload}) == {}
-    ledger = _ledger_path(repo_root, session_id)
-    if not os.path.isfile(ledger):
-        return None
-    with open(ledger, "r", encoding="utf-8") as fh:
-        return [json.loads(line) for line in fh if line.strip()]
-
-
 def test_touched_txt_paths_reads_touch_record_jsonl_not_touched_txt(tmp_path) -> None:
     """P143-T36: `_touched_txt_paths` is the sibling leg to
     `_touch_record_jsonl_paths` in `_newest_touched_sizing_path`'s
@@ -292,13 +274,13 @@ def test_touched_txt_paths_reads_touch_record_jsonl_not_touched_txt(tmp_path) ->
 
 
 def test_sizing_route_dispatch_opens_sizing_routed_obligation(tmp_path) -> None:
-    records = _written_ledger(tmp_path, "dispatch")
+    records = _sizing_open_ledger_action(tmp_path, "dispatch", "coordinator:sizing")
     assert records and records[0]["seam"] == "sizing-routed"
     assert records[0]["next_action"] == "Agent(coordinator:executor)"
 
 
 def test_sizing_route_spec_dispatch_opens_sizing_routed_obligation(tmp_path) -> None:
-    records = _written_ledger(tmp_path, "spec-dispatch")
+    records = _sizing_open_ledger_action(tmp_path, "spec-dispatch", "coordinator:sizing")
     assert records and records[0]["next_action"] == (
         "Skill(coordinator:plan|coordinator:execute-plan)"
     )
@@ -315,75 +297,37 @@ def test_spec_dispatch_terminal_is_discharged_by_either_piped_skill(skill) -> No
 
 
 def test_sizing_route_plan_opens_sizing_routed_obligation(tmp_path) -> None:
-    records = _written_ledger(tmp_path, "plan")
-    assert records and records[0]["next_action"] == "Skill|Workflow(coordinator:plan|fire-*.mjs)"
+    records = _sizing_open_ledger_action(tmp_path, "plan", "coordinator:sizing")
+    assert records and records[0]["next_action"] == "Skill(coordinator:plan)"
 
 
 def test_sizing_route_shape_opens_sizing_routed_obligation(tmp_path) -> None:
-    records = _written_ledger(tmp_path, "shape")
+    records = _sizing_open_ledger_action(tmp_path, "shape", "coordinator:sizing")
     assert records and records[0]["next_action"] == "Skill(coordinator:plan)"
 
 
 def test_sizing_route_roadmap_opens_sizing_routed_obligation(tmp_path) -> None:
-    records = _written_ledger(tmp_path, "roadmap")
+    records = _sizing_open_ledger_action(tmp_path, "roadmap", "coordinator:sizing")
     assert records and records[0]["next_action"] == "Skill(coordinator:plan)"
 
 
 def test_sizing_route_exemption_suppresses_the_obligation(tmp_path) -> None:
-    assert _written_ledger(tmp_path, "dispatch", detents=["appetite_exceeded"]) is None
-
-
-def test_a_write_with_no_session_opens_nothing(tmp_path) -> None:
-    from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
-
-    repo_root = _make_repo(tmp_path)
-    _write_sizing(repo_root, "state/sizings/thing.yaml", "plan")
-    assert open_sizing_routed(repo_root, "state/sizings/thing.yaml", None) is False
-
-
-def test_the_sizing_skill_load_opens_nothing_even_with_a_prior_sizing(tmp_path) -> None:
-    records = _sizing_open_ledger_action(tmp_path, "plan", "coordinator:sizing")
-    assert records is None
-
-
-def _post(repo_root, session_id, tool_name, tool_input):
     from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
 
-    payload = {"session_id": session_id, "cwd": repo_root, "tool_name": tool_name, "tool_input": tool_input}
-    assert _handler({"payload": payload}) == {}
-
-
-def _open_plan_route(tmp_path, session_id):
-    from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
-
     repo_root = _make_repo(tmp_path)
-    _write_sizing(repo_root, "state/sizings/thing.yaml", "plan")
-    assert open_sizing_routed(repo_root, "state/sizings/thing.yaml", session_id)
-    return repo_root
+    session_id = "sid-exempt"
+    rel_path = "state/sizings/thing.yaml"
+    _write_sizing(repo_root, rel_path, "dispatch", detents=["appetite_exceeded"])
+    _write_touch_record(repo_root, session_id, rel_path)
 
-
-def _sizing_open(repo_root, session_id) -> bool:
-    with open(_ledger_path(repo_root, session_id), "r", encoding="utf-8") as fh:
-        rows = [json.loads(line) for line in fh if line.strip()]
-    return any(r["seam"] == "sizing-routed" and r.get("discharged_at") is None for r in rows)
-
-
-def test_a_same_turn_plan_skill_after_the_write_discharges_through_the_drain(tmp_path) -> None:
-    session_id = "sid-same-turn"
-    repo_root = _open_plan_route(tmp_path, session_id)
-    _post(repo_root, session_id, "Skill", {"skill": "coordinator:plan"})
-    assert not _sizing_open(repo_root, session_id)
-
-
-@pytest.mark.parametrize(
-    "script, discharged",
-    [(r"C:\repo\scratch\trail\fire-0-1.mjs", True), ("docs/plans/x.workflow.mjs", False)],
-)
-def test_only_the_emitted_plan_fire_discharges_a_plan_route(tmp_path, script, discharged) -> None:
-    session_id = "sid-fire"
-    repo_root = _open_plan_route(tmp_path, session_id)
-    _post(repo_root, session_id, "Workflow", {"scriptPath": script})
-    assert _sizing_open(repo_root, session_id) is not discharged
+    payload = {
+        "session_id": session_id,
+        "cwd": repo_root,
+        "tool_name": "Skill",
+        "tool_input": {"skill": "coordinator:sizing"},
+    }
+    assert _handler({"payload": payload}) == {}
+    assert not os.path.isfile(_ledger_path(repo_root, session_id))
 
 
 def test_plan_skill_spec_dispatch_route_does_not_open_plan_review(tmp_path) -> None:
@@ -517,20 +461,3 @@ def test_session_id_is_read_from_payload_never_from_environment(tmp_path, monkey
     assert _handler({"payload": payload}) == {}
     assert os.path.isfile(_ledger_path(repo_root, "sid-from-payload"))
     assert not os.path.isfile(_ledger_path(repo_root, "wrong-session-from-env"))
-
-
-@pytest.mark.parametrize("session_id", ["sid-assemble", None])
-def test_sizing_assemble_write_opens_the_obligation_only_with_a_session(tmp_path, monkeypatch, session_id) -> None:
-    from coordinator_core import sizing_assemble
-    from coordinator_core.session import machinery_paths
-
-    repo_root = _make_repo(tmp_path)
-    _write_sizing(repo_root, "state/sizings/thing.yaml", "plan")
-    monkeypatch.chdir(repo_root)
-    if session_id is None:
-        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    else:
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session_id)
-    sizing_assemble._open_routed_obligation("state/sizings/thing.yaml")
-    intake = machinery_paths.intake_path(repo_root, session_id or "sid-assemble")
-    assert os.path.isfile(intake) is (session_id is not None)

@@ -70,18 +70,7 @@ def test_unresolved_confinement_foreign_zero_files():
     rec = _record()
     rec["prep"]["slice_files"] = []
     rec["prep"]["product_files"] = []
-    rec["criterion"] = {"status": "not_run"}
-    assert _refusal(rec) == (
-        "review-stamp: refusing to mint: zero files in the reviewed diff and the exit criterion is not met"
-    )
-
-
-def test_an_empty_diff_mints_on_a_met_criterion():
-    rec = _record()
-    rec["prep"]["slice_files"] = []
-    rec["prep"]["product_files"] = []
-    rec["criterion"] = {"status": "met", "observation": "the DR a peer landed answers the ask"}
-    assert _refusal(rec) is None
+    assert _refusal(rec) == "review-stamp: refusing to mint: zero files in the reviewed diff"
 
 
 def test_refusal_order_delivery_first():

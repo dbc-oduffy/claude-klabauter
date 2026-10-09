@@ -136,8 +136,6 @@ _NO_CONSOLE = no_console_creationflags()
 #: (docs/plans/2026-07-29-workstream-complete-the-envelope-names-t.md):
 #: the arg-builder and the template read this SAME constant.
 _KEY_MEMO_DISPOSITIONS = "memo_dispositions"
-#: `archive-stamp-cli action-memo --decision`'s closed set.
-_MEMO_DECISIONS = ("accepted", "partial", "declined")
 
 FREE_VALUE_KEYS: tuple[str, ...] = (_KEY_MEMO_DISPOSITIONS,)
 
@@ -238,19 +236,14 @@ def _first_heading(body: str) -> Optional[str]:
 def build_memo_disposition_directives(dispositions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Step 2.65 sub-steps 3-4 (`d-flip-memo-status`): for each
     EM/PM-resolved memo disposition — `{"path": <inbox memo path>,
-    "decision": "accepted"|"partial"|"declined", "decision_note": <why>,
-    "realized_by": <sha or artifact>}`, supplied by the caller once the
+    "decision": <one-line decision text>}`, supplied by the caller once the
     `memo-resolution-attribution` judgment point (`judgments.py`, C2f) is
     answered — emits the two-step `archive-stamp-cli` ceremony: `claim-memo-
-    stamp` then `action-memo`, the latter `depends_on` the former. IDs are
-    suffixed with the memo's basename (`d-claim-memo-stamp:<basename>`,
-    `d-flip-memo-status:<basename>`) since a session may resolve more than one
-    memo in one pass — every other directive in this spine is a fixed
-    singleton id, this pair is not.
-
-    Trap: `action-memo` refuses a `decision` outside its enum and an
-    `accepted` with no `realized_by`, but only after the claim has stamped
-    the memo; both are refused here, before any directive is built.
+    stamp` then `action-memo --decision <text>`, the latter `depends_on` the
+    former. IDs are suffixed with the memo's basename (`d-claim-memo-stamp:
+    <basename>`, `d-flip-memo-status:<basename>`) since a session may resolve
+    more than one memo in one pass — every other directive in this spine is a
+    fixed singleton id, this pair is not.
     """
     directives: list[dict[str, Any]] = []
     for idx, disposition in enumerate(dispositions):
@@ -265,9 +258,8 @@ def build_memo_disposition_directives(dispositions: list[dict[str, Any]]) -> lis
             raise ValueError(
                 f"decisions['memo_dispositions'][{idx}] is a "
                 f"{type(disposition).__name__}, not a mapping (required key: "
-                "'path'; optional: 'decision', 'decision_note', 'realized_by'). "
-                "Supply a list of {'path': <inbox memo path>, 'decision': "
-                "'accepted', 'decision_note': <why>, 'realized_by': <sha>} "
+                "'path'; optional: 'decision'). Supply a list of "
+                "{'path': <inbox memo path>, 'decision': <one-line text>} "
                 "mappings and re-run apply — this is a malformed decisions map, "
                 "not a ceremony failure, and nothing has been written."
             )
@@ -285,23 +277,8 @@ def build_memo_disposition_directives(dispositions: list[dict[str, Any]]) -> lis
         directives.append(_directive(claim_id, "archive-stamp-cli", ["claim-memo-stamp", path]))
         flip_args = ["action-memo", path]
         decision = disposition.get("decision")
-        realized_by = disposition.get("realized_by")
-        if decision and decision not in _MEMO_DECISIONS:
-            raise ValueError(
-                f"decisions['memo_dispositions'][{idx}].decision is {decision!r}; "
-                f"it takes one of {', '.join(_MEMO_DECISIONS)}. Prose goes in "
-                "'decision_note'. Nothing has been written."
-            )
-        if decision == "accepted" and not realized_by:
-            raise ValueError(
-                f"decisions['memo_dispositions'][{idx}] is accepted with no "
-                "'realized_by' (the commit or artifact that realized it). "
-                "Nothing has been written."
-            )
-        for key, flag in (("decision", "--decision"), ("decision_note", "--decision-note"),
-                          ("realized_by", "--realized-by")):
-            if disposition.get(key):
-                flip_args += [flag, str(disposition[key])]
+        if decision:
+            flip_args += ["--decision", str(decision)]
         directives.append(_directive(flip_id, "archive-stamp-cli", flip_args, depends_on=claim_id))
     return directives
 

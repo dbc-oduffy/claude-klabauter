@@ -178,7 +178,6 @@ alongside `coordinator_core.group_em.obligations`'s existing producer).
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -219,7 +218,7 @@ _SEAM_PICKUP_NEXT_MOVE = "pickup->next-move"
 _ROUTE_TERMINAL = {
     "dispatch": "Agent(coordinator:executor)",
     "spec-dispatch": "Skill(coordinator:plan|coordinator:execute-plan)",
-    "plan": "Skill|Workflow(coordinator:plan|fire-*.mjs)",
+    "plan": "Skill(coordinator:plan)",
     "shape": "Skill(coordinator:plan)",
     "roadmap": "Skill(coordinator:plan)",
 }
@@ -567,27 +566,9 @@ def _split_call(next_action: str):
     return kind, rest[:-1]
 
 
-def _skill_of(tool_input) -> Any:
-    skill = tool_input.get("skill")
-    return skill if isinstance(skill, str) else tool_input.get("command")
-
-
 def _matches_next_action(next_action: str, tool_name, tool_input) -> bool:
     kind, _ident = _split_call(next_action)
     if kind is None:
-        return False
-    if kind == "Skill|Workflow":
-        # Each arm checks its own ident: a routed sizing is discharged by the named skill or by
-        # the plan fire `emit-wave-fire --from-sizing` prints, never by an unrelated call.
-        if not isinstance(tool_input, dict):
-            return False
-        idents = _ident.split("|")
-        if tool_name == "Skill":
-            return _skill_of(tool_input) in idents
-        if tool_name == "Workflow":
-            script = tool_input.get("scriptPath")
-            name = os.path.basename(script.replace("\\", "/")) if isinstance(script, str) else ""
-            return any(fnmatch.fnmatchcase(name, i) for i in idents if i.endswith(".mjs"))
         return False
     if "|" in kind:
         return tool_name in tuple(part for part in kind.split("|") if part)
@@ -633,10 +614,6 @@ def _handle_post_tool_use(payload: Mapping) -> None:
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    try:
-        _drain_intake(repo_root, session_id)
-    except Exception:
-        pass
     _discharge_matching(repo_root, session_id, tool_name, tool_input)
 
     if tool_name != "Skill":
@@ -662,7 +639,7 @@ def _handle_post_tool_use(payload: Mapping) -> None:
         _open_obligation(repo_root, session_id, _SEAM_EXECUTE_WAVE, _SEAM_EXECUTE_WAVE, _EXECUTE_NEXT_ACTION)
         return
 
-    if skill != "coordinator:plan":
+    if skill not in ("coordinator:sizing", "coordinator:plan"):
         return
 
     git_dir = _git_dir_for(payload.get("cwd"))
@@ -675,35 +652,14 @@ def _handle_post_tool_use(payload: Mapping) -> None:
     if exempt or route is None:
         return
 
+    if skill == "coordinator:sizing":
+        next_action = _ROUTE_TERMINAL.get(route)
+        if next_action is not None:
+            _open_obligation(repo_root, session_id, _SEAM_SIZING_ROUTED, _SEAM_SIZING_ROUTED, next_action)
+        return
+
     if route == "plan":
         _open_obligation(repo_root, session_id, _SEAM_PLAN_REVIEW, _SEAM_PLAN_REVIEW, _REVIEW_TERMINAL)
-
-
-def open_sizing_routed(repo_root: str, rel_path: str, session_id: Optional[str]) -> bool:
-    """Queue the sizing-routed obligation for the sizing just written at `rel_path`.
-
-    Called by `sizing-assemble --write`, the one call that knows the route it wrote; the
-    Skill(coordinator:sizing) load opens nothing, since at load time the newest sizing is a prior
-    one. No session (a cron or headless write) opens nothing. Appends an intake row, which the
-    next PostToolUse or Stop drains, so a same-turn plan call discharges it.
-    """
-    if not session_id:
-        return False
-    route, exempt = _sizing_route_and_exemption(repo_root, rel_path)
-    next_action = None if exempt or route is None else _ROUTE_TERMINAL.get(route)
-    if next_action is None:
-        return False
-    from coordinator_core.group_em import obligations
-
-    return obligations.record(
-        repo_root,
-        session_id,
-        "open",
-        _SEAM_SIZING_ROUTED,
-        seam=_SEAM_SIZING_ROUTED,
-        next_action=next_action,
-        producer="sizing-assemble",
-    )
 
 
 def _handle_stop(payload: Mapping) -> dict:

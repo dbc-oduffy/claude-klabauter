@@ -39,7 +39,6 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     resolve_arm,
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import (
-    CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
     next_action_parts,
@@ -134,7 +133,7 @@ _MANIFEST_SCHEMA = _obj(
         "rows": {
             "type": "array",
             "items": _obj(
-                ["id", "agent_type", "model", "brief_path", "writes", "wave", "deps"],
+                ["id", "agent_type", "model", "brief_path", "writes", "wave"],
                 {
                     "id": _STR,
                     "agent_type": _STR,
@@ -142,7 +141,6 @@ _MANIFEST_SCHEMA = _obj(
                     "brief_path": _STR,
                     "writes": {"type": "array", "items": _STR},
                     "wave": {"type": "integer"},
-                    "deps": {"type": "array", "items": _STR},
                 },
             ),
         },
@@ -324,7 +322,6 @@ def compose_ask_script(
     agent_type_host: Optional[str] = None,
     baton: Optional[dict] = None,
     accept_pending: bool = False,
-    preamble: Optional[str] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -336,9 +333,7 @@ def compose_ask_script(
     always win; `writes` seeds the emit-time write set the gate and stage ops receive.
     `baton` ({"path", "deliverable_id"}) is passed to the size scaffold and the gate verb. The
     accept phase (an APM ruling recorded in-run, then a re-gate) composes when `accept_pending`
-    or on a raw ask; it never writes a `pm_quote`. `preamble` heads every row executor's prompt,
-    as on the plan route; it is refused when the script carries an M+ or roadmap branch, whose
-    executors this script never prompts.
+    or on a raw ask; it never writes a `pm_quote`.
     """
     if bool(prompt) == bool(sizing_rel):
         raise AskComposeRefused("compose_ask_script takes exactly one of prompt / sizing_rel")
@@ -350,11 +345,6 @@ def compose_ask_script(
     review = parse_execute_review(review_roster_fragment)
 
     known_arm = _known_arm(repo_root, sizing_rel)
-    if preamble and known_arm in (None, ARM_M_PLUS, ARM_ROADMAP):
-        raise AskComposeRefused(
-            f"--preamble reaches only XS/S row executors; this script's arm is {known_arm or 'unsized'}, "
-            "whose executors run from a later emit. Pass --preamble to that plan emit instead."
-        )
     blitz_fn: str = ""
     blitz_phases: list[str] = []
     if known_arm in (None, ARM_M_PLUS, ARM_ROADMAP):
@@ -611,20 +601,24 @@ def compose_ask_script(
     b.append("  phase('execute');")
     b.append("  const _rows = {};")
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
+    b.append("  let _prev = [];")
     b.append("  for (const w of _waves) {")
+    b.append("    const _cur = [];")
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     row_prompt = _cat(
-        f"{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
+        f"{_emit._prompt_head(None)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.{session_tail}",
     )
     b.append(
-        f"      _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
+        f"      _rows[r.id] = _runRow(r.id, _prev, null, async () => agent({row_prompt}, "
         f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}));"
     )
+    b.append("      _cur.push(_rows[r.id]);")
     b.append("    }")
+    b.append("    _prev = _cur;")
     b.append("  }")
     b.append("  await Promise.all(Object.values(_rows));")
     b.append("  await Promise.all(_verifications);")
@@ -671,7 +665,6 @@ def compose_ask_script(
         session_id=session_id,
     )
     b.append(
-        f"  {CAP_HELPER_JS}\n"
         f"  {TERMINAL_COMMIT_CLI_HELPER_JS}\n"
         "  return { arm: _gate.arm, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "

@@ -142,17 +142,6 @@ def test_task_output_recorded_by_reverify_record_clears_the_stamp(tmp_path, caps
     assert _criterion(p)["observation"] == "now true"
 
 
-def test_rejudge_record_stamps_head_at_record_time(tmp_path, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
-
-    monkeypatch.setattr(rd, "_head_sha", lambda _root: "later")
-    rel = rd.record_criterion_rejudge(
-        repo_root=tmp_path, plan_id=PLAN_ID, head_sha="emitted", criterion={"status": "met", "observation": "o"}
-    )
-    text = (tmp_path / rel).read_text(encoding="utf-8")
-    assert "head_sha: later" in text and "emitted_head_sha: emitted" in text
-
-
 def test_emit_rejudge_fires_only_the_criterion_judge(tmp_path):
     from coordinator_core.ops.dispatch_emit.reverify_delivery import emit_rejudge
 

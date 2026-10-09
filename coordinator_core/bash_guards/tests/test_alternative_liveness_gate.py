@@ -304,7 +304,7 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # and move this count toward 2. That probe fix belongs to
     # `_alternative_liveness.py`, not to this test file -- out of scope
     # here.
-    "block_approval_sentinel_creation": 11,
+    "block_approval_sentinel_creation": 10,
     # Same trim, same reason, same new count as the row above:
     # `block_fleet_delegation_creation`'s REASON_DIRECT copy was also cut to
     # `git status`/`git log` to fit the prose cap. Was 10 before the trim.

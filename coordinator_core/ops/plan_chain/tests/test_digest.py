@@ -51,14 +51,6 @@ def test_completed_chain():
     assert d["counts"]["reviewers"] == 2 and d["counts"]["findings_applied"] == 3
 
 
-def test_a_demoted_criterion_reason_reaches_the_final_digest_capped():
-    state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
-    ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None, "reason": "r" * 500}}
-    d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
-    D.validate_final_digest(d)
-    assert d["criterion"]["reason"] == "r" * 200
-
-
 def test_invalid_digest_raises_and_is_not_written(tmp_path):
     state = ChainState(stages_run=list(STAGES), commit={"sha": "a", "receipt_path": "r"})
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)

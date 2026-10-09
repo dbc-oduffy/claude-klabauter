@@ -99,14 +99,13 @@ def test_no_row_allowlists_a_step_zero_script_by_basename():
         )
 
 
-def test_top_level_scripts_row_allowlist_never_names_a_step_zero_script():
-    """`claude-klabauter-scripts` (source_subdir `scripts` -- this repo's
+def test_top_level_scripts_row_allowlist_is_unwidened():
+    """Pin `claude-klabauter-scripts` (source_subdir `scripts` -- this repo's
     TOP-LEVEL scripts/, scripts/setup.py's own directory, a different tree
-    from coordinator/scripts/) keeps the setup entrypoints and never names a
-    Step Zero script: that widening is the exact half-named-path bug this
-    ledger item describes -- catch it here rather than downstream in a mirror
-    diff. Other installer entrypoints may join the row; an exact-set pin
-    turned every one of them into a false red."""
+    from coordinator/scripts/) to its known-correct three-entry allowlist.
+    A future edit widening this allowlist to include any of the three Step
+    Zero scripts would be the exact half-named-path bug this ledger item
+    describes -- catch it here rather than downstream in a mirror diff."""
     rows = _parse_portable_rows(_PORTABLE_TARGETS_PATH)
     scripts_rows = [row for row in rows if row["name"] == "claude-klabauter-scripts"]
     assert len(scripts_rows) == 1, (
@@ -116,6 +115,6 @@ def test_top_level_scripts_row_allowlist_never_names_a_step_zero_script():
     row = scripts_rows[0]
     assert row["source_subdir"] == "scripts"
     allowlist_entries = {entry.strip() for entry in row["allowlist"].split(",") if entry.strip()}
-    assert {"setup.py", "setup.cmd", "test_setup.py"} <= allowlist_entries
+    assert allowlist_entries == {"setup.py", "setup.cmd", "test_setup.py"}
     for script in _STEP_ZERO_SCRIPTS:
         assert script not in allowlist_entries

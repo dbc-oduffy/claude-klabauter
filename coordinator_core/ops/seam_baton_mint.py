@@ -31,7 +31,6 @@ Negative-spec: never commits; accepts no caller-supplied root; writes only under
 
 from __future__ import annotations
 
-from coordinator_core.session.declared_writes import declare_write
 import hashlib
 import json
 import re
@@ -253,11 +252,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "x", encoding="utf-8", newline="\n") as fh:
             fh.write(content if content.endswith("\n") else content + "\n")
-        declare_write(target)
         for f in flags:
             index[f["key"]] = rel
     atomic_write_bytes(root / INDEX_REL, (json.dumps(index, indent=1, sort_keys=True) + "\n").encode("utf-8"))
-    declare_write(root / INDEX_REL)
     return reply
 
 

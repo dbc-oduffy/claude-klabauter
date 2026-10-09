@@ -144,6 +144,7 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.ops.dispatch_emit.spine_read import (
+    NON_DISPATCHABLE_DISPOSITIONS,
     SpineReadError,
     load_rows_memo,
     read_spine,
@@ -792,6 +793,16 @@ def _plan_row_execution_mode(
     return row.get("execution_mode") if row is not None else None
 
 
+def _open_rows(
+    inventory_path: Optional[Path], spec_path: str, plan_cache: Dict[Path, Dict[str, dict]]
+) -> int:
+    """Rows of `spec_path`'s plan not yet closed; 1 for an item naming no plan."""
+    if inventory_path is None or not spec_path:
+        return 1
+    rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+    return sum(1 for r in rows.values() if r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS) or 1
+
+
 def _plan_raw_rows_by_id(
     inventory_path: Path, spec_path: str, plan_cache: Dict[Path, Dict[str, dict]]
 ) -> Dict[str, dict]:
@@ -982,6 +993,7 @@ def mint_rows(
     skipped_out: Optional[List[str]] = None,
     withheld_out: Optional[Dict[str, str]] = None,
     landed_out: Optional[Dict[str, str]] = None,
+    withheld_rows_out: Optional[Dict[str, int]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1009,6 +1021,9 @@ def mint_rows(
     depends on such an item (transitively, in table order). `landed_out` is
     filled `{item id: note}` for plan items whose chunks are all closed: they
     mint nothing and discharge (never withhold) their dependents.
+    `withheld_rows_out` is filled `{item id: open plan rows}` for the same
+    withheld items -- what is still owed behind them, not what this mint
+    dispatches.
     """
     plan_cache: Dict[Path, Dict[str, dict]] = {}
     repairs: Dict[str, dict] = {}
@@ -1132,6 +1147,8 @@ def mint_rows(
                     )
         if withheld_dep is not None:
             withheld_items[row_id] = f"depends on withheld item {withheld_dep}"
+            if withheld_rows_out is not None:
+                withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
             continue
 
         # Every minted id an inter-item `deps` edge from this row must fan
@@ -1169,6 +1186,8 @@ def mint_rows(
                 sub_rows = None  # a single-chunk reference mints as before
             else:
                 withheld_items[row_id] = f"plan spine fully withheld ({sub_rows.detail})"
+                if withheld_rows_out is not None:
+                    withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
                 continue
         if sub_rows:
             # An item id (or its plan-prefix-stripped form) that already
@@ -1519,6 +1538,75 @@ def _shared_path_groups(
     return groups, shared
 
 
+def _merge_unit_cycles(
+    units: List[Tuple[List[str], str]],
+    size: Dict[str, int],
+    prereqs: Dict[str, set],
+    row_budget: int,
+) -> List[Tuple[List[str], str]]:
+    """Units whose prerequisites run in a cycle, as one unit, in table order.
+
+    A unit is admitted only once every prerequisite outside it is taken, so two
+    shared-path groups each holding the other's prerequisite were never admitted
+    at any budget. The plans themselves are ordered; only the grouping cycles.
+    A merged unit that fits is taken whole (the emitter orders writers within a
+    tranche); one over the budget is split into single plans, which place by
+    their own prerequisites across sequential tranches."""
+    unit_of = {i: n for n, (group, _) in enumerate(units) for i in group}
+    succ = [
+        sorted({unit_of[p] for i in group for p in prereqs[i] if p in unit_of} - {n})
+        for n, (group, _) in enumerate(units)
+    ]
+    index: Dict[int, int] = {}
+    low: Dict[int, int] = {}
+    stack: List[int] = []
+    on_stack: set = set()
+    comps: List[List[int]] = []
+    for root in range(len(units)):
+        if root in index:
+            continue
+        work = [(root, 0)]
+        while work:
+            node, edge = work.pop()
+            if edge == 0:
+                index[node] = low[node] = len(index)
+                stack.append(node)
+                on_stack.add(node)
+            if edge < len(succ[node]):
+                work.append((node, edge + 1))
+                nxt = succ[node][edge]
+                if nxt not in index:
+                    work.append((nxt, 0))
+                elif nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+                continue
+            if low[node] == index[node]:
+                comp = []
+                while True:
+                    top = stack.pop()
+                    on_stack.discard(top)
+                    comp.append(top)
+                    if top == node:
+                        break
+                comps.append(sorted(comp))
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+    merged: Dict[int, Tuple[List[str], str]] = {}
+    for comp in comps:
+        if len(comp) == 1:
+            merged[comp[0]] = units[comp[0]]
+            continue
+        members = [i for n in comp for i in units[n][0]]
+        label = f"plans {', '.join(members)} hold each other's prerequisites across shared-path groups; "
+        if sum(size[i] for i in members) <= row_budget:
+            merged[comp[0]] = (members, label)
+        else:
+            for k, i in enumerate(members):
+                merged[(comp[0], k)] = ([i], label + "split across tranches; ")
+    return [merged[k] for k in sorted(merged, key=lambda k: k if isinstance(k, tuple) else (k, -1))]
+
+
 def _pick_groups(
     groups: List[List[str]],
     size: Dict[str, int],
@@ -1550,6 +1638,7 @@ def _pick_groups(
             )
         else:
             units.append((group, label))
+    units = _merge_unit_cycles(units, size, prereqs, row_budget)
     taken: List[str] = []
     used = 0
     undecided = list(units)
@@ -1591,6 +1680,7 @@ def select_tranche(
     withheld: Optional[Dict[str, str]] = None,
     dispositions: Optional[Dict[str, str]] = None,
     landed: Optional[Dict[str, str]] = None,
+    withheld_rows: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[dict], dict]:
     """The next tranche of `rows`: whole plan items, in table order, whose
     rows sum to <= `row_budget`, plus a report `{"row_budget", "rows",
@@ -1651,7 +1741,13 @@ def select_tranche(
         if blocked:
             remaining["blocked_by_unplaceable"] = blocked
     if withheld:
+        # Not in `rows_remaining`: they are not dispatchable until a
+        # predecessor lands, but they are owed -- a zero there is not done.
         remaining["withheld_not_counted"] = len(withheld)
+        remaining["rows_waiting_on_predecessors"] = sum((withheld_rows or {}).get(i, 0) for i in withheld)
+        remaining["waiting_on_predecessors"] = [
+            {"plan": i, "rows": (withheld_rows or {}).get(i), "reason": r} for i, r in withheld.items()
+        ]
     present = set(items)
     skipped = [
         {
@@ -1779,6 +1875,7 @@ def mint_spine(
 
     chunk_rows = parse_chunk_table(text)
     landed: Dict[str, str] = {}
+    withheld_rows: Dict[str, int] = {}
     rows = mint_rows(
         chunk_rows,
         inventory_path=path,
@@ -1786,6 +1883,7 @@ def mint_spine(
         skipped_out=skipped_out,
         withheld_out=withheld_out,
         landed_out=landed,
+        withheld_rows_out=withheld_rows,
     )
     if skip_landed and not rows:
         raise NothingUnlandedError(f"inventory {path.name}: every row has already landed")
@@ -1799,6 +1897,7 @@ def mint_spine(
             withheld=withheld_out,
             landed=landed,
             dispositions={_strip_backtick(r["id"]): r["disposition"] for r in chunk_rows},
+            withheld_rows=withheld_rows,
         )
         if part is not None and _TRANCHE_SUFFIX_RE.search(path.stem):
             # Already a tranche record: its parts share its N, minting no sibling tranche.

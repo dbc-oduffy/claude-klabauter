@@ -947,14 +947,6 @@ def _guarded(probe: str, fn: Callable[[], Any], default: Any) -> Any:
         return default
 
 
-def _register_stall_points(root: Path) -> list[dict[str, Any]]:
-    """Day/week only: the requirement-register stall point, empty when nothing has stalled."""
-    from coordinator_core.ops.requirement_register import stall_judgment_point, stall_report
-
-    point = stall_judgment_point(stall_report(root, date.today()), id="j-requirement-register-stall")
-    return [point] if point else []
-
-
 def collect(cadence: str, *, repo_root: Path) -> ReaderResult:
     root = Path(repo_root)
     now = datetime.now(timezone.utc).timestamp()
@@ -972,5 +964,4 @@ def collect(cadence: str, *, repo_root: Path) -> ReaderResult:
     points += _guarded("em-environment", lambda: _em_environment_points(dict(os.environ)), [])
     if cadence != "session":
         points += _guarded("memos", lambda: _memo_points(root), [])
-        points += _guarded("register-stall", lambda: _register_stall_points(root), [])
     return ReaderResult(directives=directives, judgment_points=points + dirty_points)

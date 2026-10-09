@@ -152,28 +152,3 @@ def test_no_marker_carries_no_undeclared_report(repo):
     (repo / "run.mjs").write_text("// no marker\n", encoding="utf-8")
     out = _inline_call(repo, "run.mjs")
     assert "undeclared_dirty" not in out
-
-
-def test_a_peer_held_file_is_not_this_runs_undeclared_dirt(repo, monkeypatch):
-    from types import SimpleNamespace
-
-    from coordinator_core.session import claim_index
-
-    (repo / "a.py").write_text("a\n", encoding="utf-8")
-    (repo / "mine.py").write_text("m\n", encoding="utf-8")
-    (repo / "peer.py").write_text("p\n", encoding="utf-8")
-
-    def classify(session_id, paths, cwd=None):
-        assert session_id == "me"
-        verdict = {"peer.py": claim_index.OWNERSHIP_PEER}
-        return SimpleNamespace(by_path={
-            p: SimpleNamespace(verdict=verdict.get(p, claim_index.OWNERSHIP_UNCLAIMED)) for p in paths
-        })
-
-    monkeypatch.setattr(claim_index, "classify_paths", classify)
-    request = CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), session_id="me"
-    )
-    out = terminal_commit._undeclared_dirty(repo, request)
-    assert "mine.py" in out["undeclared_dirty"] and "peer.py" not in out["undeclared_dirty"]
-    assert out["undeclared_dirty_peer_held"] == 1

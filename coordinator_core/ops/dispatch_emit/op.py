@@ -703,7 +703,6 @@ _PARAM_FIELDS = (
     Field("overrides", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
-    Field("context", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -806,29 +805,6 @@ def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Pat
     return replace(inputs, lists=lists), report
 
 
-def _em_mailbox(root: Path, scratch_rel: str) -> dict:
-    """Create the run's EM mailbox (empty) and name it, with the tails the EM's Monitor runs.
-
-    Members append escalations there mid-run (`chatty.EM_MAILBOX`); nothing else reads it.
-    `em_watch` reads from the first line; `em_rewatch` starts at the current end, so a
-    re-armed Monitor never re-delivers a line it already saw.
-    """
-    from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
-
-    path = root / scratch_rel / "mail" / EM_MAILBOX
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(exist_ok=True)
-    return {
-        "em_mailbox": path.as_posix(),
-        "em_watch": f"tail -n +1 -F {path.as_posix()}",
-        "em_rewatch": f"tail -n 0 -F {path.as_posix()}",
-    }
-
-
-#: A research manifest fired by name (`--pipeline`) closes like the research route's segment.
-_LEGACY_RESEARCH_TIER = {"scouts": "scouts", "notebooklm": "corpus", "unblock": "deep"}
-
-
 def _research_route_setup(
     params: dict, repo_root: Optional[Path], from_sizing: Optional[str], ask: object
 ) -> tuple[dict, dict, dict]:
@@ -838,9 +814,7 @@ def _research_route_setup(
     segment's inputs so the pipeline route's scratch-root declaration and reply fields apply
     unchanged, and ``params`` gains the default ``output_path``. ``from_sizing`` takes its
     research block from the sizing and binds the sizing file as the brief; an ask writes
-    ``<scratch>/ask.md`` and binds that; ``context`` files are named in the bound brief
-    (``research_emit.bind_context``). ``lists['questions']`` are the scout questions; any other
-    given list fills a segment whose manifest declares it and the shape left unset.
+    ``<scratch>/ask.md`` and binds that. ``lists['questions']`` are the scout questions.
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
@@ -867,28 +841,18 @@ def _research_route_setup(
     scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
     if not from_sizing:
         brief_rel = research_emit.write_ask(root, scratch_rel, str(ask), questions)
-    members_brief = research_emit.bind_context(
-        root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
-    )
     pairs = research_emit.segments_for(
         shape,
-        brief_rel=members_brief,
+        brief_rel=brief_rel,
         scratch_rel=scratch_rel,
         questions=questions,
         sources=research.get("sources") or (),
-        targets=[t for t in research.get("targets") or () if isinstance(t, dict)],
     )
     content_root = _pipeline_content_root()
     segments = []
     for pipeline, inputs in pairs:
         manifest = load_manifest(content_root, pipeline)
-        given = {k: tuple(v) for k, v in lists.items() if k in manifest.lists and k not in inputs.lists}
-        inputs = replace(inputs, lists=normalize_lists(manifest.lists, {**inputs.lists, **given}))
-        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
-            raise PipelineEmitRefused([
-                f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
-                "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B"
-            ])
+        inputs = replace(inputs, lists=normalize_lists(manifest.lists, inputs.lists))
         segments.append((manifest, inputs, validate(manifest, inputs)))
     if not aliased_param(params, "output_path", "out_path"):
         params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
@@ -1472,7 +1436,6 @@ def _dispatch_emit(
             agent_type_host=agent_type_host,
             baton=ask_ctx.get("baton"),
             accept_pending=bool(ask_ctx.get("accept_pending")),
-            preamble=preamble,
         )
         receipt_plan_path = None
     else:
@@ -1631,22 +1594,8 @@ def _dispatch_emit(
         reply["brief"] = pipeline_ctx["inputs"].brief
         reply["scratch_dir"] = pipeline_ctx["inputs"].scratch_dir
         reply["run_output_root"] = pipeline_output_root.as_posix()
-        reply.update(_em_mailbox(Path(pipeline_ctx["root"]), pipeline_ctx["inputs"].scratch_dir))
         if pipeline_ctx["resume_missing"]:
             reply["resume_missing"] = pipeline_ctx["resume_report"]
-        legacy_tier = _LEGACY_RESEARCH_TIER.get(str(pipeline_name or ""))
-        if research_ctx is None and legacy_tier:
-            from coordinator_core.ops.dispatch_emit import research_emit
-
-            reply["next_action"] = {
-                "op": "research.close",
-                "params": {
-                    "scratch_dir": (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).as_posix(),
-                    "tier": legacy_tier,
-                    "run_id": pipeline_ctx["run_id"],
-                    "topic_slug": research_emit.topic_slug("", pipeline_ctx["inputs"].brief),
-                },
-            }
 
     if research_ctx is not None:
         reply.update(research_ctx["shape"])

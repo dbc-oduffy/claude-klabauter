@@ -67,7 +67,7 @@ def _run(capsys, argv):
 def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
     rel = _write_sizing(
         repo, "--research-class", "corpus", "--research-appetite", "medium",
-        "--research-source", "web", "--research-source", "notebooklm", "--research-target", "notebooklm=A",
+        "--research-source", "web", "--research-source", "notebooklm",
     )
     capsys.readouterr()
     code, reply = _run(capsys, ["--from-sizing", rel])
@@ -89,24 +89,6 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
         "topic_slug": "r",
     }
     assert f"next_action: {json.dumps(close, sort_keys=True)}" in script
-
-
-def test_from_sizing_honours_a_given_list(repo, capsys):
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
-    ctx, _, _ = op_module._research_route_setup(
-        {"lists": {"notebooks": ["A", "B"]}}, repo, rel, None
-    )
-    bound = {m.pipeline: i.lists for m, i, _ in ctx["segments"]}
-    assert bound["notebooklm"]["notebooks"] == ("A", "B")
-    assert "notebooks" not in bound["nlm-preflight"]
-
-
-def test_a_notebooklm_sizing_with_no_notebooks_names_both_routes(repo, capsys):
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
-    capsys.readouterr()
-    assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_DATA_ERROR
-    err = capsys.readouterr().err
-    assert "--research-target notebooklm=" in err and "--list notebooks=" in err
 
 
 def test_research_ask_writes_ask_md_and_binds_it_as_the_brief(repo, capsys):
@@ -165,11 +147,3 @@ def test_from_sizing_is_exclusive_of_other_selectors(repo, extra):
 def test_three_scout_questions_are_refused(repo, capsys):
     argv = ["--research", "--ask", "t", "--list", "questions=a,b,c"]
     assert cli_module.main(argv) == cli_module.EXIT_DATA_ERROR
-
-
-def test_context_file_is_named_in_the_brief_and_needs_a_research_route(repo, capsys):
-    (repo / "notes.md").write_text("n\n", encoding="utf-8")
-    code, reply = _run(capsys, ["--research", "--ask", "What is X?", "--context", "notes.md"])
-    assert code == cli_module.EXIT_OK
-    assert "- `notes.md`" in (repo / reply["scratch_dir"] / "ask.md").read_text(encoding="utf-8")
-    assert cli_module.main(["--pipeline", "scouts", "--context", "notes.md"]) == cli_module.EXIT_USAGE

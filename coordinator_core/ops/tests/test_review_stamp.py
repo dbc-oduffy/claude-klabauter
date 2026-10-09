@@ -1081,7 +1081,7 @@ def test_mint_takes_an_operator_attested_indeterminate_criterion_as_met(tmp_path
 def test_mint_refuses_indeterminate_when_operator_mode_is_undeclared(tmp_path):
     repo = _setup_repo(tmp_path)
     _operator_plan(repo, declared=False)
-    with pytest.raises(m.MintRefusal, match="exit criterion is indeterminate; a re-judge clears this"):
+    with pytest.raises(m.MintRefusal, match="exit criterion is indeterminate$"):
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
 
 

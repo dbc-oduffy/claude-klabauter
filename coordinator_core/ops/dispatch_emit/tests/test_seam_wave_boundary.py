@@ -4,7 +4,6 @@ what DRIFT does to them, and how its sidecars reach the terminal commit."""
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import textwrap
@@ -66,8 +65,9 @@ def test_two_plan_run_emits_the_leg_with_the_pinned_params():
     assert "named_set: true" in script
     assert f'const _seamPlans = ["{P1}", "{P2}", "{P3}"];' in script
     assert "landed_rows: _seamCommitted" in script
-    assert "'" + "a" * 40 + "..'" in script
+    assert "landed_range: _runBase + '..' + sha" in script
     assert "agentType: 'coordinator:executor'" in script.split("async function _seamLeg", 1)[1]
+    assert "'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : '')" in script
 
 
 def test_only_the_row_with_something_to_falsify_waits_on_the_leg():
@@ -206,17 +206,14 @@ def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED) ->
     if node is None:
         pytest.skip("node is not installed")
     head = script.split("  await Promise.all(_checkpointPushes);", 1)[0]
-    # LF pinned: the harness strips `meta` by a `\n};\n` regex that CRLF defeats on Windows.
-    (tmp_path / "script.mjs").write_text(head, encoding="utf-8", newline="\n")
-    (tmp_path / "harness.mjs").write_text(_HARNESS, encoding="utf-8", newline="\n")
+    (tmp_path / "script.mjs").write_text(head, encoding="utf-8")
+    (tmp_path / "harness.mjs").write_text(_HARNESS, encoding="utf-8")
     done = subprocess.run(
         [node, str(tmp_path / "harness.mjs"), str(tmp_path / "script.mjs")],
         capture_output=True,
         text=True,
         timeout=60,
-        env={"SEAM_REPLY": json.dumps(reply), "COMMIT_REPLY": json.dumps(commit), "PATH": "",
-             # Windows node aborts CSPRNG init without SystemRoot.
-             **{k: os.environ[k] for k in ("SystemRoot",) if k in os.environ}},
+        env={"SEAM_REPLY": json.dumps(reply), "COMMIT_REPLY": json.dumps(commit), "PATH": ""},
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert done.returncode == 0, done.stderr

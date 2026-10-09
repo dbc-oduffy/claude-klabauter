@@ -126,21 +126,6 @@ def test_paper_trail_partial_failure_moves_the_tracked_files_and_reports_the_res
     assert len(_files(root, "docs/research/archive")) == 2
 
 
-def test_paper_trail_drops_untracked_emission_ephemera_instead_of_failing(tmp_path: Path) -> None:
-    # addon-28: emit-dispatch-workflow left run.workflow.mjs and its .emitted.json in the workdir.
-    root, params = _paper_trail_partial_failure(tmp_path)
-    workdir = root / "docs" / "research" / "run1-workdir"
-    (workdir / "untracked.md").unlink()
-    (workdir / "run.workflow.mjs").write_text("x\n", encoding="utf-8")
-    (workdir / "run.workflow.mjs.emitted.json").write_text("{}\n", encoding="utf-8")
-
-    result = asyncio.run(paper_trail._handler(params, root / ".git"))
-
-    assert not result.get("failed")
-    assert not workdir.exists() or not _files(root, "docs/research/run1-workdir")
-    assert len(_files(root, "docs/research/archive")) == 2
-
-
 def test_paper_trail_rerun_after_partial_failure_names_what_is_stranded(tmp_path: Path) -> None:
     root, params = _paper_trail_partial_failure(tmp_path)
     asyncio.run(paper_trail._handler(params, root / ".git"))

@@ -19,7 +19,7 @@ Wire params:
 Reply fields:
     {"plan": "docs/plans/....md", "verdict": "PREPPED"|"NOT-PREPPED"|"REFUSED",
      "withheld_rows": [row_id, ...], "classes": {SPINE|CENSUS|EXTERNAL_DEPS|
-     PRIME_EXIT|CI_RETIRED|SCHEMA|REGISTER: {"status", "kind", "detail", "withheld"}}, "message": str,
+     PRIME_EXIT: {"status", "kind", "detail", "withheld"}}, "message": str,
      "stamp": {"state": "CERTIFIED"|"STALE"|"UNSTAMPED"|"MALFORMED", ...},
      "engine_build": {"engine_sha": str|None, "engine_dirty": None}}
 

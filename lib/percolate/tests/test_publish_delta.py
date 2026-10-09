@@ -219,14 +219,3 @@ def test_materialize_subtree_writes_only_that_subtree(tmp_path, spawn_counter):
     assert materialize_subtree(src, head, "setup/other.txt", tmp_path / "one") == {"setup/other.txt": 0o100644}
     with pytest.raises(RuntimeError):
         materialize_subtree(src, head, "nope", tmp_path / "none")
-
-
-def test_a_test_file_under_a_rule_dir_is_not_a_rule_change(tmp_path):
-    """r19 went cold on an edit to coordinator/lib/percolate/tests/: tests never shape published bytes."""
-    src, b = _src(tmp_path)
-    kw = dict(source_toplevel=src, row_source_prefixes=PREFIXES)
-    head = _commit(src, {"coordinator/lib/percolate/tests/test_x.py": b"t"}, "test only")
-
-    plan = plan_publish_round(head_sha=head, base=PublishBase("d" * 40, b, SIG), signature=SIG, **kw)
-
-    assert not isinstance(plan, ColdReason)

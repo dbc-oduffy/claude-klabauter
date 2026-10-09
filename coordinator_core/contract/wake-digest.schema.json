@@ -37,8 +37,7 @@
           "enum": ["met", "not_met", "indeterminate", "not_run", "unstructured"]
         },
         "observation": { "type": ["string", "null"], "maxLength": 300 },
-        "sidecar": { "type": ["string", "null"], "maxLength": 300 },
-        "reason": { "type": ["string", "null"], "maxLength": 200 }
+        "sidecar": { "type": ["string", "null"], "maxLength": 300 }
       }
     },
     "tests": {
@@ -365,23 +364,7 @@
                           "properties": {
                             "status": { "type": "string" },
                             "observation": { "type": ["string", "null"] },
-                            "sidecar": { "type": ["string", "null"] },
-                            "register_rows": {
-                              "type": ["array", "null"],
-                              "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "properties": {
-                                  "id": { "type": "string" },
-                                  "claim": { "type": ["string", "null"] },
-                                  "status": { "type": "string" },
-                                  "wired": { "type": ["boolean", "null"] },
-                                  "surface": { "type": ["string", "null"] },
-                                  "observed_ref": { "type": ["string", "null"] },
-                                  "ruling_ref": { "type": ["string", "null"] }
-                                }
-                              }
-                            }
+                            "sidecar": { "type": ["string", "null"] }
                           }
                         },
                         "integration": {
@@ -437,30 +420,7 @@
         },
         "build_clean": { "type": ["boolean", "null"] },
         "summary": { "type": "string", "maxLength": 300 },
-        "sidecar_path": { "type": "string", "maxLength": 300 },
-        "baseline": {
-          "type": ["object", "null"],
-          "additionalProperties": false,
-          "required": ["pre_existing", "caused", "unverified"],
-          "properties": {
-            "pre_existing": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
-            "caused": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
-            "unverified": {
-              "type": "array",
-              "maxItems": 50,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id", "why"],
-                "properties": {
-                  "id": { "type": "string", "maxLength": 300 },
-                  "why": { "type": "string", "maxLength": 300 }
-                }
-              }
-            }
-          }
-        },
-        "baseline_method": { "type": ["string", "null"], "enum": ["export", "heuristic", null] }
+        "sidecar_path": { "type": "string", "maxLength": 300 }
       }
     },
     "row_verification_result": {
