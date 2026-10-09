@@ -18,7 +18,7 @@ import json
 from dataclasses import replace
 from typing import Mapping, Sequence
 
-from coordinator_core.ops.dispatch_emit.emit import _degrade_agent_type
+from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE, _degrade_agent_type
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER,
     ITEM_MARK,
@@ -398,7 +398,8 @@ def _segment(
         )
         if rebinds and stage.id != first.id:
             kwargs["brief"] = _fill(first.output, **{**kwargs, "item": None})
-        return _fill(template, **kwargs), _fill(stage.output, **kwargs)
+        # Relayed driving-session chat reached pipeline agents as if it were their task.
+        return f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_fill(template, **kwargs)}", _fill(stage.output, **kwargs)
 
     def scoped(scope: str, subject: str | dict | None) -> dict[str, dict]:
         name = None if subject is None else subject_key(subject)

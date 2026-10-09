@@ -806,6 +806,23 @@ def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Pat
     return replace(inputs, lists=lists), report
 
 
+def _em_mailbox(root: Path, scratch_rel: str) -> dict:
+    """Create the run's EM mailbox (empty) and name it, with the tail the EM's Monitor runs.
+
+    Members append escalations there mid-run (`chatty.EM_MAILBOX`); nothing else reads it.
+    """
+    from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
+
+    path = root / scratch_rel / "mail" / EM_MAILBOX
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    return {"em_mailbox": path.as_posix(), "em_watch": f"tail -n +1 -F {path.as_posix()}"}
+
+
+#: A research manifest fired by name (`--pipeline`) closes like the research route's segment.
+_LEGACY_RESEARCH_TIER = {"scouts": "scouts", "notebooklm": "corpus", "unblock": "deep"}
+
+
 def _research_route_setup(
     params: dict, repo_root: Optional[Path], from_sizing: Optional[str], ask: object
 ) -> tuple[dict, dict, dict]:
@@ -1607,8 +1624,22 @@ def _dispatch_emit(
         reply["brief"] = pipeline_ctx["inputs"].brief
         reply["scratch_dir"] = pipeline_ctx["inputs"].scratch_dir
         reply["run_output_root"] = pipeline_output_root.as_posix()
+        reply.update(_em_mailbox(Path(pipeline_ctx["root"]), pipeline_ctx["inputs"].scratch_dir))
         if pipeline_ctx["resume_missing"]:
             reply["resume_missing"] = pipeline_ctx["resume_report"]
+        legacy_tier = _LEGACY_RESEARCH_TIER.get(str(pipeline_name or ""))
+        if research_ctx is None and legacy_tier:
+            from coordinator_core.ops.dispatch_emit import research_emit
+
+            reply["next_action"] = {
+                "op": "research.close",
+                "params": {
+                    "scratch_dir": (Path(pipeline_ctx["root"]) / pipeline_ctx["inputs"].scratch_dir).as_posix(),
+                    "tier": legacy_tier,
+                    "run_id": pipeline_ctx["run_id"],
+                    "topic_slug": research_emit.topic_slug("", pipeline_ctx["inputs"].brief),
+                },
+            }
 
     if research_ctx is not None:
         reply.update(research_ctx["shape"])

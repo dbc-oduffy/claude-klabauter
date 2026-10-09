@@ -83,6 +83,14 @@ def _self_id() -> str:
 
 _MAIL_LINE = '{"from":"<role>","text":"<summary>"}'
 
+#: The run's one upward channel: the EM tails this mailbox (`em_mailbox` on the emit reply).
+EM_MAILBOX = "_em.jsonl"
+_ESCALATE = (
+    "Never message the EM directly. A break-class finding the EM must act on before the run ends: "
+    f'append {{"from":"<role>","escalate":true,"text":"<finding, file:line>"}} to <run-dir>/mail/{EM_MAILBOX}; '
+    "everything else goes by mailbox."
+)
+
 
 def member_brief(role: str, nonce: str) -> str:
     """Agent-facing addendum appended to a worker's brief."""
@@ -95,7 +103,7 @@ def member_brief(role: str, nonce: str) -> str:
         f"appending one JSON line {_MAIL_LINE} to the recipient's mailbox; read "
         f"yours at <run-dir>/mail/{role}.jsonl, then append {{\"read\":true}} to it. "
         f"Report findings to the {OVERSEER_ROLE} by mailbox, as a summary, never a relay. "
-        "Never message the EM.\n"
+        f"{_ESCALATE}\n"
         "Before finishing, set your roster state=returned."
     )
 
@@ -118,7 +126,7 @@ def continuation_brief(role: str) -> str:
         "Mail: append one JSON line "
         f"{_MAIL_LINE} to the recipient's mailbox.\n"
         "4. Continue the work from the transcript and the mail, "
-        "then set your state=returned. Never message the EM."
+        f"then set your state=returned. {_ESCALATE}"
     )
 
 
