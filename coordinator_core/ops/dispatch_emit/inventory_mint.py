@@ -1519,6 +1519,75 @@ def _shared_path_groups(
     return groups, shared
 
 
+def _merge_unit_cycles(
+    units: List[Tuple[List[str], str]],
+    size: Dict[str, int],
+    prereqs: Dict[str, set],
+    row_budget: int,
+) -> List[Tuple[List[str], str]]:
+    """Units whose prerequisites run in a cycle, as one unit, in table order.
+
+    A unit is admitted only once every prerequisite outside it is taken, so two
+    shared-path groups each holding the other's prerequisite were never admitted
+    at any budget. The plans themselves are ordered; only the grouping cycles.
+    A merged unit that fits is taken whole (the emitter orders writers within a
+    tranche); one over the budget is split into single plans, which place by
+    their own prerequisites across sequential tranches."""
+    unit_of = {i: n for n, (group, _) in enumerate(units) for i in group}
+    succ = [
+        sorted({unit_of[p] for i in group for p in prereqs[i] if p in unit_of} - {n})
+        for n, (group, _) in enumerate(units)
+    ]
+    index: Dict[int, int] = {}
+    low: Dict[int, int] = {}
+    stack: List[int] = []
+    on_stack: set = set()
+    comps: List[List[int]] = []
+    for root in range(len(units)):
+        if root in index:
+            continue
+        work = [(root, 0)]
+        while work:
+            node, edge = work.pop()
+            if edge == 0:
+                index[node] = low[node] = len(index)
+                stack.append(node)
+                on_stack.add(node)
+            if edge < len(succ[node]):
+                work.append((node, edge + 1))
+                nxt = succ[node][edge]
+                if nxt not in index:
+                    work.append((nxt, 0))
+                elif nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+                continue
+            if low[node] == index[node]:
+                comp = []
+                while True:
+                    top = stack.pop()
+                    on_stack.discard(top)
+                    comp.append(top)
+                    if top == node:
+                        break
+                comps.append(sorted(comp))
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+    merged: Dict[int, Tuple[List[str], str]] = {}
+    for comp in comps:
+        if len(comp) == 1:
+            merged[comp[0]] = units[comp[0]]
+            continue
+        members = [i for n in comp for i in units[n][0]]
+        label = f"plans {', '.join(members)} hold each other's prerequisites across shared-path groups; "
+        if sum(size[i] for i in members) <= row_budget:
+            merged[comp[0]] = (members, label)
+        else:
+            for k, i in enumerate(members):
+                merged[(comp[0], k)] = ([i], label + "split across tranches; ")
+    return [merged[k] for k in sorted(merged, key=lambda k: k if isinstance(k, tuple) else (k, -1))]
+
+
 def _pick_groups(
     groups: List[List[str]],
     size: Dict[str, int],
@@ -1550,6 +1619,7 @@ def _pick_groups(
             )
         else:
             units.append((group, label))
+    units = _merge_unit_cycles(units, size, prereqs, row_budget)
     taken: List[str] = []
     used = 0
     undecided = list(units)

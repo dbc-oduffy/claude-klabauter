@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "5123dd8af157747f596aaeddecb77f49264eb031",
-    "coordinator_core/_engine_stamp": "b24dcb5fb86bbbd31c0e7449c682d370a4e08139",
+    "coordinator_core/_engine_published_at": "004ee017ec7fff4ffbd53a20b439fb620d8a4248",
+    "coordinator_core/_engine_stamp": "af9d6a1d5d0b09a9cad23fa49e8d41f95eee993c",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4018,7 +4018,7 @@
     "coordinator_core/ops/dispatch_emit/grind_compose.py": "37a014458f4e37c7c1030cafdd1948dcc6973b21",
     "coordinator_core/ops/dispatch_emit/grind_profile.py": "3082921a52d85ca9b2200b4864933ab330b61eff",
     "coordinator_core/ops/dispatch_emit/grind_stages.py": "6a15a5f6c9166200473839a9a89f8e99ed55bfe2",
-    "coordinator_core/ops/dispatch_emit/inventory_mint.py": "e9c0c24705e35b55096bef350e3f8935ebce8bb2",
+    "coordinator_core/ops/dispatch_emit/inventory_mint.py": "e3d859b5dd763a906dceb57cb5bf76d327c3a836",
     "coordinator_core/ops/dispatch_emit/landed_reconcile.py": "960f56bd920c1825d2965102105d1ac8c4e813a9",
     "coordinator_core/ops/dispatch_emit/lanes.py": "13bf01065ed17569b0005a9c789bfb8aad57516f",
     "coordinator_core/ops/dispatch_emit/mark_landed.py": "fff471fc76cb22071901f8d637e4197e5364df17",
@@ -4164,7 +4164,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_optional_columns.py": "9f686a82a54e702adc323b46068726fd14534047",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_split_cap_and_refusal.py": "1de8c9d347fd21a4a89f9cb540bafadbe3d0d116",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_and_withheld.py": "20776623a4c29d2a90ae1a1133cbfb4cefe8969e",
-    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_gaps.py": "997c9b13f8d20302c6dc173ceb5b6856d0d9008a",
+    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_gaps.py": "d63aedcec526d3e52f453f8644e87067d2781db5",
     "coordinator_core/ops/dispatch_emit/tests/test_landed_reconcile.py": "2007c2f69d33684d45c69f2d12d1d0a484014151",
     "coordinator_core/ops/dispatch_emit/tests/test_landed_rows_reemit.py": "d2374884bffbc6e33343304069b8e2f238340d1f",
     "coordinator_core/ops/dispatch_emit/tests/test_lanes.py": "656f2aaa56ff395b174b8f4d14560d2910352d85",
@@ -7166,5 +7166,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "46b1a1dd6f3c4a91065727341b2fe8eb62070b14"
+  "source_head": "2de5a407161e53371015f055ae2b2b6fe712a082"
 }
