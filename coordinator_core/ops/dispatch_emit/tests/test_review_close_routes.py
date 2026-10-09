@@ -222,3 +222,16 @@ def test_close_route_fire_fires_and_prints_the_handle(tmp_path, monkeypatch, cap
 
     assert code == 0 and fired == [str(script)]
     assert '"fire_id": "f1"' in capsys.readouterr().out
+
+
+def test_box_terms_default_to_the_machine_local_path(tmp_path, monkeypatch):
+    from coordinator_core import machine_resolver
+
+    terms = _terms(tmp_path)
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: str(terms) if key == cli.BOX_TERMS_KEY else None
+    )
+
+    params = _drive(tmp_path, monkeypatch, [], run_base=False)
+
+    assert params["box_terms"] == ["no next build", "no pnpm build (12 GB)"]

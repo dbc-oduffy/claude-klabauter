@@ -82,3 +82,9 @@ def test_test_runner_scope_collapses_a_name_twin_to_the_one_on_disk(tmp_path: Pa
         ["pkg/tests/test_mod.py", "tests/test_mod.py"], repo_root=tmp_path
     )
     assert "pkg/tests/test_mod.py" not in brief
+
+
+def test_every_row_head_carries_the_heavy_launch_floor():
+    # The subagent heavy-UE guard denies these launches everywhere, so the brief says so up front.
+    assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None)
+    assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None, verification=True)

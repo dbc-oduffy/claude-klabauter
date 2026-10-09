@@ -656,6 +656,98 @@ def check_model_default(scrubbed: str, raw: Optional[str] = None) -> List[Findin
 CheckFn = Callable[[str], List[Finding]]
 
 
+_CLOSERS = {")": "(", "]": "[", "}": "{"}
+# A `/` after one of these (or at start) opens a regex literal, not a division.
+_REGEX_PRECEDERS = set("(,=:[!&|?{};+-*%<>~^")
+_REGEX_KEYWORDS = ("return", "typeof", "case", "in", "of", "void", "delete", "throw", "new")
+
+
+def _regex_allowed(script: str, i: int) -> bool:
+    j = i - 1
+    while j >= 0 and script[j] in " \t\r\n":
+        j -= 1
+    if j < 0 or script[j] in _REGEX_PRECEDERS:
+        return True
+    k = j
+    while k >= 0 and (script[k].isalnum() or script[k] in "_$"):
+        k -= 1
+    return script[k + 1 : j + 1] in _REGEX_KEYWORDS
+
+
+def check_structure(script: str) -> List[Finding]:
+    """Structural parse check, no Node: an unterminated `'`/`"` string, template, block
+    comment or regex literal, and unbalanced `()[]{}` in code.
+
+    A hand edit to an emitted script (then `--restamp`) is where these appear; without this
+    the first sign was the Workflow fire failing to parse. NOT a parser: regex-vs-division is
+    decided by the preceding token, and brackets inside `${...}` are not checked."""
+    findings: List[Finding] = []
+    stack: List[tuple] = []
+    n = len(script)
+    i = 0
+    line = 1
+
+    def fail(code: str, message: str, at: int) -> List[Finding]:
+        findings.append(Finding(Severity.ERROR, code, message, at))
+        return findings
+
+    while i < n:
+        ch = script[i]
+        nxt = script[i + 1] if i + 1 < n else ""
+        if ch == "\n":
+            line += 1
+            i += 1
+        elif ch == "/" and nxt == "/":
+            while i < n and script[i] != "\n":
+                i += 1
+        elif ch == "/" and nxt == "*":
+            j = script.find("*/", i + 2)
+            if j < 0:
+                return fail("unterminated-comment", "block comment never closes", line)
+            line += script.count("\n", i, j)
+            i = j + 2
+        elif ch == "/" and _regex_allowed(script, i):
+            j, in_class = i + 1, False
+            while j < n and script[j] != "\n":
+                c = script[j]
+                if c == "\\":
+                    j += 1
+                elif c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    break
+                j += 1
+            if j >= n or script[j] == "\n":
+                return fail("unterminated-regex", "regex literal ends at a line break or EOF", line)
+            i = j + 1
+        elif ch == "`":
+            end = _template_end(script, i + 1)
+            if end >= n:
+                return fail("unterminated-template", "template literal never closes", line)
+            line += script.count("\n", i, end)
+            i = end + 1
+        elif ch in ("'", '"'):
+            j = i + 1
+            while j < n and script[j] not in (ch, "\n"):
+                j += 2 if script[j] == "\\" and j + 1 < n and script[j + 1] != "\n" else 1
+            if j >= n or script[j] == "\n":
+                return fail("unterminated-string", f"{ch}-quoted string ends at a line break or EOF", line)
+            i = j + 1
+        else:
+            if ch in "([{":
+                stack.append((ch, line))
+            elif ch in _CLOSERS:
+                if not stack or stack[-1][0] != _CLOSERS[ch]:
+                    return fail("unbalanced-bracket", f"`{ch}` closes nothing open", line)
+                stack.pop()
+            i += 1
+    if stack:
+        fail("unbalanced-bracket", f"`{stack[-1][0]}` never closes", stack[-1][1])
+    return findings
+
+
 def run_checks(script: str) -> List[Finding]:
     """Run the full correctness contract against `script` and return every
     Finding, ERROR and WARN together, in a stable order: meta checks,

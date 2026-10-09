@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.op import (
     ForeignSessionRestampError,
     NoReceiptToRestampError,
+    RestampParseError,
     emission_receipt_path,
     restamp,
 )
@@ -110,3 +111,33 @@ def test_refuses_when_script_does_not_exist(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        b"const p = 'it's broken';\n",
+        b"f(a, [b);\n",
+        b"const r = /abc;\n",
+        b"const t = `a ${b}\n",
+        b"/* never closed\n",
+    ],
+)
+def test_refuses_to_stamp_bytes_that_do_not_parse(tmp_path, broken):
+    script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-ours")
+    before = receipt_path.read_text(encoding="utf-8")
+    script_path.write_bytes(broken)
+
+    with pytest.raises(RestampParseError, match="line 1"):
+        restamp(script_path, "sess-ours")
+
+    assert receipt_path.read_text(encoding="utf-8") == before
+
+
+def test_regex_and_division_restamp_clean(tmp_path):
+    script_path, _ = _write_script_and_receipt(tmp_path, session_id="sess-ours")
+    script_path.write_bytes(
+        b"const a = 1 / 2 / 3;\nif (/^\"?(?:PARTIAL|BLOCKED):|<\\/x>[(]/.test(s)) return {a};\n"
+    )
+
+    assert restamp(script_path, "sess-ours")["session_id"] == "sess-ours"

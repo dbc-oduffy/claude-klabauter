@@ -13,6 +13,19 @@ def _no_ambient_plugin_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_box_terms(monkeypatch):
+    """A box whose machine-local registry names box terms would preamble every
+    CLI-driven brief here; tests that exercise the default patch it back in."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.ops.dispatch_emit.cli import BOX_TERMS_KEY
+
+    real = machine_resolver.registry_get
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: None if key == BOX_TERMS_KEY else real(key)
+    )
+
+
+@pytest.fixture(autouse=True)
 def _write_set_reads_clean(request, monkeypatch):
     """The CLI plan route refuses on a dirty or unreadable write set; fixture
     repos here are fake `.git` dirs, so the guard is stubbed out. The

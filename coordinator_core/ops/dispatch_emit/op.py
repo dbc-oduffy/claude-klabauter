@@ -620,6 +620,13 @@ class RestampScriptNotFoundError(NoReceiptToRestampError):
     """
 
 
+class RestampParseError(ValueError):
+    """Raised when ``restamp`` is asked to stamp a script that does not parse.
+
+    A stamp vouches for bytes about to fire; stamping a broken edit moves the
+    failure to the Workflow fire, after the run is already claimed."""
+
+
 def restamp(script_path: Path, session_id: str) -> dict:
     """Re-stamp an emission receipt's ``sha256`` over a script THIS session
     deliberately edited after emission.
@@ -678,6 +685,16 @@ def restamp(script_path: Path, session_id: str) -> dict:
             "peer's emission: restamping theirs would run their wave map "
             "under your handle with the one guard that notices switched "
             "off. Coordinate with that session instead."
+        )
+
+    from coordinator_core.ops._workflow_contract import check_structure
+
+    broken = check_structure(script_path.read_text(encoding="utf-8"))
+    if broken:
+        f = broken[0]
+        raise RestampParseError(
+            f"{script_path.name} line {f.line}: {f.message} ({f.code}) -- refusing to "
+            "restamp bytes that will not parse. Fix the edit and restamp again."
         )
 
     receipt["sha256"] = _script_sha256(script_path)

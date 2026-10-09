@@ -1522,9 +1522,20 @@ _WRITE_TOOL_ONLY_CLAUSE = (
     "same way: Read it, then Write it back unchanged with the Write tool."
 )
 
+#: Every dispatched agent's heavy UE launch is hard-denied
+#: (``guard_subagent_heavy_ue_launch``); a brief whose body says "rebuild and prove it live"
+#: must not send the executor into that deny, so every head states the floor.
+_HEAVY_LAUNCH_FLOOR_CLAUSE = (
+    "Never launch UBT, RunUAT, a plugin build, an Unreal editor or a commandlet: a dispatched "
+    "agent's launch is denied, and that leg is the EM's. Where the row needs one, do everything "
+    "else and name what must run under `Slot leg:`."
+)
+
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
 #: hoists into one ``_shared`` const, so neither clause is repeated per row.
-_ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}"
+_ROW_PROMPT_HEAD = (
+    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+)
 
 
 #: A verification row produces CLI and binary outputs and runs commands, so
@@ -1534,7 +1545,9 @@ _VERIFICATION_ROW_CLAUSE = (
     "keep the CLI or binary outputs they produce. The Write-tool-only rule "
     "for file changes does not apply to this row."
 )
-_VERIFICATION_ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_VERIFICATION_ROW_CLAUSE}"
+_VERIFICATION_ROW_PROMPT_HEAD = (
+    f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+)
 _VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
 
 

@@ -88,6 +88,7 @@ from coordinator_core.ops.dispatch_emit.op import (
     InventoryPathConflictError,
     NoReceiptToRestampError,
     PathEscapeError,
+    RestampParseError,
     QueuePlanConflictError,
     SizingPathConflictError,
     _dispatch_emit,
@@ -149,6 +150,9 @@ _DATA_ERRORS = (
 class _ProfileDirUnresolved(Exception):
     pass
 
+
+#: machine-local key naming the box-terms file applied when --box-terms is not given.
+BOX_TERMS_KEY = "dispatch.box_terms_path"
 
 def _default_profile_dir(profile: str) -> str:
     from coordinator_core.resolve_coordinator_clone import (
@@ -429,7 +433,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="the box's binding constraints, plain text one term per line; appended to every "
         "dispatched brief as `Box terms (from the driver; binding)` and recorded in the "
-        "emission receipt and the plan script's meta.boxTerms",
+        "emission receipt and the plan script's meta.boxTerms (default: the file named by "
+        "machine-local dispatch.box_terms_path)",
     )
     parser.add_argument(
         "--preamble",
@@ -602,6 +607,7 @@ def _do_mark_landed(script_arg: "Optional[str]", phase_title: str, sha: "Optiona
         PhaseNotFoundError,
         NoReceiptToRestampError,
         ForeignSessionRestampError,
+        RestampParseError,
     ) as exc:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
@@ -617,7 +623,7 @@ def _do_restamp(script_arg: str) -> int:
     session_id = resolve_session_id() or ""
     try:
         receipt = restamp(Path(script_arg), session_id)
-    except (NoReceiptToRestampError, ForeignSessionRestampError) as exc:
+    except (NoReceiptToRestampError, ForeignSessionRestampError, RestampParseError) as exc:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
     print(json.dumps(receipt, indent=2, sort_keys=True))
@@ -1248,6 +1254,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         preamble_sha256 = hashlib.sha256(preamble_bytes).hexdigest()
 
     box_terms: "list[str]" = []
+    if not args.box_terms_path:
+        # The box's standing terms bind every brief emitted here, not only the ones whose
+        # driver remembered the flag.
+        from coordinator_core.machine_resolver import registry_get
+
+        args.box_terms_path = registry_get(BOX_TERMS_KEY)
     if args.box_terms_path:
         try:
             raw_terms = Path(args.box_terms_path).read_text(encoding="utf-8")
