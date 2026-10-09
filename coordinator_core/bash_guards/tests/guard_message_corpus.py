@@ -1275,6 +1275,22 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
     ),
     CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-fire",
+        "find / -name '*.pyc'",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-control",
+        "find coordinator_core -name '*.pyc'",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "guard-doctrine-surface-bash-write",
         "guard-doctrine-surface-bash-write-fire",
         "echo corrupted > docs/wiki/governed-thing.md",
@@ -2636,6 +2652,9 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     from coordinator_core.hooks import nudge_em_code_dispatch as hook_mod
 
     mp.setattr(hook_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    # The hook's per-(session, path) "already nudged" marker lives under the temp dir;
+    # a marker left by an earlier run silences a small edit, so the fire row isolates it.
+    mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir))
     return {
         "tool_name": "Edit",
         "session_id": "sess-c3c-ecd",
@@ -3440,6 +3459,24 @@ def _fire_nudge_harness_directive_dispatch_control() -> Optional[Dict[str, Any]]
         return _hook_envelope_from_message(_hook_nudge_harness_directive_dispatch.op(payload))
 
 
+def _fire_nudge_hand_written_plan() -> Optional[Dict[str, Any]]:
+    text = _hooks_asyncio.run(
+        _hook_nudge_hand_written_plan.advisory_text(
+            "Write", "docs/plans/corpus-plan.md", "# plan\n", "", None
+        )
+    )
+    return {"hookSpecificOutput": {"additionalContext": text}} if text else None
+
+
+def _fire_nudge_hand_written_plan_control() -> Optional[Dict[str, Any]]:
+    text = _hooks_asyncio.run(
+        _hook_nudge_hand_written_plan.advisory_text(
+            "Write", "docs/wiki/corpus-note.md", "# note\n", "", None
+        )
+    )
+    return {"hookSpecificOutput": {"additionalContext": text}} if text else None
+
+
 def _fire_nudge_unrouted_sizing() -> Optional[Dict[str, Any]]:
     text = _hook_nudge_unrouted_sizing._build_plan_message("docs/plans/foo.md", "ready")
     return {"hookSpecificOutput": {"additionalContext": text}}
@@ -3477,6 +3514,7 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
 from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
 from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
+from coordinator_core.hooks import nudge_hand_written_plan as _hook_nudge_hand_written_plan
 from coordinator_core.hooks import nudge_foreground_agent_dispatch as _hook_nudge_foreground_agent_dispatch
 from coordinator_core.hooks import nudge_named_agent_report_delivery as _hook_nudge_named_agent_report_delivery
 from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_unauthorized_handoff
@@ -5491,6 +5529,10 @@ HOOK_ROWS: List[HookRow] = [
         _fire_nudge_harness_directive_dispatch_control,
     ),
     HookRow("nudge_unrouted_sizing", "fire-plan-message", True, _fire_nudge_unrouted_sizing),
+    HookRow("nudge_hand_written_plan", "fire-no-provenance", True, _fire_nudge_hand_written_plan),
+    HookRow(
+        "nudge_hand_written_plan", "control", False, _fire_nudge_hand_written_plan_control
+    ),
     HookRow("agent_completion_log", "noop-control", False, _fire_agent_completion_log_noop),
     HookRow(
         "agent_postuse_dispatch", "noop-control", False, _fire_agent_postuse_dispatch_noop

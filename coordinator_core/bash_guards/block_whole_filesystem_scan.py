@@ -165,8 +165,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"BLOCKED: `{offence}` is a whole-filesystem scan: it walks every mounted "
-                "drive and pins the box. Scope it to a repo or engine directory, or use "
-                "example-retrieval-repo (project_file, project_cpp_symbol)."
+                "drive and pins the box. Scope it to a repo or engine directory."
             ),
         }
     }
