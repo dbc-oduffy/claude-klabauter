@@ -3094,9 +3094,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd_safe = _sanitize(cmd)
     note = _selection_flag_note(segments_argv or ())
 
-    if any(_has_variable_path_operand(argv) for argv in segments_argv or ()):
-        note += _VARIABLE_PATH_OPERAND_NOTE
-
     if is_subagent:
         return _deny(_deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root) + note)
 

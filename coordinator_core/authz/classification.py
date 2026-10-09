@@ -3495,6 +3495,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "sizing.record_xl_exit": OpClass.MUTATING,
     # sizing.record_pm_resolution — MUTATING: writes `pm_resolution.<key>` and `pm_resolution.decided_on` on a sizing.
     "sizing.record_pm_resolution": OpClass.MUTATING,
+    # sizing.record_register — MUTATING: writes the `requirement_register` block (rows, sources, recomputed rollup) on a sizing.
+    "sizing.record_register": OpClass.MUTATING,
     # sizing.resize — MUTATING: writes `estimate.tshirt` and the engine-resolved `route`
     # under locked_rmw (see coordinator_core/ops/sizing_resize.py docstring).
     "sizing.resize": OpClass.MUTATING,
@@ -4387,6 +4389,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # research.shape — COMPUTE_ONLY: ops/research_shape.py maps a caller-passed
     # research block to tier/pipelines; no I/O.
     "research.shape": OpClass.COMPUTE_ONLY,
+
+    # requirement_register.stall_report — COMPUTE_ONLY: reads state/sizings and the plans their
+    # registers claim; writes nothing.
+    "requirement_register.stall_report": OpClass.COMPUTE_ONLY,
     # C17 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md) — the 14
     # registered-but-unclassified ops closing the OP_CLASSIFICATION gap
     # against ipc._REGISTRY (measure after `import coordinator_core.ops`,

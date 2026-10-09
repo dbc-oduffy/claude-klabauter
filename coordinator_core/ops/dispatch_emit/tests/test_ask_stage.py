@@ -183,3 +183,10 @@ def test_marker_carries_the_sizing_record_so_the_terminal_commit_lands_it(repo):
     sizing = [c for c in req.chunks if c.id == "sizing"]
     assert [c.paths for c in sizing] == [(SIZING_REL,)]
     assert SIZING_REL not in m.review_declared_paths
+
+
+def test_a_row_waits_on_its_own_predecessors_never_on_wave_siblings(repo):
+    # C3 shares wave 0 with C1 but depends on nothing; C2 waits on C1 alone.
+    m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
+    deps = {r.id: r.deps for r in m.rows}
+    assert deps == {"C1": (), "C2": ("C1",), "C3": ()}

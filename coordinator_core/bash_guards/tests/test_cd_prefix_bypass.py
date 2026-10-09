@@ -437,10 +437,7 @@ class TestDestructiveRmSubshellResolvedTarget:
 class TestRunawayFind:
     def test_bypass_matrix(self):
         base = "find / -name '*.pyc'"
-        _assert_bypass_resistant(
-            _decision,
-            base,
-        )
+        _assert_bypass_resistant(_decision, base)
 
 
 class TestBlockWorktreeCreation:

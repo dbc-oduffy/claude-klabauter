@@ -29,7 +29,6 @@ Spec backlink: coordinator-content-repo:pln-os-aware-guard-advisory-defaul-060db
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import tempfile
@@ -156,26 +155,20 @@ def _isolated_tempdir(tmp_path, monkeypatch):
     already uses)."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     (tmp_path / "h6-somefile.txt").write_text("one\ntwo\nTODO: probe\nfour\nfive\n", encoding="utf-8")
-    # sed/grep triggers above reference /tmp/h6-somefile.txt directly (not
-    # tmp_path) since the guards under test are static string parsers that
-    # never execute the command -- write the same content there too so a
-    # guard that DOES stat the path (inprocess-search) finds it.
-    # negative-spec: this leg is BEST-EFFORT and must stay so. `/tmp` does not
-    # exist on Windows, where the path resolves drive-relative to `<cwd-drive>:\tmp`
-    # and may be uncreatable. An unguarded write here raises inside the fixture,
-    # which is a SETUP error, not a test failure -- it took out all 43 cells in this
-    # module at once while reporting nothing about the guards under test. Every
-    # guard exercised here is a static string parser that never opens the path; only
-    # an inprocess-search guard would stat it, so a platform where this write cannot
-    # land should surface as that one cell failing, never as the module erroring out.
-    with contextlib.suppress(OSError):
-        os.makedirs(os.path.dirname("/tmp/h6-somefile.txt"), exist_ok=True)
-        with open("/tmp/h6-somefile.txt", "w", encoding="utf-8") as fh:
-            fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
-        os.makedirs("/tmp/h6-search", exist_ok=True)
-        with open("/tmp/h6-search/probe.txt", "w", encoding="utf-8") as fh:
-            fh.write("one\ntwo\nTODO: probe\nfour\nfive\n")
+    (tmp_path / "h6-search").mkdir()
+    (tmp_path / "h6-search" / "probe.txt").write_text("one\ntwo\nTODO: probe\n", encoding="utf-8")
     yield
+
+
+def _trigger(name, tmp_path):
+    """The trigger with its `/tmp/` files repointed under `tmp_path`: a guard that
+    stats the path finds it, and nothing is written outside the test's own dir.
+    `cat-heredoc-write-advise` is silent for a target outside every repo, so its
+    target sits in a `.git`-marked dir under `tmp_path` (the command is never run)."""
+    if name == "cat-heredoc-write-advise":
+        (tmp_path / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+        return _TRIGGERS[name].replace("/tmp/", (tmp_path / "repo").as_posix() + "/")
+    return _TRIGGERS[name].replace("/tmp/", tmp_path.as_posix() + "/")
 
 
 _MATRIX_NAMES = [name for name, cmd in _TRIGGERS.items() if cmd is not None]
@@ -183,7 +176,7 @@ _MATRIX_NAMES = [name for name, cmd in _TRIGGERS.items() if cmd is not None]
 
 @pytest.mark.parametrize("name", _MATRIX_NAMES)
 def test_windows_true_always_shows(name, monkeypatch, capsys, tmp_path):
-    cmd = _TRIGGERS[name]
+    cmd = _trigger(name, tmp_path)
     cwd = _cwd_for(name, tmp_path, monkeypatch)
     out = _run_isolated(name, cmd, True, "h6-%s-true" % name, monkeypatch, cwd=cwd)
     assert out is not None, "%s: expected a real envelope on Windows, got silent allow" % name
@@ -199,7 +192,7 @@ def test_non_windows_host_default(name, monkeypatch, capsys, tmp_path):
     """On a non-Windows host: a windows_cost_only guard is suppressed (fully,
     or leg-scoped down to just its rewrite); host_independent and
     not_cost_argued guards are UNCHANGED -- they still show."""
-    cmd = _TRIGGERS[name]
+    cmd = _trigger(name, tmp_path)
     value = _EXPECTED_VALUE[name]
     cwd = _cwd_for(name, tmp_path, monkeypatch)
     out = _run_isolated(name, cmd, False, "h6-%s-false" % name, monkeypatch, cwd=cwd)

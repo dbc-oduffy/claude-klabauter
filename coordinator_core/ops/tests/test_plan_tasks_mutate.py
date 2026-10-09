@@ -298,6 +298,20 @@ def test_add_task_happy_path(tmp_path):
     assert "## Trailer\n\nTrailing prose after the tasks block.\n" in text
 
 
+def test_add_task_lands_an_open_row_above_closed_rows_without_moving_them(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "ordered.md", _PLAN_WITH_TASKS)
+    closed = {**_valid_task("C9"), "disposition": "coded", "disposition_ref": "abc1234"}
+    for task in (closed, _valid_task("C2")):
+        result = _run(_handler(
+            {"verb": "add-task", "plan_path": str(plan), "task": task}, repo_root=repo / ".git",
+        ))
+        assert result["exit_code"] == 0, result
+
+    text = plan.read_text(encoding="utf-8")
+    assert text.index("id: C1") < text.index("id: C2") < text.index("id: C9")
+
+
 # ---------------------------------------------------------------------------
 # add-task duplicate-id fail-loud (AC5)
 # ---------------------------------------------------------------------------
@@ -4219,3 +4233,16 @@ def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(t
 
     assert _resolve_coded(repo, plan, "C1", head[:7])["exit_code"] == 0
     assert _resolve_coded(repo, plan, "C2", "deadbee")["exit_code"] == 0
+
+
+@pytest.mark.parametrize(
+    "changed,write,hit",
+    [
+        (".coordinator-local/memo-outbox/sent/m.md", ".coordinator-local/memo-outbox/m.md", True),
+        (".coordinator-local/memo-outbox/m.md", ".coordinator-local/memo-outbox/m.md", True),
+        (".coordinator-local/memo-outbox/sent/other.md", ".coordinator-local/memo-outbox/m.md", False),
+        ("docs/sent/m.md", "docs/m.md", False),
+    ],
+)
+def test_memo_send_row_matches_its_sent_receipt(changed, write, hit):
+    assert plan_tasks_mutate._writes_match(changed, write) is hit

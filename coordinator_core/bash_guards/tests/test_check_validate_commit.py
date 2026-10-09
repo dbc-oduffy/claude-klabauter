@@ -882,6 +882,15 @@ class TestCheckFiveScopeAdvisoryTailClause:
             "This commit's pathspec does not name it; it stays staged."
         )
 
+        again = dispatch_checks.check_validate_commit(
+            'git commit -m "own change" -- own.txt', sid, cwd=root
+        )
+        context = (again or {}).get("hookSpecificOutput", {}).get("additionalContext") or ""
+        assert "peer_del.txt" not in context
+
+        bare = dispatch_checks.check_validate_commit('git commit -m "sweep"', sid, cwd=root)
+        assert "peer_del.txt" in bare["hookSpecificOutput"]["additionalContext"]
+
     def test_three_clauses_differ_pairwise_and_share_the_prefix(self, tmp_path):
         """(4) The three ``additionalContext`` strings -- clause (a),
         clause (b), unchanged -- differ pairwise. Each still contains the

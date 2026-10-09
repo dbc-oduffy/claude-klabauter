@@ -190,6 +190,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _bt_exceeds_tokenizable_ceiling,
     segments_from_tokens_simple as _bt_segments_from_tokens_simple,
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
+    split_unquoted_newlines as _bt_split_unquoted_newlines,
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
@@ -3899,7 +3900,10 @@ def check_destructive_rm(
     # (not a delete-flavored verb) and what it closes.
     _pending_rm_touch_paths: List[str] = []
 
-    _rm_segments = list(_split_segments(cmd))
+    # A bare newline separates commands; unsplit, `rm a` + newline + `cd <repo>` reads
+    # `cd` and `<repo>` as rm targets and denies the repo root.
+    _rm_cmd = _bt_split_unquoted_newlines(cmd)
+    _rm_segments = list(_split_segments(_rm_cmd))
     #: Segment string -> the flag token that declared recursion, or None when
     #: the segment was parsed and declared none. Only PowerShell-synthesized
     #: segments get an entry; a bash segment is absent and falls through to the
@@ -3937,7 +3941,7 @@ def check_destructive_rm(
         # whether the caller also passed a flag -- matching that posture is
         # the safe direction, not a widening of it.
         _ps_segments = resolve_segments_for_dialect(
-            cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
+            _rm_cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
         )
         if _ps_segments:
             for _ps_tokens, _ps_pipe_before in _ps_segments:
@@ -8175,6 +8179,20 @@ def check_validate_commit(
                 # thousand-path index.
                 _deny_entries: List[Dict[str, str]] = []
 
+                # A path this session was already told about, that this commit's own
+                # pathspec leaves staged, is told once: the log below is the record.
+                _already_warned: Set[str] = set()
+                try:
+                    with open(
+                        os.path.join(session_dir, "scope-warnings.log"), encoding="utf-8"
+                    ) as fh:
+                        for _log_line in fh:
+                            _cols = [c.strip() for c in _log_line.split("|")]
+                            if len(_cols) >= 4 and _cols[2] == "foreign-staged":
+                                _already_warned.add(_cols[3])
+                except OSError:
+                    pass
+
                 for staged_file in commit_scope:
                     if staged_file in _lessons_archive_paired:
                         continue
@@ -8482,6 +8500,8 @@ def check_validate_commit(
                         )
                     else:
                         _scope_tail = ""
+                    if _scope_tail.startswith(" This commit's pathspec") and staged_file in _already_warned:
+                        continue
 
                     warnings.append(
                         "SCOPE: %s is staged but not in this session's touch "
@@ -8744,8 +8764,16 @@ def check_validate_commit(
     # Reuses `_commit_seg_tokens` and `_status_lines` already resolved above:
     # this check adds ZERO processes to the commit hot path.
     if _status_lines is not None:
+        # A resolved pathspec commit carries only the paths it names; a deletion
+        # it leaves staged is not this commit's removal.
+        _carried_status = _status_lines
+        if _pathspec_matched_set is not None:
+            _carried_status = [
+                l for l in _status_lines
+                if l.split("\t")[-1] in _pathspec_matched_set
+            ]
         undeclared_deletion_violation = commit_tripwires.check_undeclared_staged_deletion(
-            _commit_seg_tokens, _status_lines, payload=payload
+            _commit_seg_tokens, _carried_status, payload=payload
         )
         if undeclared_deletion_violation and not _override(
             "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload

@@ -669,7 +669,13 @@ def _add_task(plan_path: str, task: dict, worktree: Path, repo_root: Path) -> di
         if task["id"] in existing_ids:
             raise MutateAbort(f"add-task: duplicate task id {task['id']!r}")
 
-        new_rows = rows + [task]
+        # Insert after the last row of equal or lower D5 rank, never re-sorting the
+        # spine: an open row lands above closed ones and no existing row moves.
+        rank = _plan_tasks_row_rank(task)
+        at = len(rows)
+        while at > 0 and isinstance(rows[at - 1], dict) and _plan_tasks_row_rank(rows[at - 1]) > rank:
+            at -= 1
+        new_rows = rows[:at] + [task] + rows[at:]
         try:
             untouched_invalid = _validate_all(
                 new_rows, governed=governed, touched_ids={task["id"]}, plan_created=plan_created,
@@ -1434,6 +1440,7 @@ def _reposition_rows_for_d5(rows: list) -> list:
 
 
 _HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
+_MEMO_OUTBOX = ".coordinator-local/memo-outbox"
 
 
 def _writes_match(changed: str, write: str) -> bool:
@@ -1442,7 +1449,12 @@ def _writes_match(changed: str, write: str) -> bool:
         return False
     if any(ch in write for ch in "*?["):
         return fnmatch.fnmatchcase(changed, write)
-    return changed == write or changed.startswith(write + "/")
+    if changed == write or changed.startswith(write + "/"):
+        return True
+    # memo.send moves an outbox draft into sent/, so the commit that delivers a memo-send
+    # row touches the receipt, never the draft path the row declares.
+    head, _, name = write.rpartition("/")
+    return head.endswith(_MEMO_OUTBOX) and changed == f"{head}/sent/{name}"
 
 
 def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> Optional[str]:

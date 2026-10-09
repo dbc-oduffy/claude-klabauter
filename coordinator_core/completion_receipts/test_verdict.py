@@ -46,7 +46,11 @@ def _bind_keys(fm_text: str, bind: Dict[str, str]) -> str:
 def _count(result: Mapping, key: str) -> int:
     v = result.get(key)
     if isinstance(v, bool) or not isinstance(v, int):
-        raise TestVerdictRefused(f"{key} is not an integer: {v!r}")
+        raise TestVerdictRefused(
+            f"{key} is not an integer: {v!r}; the result must be a test_result "
+            "(status, tests_run, tests_failed, sidecar_path), the shape the runner returns when "
+            "its dispatch carries the wake-digest test_result schema"
+        )
     if v < 0:
         raise TestVerdictRefused(f"{key} is negative: {v}")
     return v

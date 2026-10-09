@@ -308,22 +308,6 @@ def _disclose_peer_holds(message: str, peer_holds: list) -> str:
     return f"{head}\n\n{lines}\n\n{rest}"
 
 
-def _disclose_gone_deletions(message: str, gone: list) -> str:
-    """A `Removes:` line per path `gone_tracked_as_deleted` reclassified.
-
-    The caller's flag is the declaration, but its message is composed before
-    anyone knows which declared paths a row deleted, so it cannot name them;
-    the undeclared-staged-deletion check reads the message, and the history
-    reader needs the removal said too."""
-    if not gone:
-        return message
-    lines = "\n".join(f"Removes: {path}" for path in gone)
-    head, sep, rest = message.partition("\n\n")
-    if not sep:
-        return f"{message.rstrip(chr(10))}\n\n{lines}\n"
-    return f"{head}\n\n{lines}\n\n{rest}"
-
-
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None
 ) -> list:
@@ -817,7 +801,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
-    reclassified: list = []
     if raw_gone_as_deleted and raw_paths:
         raw_paths, reclassified = _split_gone_tracked(worktree_root, raw_paths)
         raw_deleted = list(raw_deleted) + [p for p in reclassified if p not in raw_deleted]
@@ -919,7 +902,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
     # `outcome.sign_warning` is surfaced into `warnings` below.
     message = _disclose_peer_holds(message, peer_holds)
-    message = _disclose_gone_deletions(message, reclassified)
     message = apply_missing_trailers(
         message,
         worktree_root,

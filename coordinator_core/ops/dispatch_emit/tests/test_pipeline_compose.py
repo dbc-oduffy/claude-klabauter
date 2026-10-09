@@ -295,3 +295,11 @@ def test_synthesis_follows_awaited_fan_outs_and_subjects_run_sequentially():
     assert "ret['rebuttal'] = await (async () => {" in script
     assert script.index("ret['rebuttal'] = await") < script.index("ret['synth'] = await")
     assert "parallel(" not in script.split("for (const s of subjects)", 1)[1].replace("fanOut(", "")
+
+
+def test_every_stage_prompt_opens_with_the_brief_precedence_clause():
+    # addon-28 NotebookLM run: scope, scout and sweep answered the PM's relayed chat instead.
+    from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE
+
+    script = _compose()
+    assert script.count(_BRIEF_PRECEDENCE_CLAUSE.split(" -- ")[0]) == 4 * 2

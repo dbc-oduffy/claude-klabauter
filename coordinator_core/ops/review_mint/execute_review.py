@@ -23,7 +23,7 @@ from coordinator_core.ops.review_mint.roster import (
     ReviewAgent,
     RosterFragmentError,
 )
-from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
+from coordinator_core.ops.review_mint.compose import _agent_call_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
@@ -33,6 +33,8 @@ from pathlib import Path
 
 import yaml
 
+from coordinator_core.ops import requirement_register as _rr
+from coordinator_core.ops.requirement_register import JudgeEvidence
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.session import record_homes
 
@@ -150,7 +152,7 @@ def _agent_opts_for(agent: ReviewAgent, *, emitted_agent_type: str = None) -> Di
 
 
 def _prompt_literal(prompt: str) -> str:
-    return prompt_literal(prompt)
+    return _js_string_literal(prompt)
 
 
 #: A frozen diff touching at most this many product files is a small diff (APM ruling
@@ -227,7 +229,6 @@ def compose_execute_review(
     run_key: Optional[str] = None,
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
-    slice_identity_sha: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -255,10 +256,6 @@ def compose_execute_review(
 
     ``prep_suffix_js`` (only with ``declared_paths_js``) is a JS string
     expression concatenated onto the prep prompt after the declared paths.
-
-    ``run_base_sha`` may carry a prompt marker (``compose.PROMPT_MARKER_DELIM``) naming a script
-    variable resolved at fire. The slice id is an identity, not content, so it stays on
-    ``slice_identity_sha`` (the emit-time sha) while every prompt reads the fire-time base.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -291,9 +288,7 @@ def compose_execute_review(
     if slice_key_js and run_key:
         raise ValueError("compose_execute_review takes at most one of run_key / slice_key_js")
     prep_slice_id = prep_slice_id_for(
-        plan_path,
-        slice_identity_sha if slice_identity_sha is not None else run_base_sha,
-        _SLICE_KEY_SENTINEL if slice_key_js else run_key,
+        plan_path, run_base_sha, _SLICE_KEY_SENTINEL if slice_key_js else run_key
     )
     credit_note = (
         "\nDelivered before this run's base (resume): rows "
@@ -327,7 +322,8 @@ def compose_execute_review(
         f"an empty list is the usual answer. Take the verdict and the slices from ONE engine call, "
         f"never your own grouping: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
         f"review.partition_slices '{{\"worktree\":true,\"base\":\"{run_base_sha or 'run_base_sha'}\","
-        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}'` -- it returns "
+        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>]}}'`, its "
+        f"command word exactly as written (a guard denies the prefix moved into a shell variable) -- it returns "
         f"verdict, product_paths and slices already frozen as [{{slice_id, paths, diff_path}}]. "
         f"Report its verdict as verdict. When the verdict is single-reviewer-ok its slices is empty: "
         f"return exactly ONE slice spanning every product file, with diff_path equal to whole_diff_path. "
@@ -589,10 +585,21 @@ def compose_execute_review(
 #: The judge's independence contract: it adjudicates from the artifacts that
 #: define "done", never from the run's own account of itself.
 _JUDGE_PREAMBLE = (
-    "Judge whether this run met its plan's exit criteria. Inputs, all by path: the "
-    "plan (its prime_exit_criterion, gated_exit_criteria and body are the spec), the "
-    "PM's recorded words (the plan's execution_authorized_note, its sizing object's "
-    "intent, any '## PM brief' section), and the working tree against run_base_sha. "
+    "Judge whether this run met its plan's exit criteria. Weigh evidence in this ranked "
+    "order; a lower tier never outranks a higher one. "
+    "TIER 1, the human's verbatims: the claimed requirement rows (verbatim source text, "
+    "anchor, surface) and the PM's own words on the sizing (the plan's "
+    "execution_authorized_note, its sizing object's intent, exit_criterion.accepted.pm_quote "
+    "and amendments, any '## PM brief' section). An APM ruling is the APM's, never the PM's. "
+    "TIER 2, the exit criteria: the operative prime_exit_criterion first, then "
+    "gated_exit_criteria. "
+    "TIER 3, the plan's body and the working tree against run_base_sha: read, but it never "
+    "outranks tier 1 or 2. "
+    "Inputs are by path unless inlined below. "
+    "The run's product is uncommitted by design: dispatch.terminal_commit commits the working "
+    "tree after you return. Judge the working tree as the state about to be committed; a "
+    "clause asking for something committed is met by it being present there, and an "
+    "untracked deliverable is never a reason for not_met. "
     "Do not read executor reports, review sidecars or their prose: the run does not "
     "certify itself. Every 'met' names the command you ran or the path you read. When "
     "the plan records a falsifier, run it as recorded; it is not yours to replace. "
@@ -603,20 +610,67 @@ _JUDGE_PREAMBLE = (
     "differs from the baseline in the way the criterion describes, false otherwise "
     "(including when it matches the baseline), and copy the baseline you compared against as `baseline_output` "
     "(empty string if none). The run's verdict is computed from that boolean; "
-    "`status` must agree with it."
+    "`status` must agree with it. When claimed requirement rows are listed, also return "
+    "`register_rows`: one {id, claim, status, wired, surface, observed_ref} per row you weighed, "
+    "`claim` this-plan for a row this plan claims; `status` met only when the work is done, "
+    "`wired` true only when a user-reachable entry point on the row's surface invokes it, and "
+    "`observed_ref` naming that entry point."
 )
+
+
+def _tier1_clause(evidence: Optional[JudgeEvidence]) -> str:
+    """Tier 1 evidence inlined verbatim; a pointer to the sizing register when none is given."""
+    if not evidence:
+        return (
+            "\nTIER 1 (pointer): the plan's sizing object (its sizing_object field) holds the "
+            "requirement_register rows this plan claims and the PM's quotes; read them there."
+        )
+    out = ["\nTIER 1 evidence, verbatim:"]
+    for row in evidence.rows:
+        out.append(
+            f"claimed row id={row.get(_rr.ROW_ID)} surface={row.get(_rr.ROW_SURFACE)} "
+            f"anchor={row.get(_rr.ROW_ANCHOR)}\ntext:\n{row.get(_rr.ROW_TEXT)}"
+        )
+    for source, row_id, quote in evidence.rulings:
+        out.append(f"ruling by the {source.upper()} on row {row_id}:\n{quote}")
+    for label, quote in evidence.pm_words:
+        out.append(f"PM words ({label}):\n{quote}")
+    return "\n".join(out)
 
 
 def _widen_judge_schema(schema_literal: str) -> str:
     """The judge's roster schema plus the two fields the terminal verdict is
     computed from, matching ``dispatch_emit.emit._falsifier_schema_literal`` so
-    both producers of ``_falsifierResult`` share one result shape."""
+    both producers of ``_falsifierResult`` share one result shape. ``register_rows``
+    is DoE's own (review-stage 1.6.0); it is filled in only for an older plugin
+    whose schema predates it."""
     schema = json.loads(schema_literal)
-    schema.setdefault("properties", {}).update(
+    properties = schema.setdefault("properties", {})
+    properties.update(
         {
             "differs_from_baseline": {"type": "boolean"},
             "baseline_output": {"type": "string", "maxLength": 300},
         }
+    )
+    properties.setdefault(
+        _rr.JUDGE_ROWS_KEY,
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(_rr.JUDGE_ROW_KEYS),
+                "properties": {
+                    "id": {"type": "string", "maxLength": 100},
+                    _rr.JUDGE_CLAIM: {"type": "string", "enum": list(_rr.CLAIMS)},
+                    "status": {"type": "string", "enum": list(_rr.STATUSES)},
+                    "wired": {"type": "boolean"},
+                    "surface": {"type": "string", "enum": list(_rr.SURFACES)},
+                    _rr.JUDGE_OBSERVED_REF: {"type": "string", "maxLength": 300},
+                    _rr.JUDGE_RULING_REF: {"type": "string", "maxLength": 300},
+                },
+            },
+        },
     )
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
@@ -732,14 +786,15 @@ def compose_criterion_judge(
     host_degraded: bool = False,
     prompt_suffix_js: Optional[str] = None,
     evidence_path: Optional[str] = None,
+    evidence: Optional[JudgeEvidence] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
     plan's row-evidence sidecar, passed only when it holds entries. ``prompt_suffix_js`` is a JS
     string expression appended to the prompt at run time, for a path the
-    script learns only then. Pointers only: the engine
-    never inlines or summarises the PM's words, the judge reads them from the
-    plan and sizing artifacts."""
+    script learns only then. Pointers only, except the register tier: ``evidence``
+    inlines claimed rows, row rulings and the PM's quotes verbatim and in full;
+    without it tier 1 is a pointer to the sizing's register."""
     if review.judge is None:
         return None
     falsifier_clause = ""
@@ -752,6 +807,7 @@ def compose_criterion_judge(
     judge_type, judge_role = _host_native(review.judge.agent_type, host_degraded)
     prompt = (
         f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
+        f"{_tier1_clause(evidence)}\n"
         f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
         f"run_base_sha: {run_base_sha}\n"
         f"verification_record: {plan_path} § Verification (EM-run legs, committed; "

@@ -439,8 +439,45 @@ def _foreign_repo_root_surface(target: str) -> "str | None":
     return _norm(target_root)
 
 
+def _git_index_path(repo_root: str) -> "str | None":
+    dot_git = os.path.join(repo_root, ".git")
+    if os.path.isdir(dot_git):
+        return os.path.join(dot_git, "index")
+    try:
+        with open(dot_git, encoding="utf-8") as fh:
+            line = fh.readline().strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = line[len("gitdir:"):].strip()
+    return os.path.join(gitdir if os.path.isabs(gitdir) else os.path.join(repo_root, gitdir), "index")
+
+
+def _sentinel_tracked(repo_root: str) -> bool:
+    """True when the repo-root sentinel is in the git index. A tracked sentinel gets a fresh
+    mtime on every checkout, so it would arm every clone for the approval window. Read off
+    the index bytes rather than a git spawn; an unreadable index reads as untracked."""
+    index = _git_index_path(repo_root)
+    if not index:
+        return False
+    needle = _SENTINEL_NAME.encode() + b"\0"
+    try:
+        with open(index, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    at = data.find(needle)
+    while at != -1:
+        # A root-level entry's path is the bare name; a nested one ends in "/<name>".
+        if at == 0 or data[at - 1:at] != b"/":
+            return True
+        at = data.find(needle, at + 1)
+    return False
+
+
 def _sentinel_state(repo_root: "str | None") -> str:
-    """Returns "allow", "deny-absent", or "deny-expired".
+    """Returns "allow", "deny-absent", "deny-expired", or "deny-tracked".
 
     No repo root resolvable -> "deny-absent" (fail closed on the guard's
     own resolution failure, per this guard's deliberate fail-closed
@@ -470,6 +507,8 @@ def _sentinel_state(repo_root: "str | None") -> str:
     # A future mtime (clock skew, touch -d) would otherwise never expire.
     if age < 0 or age > _APPROVAL_WINDOW_SECONDS:
         return "deny-expired"
+    if _sentinel_tracked(repo_root):
+        return "deny-tracked"
     return "allow"
 
 
@@ -980,6 +1019,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 target_raw,
                 is_local_config=is_local_config,
                 payload=payload,
+            )
+            + (
+                f" The {_SENTINEL_NAME} here is tracked in git, so it is not an approval: "
+                f"`git rm --cached {_SENTINEL_NAME}` and add it to .gitignore."
+                if state == "deny-tracked"
+                else ""
             ),
         }
     }

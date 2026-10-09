@@ -813,20 +813,6 @@ def test_has_variable_path_operand_does_not_match_embedded_reference():
     assert guard._has_variable_path_operand(["pytest", "$env:FILES"])
 
 
-@pytest.mark.parametrize("command", ["npx vitest run $FILES", "FILES=a.test.ts; npx vitest run $FILES"])
-def test_subagent_deny_names_a_variable_held_path_list(repo, command):
-    """A test-runner leg handing vitest its files through `$FILES` was denied
-    as a full suite with no reason it could act on, and reported tests run: 0."""
-    result = guard.check(_payload(command, repo, agent_id="agent-1"))
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "held in a variable" in reason and "Name the paths literally" in reason
-
-
-def test_subagent_deny_of_plain_breadth_has_no_variable_note(repo):
-    result = guard.check(_payload("npx vitest run", repo, agent_id="agent-1"))
-    assert "variable" not in result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
 def test_top_level_em_allowed_when_mutex_free(repo, free_mutex):
     assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
 

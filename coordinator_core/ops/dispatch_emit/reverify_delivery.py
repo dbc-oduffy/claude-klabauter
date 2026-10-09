@@ -163,6 +163,14 @@ def prior_unbacked_claims(
     return record, claims
 
 
+#: The judge reads the tree as it stands when it runs; the emit-time HEAD is a floor, not the
+#: commit to judge, so evidence a peer lands between emit and fire counts.
+_JUDGE_NOW_HEAD = (
+    "Judge the tree as it stands now (HEAD was {head_sha} at emit; later commits count): "
+    "follow-up commits may have fixed what the prior run's judge saw."
+)
+
+
 def _head_sha(repo_root: Path) -> str:
     proc = run_git(["rev-parse", "HEAD"], cwd=str(repo_root), timeout=30)
     if proc.returncode != 0:
@@ -202,6 +210,13 @@ def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) ->
             "delivery and are never a claim against it.\n"
         )
     return note
+
+
+def _register_evidence(plan_path: str, repo_root: Optional[Path]):
+    """The plan's `JudgeEvidence` (register rows, PM words), or None when the plan is unreadable."""
+    from coordinator_core.ops.requirement_register import plan_judge_evidence
+
+    return plan_judge_evidence(plan_path, Path(repo_root) if repo_root is not None else Path.cwd())
 
 
 def compose_reverify_script(
@@ -275,8 +290,9 @@ def compose_reverify_script(
         run_base_sha=base,
         falsifier=None,
         criterion=criterion,
-        prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
+        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
         host_degraded=host_degraded,
+        evidence=_register_evidence(plan_path, repo_root),
     )
     phases = [_js_string_literal(_PHASE)]
     tests_lines = ""
@@ -714,8 +730,9 @@ def compose_rejudge_script(
         run_base_sha=run_base_sha or "run_base_sha",
         falsifier=None,
         criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
-        prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
+        prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
         host_degraded=host_degraded,
+        evidence=_register_evidence(plan_path, repo_root),
     )
     if call is None:
         raise ReverifyRefused("rejudge: the review roster declares no criterion judge")
@@ -812,13 +829,18 @@ def record_criterion_rejudge(
         raise ReverifyRefused(
             f"rejudge: needs a plan_id and a criterion status in {_CRITERION_STATUSES}, got {status!r}"
         )
+    try:
+        judged_head = _head_sha(repo_root)
+    except ReverifyRefused:
+        judged_head = head_sha
     now = datetime.now(timezone.utc)
     stem = re.sub(r"[^A-Za-z0-9_.-]", "-", plan_id)
     rel = VERDICT_DIR / now.strftime("%Y-%m") / f"{stem}.rejudge.{now.strftime('%Y%m%dT%H%M%S%fZ')}.md"
     fm = {
         "kind": REJUDGE_KIND,
         "plan_id": plan_id,
-        "head_sha": head_sha,
+        "head_sha": judged_head,
+        "emitted_head_sha": head_sha,
         "recorded_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "session_id": session_id,
         "criterion": {"status": status, "observation": criterion.get("observation"), "sidecar": None},

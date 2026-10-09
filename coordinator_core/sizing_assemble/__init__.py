@@ -1635,7 +1635,8 @@ def _usage(prog: str, stream=None) -> int:
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
         "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
         "| --pm-resolution <key> --pm-quote <str> "
-        "[--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml>",
+        "[--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml> "
+        "| --register <yaml> [--supersede] --write <state/sizings/x.yaml>",
         file=stream,
     )
     return EXIT_USAGE
@@ -1666,6 +1667,27 @@ def _resolve_interaction_mode_and_source(cli_value: Optional[str]) -> tuple[str,
     return resolved, source
 
 
+def _open_routed_obligation(write_path: str) -> None:
+    """Queue this session's sizing-routed watchdog obligation for the sizing just written.
+
+    Fail-soft: the sizing is already on disk, and a missed obligation costs a nudge, never the write.
+    """
+    import os
+
+    from coordinator_core.git.repo_root import show_toplevel
+    from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
+
+    root = show_toplevel(str(Path.cwd()))
+    if root is None:
+        return
+    target = Path(write_path) if Path(write_path).is_absolute() else Path.cwd() / write_path
+    try:
+        rel = target.resolve().relative_to(Path(root).resolve()).as_posix()
+        open_sizing_routed(root, rel, os.environ.get("CLAUDE_CODE_SESSION_ID"))
+    except (ValueError, OSError):
+        return
+
+
 def main(argv: list[str]) -> int:
     import json
     import sys
@@ -1694,6 +1716,7 @@ def main(argv: list[str]) -> int:
     deliverable_id = None
     xl_exit_pick = None
     pm_resolution_key = None
+    register_path = None
     supersede = False
     pm_quote = None
     decided_on = None
@@ -1778,6 +1801,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--pm-resolution" and i + 1 < len(argv):
             pm_resolution_key = argv[i + 1]
             i += 2
+        elif tok == "--register" and i + 1 < len(argv):
+            register_path = argv[i + 1]
+            i += 2
         elif tok == "--supersede":
             supersede = True
             i += 1
@@ -1807,6 +1833,35 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
+
+    if register_path is not None:
+        if xl_exit_pick is not None or pm_resolution_key is not None:
+            print(
+                f"{prog}: --register, --xl-exit and --pm-resolution are separate verbs",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if write_path is None:
+            print(
+                f"{prog}: --register requires --write <state/sizings/x.yaml>",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        from coordinator_core.ops.requirement_register import load_register_yaml
+        from coordinator_core.ops.sizing_record_register import _handler as record_register
+
+        try:
+            register = load_register_yaml(Path(register_path).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"{prog}: cannot read register {register_path}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+        result = record_register(
+            {"sizing": write_path, "register": register, "supersede": supersede},
+            repo_root=Path.cwd(),
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
 
     if pm_resolution_key is not None:
         if xl_exit_pick is not None:
@@ -1919,6 +1974,7 @@ def main(argv: list[str]) -> int:
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
+        _open_routed_obligation(write_path)
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK
