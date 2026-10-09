@@ -407,6 +407,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "sizing.accept_exit_criterion":               "common_dir",
     "sizing.record_xl_exit":                      "common_dir",
     "sizing.record_pm_resolution":                "common_dir",
+    "sizing.record_register":                     "common_dir",
     "sizing.resize":                             "common_dir",
     "sizing.record_spike_verdict":               "common_dir",
     "sizing.read_object_fields":                 "common_dir",

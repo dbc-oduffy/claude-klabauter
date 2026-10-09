@@ -12,7 +12,7 @@ Restated from requirement over ``coordinator-content-repo coordinator/bin/mise-p
 (1708 lines), read only to learn which CLI legs a thin door-served wrapper owes:
 multi-target walk (default ``docs/plans``), ``--json``, ``--tally``, ``--repo-root``,
 and an exit code per verdict. No code from that file is carried here — every
-predicate DoE's script re-implemented (SPINE/CENSUS/EXTERNAL_DEPS/PRIME_EXIT/SCHEMA)
+predicate DoE's script re-implemented (SPINE/CENSUS/EXTERNAL_DEPS/PRIME_EXIT/SCHEMA/REGISTER)
 is a single call to ``gate_plan`` instead, so the two doors cannot compute the bar
 differently.
 
@@ -26,7 +26,7 @@ Zero subprocess, zero git: ``gate_plan`` reads the plan body's sha in pure Pytho
 and target expansion is a plain ``Path.glob``.
 
 Negative-spec:
-  - Does NOT re-implement SPINE/CENSUS/EXTERNAL_DEPS/PRIME_EXIT/SCHEMA. Every class
+  - Does NOT re-implement SPINE/CENSUS/EXTERNAL_DEPS/PRIME_EXIT/SCHEMA/REGISTER. Every class
     is whatever ``gate_plan`` returns; a CLI-side divergence is exactly the two-door
     disagreement this rewrite exists to close.
   - Does NOT stamp. This module only reports; ``plan.stamp_prepped`` writes.

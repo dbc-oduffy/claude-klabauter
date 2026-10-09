@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import yaml
 
 from coordinator_core.ops import requirement_register as rr
+from coordinator_core.ops import requirement_register_stall as rrs
 
 
 def _row(rid, status="open", **kw):
@@ -204,10 +206,87 @@ def test_judge_evidence_inlines_rows_and_pm_words(tmp_path):
 
 def test_the_stall_report_op_returns_the_lines_and_the_ceremony_point(tmp_path):
     root = _tree(tmp_path, [_row("loose")])
-    reply = rr._stall_report_op({"today": "2026-10-09", "jp_id": "jp_x"}, root)
+    reply = rrs._stall_report_op({"today": "2026-10-09", "jp_id": "jp_x"}, root)
     assert reply["stalled"] is True and len(reply["unclaimed_rows"]) == 1
     assert reply["judgment_point"]["id"] == "jp_x"
-    quiet = rr._stall_report_op({}, tmp_path / "empty")
+    quiet = rrs._stall_report_op({}, tmp_path / "empty")
     assert quiet["stalled"] is False and quiet["judgment_point"] is None
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
-        rr._stall_report_op({"today": "Oct 9"}, root)
+        rrs._stall_report_op({"today": "Oct 9"}, root)
+
+
+NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+
+
+def test_unruled_rows_needs_a_non_empty_mapping_ruling():
+    rows = [_row("a", "deferred"), _row("b", "waived", ruling=RULING),
+            _row("c", "deferred", ruling="bare"), _row("d", "open"), _row("e", "waived", ruling={})]
+    assert rr.unruled_rows(rows) == ["a", "c", "e"]
+    assert rr.unruled_rows([_row("b", "waived", ruling=RULING)]) == []
+
+
+def test_ship_refusal_refuses_a_non_mapping_ruling():
+    reg = rr.Register(rows=[_row("a", "deferred", ruling="because")])
+    assert "without a recorded ruling" in rr.ship_refusal(reg)
+
+
+def test_unknown_row_ids_dedupes_in_input_order():
+    reg = rr.Register(rows=[_row("a"), _row("b")])
+    assert rr.unknown_row_ids(reg, ["z", "a", 7, "z", "y"]) == ["z", "7", "y"]
+    assert rr.unknown_row_ids(reg, ["a", "b"]) == []
+
+
+def test_duplicate_row_ids_first_seen_order():
+    rows = [_row("b"), _row("a"), _row("b"), _row("a"), _row("b"), _row("c")]
+    assert rr.duplicate_row_ids(rows) == ["b", "a"]
+    assert rr.duplicate_row_ids([_row("a"), _row("b")]) == []
+
+
+def test_load_register_yaml_keeps_timestamps_as_strings_and_raises_on_bad_yaml():
+    out = rr.load_register_yaml("rows:\n  - id: a\n    last_progress_at: 2026-10-09T01:02:03Z\n")
+    assert out["rows"][0]["last_progress_at"] == "2026-10-09T01:02:03Z"
+    with pytest.raises(yaml.YAMLError):
+        rr.load_register_yaml("rows: [unclosed")
+
+
+def test_write_register_text_appends_at_eof_when_absent():
+    head = "schema: sizing-object\nstatus: routed\n"
+    out = rr.write_register_text(head, {"sources": [{"kind": "pm"}], "rows": [_row("a")]}, NOW)
+    assert out.startswith(head) and out.endswith("\n")
+    assert rr.read_register(out).rows[0]["id"] == "a"
+
+
+def test_write_register_text_replaces_block_and_keeps_tail():
+    text = _sizing([_row("old")], tail="after: 1\n")
+    out = rr.write_register_text(text, {"sources": [{"kind": "pm"}], "rows": [_row("new")]}, NOW)
+    assert out.startswith("schema: sizing-object\n# keep me\nstatus: routed  # note\n")
+    assert out.endswith("after: 1\n")
+    assert [r["id"] for r in rr.read_register(out).rows] == ["new"]
+
+
+def test_write_register_text_discards_input_rollup_and_keeps_key_order():
+    block = {"sources": [{"kind": "pm"}], "rollup": {"open": 99}, "rows": [_row("a"), _row("b")]}
+    out = rr.write_register_text("x: 1\n", block, NOW)
+    reg = rr.read_register(out)
+    assert list(reg.raw) == ["sources", "rows", "rollup"]
+    assert reg.rollup["open"] == 2 and reg.rollup["computed_at"] == "2026-10-09T12:00:00Z"
+    assert list(reg.rows[0]) == list(_row("a"))
+
+
+def test_write_register_text_keeps_crlf():
+    text = _sizing([_row("old")], tail="after: 1\n").replace("\n", "\r\n")
+    out = rr.write_register_text(text, {"sources": [], "rows": [_row("a")]}, NOW)
+    assert "\r\n" in out and "\n" not in out.replace("\r\n", "")
+    assert out.endswith("after: 1\r\n")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_requirement_register_module_scope_does_not_import_ipc():
+    code = ("import sys; import coordinator_core.ops.requirement_register; "
+            "sys.exit(1 if 'coordinator_core.ipc' in sys.modules else 0)")
+    proc = subprocess.run(
+        [sys.executable, "-c", code], check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert proc.returncode == 0

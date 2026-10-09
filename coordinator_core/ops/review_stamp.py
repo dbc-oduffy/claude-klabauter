@@ -499,6 +499,14 @@ def _write_stamp(plan_path: Path, split: Any, stamp: Dict[str, Any]) -> None:
 _RUN_REPORT_LIFECYCLE = frozenset({"open", "dispatched", "in_flight", "complete", "blocked", "thrashing"})
 
 
+def _rel_or_abs(path: Any, root: Path) -> str:
+    """`path` repo-relative when it sits under `root`, else as given: a remedy names the real file."""
+    try:
+        return Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except (TypeError, ValueError, OSError):
+        return str(path)
+
+
 def mint(
     plan_path: Path,
     repo_root: Path,
@@ -702,7 +710,7 @@ def mint(
                 hint = hint_path.as_posix()
             refusal += (
                 "; a fix-forward clears this by re-verifying delivery at HEAD: "
-                f"emit-dispatch-workflow --plan <plan> --reverify-delivery {hint}, "
+                f"emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} --reverify-delivery {hint}, "
                 "then reverify-delivery record"
             )
         if "exit criterion is" in refusal:

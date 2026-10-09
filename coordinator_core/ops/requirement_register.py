@@ -19,8 +19,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from coordinator_core.ipc import register_op
-
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
@@ -153,7 +151,7 @@ def _block_span(lines: Sequence[str]) -> Optional[tuple[int, int]]:
 
 
 def has_register_key(data: bytes) -> bool:
-    """Byte-level pre-filter: does this sizing carry a top-level `requirements_register:` line."""
+    """Byte-level pre-filter: does this sizing carry a top-level `requirement_register:` line."""
     return _REGISTER_LINE_RE.search(data) is not None
 
 
@@ -214,13 +212,20 @@ def rollup(rows: Sequence[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
     return counts
 
 
+def _unruled(row: Mapping[str, Any]) -> bool:
+    ruling = row.get(ROW_RULING)
+    return row.get(ROW_STATUS) in (STATUS_DEFERRED, STATUS_WAIVED) and not (
+        isinstance(ruling, Mapping) and ruling
+    )
+
+
 def _row_block(row: Mapping[str, Any]) -> Optional[str]:
     """Why this row blocks shipping, or None when it does not."""
     rid, surface = row.get(ROW_ID), row.get(ROW_SURFACE)
     status = row.get(ROW_STATUS)
     label = f"row {rid} ({surface})"
     if status in (STATUS_DEFERRED, STATUS_WAIVED):
-        if not row.get(ROW_RULING):
+        if _unruled(row):
             return f"{label} is {status} without a recorded ruling"
         return None
     if status == STATUS_MET:
@@ -275,11 +280,8 @@ def apply_verdicts(
     entry in met_by (only when met and wired) and last_progress_at; the rollup is recomputed.
     Only the register block is replaced, keeping `sources`. `deferred`/`waived` rows are never
     touched. A sizing with no register is returned unchanged."""
-    nl = "\r\n" if "\r\n" in sizing_text else "\n"
-    lines = sizing_text.replace("\r\n", "\n").split("\n")
-    span = _block_span(lines)
     register = read_register(sizing_text)
-    if span is None or register is None:
+    if register is None:
         return sizing_text
     verdicts = {str(j.get("id")): j for j in judge_rows if isinstance(j, Mapping)}
     stamp = _iso_utc(now)
@@ -299,15 +301,67 @@ def apply_verdicts(
             row[ROW_STATUS] = STATUS_MET
         elif met or wired:
             row[ROW_STATUS] = STATUS_PARTIAL
+    return write_register_text(
+        sizing_text, {**register.raw, ROWS_KEY: register.rows}, now
+    )
+
+
+def write_register_text(sizing_text: str, block: Mapping[str, Any], now: datetime) -> str:
+    """`sizing_text` with the top-level register block replaced (appended at EOF when absent).
+    The block written is `block` minus its rollup, then the rows, then a rollup recomputed at
+    `now`; every byte outside the block is kept, line endings included."""
     import yaml
 
-    block = {**register.raw, ROWS_KEY: register.rows, ROLLUP_KEY: rollup(register.rows, now)}
+    nl = "\r\n" if "\r\n" in sizing_text else "\n"
+    lines = sizing_text.replace("\r\n", "\n").split("\n")
+    rows = block[ROWS_KEY]
+    body = {k: v for k, v in block.items() if k not in (ROLLUP_KEY, ROWS_KEY)}
+    body[ROWS_KEY] = rows
+    body[ROLLUP_KEY] = rollup(rows, now)
     dumped = yaml.safe_dump(
-        {REGISTER_KEY: block}, sort_keys=False, allow_unicode=True, default_flow_style=False,
+        {REGISTER_KEY: body}, sort_keys=False, allow_unicode=True, default_flow_style=False,
         width=1_000_000,
-    )
-    new_lines = lines[:span[0]] + dumped.rstrip("\n").split("\n") + lines[span[1]:]
-    return nl.join(new_lines)
+    ).rstrip("\n").split("\n")
+    span = _block_span(lines)
+    if span is not None:
+        return nl.join(lines[:span[0]] + dumped + lines[span[1]:])
+    if lines and lines[-1] == "":
+        return nl.join(lines[:-1] + dumped + [""])
+    return nl.join(lines + dumped + [""])
+
+
+def load_register_yaml(text: str) -> Any:
+    """Parse a bare register block (`{sources, rows[, rollup]}`) with timestamps kept as
+    strings. Raises on a YAML error."""
+    return _load(text)
+
+
+def unruled_rows(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Ids of deferred or waived rows whose `ruling` is not a non-empty mapping, in order."""
+    return [str(r.get(ROW_ID)) for r in rows if _unruled(r)]
+
+
+def unknown_row_ids(register: Register, ids: Sequence[Any]) -> list[str]:
+    """Members of `ids` (stringified) that are not row ids in `register`, deduplicated."""
+    known = {str(r.get(ROW_ID)) for r in register.rows}
+    out: list[str] = []
+    for raw in ids:
+        rid = str(raw)
+        if rid not in known and rid not in out:
+            out.append(rid)
+    return out
+
+
+def duplicate_row_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Ids appearing more than once among `rows`, in first-seen order."""
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for row in rows:
+        rid = str(row.get(ROW_ID))
+        if rid in seen and rid not in dupes:
+            dupes.append(rid)
+        seen.add(rid)
+    return dupes
 
 
 def _fm_scalar(fm: str, key: str) -> Optional[str]:
@@ -526,24 +580,3 @@ def stall_judgment_point(report: StallReport, *, id: str) -> Optional[dict[str, 
 
 #: The judgment-point id the day and week ceremonies cite for a stall.
 STALL_JP_ID = "j-requirement-register-stall"
-
-
-@register_op("requirement_register.stall_report")
-def _stall_report_op(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC ``requirement_register.stall_report``: the stall lines and the ceremony
-    judgment point (``None`` when nothing stalled). Params: ``today`` (YYYY-MM-DD, optional),
-    ``jp_id`` (the calling ceremony's judgment-point id, default ``STALL_JP_ID``)."""
-    if repo_root is None:
-        raise ValueError("requirement_register.stall_report requires a repo root")
-    raw = params.get("today")
-    today = _parse_day(raw) if raw is not None else date.today()
-    if today is None:
-        raise ValueError(f"today must be YYYY-MM-DD: {raw!r}")
-    report = stall_report(Path(repo_root), today)
-    return {
-        "stalled": bool(report),
-        "stale_rows": report.stale_rows,
-        "stuck_plans": report.stuck_plans,
-        "unclaimed_rows": report.unclaimed_rows,
-        "judgment_point": stall_judgment_point(report, id=str(params.get("jp_id") or STALL_JP_ID)),
-    }

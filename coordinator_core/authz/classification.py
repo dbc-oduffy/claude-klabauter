@@ -3495,6 +3495,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "sizing.record_xl_exit": OpClass.MUTATING,
     # sizing.record_pm_resolution — MUTATING: writes `pm_resolution.<key>` and `pm_resolution.decided_on` on a sizing.
     "sizing.record_pm_resolution": OpClass.MUTATING,
+    # sizing.record_register — MUTATING: writes the `requirement_register` block (rows, sources, recomputed rollup) on a sizing.
+    "sizing.record_register": OpClass.MUTATING,
     # sizing.resize — MUTATING: writes `estimate.tshirt` and the engine-resolved `route`
     # under locked_rmw (see coordinator_core/ops/sizing_resize.py docstring).
     "sizing.resize": OpClass.MUTATING,
