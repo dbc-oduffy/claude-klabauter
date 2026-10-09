@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "a96d7476fdf764bfe1a6f2a9ac976396b7a46491",
-    "coordinator_core/_engine_stamp": "eae1a64f53da7861b22b107efacadd8b5188a760",
+    "coordinator_core/_engine_published_at": "e7f59f02e36d77dedb896d0fdec212f6050d0bea",
+    "coordinator_core/_engine_stamp": "6cd7b147c8b168ea45334d0f735f96df228880b4",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2149,7 +2149,7 @@
     "coordinator_core/bash_guards/block_perforce_submit.py": "9477b9e64d0d98591fd6e6074ff1a0c4cbc3ec44",
     "coordinator_core/bash_guards/block_reviewer_bash_outside_allowlist.py": "1821504386ced334ad9285da70c0e73e5b443036",
     "coordinator_core/bash_guards/block_stash_destruction.py": "a5fd1f5e4a0fa019d9bc1988a626f33281c8a48e",
-    "coordinator_core/bash_guards/block_subagent_commit.py": "504273b4b67b1a655c535577b3aa2372b60cb302",
+    "coordinator_core/bash_guards/block_subagent_commit.py": "f6b2fea012a33f2b081fe0b83b058c6d4ba631c4",
     "coordinator_core/bash_guards/block_subagent_destructive_action.py": "2877942ce7e87388ca8e923d73aa0348b8cbfbc9",
     "coordinator_core/bash_guards/block_subagent_findings_reject.py": "5ae0849a051949f7d200f2ad37e24c634dfb24ff",
     "coordinator_core/bash_guards/block_subagent_grant_acquisition.py": "bfd62c7984d143a81b76fa946efe0138b8918537",
@@ -2228,7 +2228,7 @@
     "coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist_named_dispatch_effective_type.py": "6c301ffb5e87aeb61e2ce2212ae8e17c2cce6d48",
     "coordinator_core/bash_guards/tests/test_block_reviewer_bash_outside_allowlist_roster_absence.py": "7803709f354bee41881b03afc38e5aa3f0926965",
     "coordinator_core/bash_guards/tests/test_block_stash_destruction.py": "fdbe82652da32eabe8ad5f38951e22527936890f",
-    "coordinator_core/bash_guards/tests/test_block_subagent_commit.py": "940ae66eeeced33f9f3817dc25e52dbe447a3c94",
+    "coordinator_core/bash_guards/tests/test_block_subagent_commit.py": "33f5c449faa0773200f4a90e951e5bcde948208f",
     "coordinator_core/bash_guards/tests/test_block_subagent_commit_caller_signals.py": "934843a1135a680e2f16189d38a179b8f5f4b7c8",
     "coordinator_core/bash_guards/tests/test_block_subagent_commit_degraded_host.py": "60f8ccf28b3a4dcba499ac5d1782532fd57ca90a",
     "coordinator_core/bash_guards/tests/test_block_subagent_commit_heredoc_interpreter.py": "67aacb591d40c0b8bef1aa20e1b24a751e6e18c7",
@@ -7147,5 +7147,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "3eb37a7137385506ca3279d8ac2c572ebab0529a"
+  "source_head": "bf9bcfe8d68c3736de2b66aa584d7c0b4cd7361b"
 }

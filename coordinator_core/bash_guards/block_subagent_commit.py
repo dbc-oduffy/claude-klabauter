@@ -6291,6 +6291,24 @@ def _git_commit_agent_pathspec_permitted(
     if allowed:
         return True, ""
     reason = reason or ""
+    # A declared path with nothing to commit carries no authorship to protect:
+    # a wave's pathspec names every row's declared `writes:`, and a row that
+    # left one untouched leaves it clean at HEAD, where the scope report can
+    # only call it an orphan (orphan adoption requires dirtiness). The commit
+    # skips such a path, so the guard does too, and re-asks on the remainder.
+    dirty = _dirty_subset(git_root, paths)
+    if dirty is not None and len(dirty) < len(paths):
+        if not dirty:
+            return True, ""
+        try:
+            allowed, reason = assert_paths_in_session_scope(
+                session_id, dirty, git_root, allow_orphans=True
+            )
+        except Exception:
+            return False, ""
+        if allowed:
+            return True, ""
+        reason = reason or ""
     # The ownership leg refused. Whether that refusal rested on EVIDENCE is a
     # separate question from whether it refused, and it is the question
     # `_ownership_leg_stand_down` answers -- see that module for the two
@@ -6300,6 +6318,20 @@ def _git_commit_agent_pathspec_permitted(
     if _ownership_denial_stands_down(reason, git_root, session_id):
         return True, ""
     return False, reason
+
+
+def _dirty_subset(git_root: str, paths: "Sequence[str]") -> "Optional[List[str]]":
+    """`paths` that `git status` shows with something to commit, in order;
+    `None` when the probe fails, so the caller keeps the refusal it holds."""
+    try:
+        from coordinator_core.ops.session.scope_report import _dirty_unclaimed_paths
+
+        dirty = _dirty_unclaimed_paths(git_root, list(paths))
+    except Exception:
+        return None
+    if dirty is None:
+        return None
+    return [p for p in paths if p in dirty]
 
 
 def _ownership_denial_stands_down(
