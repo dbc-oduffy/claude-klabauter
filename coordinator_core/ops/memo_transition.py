@@ -1908,6 +1908,7 @@ async def _handler(
         return _err(
             "memo.transition: missing required param(s): " + ", ".join(missing)
             + " (verbs: claim | action | release | resolve | claim-action | close | lift)"
+            + ("; the memo's path goes in `memo`, not `path`" if not memo and params.get("path") else "")
         )
 
     cwd = (params.get("cwd") or "").strip() or None

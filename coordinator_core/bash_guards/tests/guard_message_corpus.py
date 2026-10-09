@@ -1196,14 +1196,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        "deploy-dirty-tree",
-        "deploy-dirty-tree-control",
-        "echo firebase deploy",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-unreal-engine-resave",
         "block-unreal-engine-resave-control",
         "UnrealEditor-Cmd G.uproject -run=ResavePackages -projectonly",

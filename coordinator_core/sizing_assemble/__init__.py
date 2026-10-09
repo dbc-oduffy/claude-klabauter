@@ -1557,10 +1557,12 @@ def build_research_block(
     sources: list[str],
     depth: Optional[str],
     targets: list[str],
+    questions: Optional[list[str]] = None,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given."""
-    if not (value_class or appetite or sources or depth or targets):
+    questions = [q.strip() for q in questions or ()]
+    if not (value_class or appetite or sources or depth or targets or questions):
         return None, []
     from coordinator_core.ops import _research_contract as rc
 
@@ -1588,6 +1590,8 @@ def build_research_block(
             errors.append(f"--research-target source must be one of {rc.SOURCES}, got {source!r}")
         else:
             parsed_targets.append({"source": source, "ref": ref.strip()})
+    if any(not q for q in questions):
+        errors.append("--research-question must not be empty")
     if errors:
         return None, errors
     block: dict[str, Any] = {"value_class": value_class}
@@ -1599,7 +1603,77 @@ def build_research_block(
         block["depth"] = depth
     if parsed_targets:
         block["targets"] = parsed_targets
+    if questions:
+        block["questions"] = questions
     return block, []
+
+
+#: A research sizing fires its own chain; the t-shirt's route is not this ask's room.
+RESEARCH_STAGES = ("research fire (emit-dispatch-workflow --from-sizing)", "research.close")
+
+
+def _route_to_research(decision: dict[str, Any], write_path: str) -> None:
+    """Point the reply's chain at the research fire: `route` stays the size's room on disk,
+    but `stages` and `next_move` name the research chain the /research command runs."""
+    decision["stages"] = {"rows": list(RESEARCH_STAGES), "terminal": RESEARCH_STAGES[-1], "owned_by": "research"}
+    decision["next_move"] = (
+        f"Research sizing: fire it with `emit-dispatch-workflow --from-sizing {write_path}`, then "
+        "run the reply's `next_action` (research.close) on return. Do not route to "
+        f"{decision['route']}: that is the size's room, not this ask's chain."
+    )
+
+
+def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite only the sizing's `research:` block: `given` keys (flag spellings: `sources` and
+    `targets` as raw flag lists) replace the recorded ones, the rest are kept. Validated by
+    `build_research_block` and the sizing schema; nothing else on the record moves."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import write_fm_nested_field
+    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops._path_guard import contained_path
+
+    schema = Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+    candidate = Path(sizing) if Path(sizing).is_absolute() else root / sizing
+    target = contained_path(candidate, [root / "state" / "sizings"])
+    if target is None or not target.is_file():
+        raise SizingAssembleError(f"{sizing!r} is not a sizing under state/sizings/")
+    out: dict[str, Any] = {}
+
+    def mutate(old: str) -> str:
+        doc = yaml.safe_load(old) or {}
+        prior = doc.get("research") if isinstance(doc.get("research"), dict) else {}
+        merged = {
+            "value_class": given.get("value_class", prior.get("value_class")),
+            "appetite": given.get("appetite", prior.get("appetite")),
+            "sources": given.get("sources", prior.get("sources") or []),
+            "depth": given.get("depth", prior.get("depth")),
+            "targets": given.get(
+                "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
+            ),
+            "questions": given.get("questions", prior.get("questions") or []),
+        }
+        block, errors = build_research_block(
+            merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
+            list(merged["targets"]), list(merged["questions"]),
+        )
+        if errors:
+            raise MutateAbort("; ".join(errors))
+        text = write_fm_nested_field(old, "research", _render_block(block))
+        problems = validate_frontmatter(yaml.safe_load(text) or {}, schema)
+        if problems:
+            raise MutateAbort(f"schema validation failed: {format_validation_errors(problems)}")
+        out["research"] = block
+        return text
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort as exc:
+        raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
+    except LockTimeout as exc:
+        raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
+    return {"path": str(target), "status": "amended", "research": out["research"]}
 
 
 EXIT_OK = 0
@@ -1631,7 +1705,9 @@ def _usage(prog: str, stream=None) -> int:
         "[--research-source web|repo|structured|notebooklm ...] "
         "[--research-depth standard|deeper|deepest] "
         "[--research-target <source>=<ref> ...] "
+        "[--research-question <text> ...] "
         "[--write <state/sizings/x.yaml>] "
+        "| --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block) "
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
         "[--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml> "
         "| --pm-resolution <key> --pm-quote <str> "
@@ -1720,11 +1796,13 @@ def main(argv: list[str]) -> int:
     supersede = False
     pm_quote = None
     decided_on = None
+    amend_research_path = None
     research_class = None
     research_appetite = None
     research_sources: list[str] = []
     research_depth = None
     research_targets: list[str] = []
+    research_questions: list[str] = []
 
     i = 0
     while i < len(argv):
@@ -1761,6 +1839,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--write" and i + 1 < len(argv):
             write_path = argv[i + 1]
+            i += 2
+        elif tok == "--amend-research" and i + 1 < len(argv):
+            amend_research_path = argv[i + 1]
             i += 2
         elif tok == "--boundary-in-notch" and i + 1 < len(argv):
             boundary_in_notch = argv[i + 1]
@@ -1827,6 +1908,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-target" and i + 1 < len(argv):
             research_targets.append(argv[i + 1])
+            i += 2
+        elif tok == "--research-question" and i + 1 < len(argv):
+            research_questions.append(argv[i + 1])
             i += 2
         elif tok == "--json":
             i += 1
@@ -1908,11 +1992,33 @@ def main(argv: list[str]) -> int:
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
 
+    if amend_research_path is not None:
+        given = {
+            k: v
+            for k, v in (
+                ("value_class", research_class), ("appetite", research_appetite),
+                ("sources", research_sources), ("depth", research_depth), ("targets", research_targets),
+                ("questions", research_questions),
+            )
+            if v
+        }
+        if not given or tshirt is not None or write_path is not None:
+            print(f"{prog}: --amend-research takes only --research-* flags", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            result = amend_research(Path.cwd(), amend_research_path, given)
+        except SizingAssembleError as exc:
+            print(f"{prog}: --amend-research refused: {exc}", file=sys.stderr)
+            return EXIT_BUSINESS_FAIL
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK
+
     if tshirt is None:
         return _usage(prog)
 
     research_block, research_errors = build_research_block(
-        research_class, research_appetite, research_sources, research_depth, research_targets
+        research_class, research_appetite, research_sources, research_depth, research_targets,
+        research_questions,
     )
     if research_errors:
         for message in research_errors:
@@ -1955,6 +2061,9 @@ def main(argv: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
+
+    if research_block is not None:
+        _route_to_research(decision, write_path)
 
     if write_path is not None:
         try:

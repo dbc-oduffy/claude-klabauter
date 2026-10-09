@@ -2395,12 +2395,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # said could not happen.
     _declared_writes: list = []
     _declared_writes_token = _declared_writes_var.set(_declared_writes)
-    # Set on timeout so a handler thread that outlives its budget refuses its
-    # irreversible step (`git.commit.commit_paths`) instead of landing late.
-    import threading
-    from coordinator_core import dispatch_abandon
-    _abandoned = threading.Event()
-    _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
     import inspect
     try:
         if inspect.iscoroutinefunction(handler):
@@ -2412,7 +2406,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
-                _abandoned.set()
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
@@ -2440,7 +2433,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
-                _abandoned.set()
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
@@ -2480,7 +2472,6 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         return {"jsonrpc": "2.0", "id": id_, "result": result}
     finally:
         _declared_writes_var.reset(_declared_writes_token)
-        dispatch_abandon.ACTIVE.reset(_abandoned_token)
 
 
 def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:

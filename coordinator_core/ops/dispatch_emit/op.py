@@ -840,7 +840,8 @@ def _research_route_setup(
     research block from the sizing and binds the sizing file as the brief; an ask writes
     ``<scratch>/ask.md`` and binds that; ``context`` files are named in the bound brief
     (``research_emit.bind_context``). ``lists['questions']`` are the scout questions; any other
-    given list fills a segment whose manifest declares it and the shape left unset.
+    given list or ``flags`` entry overrides the segment whose manifest declares it. Every
+    segment's refusals are raised together, prefixed by pipeline.
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
@@ -855,6 +856,7 @@ def _research_route_setup(
         research = load_sizing(root, brief_rel).get("research")
         if not isinstance(research, dict) or not research:
             raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
+        questions = questions or [str(q) for q in research.get("questions") or ()]
     else:
         given_root = repo_root or params.get("target_root")
         if not given_root:
@@ -879,17 +881,38 @@ def _research_route_setup(
         targets=[t for t in research.get("targets") or () if isinstance(t, dict)],
     )
     content_root = _pipeline_content_root()
+    given_flags = {str(k): str(v) for k, v in (params.get("flags") or {}).items()}
     segments = []
+    reasons: list[str] = []
+    claimed: set[str] = set()
     for pipeline, inputs in pairs:
         manifest = load_manifest(content_root, pipeline)
-        given = {k: tuple(v) for k, v in lists.items() if k in manifest.lists and k not in inputs.lists}
-        inputs = replace(inputs, lists=normalize_lists(manifest.lists, {**inputs.lists, **given}))
+        defaults = research_emit.corpus_default_lists(pipeline, questions)
+        given = {
+            **{k: v for k, v in defaults.items() if k in manifest.lists and k not in inputs.lists},
+            **{k: tuple(v) for k, v in lists.items() if k in manifest.lists and k != "questions"},
+        }
+        flags = {**inputs.flags, **{k: v for k, v in given_flags.items() if k in manifest.flags}}
+        claimed.update(k for k in given_flags if k in manifest.flags)
+        inputs = replace(
+            inputs, flags=flags, lists=normalize_lists(manifest.lists, {**inputs.lists, **given})
+        )
         if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
-            raise PipelineEmitRefused([
+            reasons.append(
                 f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
                 "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B"
-            ])
-        segments.append((manifest, inputs, validate(manifest, inputs)))
+            )
+            continue
+        try:
+            segments.append((manifest, inputs, validate(manifest, inputs)))
+        except PipelineEmitRefused as exc:
+            reasons.extend(f"pipeline {pipeline!r}: {r}" for r in exc.reasons)
+    reasons.extend(
+        f"--flag {name} is declared by none of this run's pipelines ({', '.join(shape['pipelines'])})"
+        for name in given_flags if name not in claimed
+    )
+    if reasons:
+        raise PipelineEmitRefused(reasons)
     if not aliased_param(params, "output_path", "out_path"):
         params = {**params, "output_path": str(root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
     close_params = {
@@ -905,7 +928,15 @@ def _research_route_setup(
         "run_id": run_id,
         "brief": brief_rel,
         "segments": segments,
-        "shape": {"tier": shape["tier"], "reason": shape["reason"], "pipelines": shape["pipelines"]},
+        "shape": {
+            "tier": shape["tier"],
+            "reason": shape["reason"],
+            "pipelines": shape["pipelines"],
+            "segments": [
+                {"pipeline": m.pipeline, "flags": dict(i.flags), "lists": {k: list(v) for k, v in i.lists.items()}}
+                for m, i, _ in segments
+            ],
+        },
         "next_action": {"op": "research.close", "params": close_params},
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}

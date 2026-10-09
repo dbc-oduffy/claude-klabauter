@@ -458,6 +458,13 @@ def _rostered_agent_types() -> "frozenset[str]":
     return _tier_walked_agent_types() | _signal_selected_agent_types()
 
 
+def inherits_an_accepted_pin(agent_type: Optional[str]) -> bool:
+    """True when `agent_type`'s definition pins a model this guard allows unmodeled: any
+    non-opus pin, or an opus pin on the published review roster."""
+    tier = _resolve_call_site_tier(agent_type)
+    return tier is not None and (tier != "opus" or agent_type in _rostered_agent_types())
+
+
 def _resolve_call_site_tier(agent_type: Optional[str]) -> Optional[str]:
     if not agent_type:
         return None
@@ -633,6 +640,9 @@ def _handler(params: dict, repo_root=None) -> dict:
         )
 
     if modeled_n < agent_n:
+        calls = _walk_agent_calls(stripped, _string_mask(stripped))
+        if all(has_model or inherits_an_accepted_pin(t) for has_model, t in calls):
+            return no_advisory()
         msg = _compose_partial_modeled_context(agent_n, modeled_n, env)
         return context_only("PreToolUse", msg)
 

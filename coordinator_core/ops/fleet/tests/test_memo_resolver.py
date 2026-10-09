@@ -461,11 +461,23 @@ class TestCanonicalReceiverId:
         self._make_manifest(
             tmp_path, claude_home,
             content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["claude-central-em", "central-em", "central", "coordinator-content-repo-em"],
+            central_ids=["coordinator-content-repo-em", "claude-central-em", "central-em", "central"],
         )
 
         for alias in ("claude-central-em", "central-em", "central", "coordinator-content-repo-em"):
             assert canonical_receiver_id(alias) == "coordinator-content-repo-em", alias
+
+    def test_central_id_is_the_manifest_canonical_not_the_registry_key_spelling(self, tmp_path, monkeypatch):
+        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        self._make_manifest(
+            tmp_path, claude_home,
+            content_root=tmp_path / "coordinator-content-repo-repo",
+            central_ids=["coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"],
+        )
+
+        for central in ("coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"):
+            assert canonical_receiver_id(central) == "coordinator-content-repo-em", central
 
     def test_redirect_alias_canonicalizes_to_same_central_id(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"})
@@ -473,7 +485,7 @@ class TestCanonicalReceiverId:
         self._make_manifest(
             tmp_path, claude_home,
             content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["claude-central-em", "coordinator-content-repo-em"],
+            central_ids=["coordinator-content-repo-em", "claude-central-em"],
             redirect_aliases=[".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"],
         )
 
@@ -704,7 +716,7 @@ class TestPublishMirrorReroute:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_doe_manifest(claude_home, doe, {"identity": {
             "repoAliases": [],
-            "centralReceiverIds": ["claude-central-em", "coordinator-content-repo-em"],
+            "centralReceiverIds": ["coordinator-content-repo-em", "claude-central-em"],
             "redirectAliases": ["coordinator-claude-em", "claude-home"],
         }})
 

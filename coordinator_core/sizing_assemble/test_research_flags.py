@@ -1,6 +1,7 @@
 """Tests for `sizing-assemble --research-*`: the flags write a schema-valid `research:` block."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -127,3 +128,35 @@ def test_one_refusal_per_bad_value(capsys: pytest.CaptureFixture[str], repo: Pat
     )
     assert code == sa.EXIT_USAGE
     assert len(capsys.readouterr().err.strip().splitlines()) == 3
+
+
+def test_a_research_sizing_routes_to_the_research_fire_not_plan(repo: Path, capsys) -> None:
+    code, _ = _run(repo, "--research-class", "corpus", "--research-source", "repo")
+    assert code == sa.EXIT_OK
+    reply = json.loads(capsys.readouterr().out)
+    assert reply["stages"]["rows"] == list(sa.RESEARCH_STAGES)
+    assert "emit-dispatch-workflow --from-sizing" in reply["next_move"]
+    assert "Route to" not in reply["next_move"]
+
+
+def test_amend_research_changes_one_field_and_keeps_the_rest(repo: Path, capsys) -> None:
+    _run(repo, "--research-class", "corpus", "--research-source", "repo", "--research-target", "repo=a/b")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
+    doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
+    assert doc["research"] == {
+        "value_class": "corpus", "sources": ["repo"], "depth": "deeper",
+        "targets": [{"source": "repo", "ref": "a/b"}],
+    }
+    assert sa.main(["--amend-research", rel, "--research-class", "nope"]) == sa.EXIT_BUSINESS_FAIL
+
+
+def test_research_questions_are_written_and_amended(repo: Path) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-question", "What is X?", "--research-question", "Why Y?")
+    assert code == sa.EXIT_OK
+    assert doc["research"]["questions"] == ["What is X?", "Why Y?"]
+    assert validate_frontmatter(doc, _SCHEMA) == []
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    assert sa.main(["--amend-research", rel, "--research-question", "Only Z?"]) == sa.EXIT_OK
+    doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
+    assert doc["research"] == {"value_class": "corpus", "questions": ["Only Z?"]}

@@ -1292,9 +1292,6 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_perforce_submit import (
             MATCHERS as _matchers_perforce_submit,
         )
-        from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
-            MATCHERS as _matchers_deploy_dirty_tree,
-        )
         from coordinator_core.bash_guards.block_unreal_engine_resave import (
             MATCHERS as _matchers_unreal_engine_resave,
         )
@@ -1336,7 +1333,6 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_noncanonical_branch_creation,
             _matchers_topic_branch,
             _matchers_perforce_submit,
-            _matchers_deploy_dirty_tree,
             _matchers_unreal_engine_resave,
             _matchers_editor_kill_by_name,
             _matchers_whole_filesystem_scan,
@@ -2326,10 +2322,6 @@ def _build_guard_chain(
         check as _check_perforce_submit,
         MATCHERS as _matchers_perforce_submit,
     )
-    from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
-        check as _check_deploy_dirty_tree,
-        MATCHERS as _matchers_deploy_dirty_tree,
-    )
     from coordinator_core.bash_guards.block_unreal_engine_resave import (
         check as _check_unreal_engine_resave,
         MATCHERS as _matchers_unreal_engine_resave,
@@ -2667,15 +2659,6 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_perforce_submit),
-        ),
-        # A deploy builds the working tree: uncommitted peer edits ship. Fail-open.
-        GuardEntry(
-            "deploy-dirty-tree",
-            lambda: _check_deploy_dirty_tree(payload),
-            False,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_deploy_dirty_tree),
         ),
         # No commandlet rewrites the installed engine.
         GuardEntry(

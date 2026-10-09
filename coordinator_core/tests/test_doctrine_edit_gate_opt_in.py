@@ -10,6 +10,7 @@ from coordinator_core.bash_guards import (
     block_approval_sentinel_creation,
     guard_doctrine_surface_bash_write,
 )
+from coordinator_core.hooks import guard_doctrine_surface_bash_write as hook_bash_write
 from coordinator_core.write_guards import guard_doctrine_surface_edits
 
 GATE_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE"
@@ -115,6 +116,7 @@ def test_every_enforcement_point_allows_when_off(author_box, monkeypatch):
     assert not _is_deny(
         guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
     )
+    assert hook_bash_write.evaluate(_bash_write_payload()) is None
 
 
 def test_every_enforcement_point_denies_when_on(author_box, monkeypatch):
@@ -126,6 +128,7 @@ def test_every_enforcement_point_denies_when_on(author_box, monkeypatch):
     assert _is_deny(
         guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
     )
+    assert hook_bash_write.evaluate(_bash_write_payload()) is not None
 
 
 def test_liveness_probe_trigger_fires_while_gate_is_off(author_box, monkeypatch):

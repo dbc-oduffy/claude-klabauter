@@ -394,6 +394,23 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),
     ),
+    # Enrolled 2026-10-09: each measures an EMPTY function-granular reachable spawn set.
+    "plan.signoff": (
+        "coordinator_core/ops/plan_signoff.py",
+        ("_handler",),
+    ),
+    "signoff.digest": (
+        "coordinator_core/ops/signoff_digest.py",
+        ("_handler",),
+    ),
+    "requirement_register.stall_report": (
+        "coordinator_core/ops/requirement_register_stall.py",
+        ("_stall_report_op",),
+    ),
+    "sizing.record_register": (
+        "coordinator_core/ops/sizing_record_register.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-01, EM-adjudication step 2: each measured an EMPTY
     # function-granular reachable spawn set, so none needs legitimization.
     "engine.registration_completeness": (
@@ -1352,6 +1369,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/guard_doctrine_changelog_prose.py",
         ("_handler",),
     ),
+    "hooks.guard_doctrine_surface_bash_write": (
+        "coordinator_core/hooks/guard_doctrine_surface_bash_write.py",
+        ("_handler",),
+    ),
     "hooks.guard_doctrine_surface_ratio": (
         "coordinator_core/hooks/guard_doctrine_surface_ratio.py",
         ("_handler",),
@@ -1534,23 +1555,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "roadmap.blitz_stage": (
         "coordinator_core/ops/roadmap_blitz_stage.py",
-        ("_handler",),
-    ),
-    # Enrolled 2026-10-09: measured spawn-free at function granularity.
-    "plan.signoff": (
-        "coordinator_core/ops/plan_signoff.py",
-        ("_handler",),
-    ),
-    "requirement_register.stall_report": (
-        "coordinator_core/ops/requirement_register_stall.py",
-        ("_stall_report_op",),
-    ),
-    "signoff.digest": (
-        "coordinator_core/ops/signoff_digest.py",
-        ("_handler",),
-    ),
-    "sizing.record_register": (
-        "coordinator_core/ops/sizing_record_register.py",
         ("_handler",),
     ),
     "session.whoami_live": (
@@ -6778,9 +6782,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
     "fleet.archive_terminal_sizings": 3,
-    # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
-    # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
-    "warm_guard.evaluate": 9,
+    "warm_guard.evaluate": 8,
     "distill.apply_disposal": 9,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
@@ -6968,8 +6970,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.handoff_segment_inject": 2,
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
-    # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
-    "hooks.preuse_bash_dispatch": 9,
+    "hooks.preuse_bash_dispatch": 8,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     "hooks.sessionend_auto_commit": 2,

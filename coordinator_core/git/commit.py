@@ -76,7 +76,6 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
-from coordinator_core import dispatch_abandon
 from coordinator_core.git import index_write
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
 from coordinator_core.git import checkin_attrs
@@ -1535,13 +1534,6 @@ def commit_paths(
     if target is None:
         raise CommitRefused("could not resolve the ref to compare-and-swap")
     ref_gitdir, ref = target
-    # Last point before the irreversible step: a caller already told this op timed out
-    # must not see the commit land afterwards (signing above is the slow part).
-    if dispatch_abandon.is_abandoned():
-        raise CommitRefused(
-            "dispatch timed out before the ref update -- nothing committed; "
-            "the commit object is unreferenced. Safe to retry."
-        )
     if not cas_ref(ref_gitdir, ref, old_head, commit_sha,
                    reflog_committer=f"{name} <{email}>",
                    reflog_message=message.splitlines()[0] if message.strip() else "commit",

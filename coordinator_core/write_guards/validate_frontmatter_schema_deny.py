@@ -165,7 +165,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter as _split_
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.content_root import read_content_root
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.write_guards._case_fold_path import casefold_path, repo_relative
+from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.frontmatter.schema_validate import (
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
     load_schemas as _load_schemas,
@@ -301,7 +301,20 @@ def _is_strict() -> bool:
 # ---------------------------------------------------------------------------
 
 
-_to_repo_relative = repo_relative
+def _to_repo_relative(abs_path: str, repo_root: str) -> Optional[str]:
+    normal_abs = abs_path.replace("\\", "/")
+    normal_root = repo_root.replace("\\", "/")
+    # Comparison-only fold: the returned `rel` (sliced from `normal_abs`,
+    # original case) is used downstream only for regex/pattern matching and
+    # schema lookup keys — never for disk I/O (callers use `abs_file_path`
+    # for that). Folding only the prefix-match operands, not `normal_abs`
+    # itself, keeps the returned relative path's case intact.
+    if not casefold_path(normal_abs).startswith(casefold_path(normal_root)):
+        return None
+    rel = normal_abs[len(normal_root):]
+    if rel.startswith("/"):
+        rel = rel[1:]
+    return rel
 
 
 def _apply_edit(content: str, old_string: str, new_string: str) -> Tuple[str, bool]:

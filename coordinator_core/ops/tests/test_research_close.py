@@ -131,3 +131,26 @@ def test_process_time_under_brightline(repo, scratch):
     out = _close(repo, scratch, "corpus", outputs=["final.md"])
     assert out["committed"] is True
     assert time.process_time() - t0 < 0.5
+
+
+def test_a_secret_shaped_value_refuses_the_close_before_any_copy(repo, scratch):
+    (scratch / "final.md").write_text("config\nDB_PASSWORD = 'hunter2Xq8v3LmN0pR7'\n", encoding="utf-8")
+    before = _count(repo)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert out["exit_code"] == 1 and out["secret_hits"] == ["final.md:2: secret-named assignment"]
+    assert "hunter2" not in str(out)
+    assert _count(repo) == before and not (repo / "docs" / "research").exists()
+
+
+def test_a_recorded_key_name_is_not_a_secret(repo, scratch):
+    (scratch / "final.md").write_text("The service reads API_KEY and DB_PASSWORD from env.\n", encoding="utf-8")
+    assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
+
+
+def test_an_untracked_research_file_written_during_the_run_is_reported(repo, scratch):
+    stray = repo / "docs" / "research" / "2026-10-09-elsewhere.md"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("duplicate\n", encoding="utf-8")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert out["exit_code"] == 0
+    assert out["strays"] == ["docs/research/2026-10-09-elsewhere.md"]

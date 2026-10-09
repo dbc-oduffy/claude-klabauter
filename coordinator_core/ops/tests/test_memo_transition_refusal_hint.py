@@ -136,3 +136,8 @@ def test_claim_action_on_open_memo_is_one_call(tmp_path):
     assert r["exit_code"] == 0, r
     text = memo.read_text(encoding="utf-8")
     assert "status: actioned" in text and "picked_up_by: s1" in text
+
+
+def test_a_path_param_is_named_as_the_memo_param():
+    out = asyncio.run(_handler({"verb": "claim", "path": "state/cross-repo/x.md", "session_id": "s"}))
+    assert "goes in `memo`, not `path`" in str(out)

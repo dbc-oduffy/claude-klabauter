@@ -181,6 +181,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.check_claude_md_size",
     "coordinator_core.hooks.derive_global_doctrine_live_copy",
     "coordinator_core.hooks.derive_setup_copies",
+    "coordinator_core.hooks.guard_doctrine_surface_bash_write",
     "coordinator_core.hooks.guard_doctrine_surface_ratio",
     "coordinator_core.hooks.guard_doctrine_changelog_prose",
     "coordinator_core.hooks.preuse_write_dispatch",

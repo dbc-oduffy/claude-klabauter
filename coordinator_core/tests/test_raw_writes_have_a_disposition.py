@@ -341,6 +341,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/hooks/preuse_sendmessage_dispatch.py': ('outside-repo', 'once-per-agent advised marker beside the harness transcript under <transcript>/subagents/workflows/<run>: _claim_once'),
     'coordinator_core/ops/migrate_completion_log_legacy.py': ('outside-repo', 'git --pathspec-from-file list under tempfile.mkstemp(), removed after the commit: _commit_moved'),
     'coordinator_core/hooks/flag_em_poll_in_flight.py':('outside-repo', 'per-session poll counter under tempfile.gettempdir(): _save_poll_state'),
+    'coordinator_core/hooks/guard_doctrine_surface_bash_write.py': ('in-repo-non-state', 'no write: the raw-write vocabulary appears only in docstrings and patterns the guard detects'),
     'coordinator_core/hooks/guard_doctrine_surface_ratio_precommit.py': ('outside-repo', 'accumulator json under machine_local_dir() (settings home): _save_accumulator'),
     'coordinator_core/hooks/nudge_multiwave_workflow.py': ('git-internal', 'dispatch log inside the session dir under <git-common-dir>/coordinator-sessions'),
     'coordinator_core/hooks/observe_config_change.py': ('git-internal', 'hook-observation jsonl under <git-common-dir>/coordinator-sessions/hook-observations'),

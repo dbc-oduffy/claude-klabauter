@@ -17,7 +17,8 @@ registry to enroll into or double-fire against. The stdin/stdout JSON
 payload read and `_message_envelope.emit()`'s stdout-writing channel dispatch
 are replaced with the payload-dict-in/response-out `register_op` contract
 and direct `allow_advisory`/`deny` envelope construction, same shape as the
-sibling guard `guard_doctrine_surface_ratio`. No other shape change: the detection logic
+sibling guards this same row lands (`guard_doctrine_surface_bash_write`,
+`guard_doctrine_surface_ratio`). No other shape change: the detection logic
 lives entirely in `coordinator_core.hooks.doctrine_changelog_prose`
 (`new_violations`, `scope_class`), already landed and unmodified by this
 chunk.

@@ -173,3 +173,54 @@ def test_context_file_is_named_in_the_brief_and_needs_a_research_route(repo, cap
     assert code == cli_module.EXIT_OK
     assert "- `notes.md`" in (repo / reply["scratch_dir"] / "ask.md").read_text(encoding="utf-8")
     assert cli_module.main(["--pipeline", "scouts", "--context", "notes.md"]) == cli_module.EXIT_USAGE
+
+
+def _content_root() -> Path:
+    from coordinator_core.conftest import _REAL_CONTENT_ROOT
+
+    content = op_module.content_root_for(_REAL_CONTENT_ROOT) if _REAL_CONTENT_ROOT else None
+    if not (content and (Path(content) / "pipelines").is_dir()):
+        pytest.skip("coordinator-content-repo tree not present")
+    return Path(content)
+
+
+def test_a_repo_and_web_corpus_sizing_emits_with_the_scope_templates_lists(repo, monkeypatch):
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "repo", "--research-source", "web",
+        "--research-target", "repo=C:/some/repo",
+    )
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    segments = {s["pipeline"]: s for s in ctx["shape"]["segments"]}
+    assert segments["repo"]["lists"] == {"chunks": ["A", "B", "C", "D"], "haiku_scouts": ["1", "2"]}
+    assert segments["web"]["lists"] == {"topics": ["a", "b", "c", "d"]}
+
+
+def test_a_flag_reaches_the_pipeline_that_declares_it_and_an_unclaimed_one_is_refused(repo, monkeypatch):
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "repo")
+    ctx, _, _ = op_module._research_route_setup({"flags": {"compare": "true"}}, repo, rel, None)
+    assert ctx["shape"]["segments"][0]["flags"] == {"compare": "true"}
+    with pytest.raises(op_module.PipelineEmitRefused) as exc:
+        op_module._research_route_setup({"flags": {"nope": "true"}}, repo, rel, None)
+    assert any("--flag nope" in r for r in exc.value.reasons)
+
+
+def test_every_segments_refusals_arrive_together(repo):
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "web", "--research-source", "notebooklm",
+    )
+    with pytest.raises(op_module.PipelineEmitRefused) as exc:
+        op_module._research_route_setup({"flags": {"nope": "1"}}, repo, rel, None)
+    reasons = exc.value.reasons
+    assert any("needs its notebooks" in r for r in reasons) and any("--flag nope" in r for r in reasons)
+
+
+def test_sizing_questions_seed_web_topics(repo, monkeypatch):
+    monkeypatch.setattr(op_module, "_pipeline_content_root", _content_root)
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "web",
+        "--research-question", "One?", "--research-question", "Two?", "--research-question", "Three?",
+    )
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    assert ctx["shape"]["segments"][0]["lists"] == {"topics": ["a", "b", "c"]}

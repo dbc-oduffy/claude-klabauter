@@ -191,7 +191,7 @@ def test_pm_and_apm_records_are_never_replaced_by_the_rule(repo: Path) -> None:
     text = (
         _DRAFT
         + "exit_criterion:\n  statement: Original\n  accepted:\n"
-        + "    source: apm\n    apm_ruling: fine\n    'on': '2026-10-01'\n    mode: ceo\n"
+        + "    source: apm\n    apm_ruling: fine\n    ruling_ref: state/apm/r.md\n    'on': '2026-10-01'\n    mode: ceo\n"
         + "interaction_mode: ceo\n"
     )
     path = _sizing(repo, text)

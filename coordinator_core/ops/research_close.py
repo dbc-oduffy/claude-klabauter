@@ -10,6 +10,12 @@ Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
 ``topic_slug`` (both safe single path segments), ``outputs`` (optional list of
 scratch-relative file paths; default is every regular file directly in scratch_dir).
 
+Before any copy, every output is scanned for secret-shaped values (a run can read a
+third-party tree that commits credentials); a hit refuses the close naming file, line and
+pattern, never the value. After the commit, untracked files under ``docs/research/`` written
+since the run began and outside the destination are reported as ``strays``: a member that
+wrote its output elsewhere left it uncommitted and unarchived.
+
 Idempotency: a re-run whose destination dir already holds byte-equal copies of every
 output returns the sha of the commit that landed them (found by walking HEAD for the
 close subject); when no such commit is found, missing copies are written and the commit
@@ -28,6 +34,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
+import re
 import shutil
 from functools import partial
 from pathlib import Path
@@ -43,6 +51,7 @@ from coordinator_core.git.commit import (
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_index import IndexParseError, parse_index_stat
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
@@ -52,6 +61,25 @@ from coordinator_core.ops.fleet._common import main_worktree_root
 
 _RESEARCH_DIR = Path("docs") / "research"
 _WALK_LIMIT = 200
+
+#: Secret-shaped values, by provider format or by an assignment to a secret-named key whose
+#: value mixes letters and digits. Names only: a doc that records a key's NAME passes.
+_SECRET_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b")),
+    ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("OpenAI/Anthropic key", re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_-]{32,}")),
+    (
+        "secret-named assignment",
+        re.compile(
+            r"(?i)\b[\w.-]*(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)"
+            r"[\w.-]*[\"']?\s*[:=]\s*[\"']?(?=[A-Za-z0-9/+_-]*\d)(?=[A-Za-z0-9/+_-]*[A-Za-z])"
+            r"[A-Za-z0-9/+_-]{16,}"
+        ),
+    ),
+)
 
 
 def _err(error: str, **extra) -> dict:
@@ -91,6 +119,46 @@ def _resolve_outputs(scratch: Path, outputs: Optional[list]) -> tuple[list[Path]
     return resolved, None
 
 
+def _secret_hits(sources: list[Path], scratch: Path) -> list[str]:
+    hits: list[str] = []
+    for src in sources:
+        try:
+            text = src.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for name, pattern in _SECRET_PATTERNS:
+                if pattern.search(line):
+                    hits.append(f"{src.relative_to(scratch).as_posix()}:{lineno}: {name}")
+                    break
+    return hits
+
+
+def _strays(worktree: Path, dest_dir: Path, since: float) -> list[str]:
+    """Untracked files under docs/research/, outside `dest_dir`, modified at or after `since`."""
+    root = worktree / _RESEARCH_DIR
+    if not root.is_dir():
+        return []
+    try:
+        tracked = set(parse_index_stat(worktree))
+    except (IndexParseError, OSError):
+        return []
+    found: list[str] = []
+    for dirpath, _dirs, files in os.walk(root):
+        here = Path(dirpath)
+        if here == dest_dir or dest_dir in here.parents:
+            continue
+        for name in files:
+            path = here / name
+            rel = path.relative_to(worktree).as_posix()
+            try:
+                if rel not in tracked and path.stat().st_mtime >= since:
+                    found.append(rel)
+            except OSError:
+                continue
+    return sorted(found)
+
+
 def _landed_sha(worktree: Path, subject: str) -> Optional[str]:
     common = resolve_git_common_dir(worktree)
     head = head_sha(worktree)
@@ -110,6 +178,14 @@ def _close_committed(
     sources, problem = _resolve_outputs(scratch, outputs)
     if problem:
         return _err(problem)
+    hits = _secret_hits(sources, scratch)
+    if hits:
+        return _err(
+            "secret-shaped values in the run's outputs; redact them in scratch (record key names "
+            "only) and re-run research.close",
+            secret_hits=hits,
+        )
+    since = min(p.stat().st_mtime for p in sources)
 
     research_root = worktree / _RESEARCH_DIR
     dest_dir = research_root / f"{datetime.date.today().isoformat()}-{topic_slug}"
@@ -130,7 +206,10 @@ def _close_committed(
         if all(dst.is_file() for _, dst in pairs):
             sha = _landed_sha(worktree, subject)
             if sha is not None:
-                return {"exit_code": 0, "committed": True, "sha": sha, "paths": rel_paths}
+                return _with_strays(
+                    {"exit_code": 0, "committed": True, "sha": sha, "paths": rel_paths},
+                    worktree, dest_dir, since,
+                )
 
     for src, dst in pairs:
         if dst.is_file():
@@ -153,7 +232,21 @@ def _close_committed(
         sha = head_sha(worktree)
     except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
         return _err(f"commit refused: {exc}", paths=rel_paths)
-    return {"exit_code": 0, "committed": True, "sha": sha or "", "paths": rel_paths}
+    return _with_strays(
+        {"exit_code": 0, "committed": True, "sha": sha or "", "paths": rel_paths}, worktree, dest_dir, since
+    )
+
+
+def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> dict:
+    strays = _strays(worktree, dest_dir, since)
+    if strays:
+        result["strays"] = strays
+        result["warning"] = (
+            f"{len(strays)} untracked docs/research file(s) written during this run sit outside "
+            f"{dest_dir.relative_to(worktree).as_posix()}; move each into the run's scratch dir "
+            "and re-close, or delete it"
+        )
+    return result
 
 
 def _close_sync(worktree: Path, params: dict) -> dict:

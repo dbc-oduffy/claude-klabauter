@@ -404,3 +404,17 @@ def test_large_fixture_mutated_phase_mismatch_is_warn_not_error(tmp_path):
     assert "phase-call-title-mismatch" in codes
     finding = next(f for f in result["findings"] if f["code"] == "phase-call-title-mismatch")
     assert finding["severity"] == "WARN"
+
+
+def test_an_agent_type_pinning_its_own_model_is_not_a_model_default(monkeypatch):
+    from coordinator_core.hooks import block_workflow_unmodeled_agent as bwua
+    from coordinator_core.ops._workflow_contract import run_checks
+
+    monkeypatch.setattr(bwua, "_resolve_call_site_tier", lambda t: "haiku" if t == "coordinator:repo-scout" else None)
+    script = (
+        "export const meta = {name: 'n', description: 'd'};\n"
+        "await agent('a', {agentType: 'coordinator:repo-scout'});\n"
+        "await agent('b', {agentType: 'general-purpose'});\n"
+    )
+    warned = [f.line for f in run_checks(script) if f.code == "agent-model-default"]
+    assert warned == [3]

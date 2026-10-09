@@ -31,6 +31,18 @@ SCOUTS_PIPELINE: Final = "scouts"
 DEEP_PIPELINE: Final = "unblock"
 PREFLIGHT_PIPELINE: Final = "nlm-preflight"
 
+# What each pipeline is for, named in the shape reason: `deep` resolves to the unblock
+# diagnostic, which a comprehension ask must not run by mistake.
+PIPELINE_JOBS: Final[dict[str, str]] = {
+    SCOUTS_PIPELINE: "quick web scouts over the ask",
+    "web": "web corpus survey",
+    "repo": "repo corpus survey",
+    "structured": "structured-data corpus survey",
+    "notebooklm": "NotebookLM corpus survey",
+    DEEP_PIPELINE: "the unblock-us diagnostic (diagnose, decompose, challenge) for an EM stuck "
+    "delivering, not a comprehension survey; use --research-class corpus to understand a subject",
+}
+
 # Deep roster: role members carry the role in DoE's templates, not in a persona.
 UNBLOCK_ROLES: Final = ("diagnose", "decompose", "challenge")
 UNBLOCK_ROLE_AGENT_TYPE: Final = "general-purpose"

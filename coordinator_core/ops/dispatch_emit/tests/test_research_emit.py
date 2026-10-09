@@ -113,7 +113,7 @@ def test_deepest_depth_sets_the_repo_flag_only():
     shape, segs = _segments({"value_class": "corpus", "sources": ["web", "repo"], "depth": "deepest"})
     assert shape["pipelines"] == ["web", "repo"]
     assert dict(segs[0][1].flags) == {}
-    assert dict(segs[1][1].flags) == {"deepest": "true"}
+    assert dict(segs[1][1].flags) == {"sonnet_scouts": "true", "deepest": "true"}
 
 
 def test_the_deep_roster_carries_its_member_prompt_once():

@@ -233,8 +233,11 @@ FORWARDED_ENV_PREFIXES = CALLER_PREFIXES
 #: reads `COORDINATOR_AUTONOMOUS_ASK_OK`. Both ops' module docstrings named this list's absence
 #: as the reason their env reads could not survive a `command`->`http` flip -- this closes
 #: that, and those docstrings' "does not yet carry this" notes are stale as of this commit.
+#: `bash_guards.block_topic_branch` reads `CLAUDE_CODE_REMOTE` (the cloud session's own
+#: `claude/*` branch is not a topic branch); absent here, every cloud push was denied.
 FORWARDED_ENV_NAMES = frozenset(
     {
+        "CLAUDE_CODE_REMOTE",
         "CLAUDE_HOME",
         "HOME",
         "USERPROFILE",

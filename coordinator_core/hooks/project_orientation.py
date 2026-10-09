@@ -486,10 +486,19 @@ def _install_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
     try:
         cache_text = cache_path.read_text(encoding="utf-8")
     except Exception:
-        out.append(
-            "── Install currency: absent — no doctor-last-run.json cache found; "
-            "/workday-start populates it ──\n"
-        )
+        from coordinator_core.hooks.day_branch_assert import is_cloud_session
+
+        if is_cloud_session(env if isinstance(env, dict) else None):
+            # A cloud container's per-box caches start empty by construction.
+            out.append(
+                "── Install currency: not yet recorded on this cloud container (expected on a "
+                "fresh one) — /workday-start populates it ──\n"
+            )
+        else:
+            out.append(
+                "── Install currency: absent — no doctor-last-run.json cache found; "
+                "/workday-start populates it ──\n"
+            )
         return
 
     parsed = None

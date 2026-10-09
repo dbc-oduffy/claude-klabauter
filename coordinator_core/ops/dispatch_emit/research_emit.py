@@ -19,7 +19,7 @@ from typing import Mapping, Sequence
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "corpus_default_lists", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -31,6 +31,22 @@ _ROSTER_LIST = "roster"
 _QUESTIONS_LIST = "questions"
 _NOTEBOOKS_LIST = "notebooks"
 _NOTEBOOKLM_PIPELINE = "notebooklm"
+
+# The corpus scope templates fix these shapes: the repo scope defines exactly four chunks A-D
+# (spanning every target, by the repos' architecture, not one per target) and assigns them to
+# two Haiku scouts; the web scope defaults to four topics a-d. A caller's --list overrides.
+CORPUS_DEFAULT_LISTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "repo": {"chunks": ("A", "B", "C", "D"), "haiku_scouts": ("1", "2")},
+    "web": {"topics": ("a", "b", "c", "d")},
+}
+
+
+def corpus_default_lists(pipeline: str, questions: Sequence[str] = ()) -> dict[str, tuple[str, ...]]:
+    """`CORPUS_DEFAULT_LISTS[pipeline]`, with web topics seeded one letter per research question."""
+    lists = dict(CORPUS_DEFAULT_LISTS.get(pipeline, {}))
+    if pipeline == "web" and questions:
+        lists["topics"] = tuple("abcdefghijklmnopqrstuvwxyz"[: len(questions)])
+    return lists
 
 
 def _slug(text: str) -> str:
@@ -147,7 +163,8 @@ def segments_for(
     pipeline. The scouts segment carries the slugs of `questions` (with none, the one entry
     `question`, the bare ask); the unblock segment carries the deep roster, three role members plus
     one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
-    the `targets` whose source is notebooklm as its notebooks.
+    the `targets` whose source is notebooklm as its notebooks. `CORPUS_DEFAULT_LISTS` is bound by
+    the caller, which sees which lists each loaded manifest declares.
     """
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []

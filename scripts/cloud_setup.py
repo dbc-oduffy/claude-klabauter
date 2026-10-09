@@ -580,6 +580,29 @@ def _git_clone(url: str, dest: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"git clone {url} -> {dest} failed: {result.stderr.strip()}")
+    _pin_origin_head(dest)
+
+
+def _pin_origin_head(dest: str) -> None:
+    """Point `refs/remotes/origin/HEAD` at the checked-out branch, offline.
+
+    A clone of a detached-HEAD source (a platform mount) gets no `origin/HEAD`, and every
+    `origin/HEAD`-relative command then fails. `set-head origin <branch>` writes the symref
+    locally where `set-head -a` would query the remote. A detached clone is left alone.
+    """
+    head = Path(dest) / ".git" / "HEAD"
+    try:
+        ref = head.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if not ref.startswith("ref: refs/heads/"):
+        return
+    branch = ref.removeprefix("ref: refs/heads/")
+    subprocess.run(  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+        ["git", "-C", dest, "remote", "set-head", "origin", branch],
+        capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 #: The directory name the platform mounts each `CLONES` repo under when the
@@ -624,6 +647,7 @@ def _seed_clone_from_mount(mount: Path, url: str, dest: str) -> bool:
             shutil.rmtree(dest, ignore_errors=True)
             return False
         subprocess.run(["git", "-C", dest, "remote", "set-url", "origin", url], **kw)  # popup-intentional-last-resort: Linux-only cloud bootstrap, importable before coordinator_core
+        _pin_origin_head(dest)
     except (OSError, subprocess.SubprocessError):
         shutil.rmtree(dest, ignore_errors=True)
         return False
@@ -3404,6 +3428,25 @@ def land_example_retrieval_repo_repo_bundle(report: Report) -> None:
         )
 
 
+WORK_TARGET_SCRIPT = "rag_work_target_index.py"
+
+
+def work_target_script(report: Report) -> Path | None:
+    """The readiness worker on disk: beside this file in a checkout, else in the engine checkout.
+
+    The documented bootstrap curls `cloud_setup.py` alone into `/root`, so the sibling is
+    absent there and the engine checkout's `scripts/` copy is the one that exists. None when
+    neither does: nothing may then name a path to it.
+    """
+    for candidate in (
+        Path(__file__).resolve().parent / WORK_TARGET_SCRIPT,
+        Path(report.engine_root or ENGINE_CURRENT_LINK) / "scripts" / WORK_TARGET_SCRIPT,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def start_work_target_indexing(report: Report) -> None:
     """Start `rag_work_target_index.py` detached for the session's work targets.
 
@@ -3416,7 +3459,11 @@ def start_work_target_indexing(report: Report) -> None:
     if retrieval_half_skipped(report) or not report.rag_install or report.rag_install.get("exit_code") != 0:
         report.rag_work_targets = {"skipped": "retrieval install did not succeed"}
         return
-    _scripts_dir = str(Path(__file__).resolve().parent)
+    script = work_target_script(report)
+    if script is None:
+        report.rag_work_targets = {"error": f"{WORK_TARGET_SCRIPT} is in neither this file's dir nor the engine checkout"}
+        return
+    _scripts_dir = str(script.parent)
     if _scripts_dir not in sys.path:
         sys.path.insert(0, _scripts_dir)
     try:
@@ -4119,6 +4166,22 @@ def _verdict_body(report: Report) -> str:
     )
 
 
+def _readiness_section(script: Path | None) -> str:
+    """The readiness instruction, naming the worker only at a path that exists."""
+    if script is None:
+        return (
+            "## Retrieval readiness\n\n"
+            f"The readiness worker (`{WORK_TARGET_SCRIPT}`) is not in this container, so readiness "
+            "is unknown: say so before relying on retrieval, and never fall back to grep silently.\n\n"
+        )
+    return (
+        "## Retrieval readiness\n\n"
+        f"At session start run `python3 {script.as_posix()} --status` (exit 0 = ready). Not ready and nothing "
+        "indexing: run the same script with the work-target keys, comma-separated; never fall back "
+        "to grep without saying so.\n\n"
+    )
+
+
 def _orientation_body(report: Report) -> str | None:
     """Render the container's ordinary shape, or None when there is nothing to state.
 
@@ -4150,11 +4213,8 @@ def _orientation_body(report: Report) -> str | None:
         "as it names the repo it means.\n\n"
         f"Addressable keys: {known}. Pass one as `repo=\"repos.<key>\"` on a call, or set "
         f"`{SESSION_FOCUS_ENV}` (e.g. `repos.a,repos.b`) for the whole session.\n\n"
-        "## Retrieval readiness\n\n"
-        f"At session start run `python3 {Path(__file__).resolve().parent / 'rag_work_target_index.py'} "
-        "--status` (exit 0 = ready). Not ready and nothing indexing: run the same script with the "
-        "work-target keys, comma-separated; never fall back to grep without saying so.\n\n"
-        "## Working in the shared tree\n\n"
+        + _readiness_section(work_target_script(report))
+        + "## Working in the shared tree\n\n"
         "- A mid-turn user interrupt kills every background subagent: commit early and often, "
         "and prefer short-lived agents.\n"
         "- Never `git stash`, `git checkout -p`, or any interactive git: other agents' uncommitted "

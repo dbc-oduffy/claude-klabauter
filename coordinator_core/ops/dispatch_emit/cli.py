@@ -105,7 +105,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
     subjects_from_value,
 )
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
-from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError, part_run_id
+from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
@@ -476,7 +476,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="research route: emit the research pipelines the sizing's research block shapes to; "
-        "emit-only, exclusive of every other route selector",
+        "emit-only, exclusive of every other route selector. Takes --list and --flag to override "
+        "a pipeline's derived inputs (e.g. --flag compare=true), plus --context and --scratch-dir",
     )
     parser.add_argument(
         "--research",
@@ -669,7 +670,7 @@ def _print_workflow_invocation(
 def _part_out_path(out_path: str, index: int) -> str:
     out = Path(out_path)
     stem = out.name[: -len(_REQUIRED_OUT_SUFFIX)]
-    return str(out.with_name(f"{part_run_id(stem, index)}{_REQUIRED_OUT_SUFFIX}"))
+    return str(out.with_name(f"{stem}-p{index}{_REQUIRED_OUT_SUFFIX}"))
 
 
 def _emit_inventory_parts(
@@ -683,22 +684,20 @@ def _emit_inventory_parts(
     `<run_id>-pN` spine and `-pN.workflow.mjs` script. The part count grows
     until every part composes under the cap; parts are fired in order."""
     count = max(2, -(-over.script_size * 11 // (_emit._WORKFLOW_SCRIPT_BYTE_CAP * 10)))
-    # Every part, and every retry at a higher count, cuts the ONE tranche record the
-    # over-cap emit minted; re-minting per part numbered sibling parts t8/t9.
-    tranche_record = getattr(over, "tranche_inventory", None)
-    if tranche_record:
-        params = {**params, "inventory_path": str(tranche_record)}
     if not params.get("output_path"):
         from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
-        # The spine run id is minted from this record, so the script name is keyed off
-        # the same record (tranche suffix included), never the pre-tranche inventory.
         inventory = Path(params["inventory_path"])
         run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
         params = {
             **params,
             "output_path": str(inventory.parent / f"{run_id}{_REQUIRED_OUT_SUFFIX}"),
         }
+    # Every part, and every retry at a higher count, cuts the ONE tranche record the
+    # over-cap emit minted; re-minting per part numbered sibling parts t8/t9.
+    tranche_record = getattr(over, "tranche_inventory", None)
+    if tranche_record:
+        params = {**params, "inventory_path": str(tranche_record)}
     while True:
         results: list = []
         try:
@@ -995,7 +994,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             ("--subjects", args.subjects),
             ("--scratch-dir", args.scratch_dir if not is_research_route else None),
             ("--resume-missing", args.resume_missing),
-            ("--flag", args.flag),
+            ("--flag", args.flag if not is_research_route else None),
             ("--list", args.list if not is_research_route else None),
             ("--validator", args.validator),
         )
@@ -1293,6 +1292,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         try:
             if args.list:
                 params["lists"] = _parse_lists(args.list)
+            if args.flag:
+                params["flags"] = _parse_flags(args.flag)
         except PipelineEmitRefused as exc:
             for reason in exc.reasons:
                 print(f"emit-dispatch-workflow: ERROR — {reason}", file=sys.stderr)

@@ -416,6 +416,20 @@ def test_bwua_partial_modeled_warns_via_additional_context(tmp_path):
     assert "2 agent() calls" in hso["additionalContext"]
 
 
+def test_bwua_partial_modeled_is_silent_when_the_rest_inherit_a_pinned_definition(tmp_path, monkeypatch):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "repo-scout.md").write_text("---\nname: repo-scout\nmodel: haiku\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(bwua, "_agents_dir", lambda: agents)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
+    script = "agent('a', {model: 'sonnet'}); agent('b', {agentType: 'coordinator:repo-scout'});"
+    result = bwua._handler(
+        {"tool_name": "Workflow", "tool_input": {"script": script}, "transcript_path": str(transcript)}
+    )
+    assert result == {}
+
+
 def test_bwua_env_override_suppresses(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")

@@ -75,7 +75,18 @@ def test_unknown_value_class_refused():
 
 def test_deepest_flags_the_repo_pipeline_only():
     assert shape({"value_class": "corpus", "sources": ["web", "repo"], "depth": "deepest"})["flags"] == {
-        "repo": {"deepest": "true"}
+        "repo": {"sonnet_scouts": "true", "deepest": "true"}
     }
     assert shape({"value_class": "corpus", "sources": ["web"], "depth": "deepest"})["flags"] == {}
-    assert shape({"value_class": "corpus", "sources": ["repo"], "depth": "deeper"})["flags"] == {}
+
+
+def test_deeper_runs_sonnet_scouts_and_standard_keeps_haiku():
+    assert shape({"value_class": "corpus", "sources": ["repo"], "depth": "deeper"})["flags"] == {
+        "repo": {"sonnet_scouts": "true"}
+    }
+    assert shape({"value_class": "corpus", "sources": ["repo"]})["flags"] == {}
+
+
+def test_deep_reason_names_the_unblock_diagnostic():
+    reason = shape({"value_class": "deep"})["reason"]
+    assert "unblock-us diagnostic" in reason and "--research-class corpus" in reason

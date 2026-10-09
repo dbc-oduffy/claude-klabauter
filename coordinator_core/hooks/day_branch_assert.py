@@ -64,9 +64,15 @@ _CLOUD_SESSION_BRANCH_PREFIX = "claude/"
 
 def is_cloud_session(env: Optional[dict] = None) -> bool:
     """True under the cloud harness (`CLAUDE_CODE_REMOTE=true`); shared with
-    `bash_guards.block_topic_branch`."""
-    source = os.environ if env is None else env
-    return (source.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
+    `bash_guards.block_topic_branch`.
+
+    A payload `env` that carries the name decides. One that lacks it (the http door forwards
+    no harness names) falls back to this process's environment: being a cloud container is
+    a property of the host, which every process on it shares, unlike a per-session override.
+    """
+    if env is not None and "CLAUDE_CODE_REMOTE" in env:
+        return (env.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
+    return (os.environ.get("CLAUDE_CODE_REMOTE") or "").strip().lower() == "true"
 
 
 _is_cloud_session = is_cloud_session

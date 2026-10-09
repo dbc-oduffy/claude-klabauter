@@ -31,7 +31,8 @@ def _choice(research: Mapping, key: str, allowed: tuple[str, ...], default: Opti
 def shape(research: Mapping) -> dict[str, Any]:
     """Return {tier, reason, pipelines, flags}; `flags` is per pipeline, bound by research_emit.segments_for.
 
-    `depth` reaches only the repo manifest's `deepest` flag (plan Design 1, Open question 2).
+    `depth` reaches the repo manifest only: `deeper` runs Sonnet scouts, `deepest` adds the
+    relay pass. Haiku scouts are the `standard` default and the documented failure on large repos.
 
     Raises ValueError on an unknown value_class, appetite, source or depth.
     """
@@ -63,7 +64,12 @@ def shape(research: Mapping) -> dict[str, Any]:
         pipelines = list(sources)
     if "notebooklm" in sources:
         pipelines.insert(0, rc.PREFLIGHT_PIPELINE)
-    flags = {"repo": {"deepest": "true"}} if depth == "deepest" and "repo" in pipelines else {}
+    flags: dict[str, dict[str, str]] = {}
+    if "repo" in pipelines and depth != "standard":
+        flags["repo"] = {"sonnet_scouts": "true", **({"deepest": "true"} if depth == "deepest" else {})}
+    jobs = [f"{p}: {rc.PIPELINE_JOBS[p]}" for p in pipelines if p in rc.PIPELINE_JOBS]
+    if jobs:
+        reason += "; runs " + "; ".join(jobs)
     return {"tier": tier, "reason": reason, "pipelines": pipelines, "flags": flags}
 
 

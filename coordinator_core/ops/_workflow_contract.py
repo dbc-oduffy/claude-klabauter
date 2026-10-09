@@ -613,13 +613,30 @@ def _has_top_level_option_key(args: str, key: str) -> bool:
     return False
 
 
-def check_model_default(scrubbed: str) -> List[Finding]:
+_AGENT_TYPE_LITERAL = re.compile(r"""\bagentType\s*:\s*(['"])([^'"]+)\1""")
+
+
+def _pinned_agent_type(raw_args: str) -> bool:
+    """True when the call's literal `agentType` names a definition whose frontmatter pins a
+    model the Workflow guard accepts: that agent never inherits the session model, and
+    `enforce_agent_model_pin` refuses a `model:` beside it."""
+    m = _AGENT_TYPE_LITERAL.search(raw_args)
+    if not m:
+        return False
+    from coordinator_core.hooks.block_workflow_unmodeled_agent import inherits_an_accepted_pin
+
+    return inherits_an_accepted_pin(m.group(2))
+
+
+def check_model_default(scrubbed: str, raw: Optional[str] = None) -> List[Finding]:
     findings: List[Finding] = []
     for m in _AGENT_CALL_SITE.finditer(scrubbed):
         open_paren = m.end() - 1
         close_paren = _find_matching_paren(scrubbed, open_paren)
         args = scrubbed[open_paren:close_paren]
-        if not _has_top_level_option_key(args, "model"):
+        if not _has_top_level_option_key(args, "model") and not (
+            raw is not None and _pinned_agent_type(raw[open_paren:close_paren])
+        ):
             line = scrubbed.count("\n", 0, m.start()) + 1
             findings.append(
                 Finding(
@@ -683,6 +700,6 @@ def run_checks(script: str) -> List[Finding]:
     findings.extend(check_forbidden_globals(scrubbed))
     findings.extend(check_phase_mismatch(script, block))
     findings.extend(check_barrier_vs_pipeline(scrubbed))
-    findings.extend(check_model_default(scrubbed))
+    findings.extend(check_model_default(scrubbed, script))
 
     return findings
