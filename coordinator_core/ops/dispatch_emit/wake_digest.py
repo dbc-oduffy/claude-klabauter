@@ -49,6 +49,7 @@ RUNTIME_VARS = (
     "_skippedDone",
     "_unusableChecks",
     "_reviews",
+    "_runBase",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -57,8 +58,7 @@ _CRITERION_CONTRADICTION_RE_JS = (
     r"/\bnot (?:yet )?met\b|\bbaseline (?:still )?match(?:es|ed)\b|\bmatch(?:es|ed)? (?:the )?baseline\b/i"
 )
 
-#: Every script that renders `next_action_parts` or `completion_return_js` must emit this.
-CAP_HELPER_JS = (
+_CAP_HELPER_JS = (
     "function _cap(s, n) { "
     "if (s === null || s === undefined) return null; "
     "s = String(s); "
@@ -220,20 +220,10 @@ def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
     )
 
 
-#: The stage's fail set is `caused` + `unverified` (DoE test-runner-baseline-attribution): a
-#: failing run whose export-measured baseline puts every failure in `pre_existing` passes.
-#: A heuristic baseline never clears -- its ids are all `unverified` by contract.
-_BASELINE_CLEARS_JS = (
-    "((t) => { const b = t && t.baseline; return !!(t.status === 'fail' && t.baseline_method === 'export' && b "
-    "&& (b.caused ?? []).length === 0 && (b.unverified ?? []).length === 0 "
-    "&& (b.pre_existing ?? []).length > 0 && (b.pre_existing ?? []).length >= (t.tests_failed ?? 0)); })"
-)
-
-
 def _tests_status_expr(test_var: Optional[str], verification_var: str, test_absent_status: str) -> str:
     """JS expression for the run's tests status: any failed row verification wins; a
     pass that skipped tests (run-level or any row) is `pass-with-skips`, never `pass`."""
-    base = f"({test_var} ? ({_BASELINE_CLEARS_JS}({test_var}) ? 'pass' : {test_var}.status) : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
+    base = f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
     run_skips = f"({test_var} && ({test_var}.status === 'pass-with-skips' || ({test_var}.status === 'pass' && ({test_var}.skipped ?? []).length > 0)))" if test_var is not None else "false"
     return (
         f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
@@ -357,8 +347,7 @@ def next_action_parts(
                 + (
                     f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
-                    f"sidecar: {falsifier_var}.sidecar_path ?? null, "
-                    f"register_rows: {falsifier_var}.register_rows ?? null }} "
+                    f"sidecar: {falsifier_var}.sidecar_path ?? null }} "
                     ": { status: 'not_run', observation: null, sidecar: null })"
                     if falsifier_present
                     else "{ status: 'not_run', observation: null, sidecar: null }"
@@ -461,6 +450,7 @@ def completion_return_js(
     predispatch: Optional[dict] = None,
     held: bool = False,
     seam: bool = False,
+    run_base_runtime: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -684,7 +674,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
-        "run_base_sha": _js_lit(run_base_sha),
+        "run_base_sha": RUNTIME_VARS[13] if run_base_runtime else _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),
@@ -726,7 +716,7 @@ def completion_return_js(
     if missing:
         raise AssertionError(f"completion_return_js field table missing schema paths: {sorted(missing)}")
 
-    lines = [CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
+    lines = [_CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
     lines.append("return {")
     lines.append(f"  schema: {table['schema']},")
     lines.append(f"  version: {table['version']},")

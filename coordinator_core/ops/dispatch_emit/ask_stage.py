@@ -54,7 +54,7 @@ from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_claus
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
-from coordinator_core.ops.dispatch_emit.wave_map import build_waves, dag_from_waves
+from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
@@ -186,7 +186,6 @@ def stage(
 
     clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
 
-    after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
@@ -212,7 +211,6 @@ def stage(
                     brief_path=_rel(root, brief),
                     writes=tuple(paths),
                     wave=wave_no,
-                    deps=after.get(row.id, ()),
                 )
             )
             chunks.append(

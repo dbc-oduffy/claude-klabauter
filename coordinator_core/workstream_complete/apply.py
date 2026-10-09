@@ -287,7 +287,6 @@ from coordinator_core.telemetry.composition_record import (
 )
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
 from coordinator_core.workstream_complete import directives_commit_tail
-from coordinator_core.workstream_complete import directives_completion
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
 from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
@@ -902,14 +901,12 @@ def _decided_nature(decisions: dict[str, Any]) -> Optional[str]:
 
 
 def _fill_completion_entry_surfaces(
-    repo_root: Optional[Path], stdout: str, decisions: dict[str, Any], review_notes_section: str = ""
+    repo_root: Optional[Path], stdout: str, decisions: dict[str, Any]
 ) -> Optional[str]:
     """Writes the decided title/nature/prose into the entry `d-complete-entry`
     printed. Returns an error naming the missing `decisions` key(s) when a
     placeholder surface has no decided value, else `None`. An entry the CLI
-    did not leave on disk is not this function's to judge. A non-empty
-    `review_notes_section` is appended to the entry's prose body (never its
-    frontmatter) once."""
+    did not leave on disk is not this function's to judge."""
     lines = (stdout or "").strip().splitlines()
     if repo_root is None or not lines:
         return None
@@ -933,10 +930,6 @@ def _fill_completion_entry_surfaces(
         )
     except AuthoredSurfaceMissing as exc:
         return f"{entry.name} left placeholder; set decisions key(s): {', '.join(exc.keys)}"
-    if review_notes_section:
-        text = entry.read_text(encoding="utf-8")
-        if "## Review notes" not in text:
-            entry.write_text(text.rstrip("\n") + "\n\n" + review_notes_section, encoding="utf-8")
     return None
 
 
@@ -973,7 +966,6 @@ def _execute_directives(
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
     composition_budget: "Optional[CompositionBudget]" = None,
-    review_notes_section: str = "",
 ) -> tuple[int, dict[str, Any]]:
     """THE directive-execution seam (halt contract). Iterates `directives`
     in list order; each entry whose gate is open (per
@@ -1231,7 +1223,7 @@ def _execute_directives(
             continue
         if directive["id"] == _COMPLETE_ENTRY_DIRECTIVE_ID:
             fill_error = _fill_completion_entry_surfaces(
-                _lazy_repo_root(), result.get("stdout", ""), decisions, review_notes_section
+                _lazy_repo_root(), result.get("stdout", ""), decisions
             )
             if fill_error is not None:
                 failed.append({"id": directive["id"], "error": fill_error})
@@ -1916,38 +1908,6 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 )
                 return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), no_commit_row_report
 
-        undecided_notes_jp = next(
-            (jp for jp in judgment_points if jp.get("id") == "jp-review-notes-undecided"), None
-        )
-        if undecided_notes_jp is not None:
-            review_notes_report = {
-                "error": (
-                    "review notes (em_may_think_differently) lack written decisions -- set "
-                    "decisions['review_note_decisions'] before this workstream can close; "
-                    "see judgment_points[0]"
-                ),
-                "judgment_points": [undecided_notes_jp],
-                "landed": [],
-                "blocked": [undecided_notes_jp["id"]],
-                "blocked_remedy": {},
-                "failed": [],
-                "results": [],
-            }
-            exit_label = exit_code_label(
-                int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), review_notes_report
-            )
-            return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), review_notes_report
-
-        plan_resolution = envelope.get("preflight", {}).get("governing_plan_resolution") or {}
-        review_notes = directives_completion.read_review_notes(
-            Path(plan_resolution["path"]) if plan_resolution.get("path") else None
-        )
-        review_notes_section = (
-            directives_completion.render_review_notes_section(review_notes, effective_decisions)
-            if review_notes
-            else ""
-        )
-
         sid = envelope.get("preflight", {}).get("session_shape", {}).get("sid")
         try:
             exit_code, report = _execute_directives(
@@ -1956,7 +1916,6 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 effective_decisions,
                 sid=sid,
                 composition_budget=composition_budget,
-                review_notes_section=review_notes_section,
             )
         except TransportFailure as exc:
             # 2026-08-25 bug-backlog (a TransportFailure abort releases no

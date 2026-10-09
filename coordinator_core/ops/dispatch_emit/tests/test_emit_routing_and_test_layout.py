@@ -16,13 +16,6 @@ def test_memo_send_row_is_detected_by_brief_kind_and_outbox_write():
     assert not _is_memo_send_row({"brief": "edit a module", "writes": ["a.py"]})
 
 
-def test_a_memo_outbox_directory_surface_or_writes_under_is_a_memo_send_row():
-    # example-game-repo-d2 idk-01 C13: doc-edit, writes: [], writes_under the outbox, a "memo lane" body.
-    assert _is_memo_send_row({"surface": "state/memo-outbox/", "writes": [], "writes_under": ["state/memo-outbox/"]})
-    assert _is_memo_send_row({"writes_under": [".coordinator-local/memo-outbox"]})
-    assert not _is_memo_send_row({"surface": "state/memo-outbox-notes/", "writes_under": ["docs/"]})
-
-
 def test_memo_send_row_is_narrated_as_an_em_step():
     out = emit._excluded_rows_narration(
         [{"id": "C9", "reason": "em-performed", "detail": "EM STEP: cross-repo memo send"}]

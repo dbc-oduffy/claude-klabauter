@@ -204,13 +204,6 @@ def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) ->
     return note
 
 
-def _register_evidence(plan_path: str, repo_root: Optional[Path]):
-    """The plan's `JudgeEvidence` (register rows, PM words), or None when the plan is unreadable."""
-    from coordinator_core.ops.requirement_register import plan_judge_evidence
-
-    return plan_judge_evidence(plan_path, Path(repo_root) if repo_root is not None else Path.cwd())
-
-
 def compose_reverify_script(
     *,
     fragment: dict,
@@ -284,7 +277,6 @@ def compose_reverify_script(
         criterion=criterion,
         prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
         host_degraded=host_degraded,
-        evidence=_register_evidence(plan_path, repo_root),
     )
     phases = [_js_string_literal(_PHASE)]
     tests_lines = ""
@@ -724,7 +716,6 @@ def compose_rejudge_script(
         criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
         prompt_head=f"Judge at HEAD {head_sha}: follow-up commits may have fixed what the prior run's judge saw.",
         host_degraded=host_degraded,
-        evidence=_register_evidence(plan_path, repo_root),
     )
     if call is None:
         raise ReverifyRefused("rejudge: the review roster declares no criterion judge")

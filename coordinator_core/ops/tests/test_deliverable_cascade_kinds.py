@@ -576,9 +576,7 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # recorded in the x-bump-note chain; upstream reads 1.25.0 as well.
     # Re-pinned 1.25.0 -> 1.31.0: claude-klabauter-ahead 1.26.0-1.31.0, all additive and recorded in the
     # x-bump-note chain; 1.31.0 is the `engine-size-rule` acceptance arm (DoE copies after).
-    # Re-pinned 1.31.0 -> 1.32.0: DoE 1a6f2d9820 adds `requirement_register` and reconciles it
-    # with the engine-size-rule arm; vendored byte-for-byte.
-    ("sizing-object.schema.json", "1.32.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json (1.32.0 at 1a6f2d9820)"),
+    ("sizing-object.schema.json", "1.32.0", "coordinator-content-repo coordinator/schemas/sizing-object.schema.json"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch

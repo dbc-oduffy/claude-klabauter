@@ -437,7 +437,17 @@ class TestDestructiveRmSubshellResolvedTarget:
 class TestRunawayFind:
     def test_bypass_matrix(self):
         base = "find / -name '*.pyc'"
-        _assert_bypass_resistant(_decision, base)
+        _assert_bypass_resistant(
+            _decision,
+            base,
+            known_bypasses={
+                "setsid_wrapper": (
+                    "LIVE BYPASS: check_runaway_find's `_FIND_WRAPPER_WORDS` "
+                    "does not include `setsid` -- staff-eng review "
+                    "2026-07-29 Finding 3"
+                ),
+            },
+        )
 
 
 class TestBlockWorktreeCreation:

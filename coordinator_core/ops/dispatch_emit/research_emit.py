@@ -1,36 +1,31 @@
 """Research segments for the dispatch.emit research route: a shape result to ordered (pipeline, inputs).
 
 `segments_for` turns a research.shape result into the ordered `(pipeline, PipelineInputs)` segments
-the chain composer runs; `write_ask` writes the ask file the scouts read as `{{brief}}`;
-`bind_context` names the caller's non-corpus context files in the brief every member reads.
+the chain composer runs; `write_ask` writes the ask file the scouts read as `{{brief}}`.
 Scout questions are slugged to [a-z0-9-] (at most 48 chars) because the scouts template names
 `digest-{{item}}.md`.
 
 Negative-spec: loads and validates no manifest, composes no script, resolves no content root; the
-only writes are ask.md and brief.md under the caller's repo-relative scratch dir.
+only write is ask.md under the caller's repo-relative scratch dir.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "MAX_SLUG_LEN", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
-BRIEF_FILE = "brief.md"
-_CONTEXT_HEADING = "## Context files"
 MAX_SLUG_LEN = 48
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _BARE_SLUG = "question"
 _ROSTER_LIST = "roster"
 _QUESTIONS_LIST = "questions"
-_NOTEBOOKS_LIST = "notebooks"
-_NOTEBOOKLM_PIPELINE = "notebooklm"
 
 
 def _slug(text: str) -> str:
@@ -85,44 +80,6 @@ def write_ask(root: Path, scratch_rel: str, ask: str, questions: Sequence[str] =
     return rel
 
 
-def bind_context(root: Path, scratch_rel: str, brief_rel: str, context: Sequence[str]) -> str:
-    """Name `context` files in the brief; return the brief path members read.
-
-    The ask file gains a `## Context files` section in place. Any other brief (a sizing) is never
-    edited: `<scratch>/brief.md` points at it and carries the section, and that path is returned.
-    Paths under `root` are written repo-relative, others absolute. Refuses a file that is missing.
-    """
-    if not context:
-        return brief_rel
-    names, missing = [], []
-    for raw in context:
-        path = Path(raw) if Path(raw).is_absolute() else root / raw
-        if not path.is_file():
-            missing.append(f"context file {raw} does not exist")
-            continue
-        try:
-            names.append(path.resolve().relative_to(root.resolve()).as_posix())
-        except ValueError:
-            names.append(path.resolve().as_posix())
-    if missing:
-        raise PipelineEmitRefused(missing)
-    section = (
-        f"{_CONTEXT_HEADING}\n\nRead each before you start; they are sources outside every corpus.\n\n"
-        + "".join(f"- `{name}`\n" for name in names)
-    )
-    ask_rel = f"{scratch_rel.rstrip('/')}/{ASK_FILE}"
-    if brief_rel == ask_rel:
-        target = root / ask_rel
-        text = target.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + section
-        target.write_text(text, encoding="utf-8", newline="\n")
-        return brief_rel
-    rel = f"{scratch_rel.rstrip('/')}/{BRIEF_FILE}"
-    target = root / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(f"The brief is `{brief_rel}`; read it first.\n\n{section}", encoding="utf-8", newline="\n")
-    return rel
-
-
 def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:
     roster = [{"slug": role, "agent_type": rc.UNBLOCK_ROLE_AGENT_TYPE} for role in rc.UNBLOCK_ROLES]
     for source in sources or ("web",):
@@ -139,15 +96,13 @@ def segments_for(
     scratch_rel: str,
     questions: Sequence[str] = (),
     sources: Sequence[str] = (),
-    targets: Sequence[Mapping[str, str]] = (),
 ) -> list[tuple[str, PipelineInputs]]:
     """One `(pipeline, PipelineInputs)` per manifest in `shape["pipelines"]`, in order.
 
     Every segment binds `brief_rel` and `scratch_rel` and the flags `shape["flags"]` names for its
     pipeline. The scouts segment carries the slugs of `questions` (with none, the one entry
     `question`, the bare ask); the unblock segment carries the deep roster, three role members plus
-    one specialist per `sources` entry that has one; the notebooklm segment carries the refs of
-    the `targets` whose source is notebooklm as its notebooks.
+    one specialist per `sources` entry that has one.
     """
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []
@@ -158,10 +113,6 @@ def segments_for(
             lists[_QUESTIONS_LIST] = tuple(scout_slugs(questions) if questions else [_BARE_SLUG])
         elif pipeline == rc.DEEP_PIPELINE:
             lists[_ROSTER_LIST] = tuple(_deep_roster(sources))
-        elif pipeline == _NOTEBOOKLM_PIPELINE:
-            refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
-            if refs:
-                lists[_NOTEBOOKS_LIST] = refs
         segments.append(
             (pipeline, PipelineInputs(brief=brief_rel, subjects=(), scratch_dir=scratch_rel, flags=flags, lists=lists))
         )

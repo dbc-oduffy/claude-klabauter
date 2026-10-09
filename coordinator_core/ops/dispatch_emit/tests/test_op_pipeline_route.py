@@ -70,7 +70,7 @@ def test_emit_writes_script_and_receipt_with_extras(stubs, tmp_path):
     out = tmp_path / "out.mjs"
     reply = _dispatch_emit(_params(tmp_path, subjects=["a", "b"], output_path=str(out)))
 
-    assert _written(tmp_path) == ["_em.jsonl", "out.mjs", "out.mjs.emitted.json"]
+    assert _written(tmp_path) == ["out.mjs", "out.mjs.emitted.json"]
     receipt = json.loads(Path(reply["receipt"]).read_text(encoding="utf-8"))
     assert receipt["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
     assert receipt["plan"] is None
@@ -155,22 +155,3 @@ def test_unresolvable_content_root_refuses_naming_the_root_and_writes_nothing(st
 def test_route_needs_a_root(stubs, tmp_path):
     with pytest.raises(ValueError, match="repo_root or target_root"):
         _dispatch_emit({"pipeline": "structured", "brief": "b"})
-
-
-def test_a_research_manifest_fired_by_name_closes_through_research_close(stubs, tmp_path):
-    # addon-28: `--pipeline notebooklm` returned no next_action, so the close was hand-routed.
-    reply = _dispatch_emit(_params(tmp_path, pipeline="notebooklm"))
-    params = reply["next_action"]["params"]
-    assert reply["next_action"]["op"] == "research.close"
-    assert params["tier"] == "corpus" and params["run_id"] == reply["run_id"] and params["topic_slug"] == "brief"
-    assert params["scratch_dir"] == (tmp_path / reply["scratch_dir"]).as_posix()
-    assert "next_action" not in _dispatch_emit(_params(tmp_path))
-
-
-def test_the_emit_creates_the_em_mailbox_and_names_its_tail(stubs, tmp_path):
-    # example-game-repo-d2: break-class finds sat ~10 min in peer mailboxes with no channel up to the EM.
-    reply = _dispatch_emit(_params(tmp_path))
-    box = Path(reply["em_mailbox"])
-    assert box == tmp_path / reply["scratch_dir"] / "mail" / "_em.jsonl"
-    assert box.is_file() and box.read_bytes() == b""
-    assert reply["em_watch"].endswith(box.as_posix())

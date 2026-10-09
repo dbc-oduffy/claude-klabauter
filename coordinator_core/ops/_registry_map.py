@@ -402,7 +402,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "research.restructure_for_repeat_topic":  "coordinator_core.ops.research_dir_restructure",
     "research.close":                         "coordinator_core.ops.research_close",
     "research.shape":                         "coordinator_core.ops.research_shape",
-    "requirement_register.stall_report":      "coordinator_core.ops.requirement_register",
     "session.rotate_orphan_sweep_log":        "coordinator_core.ops.session.rotate_orphan_sweep_log",
     "repo.create_and_push_remote":            "coordinator_core.ops.create_github_remote",
     "branch.merge_into_workstream":           "coordinator_core.ops.merge_branch_into_workstream",

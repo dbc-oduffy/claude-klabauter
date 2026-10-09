@@ -919,22 +919,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        "block-whole-filesystem-scan",
-        "block-whole-filesystem-scan-fire",
-        "find ~ -name '*.pyc'",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-whole-filesystem-scan",
-        "block-whole-filesystem-scan-control",
-        "find . -name '*.pyc'",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-worktree-creation",
         "block-worktree-creation-fire",
         "git worktree add ../wt-1 feature-branch",
@@ -2654,7 +2638,7 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     mp.setattr(hook_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     return {
         "tool_name": "Edit",
-        "session_id": "sess-c3c-ecd-%s" % uuid.uuid4().hex,
+        "session_id": "sess-c3c-ecd",
         "tool_input": {
             "file_path": "/repo/pkg/module.py",
             "old_string": "def f():\n    return 1",
@@ -3493,7 +3477,6 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
 from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
 from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
-from coordinator_core.hooks import nudge_hand_written_plan as _hook_nudge_hand_written_plan
 from coordinator_core.hooks import nudge_foreground_agent_dispatch as _hook_nudge_foreground_agent_dispatch
 from coordinator_core.hooks import nudge_named_agent_report_delivery as _hook_nudge_named_agent_report_delivery
 from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_unauthorized_handoff
@@ -3764,27 +3747,6 @@ def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
         "session_id": "sess-c12-nemcd-ctrl-%s" % uuid.uuid4().hex,
     }
     return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
-
-
-def _fire_nudge_hand_written_plan(content: str) -> Optional[Dict[str, Any]]:
-    text = _run_maybe_async(
-        _hook_nudge_hand_written_plan.advisory_text(
-            "Write",
-            "docs/plans/2026-01-01-corpus-probe.md",
-            content,
-            "sess-nhwp-%s" % uuid.uuid4().hex,
-            None,
-        )
-    )
-    return _hook_envelope_from_message({"message": text})
-
-
-def _fire_nudge_hand_written_plan_fire() -> Optional[Dict[str, Any]]:
-    return _fire_nudge_hand_written_plan("# A hand-written plan\n")
-
-
-def _fire_nudge_hand_written_plan_control() -> Optional[Dict[str, Any]]:
-    return _fire_nudge_hand_written_plan("---\nplan_id: pln-corpus-probe-000000\n---\n# Plan\n")
 
 
 # --- (7) nudge_foreground_agent_dispatch -- real firing row: `run_in_background`
@@ -5601,10 +5563,6 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_em_code_dispatch", "fire-code-write", True, _fire_nudge_em_code_dispatch),
     HookRow(
         "nudge_em_code_dispatch", "control-doc-write", False, _fire_nudge_em_code_dispatch_control
-    ),
-    HookRow("nudge_hand_written_plan", "fire-no-frontmatter", True, _fire_nudge_hand_written_plan_fire),
-    HookRow(
-        "nudge_hand_written_plan", "control-has-plan-id", False, _fire_nudge_hand_written_plan_control
     ),
     HookRow(
         "nudge_foreground_agent_dispatch",

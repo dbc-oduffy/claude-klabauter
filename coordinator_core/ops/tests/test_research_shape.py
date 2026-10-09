@@ -60,12 +60,6 @@ def test_deep_is_unblock():
     assert shape({"value_class": "deep", "appetite": "medium"})["pipelines"] == ["unblock"]
 
 
-def test_deep_runs_a_named_source_with_no_specialist_ahead_of_the_team():
-    r = shape({"value_class": "corpus", "appetite": "large", "sources": ["notebooklm", "web", "structured"]})
-    assert r["tier"] == "deep"
-    assert r["pipelines"] == ["nlm-preflight", "notebooklm", "structured", "unblock"]
-
-
 def test_unknown_value_class_refused():
     with pytest.raises(ValueError):
         shape({"value_class": "bogus"})
