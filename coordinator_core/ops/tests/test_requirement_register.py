@@ -200,3 +200,14 @@ def test_judge_evidence_inlines_rows_and_pm_words(tmp_path):
                            ("intent", "say it")]
     assert ev.rulings == [("pm", "a", "defer it")]
     assert not rr.judge_evidence("---\nplan_id: x\n---\n", tmp_path, P1)
+
+
+def test_the_stall_report_op_returns_the_lines_and_the_ceremony_point(tmp_path):
+    root = _tree(tmp_path, [_row("loose")])
+    reply = rr._stall_report_op({"today": "2026-10-09", "jp_id": "jp_x"}, root)
+    assert reply["stalled"] is True and len(reply["unclaimed_rows"]) == 1
+    assert reply["judgment_point"]["id"] == "jp_x"
+    quiet = rr._stall_report_op({}, tmp_path / "empty")
+    assert quiet["stalled"] is False and quiet["judgment_point"] is None
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        rr._stall_report_op({"today": "Oct 9"}, root)

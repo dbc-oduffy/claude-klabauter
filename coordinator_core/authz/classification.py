@@ -4387,6 +4387,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # research.shape — COMPUTE_ONLY: ops/research_shape.py maps a caller-passed
     # research block to tier/pipelines; no I/O.
     "research.shape": OpClass.COMPUTE_ONLY,
+
+    # requirement_register.stall_report — COMPUTE_ONLY: reads state/sizings and the plans their
+    # registers claim; writes nothing.
+    "requirement_register.stall_report": OpClass.COMPUTE_ONLY,
     # C17 (docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md) — the 14
     # registered-but-unclassified ops closing the OP_CLASSIFICATION gap
     # against ipc._REGISTRY (measure after `import coordinator_core.ops`,

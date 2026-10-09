@@ -19,6 +19,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from coordinator_core.ipc import register_op
+
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
@@ -520,3 +522,28 @@ def stall_judgment_point(report: StallReport, *, id: str) -> Optional[dict[str, 
         reason=f"no progress in {STALL_DAYS} days, or no plan claims the row",
         reportable=True,
     )
+
+
+#: The judgment-point id the day and week ceremonies cite for a stall.
+STALL_JP_ID = "j-requirement-register-stall"
+
+
+@register_op("requirement_register.stall_report")
+def _stall_report_op(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC ``requirement_register.stall_report``: the stall lines and the ceremony
+    judgment point (``None`` when nothing stalled). Params: ``today`` (YYYY-MM-DD, optional),
+    ``jp_id`` (the calling ceremony's judgment-point id, default ``STALL_JP_ID``)."""
+    if repo_root is None:
+        raise ValueError("requirement_register.stall_report requires a repo root")
+    raw = params.get("today")
+    today = _parse_day(raw) if raw is not None else date.today()
+    if today is None:
+        raise ValueError(f"today must be YYYY-MM-DD: {raw!r}")
+    report = stall_report(Path(repo_root), today)
+    return {
+        "stalled": bool(report),
+        "stale_rows": report.stale_rows,
+        "stuck_plans": report.stuck_plans,
+        "unclaimed_rows": report.unclaimed_rows,
+        "judgment_point": stall_judgment_point(report, id=str(params.get("jp_id") or STALL_JP_ID)),
+    }

@@ -525,6 +525,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.research_archive_workdir", 'registers "research.archive_workdir"'),
     ("coordinator_core.ops.research_close", 'registers "research.close"'),
     ("coordinator_core.ops.research_shape", 'registers "research.shape"'),
+    ("coordinator_core.ops.requirement_register", 'registers "requirement_register.stall_report"'),
     (
         "coordinator_core.ops.research_dir_restructure",
         'registers "research.restructure_for_repeat_topic"',
