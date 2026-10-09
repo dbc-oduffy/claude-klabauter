@@ -1052,7 +1052,7 @@ def _collect_sizing_refusals(sizing: dict) -> list[str]:
         out.append("`exit_criterion.statement` is absent — nothing to hand off as the prime exit criterion")
     if ec.get("accepted") is None and not _acceptance_skipped(sizing):
         out.append("`exit_criterion.accepted` is null — the exit criterion is not accepted yet "
-            "(accept it with `--pm-quote` or `--apm-ruling`)")
+            "(accept it with `--pm-quote`, or `--apm-ruling` plus `--ruling-ref`)")
     if not sizing.get("interaction_mode"):
         out.append("`interaction_mode` is absent")
     route = _effective_route(sizing)

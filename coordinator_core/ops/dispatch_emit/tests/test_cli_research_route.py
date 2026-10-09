@@ -87,6 +87,7 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
         "tier": "corpus",
         "run_id": reply["run_id"],
         "topic_slug": "r",
+        "segment_dirs": ["web", "notebooklm"],
     }
     assert f"next_action: {json.dumps(close, sort_keys=True)}" in script
 
@@ -224,3 +225,32 @@ def test_sizing_questions_seed_web_topics(repo, monkeypatch):
     )
     ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
     assert ctx["shape"]["segments"][0]["lists"] == {"topics": ["a", "b", "c"]}
+
+
+
+def test_list_values_the_scope_templates_cannot_key_on_are_refused():
+    from coordinator_core.ops.dispatch_emit import research_emit
+
+    refusals = research_emit.list_key_refusals(
+        "repo", {"chunks": ("A", "B"), "haiku_scouts": ("repo-census", "1")}
+    ) + research_emit.list_key_refusals("web", {"topics": ("a", "A-backend-inventory")})
+    assert refusals == [
+        "--list haiku_scouts=repo-census: values must be the repo scope's Haiku scout keys 1 and 2",
+        "--list topics=A-backend-inventory: values must be the web scope's lowercase topic letters a, b, c, ...",
+    ]
+    assert research_emit.list_key_refusals("web", research_emit.corpus_default_lists("web", ["q"] * 6)) == []
+    assert research_emit.list_key_refusals("repo", research_emit.CORPUS_DEFAULT_LISTS["repo"]) == []
+
+
+def test_an_unkeyable_list_value_refuses_the_emit(repo, monkeypatch):
+    import re
+
+    from coordinator_core.ops.dispatch_emit import research_emit
+
+    monkeypatch.setitem(
+        research_emit.LIST_KEY_SHAPES, "notebooklm", {"notebooks": (re.compile(r"^[A-Z]$"), "letters")}
+    )
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    with pytest.raises(op_module.PipelineEmitRefused) as exc:
+        op_module._research_route_setup({"lists": {"notebooks": ["web-docs"]}}, repo, rel, None)
+    assert exc.value.reasons == ["pipeline 'notebooklm': --list notebooks=web-docs: values must be letters"]

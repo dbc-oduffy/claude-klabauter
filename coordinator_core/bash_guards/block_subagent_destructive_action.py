@@ -430,6 +430,7 @@ behavior undocumented.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import shlex
@@ -2201,6 +2202,78 @@ _REMOTE_MUTATING_SUBCOMMANDS = frozenset(
 )
 
 
+#: SCRATCH-CLONE MERGE ROUTE. With the worktree ban and peers' files staged in the main tree,
+#: a clone under `<repo>/scratch/` is a subagent's only place to merge a branch. While a
+#: `check()` call runs, this holds `(cwd, main_root, in_scratch_clone)` for the payload's cwd
+#: (None when the command re-points git with `cd`/`-C`/`--git-dir`/`--work-tree`, or names
+#: neither verb). `git clone` is allowed only into `<main_root>/scratch/`, and a non-ff
+#: `git merge` only when the cwd's own repo IS such a clone. The main checkout never gains
+#: either.
+_SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
+    "_subagent_scratch_clone_ctx", default=None
+)
+_SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge)\b")
+_REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
+#: `git clone` options that take a separate argument; `--template`/`--separate-git-dir`/
+#: `-u`/`--upload-pack`/`--config` can install hooks or run a program and are refused.
+_CLONE_OPTS_WITH_ARG = frozenset({"-b", "--branch", "-o", "--origin", "--depth", "-j", "--jobs", "--filter", "--reference"})
+_CLONE_REFUSED_OPTS = ("--template", "--separate-git-dir", "-u", "--upload-pack", "-c", "--config")
+
+
+def _repo_root_of(start: Path) -> Optional[Path]:
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
+    """`(cwd, main_root, in_scratch_clone)`, read off the filesystem (no spawn)."""
+    if not cwd or not _SCRATCH_VERB_RE.search(cmd) or _REPOINTS_GIT_RE.search(cmd):
+        return None
+    here = Path(cwd).resolve()
+    root = _repo_root_of(here)
+    if root is None:
+        return None
+    for ancestor in root.parents:
+        if ancestor.name == "scratch" and (ancestor.parent / ".git").exists():
+            return (here, ancestor.parent, True)
+    return (here, root, False)
+
+
+def _clone_into_scratch(remaining: List[str]) -> bool:
+    ctx = _SCRATCH_CTX.get()
+    if ctx is None:
+        return False
+    here, main_root, _in_clone = ctx
+    positionals: List[str] = []
+    skip = False
+    for tok in remaining:
+        if skip:
+            skip = False
+            continue
+        if tok.startswith(_CLONE_REFUSED_OPTS):
+            return False
+        if tok in _CLONE_OPTS_WITH_ARG:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        positionals.append(tok)
+    if len(positionals) == 1:
+        dest_name = positionals[0].rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    elif len(positionals) == 2:
+        dest_name = positionals[1]
+    else:
+        return False
+    dest = Path(dest_name) if Path(dest_name).is_absolute() else here / dest_name
+    scratch = (main_root / "scratch").resolve()
+    try:
+        return scratch in dest.resolve().parents
+    except OSError:
+        return False
+
+
 def _evaluate_git_segment_anchored(
     seg: str, subcmd: Optional[str], remaining: Optional[List[str]] = None
 ) -> Optional[str]:
@@ -2379,7 +2452,14 @@ def _evaluate_git_segment_anchored(
     if subcmd == "merge":
         if "--ff-only" in remaining:
             return None
+        ctx = _SCRATCH_CTX.get()
+        if ctx is not None and ctx[2]:
+            return None
         return "git merge (not --ff-only)"
+    if subcmd == "clone":
+        if _clone_into_scratch(list(remaining or ())):
+            return None
+        return "git clone (only into <repo>/scratch/)"
     if subcmd == "push":
         return None
     if subcmd in ("checkout", "switch"):
@@ -3906,6 +3986,15 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    cmd = _extract_command(payload) or ""
+    token = _SCRATCH_CTX.set(_scratch_ctx_for(cmd.replace("\r", ""), payload.get("cwd")))
+    try:
+        return _check_unscoped(payload)
+    finally:
+        _SCRATCH_CTX.reset(token)
+
+
+def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is None:

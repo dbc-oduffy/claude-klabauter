@@ -770,6 +770,12 @@ def _line_has_shell_in_command_position(line: str) -> bool:
             tokens = shlex.split(seg, posix=True)
         except ValueError:
             return True
+        if tokens and all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) for t in tokens):
+            # `D=dir; cat > $D/x <<'EOF'`: a bare assignment runs nothing and
+            # cannot be the heredoc's consumer. A `$(...)` in its value is
+            # still caught: `_split_segments` does not split inside it, and
+            # CHECK 2/3 scan the visible line regardless.
+            continue
         i = 0
         while i < len(tokens):
             tok = tokens[i]

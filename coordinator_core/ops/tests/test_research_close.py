@@ -154,3 +154,20 @@ def test_an_untracked_research_file_written_during_the_run_is_reported(repo, scr
     out = _close(repo, scratch, "corpus", outputs=["final.md"])
     assert out["exit_code"] == 0
     assert out["strays"] == ["docs/research/2026-10-09-elsewhere.md"]
+
+
+def test_every_segment_dir_is_archived_at_its_relative_path(repo, scratch):
+    (scratch / "web").mkdir()
+    (scratch / "web" / "synthesis.md").write_text("web synthesis\n")
+    (scratch / "mail").mkdir()
+    (scratch / "mail" / "_em.jsonl").write_text("{}\n")
+    out = _close(repo, scratch, "corpus", segment_dirs=["web"])
+    assert out["exit_code"] == 0, out
+    names = {p.split("/", 3)[-1] for p in out["paths"]}
+    assert {"final.md", "web/synthesis.md"} <= names
+    assert not any(n.startswith("mail/") for n in names)
+
+
+def test_a_missing_or_unsafe_segment_dir_is_refused(repo, scratch):
+    assert _close(repo, scratch, "corpus", segment_dirs=["web"])["exit_code"] != 0
+    assert _close(repo, scratch, "corpus", segment_dirs=["../x"])["exit_code"] != 0

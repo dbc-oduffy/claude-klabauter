@@ -232,6 +232,19 @@ def emit_claims(
             print(f"claims-emit: claim record [{index}] failed schema validation: {errors}", file=sys.stderr)
             return EXIT_PRODUCER_FAILURE
 
+    # Ids are join keys (rebuttals and relays cite them), so a collision is refused, never re-keyed.
+    seen: dict[Any, int] = {}
+    for index, record in enumerate(claims):
+        claim_id = record.get("id")
+        if claim_id in seen:
+            print(
+                f"claims-emit: claim id {claim_id!r} repeats at [{seen[claim_id]}] and [{index}]; "
+                "rename one in the merged array and re-run",
+                file=sys.stderr,
+            )
+            return EXIT_PRODUCER_FAILURE
+        seen[claim_id] = index
+
     stem_path = Path(out_stem)
     claims_path = stem_path.with_name(stem_path.name + ".claims.json")
     meta_path = stem_path.with_name(stem_path.name + ".claims.meta.json")

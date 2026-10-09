@@ -897,6 +897,10 @@ def _research_route_setup(
         inputs = replace(
             inputs, flags=flags, lists=normalize_lists(manifest.lists, {**inputs.lists, **given})
         )
+        key_refusals = research_emit.list_key_refusals(pipeline, inputs.lists)
+        if key_refusals:
+            reasons.extend(f"pipeline {pipeline!r}: {r}" for r in key_refusals)
+            continue
         if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
             reasons.append(
                 f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
@@ -923,6 +927,9 @@ def _research_route_setup(
             str(ask or ""), brief_rel if from_sizing else ""
         ),
     }
+    if len(segments) > 1:
+        # pipeline_compose writes every segment after the first under <scratch>/<pipeline>/.
+        close_params["segment_dirs"] = [m.pipeline for m, _, _ in segments[1:]]
     research_ctx = {
         "root": root,
         "run_id": run_id,

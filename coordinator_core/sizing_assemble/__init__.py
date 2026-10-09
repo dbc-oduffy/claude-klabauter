@@ -294,6 +294,18 @@ _SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
 _RECORDABLE_PREMISES = ("executed", "read", "not-applicable")
 
 
+def _cli_repo_root(sizing: Optional[str]) -> Path:
+    """The repo a CLI sizing path belongs to, read off the filesystem (no spawn): an absolute
+    path's own repo, else the repo enclosing the cwd. A relative path is repo-relative, so a
+    shell parked in a subdirectory still names `state/sizings/x.yaml`. No `.git` found: cwd."""
+    start = Path(sizing).parent if sizing and Path(sizing).is_absolute() else Path.cwd()
+    start = start.resolve()
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return Path.cwd()
+
+
 def _slug(text: str) -> str:
     out = []
     prev_dash = False
@@ -1638,7 +1650,10 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
     candidate = Path(sizing) if Path(sizing).is_absolute() else root / sizing
     target = contained_path(candidate, [root / "state" / "sizings"])
     if target is None or not target.is_file():
-        raise SizingAssembleError(f"{sizing!r} is not a sizing under state/sizings/")
+        raise SizingAssembleError(
+            f"{sizing!r} is not a sizing under {(root / 'state' / 'sizings').as_posix()}/ "
+            f"(read as {candidate.as_posix()})"
+        )
     out: dict[str, Any] = {}
 
     def mutate(old: str) -> str:
@@ -1753,10 +1768,10 @@ def _open_routed_obligation(write_path: str) -> None:
     from coordinator_core.git.repo_root import show_toplevel
     from coordinator_core.hooks.watchdog_undischarged_next_move import open_sizing_routed
 
-    root = show_toplevel(str(Path.cwd()))
+    root = show_toplevel(str(_cli_repo_root(write_path)))
     if root is None:
         return
-    target = Path(write_path) if Path(write_path).is_absolute() else Path.cwd() / write_path
+    target = Path(write_path) if Path(write_path).is_absolute() else Path(root) / write_path
     try:
         rel = target.resolve().relative_to(Path(root).resolve()).as_posix()
         open_sizing_routed(root, rel, os.environ.get("CLAUDE_CODE_SESSION_ID"))
@@ -1942,7 +1957,7 @@ def main(argv: list[str]) -> int:
 
         result = record_register(
             {"sizing": write_path, "register": register, "supersede": supersede},
-            repo_root=Path.cwd(),
+            repo_root=_cli_repo_root(write_path),
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
@@ -1969,7 +1984,7 @@ def main(argv: list[str]) -> int:
                 "decided_on": decided_on,
                 "supersede": supersede,
             },
-            repo_root=Path.cwd(),
+            repo_root=_cli_repo_root(write_path),
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
@@ -1987,7 +2002,7 @@ def main(argv: list[str]) -> int:
                 "pm_quote": pm_quote,
                 "decided_on": decided_on,
             },
-            repo_root=Path.cwd(),
+            repo_root=_cli_repo_root(write_path),
         )
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
@@ -2006,7 +2021,7 @@ def main(argv: list[str]) -> int:
             print(f"{prog}: --amend-research takes only --research-* flags", file=sys.stderr)
             return EXIT_USAGE
         try:
-            result = amend_research(Path.cwd(), amend_research_path, given)
+            result = amend_research(_cli_repo_root(amend_research_path), amend_research_path, given)
         except SizingAssembleError as exc:
             print(f"{prog}: --amend-research refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
@@ -2068,7 +2083,7 @@ def main(argv: list[str]) -> int:
     if write_path is not None:
         try:
             decision["write"] = write_back(
-                Path.cwd(),
+                _cli_repo_root(write_path),
                 write_path,
                 decision,
                 exit_criterion=exit_criterion,

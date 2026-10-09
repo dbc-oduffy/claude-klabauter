@@ -19,7 +19,7 @@ from typing import Mapping, Sequence
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
 
-__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "corpus_default_lists", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "bind_context", "scout_slugs", "segments_for", "write_ask"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -39,6 +39,28 @@ CORPUS_DEFAULT_LISTS: dict[str, dict[str, tuple[str, ...]]] = {
     "repo": {"chunks": ("A", "B", "C", "D"), "haiku_scouts": ("1", "2")},
     "web": {"topics": ("a", "b", "c", "d")},
 }
+
+
+#: The keys each corpus scope template can key on. A list value outside these fans a member
+#: out under a name the scope, mailboxes and rebuttals never use: its scout BLOCKs, or its
+#: specialist's mailbox is never read (every rebuttal comes back `challenged: []`).
+LIST_KEY_SHAPES: dict[str, dict[str, tuple[re.Pattern, str]]] = {
+    "repo": {
+        "chunks": (re.compile(r"^[A-D]$"), "the repo scope's chunk letters A-D"),
+        "haiku_scouts": (re.compile(r"^[12]$"), "the repo scope's Haiku scout keys 1 and 2"),
+    },
+    "web": {"topics": (re.compile(r"^[a-z]$"), "the web scope's lowercase topic letters a, b, c, ...")},
+}
+
+
+def list_key_refusals(pipeline: str, lists: Mapping[str, Sequence[str]]) -> list[str]:
+    """One refusal per list value the pipeline's scope template cannot key on."""
+    out: list[str] = []
+    for name, (pattern, meaning) in LIST_KEY_SHAPES.get(pipeline, {}).items():
+        bad = [v for v in lists.get(name) or () if not pattern.match(str(v))]
+        if bad:
+            out.append(f"--list {name}={','.join(map(str, bad))}: values must be {meaning}")
+    return out
 
 
 def corpus_default_lists(pipeline: str, questions: Sequence[str] = ()) -> dict[str, tuple[str, ...]]:

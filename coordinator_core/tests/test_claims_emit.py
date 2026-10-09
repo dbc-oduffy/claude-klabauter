@@ -345,3 +345,10 @@ def test_failed_re_run_restores_when_only_meta_json_pre_exists(tmp_path, monkeyp
     assert meta_path.read_bytes() == original_meta_bytes
     leftovers = [p for p in tmp_path.iterdir() if p != meta_path]
     assert leftovers == []
+
+
+def test_a_repeated_claim_id_is_refused_and_writes_nothing(tmp_path, capsys):
+    dup = [VALID_CLAIM, {**VALID_CLAIM, "claim_text": "Another."}]
+    assert _emit(tmp_path, claims=dup) == claims_emit.EXIT_PRODUCER_FAILURE
+    assert "'c1' repeats at [0] and [1]" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []

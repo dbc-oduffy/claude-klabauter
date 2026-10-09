@@ -64,6 +64,12 @@ class TestApmRuling(unittest.TestCase):
             {"sizing": "s", "apm_ruling": "r"},
         )
 
+    def test_ruling_ref_is_forwarded(self):
+        self.assertEqual(
+            cli.build_params(["--sizing", "s", "--apm-ruling", "r", "--ruling-ref", "state/apm/x.md"]),
+            {"sizing": "s", "apm_ruling": "r", "ruling_ref": "state/apm/x.md"},
+        )
+
     def test_both_flags_is_a_usage_error(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
             cli.main(["--sizing", "s", "--pm-quote", "q", "--apm-ruling", "r"])

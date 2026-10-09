@@ -160,3 +160,18 @@ def test_research_questions_are_written_and_amended(repo: Path) -> None:
     assert sa.main(["--amend-research", rel, "--research-question", "Only Z?"]) == sa.EXIT_OK
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"] == {"value_class": "corpus", "questions": ["Only Z?"]}
+
+
+def test_amend_research_from_a_subdirectory_resolves_the_repo_root(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _run(repo, "--research-class", "corpus")
+    sub = repo / "scratch" / "deep"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    absolute = str(Path(record_homes.record_path(str(repo), "sizings", _NAME)))
+    assert sa.main(["--amend-research", absolute, "--research-depth", "deeper"]) == sa.EXIT_OK
+    assert sa.main(["--amend-research", rel, "--research-depth", "deepest"]) == sa.EXIT_OK
+    doc = yaml.safe_load(Path(absolute).read_text(encoding="utf-8"))
+    assert doc["research"]["depth"] == "deepest"

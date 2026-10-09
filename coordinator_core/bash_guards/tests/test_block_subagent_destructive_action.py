@@ -4336,3 +4336,43 @@ def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
     finally:
         child.kill()
         child.wait()
+
+
+@pytest.fixture
+def scratch_tree(tmp_path):
+    main = tmp_path / "repo"
+    (main / ".git").mkdir(parents=True)
+    clone = main / "scratch" / "merge-clone"
+    (clone / ".git").mkdir(parents=True)
+    return main, clone
+
+
+def _at(command, cwd):
+    p = _payload(command, agent_type="coordinator:executor")
+    p["cwd"] = str(cwd)
+    return p
+
+
+def _denied_kind(out):
+    return None if out is None else out["hookSpecificOutput"].get("permissionDecisionReason", "")
+
+
+def test_subagent_may_clone_into_the_repos_scratch(scratch_tree):
+    main, _clone = scratch_tree
+    assert guard.check(_at("git clone https://github.com/o/r.git scratch/merge-r", main)) is None
+    assert guard.check(_at("git clone --depth 50 -b main /x/r.git", main / "scratch")) is None
+
+
+def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_tree):
+    main, _clone = scratch_tree
+    assert guard.check(_at("git clone https://github.com/o/r.git elsewhere", main)) is not None
+    assert guard.check(_at("git clone https://github.com/o/r.git ../../r", main / "scratch")) is not None
+    assert guard.check(_at("git clone --template=/t https://h/o/r.git scratch/x", main)) is not None
+
+
+def test_subagent_may_merge_inside_a_scratch_clone_only(scratch_tree):
+    main, clone = scratch_tree
+    assert guard.check(_at("git merge --no-ff origin/feature", clone)) is None
+    assert guard.check(_at("git merge --no-ff origin/feature", main)) is not None
+    assert guard.check(_at(f"git -C {main} merge --no-ff origin/feature", clone)) is not None
+    assert guard.check(_at(f"cd {main} && git merge --no-ff origin/feature", clone)) is not None

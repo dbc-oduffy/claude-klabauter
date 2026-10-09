@@ -8,7 +8,10 @@ exactly one ``commit_paths`` call over the copied paths.
 
 Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
 ``topic_slug`` (both safe single path segments), ``outputs`` (optional list of
-scratch-relative file paths; default is every regular file directly in scratch_dir).
+scratch-relative file paths; default is every regular file directly in scratch_dir and
+directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
+path segments: a multi-pipeline run writes every segment after the first under
+``<scratch_dir>/<pipeline>/``, archived at the same relative path).
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -98,9 +101,16 @@ def _close_scouts(scratch: Path) -> dict:
     return {"exit_code": 0, "committed": False, "digest_path": target.as_posix()}
 
 
-def _resolve_outputs(scratch: Path, outputs: Optional[list]) -> tuple[list[Path], Optional[str]]:
+def _resolve_outputs(
+    scratch: Path, outputs: Optional[list], segment_dirs: list[str]
+) -> tuple[list[Path], Optional[str]]:
     if outputs is None:
         found = sorted(p for p in scratch.iterdir() if p.is_file())
+        for name in segment_dirs:
+            seg = scratch / name
+            if not seg.is_dir():
+                return [], f"segment output dir missing: {name!r}"
+            found.extend(sorted(p for p in seg.iterdir() if p.is_file()))
         if not found:
             return [], f"no output files directly under {str(scratch)!r}"
         return found, None
@@ -173,9 +183,14 @@ def _landed_sha(worktree: Path, subject: str) -> Optional[str]:
 
 
 def _close_committed(
-    worktree: Path, scratch: Path, run_id: str, topic_slug: str, outputs: Optional[list]
+    worktree: Path,
+    scratch: Path,
+    run_id: str,
+    topic_slug: str,
+    outputs: Optional[list],
+    segment_dirs: list[str],
 ) -> dict:
-    sources, problem = _resolve_outputs(scratch, outputs)
+    sources, problem = _resolve_outputs(scratch, outputs, segment_dirs)
     if problem:
         return _err(problem)
     hits = _secret_hits(sources, scratch)
@@ -270,7 +285,12 @@ def _close_sync(worktree: Path, params: dict) -> dict:
             return _err(f"{name} is not a safe path segment: {value!r}")
     if outputs is not None and not isinstance(outputs, list):
         return _err("outputs must be a list of scratch-relative paths")
-    return _close_committed(worktree, scratch, run_id, topic_slug, outputs)
+    segment_dirs = params.get("segment_dirs") or []
+    if not isinstance(segment_dirs, list) or not all(
+        isinstance(d, str) and safe_id(d) for d in segment_dirs
+    ):
+        return _err(f"segment_dirs must be a list of safe path segments: {segment_dirs!r}")
+    return _close_committed(worktree, scratch, run_id, topic_slug, outputs, segment_dirs)
 
 
 @register_op("research.close")

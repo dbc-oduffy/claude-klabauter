@@ -131,7 +131,7 @@ def collect_fire_refusals(
         out.append(
             "`exit_criterion.accepted` is null — accept it first: "
             f"sizing-accept-exit-criterion --sizing {sizing_rel} --pm-quote \"<PM's words>\" "
-            "(or --apm-ruling \"<ruling>\" in pm/ceo mode)"
+            "(or --apm-ruling \"<ruling>\" --ruling-ref <path> in pm/ceo mode)"
         )
     if not sizing.get("interaction_mode"):
         out.append("`interaction_mode` is absent")
