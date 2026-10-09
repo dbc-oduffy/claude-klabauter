@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "a3da56abdaaa45ede68096b617951c4abf3bd80f",
-    "coordinator_core/_engine_stamp": "d6dcace2e24b26a56f56afee9123cecd72a08135",
+    "coordinator_core/_engine_published_at": "f0bbae5400c7fcdeaee2d0efdc5c69b58003992b",
+    "coordinator_core/_engine_stamp": "bb62be56cbc6ae79650752d98d98986d11b07cc3",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4505,7 +4505,7 @@
     "coordinator_core/ops/fleet/_index_resync_pending.py": "2db8e466ff35e82c55b120f421192222aaecd9f6",
     "coordinator_core/ops/fleet/_memo_anchor.py": "0401dcb12ecf0e86cbfe696b1ea6073934b208fa",
     "coordinator_core/ops/fleet/_memo_compose.py": "503dfc5c13dc00d8ebb9a5e56be29aecd111ea14",
-    "coordinator_core/ops/fleet/_memo_resolver.py": "67321b91cbd5616624981ef9501d8fc3b6604fcc",
+    "coordinator_core/ops/fleet/_memo_resolver.py": "7d1e5239c4f8577a4d1299748cded8087c86cf9d",
     "coordinator_core/ops/fleet/_memo_summary.py": "b7c13efacc987eccdca6387dd896cef69b17442f",
     "coordinator_core/ops/fleet/_outbox_frontmatter_rules.py": "2fbd4546ea34875afd7909593941f55bcb2c82dd",
     "coordinator_core/ops/fleet/_sweep_receipt.py": "2d960e1cfc3dee66d49835d5869ae1fd6d6c2150",
@@ -4601,7 +4601,7 @@
     "coordinator_core/ops/fleet/tests/test_memo_reconcile_outbox.py": "126f6b8364fc28ed8fa3697194955955d98d73e2",
     "coordinator_core/ops/fleet/tests/test_memo_reconcile_outbox_receipt_keyed.py": "00aa8185c96d5222ecfd2f34734082ab04172d54",
     "coordinator_core/ops/fleet/tests/test_memo_reconcile_uncommitted_receipt.py": "743410081808d26973116f60e8bb7dc0c54d07a6",
-    "coordinator_core/ops/fleet/tests/test_memo_resolver.py": "c071879ca7ebb27792587eb6d160fc19a12dc247",
+    "coordinator_core/ops/fleet/tests/test_memo_resolver.py": "60ddaf9d8fe3141dc8cf95e72012165593ea0d62",
     "coordinator_core/ops/fleet/tests/test_memo_send.py": "fe9cad4f47107b769bf5b855cea7117fb24bbd71",
     "coordinator_core/ops/fleet/tests/test_memo_send_cc_delivery.py": "b5e33052ec5fe7c0b67528870c832eb87f27f1a5",
     "coordinator_core/ops/fleet/tests/test_memo_send_citation_lint.py": "8be86cdf89f980de271419e8ccd019f682d6c069",
@@ -6606,7 +6606,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "fae42c9aca8e9d1b1b87aa2ecd7efbb988e069bd",
+    "coordinator_core/warm/door/door.exe.provenance.json": "ee6df619eb5311d5c3d445ae761dc7f66286b814",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -7175,5 +7175,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "4b2b362ec1ef280626e224a19f37dbebacd9ac2a"
+  "source_head": "4431c1de727213eedb6ebe90f8f0c91b2373798d"
 }
