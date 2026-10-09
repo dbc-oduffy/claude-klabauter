@@ -1904,7 +1904,7 @@ def _slot_row_clause(commands: list) -> str:
     row's build gate becomes the EM's slot leg."""
     owed = "".join(f"\n- `{c}`" for c in commands)
     return (
-        "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor, commandlet or "
+        "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor or "
         "other long-running or memory-heavy process; the EM runs that leg once the Group "
         "EM clears box load. Report what it must run under `Slot leg:`." + owed
     )

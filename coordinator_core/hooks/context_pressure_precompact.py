@@ -24,10 +24,13 @@ the op over the http door (item 2); the DoE stub (item 1) is no longer wired:
      ops and any future MCP/IPC-routed caller — `_handler` is a thin adapter
      over the same `run()` core.
 
-Output is IGNORED by Claude Code for PreCompact events (stdout is not
-surfaced to the model) — `_handler` therefore always returns `no_advisory()`,
-matching `track_touched_files.py`'s "the product is the write side-effect"
-contract. State is bridged to context via
+`run()` returns the compaction STEERING text: the DoE stub prints it, and
+the harness (2.1.295) takes a PreCompact hook's trimmed plain stdout as
+`newCustomInstructions`, appended after any args the PM typed to `/compact` —
+additive, never a replacement. The same text is echoed to the PM as the hook's
+completion line, so it is held to `_STEERING_CHAR_CAP`. `_handler` keeps
+returning `no_advisory()`: the op door has no stdout. State is bridged to
+context via
 `coordinator_core.hooks.postuse_advisory_dispatch` (PostToolUse), which
 ALREADY consumes the two files this module writes:
 
@@ -97,16 +100,16 @@ GENERATES: list = []
 _TOTAL_LINE_CAP = 100
 
 
-def _extract_ids(raw: str) -> Tuple[str, str]:
+def _extract_ids(raw: str) -> Tuple[str, str, str]:
+    """`(session_id, transcript_path, custom_instructions)`, each `""` when absent."""
     try:
         data = json.loads(raw)
     except Exception:
-        return "", ""
+        return "", "", ""
     if not isinstance(data, dict):
-        return "", ""
-    session_id = data.get("session_id") or ""
-    transcript_path = data.get("transcript_path") or ""
-    return str(session_id), str(transcript_path)
+        return "", "", ""
+    return tuple(str(data.get(k) or "") for k in
+                 ("session_id", "transcript_path", "custom_instructions"))
 
 
 def _write_sentinel(tmpdir: str, session_id: str, transcript_path: str) -> None:
@@ -326,6 +329,74 @@ def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
     return lines
 
 
+_STEERING_CHAR_CAP = 1500
+_CARRY_FORWARD_CAP = 5
+_CARRY_FORWARD_ENTRY_CAP = 200
+
+_STEERING_RULES = (
+    "Compaction steering (coordinator):\n"
+    "- Lead with forward state: open work, next actions, pending PM decisions, "
+    "in-flight agents and workflow runs (with ids), uncommitted or unpushed changes.\n"
+    "- Finished, verified work: one line each. Drop tool-output narration."
+)
+
+
+def _journal_paths(session_id: str, cwd: str) -> Tuple[Optional[Path], Optional[Path]]:
+    """`(baton.json, pm_turns.jsonl)` for the session, each `None` when absent."""
+    from coordinator_core.session_baton import store
+
+    sdir = store.baton_dir(session_id, cwd)
+    if sdir is None or not sdir.is_dir():
+        return None, None
+    baton = sdir / store.BATON_FILENAME
+    turns = sdir / "pm_turns.jsonl"
+    return (baton if baton.is_file() else None,
+            turns if turns.is_file() else None)
+
+
+def _one_line(text: str, cap: int) -> str:
+    flat = " ".join(_CONTROL_CHAR_RE.sub(" ", text).split())
+    return flat if len(flat) <= cap else flat[: cap - 1] + "…"
+
+
+def build_steering(session_id: str, cwd: str, typed: str = "") -> str:
+    """The summarizer instructions for this compaction. Never raises: any
+    journal read failure degrades to the static rules alone."""
+    lines = [_STEERING_RULES]
+    if typed.strip():
+        lines[0] = lines[0].replace(
+            "(coordinator):", "(coordinator; the PM's instructions above take precedence):"
+        )
+    try:
+        baton, turns = _journal_paths(session_id, cwd)
+    except Exception:
+        baton, turns = None, None
+    if turns is not None:
+        try:
+            count = turns.read_bytes().count(b"\n")
+        except OSError:
+            count = 0
+        lines.append(
+            f"- PM verbatims ({count} turns) are saved at {turns} — cite that path "
+            "and the turn numbers; do not restate or paraphrase them."
+        )
+    if baton is not None:
+        lines.append(f"- Session work journal: {baton} — point to it, do not copy it.")
+        try:
+            record = json.loads(baton.read_text(encoding="utf-8"))
+            notes = record.get("carry_forward") if isinstance(record, dict) else None
+        except (OSError, ValueError):
+            notes = None
+        if isinstance(notes, list):
+            kept = [_one_line(n, _CARRY_FORWARD_ENTRY_CAP)
+                    for n in notes[-_CARRY_FORWARD_CAP:] if isinstance(n, str) and n.strip()]
+            if kept:
+                lines.append("- Keep these carry-forward notes verbatim:")
+                lines.extend(f"  - {n}" for n in kept)
+    text = "\n".join(lines)
+    return text if len(text) <= _STEERING_CHAR_CAP else text[: _STEERING_CHAR_CAP - 1] + "…"
+
+
 def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
     try:
         from coordinator_core.git import repo_root as _repo_root_seam
@@ -349,7 +420,7 @@ def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
         pass
 
 
-def run(raw_stdin: str) -> None:
+def run(raw_stdin: str) -> str:
     """Entry point for the DoE Shape-P1 stub — direct in-process call, no
     register_op/dispatch_message round-trip (mirrors
     `write_guards.engine.evaluate_payload_json`'s call shape).
@@ -360,19 +431,19 @@ def run(raw_stdin: str) -> None:
             stdin; the DoE stub owns the read, matching
             `preuse-write-dispatch.py`'s ownership split).
 
-    Never raises. Fail-open silently (no files written) when session_id is
-    absent OR fails the charset validation — both are the SAME no-op path,
-    matching the bash oracle's `[[ -z "$SESSION_ID" ]]` early-exit reusing
-    the traversal-guard's `exit 0` shape.
+    Returns the steering text for the stub to print — always non-empty, the
+    static rules alone when the session or its journal is unreadable.
+
+    Never raises. Writes no files when session_id is absent OR fails the
+    charset validation — both are the SAME no-op path, matching the bash
+    oracle's `[[ -z "$SESSION_ID" ]]` early-exit reusing the traversal-guard's
+    `exit 0` shape.
     """
     try:
-        session_id, transcript_path = _extract_ids(raw_stdin)
+        session_id, transcript_path, typed = _extract_ids(raw_stdin)
 
-        if not session_id:
-            return
-
-        if not _SESSION_ID_RE.fullmatch(session_id):
-            return
+        if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
+            return _STEERING_RULES
 
         import tempfile
 
@@ -380,8 +451,9 @@ def run(raw_stdin: str) -> None:
 
         _write_sentinel(tmpdir, session_id, transcript_path)
         _write_state_snapshot(tmpdir, session_id)
+        return build_steering(session_id, os.getcwd(), typed)
     except Exception:
-        pass
+        return _STEERING_RULES
 
 
 @register_op("hooks.context_pressure_precompact")

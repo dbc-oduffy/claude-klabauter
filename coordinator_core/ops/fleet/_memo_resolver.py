@@ -723,12 +723,7 @@ def canonical_receiver_id(receiver_em_id: str) -> str:
     repo_key = next(iter(matched_keys), None)
     if repo_key is None:
         return normalized
-    # The manifest's first central id is canonical (as em_id_for_root reads it), never the
-    # registry key's spelling: a box registering the central repo as repos.content_root would
-    # otherwise sign `content-root-em`. Not a literal either, since publish rewrites `coordinator-content-repo`.
-    ordered = [e.strip().lower() for e in read_doe_identity().get("centralReceiverIds", [])
-               if isinstance(e, str) and e.strip()]
-    return ordered[0] if ordered else _repo_key_to_receiver_em_id(repo_key)
+    return _repo_key_to_receiver_em_id(repo_key)
 
 
 def reroute_owner(receiver_em_id: str) -> Optional[str]:

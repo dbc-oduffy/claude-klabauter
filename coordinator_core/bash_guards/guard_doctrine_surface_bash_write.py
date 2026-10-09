@@ -381,12 +381,45 @@ _INDIRECTION_PATTERNS = (
     _SHELL_DASH_C_RE,
     _EVAL_RE,
     _XARGS_RE,
-    _CMD_SUBST_RE,
 )
 
 
-def _has_indirection_marker(text: str) -> bool:
-    return any(pattern.search(text) for pattern in _INDIRECTION_PATTERNS)
+def _has_live_command_substitution(text: str) -> bool:
+    """``$(`` or a backtick the shell would EXECUTE: not inside single quotes,
+    not backslash-escaped. Unbalanced quotes are unreadable and fail closed
+    to the raw `_CMD_SUBST_RE` scan."""
+    quote = ""
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        if quote != "'" and (ch == "`" or text.startswith("$(", i)):
+            return True
+        i += 1
+    return bool(quote) and bool(_CMD_SUBST_RE.search(text))
+
+
+def _has_indirection_marker(text: str, *, quote_aware: bool = True) -> bool:
+    """``quote_aware=False`` for a command carrying any heredoc: the segment
+    splitter cuts bodies into per-line segments, so an unquoted body's
+    expanding ``$(`` can sit inside quotes the segment alone cannot see
+    through."""
+    substitution = (
+        _has_live_command_substitution(text)
+        if quote_aware
+        else bool(_CMD_SUBST_RE.search(text))
+    )
+    return substitution or any(
+        pattern.search(text) for pattern in _INDIRECTION_PATTERNS
+    )
 
 
 #: A ZERO-WIDTH literal join: two quote characters with nothing between them
@@ -1576,7 +1609,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             return True
         if not _lies_in_a_quoted_heredoc_body(
             segment, quoted_heredoc_bodies
-        ) and _has_indirection_marker(segment):
+        ) and _has_indirection_marker(segment, quote_aware="<<" not in cmd):
             return True
 
     return False

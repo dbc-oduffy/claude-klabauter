@@ -597,47 +597,24 @@ def _http_matchers_for_url(doc: Dict[str, Any], url: str) -> Set[str]:
     return out
 
 
-#: The bash carrier as a `hook-run <op>` command (DoE's current registration): a plain
-#: `command` string with no `args`, so `_walk_registrations` cannot see it either.
-_BASH_CARRIER_HOOK_RUN_OP = "hooks.preuse_bash_dispatch"
-
-
-def _hook_run_matchers_for_op(doc: Dict[str, Any], op: str) -> Set[str]:
-    """Matchers of every `command` hook that runs `hook-run [--flags] <op>`."""
-    pattern = re.compile(r'hook-run"?(?:\s+--\S+)*\s+' + re.escape(op) + r"(?![\w.])")
-    out: Set[str] = set()
-    hooks = doc.get("hooks")
-    if not isinstance(hooks, dict):
-        return out
-    for entries in hooks.values():
-        for entry in entries if isinstance(entries, list) else ():
-            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
-                continue
-            matcher = entry.get("matcher", "")
-            for hook in entry["hooks"]:
-                command = hook.get("command") if isinstance(hook, dict) else None
-                if isinstance(command, str) and pattern.search(command):
-                    out.add(matcher if isinstance(matcher, str) else "")
-    return out
-
-
 def build_carrier_bash_dispatch(
     matchers_by_tail: Dict[str, Set[str]], doc: Dict[str, Any]
 ) -> Dict[str, Any]:
     script_tail = tail_key(_CARRIER_RAW_TOKENS["bash_dispatch"])
-    transports = {
-        script_tail: matchers_by_tail.get(script_tail, set()),
-        "http:" + _BASH_CARRIER_HTTP_URL: _http_matchers_for_url(doc, _BASH_CARRIER_HTTP_URL),
-        "hook-run:" + _BASH_CARRIER_HOOK_RUN_OP: _hook_run_matchers_for_op(doc, _BASH_CARRIER_HOOK_RUN_OP),
-    }
-    live = {name: m for name, m in transports.items() if m}
-    if len(live) > 1:
+    command_matchers = matchers_by_tail.get(script_tail, set())
+    http_matchers = _http_matchers_for_url(doc, _BASH_CARRIER_HTTP_URL)
+    if command_matchers and http_matchers:
         raise EmitterError(
-            "bash_dispatch is registered on more than one transport -- "
-            + ", ".join(f"{name} {sorted(m)}" for name, m in live.items())
-            + ". Two carriers would deliver the same guard roster; deregister one"
+            f"bash_dispatch is registered on BOTH transports -- command "
+            f"{sorted(command_matchers)} and http {sorted(http_matchers)}. Two "
+            "carriers would deliver the same guard roster; deregister one"
         )
-    carrier_tail, carrier_matcher_tokens = next(iter(live.items()), (script_tail, set()))
+    if http_matchers:
+        carrier_tail = "http:" + _BASH_CARRIER_HTTP_URL
+        carrier_matcher_tokens = http_matchers
+    else:
+        carrier_tail = script_tail
+        carrier_matcher_tokens = command_matchers
     if len(carrier_matcher_tokens) != 1:
         raise EmitterError(
             f"bash_dispatch carrier ({carrier_tail}) matcher is not singular in "

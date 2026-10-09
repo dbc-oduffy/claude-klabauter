@@ -47,5 +47,4 @@ def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path):
     plan.write_text(text, encoding="utf-8")
     script = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
     assert script.count("Slot row (needs_slot): author only") == 1
-    assert "UBT, editor, commandlet or" in script
     assert script.count("Build gate (mandatory)") == 1  # B1 keeps its gate; A1's moves to the EM

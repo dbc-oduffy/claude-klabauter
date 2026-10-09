@@ -230,12 +230,7 @@ GUARD_DEFAULT_LEVEL = {
 
 #: Guards whose deny is floor for a dispatched caller only: no level lowers it
 #: for a subagent, while the EM's deny still follows ``guard_level``.
-SUBAGENT_FLOOR_GUARDS = frozenset({
-    "check-test-suite-invocation",
-    # A subagent's UE build or editor run overlaps the EM's slot; the prose rule already failed
-    # once (DoE bug 763a311d4442), so a box-wide `warn` must not reopen it.
-    "guard-subagent-heavy-ue-launch",
-})
+SUBAGENT_FLOOR_GUARDS = frozenset({"check-test-suite-invocation"})
 
 
 #: Guards whose deny prevents irreversible harm; ``apply_guard_level`` returns

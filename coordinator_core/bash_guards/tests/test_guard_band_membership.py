@@ -52,6 +52,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-stash-creation",
     "block-topic-branch",
     "block-perforce-submit",
+    "deploy-dirty-tree",
     "block-unreal-engine-resave",
     "block-editor-kill-by-name",
     "block-whole-filesystem-scan",
@@ -77,6 +78,7 @@ CONFINEMENT_DENY_NAMES = [
     "guard-repo-setup-claude-home-refusal",
     "guard-host-subagent-bash-ban",
     "guard-host-subagent-bash-spawn-shapes",
+    "guard-subagent-heavy-ue-launch",
     "guard-doctrine-surface-bash-write",
     # C6 (D6/D7/S4, docs/plans/2026-09-12-perforce-second-class-commit-and-
     # shelve.md): a fail-closed hard deny on p4 verbs (submit outright,
