@@ -79,10 +79,15 @@ def test_underscore_name_resolves_kebab_key(reg):
     assert "a-c" in text and "a_c" not in text
 
 
-def test_floor_guards_has_the_twelve_names():
-    assert len(mp.FLOOR_GUARDS) == 12
+def test_floor_guards_has_the_thirteen_names():
+    assert len(mp.FLOOR_GUARDS) == 13
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
+    assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
+
+
+def test_heavy_ue_launch_guard_is_a_subagent_floor():
+    assert "guard-subagent-heavy-ue-launch" in mp.SUBAGENT_FLOOR_GUARDS
 
 
 @pytest.mark.parametrize("name", sorted(mp.FLOOR_GUARDS))

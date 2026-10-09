@@ -75,6 +75,16 @@ def test_non_shell_tool_allows():
     assert check(_payload("Build.bat", tool="Read")) is None
 
 
+def test_a_warn_box_still_denies_the_subagent(monkeypatch):
+    from coordinator_core import machine_profile
+    from coordinator_core.bash_guards import dispatch
+
+    monkeypatch.setattr(machine_profile, "guard_level", lambda name: "warn")
+    deny = check(_payload("Build.bat Foo Win64"))
+    out = dispatch._apply_guard_level("guard-subagent-heavy-ue-launch", deny, subagent=True)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_registered_in_the_roster_as_a_confinement_deny():
     (entry,) = [e for e in guard_roster() if e.id == "guard-subagent-heavy-ue-launch"]
     assert entry.band == "confinement-deny" and entry.fail_closed
