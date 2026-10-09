@@ -450,9 +450,11 @@ def judge_evidence(plan_text: str, repo_root: Path, plan_path: str) -> JudgeEvid
     return JudgeEvidence(rows=rows, pm_words=pm_words, rulings=rulings)
 
 
-def plan_judge_evidence(plan_path: str, repo_root: Path) -> Optional[JudgeEvidence]:
+def plan_judge_evidence(
+    plan_path: str, repo_root: Path, *, plan_text: Optional[str] = None
+) -> Optional[JudgeEvidence]:
     """`judge_evidence` for the plan at `plan_path` (relative to `repo_root`), or None when the
-    plan is unreadable."""
+    plan is unreadable. `plan_text`, when the caller already read the plan, spares a second read."""
     plan = Path(plan_path)
     if not plan.is_absolute():
         plan = Path(repo_root) / plan
@@ -461,7 +463,8 @@ def plan_judge_evidence(plan_path: str, repo_root: Path) -> Optional[JudgeEviden
     except ValueError:
         rel = str(plan_path)
     try:
-        return judge_evidence(plan.read_text(encoding="utf-8"), Path(repo_root), rel)
+        text = plan_text if plan_text is not None else plan.read_text(encoding="utf-8")
+        return judge_evidence(text, Path(repo_root), rel)
     except OSError:
         return None
 

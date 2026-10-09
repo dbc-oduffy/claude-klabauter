@@ -96,6 +96,14 @@ def test_deep_yields_the_roster_roles_plus_a_specialist_per_source():
     _validate_all(segs)
 
 
+def test_notebooklm_targets_become_its_notebooks_list():
+    targets = [{"source": "notebooklm", "ref": "A"}, {"source": "web", "ref": "x"}, {"source": "notebooklm", "ref": "B"}]
+    _, segs = _segments({"value_class": "corpus", "sources": ["notebooklm"]}, targets=targets)
+    lists = dict(segs)["notebooklm"].lists
+    assert lists["notebooks"] == ("A", "B")
+    _validate_all(segs)
+
+
 def test_deep_with_no_sources_defaults_to_the_web_specialist():
     _, segs = _segments({"value_class": "deep"})
     assert [m["slug"] for m in segs[0][1].lists["roster"]][-1] == "web"
@@ -106,3 +114,41 @@ def test_deepest_depth_sets_the_repo_flag_only():
     assert shape["pipelines"] == ["web", "repo"]
     assert dict(segs[0][1].flags) == {}
     assert dict(segs[1][1].flags) == {"deepest": "true"}
+
+
+def test_the_deep_roster_carries_its_member_prompt_once():
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
+
+    manifest = load_manifest(CONTENT, "unblock")
+    _, segs = _segments({"value_class": "deep"}, sources=["web", "repo"])
+    inputs = segs[0][1]
+    script = compose_pipeline_script(manifest, inputs, validate(manifest, inputs), run_id="r", agent_type_host=None)
+    assert script.count("You are roster member") == 1
+
+
+def test_context_files_are_named_in_the_ask(tmp_path):
+    (tmp_path / "notes.md").write_text("n\n", encoding="utf-8")
+    rel = re_.write_ask(tmp_path, SCRATCH, "What is X?")
+    assert re_.bind_context(tmp_path, SCRATCH, rel, ["notes.md"]) == rel
+    text = (tmp_path / rel).read_text(encoding="utf-8")
+    assert text.startswith("What is X?\n\n## Context files")
+    assert "- `notes.md`" in text
+
+
+def test_a_sizing_brief_is_wrapped_never_edited(tmp_path):
+    sizing = tmp_path / "state" / "sizings" / "s.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("x: 1\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-ext.md"
+    outside.write_text("e\n", encoding="utf-8")
+    rel = re_.bind_context(tmp_path, SCRATCH, "state/sizings/s.yaml", [str(outside)])
+    assert rel == f"{SCRATCH}/brief.md"
+    assert sizing.read_text(encoding="utf-8") == "x: 1\n"
+    text = (tmp_path / rel).read_text(encoding="utf-8")
+    assert "`state/sizings/s.yaml`" in text and f"`{outside.resolve().as_posix()}`" in text
+
+
+def test_no_context_keeps_the_brief_and_a_missing_file_is_refused(tmp_path):
+    assert re_.bind_context(tmp_path, SCRATCH, "b.md", []) == "b.md"
+    with pytest.raises(PipelineEmitRefused, match="nope.md"):
+        re_.bind_context(tmp_path, SCRATCH, "b.md", ["nope.md"])

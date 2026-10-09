@@ -239,9 +239,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--only-incomplete",
         default=None,
-        metavar="RUN_TEXT",
+        metavar="RUN_FILE",
         help="with --plan: re-emit only the rows no `checkpoint(wave N): ... \u2014 ids` "
-        "commit subject in RUN_TEXT (a git log dump or run output) names as landed; "
+        "commit subject in RUN_FILE (a path to a git log dump or a run's task output) "
+        "names as landed; "
         "edges onto landed rows count as satisfied",
     )
     parser.add_argument(
@@ -482,6 +483,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --ask PROMPT: the scouts express lane -- write the ask to <scratch>/ask.md and "
         "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
+    )
+    parser.add_argument(
+        "--context",
+        action="append",
+        default=None,
+        metavar="FILE",
+        help="research route: a non-corpus file every member reads first, named in the brief (repeatable)",
     )
     parser.add_argument(
         "--resume-missing",
@@ -975,6 +983,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
+    if args.context and not is_research_route:
+        print("emit-dispatch-workflow: ERROR — --context requires --from-sizing or --research", file=sys.stderr)
+        return EXIT_USAGE
     pipeline_only = [
         flag
         for flag, value in (
@@ -1286,6 +1297,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_DATA_ERROR
         if args.scratch_dir:
             params["scratch_dir"] = args.scratch_dir
+        if args.context:
+            params["context"] = args.context
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_pipeline_route:
@@ -1334,9 +1347,16 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if args.only_incomplete:
             from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
 
-            params["landed_rows"] = sorted(
-                landed_rows_from_text(Path(args.only_incomplete).read_text(encoding="utf-8"))
-            )
+            try:
+                run_text = Path(args.only_incomplete).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(
+                    f"emit-dispatch-workflow: ERROR — --only-incomplete takes a file path "
+                    f"(git log dump or run output); {args.only_incomplete!r} unreadable: {exc}",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            params["landed_rows"] = sorted(landed_rows_from_text(run_text))
     if args.review_only is not None:
         from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
         from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
@@ -1455,7 +1475,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
             guard_root = repo_root or _repo_root_for_plan(args.plan)
             if guard_root is not None:
-                regenerable_dirty = guard_against_dirty_write_set(Path(args.plan), guard_root)
+                regenerable_dirty = guard_against_dirty_write_set(
+                    Path(args.plan), guard_root,
+                    hold=frozenset(params.get("hold_rows") or ()),
+                    landed=frozenset(params.get("landed_rows") or ()),
+                )
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
         except ScriptOverCapError as over:

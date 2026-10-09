@@ -31,8 +31,6 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wak
 # these (plus stage-result bindings and emitter literals) — never an executor's own reply.
 #: Emitted only by a script composed with an operator hold: `{row id: reason}`.
 HELD_VAR = "_heldRows"
-#: {row id: halt reason} for rows their plan's halt kept from starting.
-PLAN_HELD_VAR = "_planHeld"
 
 #: Emitted only by a script composed with a seam leg: `[{wave, class, plans, path}]`, one per blocking finding; `failed` replaces `class` for a leg that returned no verdict.
 SEAM_DRIFT_VAR = "_seamDrift"
@@ -51,7 +49,6 @@ RUNTIME_VARS = (
     "_skippedDone",
     "_unusableChecks",
     "_reviews",
-    "_runBase",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -60,7 +57,8 @@ _CRITERION_CONTRADICTION_RE_JS = (
     r"/\bnot (?:yet )?met\b|\bbaseline (?:still )?match(?:es|ed)\b|\bmatch(?:es|ed)? (?:the )?baseline\b/i"
 )
 
-_CAP_HELPER_JS = (
+#: Every script that renders `next_action_parts` or `completion_return_js` must emit this.
+CAP_HELPER_JS = (
     "function _cap(s, n) { "
     "if (s === null || s === undefined) return null; "
     "s = String(s); "
@@ -222,10 +220,20 @@ def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
     )
 
 
+#: The stage's fail set is `caused` + `unverified` (DoE test-runner-baseline-attribution): a
+#: failing run whose export-measured baseline puts every failure in `pre_existing` passes.
+#: A heuristic baseline never clears -- its ids are all `unverified` by contract.
+_BASELINE_CLEARS_JS = (
+    "((t) => { const b = t && t.baseline; return !!(t.status === 'fail' && t.baseline_method === 'export' && b "
+    "&& (b.caused ?? []).length === 0 && (b.unverified ?? []).length === 0 "
+    "&& (b.pre_existing ?? []).length > 0 && (b.pre_existing ?? []).length >= (t.tests_failed ?? 0)); })"
+)
+
+
 def _tests_status_expr(test_var: Optional[str], verification_var: str, test_absent_status: str) -> str:
     """JS expression for the run's tests status: any failed row verification wins; a
     pass that skipped tests (run-level or any row) is `pass-with-skips`, never `pass`."""
-    base = f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
+    base = f"({test_var} ? ({_BASELINE_CLEARS_JS}({test_var}) ? 'pass' : {test_var}.status) : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
     run_skips = f"({test_var} && ({test_var}.status === 'pass-with-skips' || ({test_var}.status === 'pass' && ({test_var}.skipped ?? []).length > 0)))" if test_var is not None else "false"
     return (
         f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "
@@ -349,7 +357,8 @@ def next_action_parts(
                 + (
                     f"({falsifier_var} ? {{ status: {criterion_status_expr}, "
                     f"observation: {falsifier_var}.observation ?? null, "
-                    f"sidecar: {falsifier_var}.sidecar_path ?? null }} "
+                    f"sidecar: {falsifier_var}.sidecar_path ?? null, "
+                    f"register_rows: {falsifier_var}.register_rows ?? null }} "
                     ": { status: 'not_run', observation: null, sidecar: null })"
                     if falsifier_present
                     else "{ status: 'not_run', observation: null, sidecar: null }"
@@ -411,9 +420,10 @@ def next_action_parts(
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
             + "inline_review: " + inline_review_expr
             # {row id: reason} for rows an operator hold kept out of this script.
-            + ", held: Object.entries({ "
-            + (f"...{HELD_VAR}, " if held else "")
-            + f"...{PLAN_HELD_VAR} }}).map(([chunk, reason]) => ({{ chunk, reason }}))"
+            + (
+                f", held: Object.entries({HELD_VAR}).map(([chunk, reason]) => ({{ chunk, reason }}))"
+                if held else ""
+            )
             # [{plan, tells}] for each plan the pre-dispatch review called BROKEN.
             # terminal_commit reads it to withhold that plan's `implemented` stamp.
             + (
@@ -451,7 +461,6 @@ def completion_return_js(
     predispatch: Optional[dict] = None,
     held: bool = False,
     seam: bool = False,
-    run_base_runtime: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -565,19 +574,11 @@ def completion_return_js(
             f"({routed_out_var}.includes(id) ? 'routed_out' : {deviation_kind_expr}))"
         )
     deviation_anchor_expr = "''"
-    # A row its plan's halt kept from starting -- a seam drift at a wave gate,
-    # or a sibling row's stop rule -- is held, and names the halt; not
-    # `not_started`, which reads as a run that ran out.
-    deviation_kind_expr = f"({PLAN_HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
-    deviation_anchor_expr = (
-        f"({PLAN_HELD_VAR}[id] !== undefined ? _cap({PLAN_HELD_VAR}[id], "
-        f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
-    )
     if held:
         deviation_kind_expr = f"({HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
         deviation_anchor_expr = (
             f"({HELD_VAR}[id] !== undefined ? _cap({HELD_VAR}[id], "
-            f"{_maxlength(schema, 'deviations[].anchor')}) : {deviation_anchor_expr})"
+            f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
         )
     reviews_var = RUNTIME_VARS[12]
 
@@ -683,7 +684,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
-        "run_base_sha": RUNTIME_VARS[13] if run_base_runtime else _js_lit(run_base_sha),
+        "run_base_sha": _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),
@@ -725,7 +726,7 @@ def completion_return_js(
     if missing:
         raise AssertionError(f"completion_return_js field table missing schema paths: {sorted(missing)}")
 
-    lines = [_CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
+    lines = [CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
     lines.append("return {")
     lines.append(f"  schema: {table['schema']},")
     lines.append(f"  version: {table['version']},")

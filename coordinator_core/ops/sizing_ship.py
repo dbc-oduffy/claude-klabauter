@@ -125,6 +125,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.ops import requirement_register
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 
@@ -222,6 +223,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "different, incompatible terminal fact — 'declined' means the spend "
                 "was refused, 'superseded' means replaced by a later sizing; neither "
                 "is 'shipped' and this op never overwrites one with the other"
+            )
+
+        if requirement_register.read_register(old_text) is not None:
+            raise MutateAbort(
+                f"refusing to ship {p}: the sizing carries a requirement register; "
+                "the register rollup via deliverable.cascade_terminal is its only "
+                "writer of shipped"
             )
 
         route = read_fm_field_unquoted(old_text, "route")

@@ -4219,3 +4219,16 @@ def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(t
 
     assert _resolve_coded(repo, plan, "C1", head[:7])["exit_code"] == 0
     assert _resolve_coded(repo, plan, "C2", "deadbee")["exit_code"] == 0
+
+
+@pytest.mark.parametrize(
+    "changed,write,hit",
+    [
+        (".coordinator-local/memo-outbox/sent/m.md", ".coordinator-local/memo-outbox/m.md", True),
+        (".coordinator-local/memo-outbox/m.md", ".coordinator-local/memo-outbox/m.md", True),
+        (".coordinator-local/memo-outbox/sent/other.md", ".coordinator-local/memo-outbox/m.md", False),
+        ("docs/sent/m.md", "docs/m.md", False),
+    ],
+)
+def test_memo_send_row_matches_its_sent_receipt(changed, write, hit):
+    assert plan_tasks_mutate._writes_match(changed, write) is hit

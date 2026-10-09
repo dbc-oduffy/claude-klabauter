@@ -475,3 +475,17 @@ def test_accept_keeps_click_paths(tmp_path):
         {"role": "admin", "steps": ["Settings", "Grant access"]}
     ]
     assert doc["exit_criterion"]["accepted"]["pm_quote"]
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_an_empty_statement_amendment_is_refused(tmp_path, blank):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    before = sizing.read_text(encoding="utf-8")
+
+    result = _run(_base(statement=blank), repo)
+
+    assert result["exit_code"] == 1
+    assert "statement is empty" in result["error"]
+    assert sizing.read_text(encoding="utf-8") == before

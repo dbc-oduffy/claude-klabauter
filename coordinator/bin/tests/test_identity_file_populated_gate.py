@@ -81,7 +81,7 @@ def _stub_dest_refresh(monkeypatch) -> None:
     monkeypatch.setattr(
         _dest_refresh,
         "refresh_dest_from_origin",
-        lambda repo_root, *, out, err, source_root=None: _dest_refresh.RefreshResult(
+        lambda repo_root, *, out, err: _dest_refresh.RefreshResult(
             Path(repo_root), ok=True, branch="main", upstream="origin/main"
         ),
     )

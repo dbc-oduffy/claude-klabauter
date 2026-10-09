@@ -173,19 +173,23 @@ class TestFailOpenPaths:
         assert first == _ADVISORY_ENVELOPE
         assert second == _ADVISORY_ENVELOPE
 
-    def test_unresolvable_gitdir_never_suppresses(self, tmp_path, monkeypatch):
+    def test_unresolvable_gitdir_dedupes_through_temp_store(self, tmp_path, monkeypatch):
+        """No gitdir (cloud session above its checkouts): the once-per-session
+        contract holds through a temp-dir store, redirected here to tmp_path."""
+        import json
+        import tempfile
+
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE)
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: None)
-
-        import json
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
         raw = json.dumps(_payload(cwd=str(tmp_path)))
         first = dispatch.evaluate_payload_json(raw)
         second = dispatch.evaluate_payload_json(raw)
 
         assert first == _ADVISORY_ENVELOPE
-        assert second == _ADVISORY_ENVELOPE
+        assert "additionalContext" not in second["hookSpecificOutput"]
 
     def test_dedupe_key_raises_never_suppresses(self, tmp_path, monkeypatch):
         entry = _advisory_entry("fake-guard", _ADVISORY_ENVELOPE)
