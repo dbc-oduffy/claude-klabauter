@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "36edbdca19867536105a3d9ddf8987932c250cf8",
-    "coordinator_core/_engine_stamp": "83c30fd9e90384ab451b2684e0e90a309223b227",
+    "coordinator_core/_engine_published_at": "82986673454f00257bace44ab1fefec8f8f7d859",
+    "coordinator_core/_engine_stamp": "198adb5d5381a2f82435d039676ca583594c0050",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3754,7 +3754,7 @@
     "coordinator_core/op_census/tests/test_timing.py": "1415b340dfc50c33503070aef1435d9395328c93",
     "coordinator_core/op_census/timing.py": "88029cbde47fa9a2d8bcf202462072d073b4bf32",
     "coordinator_core/op_scopes.py": "886aab893c0992ba90ba1e20cb56f361627f9d86",
-    "coordinator_core/ops/__init__.py": "52f5ff2cd6e72dfb7230eb49896950cb9216d6a1",
+    "coordinator_core/ops/__init__.py": "cd3d4c990b2beb381833743532acfb460e1cf376",
     "coordinator_core/ops/_app_session_runtime.py": "34f95d0d5189d23df7eb5f1d2cbe8a0b1bb51afc",
     "coordinator_core/ops/_fm_util.py": "358c3e2468b94566c7732d0e25982f2c7302cacb",
     "coordinator_core/ops/_git_root_util.py": "b4381823d1e11607594ce5f19379ea6bc12815dd",
@@ -3762,7 +3762,7 @@
     "coordinator_core/ops/_param_alias.py": "a2f5adf928c85a3594823d2cf0e25c6d44ee7ad5",
     "coordinator_core/ops/_path_guard.py": "ce329e7d9ec3962a0de6198ccefbb1bf6635b640",
     "coordinator_core/ops/_pytest_child_env.py": "a27c560bb24998f389d5fced3b860d19a08b9f37",
-    "coordinator_core/ops/_registry_map.py": "7432d2d39d04874d07fdd4b7524df75761228ca3",
+    "coordinator_core/ops/_registry_map.py": "9646b0820f244317e274b97d1751b4b0e1497bbd",
     "coordinator_core/ops/_relative_link.py": "008dd7b78a44232895234e76a1275df2b32f9175",
     "coordinator_core/ops/_research_contract.py": "736c026fc0fee05e3369b085632f41ab0103a75a",
     "coordinator_core/ops/_sizing_citation.py": "637d7952ebbf0e4699465166b114f16f88f7b081",
@@ -6597,7 +6597,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "4d56be281219e971f441588e89173eac245b95b4",
     "coordinator_core/warm/door/door.exe": "82a1a4b1650f77b973dd02d640e320fc715d83b8",
-    "coordinator_core/warm/door/door.exe.provenance.json": "6b308683b76f5b077206afb52bcfe75a2d073e47",
+    "coordinator_core/warm/door/door.exe.provenance.json": "db5de143e8dc361692579f9f9f5c3f448613a9ff",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "d6e8081c2c06a2117decfa04c8cd4cfa8861766b",
     "coordinator_core/warm/door/door_core.h": "c2f36e496ce12ee933f322f974c0fbbc4da98ce3",
@@ -7166,5 +7166,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "02b6ccaade1f4996dca2d47770f1c87d635cd8a4"
+  "source_head": "c60f37a5d10d430c27450f04b9500e2156a1493c"
 }

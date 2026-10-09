@@ -99,18 +99,640 @@ from typing import Dict, List, Tuple
 _logger = _logging.getLogger(__name__)
 
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
+    ("coordinator_core.ops.ping", 'registers "ping"'),
+    ("coordinator_core.ops.invoke_from_argv", 'registers "invoke.from_argv"'),
+    ("coordinator_core.ops.cutover_gate", 'registers "cutover.gate"'),
+    ("coordinator_core.ops.cutover_advance", 'registers "cutover.advance"'),
+    ("coordinator_core.ops.git_maintenance", 'registers "git.maintenance"'),
+    (
+        "coordinator_core.ops.handoff_children",
+        'registers "handoff.blocked_by_dependents" (handoff.has_live_children was '
+        'DELETED 2026-08-27, kill ledger K-113; the module stays eager for the '
+        'surviving op and for the undecorated compute in-process callers use)',
+    ),
+    (
+        "coordinator_core.hooks",
+        "coordinator_core.hooks is ITSELF lazy (2026-08-22, mirroring this package's own "
+        "C6 retirement) -- a bare import of the package registers nothing; only its own "
+        "_eager_import_all() forces its 19 hooks.* ops to register. Handled as a special "
+        "case in the loop below, not a plain importlib.import_module() call.",
+    ),
+    (
+        "coordinator_core.frontmatter.schema_cli",
+        'registers "schema.describe", "schema.validate" (C7 byte-parity CLI + JSON-RPC ops)',
+    ),
+    ("coordinator_core.ops.goal_append", 'registers "goal.append"'),
+    ("coordinator_core.ops.goal_kr_status", 'registers "goal.set_kr_status"'),
+    ("coordinator_core.ops.goal_close_day", 'registers "goal.close_day", "goal.close_day_apply"'),
+    ("coordinator_core.orientation.regenerate_cache", 'registers "orientation.regenerate_cache"'),
+    ("coordinator_core.ops.fleet.plan_handoffs", 'registers "fleet.handoffs_for_plan"'),
+    ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
+    ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
+    ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
+    (
+        "coordinator_core.ops.fleet.prune_bugs",
+        'registers "fleet.prune_closed_bugs" (P045-C5, v2 rebuild — '
+        "docs/plans/2026-09-07-fleet-prune-closed-bugs-v2-rebuild.md — the "
+        "module contains no reference to prune before this row; C1's "
+        "SUSPENDED_OPS row removal is what makes dispatch reachable)",
+    ),
+    (
+        "coordinator_core.ops.cascade_terminal_op",
+        'registers "deliverable.cascade_terminal" (v2 rebuild, 0 spawns, one commit per run — '
+        "docs/plans/2026-10-03-warp-dogfood-follow-ons.md C5, the fleet.prune_closed_bugs "
+        "precedent; the library ops/deliverable_cascade.py stays undecorated for in-process callers)",
+    ),
+    ("coordinator_core.ops.fleet.prune_emitted", 'registers "fleet.prune_emitted_output"'),
+    ("coordinator_core.ops.fleet.scratch_hygiene", 'registers "fleet.scratch_hygiene"'),
+    ("coordinator_core.ops.fleet.archive_plans", 'eager-imported for library compute; its op is killed'),
+    ("coordinator_core.housekeeping.cycle", 'registers "housekeeping.cycle"'),
+    ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
+    ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
+    ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
+    ("coordinator_core.ops.fleet.delete_superseded_decisions", 'registers "fleet.delete_superseded_decisions"'),
+    ("coordinator_core.ops.fleet.memo_heal", 'registers "memo.heal_inbox"'),
+    ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
+    ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
+    ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
+    ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
+    ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
+    ("coordinator_core.ops.memo_correct_note", 'registers "memo.correct_note"'),
+    ("coordinator_core.ops.handoff_transition", 'registers "handoff.transition"'),
+    ("coordinator_core.ops.handoff_stamp", 'registers "handoff.stamp"'),
+    ("coordinator_core.ops.handoff_correct_body", 'registers "handoff.correct_body"'),
+    ("coordinator_core.ops.handoff_discharge_criteria", 'registers "handoff.discharge_criteria"'),
+    ("coordinator_core.ops.handoff_author_lint", 'registers "handoff.author_lint"'),
+    ("coordinator_core.ops.handoff_append_session_ledger", 'registers "handoff.append_session_ledger"'),
+    ("coordinator_core.ops.propagate_body", 'registers "handoff.propagate"'),
+    ("coordinator_core.ops.handoff_phase_stamp", 'registers "handoff.stamp_phase"'),
+    ("coordinator_core.ops.handoff_discharge_landed", 'registers "handoff.discharge_landed"'),
+    ("coordinator_core.ops.dispatch_emit.terminal_commit", 'registers "dispatch.terminal_commit"'),
+    ("coordinator_core.ops.dispatch_emit.ask_gate", 'registers "dispatch.ask_gate"'),
+    ("coordinator_core.ops.dispatch_emit.ask_stage", 'registers "dispatch.ask_stage"'),
+    ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
+    ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
+    ("coordinator_core.ops.baton_supersede", 'registers "baton.supersede"'),
+    ("coordinator_core.ops.baton_awaiting_gate_recheck", 'registers "baton.awaiting_gate_recheck"'),
+    ("coordinator_core.ops.baton_seed_split", 'registers "baton.seed_split"'),
+    ("coordinator_core.ops.goal_record_go", 'registers "goal.record_go"'),
+    ("coordinator_core.ops.handoff_normalize", 'registers "handoff.normalize"'),
+    ("coordinator_core.ops.artifact_adopt", 'registers "artifact.adopt"'),
+    ("coordinator_core.ops.goals_match", 'registers "goal.match_candidates"'),
+    ("coordinator_core.ops.plan_match", 'registers "plan.match_candidates"'),
+    ("coordinator_core.ops.plan_capture_persist", 'registers "plan.persist_capture"'),
+    ("coordinator_core.ops.handoff_match", 'registers "handoff.match_candidates"'),
+    ("coordinator_core.ops.initiatives_serve", 'registers "initiative.serve_set"'),
+    ("coordinator_core.ops.roadmap_link_stubs", 'registers "roadmap.link_stubs"'),
+    ("coordinator_core.ops.roadmap_plan_gate", 'registers "roadmap.plan_gate"'),
+    ("coordinator_core.ops.roadmap_blitz_land", 'registers "roadmap.blitz_land"'),
+    ("coordinator_core.ops.roadmap_blitz_stage", 'registers "roadmap.blitz_stage"'),
+    ("coordinator_core.ops.plan_cross_plan_gate", 'registers "plan.cross_plan_gate"'),
+    ("coordinator_core.ops.plan_seam_check", 'registers "plan.seam_check", "plan.seam_record"'),
+    ("coordinator_core.ops.plan_seam_fix", 'registers "plan.seam_fix"'),
     ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
+    ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
+    ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),
+    ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
+    ("coordinator_core.ops.decision_record_mint",
+     'registers "decision_record.mint_id" + "decision_record.release_id"'),
+    ("coordinator_core.ops.peer_notice_send", 'registers "peer_notice.send"'),
+    ("coordinator_core.ops.peer_notice_check", 'registers "peer_notice.check"'),
+    ("coordinator_core.ops.queue_promote", 'registers "queue.promote"'),
+    ("coordinator_core.ops.queue_cluster", 'registers "queue.cluster"'),
+    ("coordinator_core.ops.queue_scaffold_baton", 'registers "handoff.scaffold_from_queue"'),
+    ("coordinator_core.ops.updatedocs_gates", 'registers "updatedocs.gates"'),
+    ("coordinator_core.ops.fleet.memo_list", 'registers "memo.list"'),
+    ("coordinator_core.ops.fleet.memo_list_outbox", 'registers "memo.list_outbox"'),
+    ("coordinator_core.ops.fleet.memo_check_addressee", 'registers "memo.check_addressee"'),
+    ("coordinator_core.ops.fleet.memo_draft", 'registers "memo.draft" (C7 wiring)'),
+    ("coordinator_core.ops.fleet.memo_compose", 'registers "memo.compose" (C7 wiring)'),
+    ("coordinator_core.ops.fleet.memo_send", 'registers "memo.send" (rebuilt 2026-08-25, C2)'),
+    ("coordinator_core.ops.fleet.memo_reconcile_outbox", 'registers "memo.reconcile_outbox"'),
+    ("coordinator_core.ops.fleet.memo_blitz_buckets", 'registers "memo.blitz_buckets"'),
+    ("coordinator_core.ops.push_outstanding", 'registers "push.outstanding"'),
+    ("coordinator_core.ops.deliverable_rollup", 'registers "deliverable.rollup"'),
+    ("coordinator_core.ops.delegation_check", 'registers "delegation.check"'),
+    (
+        "coordinator_core.ops.spec_backlink_resolve",
+        'registers "spec_backlink.resolve", "spec_backlink.rewrite"',
+    ),
+    (
+        "coordinator_core.ops.sizing_decline",
+        'registers "sizing.decline" (2026-08-10, single-target applier for the sizing-object '
+        '`declined` terminal status)',
+    ),
+    (
+        "coordinator_core.ops.sizing_ship",
+        'registers "sizing.ship" (2026-08-13, single-target applier for the sizing-object '
+        '`shipped` terminal status when no plan was ever minted for the routed work)',
+    ),
+    (
+        "coordinator_core.ops.sizing_mark_routed",
+        'registers "sizing.mark_routed" (2026-10-08, sized -> routed plus goal_id for '
+        'cascade-only routes that sizing.ship refuses)',
+    ),
+    (
+        "coordinator_core.ops.sizing_discharge_surfaced",
+        'registers "sizing.discharge_surfaced" (2026-09-11, records a PM answer to a '
+        '`surfaced_to_pm` item in `pm_resolution` against the artifact that settled it, '
+        'leaving the surfaced entry listed)',
+    ),
+    (
+        "coordinator_core.ops.sizing_accept_exit_criterion",
+        'registers "sizing.accept_exit_criterion" (2026-09-27, single-target applier for '
+        'the sizing-object `exit_criterion.accepted` field — the PM\'s verbatim acceptance '
+        'of the primary success / exit criterion at the sizing touchpoint)',
+    ),
+    (
+        "coordinator_core.ops.sizing_record_xl_exit",
+        'registers "sizing.record_xl_exit" (2026-10-03, records the PM\'s XL exit pick '
+        'and verbatim quote on a sizing)',
+    ),
+    (
+        "coordinator_core.ops.sizing_record_pm_resolution",
+        'registers "sizing.record_pm_resolution" (2026-10-05, records a PM ruling\'s '
+        'verbatim quote under an arbitrary `pm_resolution` key on a sizing)',
+    ),
     (
         "coordinator_core.ops.sizing_record_register",
         'registers "sizing.record_register" (2026-10-09, writes a sizing\'s '
         '`requirement_register` block with a recomputed rollup)',
     ),
     (
+        "coordinator_core.ops.sizing_resize",
+        'registers "sizing.resize" (2026-10-01, writes `estimate.tshirt` and the '
+        'engine-resolved `route` back to a sizing)',
+    ),
+    (
+        "coordinator_core.ops.sizing_spike_verdict",
+        'registers "sizing.record_spike_verdict" (2026-08-14, single-target applier for '
+        'the sizing-object `premise.spike_verdict` pointer — the missing producer for the '
+        '`plan⇄spike` back-edge\'s trampoline gate)',
+    ),
+    (
+        "coordinator_core.ops.cascade_backstop_sweep",
+        'registers "deliverable.cascade_backstop_sweep" (C6c read-only backstop sweep, AC6d)',
+    ),
+    (
+        "coordinator_core.ops.cascade_divergence_report",
+        'registers "deliverable.cascade_divergence_report" (single-pass, read-only, '
+        "zero-spawn report naming a live record whose engine terminal an implemented "
+        "plan already owns, docs/plans/2026-09-23-cascade-write-provenance.md C2)",
+    ),
+    (
+        "coordinator_core.ops.commit_join_divergence_report",
+        'registers "commit_ledger.join_divergence_report" (read-only, one-git-spawn report of '
+        "ledger vs Deliverable-Id join divergence; never gates)",
+    ),
+    (
+        "coordinator_core.ops.audit_two_repo_rate",
+        'registers "goal.kr2_two_repo_rate" (read-only KR2 engine-tool commit count, '
+        "pairing leg unmeasured, docs/plans/2026-07-20-kr-baselining-package.md C1)",
+    ),
+    (
+        "coordinator_core.ops.cascade_retract",
+        'registers "deliverable.cascade_retract" (C6d retraction/revision, AC6f)',
+    ),
+    (
+        "coordinator_core.ops.deliverable_fork_detect",
+        'registers "deliverable.fork_detect" (C7 report-only slug-prefix fork-family '
+        "detector, AC12 — reachable by name, from no boot/commit-path trigger)",
+    ),
+    (
+        "coordinator_core.ops.ceremony.post_commit_tail",
+        "no reachable op; imported for its in-process helpers only",
+    ),
+    ("coordinator_core.session_ledger.aggregate_chain_loe", 'registers "session_ledger.aggregate_chain_loe"'),
+    ("coordinator_core.ops.records_query", 'registers "records.query"'),
+    (
+        "coordinator_core.ops.record_history",
+        # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
+        # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
+        # the refusal. Nothing this module declares dispatches.
+        # overengineering-reviewer (finding #1, major) asked this row
+        # struck entirely rather than re-annotated. Left in place: the module
+        # still declares `@register_op("records.history")`
+        # (coordinator_core/ops/record_history.py:657), and
+        # test_eager_op_modules_covers_every_register_op.py requires every
+        # such module to be _EAGER_OP_MODULES-reachable or it ships
+        # present-but-dead (registry MISS at dispatch). That test is the
+        # arbiter per this dispatch's brief — striking this row is correct
+        # only once the module's `@register_op` decorator (or the module
+        # itself) is also removed, which is outside this integration pass.
+        "no reachable op; `records.history` was killed under the budget",
+    ),
+    (
+        "coordinator_core.ops.read_sizing_object_fields",
+        'registers "sizing.read_object_fields" -- shipped PRESENT-BUT-DEAD: '
+        "decorated and listed in `_registry_map.py`, but absent here, so "
+        "`import coordinator_core.ops` never registered it and "
+        "`coordinator-invoke sizing.read_object_fields` could not resolve it. "
+        "Its own suite asserted registry membership and stayed GREEN "
+        "throughout, because that test file imports the module directly and "
+        "the decorator fires as an import side effect -- a guard or test that "
+        "imports what it audits cannot observe declared-but-unreachable. "
+        "Caught 2026-08-21 by `test_registry_fast_path_matches_live_registry`, "
+        "not by the op's own tests.",
+    ),
+    (
+        "coordinator_core.p4.register",
+        'registers "p4.register_workspace" (C7). Lives under coordinator_core/p4/, '
+        "not coordinator_core/ops/ — a module outside this package is reachable "
+        "for DISPATCH through OP_MODULE_MAP's targeted import, which is why the "
+        "op resolves, but reachability for the registry-miss SAFE FALLBACK and "
+        "for every census enumerator comes from THIS list alone. Same shape as "
+        "`sizing.read_object_fields` above: the p4 suites stayed green because "
+        "they import the module directly.",
+    ),
+    (
+        "coordinator_core.p4.session_state",
+        'registers "p4.session_state" (C7, D9 S3) — see the sibling p4.register '
+        "row above for why an out-of-package op module still needs this entry.",
+    ),
+    (
+        "coordinator_core.ops.handoff_columns_query",
+        'registers "handoff.columns" (2026-08-11 pull-surface-four-columns C3 — '
+        "batch-computed status/deployment_state/predecessor/shipped_in over live "
+        "plus opt-in archived handoffs)",
+    ),
+    (
+        "coordinator_core.ops.changelog_ops",
+        'registers "changelog.append_day", "changelog.backfill_gaps", '
+        '"changelog.compute_day_fields", "changelog.upsert_reviewed" (strang-10 A, DR-216)',
+    ),
+    ("coordinator_core.ops.cruft_sweep", ""),
+    (
+        "coordinator_core.ops.completion_ops",
+        'registers "completion.flip_to_released", "plan.append_session" (strang-10 B, DR-216)',
+    ),
+    (
+        "coordinator_core.ops.review_freeze_diff",
+        'registers "review.freeze_diff" (cross-repo/inbox/2026-07-23-claude-central-em-'
+        "review-diff-freeze-op-wanted.md)",
+    ),
+    ("coordinator_core.ops.review_partition_slices", 'registers "review.partition_slices"'),
+    ("coordinator_core.ops.review_reachability", 'registers "review.reachability" (2026-10-08, wired-up gate entry-point and click-path reachability)'),
+    (
+        "coordinator_core.ops.fleet.backfill_memo_disposition",
+        'registers "fleet.backfill_dispositionless_memos"',
+    ),
+    ("coordinator_core.ops.backfill_reference_edges", 'registers "fleet.backfill_reference_edges"'),
+    ("coordinator_core.ops.fleet.reap_unintegrated_findings", 'registers "fleet.reap_unintegrated_findings"'),
+    ("coordinator_core.ops.fleet.reap_integrated_findings", 'registers "fleet.reap_integrated_findings"'),
+    (
+        "coordinator_core.ops.session.reap",
+        'registers "session.reap", "session.audit_unreapable"',
+    ),
+    ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
+    ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
+    ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),
+    ("coordinator_core.ops.session.safe_commit_offer", 'registers "session.safe_commit_offer"'),
+    ("coordinator_core.ops.session_resolve_address", 'registers "session.resolve_address"'),
+    ("coordinator_core.ops.session_whoami_live", 'registers "session.whoami_live"'),
+    ("coordinator_core.ops.session_peer_roster", 'registers "session.peer_roster"'),
+    ("coordinator_core.ops.group_em_enter", 'registers "groupem.enter"'),
+    ("coordinator_core.ops.group_em_stamp", 'registers "groupem.stamp"'),
+    ("coordinator_core.ops.group_em_resolve_addressee", 'registers "groupem.resolve_addressee"'),
+    ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
+    ("coordinator_core.ops.group_em_standing", 'registers "groupem.standing"'),
+    ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
+    ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),
+    ("coordinator_core.ops.session_incident_claim", 'registers "session.incident_claim", "session.incident_peers"'),
+    ("coordinator_core.ops.handoff_author_fork", 'registers "handoff.author_fork"'),
+    ("coordinator_core.ops.handoff_lineage_ancestry", 'registers "handoff.lineage_ancestry"'),
+    ("coordinator_core.ops.plan_tasks_mutate", ""),
+    ("coordinator_core.ops.plan_narrow_criterion", 'registers "plan.narrow_criterion"'),
+    ("coordinator_core.ops.plan_tasks_grouping_digest", 'registers "plan.tasks.grouping_digest"'),
+    (
+        "coordinator_core.ops.plan_tasks_spine_drift_check",
+        'registers "plan.tasks.spine_drift_check" (read-only spine-vs-tree drift '
+        "check, reusing close_out_and_stamp's commit-coverage oracle)",
+    ),
+    ("coordinator_core.ops.engine_drift", 'registers "engine.drift"'),
+    (
+        "coordinator_core.ops.engine_registration_completeness",
+        'registers "engine.registration_completeness"',
+    ),
+    ("coordinator_core.plugin_health.drift", 'registers "plugin_health.drift"'),
+    ("coordinator_core.plugin_health.scan", 'registers "plugin_health.scan"'),
+    ("coordinator_core.plugin_health.sentinel", 'registers "plugin_health.sentinel"'),
+    ("coordinator_core.plugin_health.forwarder_drift", 'registers "plugin_health.forwarder_drift"'),
+    ("coordinator_core.ops.cartography_tree", 'registers "cartography.tree"'),
+    ("coordinator_core.ops.cartography_file_index", 'registers "cartography.file_index"'),
+    ("coordinator_core.ops.cartography_symbols", 'registers "cartography.symbols"'),
+    ("coordinator_core.ops.cartography_edges", 'registers "cartography.edges", "cartography.count_references"'),
+    ("coordinator_core.ops.cartography_op_edges", 'registers "cartography.op_edges"'),
+    ("coordinator_core.ops.docindex_emit", 'registers "docindex.emit"'),
+    ("coordinator_core.ops.memo_triage", 'registers "memo.triage"'),
+    ("coordinator_core.ops.distill_scope", 'registers "distill.scope"'),
+    ("coordinator_core.ops.distill_workflow_input", 'registers "distill.workflow_input"'),
+    ("coordinator_core.ops.workflow_validate", 'registers "workflow.validate"'),
+    ("coordinator_core.ops.workflow_scaffold", 'registers "workflow.scaffold"'),
+    ("coordinator_core.ops.workflow_bind", 'registers "workflow.bind_args"'),
+    ("coordinator_core.ops.compute_layer_scaffold.op", 'registers "compute_layer.scaffold"'),
+    ("coordinator_core.ops.dispatch_emit.op", 'registers "dispatch.emit"'),
+    (
+        "coordinator_core.ops.workflow_fire.op",
+        'registers "workflow.fire", "workflow.fire_status"',
+    ),
+    (
         "coordinator_core.ops.review_stamp",
         'registers "review_stamp.mint", "review_stamp.check"',
     ),
+    (
+        "coordinator_core.ops.review_mint.wave_bookkeeping",
+        'registers "review_mint.bookkeep_wave"',
+    ),
+    (
+        "coordinator_core.ops.review_mint.supersede",
+        'registers "review_mint.record_superseding_review"',
+    ),
+    ("coordinator_core.ops.verdict_record_op", 'registers "test_verdict.record"'),
+    ("coordinator_core.completion_receipts.approve", 'registers "receipt.approve"'),
+    ("coordinator_core.ops.strategic_generate", 'registers "strategic.generate"'),
+    ("coordinator_core.ops.strategic_emit", 'registers "strategic.emit"'),
+    ("coordinator_core.ops.handoff_close_origin_stub", 'registers "handoff.close_origin_stub"'),
+    ("coordinator_core.ops.session_hierarchy_derive", 'registers "session_hierarchy.derive"'),
+    ("coordinator_core.goals.reassess_krs", ""),
+    ("coordinator_core.ops.deferral_detect_orphan_memo", 'registers "deferral.detect_orphan_memo"'),
+    ("coordinator_core.ops.deferral_detect_partial_strangle", 'registers "deferral.detect_partial_strangle"'),
+    ("coordinator_core.ops.fleet.archive_release_accumulator", 'registers "fleet.archive_release_accumulator"'),
+    ("coordinator_core.ops.fleet.archive_paper_trail", 'registers "fleet.archive_paper_trail"'),
+    ("coordinator_core.ops.fleet.archive_queue_entry", 'registers "fleet.archive_queue_entry"'),
+    ("coordinator_core.ops.fleet.migrate_handoff_vocabulary", 'registers "fleet.migrate_handoff_vocabulary"'),
+    ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
+    (
+        "coordinator_core.ops.orphan_branch_sweep",
+        'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '
+        '"git_branch.list_unmerged_work", "git_branch.verify_commit_in_review_window"',
+    ),
+    ("coordinator_core.ops.bootstrap_repo", 'registers "repo_setup.validate_target_root"'),
+    ("coordinator_core.ops.ensure_python3_exe_shim", 'registers "install.detect_python3_appx_stub"'),
+    ("coordinator_core.ops.draft_plan_aging", 'registers "plan.list_stale_executing", "plan.list_orphaned"'),
+    ("coordinator_core.ops.plan_suggest_completion_steps", 'registers "plan.suggest_completion_steps"'),
+    ("coordinator_core.ops.ceremony.chunk_commits", 'registers "ceremony.chunk_commits"'),
+    ("coordinator_core.ops.session_commits", 'registers "session.commits"'),
+    ("coordinator_core.ops.session_baton_mint", 'registers "session_baton.mint"'),
+    ("coordinator_core.ops.session_baton_promote", 'registers "session_baton.promote"'),
+    ("coordinator_core.ops.baton_pm_turns", 'registers "baton.pm_turn_append", "baton.pm_turns"'),
+    ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
+    ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
+    ("coordinator_core.ops.write_identity_file", 'registers "install.write_identity_file"'),
+    ("coordinator_core.install.clone_sibling_repo", 'registers "install.clone_idempotent"'),
+    (
+        "coordinator_core.install.prereq_probe",
+        'registers "install.probe_skill_frontmatter_valid", "install.probe_windows_terminal_presence"',
+    ),
+    ("coordinator_core.install.shell_rc_guard", 'registers "install.write_shell_rc_guard_block"'),
+    ("coordinator_core.install.wrapper_onto_path", 'registers "install.wrapper_onto_path"'),
+    (
+        "coordinator_core.ops.assert_doctrine_cross_reference_counts",
+        'registers "doctrine.assert_cross_reference_counts"',
+    ),
+    ("coordinator_core.ops.cartography_stack", 'registers "cartography.stack"'),
+    ("coordinator_core.ops.cartography_chunk_table", 'registers "cartography.chunk_table"'),
+    ("coordinator_core.ops.ceremony.snapshot_diff_and_head", 'registers "review.snapshot_diff_and_head"'),
+    (
+        "coordinator_core.ops.detect_changed_dependency_manifests",
+        'registers "dependency.detect_changed_manifests"',
+    ),
+    ("coordinator_core.ops.detect_plugin_layout", 'registers "detect.plugin_layout"'),
+    ("coordinator_core.ops.detect_primary_languages", 'registers "detect.primary_languages"'),
+    ("coordinator_core.ops.init_anchor_injection_state", 'registers "ceremony.init_anchor_injection_state"'),
+    (
+        "coordinator_core.ops.lessons_filter",
+        'registers "lessons.filter_undated_universal", "lessons.reject_orphan_strip_entries"',
+    ),
+    ("coordinator_core.ops.list_files_newer_than_marker", 'registers "percolate.list_files_newer_than_marker"'),
+    ("coordinator_core.ops.merge_quiet_activity_gate", 'registers "merge.quiet_activity_gate"'),
+    (
+        "coordinator_core.ops.parse_cli_args",
+        'registers "cli.parse_flag", "cli.parse_date_flags"',
+    ),
+    ("coordinator_core.ops.probe_fresh_repo_noop", 'registers "update_docs.probe_fresh_repo_noop"'),
+    (
+        "coordinator_core.ops.release_tagging",
+        'registers "release.cut_tag", "release.cut_tag_and_publish"',
+    ),
+    ("coordinator_core.ops.repo_bootstrap", 'registers "repo.clone_and_register"'),
+    ("coordinator_core.ops.resolve_mcp_server_cli_path", 'registers "mcp.resolve_server_cli_path"'),
+    ("coordinator_core.ops.resolve_swept_baton", 'registers "baton.resolve_swept_in_archive"'),
+    ("coordinator_core.ops.run_pip_audit", 'registers "ci.run_pip_audit"'),
+    ("coordinator_core.ops.run_semgrep_scan", 'registers "ci.run_semgrep_scan"'),
+    ("coordinator_core.ops.run_shellcheck_sweep", 'registers "ci.run_shellcheck_sweep"'),
+    ("coordinator_core.ops.run_commenting_sweep", 'registers "ci.run_commenting_sweep"'),
+    ("coordinator_core.ops.campaign_enumerate", 'registers "records.by_origin_plan"'),
+    (
+        "coordinator_core.ops.verify_scout_inventory_completeness",
+        'registers "research.verify_scout_inventory_completeness"',
+    ),
+    ("coordinator_core.ops.research_archive_workdir", 'registers "research.archive_workdir"'),
+    ("coordinator_core.ops.research_close", 'registers "research.close"'),
+    ("coordinator_core.ops.research_shape", 'registers "research.shape"'),
     ("coordinator_core.ops.requirement_register_stall", 'registers "requirement_register.stall_report"'),
+    (
+        "coordinator_core.ops.research_dir_restructure",
+        'registers "research.restructure_for_repeat_topic"',
+    ),
+    (
+        "coordinator_core.ops.session.rotate_orphan_sweep_log",
+        'registers "session.rotate_orphan_sweep_log"',
+    ),
+    ("coordinator_core.ops.create_github_remote", 'registers "repo.create_and_push_remote"'),
+    (
+        "coordinator_core.ops.merge_branch_into_workstream",
+        'registers "branch.merge_into_workstream"',
+    ),
+    (
+        "coordinator_core.ops.copy_plugin_template",
+        'registers "repo_setup.copy_console_subprocess_tripwire"',
+    ),
+    (
+        "coordinator_core.ops.workday_surface_auto_push_failure_stats",
+        'registers "workday.surface_auto_push_failure_stats"',
+    ),
+    (
+        "coordinator_core.ops.push_failure_verdict",
+        'registers "git.push_failure_verdict"',
+    ),
+    (
+        "coordinator_core.ops.verify_fix_files_changed",
+        'registers "bug_sweep.verify_fix_files_changed"',
+    ),
+    ("coordinator_core.ops.hibernate_machine", 'registers "machine.hibernate"'),
+    ("coordinator_core.ops.run_pre_ci_hooks", 'registers "percolate.run_pre_ci_hooks"'),
+    ("coordinator_core.ops.scan_content_leakage", 'registers "percolate.scan_content_leakage_tiers"'),
+    (
+        "coordinator_core.ops.session.resolve_chain_terminal_disposition",
+        'registers "session.resolve_chain_terminal_disposition"',
+    ),
+    ("coordinator_core.ops.resolve_baton_path", 'registers "baton.resolve_path_and_repo"'),
+    ("coordinator_core.ops.baton_carry_forward", 'registers "baton.carry_forward", "baton.carry_forward_read"'),
+    ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
+    (
+        "coordinator_core.ops.fanout.ops",
+        'registers "fanout.compose", "fanout.census", "fanout.reconcile"',
+    ),
+    ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
+    ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
+    ("coordinator_core.ops.memo_fate_backfill", 'registers "memo.fate_backfill"'),
+    ("coordinator_core.ops.distill_curation_status", 'registers "distill.curation_status"'),
+    (
+        "coordinator_core.ops.distill_disposal_manifest",
+        'registers "distill.assemble_disposal_manifest"',
+    ),
+    ("coordinator_core.ops.distill_stamp_disposal", 'registers "distill.stamp_disposal"'),
+    ("coordinator_core.ops.distill_apply_disposal", 'registers "distill.apply_disposal"'),
+    ("coordinator_core.ops.crossrepo_closure_status", 'registers "crossrepo.closure_status"'),
+    ("coordinator_core.ops.ceremony.update_docs_scan", 'registers "ceremony.update_docs_scan"'),
+    (
+        "coordinator_core.ops.tracker.advance_status",
+        'registers "tracker.advance_status" (provisional — see module docstring\'s '
+        '"Provisional classification" section: no ratified DR carve-out yet)',
+    ),
+    (
+        "coordinator_core.ops.tracker.fold_observed_set",
+        'registers "tracker.fold_observed_set" (sat-01b C5, DR-241-affirmed; '
+        "no longer actuated from session.boot_sweep as of the C3/C5 boot-backstop "
+        "rebuild, docs/plans/2026-08-22-the-boot-backstop-asks-git-nothing.md — "
+        "relocated to a ceremony-gate call site (coordinator-claude side, per "
+        "C3's cross-repo-memo wiring), opt-in-by-existence only)",
+    ),
+    (
+        "coordinator_core.ops.tracker.mint_person",
+        'registers "tracker.mint_person" (sat-06 C4, DR-241-affirmed producer-'
+        "facing op that mints a person through the sovereign-tracker person "
+        "registry, per-repo, no cross-tree write)",
+    ),
+    (
+        "coordinator_core.ops.tracker.assign",
+        'registers "tracker.assign" (the first production caller of the '
+        "item_person edge — writes/retracts through tracker_entities' "
+        "existing emit_item_person_added/emit_item_person_retracted, "
+        "per-repo, no cross-tree write)",
+    ),
+    (
+        "coordinator_core.ops.tracker.render_status",
+        'registers "tracker.render_status" (sat-06 C3 — the read-only status '
+        "projection, classified MUTATING by DR-241's 2026-08-20 amendment as "
+        "conservative-by-construction rather than descriptive)",
+    ),
+    (
+        "coordinator_core.ops.tracker.completion_policy",
+        'registers "tracker.assert_code_complete" (C11 — DR-318 D2\'s routed '
+        "op surface for sat-04's tracker_completion_policy; wraps "
+        "emit_code_complete_assert, a real write via tracker_transitions."
+        "emit_transition, classified MUTATING on the merits)",
+    ),
+    (
+        "coordinator_core.ops.tracker.push_suggestion",
+        'registers "tracker.push_suggestion" (sat-06 C4 — the producer-'
+        "facing write op: resolves ownership via tracker_holder."
+        "write_root_for, then routes a local write through the store's own "
+        "append entrypoint "
+        "vs a DR-338 delivery envelope committed into a peer repo's "
+        "cross-repo/inbox/, never a direct cross-tree open())",
+    ),
+    (
+        "coordinator_core.ops.tracker.fold_ownership",
+        'registers "tracker.fold_ownership" (a read op answering who owns/is '
+        "assigned one item — folds item_person retractions and person_merged "
+        "resolution via tracker_projection, classified MUTATING per DR-241's "
+        "2026-08-20 conservative-by-construction amendment)",
+    ),
+    ("coordinator_core.ops.priority_set", 'registers "priority.set"'),
+    ("coordinator_core.ops.priority_drain", 'registers "priority.drain"'),
+    ("coordinator_core.ops.distill_curate_clusters", 'registers "distill.curate_clusters"'),
+    (
+        "coordinator_core.ops.diagnostics_probes",
+        'registers "diagnostics.always_succeeds", "diagnostics.always_refuses", '
+        '"diagnostics.always_structural_pin" (write-free transport-failure probes)',
+    ),
+    (
+        "coordinator_core.ops.gate_validate_invocable",
+        'registers "gate.validate_invocable" (merge-gate DoD checker skeleton, '
+        "docs/plans/2026-07-20-merge-gate-dod-engine-enforced.md § C1)",
+    ),
+    (
+        "coordinator_core.ops.gate_liveness.resolve",
+        'registers "gate_liveness.resolve" (external_gate closure_key join '
+        "reader, docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C1)",
+    ),
+    (
+        "coordinator_core.ops.gate_liveness.reconcile",
+        'registers "gate_liveness.reconcile" (dry-run-default, precondition-'
+        "checked external_gate cleared: true flip through stamp, "
+        "docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md § C2)",
+    ),
+    (
+        "coordinator_core.ops.cmd_autorun_guard",
+        'registers "install.detect_cmd_autorun_coverage", '
+        '"install.write_cmd_autorun_guard", "install.strip_cmd_autorun_guard" '
+        "(cmd.exe AutoRun coverage-gap probe/write/strip)",
+    ),
+    (
+        "coordinator_core.ops.app_session",
+        'registers "app_session.launch", "app_session.census", '
+        '"app_session.teardown" (docs/plans/2026-08-15-app-session-launch-'
+        "census-teardown-ops.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.op_budget_breaches",
+        'registers "op_census.breaches" (the budget-breach surface — DR-344-the-'
+        "brightline-process-budget-for-claude-klabauter.md)",
+    ),
+    (
+        "coordinator_core.ops.freshness_commit_delta",
+        'registers "freshness.commit_delta" (workday-start doc/test/bug-sweep '
+        "commit-delta producer — docs/plans/2026-09-10-cartography-churn-producer-"
+        "and-staleness-registrations.md § C3)",
+    ),
+    (
+        "coordinator_core.ops.warm_guard_evaluate",
+        'registers "warm_guard.evaluate" (the warm-side bash-guard chain — state/'
+        "handoffs/2026-08-23-the-warm-guard-op-gets-registered.md)",
+    ),
+    (
+        "coordinator_core.merge_assemble.ops",
+        'registers "merge_assemble.apply" (chunk C6, '
+        "docs/plans/2026-08-26-merges-directives-stop-starting-interpreters.md). "
+        'merge_assemble.brief was DELETED 2026-08-27 (kill ledger K-114) and is '
+        "struck from this annotation: the module stays eager for apply, and an "
+        "advertised-but-absent op reads to the annotation guard as a name "
+        "committed ahead of its op.",
+    ),
+    (
+        "coordinator_core.baton_assemble.ops",
+        'registers "baton_assemble.brief", "baton_assemble.apply" — making '
+        "baton_assemble reachable through the warm engine (previously served "
+        'only via the COLD entry_point_shim "baton-assemble" forwarder).',
+    ),
+    (
+        "coordinator_core.learn_lessons_pipeline.ops",
+        'registers "learn_lessons_pipeline.brief", "learn_lessons_pipeline.apply" '
+        "— C5's outbox-drain/age-sweep/run-stamp pipeline; without this entry the "
+        "module never imports on the warm-engine path, so OP_CLASSIFICATION/"
+        "_OP_KEY_SCOPE/ASSEMBLER_DISPATCHABLE rows for both ops name an op that "
+        "never actually registers.",
+    ),
+    (
+        "coordinator_core.ops.grind_ops",
+        'registers "lessons.extract", "lessons.verify_extraction", '
+        '"doctrine.surface_split_regenerate" (the queue-grind engine\'s closed '
+        "source/verify/regenerate op list). Complete on OP_MODULE_MAP/"
+        "OP_CLASSIFICATION/_OP_KEY_SCOPE but missed this table at registration "
+        "time — caught by test_registration_quad.py's live-tree eager-modules "
+        "surface check.",
+    ),
+    (
+        "coordinator_core.ops.warm_request_status",
+        'registers "warm.request_status" (docs/plans/2026-09-23-warm-dispatch-'
+        "reconcile.md C4 — the poll op named in a -32004 envelope; this leg's "
+        "handler runs only on the cold/pool path and always answers "
+        "unknowable(no-resident-engine), never not_received; the accept "
+        "process's `_serve_line` intercepts and answers it from AckStore instead)",
+    ),
 ]
 
 # module dotted-path -> the exception raised the last time we tried to import
