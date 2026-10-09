@@ -137,12 +137,14 @@ def test_conflicting_flags_refused(tmp_path, capsys, extra):
     assert "exclusive of" in err
 
 
-def test_review_only_takes_a_plan_or_an_inventory_not_both(tmp_path, capsys):
+def test_review_only_takes_plan_or_inventory_not_both(tmp_path, capsys):
     run = tmp_path / "run.txt"
     run.write_text("x", encoding="utf-8")
-    code, err = _run(["--plan", "p.md", "--inventory", "i.md", "--review-only", str(run), "--run-base", _BASE], capsys)
+
+    code, err = _run(["--plan", "p.md", "--inventory", "x", "--review-only", str(run), "--run-base", _BASE], capsys)
+
     assert code == cli.EXIT_USAGE
-    assert "not both" in err
+    assert "--review-only takes --plan or --inventory, not both" in err
 
 
 _PLAN = (

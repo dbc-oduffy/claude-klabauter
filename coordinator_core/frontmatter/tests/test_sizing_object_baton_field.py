@@ -40,9 +40,8 @@ def _baton_errors(fm: dict) -> list:
     return [e for e in validate_frontmatter(fm, _SCHEMA) if "baton" in str(e.get("field", ""))]
 
 
-def test_schema_declares_baton_at_1_25_0():
+def test_schema_declares_baton():
     schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
-    assert schema["x-schema-version"] == "1.31.0"
     assert "baton" in schema["properties"]
 
 

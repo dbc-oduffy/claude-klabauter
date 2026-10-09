@@ -31,6 +31,8 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wak
 # these (plus stage-result bindings and emitter literals) — never an executor's own reply.
 #: Emitted only by a script composed with an operator hold: `{row id: reason}`.
 HELD_VAR = "_heldRows"
+#: {row id: halt reason} for rows their plan's halt kept from starting.
+PLAN_HELD_VAR = "_planHeld"
 
 #: Emitted only by a script composed with a seam leg: `[{wave, class, plans, path}]`, one per blocking finding; `failed` replaces `class` for a leg that returned no verdict.
 SEAM_DRIFT_VAR = "_seamDrift"
@@ -49,6 +51,7 @@ RUNTIME_VARS = (
     "_skippedDone",
     "_unusableChecks",
     "_reviews",
+    "_runBase",
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -420,10 +423,9 @@ def next_action_parts(
             + (f"plan_path: {_js_lit(anchor_plan_path)}, " if anchor_only else "")
             + "inline_review: " + inline_review_expr
             # {row id: reason} for rows an operator hold kept out of this script.
-            + (
-                f", held: Object.entries({HELD_VAR}).map(([chunk, reason]) => ({{ chunk, reason }}))"
-                if held else ""
-            )
+            + ", held: Object.entries({ "
+            + (f"...{HELD_VAR}, " if held else "")
+            + f"...{PLAN_HELD_VAR} }}).map(([chunk, reason]) => ({{ chunk, reason }}))"
             # [{plan, tells}] for each plan the pre-dispatch review called BROKEN.
             # terminal_commit reads it to withhold that plan's `implemented` stamp.
             + (
@@ -461,6 +463,7 @@ def completion_return_js(
     predispatch: Optional[dict] = None,
     held: bool = False,
     seam: bool = False,
+    run_base_runtime: bool = False,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -580,11 +583,19 @@ def completion_return_js(
             f"({routed_out_var}.includes(id) ? 'routed_out' : {deviation_kind_expr}))"
         )
     deviation_anchor_expr = "''"
+    # A row its plan's halt kept from starting -- a seam drift at a wave gate,
+    # or a sibling row's stop rule -- is held, and names the halt; not
+    # `not_started`, which reads as a run that ran out.
+    deviation_kind_expr = f"({PLAN_HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
+    deviation_anchor_expr = (
+        f"({PLAN_HELD_VAR}[id] !== undefined ? _cap({PLAN_HELD_VAR}[id], "
+        f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
+    )
     if held:
         deviation_kind_expr = f"({HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
         deviation_anchor_expr = (
             f"({HELD_VAR}[id] !== undefined ? _cap({HELD_VAR}[id], "
-            f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
+            f"{_maxlength(schema, 'deviations[].anchor')}) : {deviation_anchor_expr})"
         )
     reviews_var = RUNTIME_VARS[12]
 
@@ -695,7 +706,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
-        "run_base_sha": _js_lit(run_base_sha),
+        "run_base_sha": RUNTIME_VARS[13] if run_base_runtime else _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
         "width.critical_path_rows": _js_lit(width["critical_path_rows"]),

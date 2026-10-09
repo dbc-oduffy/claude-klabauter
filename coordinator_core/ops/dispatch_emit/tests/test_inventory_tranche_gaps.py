@@ -101,6 +101,9 @@ def test_plan_with_no_live_rows_is_skipped_and_reported(tmp_path):
     assert [s["plan"] for s in report["skipped"]] == ["held"]
     assert "withheld" in report["skipped"][0]["reason"] or "depends_on_plan" in report["skipped"][0]["reason"]
     assert report["remaining"]["withheld_not_counted"] == 1
+    assert report["remaining"]["rows_remaining"] == 0
+    assert report["remaining"]["rows_waiting_on_predecessors"] == 1
+    assert [w["plan"] for w in report["remaining"]["waiting_on_predecessors"]] == ["held"]
 
 
 def test_remaining_estimate_simulates_further_tranches(tmp_path):
@@ -272,3 +275,26 @@ def test_part_review_specs_cover_only_that_parts_plans(tmp_path, monkeypatch, _r
         {"inventory_path": str(inv), "target_root": str(tmp_path), "inventory_part": [1, 2]}
     )
     assert seen == [frozenset({"docs/plans/a.md", "docs/plans/b.md"})]
+
+
+def _cyclic_groups():
+    # {a, b} and {c, d} each share a path; a needs c and d needs b, so each
+    # group holds the other's prerequisite while the plans themselves are ordered.
+    groups = [["a", "b"], ["c", "d"]]
+    size = {"a": 2, "b": 2, "c": 2, "d": 2}
+    prereqs = {"a": {"c"}, "b": set(), "c": set(), "d": {"b"}}
+    shared = {"a": "s/one.ts", "c": "s/two.ts"}
+    return groups, size, prereqs, shared
+
+
+def test_groups_holding_each_others_prerequisites_are_taken_as_one_unit():
+    groups, size, prereqs, shared = _cyclic_groups()
+    taken, deferred = im._pick_groups(groups, size, prereqs, shared, 8)
+    assert sorted(taken) == ["a", "b", "c", "d"] and deferred == {}
+
+
+def test_an_over_budget_group_cycle_places_plan_by_plan():
+    groups, size, prereqs, shared = _cyclic_groups()
+    taken, deferred = im._pick_groups(groups, size, prereqs, shared, 4)
+    assert sorted(taken) == ["b", "c"]
+    assert set(deferred) == {"a", "d"}

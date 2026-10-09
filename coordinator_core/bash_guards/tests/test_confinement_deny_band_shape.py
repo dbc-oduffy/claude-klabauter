@@ -191,14 +191,6 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        "block-whole-filesystem-scan",
-        "block-whole-filesystem-scan-fire",
-        "find / -name x",
-        True,
-        GuardBand.CONFINEMENT_DENY,
-        False,
-    ),
-    CorpusRow(
         "block-topic-branch",
         "block-topic-branch-fire",
         "git checkout -b topic/shape-probe",

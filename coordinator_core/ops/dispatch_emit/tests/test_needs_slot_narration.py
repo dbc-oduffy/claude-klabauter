@@ -37,3 +37,14 @@ def test_slot_rows_are_named(tmp_path):
 def test_no_slot_rows_no_narration(tmp_path):
     plan = _plan(tmp_path, _row("A1"), _row("B1", "  needs_slot: false\n"))
     assert "needs_slot" not in emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
+
+
+def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path):
+    plan = _plan(tmp_path, _row("A1", "  needs_slot: true\n"), _row("B1"))
+    text = plan.read_text(encoding="utf-8").replace(
+        "title: p\n", "title: p\nrow_build_gate:\n  - command: build-plugin.ps1\n"
+    )
+    plan.write_text(text, encoding="utf-8")
+    script = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
+    assert script.count("Slot row (needs_slot): author only") == 1
+    assert script.count("Build gate (mandatory)") == 1  # B1 keeps its gate; A1's moves to the EM

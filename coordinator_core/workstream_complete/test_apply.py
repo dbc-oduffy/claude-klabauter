@@ -957,6 +957,26 @@ def test_no_commit_row_judgment_surfaces_a_row_with_no_covering_commit(tmp_path:
     assert "C1" in jp["question"]
 
 
+def test_no_commit_row_judgment_names_an_uncleared_gate(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    plan = tmp_path / "docs" / "plans" / "myplan.md"
+    plan.write_text(
+        _NO_COMMIT_ROW_PLAN_TEXT.replace(
+            "  disposition: open\n",
+            "  disposition: open\n  external_gate:\n  - owner_repo: coordinator-content-repo\n"
+            "    condition: c\n    requires: landed-work\n    blocks: execution\n    cleared: false\n",
+        ),
+        encoding="utf-8",
+    )
+
+    jp = ws_apply._no_commit_row_judgment({"governing_plan_slug": "myplan"}, tmp_path)
+
+    assert jp is not None
+    assert "C1 carry an uncleared `external_gate`" in jp["evidence"]
+    assert "clear-gate" in jp["evidence"]
+
+
 def test_no_commit_row_judgment_returns_none_once_row_already_resolved(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     (tmp_path / "docs" / "plans").mkdir(parents=True)

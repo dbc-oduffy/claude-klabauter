@@ -254,6 +254,17 @@ def test_an_append_against_an_in_place_write_collides(tmp_path, git):
     assert r["verdict"] == "REFUSED" and {f["path"] for f in r["findings"]} == {"s/hub.ts"}
 
 
+def test_a_repo_declared_hub_does_not_collide_without_row_annotations(tmp_path, git):
+    root = _root(tmp_path)
+    (root / "coordinator.local.md").write_text(
+        '---\nappend_only_paths: "s/hub.ts, ./s/other-hub.ts"\n---\n', encoding="utf-8"
+    )
+    a = _plan(root, "a", _row("R1", "[s/hub.ts, s/x.py]"))
+    b = _plan(root, "b", _row("R2", "[s/hub.ts, s/x.py]"))
+    r = _check(root, [a, b])
+    assert r["verdict"] == "REFUSED" and {f["path"] for f in r["findings"]} == {"s/x.py"}
+
+
 def test_one_in_place_row_makes_the_plan_an_in_place_writer(tmp_path, git):
     root = _root(tmp_path)
     a = _plan(root, "a", _row("R1", "[s/hub.ts]", extra="  appends: [s/hub.ts]\n") + _row("R3", "[s/hub.ts]"))
@@ -268,6 +279,18 @@ def test_ordered_pair_is_clean(tmp_path, git):
     b = _plan(root, "b", _row("R2", "[s/x.py]"), fm=edge)
     r = _check(root, [a, b])
     assert r["verdict"] == "CLEAN" and not any(f["class"] == "writes-collision" for f in r["findings"])
+
+
+def test_a_pair_ordered_through_a_plan_outside_the_set_is_clean(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("R1", "[s/x.py]"))
+    mid = _plan(root, "m", _row("R3", "[s/m.py]"),
+                fm=f"capabilities: []\ndepends_on_plan:\n  - {{plan: {a}, status: approved, gate_kind: k}}\n")
+    b = _plan(root, "b", _row("R2", "[s/x.py]"),
+              fm=f"capabilities: []\ndepends_on_plan:\n  - {{plan: {mid}, status: approved, gate_kind: k}}\n")
+    assert _check(root, [a, mid, b])["verdict"] == "CLEAN"
+    r = _check(root, [a, b])
+    assert not any(f["class"] == "writes-collision" and f["path"] for f in r["findings"])
 
 
 def test_undeclared_writes_recorded_as_undetermined(tmp_path, git):

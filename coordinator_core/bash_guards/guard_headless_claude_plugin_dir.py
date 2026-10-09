@@ -15,7 +15,10 @@ from __future__ import annotations
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core.bash_guards._command_tokenizer import token_matches_binary
+from coordinator_core.bash_guards._command_tokenizer import (
+    exceeds_tokenizable_ceiling,
+    token_matches_binary,
+)
 from coordinator_core.bash_guards._rewrite_support import (
     _advisory,
     _allow_rewrite,
@@ -83,6 +86,8 @@ def _scan_segments(cmd: str) -> List[List[_Word]]:
 
 def _plain(raw: str) -> str:
     if "'" not in raw and '"' not in raw:
+        return raw
+    if exceeds_tokenizable_ceiling(raw):
         return raw
     try:
         parts = shlex.split(raw)

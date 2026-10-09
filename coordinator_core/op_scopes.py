@@ -572,6 +572,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.persist_capture":                  "common_dir",
     "plan.tasks.mutate":                     "common_dir",
     "plan.tasks.grouping_digest":             "common_dir",
+    "plan.signoff":                           "common_dir",
+    "signoff.digest":                         "common_dir",
     "plan.narrow_criterion":                  "common_dir",
     "session_ledger.aggregate_chain_loe":    "common_dir",
     "session_hierarchy.derive":              "none",

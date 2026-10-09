@@ -912,8 +912,6 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     (`reverify_delivery record`, from the Workflow's task output), never a parameter or a
     hand-written file. Returns `{"status": "rejudged"|"unchanged", "reason": ...}`; a
     not_met/indeterminate newest record, or none bound and newer than the stamp, writes nothing."""
-    from datetime import datetime, timezone
-
     from coordinator_core.ops.dispatch_emit.verdict_supersession import _instant, latest_criterion_record
 
     _, split = _read_plan_frontmatter(plan_path)
@@ -951,14 +949,9 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     if not observation:
         return {"status": "unchanged", "reason": f"judge result {rel} records no observation"}
 
-    stamp["criterion"] = {
-        "status": "met",
-        "observation": observation,
-        "sidecar": rel,
-        "prior_status": criterion.get("status"),
-        "judged_at": record["recorded_at"],
-        "judged_head_sha": record.get("head_sha"),
-    }
+    # Only the schema's three keys: the plan schema is DoE-owned and closed, and the sidecar
+    # record already carries when and at which head the judge ran.
+    stamp["criterion"] = {"status": "met", "observation": observation, "sidecar": rel}
     _write_stamp(plan_path, split, stamp)
     return {"status": "rejudged", "reason": f"criterion met per {rel}"}
 

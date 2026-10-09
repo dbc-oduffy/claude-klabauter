@@ -44,6 +44,8 @@ Negative-spec:
   - Neither op commits or accepts a caller-supplied root.
   - Two plans that only append to a path (`appends:` on every row writing it)
     do not collide on it; an append against an in-place write still does.
+    A path the repo lists under `append_only_paths` in `coordinator.local.md`
+    is an append for every writer, so no two plans collide on it.
   - The universe pass adds no git call: it reads plan files and shares the
     outside-plan cache; its one HEAD question rides the existing batched cat-file.
   - Git is asked twice at most per call: one ``cat-file --batch-check`` for HEAD's
@@ -80,6 +82,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     with_canonical_disposition,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import _normalize_path
+from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
 
 
 _DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
@@ -512,20 +515,46 @@ def _export_findings(plan: _Plan, pset, ctx, tree: _Tree, pending: list) -> None
             pending.append((plan, row, raw, norm not in consumed))
 
 
-def _edge_closure(pset: Dict[str, _Plan]) -> Dict[str, set]:
-    """Per plan, every set member it reaches through ``depends_on_plan`` edges, transitively."""
-    direct = {rel: {d for d in p.edge_plans() if d in pset} for rel, p in pset.items()}
+def _edge_closure(pset: Dict[str, _Plan], ctx: Optional[dict] = None) -> Dict[str, set]:
+    """Per plan, every set member it reaches through ``depends_on_plan`` edges, transitively.
+
+    With a ``ctx`` carrying ``root``, the walk passes through plans outside the set:
+    a wave's set is a slice of the prep set, and an order the prep set declared
+    through a plan the wave left out is still declared -- dropping it made a set
+    certified at prep DRIFT at a wave on a collision prep had seen ordered."""
+    through_outside = ctx is not None and "root" in ctx
+    direct: Dict[str, set] = {}
+
+    def edges(rel: str) -> set:
+        if rel not in direct:
+            plan = pset.get(rel) or (_load_outside(ctx, rel) if through_outside else None)
+            targets = plan.edge_plans() if plan is not None else set()
+            direct[rel] = targets if through_outside else {d for d in targets if d in pset}
+        return direct[rel]
+
     closure: Dict[str, set] = {}
     for rel in pset:
         seen: set = set()
-        stack = list(direct[rel])
+        stack = list(edges(rel))
         while stack:
             cur = stack.pop()
             if cur not in seen:
                 seen.add(cur)
-                stack.extend(direct[cur])
-        closure[rel] = seen
+                stack.extend(edges(cur))
+        closure[rel] = seen & pset.keys()
     return closure
+
+
+APPEND_HUBS_KEY = "append_only_paths"
+
+
+def _declared_append_hubs(root: Path) -> set:
+    """Normalized paths from the `append_only_paths` key of `coordinator.local.md`:
+    a comma-separated list, optional `[...]` wrapper and per-item quotes stripped."""
+    raw = cs_read_local_md_key(str(root), APPEND_HUBS_KEY).strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    return {_normalize_path(i) for i in (x.strip().strip("\"'") for x in raw.split(",")) if i}
 
 
 def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
@@ -538,7 +567,7 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
             exact.setdefault(p, set()).add(rel)
         for p in prefixes:
             prefix.setdefault(p, set()).add(rel)
-    ordered = _edge_closure(pset)
+    ordered = _edge_closure(pset, ctx)
     appends = {rel: p.append_only_paths() for rel, p in pset.items()}
     seen: set = set()
     for rel, (paths, prefixes) in sets.items():
@@ -551,7 +580,7 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
             for other in hits - {rel}:
                 if other in ordered[rel] or rel in ordered[other]:
                     continue
-                if item in appends[rel] and item in appends[other]:
+                if item in ctx["hubs"] or (item in appends[rel] and item in appends[other]):
                     continue
                 key = (rel, other, item)
                 if key in seen:
@@ -765,7 +794,7 @@ class _Universe:
         return self.coded_row(rel, item) is not None
 
 
-def _overlap_seams(pset: Dict[str, _Plan], uni: _Universe) -> list:
+def _overlap_seams(pset: Dict[str, _Plan], uni: _Universe, hubs: set) -> list:
     out: list = []
     for rel, plan in pset.items():
         paths, prefixes = _paths_and_prefixes(plan.live_rows)
@@ -780,7 +809,7 @@ def _overlap_seams(pset: Dict[str, _Plan], uni: _Universe) -> list:
             for other in sorted(hits):
                 if other in edges or rel in uni.plans[other].edge_plans():
                     continue
-                if item in own_appends and item in uni.appends[other]:
+                if item in hubs or (item in own_appends and item in uni.appends[other]):
                     continue
                 out.append(_finding(
                     rel, MISSING_SEAM, False,
@@ -841,7 +870,7 @@ def _cap_seams(findings: list, plans: list) -> list:
 
 def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     ctx = _parse_params(params, root, record=record)
-    ctx.update(root=root, outside={})
+    ctx.update(root=root, outside={}, hubs=_declared_append_hubs(root))
     pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in ctx["plans"]}
     landed_head = "HEAD"
     if ctx["phase"] == "wave-boundary":
@@ -886,7 +915,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
         uni = ctx["uni"] = _Universe(ctx, pset)
         ctx.setdefault("set_promised", _set_promises(pset))
         ctx.setdefault("siblings", _siblings(ctx))
-        seams += _overlap_seams(pset, uni)
+        seams += _overlap_seams(pset, uni, ctx["hubs"])
         seams += _consume_seams(pset, ctx, uni, unwritten)
         for _, _, raw in unwritten:
             tree.want(raw)

@@ -66,8 +66,9 @@ def test_two_plan_run_emits_the_leg_with_the_pinned_params():
     assert "named_set: true" in script
     assert f'const _seamPlans = ["{P1}", "{P2}", "{P3}"];' in script
     assert "landed_rows: _seamCommitted" in script
-    assert "'" + "a" * 40 + "..'" in script
+    assert "landed_range: _runBase + '..' + sha" in script
     assert "agentType: 'coordinator:executor'" in script.split("async function _seamLeg", 1)[1]
+    assert "'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : '')" in script
 
 
 def test_only_the_row_with_something_to_falsify_waits_on_the_leg():

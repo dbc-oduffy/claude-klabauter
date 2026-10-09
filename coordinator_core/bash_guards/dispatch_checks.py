@@ -3835,6 +3835,9 @@ def check_destructive_rm(
         return None
 
     rm_override = _override("COORDINATOR_ALLOW_RM", payload=payload)
+    # A relative target is relative to the session's cwd: on the warm engine the process
+    # cwd is wherever the server booted, and an unresolved target is silently skipped.
+    _rm_cwd = (payload or {}).get("cwd") or os.getcwd()
 
     # Per-call memo, keyed on the exact (cwd, args) pair actually run -- see
     # `_new_git_memo` docstring for why this is sound and why it is
@@ -4008,7 +4011,7 @@ def check_destructive_rm(
                         _gr_t = _gr_t[:-1]
                     if _gr_t.endswith("}"):
                         _gr_t = _gr_t[:-1]
-                    _gr_resolved = os.path.expanduser(_gr_t) if _gr_t.startswith("~") else _gr_t
+                    _gr_resolved = os.path.join(_rm_cwd, os.path.expanduser(_gr_t)) if _gr_t else ""
                     if not _gr_resolved or not os.path.exists(_gr_resolved):
                         continue
                     _pending_rm_touch_paths.append(_abs_path(_gr_resolved))
@@ -4100,7 +4103,7 @@ def check_destructive_rm(
             # this used to overwrite `tgt` itself for that spelling, so
             # `tgt` was already absolute by message-build time despite the
             # comment above claiming otherwise for every spelling).
-            tgt_resolved = os.path.expanduser(tgt) if tgt.startswith("~") else tgt_expanded
+            tgt_resolved = os.path.join(_rm_cwd, os.path.expanduser(tgt) if tgt.startswith("~") else tgt_expanded)
             if not tgt or not os.path.exists(tgt_resolved):
                 continue
             tgt_abs = _abs_path(tgt_resolved)

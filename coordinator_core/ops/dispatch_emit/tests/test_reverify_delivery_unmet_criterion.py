@@ -59,3 +59,34 @@ def test_delivery_fail_still_returns_its_claims(tmp_path):
 
 def test_judge_preamble_names_the_python_interpreter():
     assert "`python3`" in _JUDGE_PREAMBLE and "`python`" in _JUDGE_PREAMBLE
+
+
+def test_recorded_row_evidence_reaches_the_verifier_and_the_judge(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    fail = {"verdict": "FAIL", "unbacked": [{"claim": "timing", "anchor": "unmeasured"}]}
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-x\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    (plan.parent / "p.evidence.yaml").write_text(
+        "rows:\n  D1:\n  - {recorded_at: '2026-10-09', text: 40.6ms per op}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    rd.emit_reverify(repo_root=repo, plan_path="docs/plans/p.md", run_record=str(record), out_path=str(out))
+    text = out.read_text(encoding="utf-8")
+    assert "Row evidence recorded through evidence-append is in docs/plans/p.evidence.yaml" in text
+    assert "row_evidence: docs/plans/p.evidence.yaml" in text
+
+
+def test_no_recorded_evidence_names_no_sidecar(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    fail = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-x\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    rd.emit_reverify(repo_root=repo, plan_path="docs/plans/p.md", run_record=str(record), out_path=str(out))
+    assert "evidence.yaml" not in out.read_text(encoding="utf-8")

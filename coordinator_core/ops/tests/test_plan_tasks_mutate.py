@@ -104,6 +104,15 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _seed_pm_approved_via_stamp(request, monkeypatch):
+    """Resolve-gate tests seed a legacy row's pm_approved through stamp, which
+    now refuses it in production; lift the refusal for those fixtures only.
+    Tests named `*stamp_refuses_signoff*` keep the real refusal."""
+    if "stamp_refuses_signoff" not in request.node.name:
+        monkeypatch.setattr(plan_tasks_mutate, "_STAMP_REFUSED_APPROVAL_FIELDS", frozenset())
+
+
 def _make_git_repo(tmp_path: Path) -> Path:
     """Create a minimal git repo and return its root (main worktree).
 
@@ -1665,6 +1674,39 @@ def test_stamp_refuses_batch_carrying_disposition_field_no_write(tmp_path):
         "file must be byte-unchanged: the whole batch is refused, including "
         "the harmless sibling update entry"
     )
+
+
+@pytest.mark.parametrize("field", ["pm_approved", "signoff"])
+def test_stamp_refuses_signoff_field_naming_plan_signoff(tmp_path, field):
+    """stamp refuses pm_approved/signoff for the whole batch, naming
+    plan.signoff; no write."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "stamp-signoff.md", _PLAN_TWO_ROWS)
+    original = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "stamp",
+            "plan_path": str(plan),
+            "updates": [
+                {"id": "C1", "title": "harmless rename"},
+                {"id": "C2", field: True},
+            ],
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 1, result
+    assert result["applied"] is False
+    assert "plan.signoff" in result.get("error", "")
+    assert plan.read_text(encoding="utf-8") == original
+
+
+def test_legacy_pm_approval_hint_names_plan_signoff_and_apm():
+    hint = plan_tasks_mutate._LEGACY_PM_APPROVAL_HINT
+    assert "plan.signoff" in hint
+    assert "APM" in hint
+    assert "plan-tasks-stamp" not in hint
 
 
 def test_stamp_refuses_disposition_ref_field_alone(tmp_path):

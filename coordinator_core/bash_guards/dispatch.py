@@ -524,6 +524,10 @@ _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
         "denies only for a subagent caller, which a command-text trigger cannot carry",
     ),
     (
+        "guard-subagent-heavy-ue-launch",
+        "denies only for a subagent caller, which a command-text trigger cannot carry",
+    ),
+    (
         "block-reviewer-bash-outside-allowlist",
         "denies every command a confined reviewer runs that is not on its allowlist, so any text can deny",
     ),
@@ -2264,6 +2268,10 @@ def _build_guard_chain(
         check as _check_host_subagent_bash_spawn_shapes,
         MATCHERS as _matchers_host_subagent_bash_spawn_shapes,
     )
+    from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import (
+        check as _check_subagent_heavy_ue_launch,
+        MATCHERS as _matchers_subagent_heavy_ue_launch,
+    )
     from coordinator_core.bash_guards.check_raw_pid_liveness import (
         check as _check_raw_pid_liveness,
         MATCHERS as _matchers_raw_pid_liveness,
@@ -2782,6 +2790,17 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_host_subagent_bash_spawn_shapes),
+        ),
+        # guard-subagent-heavy-ue-launch -- port of DoE's cold script (169088ceb): a
+        # dispatched agent never launches UBT/RunUAT/build-plugin/UnrealEditor; those are
+        # Group EM slot legs. Same subagent cohort and CONFINEMENT_DENY posture as above.
+        GuardEntry(
+            "guard-subagent-heavy-ue-launch",
+            lambda: _check_subagent_heavy_ue_launch(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_subagent_heavy_ue_launch),
         ),
         # This one is a hard-deny (fail_closed) and belongs on this side of every
         # rewriting guard for the same reason as the three above. It previously sat

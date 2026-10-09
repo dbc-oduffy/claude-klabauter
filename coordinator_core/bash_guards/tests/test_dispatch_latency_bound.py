@@ -104,6 +104,7 @@ from typing import Callable, Dict, List, Tuple
 import pytest
 
 from coordinator_core.bash_guards import _command_tokenizer as _ct
+from coordinator_core.bash_guards import dispatch_checks as _dispatch_checks
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
@@ -706,7 +707,10 @@ def rm_spawn_count_profile() -> Dict[Tuple[str, int], int]:
     corpus would never see this defect move.
     """
     profile: Dict[Tuple[str, int], int] = {}
-    with _SpawnCountCounter() as counter:
+    # The corpus names real files of the live repo, so an allowed rm would record a touch
+    # into the real session hub under the probe's session id. The touch is not the axis.
+    with pytest.MonkeyPatch.context() as mp, _SpawnCountCounter() as counter:
+        mp.setattr(_dispatch_checks, "_rm_flush_touch", lambda *_a, **_k: None)
         for name, build in _RM_SPAWN_CORPUS.items():
             for count in (_RM_TARGET_COUNT_SMALL, _RM_TARGET_COUNT_LARGE):
                 profile[(name, count)] = counter.measure(build(count))

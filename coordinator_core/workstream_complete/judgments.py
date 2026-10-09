@@ -999,10 +999,19 @@ _JOIN_PROVENANCE_UNATTRIBUTABLE_REASON = {
 def build_no_commit_row_disposition_judgment_point(
     no_commit_row_ids: list[str] | None = None,
     join_provenance: str = "joined",
+    gated_row_ids: list[str] | None = None,
 ) -> dict[str, Any] | None:
     if not no_commit_row_ids:
         return None
     row_line = ", ".join(sorted(no_commit_row_ids))
+    # A coded row behind an uncleared execution gate is refused as evidence, which reads as
+    # "no covering commit" unless the gate is named.
+    gated_note = (
+        f"; {', '.join(sorted(gated_row_ids))} carry an uncleared `external_gate` "
+        "(blocks: execution), so their disposition_ref is not counted -- if the gate is met, "
+        "clear it (plan.tasks.mutate verb clear-gate, with evidence) and re-run"
+        if gated_row_ids else ""
+    )
 
     if join_provenance == "joined":
         evidence = (
@@ -1010,7 +1019,7 @@ def build_no_commit_row_disposition_judgment_point(
             "open/coded) cross-referenced against this session's commit-coverage "
             "oracle (close_out_and_stamp._determine_shipped / "
             "_committed_chunk_shas) -- row(s) with no covering commit found: "
-            f"{row_line}"
+            f"{row_line}{gated_note}"
         )
     else:
         reason_text = _JOIN_PROVENANCE_UNATTRIBUTABLE_REASON.get(

@@ -333,12 +333,14 @@ def _parse_semver(v: str) -> tuple[int, int, int] | None:
 
 
 def _resolve_json_ref(ref: str, root_schema: dict) -> dict:
-    """Resolve an in-file JSON Schema $ref.
-
-    Only '#/$defs/Name' references are supported — cross-file refs are banned in
-    the dependency-free validator context (no network/filesystem fetch permitted).
+    """Resolve a JSON Schema $ref: in-file '#/$defs/Name', or a sibling schema
+    vendored beside this module (`_resolve_sibling_ref`). Any other cross-file ref
+    would need a fetch, banned in the dependency-free validator context.
     Raises ValueError on unsupported or unresolvable refs.
     """
+    sibling = _resolve_sibling_ref(ref)
+    if sibling is not None:
+        return sibling[0]
     if not isinstance(ref, str) or not ref.startswith('#/$defs/'):
         raise ValueError(
             f'JSON Schema $ref "{ref}" is not supported — only in-file '
@@ -352,6 +354,40 @@ def _resolve_json_ref(ref: str, root_schema: dict) -> dict:
             f'JSON Schema $ref "{ref}" not found — no $defs.{def_name} in schema.'
         )
     return defs[def_name]
+
+
+_SIBLING_REF_PREFIX = 'https://coordinator.local/schemas/'
+_SIBLING_SCHEMA_DIR = Path(__file__).resolve().parent / 'schemas'
+
+
+@functools.cache
+def _sibling_schema(name: str) -> dict | None:
+    path = _SIBLING_SCHEMA_DIR / name
+    if '/' in name or '\\' in name or not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _resolve_sibling_ref(ref: Any) -> tuple[dict, dict] | None:
+    """`(subschema, sibling_root)` for a `$ref` naming a schema vendored beside this
+    module by its `$id` URL (plan.schema's `tasks` and `row_build_gate` point at
+    plan-tasks.schema). A local file read, never a fetch; `None` for any other ref,
+    which `_resolve_json_ref` then judges. Nested refs resolve against the sibling."""
+    if not isinstance(ref, str) or not ref.startswith(_SIBLING_REF_PREFIX):
+        return None
+    name, _, pointer = ref[len(_SIBLING_REF_PREFIX):].partition('#')
+    root = _sibling_schema(name)
+    if root is None:
+        return None
+    node: Any = root
+    for part in [p for p in pointer.split('/') if p]:
+        part = part.replace('~1', '/').replace('~0', '~')
+        if not isinstance(node, dict) or part not in node:
+            raise ValueError(f'JSON Schema $ref "{ref}" not found in {name}.')
+        node = node[part]
+    if not isinstance(node, dict):
+        raise ValueError(f'JSON Schema $ref "{ref}" does not name a schema object.')
+    return node, root
 
 
 def _json_type_ok(value: Any, type_spec: str | list) -> bool:
@@ -491,7 +527,7 @@ def _validate_json_schema_node(
     Port of validateJsonSchemaNode from coordinator-content-repo coordinator/bin/lib/schema.js.
 
     Supported keywords: $ref, anyOf, allOf, oneOf, type, enum, format
-    (date/date-time), pattern, minLength, maxLength, minItems, uniqueItems, minimum, maximum,
+    (date/date-time), pattern, minLength, maxLength, minItems, maxItems, uniqueItems, minimum, maximum,
     propertyNames, required (array form), properties, additionalProperties (both boolean
     false and schema-valued — a schema-valued additionalProperties recurses
     into every key not declared in this node's `properties`, same as
@@ -548,6 +584,10 @@ def _validate_json_schema_node(
 
     # $ref — resolve before all other keywords.
     if '$ref' in schema:
+        sibling = _resolve_sibling_ref(schema['$ref'])
+        if sibling is not None:
+            resolved, sibling_root = sibling
+            return _validate_json_schema_node(value, resolved, sibling_root, path)
         resolved = _resolve_json_ref(schema['$ref'], root_schema)
         return _validate_json_schema_node(value, resolved, root_schema, path)
 
@@ -949,6 +989,13 @@ def _validate_json_schema_node(
                     'error': f'array length {len(value)} is less than minItems {min_items}',
                     'hint': f'Provide at least {min_items} item(s)',
                 })
+
+        if 'maxItems' in schema and len(value) > schema['maxItems']:
+            errors.append({
+                'field': field,
+                'error': f'array length {len(value)} exceeds maxItems {schema["maxItems"]}',
+                'hint': f'Provide at most {schema["maxItems"]} item(s)',
+            })
 
         # uniqueItems — array values only. Implemented rather than tolerated:
         # an unimplemented keyword in a shipped schema validates as a silent
@@ -3758,6 +3805,47 @@ def is_governed_plan(fm: dict) -> bool:
     return 'grouping_approvals' in fm
 
 
+def _grouping_signoff_error(grouping: str, block: dict) -> ErrorDict | None:
+    """A present `signoff` must read through read_grouping and agree with `approver`.
+
+    A block without `signoff` is admitted (legacy). The import is local: DoE loads this
+    file by path and signoff_provenance pulls in dispatch_emit.
+    """
+    if 'signoff' not in block:
+        return None
+    from coordinator_core.ops.signoff_provenance import DELEGATED_SOURCES, read_grouping
+
+    field = f'grouping_approvals.{grouping}.signoff'
+    sig = read_grouping(block)
+    if sig is None or sig.unrecorded:
+        return {
+            'field': field,
+            'error': (
+                f'grouping {grouping!r} carries a signoff that is not a record '
+                f'with source pm, apm, g-em or uhura'
+            ),
+            'hint': _GROUPING_APPROVAL_HINT,
+        }
+    if sig.source in DELEGATED_SOURCES and not sig.ruling_ref:
+        return {
+            'field': field,
+            'error': f'grouping {grouping!r} has a {sig.source} signoff without ruling_ref',
+            'hint': _GROUPING_APPROVAL_HINT,
+        }
+    # approver is a free-form handle (plan.signoff writes PM/APM/G-EM/Uhura); only case is ignored.
+    approver = block.get('approver')
+    if not isinstance(approver, str) or approver.strip().casefold() != sig.source:
+        return {
+            'field': field,
+            'error': (
+                f'grouping {grouping!r} approver {approver!r} disagrees with '
+                f'signoff source {sig.source!r}'
+            ),
+            'hint': _GROUPING_APPROVAL_HINT,
+        }
+    return None
+
+
 def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
     """Authorization predicate for PM-GATED spine rows on a GOVERNED plan.
 
@@ -3878,6 +3966,10 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
                 ),
                 'hint': _GROUPING_APPROVAL_HINT,
             }
+
+        signoff_error = _grouping_signoff_error(grouping, block)
+        if signoff_error is not None:
+            return signoff_error
 
         recorded = block.get('digest')
         if not isinstance(recorded, str) or not _GROUPING_DIGEST_RE.match(recorded):

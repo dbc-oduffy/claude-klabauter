@@ -767,3 +767,81 @@ class TestSpunOffGateIsLiveOnTheFourthGroupingKey:
         assert _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS == frozenset(
             {'backlogged', 'wont_do'}
         )
+
+
+class TestGroupingSignoff:
+    """A present `signoff` must be well-formed and agree with `approver`."""
+
+    @staticmethod
+    def _fm(approver: str, signoff: str) -> str:
+        return (
+            "grouping_approvals:\n"
+            "  defer:\n"
+            "    status: approved\n"
+            f"    approver: {approver}\n"
+            "    approved_at: 2026-07-29\n"
+            f"    digest: '{_defer_digest()}'\n"
+            f"{signoff}"
+        )
+
+    def _check(self, approver: str, signoff: str):
+        source = _plan(_ONE_DEFER, frontmatter=self._fm(approver, signoff))
+        return check_plan_tasks_grouping_approval(source)
+
+    def test_well_formed_apm_passes(self):
+        sig = (
+            "    signoff:\n"
+            "      source: apm\n"
+            "      apm_ruling: cut it\n"
+            "      ruling_ref: docs/decisions/DR-1.md\n"
+            "      on: 2026-10-09\n"
+        )
+        assert self._check('apm', sig) is None
+
+    def test_well_formed_pm_passes(self):
+        sig = (
+            "    signoff:\n"
+            "      source: pm\n"
+            "      pm_quote: yes cut it\n"
+            "      on: 2026-10-09\n"
+        )
+        assert self._check('pm', sig) is None
+
+    def test_apm_without_ruling_ref_fails(self):
+        sig = "    signoff:\n      source: apm\n      apm_ruling: cut it\n      on: 2026-10-09\n"
+        error = self._check('apm', sig)
+        assert error is not None
+        assert error['field'] == 'grouping_approvals.defer.signoff'
+
+    def test_approver_case_is_ignored(self):
+        # plan.signoff writes the handle as PM/APM; the signoff source is lowercase.
+        apm = (
+            "    signoff:\n"
+            "      source: apm\n"
+            "      apm_ruling: cut it\n"
+            "      ruling_ref: docs/decisions/DR-1.md\n"
+            "      on: 2026-10-09\n"
+        )
+        pm = "    signoff:\n      source: pm\n      pm_quote: yes cut it\n      on: 2026-10-09\n"
+        assert self._check('APM', apm) is None
+        assert self._check('PM', pm) is None
+
+    def test_approver_source_mismatch_fails(self):
+        sig = (
+            "    signoff:\n"
+            "      source: apm\n"
+            "      apm_ruling: cut it\n"
+            "      ruling_ref: docs/decisions/DR-1.md\n"
+            "      on: 2026-10-09\n"
+        )
+        error = self._check('pm', sig)
+        assert error is not None
+        assert 'disagrees' in error['error']
+
+    def test_unreadable_signoff_fails(self):
+        error = self._check('pm', "    signoff:\n      source: nobody\n")
+        assert error is not None
+        assert error['field'] == 'grouping_approvals.defer.signoff'
+
+    def test_legacy_block_without_signoff_passes(self):
+        assert self._check('pm', '') is None

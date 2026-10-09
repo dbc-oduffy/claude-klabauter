@@ -497,7 +497,7 @@ def compose_ask_script(
             schema=_ACCEPT_SCHEMA, agent_model="sonnet"
         )
         accept_payload = (
-            "js:JSON.stringify({ sizing: _sizingRel, apm_ruling: _apm.ruling, run_id: _runId"
+            "js:JSON.stringify({ sizing: _sizingRel, apm_ruling: _apm.ruling, ruling_ref: _runId"
             + ", ...(_apm.statement ? { statement: _apm.statement } : {}) })"
         )
         run_prompt = _cat(

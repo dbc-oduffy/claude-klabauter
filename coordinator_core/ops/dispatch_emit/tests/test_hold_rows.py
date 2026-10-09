@@ -90,7 +90,7 @@ def _run_digest(script: str, tmp_path) -> dict:
         "_routedOut = [], _skippedDone = [], _unusableChecks = [], _reviews = [], "
         "_reviewPrep = null, _reviewWave = null, _deliveryVerdict = null, _reviewIntegration = null, "
         "_testResult = null, _falsifier = null;\n"
-        "const _notStarted = [];\n" + held_line + "\n_notStarted.push(...Object.keys(_heldRows));\n"
+        "const _notStarted = [];\nconst _planHeld = {};\n" + held_line + "\n_notStarted.push(...Object.keys(_heldRows));\n"
         "console.log(JSON.stringify((function(){\n" + tail + "\n})()));\n",
         encoding="utf-8",
     )
@@ -114,6 +114,28 @@ def test_digest_lists_held_rows_incomplete_with_the_reason(plan, tmp_path):
     assert all(d["kind"] == "held" for d in by_chunk.values())
     assert "peer deploy lane" in by_chunk["C8"]["anchor"]
     assert "C8" in by_chunk["C9"]["anchor"]
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_row_its_plans_seam_halt_kept_out_reads_held_with_the_finding(plan, tmp_path):
+    script, _ = _emit(plan, tmp_path)
+    assert "_planHeld[id] = 'plan halted by ' + _haltedPlanReasons.get(plan);" in script
+    seam_hold = "plan halted by seam drift at wave 1: writes-collision at src/hub.ts"
+    held_line = next(l for l in script.splitlines() if l.startswith("  const _heldRows = "))
+    script = script.replace(
+        held_line,
+        held_line + " _planHeld['C11'] = " + json.dumps(seam_hold) + "; _notStarted.push('C11');",
+    )
+
+    digest = _run_digest(script, tmp_path)
+
+    by_chunk = {d["chunk"]: d for d in digest["deviations"]}
+    assert by_chunk["C11"]["kind"] == "held"
+    assert by_chunk["C11"]["anchor"] == seam_hold
+    held = {h["chunk"]: h["reason"] for h in digest["next_action"]["params"]["held"]}
+    assert held["C11"] == seam_hold
     assert wd.validate_digest(digest) == []
 
 
@@ -177,7 +199,7 @@ def test_only_incomplete_reemit_picks_the_held_rows_up_once_the_hold_clears(plan
 def test_no_hold_leaves_the_script_free_of_hold_machinery(plan, tmp_path):
     script = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
-    assert "_heldRows" not in script and "'held'" not in script
+    assert "_heldRows" not in script
 
 
 def test_hold_params_need_the_plan_route(plan, tmp_path):

@@ -1522,6 +1522,22 @@ def test_sizing_arm_stamps_the_sizing_note_for_pm_mode(tmp_path: Path) -> None:
     )
     assert "yes that criterion" not in fm["execution_authorized_note"]
     assert str(fm["execution_authorized_at"]) == "2026-10-05"
+    assert fm["execution_authorized_by"] == "PM"
+
+
+def test_pm_stamp_over_apm_keeps_the_apm_note(tmp_path: Path) -> None:
+    plan = _stamped(tmp_path, "authorized by accepted sizing (mode=ceo, source=apm): s.yaml", by="APM")
+    path = tmp_path / plan
+    assert main(["stamp", str(path), "--by", "PM", "--note", "go ahead"]) == EXIT_OK
+    fm = _plan_fm(tmp_path, plan)
+    assert fm["execution_authorized_by"] == "PM"
+    assert fm["execution_authorized_note"] == (
+        "go ahead\\nCountersigned over APM:\\n"
+        "authorized by accepted sizing (mode=ceo, source=apm): s.yaml"
+    )
+    before = path.read_text(encoding="utf-8")
+    assert main(["stamp", str(path), "--by", "PM", "--note", "go ahead"]) == EXIT_OK
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_sizing_arm_refuses_hands_on_and_unaccepted(tmp_path: Path) -> None:
@@ -1609,9 +1625,9 @@ def test_cli_delegation_refusals(tmp_path: Path) -> None:
     assert "execution_authorized_by" not in (tmp_path / plan).read_text(encoding="utf-8")
 
 
-def _stamped(tmp_path: Path, note: str) -> str:
+def _stamped(tmp_path: Path, note: str, by: str = "PM") -> str:
     plan, _ = _sizing_fixture(tmp_path, _sizing_text("pm"))
-    code, result = stamp_execution_authorization(plan, "PM", note, at="2026-10-05", repo_root=tmp_path)
+    code, result = stamp_execution_authorization(plan, by, note, at="2026-10-05", repo_root=tmp_path)
     assert code == EXIT_OK, result
     return plan
 
@@ -1644,14 +1660,17 @@ def test_sizing_arm_apm_acceptance_authorizes_ceo_and_not_hands_on(tmp_path: Pat
     def apm(mode: str) -> str:
         return (
             f"status: sized\ninteraction_mode: {mode}\nexit_criterion:\n  statement: done\n"
-            f"  accepted:\n    source: apm\n    apm_ruling: ruled\n    on: '2026-10-06'\n    mode: {mode}\n"
+            f"  accepted:\n    source: apm\n    apm_ruling: ruled\n    ruling_ref: runs/r1\n"
+            f"    on: '2026-10-06'\n    mode: {mode}\n"
         )
 
     plan, sizing = _sizing_fixture(tmp_path, apm("ceo"))
     code, result = stamp_sizing_authorization(plan, sizing, at="2026-10-06", repo_root=tmp_path)
     assert code == EXIT_OK, result
+    assert _plan_fm(tmp_path, plan)["execution_authorized_by"] == "APM"
     assert _plan_fm(tmp_path, plan)["execution_authorized_note"] == (
-        "authorized by accepted sizing (mode=ceo, source=apm): state/sizings/s.yaml"
+        "authorized by accepted sizing (mode=ceo, source=apm, ruling_ref=runs/r1): "
+        "state/sizings/s.yaml"
     )
     code, again = stamp_sizing_authorization(plan, sizing, repo_root=tmp_path)
     assert code == EXIT_OK and again["applied"] is False

@@ -108,3 +108,15 @@ def test_each_target_keeps_its_own_status(tmp_path):
 def test_unparseable_shapes_decline_rather_than_report_clean():
     assert dc._attribute_porcelain(' M "odd\\303\\251.py"\n', "/repo", ["/repo/odd.py"]) is None
     assert dc._attribute_porcelain("R  old.py -> new.py\n", "/repo", ["/repo/new.py"]) is None
+
+
+def test_relative_target_resolves_against_the_payload_cwd(tmp_path, monkeypatch):
+    # The warm engine's process cwd is wherever it booted, never the session's: a relative
+    # target must still be found, or uncommitted work under it is deleted unguarded.
+    root, _targets = _repo_with_dirty_files(tmp_path, 2)
+    monkeypatch.setattr(dc, "_rm_flush_touch", lambda *_a, **_k: None)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    verdict = dc.check_destructive_rm("rm -rf work", session_id="cwd-probe", payload={"cwd": root})
+    assert verdict is not None, "rm -rf of a dir with uncommitted work allowed: target resolved against the process cwd"

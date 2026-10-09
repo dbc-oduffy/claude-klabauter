@@ -23,7 +23,7 @@ from coordinator_core.ops.review_mint.roster import (
     ReviewAgent,
     RosterFragmentError,
 )
-from coordinator_core.ops.review_mint.compose import _agent_call_literal
+from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 import json
@@ -152,7 +152,7 @@ def _agent_opts_for(agent: ReviewAgent, *, emitted_agent_type: str = None) -> Di
 
 
 def _prompt_literal(prompt: str) -> str:
-    return _js_string_literal(prompt)
+    return prompt_literal(prompt)
 
 
 #: A frozen diff touching at most this many product files is a small diff (APM ruling
@@ -229,6 +229,7 @@ def compose_execute_review(
     run_key: Optional[str] = None,
     host_degraded: bool = False,
     slice_key_js: Optional[str] = None,
+    slice_identity_sha: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -256,6 +257,10 @@ def compose_execute_review(
 
     ``prep_suffix_js`` (only with ``declared_paths_js``) is a JS string
     expression concatenated onto the prep prompt after the declared paths.
+
+    ``run_base_sha`` may carry a prompt marker (``compose.PROMPT_MARKER_DELIM``) naming a script
+    variable resolved at fire. The slice id is an identity, not content, so it stays on
+    ``slice_identity_sha`` (the emit-time sha) while every prompt reads the fire-time base.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -288,7 +293,9 @@ def compose_execute_review(
     if slice_key_js and run_key:
         raise ValueError("compose_execute_review takes at most one of run_key / slice_key_js")
     prep_slice_id = prep_slice_id_for(
-        plan_path, run_base_sha, _SLICE_KEY_SENTINEL if slice_key_js else run_key
+        plan_path,
+        slice_identity_sha if slice_identity_sha is not None else run_base_sha,
+        _SLICE_KEY_SENTINEL if slice_key_js else run_key,
     )
     credit_note = (
         "\nDelivered before this run's base (resume): rows "

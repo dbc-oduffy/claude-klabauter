@@ -492,6 +492,12 @@ class TestMinItemsKeyword:
         assert _validate_json_schema_node([1, 2], schema, schema, 'field') == []
         assert _validate_json_schema_node([1], schema, schema, 'field') != []
 
+    def test_max_items(self):
+        schema = {'type': 'array', 'maxItems': 2}
+        assert _validate_json_schema_node([1, 2], schema, schema, 'field') == []
+        errors = _validate_json_schema_node([1, 2, 3], schema, schema, 'field')
+        assert [e['error'] for e in errors] == ['array length 3 exceeds maxItems 2']
+
 
 class TestMinimumKeyword:
     # Exercised against a synthetic schema rather than a live artifact schema:
@@ -579,6 +585,36 @@ class TestPropertyNamesKeyword:
         schema = {'type': 'object', 'propertyNames': {'not': {'enum': ['forbidden']}}}
         assert _validate_json_schema_node({'ok': 1}, schema, schema, 'field') == []
         assert _validate_json_schema_node({'forbidden': 1}, schema, schema, 'field') != []
+
+
+class TestSiblingSchemaRef:
+    """plan.schema's `tasks` and `row_build_gate` $ref plan-tasks.schema by its
+    $id URL; it resolves against the vendored sibling, never raises."""
+
+    _REF = 'https://coordinator.local/schemas/plan-tasks.schema.json#/properties/change_kind'
+
+    def test_sibling_ref_enforces_the_target(self):
+        schema = {'type': 'object', 'properties': {'k': {'$ref': self._REF}}}
+        assert validate_frontmatter_obj({'k': 'code-edit'}, schema) == {'ok': True}
+        bad = validate_frontmatter_obj({'k': 'bogus-kind'}, schema)
+        assert [e['field'] for e in bad['errors']] == ['k']
+        assert 'invalid enum value' in bad['errors'][0]['error']
+
+    def test_plan_with_row_build_gate_validates(self):
+        def gate(kind):
+            return _valid_plan(row_build_gate=[{'when': {'change_kind': kind}, 'command': 'make'}])
+        assert validate_frontmatter(gate('hook-edit'), _PLAN_SCHEMA) == []
+        fields = [e['field'] for e in validate_frontmatter(gate('bogus-kind'), _PLAN_SCHEMA)]
+        assert fields == ['row_build_gate[0].when.change_kind']
+
+    def test_missing_pointer_and_unknown_file_fail_loud(self):
+        for ref in (
+            'https://coordinator.local/schemas/plan-tasks.schema.json#/properties/no_such',
+            'https://coordinator.local/schemas/no-such.schema.json#/properties/x',
+        ):
+            schema = {'type': 'object', 'properties': {'k': {'$ref': ref}}}
+            result = validate_frontmatter_obj({'k': 'x'}, schema)
+            assert result['ok'] is False and result['errors'][0]['field'] == '_internal'
 
 
 # ---------------------------------------------------------------------------

@@ -1070,6 +1070,10 @@ def test_sizing_object_schema_version_and_bump_class():
     # see the vendored schema's own x-bump-note.
     # Moved 1.24.0 -> 1.25.0 (additive optional `exit_criterion.amendments`).
     # Moved 1.25.0 -> 1.26.0 (additive APM-ruling branch on accepted/amendments).
+    # Moved 1.33.0 -> 1.34.0 (2026-10-09): DoE c79e1b9f1 amendments APM arm matches accepted
+    # (requires `ruling_ref`, drops `run_id`).
+    # Moved 1.32.1 -> 1.33.0 (2026-10-09): DoE c64530b00 signoff provenance. PM arm gains
+    # optional `source`/`history`; APM arm requires `ruling_ref` and drops `run_id`.
     # Moved 1.32.0 -> 1.32.1 (2026-10-09): DoE 4b379a656 drops the `x-bump-class` the
     # 1.32.0 reconcile re-added; no shape change. The absence pin below held.
     # Moved 1.31.0 -> 1.32.0 (2026-10-09): reconciles DoE's 1.31.0 (optional
@@ -1080,7 +1084,7 @@ def test_sizing_object_schema_version_and_bump_class():
     # goal-setting sizing landed as, written by sizing.mark_routed); 1.28.0 adds optional
     # `exit_criterion.click_paths`; 1.29.0 optional `research`; 1.30.0 optional
     # `pm_verbatims`. All additive; nothing joined `required`.
-    assert schema["x-schema-version"] == "1.32.1"
+    assert schema["x-schema-version"] == "1.34.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

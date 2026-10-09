@@ -57,7 +57,7 @@ def test_terminal_commit_flip_keeps_the_stamp_valid():
     flipped, ids = _flip_rows_coded(approved, {"C3", "C4"}, "a" * 40)
     assert ids == ["C3", "C4"]
     assert "disposition_ref" in flipped and flipped != approved
-    assert flipped.index("id: C5") < flipped.index("id: C3")  # D5 re-sort really moved rows
+    assert flipped.index("id: C3") < flipped.index("id: C5")  # coding a row never moves it
     assert check_approved_body(flipped)[0] == APPROVED_BODY_OK
 
 

@@ -76,9 +76,9 @@ def test_bound_met_judge_sidecar_lets_stamp_implemented_close(tmp_path):
     result = m.rejudge(p, tmp_path)
     assert result["status"] == "rejudged"
     crit = _criterion(p)
-    assert crit["status"] == "met" and crit["prior_status"] == "indeterminate"
+    assert crit["status"] == "met"
+    assert set(crit) == {"status", "observation", "sidecar"}  # plan.schema.json closes this block
     assert crit["sidecar"] == judge.relative_to(tmp_path).as_posix()
-    assert crit["judged_at"] > STAMPED_AT
     assert main(["stamp-implemented", "--plan", str(p), *_FLAGS]) in (0, 2)
     assert "status: implemented" in p.read_text(encoding="utf-8")
 

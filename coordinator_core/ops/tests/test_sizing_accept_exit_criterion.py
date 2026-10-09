@@ -363,7 +363,7 @@ def test_an_unexpected_exception_still_yields_a_reason(tmp_path, monkeypatch):
 
 def test_missing_sizing_refusal_names_every_accepted_param():
     msg = _handler({"sizing_path": "state/sizings/x.yaml", "pm_quote": "q"})["error"]
-    for name in ("sizing", "pm_quote", "apm_ruling", "statement", "mode", "supersede"):
+    for name in ("sizing", "pm_quote", "apm_ruling", "ruling_ref", "statement", "mode", "supersede"):
         assert name in msg
 
 
@@ -374,7 +374,7 @@ def test_missing_sizing_refusal_names_every_accepted_param():
 _CEO = "interaction_mode: ceo\n" + _PROPOSED
 _APM_ACCEPTED = (
     "interaction_mode: ceo\nexit_criterion:\n  statement: Beat vanilla on category X.\n"
-    "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    on: '2026-01-01'\n"
+    "  accepted:\n    source: apm\n    apm_ruling: Ruled fine.\n    ruling_ref: run-1\n    on: '2026-01-01'\n"
     "    mode: ceo\n"
 )
 _PM_ACCEPTED = (
@@ -384,7 +384,11 @@ _PM_ACCEPTED = (
 
 
 def _apm(**overrides) -> dict:
-    params = {"sizing": "state/sizings/20260101-a.yaml", "apm_ruling": "Ruled fine."}
+    params = {
+        "sizing": "state/sizings/20260101-a.yaml",
+        "apm_ruling": "Ruled fine.",
+        "ruling_ref": "run-1",
+    }
     params.update(overrides)
     return params
 
@@ -442,7 +446,40 @@ def test_pm_quote_replaces_an_apm_acceptance_without_supersede(tmp_path):
     result = _run(_base(pm_quote="PM overrules."), repo)
     assert result["exit_code"] == 0 and result["applied"] is True, result
     accepted = _doc(sizing)["exit_criterion"]["accepted"]
-    assert accepted["pm_quote"] == "PM overrules." and "source" not in accepted
+    assert accepted["pm_quote"] == "PM overrules." and accepted["source"] == "pm"
+    assert accepted["history"] == [
+        {"source": "apm", "apm_ruling": "Ruled fine.", "ruling_ref": "run-1", "on": "2026-01-01"}
+    ]
+
+
+def test_apm_without_ruling_ref_is_refused(tmp_path):
+    repo, sizing = _setup(tmp_path, _CEO)
+    before = sizing.read_text(encoding="utf-8")
+    params = _apm()
+    del params["ruling_ref"]
+    result = _run(params, repo)
+    assert result["exit_code"] == 1 and "ruling_ref" in result["error"]
+    assert sizing.read_text(encoding="utf-8") == before
+
+
+def test_irreversible_apm_ruling_is_refused(tmp_path):
+    repo, sizing = _setup(tmp_path, _CEO)
+    before = sizing.read_text(encoding="utf-8")
+    result = _run(_apm(apm_ruling="Approved; merge to main now."), repo)
+    assert result["exit_code"] == 1 and "irreversible" in result["error"]
+    assert sizing.read_text(encoding="utf-8") == before
+
+
+def test_apm_record_carries_ruling_ref(tmp_path):
+    repo, sizing = _setup(tmp_path, _CEO)
+    assert _run(_apm(), repo)["applied"] is True
+    assert _doc(sizing)["exit_criterion"]["accepted"]["ruling_ref"] == "run-1"
+
+
+def test_new_pm_record_carries_explicit_source(tmp_path):
+    repo, sizing = _setup(tmp_path, _PROPOSED)
+    assert _run(_base(), repo)["applied"] is True
+    assert _doc(sizing)["exit_criterion"]["accepted"]["source"] == "pm"
 
 
 def test_identical_apm_ruling_is_a_byte_identical_no_op(tmp_path):

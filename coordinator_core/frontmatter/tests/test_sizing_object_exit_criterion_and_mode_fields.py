@@ -128,7 +128,10 @@ class TestExitCriterionField:
         assert any(e["field"] == "exit_criterion" for e in errors), errors
 
 
-_APM = {"source": "apm", "apm_ruling": "x", "on": "2026-10-06", "mode": "ceo"}
+_APM = {
+    "source": "apm", "apm_ruling": "x", "ruling_ref": "state/rulings/r1.md",
+    "on": "2026-10-06", "mode": "ceo",
+}
 
 
 def _ec_errors(accepted=None, amendments=None):
@@ -143,8 +146,16 @@ class TestApmAcceptanceShape:
     def test_apm_accepted_is_valid(self):
         assert not _ec_errors(_APM)
 
-    def test_apm_with_run_id_is_valid(self):
-        assert not _ec_errors({**_APM, "run_id": "r1"})
+    def test_apm_with_run_id_is_rejected(self):
+        assert _ec_errors({**_APM, "run_id": "r1"})
+
+    def test_apm_without_ruling_ref_is_rejected(self):
+        assert _ec_errors({k: v for k, v in _APM.items() if k != "ruling_ref"})
+
+    def test_pm_countersign_keeps_the_apm_ruling_in_history(self):
+        history = [{k: v for k, v in _APM.items() if k != "mode"}]
+        pm = {"source": "pm", "pm_quote": "go", "on": "2026-10-09", "mode": "ceo", "history": history}
+        assert not _ec_errors(pm)
 
     def test_apm_with_pm_quote_is_rejected(self):
         assert _ec_errors({**_APM, "pm_quote": "q"})
@@ -157,6 +168,10 @@ class TestApmAcceptanceShape:
 
     def test_apm_amendment_is_valid(self):
         assert not _ec_errors(_APM, [{**_APM, "statement": "T"}])
+
+    def test_apm_amendment_without_ruling_ref_is_rejected(self):
+        amendment = {k: v for k, v in _APM.items() if k != "ruling_ref"}
+        assert _ec_errors(_APM, [{**amendment, "statement": "T"}])
 
     def test_apm_amendment_with_pm_quote_is_rejected(self):
         assert _ec_errors(_APM, [{**_APM, "statement": "T", "pm_quote": "q"}])

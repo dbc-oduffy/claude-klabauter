@@ -13,7 +13,6 @@ forwards no `tool_response`), so both fire.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import os
 import tempfile
@@ -81,7 +80,7 @@ async def advisory_text(tool_name: str, file_path: str, content: str, session_id
     fm = _frontmatter_text(content or "")
     if fm is not None and has_plan_producer_provenance(fm):
         return ""
-    if not await asyncio.to_thread(_first_time_sync, session_id, rel):
+    if not _first_time_sync(session_id, rel):
         return ""
     reason = "no frontmatter" if fm is None else "no plan_id"
     return f"[adopt] {rel}: {reason} (hand-written). Port: {adopt_command(rel)}"

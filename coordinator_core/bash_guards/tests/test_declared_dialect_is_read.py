@@ -311,10 +311,10 @@ class TestBlockSubagentGuardGrantConverted:
 class TestBlockNoncanonicalBranchCreationConverted:
     """RED-FIRST: `resolve_command_positions` is Bash-shaped -- a
     `Start-Process git -ArgumentList 'checkout','-b','fix-thing'` invocation
-    evaded the advisory even though the base `git checkout -b` argv is
+    evaded the deny even though the base `git checkout -b` argv is
     byte-identical across dialects. Fails OPEN by construction (this
     module's own MATCHERS comment), so a missed detection is a missed
-    advisory, never a spurious one."""
+    deny, never a spurious one."""
 
     def _payload(self, cmd, tool_name, cwd="/repo"):
         return {"tool_name": tool_name, "tool_input": {"command": cmd}, "cwd": cwd}
@@ -332,13 +332,13 @@ class TestBlockNoncanonicalBranchCreationConverted:
         cmd = 'Start-Process git -ArgumentList "checkout","-b","fix-thing"'
         result = block_noncanonical_branch_creation.check(self._payload(cmd, "PowerShell"))
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = "git checkout -b fix-thing"
         result = block_noncanonical_branch_creation.check(self._payload(cmd, "Bash"))
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
         cmd = "Start-Process git -ArgumentList 'checkout', @'\nunterminated"

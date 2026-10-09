@@ -404,6 +404,18 @@ def _detect_label_or_exit_echo(
     """
     if len(segments) < 2:
         return None
+    # Hoisted: a matching segment is itself echo/printf, so "some OTHER segment is real work"
+    # is the same question for every candidate. Re-asked per candidate it is quadratic in
+    # the segment count.
+    has_other_work = any(
+        not pb
+        and other
+        and not (
+            token_matches_binary(other[0], "echo")
+            or token_matches_binary(other[0], "printf")
+        )
+        for other, pb in segments
+    )
     for idx, (tokens, pipe_before) in enumerate(segments):
         if pipe_before or not tokens:
             continue
@@ -420,16 +432,7 @@ def _detect_label_or_exit_echo(
         exit_readout = any("$?" in tok for tok in args)
         if not exit_readout and (not args or any("$" in tok for tok in args)):
             continue
-        if not exit_readout and not any(
-            not pb
-            and other
-            and not (
-                token_matches_binary(other[0], "echo")
-                or token_matches_binary(other[0], "printf")
-            )
-            for j, (other, pb) in enumerate(segments)
-            if j != idx
-        ):
+        if not exit_readout and not has_other_work:
             continue
         return ShapeMatch(Shape.LABEL_OR_EXIT_ECHO, evidence=" ".join(tokens))
     return None

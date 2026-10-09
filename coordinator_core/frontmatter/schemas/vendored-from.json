@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "dcbb016865e444a123e22239937918af9289df54",
-    "doe_commit": "c986b17470096d33938d180eaff16c6a2d6fd794"
+    "blob": "7e681c4ab0d6dbc2f2268953d2be3621d6f383f6",
+    "doe_commit": "37d684b485f8026ac6f88f16f97bd288e6347831"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -92,12 +92,12 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "plan-tasks.schema.json": {
-    "blob": "35905d5ad09e48d527f4daae0ef8d6005523f705",
-    "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"
+    "blob": "84d3989fc4e87bef2675a0f029e615a0f9f77898",
+    "doe_commit": "c64530b006db1075689d7112c88e18e298b6767c"
   },
   "plan.schema.json": {
-    "blob": "c4a6e31f150045e54f58068855d84989ca636e71",
-    "doe_commit": "76a8a397a98503b9190351b3b70532f5f55ec176"
+    "blob": "0c0d77aa047229003e77c63d46691176c5383599",
+    "doe_commit": "c64530b006db1075689d7112c88e18e298b6767c"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",
@@ -148,8 +148,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "8898421d830fb8956f3b7469ca8902cab151ebe8",
-    "doe_commit": "1a6f2d98207200fa345f9d775a667f8e389b58dd"
+    "blob": "eb72278643ac6ec787a132bba1c6e951037d9096",
+    "doe_commit": "c79e1b9f1eb157364039296e3c918ab0e8a31f4f"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

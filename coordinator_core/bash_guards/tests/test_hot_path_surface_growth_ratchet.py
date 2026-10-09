@@ -70,8 +70,12 @@ _guard_roster_provider: GuardRosterProvider = _live_guard_roster
 # Measured 2026-09-24, Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,
 # CPython 3.11.15, against dispatch.py post-P070-C3's eager-import shed.
 _EAGER_IMPORT_CEILING = 21
-_DISPATCH_CHECKS_LINE_CEILING = 11284
-_REGISTERED_ENTRY_CEILING = 65  # + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
+# 11284 -> 11312: e7b6940905 (parent 572fba1c48, +28: check_validate_commit's scoped-deletion and
+# SCOPE-once leg); parent 68b5c75cda holds the 11284 base unchanged. Merge 7b5405ad04.
+# 11312 -> 11315: check_destructive_rm resolves a relative rm target against the payload cwd
+# (the warm engine's process cwd is not the session's); EM ruling, break-class fix.
+_DISPATCH_CHECKS_LINE_CEILING = 11315
+_REGISTERED_ENTRY_CEILING = 66  # + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
 def _count_module_scope_imports(source: str) -> int:

@@ -67,6 +67,7 @@ from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal, suite
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.signoff_provenance import apm_admissible, countersign
 from coordinator_core.ops.sizing_acceptance import (
     APM_ADMISSIBLE_MODES,
     SOURCE_APM,
@@ -106,7 +107,7 @@ def _render_exit_criterion(mapping: dict) -> str:
 
 _PARAMS_HINT = (
     "params: sizing (required, path under state/sizings/), exactly one of pm_quote / "
-    "apm_ruling (required), statement, mode, supersede"
+    "apm_ruling (required; apm_ruling also needs ruling_ref), statement, mode, supersede"
 )
 
 
@@ -130,9 +131,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                               Exactly one of pm_quote / apm_ruling is required. Never
                               composed or paraphrased by this op or its caller.
         apm_ruling   (str)  — the APM's verbatim ruling standing in for the PM; admitted
-                              only when the effective mode is pm or ceo, and never over a
-                              PM acceptance. A pm_quote replaces an APM acceptance without
-                              `supersede`.
+                              only when the effective mode is pm or ceo, never over a
+                              PM acceptance, and never when it names an irreversible act.
+                              A pm_quote over an APM acceptance countersigns it without
+                              `supersede`, keeping the APM record in `history`.
+        ruling_ref   (str)  — required with apm_ruling: the run id or repo-relative path
+                              where the ruling is recorded.
         statement    (str)  — the PM's amended criterion, replacing the proposed one in
                               the same write. Optional; when omitted the statement
                               already on record is kept.
@@ -159,6 +163,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_raw: str = (params.get("sizing") or "").strip()
     pm_quote: str = (params.get("pm_quote") or "").strip()
     apm_ruling: str = (params.get("apm_ruling") or "").strip()
+    ruling_ref: str = (params.get("ruling_ref") or "").strip()
     statement_param: str = (params.get("statement") or "").strip()
     mode: str = (params.get("mode") or "").strip()
     supersede: bool = bool(params.get("supersede"))
@@ -178,6 +183,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _err(
             "missing required param: pm_quote or apm_ruling — the PM's or the APM's "
             f"verbatim words; this op never composes or infers either; {_PARAMS_HINT}"
+        )
+    if apm_ruling and not ruling_ref:
+        return _err(
+            "missing required param: ruling_ref — an apm_ruling names the run id or "
+            f"repo-relative path where the ruling is recorded; {_PARAMS_HINT}"
+        )
+    if ruling_ref and not apm_ruling:
+        return _err(f"ruling_ref accompanies apm_ruling only; {_PARAMS_HINT}")
+    if ruling_ref and (ruling_ref[:1] in "/\\" or ruling_ref[1:3] in (":\\", ":/") or "\n" in ruling_ref):
+        return _err("ruling_ref must be a run id or repo-relative path on one line")
+    if apm_ruling and not apm_admissible(apm_ruling):
+        return _err(
+            "refusing: the APM ruling names an irreversible or external act "
+            "(merge/push to main, publish, release, ...); that stays the PM's"
         )
     if mode and mode not in INTERACTION_MODES:
         return _err(
@@ -270,11 +289,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             new_accepted = {
                 "source": SOURCE_APM,
                 "apm_ruling": apm_ruling,
+                "ruling_ref": ruling_ref,
                 "on": today,
                 "mode": eff_mode,
             }
+        elif existing_source == SOURCE_APM and isinstance(existing_accepted, dict):
+            # YAML 1.1 reads an unquoted `on:` key as boolean True.
+            prior = {
+                ("on" if k is True else k): v
+                for k, v in existing_accepted.items()
+                if k != "mode"
+            }
+            prior.setdefault("ruling_ref", "legacy-unrecorded")
+            new_accepted = {**countersign(prior, pm_quote, today), "mode": eff_mode}
         else:
-            new_accepted = {"pm_quote": pm_quote, "on": today, "mode": eff_mode}
+            new_accepted = {
+                "source": SOURCE_PM, "pm_quote": pm_quote, "on": today, "mode": eff_mode,
+            }
         new_words = apm_ruling or pm_quote
 
         if isinstance(existing_accepted, dict) and not (
@@ -296,7 +327,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                         "acceptance"
                     )
                 amendments = list(existing.get("amendments") or [])
-                amendments.append({**new_accepted, "statement": new_statement})
+                amendment = {k: v for k, v in new_accepted.items() if k != "history"}
+                if amendment.get("source") == SOURCE_PM:
+                    del amendment["source"]
+                amendments.append({**amendment, "statement": new_statement})
                 new_text = write_fm_nested_field(
                     old_text,
                     "exit_criterion",

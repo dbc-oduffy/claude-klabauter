@@ -44,8 +44,8 @@ def repo_cwd() -> str:
     cwd = os.getcwd()
     assert os.path.isdir(os.path.join(cwd, ".git")), (
         "this oracle requires the process cwd to be a real git checkout "
-        "(found no %r) -- see check_destructive_rm's own docstring for why "
-        "cwd, not payload['cwd'], governs its target-existence probe"
+        "(found no %r) -- its rows name repo-relative targets and the hub "
+        "probes run against this checkout"
         % os.path.join(cwd, ".git")
     )
     return cwd

@@ -743,6 +743,13 @@ def _rehomed_subagent_spawn_shapes_setup(
     return dict(_EXECUTOR_IDENTITY)
 
 
+def _subagent_heavy_ue_launch_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """Subagent-cohort guard with no host opt-in: the executor identity is the whole setup."""
+    return dict(_EXECUTOR_IDENTITY)
+
+
 def _noncanonical_branch_creation_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1359,6 +1366,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_rehomed_subagent_spawn_shapes_setup,
+    ),
+    CorpusRow(
+        "guard-subagent-heavy-ue-launch",
+        "guard-subagent-heavy-ue-launch-fire",
+        "pwsh -File scripts/build-plugin.ps1 -EngineVersion 5.8",
+        True,
+        _DENY,
+        False,
+        setup=_subagent_heavy_ue_launch_setup,
+    ),
+    CorpusRow(
+        "guard-subagent-heavy-ue-launch",
+        "guard-subagent-heavy-ue-launch-control",
+        "git log -- scripts/build-plugin.ps1",
+        False,
+        _DENY,
+        False,
+        setup=_subagent_heavy_ue_launch_setup,
     ),
     CorpusRow(
         "block-fleet-delegation-creation",
@@ -2652,6 +2677,9 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     from coordinator_core.hooks import nudge_em_code_dispatch as hook_mod
 
     mp.setattr(hook_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    # The hook's per-(session, path) "already nudged" marker lives under the temp dir;
+    # a marker left by an earlier run silences a small edit, so the fire row isolates it.
+    mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir))
     return {
         "tool_name": "Edit",
         "session_id": "sess-c3c-ecd-%s" % uuid.uuid4().hex,

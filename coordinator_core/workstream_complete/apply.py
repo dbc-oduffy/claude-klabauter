@@ -1839,7 +1839,15 @@ def _no_commit_row_judgment(
     unresolved = [cid for cid in missing_chunk_ids if cid not in already_resolved]
     if not unresolved:
         return None
-    return _judgments.build_no_commit_row_disposition_judgment_point(unresolved)
+    from coordinator_core.execute_plan_assemble.close_out_and_stamp import _parse_spine_rows
+    from coordinator_core.ops.dispatch_emit.spine_read import _has_uncleared_execution_gate
+
+    rows, _ = _parse_spine_rows(plan_text, str(governing_plan.path))
+    gated = [
+        r["id"] for r in rows or []
+        if isinstance(r, dict) and r.get("id") in unresolved and _has_uncleared_execution_gate(r)
+    ]
+    return _judgments.build_no_commit_row_disposition_judgment_point(unresolved, gated_row_ids=gated)
 
 
 def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:

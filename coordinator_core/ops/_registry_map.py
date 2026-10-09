@@ -303,6 +303,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.narrow_criterion":                  "coordinator_core.ops.plan_narrow_criterion",
     "plan.tasks.mutate":                      "coordinator_core.ops.plan_tasks_mutate",
     "plan.tasks.grouping_digest":             "coordinator_core.ops.plan_tasks_grouping_digest",
+    "plan.signoff":                           "coordinator_core.ops.plan_signoff",
+    "signoff.digest":                         "coordinator_core.ops.signoff_digest",
     "plan.tasks.spine_drift_check":           "coordinator_core.ops.plan_tasks_spine_drift_check",
     "engine.drift":                           "coordinator_core.ops.engine_drift",
     "engine.registration_completeness":       "coordinator_core.ops.engine_registration_completeness",

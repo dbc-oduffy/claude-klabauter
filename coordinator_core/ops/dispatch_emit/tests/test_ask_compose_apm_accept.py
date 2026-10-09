@@ -36,7 +36,8 @@ def test_raw_ask_accept_phase_follows_gate():
     section = _accept_section(script)
     assert "agentType: 'coordinator:apm'" in section
     assert "sizing.accept_exit_criterion" in section and "apm_ruling" in section
-    assert "run_id: _runId" in section
+    assert "ruling_ref: _runId" in section
+    assert "run_id" not in section
     assert "pm_quote" not in section
     assert "'accept'" in script.split("phases: [", 1)[1].split("]", 1)[0]
 

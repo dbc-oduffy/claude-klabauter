@@ -76,7 +76,8 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
     a negative control proving the deny is NOT merely "the env override
     happened to be unset" -- setting `COORDINATOR_ALLOW_FIND_ROOT` (this
     guard's own pre-existing F4 disarm leg, out of this plan's scope to
-    remove) flips the same probe to a silent allow, so the deny above is
+    remove) drops runaway-find's own deny text (the no-override
+    whole-filesystem-scan guard still denies), so the deny above is
     provably conditioned on the override, not on some unrelated silent
     default.
 
@@ -102,14 +103,18 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
     assert "find" in reason, reason
     assert "anchored at" in reason, reason
 
+    # `block-whole-filesystem-scan` (no override, dual-registered) denies the same
+    # command once runaway-find is disarmed, so the control is that runaway-find's
+    # own text is gone, not that the probe goes silent.
     overridden = _probe(
         "find / -name foo", "PowerShell", env={"COORDINATOR_ALLOW_FIND_ROOT": "1"}
     )
-    assert overridden is None, (
-        "expected the disarm override to silence the deny -- if it did not, "
-        "the deny above may be coming from a different guard than "
-        "runaway-find, invalidating this oracle"
+    assert overridden is not None and "whole-filesystem scan" in _deny_reason(overridden), (
+        "expected the disarm override to hand the deny to block-whole-filesystem-scan "
+        "-- if runaway-find's text survives, the override does not disarm it, "
+        "invalidating this oracle"
     )
+    assert "anchored at" not in _deny_reason(overridden)
 
     assert _is_deny(_probe("find / -name foo", "Bash"))
 

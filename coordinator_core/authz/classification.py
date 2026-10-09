@@ -1220,6 +1220,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Reintroducing a write here would collapse the separation this op exists to enforce.
     # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.grouping_digest": OpClass.COMPUTE_ONLY,
+    # plan.signoff — MUTATING: rewrites a docs/plans/*.md file in place under locked_rmw
+    # (pm_approved/signoff on spine rows, or a grouping_approvals.<g> block). Same write-shape
+    # and scope class as plan.tasks.mutate above.
+    # DR-208 five-question affirmation (citing ops/plan_signoff.py):
+    #   1. Writes state file?                          YES. locked_rmw rewrites the plan.
+    #   2. Writes into rag's relational store?         No.
+    #   3. Opens any file for write?                   YES. locked_rmw atomic rewrite.
+    #   4. Mutates shared state outside its module?    YES. docs/plans/*.md is shared substrate.
+    #   5. Persistent change across processes?         YES. Plan read by other ops and rag.
+    "plan.signoff": OpClass.MUTATING,
+    # signoff.digest — COMPUTE_ONLY: globs docs/plans/*.md and state/sizings/*.yaml by filename
+    # date, reads each matching file and buckets its sign-offs into PM-verified, delegated and
+    # unrecorded. It writes nothing; the countersign write is plan.signoff's.
+    "signoff.digest": OpClass.COMPUTE_ONLY,
     # plan.list_orphaned — COMPUTE_ONLY: scans <repo_root>/docs/plans/*.md read-only
     # (frontmatter + resolve_plan_owner's own read-only state/handoffs/*.md scan) and
     # returns the computed tiered orphan census. C2 of the plan-orphan-ownership-resolver

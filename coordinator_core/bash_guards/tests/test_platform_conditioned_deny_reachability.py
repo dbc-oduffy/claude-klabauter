@@ -53,6 +53,7 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.bash_guards.tests import guard_message_corpus as corpus
+from coordinator_core.bash_guards.tests import test_confinement_deny_band_shape as band_shape
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -204,15 +205,9 @@ class TestPlumbingAndLoopsChainReachability:
         assert out is None or _decision(out) != "deny"
 
 
-#: Fail-closed guards with no `-fire` corpus row. Shrink-only: an entry leaves
-#: when its row lands, and a new fail-closed guard may not join.
-_NO_FIRE_ROW_YET = frozenset(
-    {
-        "block-disarm-marker-sentinel-creation",
-        "block-stash-destruction",
-        "block-subagent-stash-creation",
-    }
-)
+#: Fail-closed guards with no `-fire` row in the corpus or in the band-shape gate's extra firing
+#: rows. Shrink-only: an entry leaves when its row lands, and a new fail-closed guard may not join.
+_NO_FIRE_ROW_YET: frozenset = frozenset()
 
 #: Fail-closed guards whose isolated deny the real chain intercepts with a
 #: rewrite or advisory first (DR-280); the classes above characterize them.
@@ -232,7 +227,11 @@ def _fail_closed_entries():
 
 
 def _fire_rows():
-    rows = corpus.CONFINEMENT_ROWS + corpus.PLATFORM_CONDITIONED_ROWS
+    rows = (
+        corpus.CONFINEMENT_ROWS
+        + corpus.PLATFORM_CONDITIONED_ROWS
+        + band_shape._EXTRA_FIRING_ROWS
+    )
     return {r.guard: r for r in rows if r.expected_speaker and r.row_id.endswith("-fire")}
 
 

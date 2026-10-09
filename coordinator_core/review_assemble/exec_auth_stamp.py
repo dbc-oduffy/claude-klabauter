@@ -134,8 +134,11 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
     stamp_approved_body_sha,
 )
+from coordinator_core.ops.signoff_provenance import read_sizing_accepted
 from coordinator_core.ops.sizing_acceptance import (
     ENGINE_SIZE_RULE,
+    SOURCE_APM,
+    SOURCE_PM,
     acceptance_source,
     acceptance_words,
     lacks_human_acceptance,
@@ -203,14 +206,20 @@ def _append_note(current: Optional[str], addition: str) -> str:
 SUPERSEDED_MARKER = "Superseded (inaccurate):"
 
 
-def _supersede_note(current: Optional[str], text: str) -> str:
+#: Header line a PM stamp writes between the PM's words and the non-PM
+#: sign-off note it countersigned. A countersign takes precedence over
+#: `--append-note` and `--supersede-note`.
+COUNTERSIGNED_MARKER = "Countersigned over APM:"
+
+
+def _supersede_note(current: Optional[str], text: str, marker: str = SUPERSEDED_MARKER) -> str:
     """New `execution_authorized_note` for `--supersede-note`: *text* first,
-    then *current* preserved verbatim below `SUPERSEDED_MARKER`. Already
+    then *current* preserved verbatim below *marker*. Already
     superseded by *text* (current equals it or starts with the header-joined
     form) returns *current* unchanged, so a repeat cannot nest."""
     if not current:
         return text
-    head = text + NOTE_APPEND_SEPARATOR + SUPERSEDED_MARKER
+    head = text + NOTE_APPEND_SEPARATOR + marker
     if current == text or current.startswith(head + NOTE_APPEND_SEPARATOR):
         return current
     return head + NOTE_APPEND_SEPARATOR + current
@@ -437,7 +446,9 @@ def stamp_execution_authorization(
             elif append_note:
                 already_converged = (current_note or "").endswith(note)
             else:
-                already_converged = current_note == note
+                already_converged = current_note == note or (current_note or "").startswith(
+                    note + NOTE_APPEND_SEPARATOR + COUNTERSIGNED_MARKER + NOTE_APPEND_SEPARATOR
+                )
         if already_converged:
             state["applied"] = False
             return old_text
@@ -497,7 +508,18 @@ def stamp_execution_authorization(
             fields.remove("execution_authorized_note")
             final_note = note
         else:
-            if supersede_note:
+            recorded_by = read_fm_field_unquoted(fm, "execution_authorized_by")
+            if (
+                _is_pm_shaped(by)
+                and recorded_by
+                and current_note
+                and (
+                    not _is_pm_shaped(recorded_by)
+                    or NOTE_APPEND_SEPARATOR + COUNTERSIGNED_MARKER + NOTE_APPEND_SEPARATOR in current_note
+                )
+            ):
+                final_note = _supersede_note(current_note, note, COUNTERSIGNED_MARKER)
+            elif supersede_note:
                 final_note = _supersede_note(current_note, note)
             else:
                 final_note = _append_note(current_note, note) if append_note else note
@@ -1057,8 +1079,13 @@ def stamp_sizing_authorization(
             f"tshirt={estimate.get('tshirt')}): {sizing_rel}"
         )
     else:
-        by = "PM"
-        src = ", source=apm" if acceptance_source(accepted) == "apm" else ""
+        source = acceptance_source(accepted) or SOURCE_PM
+        by = source.upper()
+        src = ""
+        if source == SOURCE_APM:
+            record = read_sizing_accepted(accepted)
+            ref = f", ruling_ref={record.ruling_ref}" if record and record.ruling_ref else ""
+            src = f", source=apm{ref}"
         note = f"authorized by accepted sizing (mode={mode}{src}): {sizing_rel}"
     fm = split_frontmatter(text).fm_text
     unchanged = read_fm_field_unquoted(fm, "execution_authorized_sha") == _canonical_body_sha(text, root)

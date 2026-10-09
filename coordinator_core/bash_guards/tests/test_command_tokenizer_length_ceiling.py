@@ -32,6 +32,7 @@ signal to shrink the command, not the bound.
 
 from __future__ import annotations
 
+import time
 import importlib.util
 
 import pytest
@@ -184,12 +185,16 @@ class TestDosBoundIsActuallyBinding:
         def _call() -> None:
             outcome["result"] = tokenize_full_command(cmd)
 
-        timing = in_process_time_ms(_call)
+        # One call, not `in_process_time_ms`: a bound ceiling rejects in nanoseconds, so no
+        # adaptive window reaches MIN_WINDOW_TICKS. A sub-tick reading is the pass; the
+        # failure this pins (~105s pre-fix) is far above the clock tick.
+        t0 = time.process_time()
+        _call()
+        elapsed_ms = (time.process_time() - t0) * 1000.0
         assert outcome["result"] is None
-        assert timing["process_time_ms"] < 500.0, (
+        assert elapsed_ms < 500.0, (
             "3.2 MB command took %.3fms process time -- the DoS bound is "
-            "not binding (pre-fix this shape took ~105s)"
-            % timing["process_time_ms"]
+            "not binding (pre-fix this shape took ~105s)" % elapsed_ms
         )
 
     def test_multi_megabyte_command_resolves_promptly(self) -> None:

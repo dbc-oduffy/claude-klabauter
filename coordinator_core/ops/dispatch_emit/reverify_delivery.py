@@ -212,6 +212,21 @@ def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) ->
     return note
 
 
+def _row_evidence_path(plan_path: str, repo_root: Optional[Path]) -> Optional[str]:
+    """The plan's `evidence-append` sidecar as a repo-relative path, or None when it holds nothing.
+
+    A claim backed by recorded evidence lives there, outside the plan body and outside any
+    diff, so a verifier not pointed at it reports the claim unbacked."""
+    from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
+
+    plan_file = Path(plan_path)
+    if not plan_file.is_absolute() and repo_root is not None:
+        plan_file = Path(repo_root) / plan_file
+    if not read_row_evidence(plan_file):
+        return None
+    return str(Path(plan_path).with_name(evidence_sidecar_path(plan_file).name)).replace("\\", "/")
+
+
 def _register_evidence(plan_path: str, repo_root: Optional[Path]):
     """The plan's `JudgeEvidence` (register rows, PM words), or None when the plan is unreadable."""
     from coordinator_core.ops.requirement_register import plan_judge_evidence
@@ -263,6 +278,12 @@ def compose_reverify_script(
             "claims_unbacked listing every claim unbacked at HEAD, PASS only when all are backed.\n"
         )
     lead += _commit_credit_note(repo_root, plan_path, base)
+    evidence_path = _row_evidence_path(plan_path, repo_root)
+    if evidence_path:
+        lead += (
+            f"Row evidence recorded through evidence-append is in {evidence_path}; a claim it "
+            "records is backed there, not only by the diff.\n"
+        )
     prompt = (
         f"{_DELIVERY_VERIFIER_ROLE_PREAMBLE}\n\n"
         f"{lead}"
@@ -292,6 +313,7 @@ def compose_reverify_script(
         criterion=criterion,
         prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
         host_degraded=host_degraded,
+        evidence_path=evidence_path,
         evidence=_register_evidence(plan_path, repo_root),
     )
     phases = [_js_string_literal(_PHASE)]
@@ -732,6 +754,7 @@ def compose_rejudge_script(
         criterion=resolve_operative_criterion_for_plan(plan_path, repo_root),
         prompt_head=_JUDGE_NOW_HEAD.format(head_sha=head_sha),
         host_degraded=host_degraded,
+        evidence_path=_row_evidence_path(plan_path, repo_root),
         evidence=_register_evidence(plan_path, repo_root),
     )
     if call is None:

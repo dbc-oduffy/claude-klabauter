@@ -707,6 +707,9 @@ _STAMP_RESERVED_DISPOSITION_FIELDS = frozenset(
 )
 
 
+_STAMP_REFUSED_APPROVAL_FIELDS = frozenset({"pm_approved", "signoff"})
+
+
 def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> dict:
     """Apply the stamp verb: update fields on N ids in a single locked_rmw.
 
@@ -726,6 +729,9 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
     the key to its own door. `_LEGACY_PM_APPROVAL_HINT`'s naming of the
     field is not a precedent here: that is resolve's honesty layer on a
     branch the caller has already reached, not stamp's exit offer.
+
+    `pm_approved` and `signoff` are likewise refused for the whole batch:
+    sign-off provenance (PM or APM) is recorded only through plan.signoff.
     """
     try:
         path = _resolve_path(plan_path, worktree)
@@ -748,6 +754,16 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 "resolve. A closed disposition (spun_off/backlogged/wont_do) "
                 "records that the PM ratified this cut, so it waits on their "
                 "ruling. Refusing the whole batch — no writes applied."
+            )
+
+    for u in updates:
+        approval_present = _STAMP_REFUSED_APPROVAL_FIELDS & set(u.keys())
+        if approval_present:
+            fields = ", ".join(sorted(approval_present))
+            return _err(
+                f"stamp: update entry {u.get('id')!r} carries sign-off field(s) "
+                f"{fields} — use plan.signoff, which records whether the PM or "
+                "the APM signed. Refusing the whole batch — no writes applied."
             )
 
     _state: dict = {"applied": False, "message": "", "warnings": []}
@@ -1114,10 +1130,11 @@ def _clear_gate(
 # untouched by this ruling: its impossibility claim is TRUE, and the
 # membership digest is what makes it true.
 _LEGACY_PM_APPROVAL_HINT = (
-    "Recording pm_approved: true on this row asserts that the PM ratified "
-    "this specific cut. Nothing in this session can verify that, so stamping "
-    "it without their word puts a false statement in the record. "
-    "plan-tasks-stamp sets the field once they have ruled."
+    "Recording pm_approved on this row asserts that the PM, or the APM "
+    "signing for them, ratified this specific cut. Nothing in this session "
+    "can verify that, so recording it without their word puts a false "
+    "statement in the record. plan.signoff records which of the two signed, "
+    "once they have ruled."
 )
 
 _PLAN_TASKS_DETAIL_REQUIRED_DISPOSITIONS = frozenset({'spun_off', 'backlogged', 'wont_do'})

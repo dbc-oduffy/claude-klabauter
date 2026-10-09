@@ -269,7 +269,7 @@ import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, NamedTuple, Optional, Sequence
 
@@ -1331,6 +1331,8 @@ class PlanContext:
     execution_notes: Optional[str] = None
     #: Parsed frontmatter ``row_build_gate`` entries (``_parse_row_build_gates``).
     row_build_gates: tuple = ()
+    #: Ids of spine rows marked ``needs_slot: true``; their briefs are author-only.
+    slot_row_ids: frozenset = frozenset()
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -1893,6 +1895,18 @@ def _build_gate_clause(commands: list) -> str:
         "line `gate-blocker: outside-footprint: <first error>` and nothing else undone.\n"
         + lines
         + f"{marker}_gateBaselineText({json.dumps(commands)}){marker}"
+    )
+
+
+def _slot_row_clause(commands: list) -> str:
+    """A `needs_slot` row's process (build, compiler, editor) is scheduled by
+    the Group EM against box load and never launched by the executor, so the
+    row's build gate becomes the EM's slot leg."""
+    owed = "".join(f"\n- `{c}`" for c in commands)
+    return (
+        "Slot row (needs_slot): author only. Launch no build, compiler, UBT, editor or "
+        "other long-running or memory-heavy process; the EM runs that leg once the Group "
+        "EM clears box load. Report what it must run under `Slot leg:`." + owed
     )
 
 
@@ -2572,7 +2586,9 @@ def _row_prompt(
         )
     if plan_context is not None:
         gate_commands = _row_build_gate_commands(row, plan_context.row_build_gates)
-        if gate_commands:
+        if row.id in plan_context.slot_row_ids:
+            body += f"\n\n{_slot_row_clause(gate_commands)}"
+        elif gate_commands:
             body += f"\n\n{_build_gate_clause(gate_commands)}"
     if predecessor_state:
         body += f"\n\n{predecessor_state}"
@@ -2929,7 +2945,7 @@ def _test_agent_call_expr(
         prompt += f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}."
     return (
         "agent("
-        f"{_js_string_literal(prompt)}, "
+        f"{_resolve_markers_plus(prompt)}, "
         "{ "
         f"label: {_js_string_literal('test:terminal')}, "
         f"phase: {_js_string_literal(_TEST_PHASE_TITLE)}, "
@@ -3378,6 +3394,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  const _unusableChecks = [];\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
+        "  const _planHeld = {};\n"
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
@@ -3408,6 +3425,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    }\n"
         "    if (plan && _haltedPlans.has(plan)) {\n"
         "      _notStarted.push(id);\n"
+        "      _planHeld[id] = 'plan halted by ' + _haltedPlanReasons.get(plan);\n"
         "      return 'BLOCKED: plan halted by stop rule in ' + "
         "_haltedPlanReasons.get(plan);\n"
         "    }\n"
@@ -3505,12 +3523,56 @@ _CHECKPOINT_PUSH_SCHEMA = {
 _CHECKPOINT_PROTECTED_BRANCHES = frozenset({"main", "master"})
 
 
-def _checkpoint_trailer(plan_path: Optional[str], run_base_sha: Optional[str]) -> str:
-    """The body lines `git.checkpoint_guard` reads to refuse re-landing a
-    closed or reverted row."""
+#: Script-scope binding of the run's base sha, resolved at the script's first step
+#: (``_run_base_blocks``), not at emit. Parts of an over-cap inventory are all emitted
+#: before any fires; an emit-time base makes part N's checkpoint guard and seam
+#: landed-range treat parts 1..N-1's commits as foreign.
+_RUN_BASE_VAR = "_runBase"
+
+
+def _run_base_marker() -> str:
+    """``_runBase`` as a marker segment for prompt text `_resolve_markers_plus` splices."""
+    return f"{_SHARED_PATH_MARKER_DELIM}{_RUN_BASE_VAR}{_SHARED_PATH_MARKER_DELIM}"
+
+
+def _checkpoint_trailer_js(plan_path: Optional[str], run_base_sha: Optional[str]) -> str:
+    """JS expression for the body lines `git.checkpoint_guard` reads to refuse
+    re-landing a closed or reverted row; ``''`` when the run has no plan or base."""
     if not plan_path or not run_base_sha:
-        return ""
-    return f"\n\nCheckpoint-Plan: {plan_path}\nCheckpoint-Base: {run_base_sha}"
+        return "''"
+    return (
+        _js_string_literal(f"\n\nCheckpoint-Plan: {plan_path}\nCheckpoint-Base: ")
+        + f" + {_RUN_BASE_VAR}"
+    )
+
+
+_RUN_BASE_SCHEMA = json.dumps(
+    {"type": "object", "properties": {"sha": {"type": "string"}}, "required": ["sha"]},
+    sort_keys=True,
+)
+
+
+def _run_base_blocks(emit_sha: str, repo_anchor: Optional[str]) -> list[str]:
+    """First step of the script: ``_runBase`` is the repo's HEAD when the script
+    FIRES. ``emit_sha`` is the fallback for an agent that fails or answers
+    malformed. Resume replays this call from the journal (same prompt, same
+    position), so a resumed run keeps its first fire's base."""
+    root = f"'git -C ' + {_REPO_ROOT_VAR} + ' rev-parse HEAD'" if repo_anchor else "'git rev-parse HEAD'"
+    prompt = (
+        "'Run base. Run exactly `' + " + root + " + '` and change nothing. "
+        "Return sha: its 40-hex output, verbatim.'"
+    )
+    return [
+        f"  let {_RUN_BASE_VAR} = {_js_string_literal(emit_sha)};",
+        "  try {",
+        f"    const _rb = await agent({prompt}, {{ label: 'run-base', effort: 'low', "
+        f"{_model_opt('', 'sonnet')}, schema: {_RUN_BASE_SCHEMA} }});",
+        "    const _rbSha = _rb && typeof _rb.sha === 'string' ? _rb.sha.trim() : '';",
+        f"    if (/^[0-9a-f]{{40}}$/.test(_rbSha)) {_RUN_BASE_VAR} = _rbSha;",
+        f"    else log('Run base unreadable at fire; using the emit-time sha ' + {_RUN_BASE_VAR});",
+        f"  }} catch (e) {{ log('Run base agent failed; using the emit-time sha ' + {_RUN_BASE_VAR}); }}",
+        f"  log('Run base sha (observed at fire): ' + {_RUN_BASE_VAR});",
+    ]
 
 
 class SeamInputs(NamedTuple):
@@ -3654,7 +3716,7 @@ def _seam_leg_js(
         "  async function _seamLeg(n, sha) {",
         "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,"
         + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
-        f"      landed_range: {_js_string_literal(run_base_sha + '..')} + sha,",
+        f"      landed_range: {_RUN_BASE_VAR} + '..' + sha,",
         f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
         "    let r = null;",
         "    try {",
@@ -3679,15 +3741,18 @@ def _seam_leg_js(
         "    }",
         "    if (r.verdict !== 'DRIFT') return;",
         "    const halted = new Set(marked);",
+        "    const finding = {};",
         "    found.forEach((f) => {",
         "      if (f.plan) halted.add(f.plan);",
         "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : marked;",
+        "      const what = (f.class || 'unclassified') + (f.path ? ' at ' + f.path : '');",
+        "      named.forEach((p) => { if (!finding[p]) finding[p] = what; });",
         "      _seamDrift.push({ wave: n, class: f.class || 'unclassified', plans: named, path: f.path || '' });",
         "    });",
         "    if (!found.length) _seamDrift.push({ wave: n, class: 'unclassified', plans: marked, path: '' });",
         "    halted.forEach((p) => {",
         "      _haltedPlans.add(p);",
-        "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam leg of wave ' + n);",
+        "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : ''));",
         "    });",
         "  }",
         "  function _seamFail(n, why) {",
@@ -3833,7 +3898,7 @@ def _checkpoint_commit_js(
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
         "    const message = subject + "
-        + _js_string_literal(_checkpoint_trailer(plan_path, run_base_sha)) + ";",
+        + _checkpoint_trailer_js(plan_path, run_base_sha) + ";",
         "    let r = null;",
         "    try {",
         "      r = await agent(",
@@ -4362,9 +4427,14 @@ def compose_script(
     phase_titles: list[str] = []
     shared = SharedBlocks()
 
-    if run_base_sha:
+    # Review-only carries a caller-provided base, which always wins; every other
+    # run resolves its base when it fires.
+    runtime_base = bool(run_base_sha) and not review_only
+    if runtime_base:
+        body_blocks.extend(_run_base_blocks(run_base_sha, repo_anchor))
+    elif run_base_sha:
         body_blocks.append(
-            f"  log({_js_string_literal(f'Run base sha (observed at emit): {run_base_sha}')});"
+            f"  log({_js_string_literal(f'Run base sha (provided): {run_base_sha}')});"
         )
 
     if gitignore_filter_degraded:
@@ -4761,7 +4831,8 @@ def compose_script(
         review,
         stage_schemas=review_stage_schemas,
         plan_path=plan_path or "",
-        run_base_sha=run_base_sha or "",
+        run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
+        slice_identity_sha=run_base_sha or "",
         declared_paths=declared_paths,
         prompt_head=review_prompt_head,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
@@ -4791,7 +4862,7 @@ def compose_script(
         review,
         stage_schemas=review_stage_schemas,
         plan_path=plan_path or "",
-        run_base_sha=run_base_sha or "",
+        run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
         falsifier=falsifier,
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
@@ -4865,7 +4936,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=run_base_sha or 'HEAD')},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'))},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -4876,7 +4947,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=run_base_sha or 'HEAD')};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'))};"
             )
             test_var = _TEST_RESULT_VAR
 
@@ -4896,6 +4967,7 @@ def compose_script(
             plan_path=plan_path,
             deliverable_id=deliverable_id,
             run_base_sha=run_base_sha,
+            run_base_runtime=runtime_base,
             test_var=test_var,
             test_absent_status=test_absent_status,
             test_absent_note=test_absent_note,
@@ -5614,6 +5686,7 @@ def emit_script(
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
     check_unschedulable_rows(rows, raw_by_id)
+    slot_rows = [row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True]
 
     check_cross_plan_write_overlap(plan_path, rows, repo_root, session_id)
     check_cross_repo_writes(rows, repo_root, approved=cross_repo_approved)
@@ -5626,10 +5699,13 @@ def emit_script(
 
     spec_path = _spec_path_for_prompt(plan_path, repo_root)
 
-    plan_context = derive_plan_context(
-        plan_text if plan_text is not None else "",
-        fallback_title=plan_path.stem,
-        repo_root=Path(repo_root).as_posix() if repo_root is not None else None,
+    plan_context = _dc_replace(
+        derive_plan_context(
+            plan_text if plan_text is not None else "",
+            fallback_title=plan_path.stem,
+            repo_root=Path(repo_root).as_posix() if repo_root is not None else None,
+        ),
+        slot_row_ids=frozenset(slot_rows),
     )
 
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
@@ -5682,12 +5758,13 @@ def emit_script(
         predispatch=predispatch,
         review_specs=review_specs,
         predecessor_state=_with_resume_guard(
-            predecessor_state_section(plan_text, repo_root), run_base_sha
+            predecessor_state_section(plan_text, repo_root),
+            run_base_sha if review_only else (_run_base_marker() if run_base_sha else None),
         ),
         precredited_rows=precredited_rows,
         review_only=review_only,
         held_rows=held_rows,
-        slot_rows=[row.id for row in rows if raw_by_id.get(row.id, {}).get("needs_slot") is True],
+        slot_rows=slot_rows,
         seam=None if review_only else seam_inputs_for(
             rows_by_plan, spec_path.as_posix(), plan_text, raw_by_id, repo_root, certified_plans
         ),

@@ -404,6 +404,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.plan_tasks_mutate", ""),
     ("coordinator_core.ops.plan_narrow_criterion", 'registers "plan.narrow_criterion"'),
     ("coordinator_core.ops.plan_tasks_grouping_digest", 'registers "plan.tasks.grouping_digest"'),
+    ("coordinator_core.ops.plan_signoff", 'registers "plan.signoff"'),
+    ("coordinator_core.ops.signoff_digest", 'registers "signoff.digest"'),
     (
         "coordinator_core.ops.plan_tasks_spine_drift_check",
         'registers "plan.tasks.spine_drift_check" (read-only spine-vs-tree drift '
