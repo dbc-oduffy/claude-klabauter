@@ -17,7 +17,12 @@ never-resolved string.
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from coordinator_core.write_guards._case_fold_path import (
+    repo_relative,
     casefold_path,
     strip_extended_length_prefix,
 )
@@ -70,3 +75,26 @@ def test_strip_extended_length_prefix_direct_unc_form():
 
 def test_strip_extended_length_prefix_direct_posix_noop():
     assert strip_extended_length_prefix("/already/posix/style") == "/already/posix/style"
+
+
+# --- repo_relative ---------------------------------------------------------
+
+
+def test_repo_relative_inside_and_outside():
+    assert repo_relative("/repo/state/a.md", "/repo") == "state/a.md"
+    assert repo_relative("C:\\repo\\state\\a.md", "C:\\repo") == "state/a.md"
+    assert repo_relative("/other/a.md", "/repo") is None
+
+
+def test_repo_relative_prefix_is_not_containment():
+    assert repo_relative("/repo2/state/a.md", "/repo") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs privilege")
+def test_repo_relative_sees_through_a_symlinked_path(tmp_path):
+    real = tmp_path / "real"
+    (real / "state").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+
+    assert repo_relative(str(link / "state" / "a.md"), str(real)) == "state/a.md"

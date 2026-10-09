@@ -74,7 +74,6 @@ def test_per_guard_off_allows_silently(isolated):
         "block_worktree_tool",
         "check_claude_md_size",
         "guard_doctrine_changelog_prose",
-        "guard_doctrine_surface_bash_write",
         "guard_doctrine_surface_ratio",
         "guard_python_syntax_on_write",
         "guard_repo_setup_claude_home_refusal",

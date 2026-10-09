@@ -120,7 +120,7 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter_obj,
 )
 from coordinator_core.content_root import read_content_root
-from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._case_fold_path import casefold_path, repo_relative
 from coordinator_core.write_guards._repo_root import (
     resolve_repo_root as _shared_resolve_repo_root,
 )
@@ -241,19 +241,7 @@ def resolve_repo_root(cwd: str) -> str:
     return root or cwd
 
 
-def to_repo_relative(abs_path: str, repo_root: str) -> Optional[str]:
-    normal_abs = abs_path.replace("\\", "/")
-    normal_root = repo_root.replace("\\", "/")
-    # Comparison-only fold: the returned `rel` (sliced from `normal_abs`,
-    # original case) is used downstream only for regex/pattern matching —
-    # never disk I/O (callers use `abs_file_path` for that). Fold only the
-    # prefix-match operands, not `normal_abs` itself.
-    if not casefold_path(normal_abs).startswith(casefold_path(normal_root)):
-        return None
-    rel = normal_abs[len(normal_root):]
-    if rel.startswith("/"):
-        rel = rel[1:]
-    return rel
+to_repo_relative = repo_relative
 
 
 def apply_edit(content: str, old_string: str, new_string: str) -> tuple[str, bool]:

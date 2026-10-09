@@ -74,7 +74,6 @@ silently invented here). `_resolve_state_root()` falls back to the same
 default the bash oracle itself falls back to when its seam is unavailable:
 `${GIT_ROOT}/state`.
 
-Spec backlink: C:/coordinator-content-repo/scratch/subagent-sandbox/bash-to-python-migration/W4a-sessionstart-recipe.md § 2.6
 """
 
 from __future__ import annotations

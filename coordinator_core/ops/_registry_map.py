@@ -101,7 +101,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.check_claude_md_size":             "coordinator_core.hooks",
     "hooks.derive_global_doctrine_live_copy": "coordinator_core.hooks",
     "hooks.derive_setup_copies":              "coordinator_core.hooks",
-    "hooks.guard_doctrine_surface_bash_write": "coordinator_core.hooks",
     "hooks.guard_doctrine_surface_ratio":     "coordinator_core.hooks",
     "hooks.guard_doctrine_changelog_prose":   "coordinator_core.hooks",
     "hooks.preuse_write_dispatch":            "coordinator_core.hooks",

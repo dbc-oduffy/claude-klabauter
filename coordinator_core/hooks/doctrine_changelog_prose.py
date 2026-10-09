@@ -211,8 +211,7 @@ def _resolve_doctrine_content_root() -> Path:
     ("resolve doctrine assets through the plugin root") this resolves via
     `coordinator_core.subagent_sandbox.provision_report.resolve_plugin_root`
     -- the same plugin-content-root resolver `cater_subagent_start`'s
-    `_resolve_role_append_snippet_path` and this module's own consumer
-    (`guard_doctrine_surface_bash_write`) already use, rather than a second,
+    `_resolve_role_append_snippet_path` already uses, rather than a second,
     narrower probe reinvented here.
 
     Falls open to an inert sentinel path (matches nothing, never raises and

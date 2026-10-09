@@ -83,7 +83,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.check_claude_md_size":             "none",
     "hooks.derive_global_doctrine_live_copy": "none",
     "hooks.derive_setup_copies":              "none",
-    "hooks.guard_doctrine_surface_bash_write": "none",
     "hooks.guard_doctrine_surface_ratio":     "none",
     "hooks.guard_doctrine_changelog_prose":   "none",
     "hooks.preuse_write_dispatch":            "none",
