@@ -11,7 +11,10 @@ Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
 scratch-relative file paths; default is every regular file directly in scratch_dir and
 directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
 path segments: a multi-pipeline run writes every segment after the first under
-``<scratch_dir>/<pipeline>/``, archived at the same relative path).
+``<scratch_dir>/<pipeline>/``, archived at the same relative path), ``local_root``
+(optional, absolute: a local-only run archives to ``<local_root>/<YYYY-MM-DD>-<topic_slug>/``
+outside every git checkout and commits nothing; the reply's ``claims_out`` is the
+``claims-emit --out`` stem there).
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -252,6 +255,53 @@ def _close_committed(
     )
 
 
+def _close_local(
+    scratch: Path,
+    run_id: str,
+    topic_slug: str,
+    outputs: Optional[list],
+    segment_dirs: list[str],
+    local_root_raw: str,
+) -> dict:
+    from coordinator_core.ops import _research_local
+
+    try:
+        root = _research_local.outside_checkouts(Path(local_root_raw), "local_root")
+    except _research_local.LocalRootError as exc:
+        return _err(str(exc))
+    sources, problem = _resolve_outputs(scratch, outputs, segment_dirs)
+    if problem:
+        return _err(problem)
+    hits = _secret_hits(sources, scratch)
+    if hits:
+        return _err(
+            "secret-shaped values in the run's outputs; redact them in scratch (record key names "
+            "only) and re-run research.close",
+            secret_hits=hits,
+        )
+    dest_dir = root / f"{datetime.date.today().isoformat()}-{topic_slug}"
+    pairs = [(src, dest_dir / src.relative_to(scratch)) for src in sources]
+    for src, dst in pairs:
+        if dst.exists() and (not dst.is_file() or dst.read_bytes() != src.read_bytes()):
+            return _err(
+                f"destination exists with different content, refusing to overwrite: {str(dst)!r}",
+                dest=str(dest_dir),
+            )
+    for src, dst in pairs:
+        if not dst.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+    return {
+        "exit_code": 0,
+        "committed": False,
+        "local_only": True,
+        "destination": dest_dir.as_posix(),
+        "paths": [dst.as_posix() for _, dst in pairs],
+        "claims_out": (dest_dir / topic_slug).as_posix(),
+        "run_id": run_id,
+    }
+
+
 def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> dict:
     strays = _strays(worktree, dest_dir, since)
     if strays:
@@ -290,6 +340,9 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         isinstance(d, str) and safe_id(d) for d in segment_dirs
     ):
         return _err(f"segment_dirs must be a list of safe path segments: {segment_dirs!r}")
+    local_root_raw = params.get("local_root")
+    if local_root_raw:
+        return _close_local(scratch, run_id, topic_slug, outputs, segment_dirs, str(local_root_raw))
     return _close_committed(worktree, scratch, run_id, topic_slug, outputs, segment_dirs)
 
 

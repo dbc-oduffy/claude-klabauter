@@ -352,3 +352,20 @@ def test_a_repeated_claim_id_is_refused_and_writes_nothing(tmp_path, capsys):
     assert _emit(tmp_path, claims=dup) == claims_emit.EXIT_PRODUCER_FAILURE
     assert "'c1' repeats at [0] and [1]" in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []
+
+
+def test_local_only_refuses_an_out_stem_inside_a_checkout(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "docs").mkdir()
+    code = _emit(tmp_path, out_stem=str(repo / "docs" / "run1"), local_only=True)
+    assert code == claims_emit.EXIT_INVALID_INVOCATION
+    assert "inside the git checkout" in capsys.readouterr().err
+    assert list((repo / "docs").iterdir()) == []
+
+
+def test_local_only_writes_the_pair_outside_any_checkout(tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    assert _emit(tmp_path, out_stem=str(local / "run1"), local_only=True) == claims_emit.EXIT_OK
+    assert (local / "run1.claims.json").is_file() and (local / "run1.claims.meta.json").is_file()

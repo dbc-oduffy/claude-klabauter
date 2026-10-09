@@ -171,3 +171,21 @@ def test_every_segment_dir_is_archived_at_its_relative_path(repo, scratch):
 def test_a_missing_or_unsafe_segment_dir_is_refused(repo, scratch):
     assert _close(repo, scratch, "corpus", segment_dirs=["web"])["exit_code"] != 0
     assert _close(repo, scratch, "corpus", segment_dirs=["../x"])["exit_code"] != 0
+
+
+def test_local_only_archives_outside_the_repo_and_commits_nothing(repo, scratch, tmp_path):
+    local = tmp_path / "local"
+    local.mkdir()
+    before = _count(repo)
+    out = _close(repo, scratch, "corpus", local_root=local.as_posix())
+    assert out["exit_code"] == 0 and out["committed"] is False and out["local_only"] is True, out
+    dest = Path(out["destination"])
+    assert dest.parent == local.resolve() and (dest / "final.md").read_text() == "final body\n"
+    assert out["claims_out"] == (dest / "topic").as_posix()
+    assert _count(repo) == before and _git(repo, "status", "--porcelain") == ""
+    assert not (repo / "docs").exists()
+
+
+def test_local_only_refuses_a_root_inside_a_checkout(repo, scratch):
+    out = _close(repo, scratch, "corpus", local_root=(repo / "corpus").as_posix())
+    assert out["exit_code"] != 0 and "inside the git checkout" in out["error"]

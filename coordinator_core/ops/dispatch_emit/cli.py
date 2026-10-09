@@ -471,6 +471,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scratch-dir", default=None, metavar="PATH", help="pipeline route: repo-relative scratch dir"
     )
     parser.add_argument(
+        "--local-only",
+        dest="local_only",
+        action="store_true",
+        help="research route: scratch and archive under machine-local research.local_root, outside "
+        "every git checkout; research.close commits nothing (vendor code that may enter no repo)",
+    )
+    parser.add_argument(
         "--from-sizing",
         dest="from_sizing",
         default=None,
@@ -987,6 +994,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if args.context and not is_research_route:
         print("emit-dispatch-workflow: ERROR — --context requires --from-sizing or --research", file=sys.stderr)
         return EXIT_USAGE
+    if args.local_only and not is_research_route:
+        print("emit-dispatch-workflow: ERROR — --local-only requires --from-sizing or --research", file=sys.stderr)
+        return EXIT_USAGE
     pipeline_only = [
         flag
         for flag, value in (
@@ -1300,6 +1310,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_DATA_ERROR
         if args.scratch_dir:
             params["scratch_dir"] = args.scratch_dir
+        if args.local_only:
+            params["local_only"] = True
         if args.context:
             params["context"] = args.context
         if repo_root is None:

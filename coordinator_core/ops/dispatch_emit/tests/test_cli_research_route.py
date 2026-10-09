@@ -254,3 +254,41 @@ def test_an_unkeyable_list_value_refuses_the_emit(repo, monkeypatch):
     with pytest.raises(op_module.PipelineEmitRefused) as exc:
         op_module._research_route_setup({"lists": {"notebooks": ["web-docs"]}}, repo, rel, None)
     assert exc.value.reasons == ["pipeline 'notebooklm': --list notebooks=web-docs: values must be letters"]
+
+
+@pytest.fixture
+def split(monkeypatch, tmp_path):
+    """A repo and a local-only root side by side, the root outside the checkout."""
+    repo_dir, local = tmp_path / "repo", tmp_path / "local"
+    (repo_dir / ".git").mkdir(parents=True)
+    local.mkdir()
+    monkeypatch.chdir(repo_dir)
+    monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: _FIXTURE)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-research")
+    monkeypatch.setenv("MACHINE_LOCAL_RESEARCH_LOCAL_ROOT", local.as_posix())
+    return repo_dir, local
+
+
+def test_local_only_puts_scratch_and_the_close_destination_outside_the_repo(split, capsys):
+    repo_dir, local = split
+    rel = _write_sizing(repo_dir, "--research-class", "corpus", "--research-source", "web")
+    capsys.readouterr()
+    code = cli_module.main(["--from-sizing", rel, "--local-only"])
+    captured = capsys.readouterr()
+    assert code == cli_module.EXIT_OK, captured.err
+    reply = json.loads(captured.out)
+    scratch = Path(reply["scratch_dir"])
+    assert scratch.is_absolute() and local.resolve() in scratch.resolve().parents
+    params = reply["next_action"]["params"]
+    assert params["local_root"] == local.resolve().as_posix()
+    assert Path(params["scratch_dir"]).resolve() == scratch.resolve()
+
+
+def test_local_only_refuses_a_root_inside_a_checkout(split, capsys, monkeypatch):
+    repo_dir, _ = split
+    monkeypatch.setenv("MACHINE_LOCAL_RESEARCH_LOCAL_ROOT", (repo_dir / "corpus").as_posix())
+    rel = _write_sizing(repo_dir, "--research-class", "corpus", "--research-source", "web")
+    capsys.readouterr()
+    assert cli_module.main(["--from-sizing", rel, "--local-only"]) == cli_module.EXIT_DATA_ERROR
+    assert "inside the git checkout" in capsys.readouterr().err

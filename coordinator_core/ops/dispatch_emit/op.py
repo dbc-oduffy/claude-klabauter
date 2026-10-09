@@ -728,6 +728,32 @@ def _pipeline_content_root() -> Path:
     return Path(content_root)
 
 
+def _local_only_root(params: dict) -> Optional[Path]:
+    """The validated machine-local root for a ``local_only`` research run, else None."""
+    if not params.get("local_only"):
+        return None
+    from coordinator_core.ops import _research_local
+
+    try:
+        return _research_local.local_root()
+    except _research_local.LocalRootError as exc:
+        raise PipelineEmitRefused([str(exc)]) from exc
+
+
+def _local_only_scratch(local_root: Path, scratch_dir: Optional[str], run_id: str) -> str:
+    """Absolute POSIX scratch dir under the local root: the caller's, or ``<root>/runs/<run_id>``.
+    Absolute, so every ``root / scratch`` join in the composer lands outside the repo."""
+    from coordinator_core.ops import _research_local
+
+    given = Path(scratch_dir) if scratch_dir else Path("runs") / run_id
+    try:
+        scratch = _research_local.under_local_root(given, local_root, "scratch_dir")
+    except _research_local.LocalRootError as exc:
+        raise PipelineEmitRefused([str(exc)]) from exc
+    scratch.mkdir(parents=True, exist_ok=True)
+    return scratch.as_posix()
+
+
 def _pipeline_scratch_rel(root: Path, scratch_dir: Optional[str], run_id: str) -> str:
     """Repo-relative POSIX scratch dir: the caller's, guarded under ``root``, or the per-run default."""
     if not scratch_dir:
@@ -866,7 +892,11 @@ def _research_route_setup(
         brief_rel = ""
     shape = research_shape.shape(research)
     run_id = f"{RUN_ID_PREFIX}research-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
+    local_root = _local_only_root(params)
+    if local_root is None:
+        scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
+    else:
+        scratch_rel = _local_only_scratch(local_root, params.get("scratch_dir"), run_id)
     if not from_sizing:
         brief_rel = research_emit.write_ask(root, scratch_rel, str(ask), questions)
     members_brief = research_emit.bind_context(
@@ -927,6 +957,8 @@ def _research_route_setup(
             str(ask or ""), brief_rel if from_sizing else ""
         ),
     }
+    if local_root is not None:
+        close_params["local_root"] = local_root.as_posix()
     if len(segments) > 1:
         # pipeline_compose writes every segment after the first under <scratch>/<pipeline>/.
         close_params["segment_dirs"] = [m.pipeline for m, _, _ in segments[1:]]

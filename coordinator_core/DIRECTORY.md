@@ -44,6 +44,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 |---|---|---|
 | `_fm_util.py` | — | Shared frontmatter scalar extraction primitive |
 | `_path_guard.py` | — | Shared caller-supplied-path containment helpers (generalized from `handoff_lineage_ancestry.py`) |
+| `_research_local.py` | — | Local-only research root (machine-local `research.local_root`), refused inside any git checkout; shared by the research emit route, `research.close` and claims-emit |
 | `_param_alias.py` | — | One op parameter accepted under more than one spelling; disagreeing spellings refused |
 | `assert_doctrine_cross_reference_counts.py` | `doctrine.assert_cross_reference_counts` | Read-only doctrine cross-reference count assertion over the caller's skills/wiki doctrine tree |
 | `audit_two_repo_rate.py` | `goal.kr2_two_repo_rate` | COMPUTE_ONLY — KR2 engine-tool commit count over a date window (two git spawns; shallow clones refused; pairing leg `unmeasured`) |

@@ -10,7 +10,8 @@ Spec backlink:
   source_memo: 2026-08-06-example-market-data-repo-em-claims-emit-verb-implementation.md
 
 Public surface:
-  emit_claims(claims, *, producer, ran_at, pipeline, out_stem, schema_path=None) -> int
+  emit_claims(claims, *, producer, ran_at, pipeline, out_stem, schema_path=None, local_only=False) -> int
+    local_only refuses an --out stem inside any git checkout (local-only research).
     Validates flags and per-record claim shape, then writes the pair
     atomically. Returns an exit code — never raises for a producer- or
     invocation-level failure; only a genuinely unexpected error not covered
@@ -183,6 +184,7 @@ def emit_claims(
     pipeline: str,
     out_stem: str | os.PathLike[str],
     schema_path: str | os.PathLike[str] | None = None,
+    local_only: bool = False,
 ) -> int:
     if not producer or not producer.strip():
         print("claims-emit: --producer is required and must be non-empty", file=sys.stderr)
@@ -191,6 +193,15 @@ def emit_claims(
     if not out_stem or not str(out_stem).strip():
         print("claims-emit: --out is required and must be non-empty", file=sys.stderr)
         return EXIT_INVALID_INVOCATION
+
+    if local_only:
+        from coordinator_core.ops import _research_local
+
+        try:
+            _research_local.outside_checkouts(Path(out_stem).parent, "--out")
+        except _research_local.LocalRootError as exc:
+            print(f"claims-emit: --local-only: {exc}", file=sys.stderr)
+            return EXIT_INVALID_INVOCATION
 
     parsed_ran_at = _parse_rfc3339_tz_aware(ran_at)
     if parsed_ran_at is None:

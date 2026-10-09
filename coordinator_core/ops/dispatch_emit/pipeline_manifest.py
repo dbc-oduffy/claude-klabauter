@@ -538,11 +538,28 @@ def _check_inputs(manifest: Manifest, inputs: PipelineInputs, reasons: list[str]
     if manifest.subjects_mode and len({subject_slug(k) for k in keys}) != len(keys):
         reasons.append("subjects have duplicate (or slug-colliding) keys; their scratch dirs would collide")
     scratch = inputs.scratch_dir
+    if _under_local_research_root(scratch):
+        return
     if (
         not scratch or "\\" in scratch or scratch.startswith("/") or _DRIVE_RE.match(scratch)
         or ".." in scratch.split("/")
     ):
         reasons.append(f"scratch_dir {scratch!r} must be a repo-relative POSIX path without '..'")
+
+
+def _under_local_research_root(scratch: str) -> bool:
+    """An absolute scratch dir is admitted only under the validated local-only research root
+    (outside every git checkout): the one place a run's scratch may not be repo-relative."""
+    if not scratch or not (scratch.startswith("/") or _DRIVE_RE.match(scratch)) or ".." in scratch.split("/"):
+        return False
+    from coordinator_core.ops import _research_local
+
+    try:
+        root = _research_local.local_root()
+        _research_local.under_local_root(Path(scratch), root, "scratch_dir")
+    except _research_local.LocalRootError:
+        return False
+    return True
 
 
 def _check_lists(manifest: Manifest, inputs: PipelineInputs, skipped: set[str], reasons: list[str]) -> None:
