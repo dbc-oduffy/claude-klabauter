@@ -499,6 +499,14 @@ def _write_stamp(plan_path: Path, split: Any, stamp: Dict[str, Any]) -> None:
 _RUN_REPORT_LIFECYCLE = frozenset({"open", "dispatched", "in_flight", "complete", "blocked", "thrashing"})
 
 
+def _rel_or_abs(path: Any, root: Path) -> str:
+    """`path` repo-relative when it sits under `root`, else as given: a remedy names the real file."""
+    try:
+        return Path(path).resolve().relative_to(root.resolve()).as_posix()
+    except (TypeError, ValueError, OSError):
+        return str(path)
+
+
 def mint(
     plan_path: Path,
     repo_root: Path,
@@ -702,8 +710,14 @@ def mint(
                 hint = hint_path.as_posix()
             refusal += (
                 "; a fix-forward clears this by re-verifying delivery at HEAD: "
-                f"emit-dispatch-workflow --plan <plan> --reverify-delivery {hint}, "
+                f"emit-dispatch-workflow --plan {_rel_or_abs(plan_path, repo_root)} --reverify-delivery {hint}, "
                 "then reverify-delivery record"
+            )
+        if "exit criterion is" in refusal:
+            refusal += (
+                f"; a re-judge clears this: emit-dispatch-workflow --plan {plan_path} --rejudge "
+                "--out <x>.workflow.mjs, fire it, reverify_delivery record --result-json <task output>, "
+                "then mint again (a hand-run judge leaves no record mint can read)"
             )
         if (
             "build/test verdict is" in refusal
@@ -906,7 +920,11 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     fm_data = yaml.safe_load(split.fm_text) or {}
     stamp = fm_data.get("review_stamp") if isinstance(fm_data, dict) else None
     if not isinstance(stamp, dict) or not isinstance(stamp.get("criterion"), dict):
-        raise MintRefusal(f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge")
+        raise MintRefusal(
+            f"review-stamp: {plan_path} carries no review_stamp criterion to re-judge; with no stamp, "
+            "record the re-judge (emit-dispatch-workflow --rejudge, fire, reverify_delivery record) "
+            "and run review-stamp mint, which reads the newer met verdict"
+        )
     plan_id = str(fm_data.get("plan_id") or "")
     if not plan_id:
         raise MintRefusal(f"review-stamp: {plan_path} carries no plan_id")

@@ -233,3 +233,31 @@ def test_a_roster_without_a_judge_leaves_the_criterion_unrun():
 def test_the_judge_script_validates_with_zero_errors():
     findings = run_checks(_compose(**_JUDGE_KW))
     assert [f for f in findings if f.severity is Severity.ERROR] == []
+
+
+def test_a_script_that_calls_cap_defines_it():
+    script = _compose()
+    assert "_cap(" in script
+    assert "function _cap(" in script
+
+
+@pytest.mark.parametrize("arm", ["xs", "s"])
+def test_a_sized_ask_carries_the_preamble_into_every_row_executor_prompt(monkeypatch, arm):
+    """An S-arm executor never saw the box terms "no UBT, do not verify by building"
+    because --preamble was recorded on the receipt and dropped from the script."""
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml",
+                      preamble="BOX TERMS: no UBT, do not verify by building.")
+
+    execute = script.split("phase('execute');", 1)[1]
+    assert "BOX TERMS: no UBT, do not verify by building." in execute
+    assert not [i for i in run_checks(script) if i.severity == Severity.ERROR]
+
+
+@pytest.mark.parametrize("arm", ["m_plus", "roadmap", None])
+def test_a_preamble_the_arm_cannot_deliver_is_refused_not_recorded(monkeypatch, arm):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
+    kw = {"prompt": None, "sizing_rel": "s.yaml"} if arm else {}
+
+    with pytest.raises(AskComposeRefused, match="--preamble"):
+        _compose(preamble="BOX TERMS", **kw)

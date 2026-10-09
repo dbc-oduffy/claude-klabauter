@@ -112,6 +112,33 @@ def test_absent_sentinel_denies(scratch_repo):
     assert guard._sentinel_state(str(scratch_repo)) == "deny-absent"
 
 
+def _index_with(repo, *paths: str) -> None:
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
+    entries = b"".join(b"\0" * 60 + len(p).to_bytes(2, "big") + p.encode() + b"\0" for p in paths)
+    (repo / ".git" / "index").write_bytes(b"DIRC\0\0\0\2" + entries)
+
+
+def test_fresh_but_tracked_sentinel_denies_tracked(scratch_repo):
+    """A committed sentinel gets a fresh mtime on every checkout; it must never approve."""
+    _fresh(scratch_repo / _SENTINEL_NAME)
+    _index_with(scratch_repo, "README.md", _SENTINEL_NAME)
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-tracked"
+
+
+def test_nested_tracked_copy_does_not_count(scratch_repo):
+    _fresh(scratch_repo / _SENTINEL_NAME)
+    _index_with(scratch_repo, f"sub/{_SENTINEL_NAME}")
+    assert guard._sentinel_state(str(scratch_repo)) == "allow"
+
+
+def test_worktree_gitdir_file_index_is_read(scratch_repo, tmp_path):
+    _fresh(scratch_repo / _SENTINEL_NAME)
+    real = tmp_path / "real"
+    _index_with(real, _SENTINEL_NAME)
+    (scratch_repo / ".git").write_text(f"gitdir: {real / '.git'}\n", encoding="utf-8")
+    assert guard._sentinel_state(str(scratch_repo)) == "deny-tracked"
+
+
 # ---------------------------------------------------------------------------
 # Symlinks -- `isfile()` follows symlinks, deliberately: a symlink to a
 # regular file the PM created still approves. A symlink to a directory (or

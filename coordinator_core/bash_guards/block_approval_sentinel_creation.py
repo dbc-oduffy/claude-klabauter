@@ -652,7 +652,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     """
 
     _SAFE_ARGV0 = frozenset(
-        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
+        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo", "printf"}
     )
 
     #: `git` subcommands that only read repo state. Anything else under
@@ -669,6 +669,10 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     #: own boundary holds. `check-attr` is admitted alongside it as the
     #: identical query shape rather than waiting for its own false positive.
     #:
+    #: `rm` writes, but it can only remove: `git rm --cached <sentinel>` untracks a
+    #: committed sentinel, which re-arms every fresh checkout, and was denied as
+    #: creation. `checkout`/`restore`, which can materialise one, stay out.
+    #:
     #: Deliberately NOT widened past demonstrated need: this set is an
     #: enumerate-the-harmless allowlist by construction (see the class
     #: docstring's "THE INVERSION ITSELF"), so it grows one justified entry at
@@ -678,7 +682,11 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     _SAFE_GIT_SUBCOMMANDS = frozenset(
         {
             "status", "diff", "log", "show", "ls-files", "rev-parse", "describe",
-            "check-ignore", "check-attr",
+            "check-ignore", "check-attr", "rm",
+            # `commit` records index state and never materialises a worktree file; a
+            # tracked sentinel is no approval (the doctrine-edit gate refuses it), so
+            # committing the `git rm` that disarms one was a deny with nothing to guard.
+            "commit",
         }
     )
 
@@ -690,7 +698,31 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             sub = seg_tokens[argv0_idx + 1]
             if sub in self._SAFE_GIT_SUBCOMMANDS:
                 return True
+        if base == "mv":
+            return self._mv_only_moves_sentinel_away(seg_tokens[argv0_idx + 1 :])
         return False
+
+    def _mv_only_moves_sentinel_away(self, args: "list[str]") -> bool:
+        """True when `mv` cannot land a file named the sentinel: the destination does
+        not name it, and when the destination is a directory (where each source keeps
+        its basename) no source names it either. `-t`/`--target-directory` and an
+        unresolvable directory fall to the deny side."""
+        if any(a == "-t" or a.startswith("--target-directory")
+               or (a.startswith("-") and not a.startswith("--") and "t" in a[1:]) for a in args):
+            return False
+        operands = [a for a in args if a != "--" and not a.startswith("-")]
+        if len(operands) < 2:
+            return False
+        sources, dest = operands[:-1], operands[-1]
+        if self._segment_mentions_target([dest]):
+            return False
+        if dest.endswith(("/", "\\")) or dest in (".", ".."):
+            dest_is_dir = True
+        elif self._cwd is None and not os.path.isabs(dest):
+            return False
+        else:
+            dest_is_dir = os.path.isdir(os.path.join(self._cwd or "", dest))
+        return not (dest_is_dir and self._segment_mentions_target(sources))
 
     def __init__(self, target_basename: str) -> None:
         super().__init__(target_basename)

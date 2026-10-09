@@ -191,6 +191,68 @@ class TestAllowReadsAndRemoval:
         assert guard.check(_payload("touch somefile.txt")) is None
 
 
+class TestAllowNameAsDataToOtherTarget:
+    def test_echo_ignore_rule_append_allows(self):
+        assert guard.check(_payload("echo '/%s' >> .gitignore" % SENTINEL)) is None
+
+    def test_printf_ignore_rule_append_allows(self):
+        assert guard.check(_payload("printf '%%s\\n' %s >> .gitignore" % SENTINEL)) is None
+
+    def test_grep_name_allows(self):
+        assert guard.check(
+            _payload("grep -n coordinator-doctrine-edit-approved .gitignore")
+        ) is None
+
+    def test_data_append_then_touch_still_denies(self):
+        _reason(
+            guard.check(
+                _payload("echo %s >> .gitignore && touch %s" % (SENTINEL, SENTINEL))
+            )
+        )
+
+    def test_git_rm_cached_allows(self):
+        assert guard.check(_payload("git rm --cached %s" % SENTINEL)) is None
+
+    def test_git_rm_cached_dashdash_path_allows(self):
+        assert guard.check(
+            _payload("git rm --cached -- path/to/%s" % SENTINEL)
+        ) is None
+
+    def test_git_rm_plain_allows(self):
+        assert guard.check(_payload("git rm %s" % SENTINEL)) is None
+
+    def test_git_checkout_still_denies(self):
+        _reason(guard.check(_payload("git checkout HEAD -- %s" % SENTINEL)))
+
+    def test_git_restore_still_denies(self):
+        _reason(guard.check(_payload("git restore %s" % SENTINEL)))
+
+    def test_git_show_redirect_still_denies(self):
+        _reason(guard.check(_payload("git show HEAD:%s > %s" % (SENTINEL, SENTINEL))))
+
+    def test_printf_redirect_into_sentinel_still_denies(self):
+        _reason(guard.check(_payload("printf x > %s" % SENTINEL)))
+
+    def test_git_commit_recording_the_untrack_allows(self):
+        assert guard.check(_payload('git commit -m "disarm" -- %s' % SENTINEL)) is None
+
+    def test_mv_sentinel_to_a_new_name_allows(self, tmp_path):
+        out = guard.check(_payload("mv %s scratch/old-approval" % SENTINEL, cwd=str(tmp_path)))
+        assert out is None
+
+    def test_mv_sentinel_into_a_directory_still_denies(self, tmp_path):
+        (tmp_path / "scratch").mkdir()
+        _reason(guard.check(_payload("mv %s scratch" % SENTINEL, cwd=str(tmp_path))))
+
+    @pytest.mark.parametrize("cmd", [
+        "mv elsewhere %s" % SENTINEL,
+        "mv scratch/%s ." % SENTINEL,
+        "mv -t . scratch/%s" % SENTINEL,
+    ])
+    def test_mv_that_can_land_a_sentinel_still_denies(self, cmd, tmp_path):
+        _reason(guard.check(_payload(cmd, cwd=str(tmp_path))))
+
+
 class TestNotIdentityGated:
     def test_denies_without_any_identity_fields(self):
         out = guard.check(_payload("touch %s" % SENTINEL))

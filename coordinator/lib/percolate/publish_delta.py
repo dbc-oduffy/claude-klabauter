@@ -86,6 +86,8 @@ def _under(path: str, prefix: str) -> bool:
 def _is_rule_path(path: str) -> bool:
     if path.rsplit("/", 1)[-1] in TRANSFORM_RULE_BASENAMES:
         return True
+    if "tests" in path.split("/")[:-1]:
+        return False
     for rule in TRANSFORM_RULE_PATHS:
         if rule.endswith("/"):
             if path.startswith(rule):
