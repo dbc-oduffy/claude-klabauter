@@ -728,9 +728,11 @@ def _pipeline_content_root() -> Path:
     return Path(content_root)
 
 
-def _local_only_root(params: dict) -> Optional[Path]:
-    """The validated machine-local root for a ``local_only`` research run, else None."""
-    if not params.get("local_only"):
+def _local_only_root(params: dict, research: dict) -> Optional[Path]:
+    """The validated machine-local root for a local-only research run, else None. The sizing's
+    ``research.destination: local-only`` sets the mode, so a fire from the sizing cannot drop
+    it; the caller's ``local_only`` turns it on for a sizing that does not."""
+    if not (params.get("local_only") or research.get("destination") == "local-only"):
         return None
     from coordinator_core.ops import _research_local
 
@@ -892,7 +894,7 @@ def _research_route_setup(
         brief_rel = ""
     shape = research_shape.shape(research)
     run_id = f"{RUN_ID_PREFIX}research-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    local_root = _local_only_root(params)
+    local_root = _local_only_root(params, research)
     if local_root is None:
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
     else:

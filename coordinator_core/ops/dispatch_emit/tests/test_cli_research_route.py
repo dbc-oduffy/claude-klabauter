@@ -292,3 +292,17 @@ def test_local_only_refuses_a_root_inside_a_checkout(split, capsys, monkeypatch)
     capsys.readouterr()
     assert cli_module.main(["--from-sizing", rel, "--local-only"]) == cli_module.EXIT_DATA_ERROR
     assert "inside the git checkout" in capsys.readouterr().err
+
+
+def test_a_local_only_sizing_runs_local_only_without_the_flag(split, capsys):
+    repo_dir, local = split
+    rel = _write_sizing(
+        repo_dir, "--research-class", "corpus", "--research-source", "web",
+        "--research-destination", "local-only",
+    )
+    capsys.readouterr()
+    code = cli_module.main(["--from-sizing", rel])
+    captured = capsys.readouterr()
+    assert code == cli_module.EXIT_OK, captured.err
+    params = json.loads(captured.out)["next_action"]["params"]
+    assert params["local_root"] == local.resolve().as_posix()

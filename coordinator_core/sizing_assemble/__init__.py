@@ -1570,11 +1570,12 @@ def build_research_block(
     depth: Optional[str],
     targets: list[str],
     questions: Optional[list[str]] = None,
+    destination: Optional[str] = None,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given."""
     questions = [q.strip() for q in questions or ()]
-    if not (value_class or appetite or sources or depth or targets or questions):
+    if not (value_class or appetite or sources or depth or targets or questions or destination):
         return None, []
     from coordinator_core.ops import _research_contract as rc
 
@@ -1604,6 +1605,8 @@ def build_research_block(
             parsed_targets.append({"source": source, "ref": ref.strip()})
     if any(not q for q in questions):
         errors.append("--research-question must not be empty")
+    if destination is not None and destination not in rc.DESTINATIONS:
+        errors.append(f"--research-destination must be one of {rc.DESTINATIONS}, got {destination!r}")
     if errors:
         return None, errors
     block: dict[str, Any] = {"value_class": value_class}
@@ -1617,6 +1620,8 @@ def build_research_block(
         block["targets"] = parsed_targets
     if questions:
         block["questions"] = questions
+    if destination is not None:
+        block["destination"] = destination
     return block, []
 
 
@@ -1668,10 +1673,11 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
                 "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
             ),
             "questions": given.get("questions", prior.get("questions") or []),
+            "destination": given.get("destination", prior.get("destination")),
         }
         block, errors = build_research_block(
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
-            list(merged["targets"]), list(merged["questions"]),
+            list(merged["targets"]), list(merged["questions"]), merged["destination"],
         )
         if errors:
             raise MutateAbort("; ".join(errors))
@@ -1721,6 +1727,7 @@ def _usage(prog: str, stream=None) -> int:
         "[--research-depth standard|deeper|deepest] "
         "[--research-target <source>=<ref> ...] "
         "[--research-question <text> ...] "
+        "[--research-destination repo|local-only] "
         "[--write <state/sizings/x.yaml>] "
         "| --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block) "
         "| --xl-exit shape|roadmap|accept_multi_session --pm-quote <str> "
@@ -1818,6 +1825,7 @@ def main(argv: list[str]) -> int:
     research_depth = None
     research_targets: list[str] = []
     research_questions: list[str] = []
+    research_destination = None
 
     i = 0
     while i < len(argv):
@@ -1927,6 +1935,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--research-question" and i + 1 < len(argv):
             research_questions.append(argv[i + 1])
             i += 2
+        elif tok == "--research-destination" and i + 1 < len(argv):
+            research_destination = argv[i + 1]
+            i += 2
         elif tok == "--json":
             i += 1
         else:
@@ -2013,7 +2024,7 @@ def main(argv: list[str]) -> int:
             for k, v in (
                 ("value_class", research_class), ("appetite", research_appetite),
                 ("sources", research_sources), ("depth", research_depth), ("targets", research_targets),
-                ("questions", research_questions),
+                ("questions", research_questions), ("destination", research_destination),
             )
             if v
         }
@@ -2033,7 +2044,7 @@ def main(argv: list[str]) -> int:
 
     research_block, research_errors = build_research_block(
         research_class, research_appetite, research_sources, research_depth, research_targets,
-        research_questions,
+        research_questions, research_destination,
     )
     if research_errors:
         for message in research_errors:

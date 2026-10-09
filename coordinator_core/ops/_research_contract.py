@@ -16,6 +16,8 @@ APPETITES: Final = ("small", "medium", "large")
 SOURCES: Final = ("web", "repo", "structured", "notebooklm")
 DEPTHS: Final = ("standard", "deeper", "deepest")
 TIERS: Final = ("scouts", "corpus", "deep")
+# local-only: every output stays under machine-local research.local_root, outside every repo.
+DESTINATIONS: Final = ("repo", "local-only")
 
 # TIER_TABLE[value_class][appetite] -> tier: small moves down a notch, large up, clamped.
 TIER_TABLE: Final[dict[str, dict[str, str]]] = {

@@ -148,8 +148,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "e1057b8a8630f05e72a92380d8f43c6f0a38f39b",
-    "doe_commit": "e9b4f15f509ec60b3c2010780ceb0e0b23a99a6f"
+    "blob": "6f39ab1eb323d5a6a4bbfaa2e624cb79188016d2",
+    "doe_commit": "b555e3b7c58564122e69c9d541a96f4be2f4f6cd"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",
