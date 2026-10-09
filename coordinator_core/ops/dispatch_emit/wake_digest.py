@@ -220,10 +220,20 @@ def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
     )
 
 
+#: The stage's fail set is `caused` + `unverified` (DoE test-runner-baseline-attribution): a
+#: failing run whose export-measured baseline puts every failure in `pre_existing` passes.
+#: A heuristic baseline never clears -- its ids are all `unverified` by contract.
+_BASELINE_CLEARS_JS = (
+    "((t) => { const b = t && t.baseline; return !!(t.status === 'fail' && t.baseline_method === 'export' && b "
+    "&& (b.caused ?? []).length === 0 && (b.unverified ?? []).length === 0 "
+    "&& (b.pre_existing ?? []).length > 0 && (b.pre_existing ?? []).length >= (t.tests_failed ?? 0)); })"
+)
+
+
 def _tests_status_expr(test_var: Optional[str], verification_var: str, test_absent_status: str) -> str:
     """JS expression for the run's tests status: any failed row verification wins; a
     pass that skipped tests (run-level or any row) is `pass-with-skips`, never `pass`."""
-    base = f"({test_var} ? {test_var}.status : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
+    base = f"({test_var} ? ({_BASELINE_CLEARS_JS}({test_var}) ? 'pass' : {test_var}.status) : {_js_lit(test_absent_status)})" if test_var is not None else _js_lit(test_absent_status)
     run_skips = f"({test_var} && ({test_var}.status === 'pass-with-skips' || ({test_var}.status === 'pass' && ({test_var}.skipped ?? []).length > 0)))" if test_var is not None else "false"
     return (
         f"({verification_var}.some(v => v && v.status === 'fail') ? 'fail' : "

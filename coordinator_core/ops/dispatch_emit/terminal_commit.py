@@ -907,6 +907,20 @@ def _scope_pathspecs(request: CommitRequest) -> list:
     return list(specs)
 
 
+def _peer_held(worktree_root: Path, session_id: Optional[str], paths: list) -> set:
+    """The paths another session's touch claim holds: a peer's in-flight edit sitting in
+    one of this run's directories, not this run's residue. No git spawn."""
+    if not session_id or not paths:
+        return set()
+    from coordinator_core.session import claim_index
+
+    try:
+        answer = claim_index.classify_paths(session_id, paths, cwd=str(worktree_root))
+    except Exception:
+        return set()
+    return {p for p, o in answer.by_path.items() if o.verdict == claim_index.OWNERSHIP_PEER}
+
+
 def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -939,7 +953,11 @@ def _undeclared_dirty(worktree_root: Path, request: CommitRequest) -> dict:
         }
         - declared
     )
+    peer_held = _peer_held(worktree_root, request.session_id, dirty)
+    dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
+    if peer_held:
+        out["undeclared_dirty_peer_held"] = len(peer_held)
     if len(dirty) > _UNDECLARED_DIRTY_CAP:
         out["undeclared_dirty_total"] = len(dirty)
     return out

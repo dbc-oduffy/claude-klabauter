@@ -134,7 +134,7 @@ _MANIFEST_SCHEMA = _obj(
         "rows": {
             "type": "array",
             "items": _obj(
-                ["id", "agent_type", "model", "brief_path", "writes", "wave"],
+                ["id", "agent_type", "model", "brief_path", "writes", "wave", "deps"],
                 {
                     "id": _STR,
                     "agent_type": _STR,
@@ -142,6 +142,7 @@ _MANIFEST_SCHEMA = _obj(
                     "brief_path": _STR,
                     "writes": {"type": "array", "items": _STR},
                     "wave": {"type": "integer"},
+                    "deps": {"type": "array", "items": _STR},
                 },
             ),
         },
@@ -602,9 +603,7 @@ def compose_ask_script(
     b.append("  phase('execute');")
     b.append("  const _rows = {};")
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
-    b.append("  let _prev = [];")
     b.append("  for (const w of _waves) {")
-    b.append("    const _cur = [];")
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     row_prompt = _cat(
         f"{_emit._prompt_head(None)}\n\n{anchor}\n\n",
@@ -613,13 +612,11 @@ def compose_ask_script(
         f" -- read it completely, then execute it as written.{session_tail}",
     )
     b.append(
-        f"      _rows[r.id] = _runRow(r.id, _prev, null, async () => agent({row_prompt}, "
+        f"      _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
         f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}));"
     )
-    b.append("      _cur.push(_rows[r.id]);")
     b.append("    }")
-    b.append("    _prev = _cur;")
     b.append("  }")
     b.append("  await Promise.all(Object.values(_rows));")
     b.append("  await Promise.all(_verifications);")

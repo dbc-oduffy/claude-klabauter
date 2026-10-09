@@ -484,6 +484,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "emit the scouts pipeline over it (--list questions=a,b names up to two scout questions)",
     )
     parser.add_argument(
+        "--context",
+        action="append",
+        default=None,
+        metavar="FILE",
+        help="research route: a non-corpus file every member reads first, named in the brief (repeatable)",
+    )
+    parser.add_argument(
         "--resume-missing",
         action="store_true",
         help="pipeline route: re-emit only the fan-out elements whose expected output is missing or empty "
@@ -975,6 +982,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
+    if args.context and not is_research_route:
+        print("emit-dispatch-workflow: ERROR — --context requires --from-sizing or --research", file=sys.stderr)
+        return EXIT_USAGE
     pipeline_only = [
         flag
         for flag, value in (
@@ -1286,6 +1296,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             return EXIT_DATA_ERROR
         if args.scratch_dir:
             params["scratch_dir"] = args.scratch_dir
+        if args.context:
+            params["context"] = args.context
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_pipeline_route:
@@ -1455,7 +1467,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
 
             guard_root = repo_root or _repo_root_for_plan(args.plan)
             if guard_root is not None:
-                regenerable_dirty = guard_against_dirty_write_set(Path(args.plan), guard_root)
+                regenerable_dirty = guard_against_dirty_write_set(
+                    Path(args.plan), guard_root,
+                    hold=frozenset(params.get("hold_rows") or ()),
+                    landed=frozenset(params.get("landed_rows") or ()),
+                )
         try:
             result = _dispatch_emit(params, repo_root=repo_root)
         except ScriptOverCapError as over:

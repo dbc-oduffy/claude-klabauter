@@ -124,3 +124,31 @@ def test_the_deep_roster_carries_its_member_prompt_once():
     inputs = segs[0][1]
     script = compose_pipeline_script(manifest, inputs, validate(manifest, inputs), run_id="r", agent_type_host=None)
     assert script.count("You are roster member") == 1
+
+
+def test_context_files_are_named_in_the_ask(tmp_path):
+    (tmp_path / "notes.md").write_text("n\n", encoding="utf-8")
+    rel = re_.write_ask(tmp_path, SCRATCH, "What is X?")
+    assert re_.bind_context(tmp_path, SCRATCH, rel, ["notes.md"]) == rel
+    text = (tmp_path / rel).read_text(encoding="utf-8")
+    assert text.startswith("What is X?\n\n## Context files")
+    assert "- `notes.md`" in text
+
+
+def test_a_sizing_brief_is_wrapped_never_edited(tmp_path):
+    sizing = tmp_path / "state" / "sizings" / "s.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("x: 1\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-ext.md"
+    outside.write_text("e\n", encoding="utf-8")
+    rel = re_.bind_context(tmp_path, SCRATCH, "state/sizings/s.yaml", [str(outside)])
+    assert rel == f"{SCRATCH}/brief.md"
+    assert sizing.read_text(encoding="utf-8") == "x: 1\n"
+    text = (tmp_path / rel).read_text(encoding="utf-8")
+    assert "`state/sizings/s.yaml`" in text and f"`{outside.resolve().as_posix()}`" in text
+
+
+def test_no_context_keeps_the_brief_and_a_missing_file_is_refused(tmp_path):
+    assert re_.bind_context(tmp_path, SCRATCH, "b.md", []) == "b.md"
+    with pytest.raises(PipelineEmitRefused, match="nope.md"):
+        re_.bind_context(tmp_path, SCRATCH, "b.md", ["nope.md"])

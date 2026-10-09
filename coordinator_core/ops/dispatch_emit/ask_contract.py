@@ -52,6 +52,8 @@ class ManifestRow:
     brief_path: str
     writes: tuple[str, ...]
     wave: int
+    #: The rows this one waits on (`DagNode.after`): never a whole earlier wave.
+    deps: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -61,6 +63,7 @@ class ManifestRow:
             "brief_path": self.brief_path,
             "writes": list(self.writes),
             "wave": self.wave,
+            "deps": list(self.deps),
         }
 
     @classmethod
@@ -72,6 +75,7 @@ class ManifestRow:
             brief_path=data["brief_path"],
             writes=tuple(data["writes"]),
             wave=data["wave"],
+            deps=tuple(data.get("deps") or ()),
         )
 
 

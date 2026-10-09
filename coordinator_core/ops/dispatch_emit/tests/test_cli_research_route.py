@@ -165,3 +165,11 @@ def test_from_sizing_is_exclusive_of_other_selectors(repo, extra):
 def test_three_scout_questions_are_refused(repo, capsys):
     argv = ["--research", "--ask", "t", "--list", "questions=a,b,c"]
     assert cli_module.main(argv) == cli_module.EXIT_DATA_ERROR
+
+
+def test_context_file_is_named_in_the_brief_and_needs_a_research_route(repo, capsys):
+    (repo / "notes.md").write_text("n\n", encoding="utf-8")
+    code, reply = _run(capsys, ["--research", "--ask", "What is X?", "--context", "notes.md"])
+    assert code == cli_module.EXIT_OK
+    assert "- `notes.md`" in (repo / reply["scratch_dir"] / "ask.md").read_text(encoding="utf-8")
+    assert cli_module.main(["--pipeline", "scouts", "--context", "notes.md"]) == cli_module.EXIT_USAGE

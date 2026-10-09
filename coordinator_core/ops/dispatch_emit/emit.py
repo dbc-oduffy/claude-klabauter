@@ -2898,6 +2898,7 @@ def _test_agent_call_expr(
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")
         + f"{_SKIP_REPORT_CLAUSE} "
+        + (f"{_baseline_context_clause(review_edits_base)} " if _is_full_sha(review_edits_base) else "")
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
     if plan_path:
@@ -2912,6 +2913,28 @@ def _test_agent_call_expr(
         f"{_model_opt(_TEST_AGENT_TYPE)}, "
         f"schema: {stage_schema_literal('test_result')} "
         "})"
+    )
+
+
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _is_full_sha(ref: Optional[str]) -> bool:
+    return bool(ref) and _FULL_SHA_RE.fullmatch(ref) is not None
+
+
+def _baseline_context_clause(run_base_sha: str) -> str:
+    """The `BASELINE_CONTEXT` block that turns on the runner's baseline attribution.
+
+    DoE's test-runner re-runs its own failures in an export of `run_base_sha` and buckets them
+    `pre_existing`/`caused`/`unverified`; `_tests_status_expr` reads that back. `diff_files` is
+    the runner's to fill: the run's diff does not exist when the script is composed.
+    """
+    block = json.dumps({"run_base_sha": run_base_sha, "diff_files": [], "failing_ids": []})
+    return (
+        "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
+        f"fill diff_files from `git diff --name-only {run_base_sha}`.\n"
+        f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
     )
 
 

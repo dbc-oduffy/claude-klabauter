@@ -703,6 +703,7 @@ _PARAM_FIELDS = (
     Field("overrides", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
+    Field("context", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
     Field("box_terms", "str_list"),
@@ -814,7 +815,8 @@ def _research_route_setup(
     segment's inputs so the pipeline route's scratch-root declaration and reply fields apply
     unchanged, and ``params`` gains the default ``output_path``. ``from_sizing`` takes its
     research block from the sizing and binds the sizing file as the brief; an ask writes
-    ``<scratch>/ask.md`` and binds that. ``lists['questions']`` are the scout questions; any other
+    ``<scratch>/ask.md`` and binds that; ``context`` files are named in the bound brief
+    (``research_emit.bind_context``). ``lists['questions']`` are the scout questions; any other
     given list fills a segment whose manifest declares it and the shape left unset.
     """
     from coordinator_core.ops import research_shape
@@ -842,9 +844,12 @@ def _research_route_setup(
     scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
     if not from_sizing:
         brief_rel = research_emit.write_ask(root, scratch_rel, str(ask), questions)
+    members_brief = research_emit.bind_context(
+        root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
+    )
     pairs = research_emit.segments_for(
         shape,
-        brief_rel=brief_rel,
+        brief_rel=members_brief,
         scratch_rel=scratch_rel,
         questions=questions,
         sources=research.get("sources") or (),

@@ -79,3 +79,11 @@ def test_plugin_register_rows_shape_is_kept():
     start = call.index("schema: ") + len("schema: ")
     schema, _ = json.JSONDecoder().raw_decode(call[start:])
     assert schema["properties"]["register_rows"] == own
+
+
+def test_the_judge_judges_the_uncommitted_tree_as_the_state_to_commit():
+    # The judge runs before dispatch.terminal_commit; an untracked deliverable is expected.
+    from coordinator_core.ops.review_mint.execute_review import _JUDGE_PREAMBLE
+
+    assert "uncommitted by design" in _JUDGE_PREAMBLE
+    assert "never a reason for not_met" in _JUDGE_PREAMBLE
