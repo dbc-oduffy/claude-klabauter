@@ -99,8 +99,10 @@ def mint_refusal(
             f"review-stamp: refusing to mint: {len(foreign_claims)} foreign claim(s) on spine paths: "
             + ", ".join(str(c) for c in foreign_claims)
         )
-    if reviewed_files == 0:
-        return "review-stamp: refusing to mint: zero files in the reviewed diff"
+    # An empty diff mints only on a met criterion: the outcome already held (a peer landed it),
+    # so there is nothing to review and the judge's observation is the evidence.
+    if reviewed_files == 0 and criterion_status != "met":
+        return "review-stamp: refusing to mint: zero files in the reviewed diff and the exit criterion is not met"
     return None
 
 

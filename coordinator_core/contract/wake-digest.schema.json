@@ -37,7 +37,8 @@
           "enum": ["met", "not_met", "indeterminate", "not_run", "unstructured"]
         },
         "observation": { "type": ["string", "null"], "maxLength": 300 },
-        "sidecar": { "type": ["string", "null"], "maxLength": 300 }
+        "sidecar": { "type": ["string", "null"], "maxLength": 300 },
+        "reason": { "type": ["string", "null"], "maxLength": 200 }
       }
     },
     "tests": {

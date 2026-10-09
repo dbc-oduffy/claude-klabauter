@@ -36,6 +36,7 @@ def _caps() -> dict[str, int]:
         "deliverable": props["plan"]["properties"]["deliverable_id"]["maxLength"],
         "observation": props["criterion"]["properties"]["observation"]["maxLength"],
         "sidecar": props["criterion"]["properties"]["sidecar"]["maxLength"],
+        "reason": props["criterion"]["properties"]["reason"]["maxLength"],
         "decision": props["decision_required"]["maxLength"],
         "halt_reason": chain["halt_reason"]["maxLength"],
         "sha": chain["commit"]["properties"]["sha"]["maxLength"],
@@ -49,12 +50,13 @@ def _caps() -> dict[str, int]:
 def _criterion(execute_digest: Mapping[str, Any] | None, caps: Mapping[str, int]) -> dict[str, Any]:
     src = (execute_digest or {}).get("criterion")
     if not isinstance(src, Mapping):
-        return {"status": "not_run", "observation": None, "sidecar": None}
+        return {"status": "not_run", "observation": None, "sidecar": None, "reason": None}
     status = src.get("status")
     return {
         "status": status if status in _CRITERION_STATUSES else "unstructured",
         "observation": _cap(src.get("observation"), caps["observation"]),
         "sidecar": _cap(src.get("sidecar"), caps["sidecar"]),
+        "reason": _cap(src.get("reason"), caps["reason"]),
     }
 
 

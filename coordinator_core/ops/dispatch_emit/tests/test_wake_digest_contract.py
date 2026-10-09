@@ -265,7 +265,14 @@ def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **override
         # Legacy result with no boolean: the agent's status, regex-demoted.
         ("{status:'met', observation:'passes now'}", "met", None),
         ("{status:'met', observation:'baseline still matches'}", "not_met", "falsifier not met"),
-        ("{status:'indeterminate', observation:'could not run'}", "indeterminate", None),
+        # A run criterion short of met always raises a decision, carrying the judge's reason.
+        ("{status:'indeterminate', observation:'could not run'}", "indeterminate", "falsifier indeterminate"),
+        (
+            "{status:'indeterminate', differs_from_baseline:null, reason:'met demoted: a clause is not met'}",
+            "indeterminate",
+            "falsifier indeterminate: met demoted: a clause is not met",
+        ),
+        ("{status:'not_met', reason:'not wired up: op.x'}", "not_met", "falsifier not met: not wired up: op.x"),
     ],
 )
 def test_criterion_status_is_computed_from_differs_from_baseline(tmp_path, falsifier_js, expected, decision):
@@ -279,7 +286,18 @@ def test_criterion_status_is_computed_from_differs_from_baseline(tmp_path, falsi
 @pytest.mark.cadence
 def test_a_null_falsifier_result_keeps_observation_null(tmp_path):
     digest = _run_digest(tmp_path, falsifier_js="null")
-    assert digest["criterion"] == {"status": "not_run", "observation": None, "sidecar": None}
+    assert digest["criterion"] == {"status": "not_run", "observation": None, "sidecar": None, "reason": None}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_demoted_criterion_carries_its_reason(tmp_path):
+    digest = _run_digest(
+        tmp_path,
+        falsifier_js="{status:'indeterminate', differs_from_baseline:null, reason:'met demoted: a clause is not met'}",
+    )
+    assert digest["criterion"]["reason"] == "met demoted: a clause is not met"
+    assert wd.validate_digest(digest) == []
 
 
 @pytest.mark.spawns_process
