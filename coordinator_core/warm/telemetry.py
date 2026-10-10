@@ -461,9 +461,11 @@ def record_sweep(
     skipped: list,
     failed: list,
     *,
+    not_reached: Optional[list] = None,
     engine_root: Optional[Path] = None,
 ) -> None:
-    """Append one row naming the repos a sweep pushed, skipped and failed.
+    """Append one row naming the repos a sweep pushed, skipped and failed,
+    and those its ceiling cut before it reached them (`not_reached`).
 
     Best-effort: never raises, matching every other recorder here.
     """
@@ -473,6 +475,7 @@ def record_sweep(
         "pushed": [str(p) for p in pushed],
         "skipped": [str(p) for p in skipped],
         "failed": [str(p) for p in failed],
+        "not_reached": [str(p) for p in (not_reached or [])],
     }
     path = push_sweep_path(engine_root)
     try:

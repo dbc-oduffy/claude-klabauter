@@ -162,7 +162,7 @@ def test_each_sweep_appends_one_row_naming_pushed_and_failed(tmp_path, monkeypat
     assert len(_rows()) == 2
 
 
-def test_ceiling_cut_repos_count_as_skipped(tmp_path, monkeypatch):
+def test_ceiling_cut_repos_are_not_reached(tmp_path, monkeypatch):
     first = _repo_ahead(tmp_path, "first")
     second = _repo_ahead(tmp_path, "second")
     ticks = iter([0.0, 0.0, 100.0])
@@ -175,6 +175,7 @@ def test_ceiling_cut_repos_count_as_skipped(tmp_path, monkeypatch):
     rows = _rows()
     assert len(rows) == 1
     assert rows[0]["pushed"] == [str(first)]
-    assert rows[0]["skipped"] == [str(second)]
+    assert rows[0]["not_reached"] == [str(second)]
+    assert rows[0]["skipped"] == []
     assert rows[0]["failed"] == []
     assert _remote_head(second) != _local_head(second)

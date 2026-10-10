@@ -2042,8 +2042,8 @@
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "9aa3806220022d0359b806be9a18d81946a80e5a",
-    "coordinator_core/_engine_stamp": "64f52f5541069ab1f841a03021c728a100c0eeeb",
+    "coordinator_core/_engine_published_at": "0de3ab0cb75a6607f5de2c51a65cd2875720e114",
+    "coordinator_core/_engine_stamp": "11c23881e18ee3ea32e709eff2879361f04240c0",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6708,14 +6708,14 @@
     "coordinator_core/warm/http_listener.py": "3b0d103b3d1d71fbd54fb334b1025a0eab48bac6",
     "coordinator_core/warm/idle.py": "c9ae1c871c315cec8b41f65dd0abc161a61e9507",
     "coordinator_core/warm/lifecycle.py": "578084ec6451c799363f73b285903b40afc73f34",
-    "coordinator_core/warm/push_cadence.py": "ebaa5d28b68a8a0e42ede6dd74bd3593b845c545",
+    "coordinator_core/warm/push_cadence.py": "b7a33afac48fc27a5b3fcc96fa274ead7f19d5b4",
     "coordinator_core/warm/serve_classifier.py": "5fd3229569129272549b89efe624ded1f28a4f04",
     "coordinator_core/warm/server.py": "26539c660fabd28f7a0c728e96ab3a38d971f12d",
     "coordinator_core/warm/settings.py": "2dd31b738a88a3b46cb71c1d24332a7088953890",
     "coordinator_core/warm/settings_home_claim.py": "9f626ce1df8eaed6777d2eb094391cae7371249d",
     "coordinator_core/warm/skew.py": "278350abe7a2016c009f0641c767f30be0c593af",
     "coordinator_core/warm/supervisor.py": "7b28693103799e57efc466f00e66da88d461f8d8",
-    "coordinator_core/warm/telemetry.py": "a72888e7e0169c552cf0cc4b02693582f23d5517",
+    "coordinator_core/warm/telemetry.py": "9e669e815e1bd69fe1ed27ae25f4307a54b3c6cd",
     "coordinator_core/warm/tests/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/warm/tests/door_test_support.py": "7473f718c5e1e407c5f7eb42b130babeaa9ca49b",
     "coordinator_core/warm/tests/test_boot_claim_ceiling.py": "926c804a52e329ed65a3abe8a043982034f0894d",
@@ -6808,7 +6808,7 @@
     "coordinator_core/warm/tests/test_push_cadence.py": "548699f262cf5425536c0376b05c5b768089fa32",
     "coordinator_core/warm/tests/test_push_cadence_foreign_delivery.py": "e2f47d8c4a847b2f3a28abfd9d7afabb4c2f017f",
     "coordinator_core/warm/tests/test_push_cadence_per_repo_ceiling.py": "c35ee18bc8145a934d4317b3f6292c9b21433804",
-    "coordinator_core/warm/tests/test_push_cadence_registry_sweep.py": "b229ea583af4c95e2711b1b850402a6d4b7f2ff8",
+    "coordinator_core/warm/tests/test_push_cadence_registry_sweep.py": "bbfe40dcebb0a52ed9bea6dc4ebb81ba1e47a2e0",
     "coordinator_core/warm/tests/test_queue_drain_preserves_unstarted_request.py": "b096a428c195b01c94910b4f071825e98e531234",
     "coordinator_core/warm/tests/test_reconcile_poll_cannot_false_negative.py": "6b92e719b65a2966d427617f2b7473274f64c0d1",
     "coordinator_core/warm/tests/test_reentry_goes_through_the_seam.py": "6baa0167ff59e071bc18abeb85de162cd90016d2",
@@ -7251,5 +7251,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "c89fed4a710ac901f83537e25e9b2544c8e95d5f"
+  "source_head": "d3179322e85295c87392aa2f28c06a90bd829f77"
 }

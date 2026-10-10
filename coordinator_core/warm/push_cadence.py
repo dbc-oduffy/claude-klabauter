@@ -715,11 +715,10 @@ def sweep_repos(
             cut = ordered[index + 1] if index + 1 < len(ordered) else None
             reached = index + 1
             break
-    skipped.extend(ordered[reached:])
     with _cadence_lock:
         _resume_repo = cut
     _sweep_foreign(deadline=deadline, clock=clock)
-    telemetry.record_sweep(pushed, skipped, failed)
+    telemetry.record_sweep(pushed, skipped, failed, not_reached=ordered[reached:])
 
 
 def registry_sweep_repos(served: Iterable[Union[str, Path]]) -> list:
