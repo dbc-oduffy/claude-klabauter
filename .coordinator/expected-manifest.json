@@ -2040,8 +2040,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "123ee0e21293ada542ccebeb399a7927430e94c0",
-    "coordinator_core/_engine_stamp": "14f7b320752a778f75e4362cdd88b3fb1430fc69",
+    "coordinator_core/_engine_published_at": "12d4a91f7d09dbf02bbeca420a2a011f8defa084",
+    "coordinator_core/_engine_stamp": "b3dcf7e687acf622767d5b9a820748ebf08096c9",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2121,7 +2121,7 @@
     "coordinator_core/bash_guards/_guard_coverage.py": "8661ffb4daebf18dcbda7cdf45abe6f55aa5fb63",
     "coordinator_core/bash_guards/_heavy_admission_contract.py": "4b42a9a411bf0ec70ec6e7e554ee6ccdf78877a5",
     "coordinator_core/bash_guards/_heavy_admission_seed.py": "b12cb17e517089ff92a70425003dd6a96a7c7f87",
-    "coordinator_core/bash_guards/_heavy_command_class.py": "6018cfb706229ff5279bbe20bd28b921831ed14c",
+    "coordinator_core/bash_guards/_heavy_command_class.py": "a4817021e412420f2e7e009040607766e5776754",
     "coordinator_core/bash_guards/_heavy_identity.py": "81320c8a6b790beb58a53df1dea111cefb4a8720",
     "coordinator_core/bash_guards/_heavy_lease_store.py": "5c1aabdaa6d390edc57eb953244898c26302e1b8",
     "coordinator_core/bash_guards/_helpers.py": "4ad90f94dd6ca7732af7669415de9232d92a7e83",
@@ -2395,7 +2395,7 @@
     "coordinator_core/bash_guards/tests/test_heavy_admission_contract.py": "5a2cb35681f8423ec4e057ecb46d9c933b0798ab",
     "coordinator_core/bash_guards/tests/test_heavy_admission_cost.py": "ceaac5af84b5e833b164c51ae0534e697dd3dc33",
     "coordinator_core/bash_guards/tests/test_heavy_admission_seed.py": "0ace3835191e052fb4614bbe4f0a67774bd0da70",
-    "coordinator_core/bash_guards/tests/test_heavy_command_class.py": "63215aec9e407532cfdc43834bf1dccdc8cb7150",
+    "coordinator_core/bash_guards/tests/test_heavy_command_class.py": "795ef8898d46214f9f5061ae93ee6ac7a0215df3",
     "coordinator_core/bash_guards/tests/test_heavy_identity.py": "b380a4037ce7dd8357115d79090d85c7acf55477",
     "coordinator_core/bash_guards/tests/test_heavy_lease_store.py": "e6e9c42ad43a42e01bda53e1f5c4c2bb484fb2ec",
     "coordinator_core/bash_guards/tests/test_helpers_kind_resolution_signal.py": "27d6707ea5285add3e1fb3d17c77a85ad3298eba",
@@ -7232,5 +7232,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "39095e492e13e062f5d09f457fbc79a01a394891"
+  "source_head": "63d0df3ba38fab4287cc7fcc9be2e6add728fe7d"
 }

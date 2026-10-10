@@ -258,6 +258,45 @@ def _is_noemit_tsc(argv: Sequence[str]) -> bool:
     return not (i + 1 < len(low) and low[i + 1] == "false")
 
 
+def _package_script(cwd: Optional[str], name: str) -> Optional[str]:
+    """`scripts.<name>` of the nearest package.json up to the git root; None when absent or unreadable."""
+    import json
+
+    if not cwd:
+        return None
+    cur = os.path.abspath(cwd)
+    while True:
+        try:
+            with open(os.path.join(cur, "package.json"), encoding="utf-8") as fh:
+                scripts = json.load(fh).get("scripts")
+        except (OSError, ValueError, AttributeError):
+            scripts = None
+        else:
+            value = scripts.get(name) if isinstance(scripts, dict) else None
+            return value if isinstance(value, str) else None
+        parent = os.path.dirname(cur)
+        if os.path.exists(os.path.join(cur, ".git")) or parent == cur:
+            return None
+        cur = parent
+
+
+def _is_noemit_pm_typecheck(argv: Sequence[str], cwd: Optional[str]) -> bool:
+    """`pnpm typecheck` (or npm/yarn/bun) whose package script is only one-shot `tsc --noEmit`.
+
+    TRAP: a script that chains or calls another script is opaque here, so it stays a plain
+    TYPECHECK; only a script every segment of which is a no-emit tsc earns the executor carve-out.
+    """
+    if _suite._base(argv[0]).lower() not in _PM_BASES or _pm_script(argv[1:]) != "typecheck":
+        return False
+    if any(a.lower() in _RECURSIVE_FLAGS for a in argv[1:]):
+        return False
+    script = _package_script(cwd, "typecheck")
+    if not script:
+        return False
+    segments = [_suite._strip_command_prefix(s) for s in _suite._segment_argvs(script)]
+    return bool(segments) and all(s and _is_noemit_tsc(_unwrap_launcher(s)) for s in segments)
+
+
 def _argv_class(argv: Sequence[str]) -> Optional[HeavyClass]:
     base = _suite._base(argv[0])
     args = argv[1:]
@@ -327,7 +366,9 @@ def _scan(
         heavy = _argv_class(argv)
         if heavy is not None:
             found.append(heavy)
-            if heavy is HeavyClass.TYPECHECK and _is_noemit_tsc(argv):
+            if heavy is HeavyClass.TYPECHECK and (
+                _is_noemit_tsc(argv) or _is_noemit_pm_typecheck(argv, cwd)
+            ):
                 found.append(_NOEMIT)
             if _watch_or_fanout_class(argv) is not None or any(
                 a.lower() in _WATCH_FLAGS for a in argv[1:]

@@ -227,3 +227,36 @@ def test_a_capped_scoped_vitest_beside_noemit_tsc_keeps_the_mark(tmp_path):
 def test_an_uncapped_vitest_beside_noemit_tsc_drops_the_mark(tmp_path):
     c = classify("vitest run a.test.ts && tsc --noEmit", None, str(tmp_path), 4)
     assert c.heavy_class is H.TYPECHECK and c.noemit_tsc is False
+
+
+def _pkg(tmp_path, script):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "package.json").write_text('{"scripts": {"typecheck": %s}}' % __import__("json").dumps(script))
+    return str(tmp_path)
+
+
+@pytest.mark.parametrize("script", ["tsc --noEmit", "tsc -p tsconfig.json --noEmit", "npx tsc --noEmit"])
+def test_a_package_typecheck_that_is_only_noemit_tsc_is_noemit(tmp_path, script):
+    c = classify("pnpm typecheck", None, _pkg(tmp_path, script), 4)
+    assert c.heavy_class is H.TYPECHECK and c.noemit_tsc
+
+
+@pytest.mark.parametrize(
+    "cmd,script",
+    [
+        ("pnpm typecheck", "tsc --noEmit && pnpm build"),
+        ("pnpm typecheck", "tsc -b"),
+        ("pnpm typecheck", "tsc --noEmit --watch"),
+        ("pnpm -r typecheck", "tsc --noEmit"),
+        ("pnpm typecheck", "turbo run typecheck"),
+    ],
+)
+def test_an_opaque_or_heavier_package_typecheck_is_not_noemit(tmp_path, cmd, script):
+    c = classify(cmd, None, _pkg(tmp_path, script), 4)
+    assert c.heavy_class is not None and not c.noemit_tsc
+
+
+def test_a_package_typecheck_without_a_package_json_is_not_noemit(tmp_path):
+    (tmp_path / ".git").mkdir()
+    c = classify("pnpm typecheck", None, str(tmp_path), 4)
+    assert c.heavy_class is H.TYPECHECK and not c.noemit_tsc
