@@ -226,6 +226,11 @@ GUARD_DEFAULT_LEVEL = {
     # PM ruling 2026-10-04: a fast/full suite run for a one-line change is the
     # waste this guard exists to stop, so a box-wide `warn` must not open it.
     "check-test-suite-invocation": "strict",
+    # Report-only until its census is tuned on live logs (Group EM coordinator-content-repo-6c, 2026-10-10):
+    # every would-deny lands in <settings-home>/heavy-admission/would-deny.jsonl and nothing is
+    # shown to the caller. The flip back to strict is
+    # state/bug-backlog/2026-10-10-heavy-command-admission-guard-is-report-8e3c3b48d41a.yaml.
+    "guard-heavy-command-admission": "off",
 }
 
 #: Guards whose deny is floor for a dispatched caller only: no level lowers it

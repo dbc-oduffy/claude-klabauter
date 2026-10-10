@@ -69,6 +69,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-destructive-action",
     "block-subagent-commit",
     "check-test-suite-invocation",
+    "guard-heavy-command-admission",
     "block-subagent-grant-acquisition",
     "block-subagent-findings-reject",
     # immediately after, same CONFINEMENT_DENY hard-deny posture -- see

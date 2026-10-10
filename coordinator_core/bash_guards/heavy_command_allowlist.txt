@@ -1,0 +1,13 @@
+# Agent types that may launch heavy commands (guard-heavy-command-admission, identity leg).
+# One exact agent_type per line; '#' starts a comment. The main thread needs no entry.
+# Roster source of truth is DoE's agent definitions: a roster change is a DoE edit plus a bump here.
+# Never list workflow-subagent, general-purpose, Explore or coordinator:executor.
+coordinator:staff-eng
+coordinator:staff-data-sci
+coordinator:staff-ux
+coordinator:senior-front-end
+coordinator:eng-director
+game-dev:staff-game-dev
+coordinator:test-runner
+coordinator:exit-criterion-falsifier
+Example-game-repo-control:ue-infra-engineer

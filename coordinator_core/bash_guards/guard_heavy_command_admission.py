@@ -1,0 +1,518 @@
+"""coordinator_core.bash_guards.guard_heavy_command_admission -- PreToolUse (Bash|PowerShell)
+hard-deny: a heavy command is admitted by caller identity and measured box capacity only.
+
+What this guard is, in four points (DoE tripwire A-BOX-CAP-COUNTS-COMMANDS-NOT-AGENTS, DoE 4289b1712):
+  1. It never counts dispatched agents. An idle agent costs the box nothing; a cap on agents
+     throttles the fleet and leaves the box-killers running.
+  2. It keys on the command's class and the calling session's process tree, both measured.
+  3. Heavy: typecheck (any tsc, a second one per session included), builds, unscoped test
+     tiers, any vitest run whose workers are not capped, watch modes, `pnpm -r` and other
+     every-workspace runs, UE launches, reindexes.
+  4. A caller's claim of need never admits. No justification, priority or "light" field is read.
+
+Legs, in order, each denying once (no hold, sleep or retry):
+  identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt with no
+               live workflow run
+  ram-floor    available RAM minus the reserve of every still-unattributed lease stays at or
+               above the machine-local floor; scoped test runs skip it
+  session-cap  the session's live heavy and background-shell descendants stay under the
+               machine-local caps
+
+A light, foreground command stops after classification and imports nothing else. Every
+threshold is machine-local config (heavy_admission.*) seeded by setup; an absent or malformed
+key is untrusted and denies. No caller-supplied field (justification, priority, light flag)
+is read. The COORDINATOR_ALLOW_HEAVY_* keys are operator pre-launch overrides and every bypass
+is logged. The lease is written only after every leg has passed.
+
+Spawn-free: this module creates no process and calls no git; every process fact comes from
+in-process host reads.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from typing import Any, Callable, Dict, List, Mapping, Optional
+
+from coordinator_core._hook_envelope import deny as _deny
+from coordinator_core.bash_guards._heavy_admission_contract import (
+    ADVISORY_WORKER_RSS,
+    GUARD_NAME,
+    KEY_FREE_RAM_FLOOR_MB,
+    KEY_LEASE_RESERVE_MB,
+    KEY_SESSION_BACKGROUND_CAP,
+    KEY_SESSION_HEAVY_CAP,
+    KEY_VITEST_MAX_WORKERS,
+    KEY_WORKER_RSS_CEILING_MB,
+    LEG_IDENTITY,
+    LEG_RAM_FLOOR,
+    LEG_SESSION_CAP,
+    OVERRIDE_KEYS,
+    HeavyClass,
+    LeaseRecord,
+)
+from coordinator_core.bash_guards._heavy_command_class import classify
+from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+
+CLASS = "hard-deny"
+MATCHERS = COMMAND_TOOL_NAMES
+GENERATES: List[str] = []
+
+_SETUP_REMEDY = "run scripts/setup.py to seed the heavy_admission.* keys"
+_LOG_CMD_CHARS = 120
+
+
+# --------------------------------------------------------------------------- seams
+# Module-level so tests substitute each reader without touching the host.
+
+def _read_config() -> Mapping[str, Any]:
+    from coordinator_core import machine_resolver
+
+    return machine_resolver.merged_flat_registry()
+
+
+def _live_workflow_runs(session_id: Optional[str]) -> List[str]:
+    if not isinstance(session_id, str) or not session_id:
+        return []
+    try:
+        import tempfile
+
+        from coordinator_core.hooks.flag_em_poll_in_flight import _run_ids_in_flight
+
+        return list(_run_ids_in_flight(tempfile.gettempdir(), session_id))
+    except Exception:
+        return []
+
+
+def _primitives():
+    from coordinator_core.bash_guards._host_probe import HostPrimitives
+
+    return HostPrimitives
+
+
+def _read_available():
+    from coordinator_core.bash_guards._host_probe import read_available_mb
+
+    return read_available_mb()
+
+
+def _working_set_mb(pid: int) -> Optional[int]:
+    from coordinator_core.bash_guards._host_probe import working_set_mb
+
+    return working_set_mb(pid)
+
+
+def _deny_log_path():
+    from coordinator_core._settings_home import settings_home
+
+    return settings_home() / "heavy-admission" / "would-deny.jsonl"
+
+
+def _append_log(record: Dict[str, Any]) -> None:
+    """One JSON line per deny or advisory; append-only, spawn-free, never raises."""
+    import json
+
+    try:
+        path = _deny_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
+    except (OSError, TypeError, ValueError) as exc:
+        print("%s: failed to write would-deny log: %s" % (GUARD_NAME, exc), file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- helpers
+
+def _positive_int(config: Mapping[str, Any], key: str) -> Optional[int]:
+    raw = config.get(key)
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _bypassed(leg: str, payload: Dict[str, Any], command: str) -> bool:
+    """True when the operator's pre-launch key for `leg` is set; the bypass is logged."""
+    from coordinator_core.bash_guards._rewrite_support import _override
+
+    key = OVERRIDE_KEYS[leg]
+    if not _override(key, payload=payload):
+        return False
+    _log_bypass(leg, key, payload, command)
+    return True
+
+
+def _find_git_root(cwd: Any) -> Optional[str]:
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    cur = os.path.abspath(cwd)
+    while True:
+        if os.path.exists(os.path.join(cur, ".git")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _log_bypass(leg: str, key: str, payload: Dict[str, Any], command: str) -> None:
+    """Append one audit line to the session's overrides.log; a failed write is reported, never raised."""
+    try:
+        from coordinator_core.bash_guards._override_log_path import _override_log_path
+
+        session_id = payload.get("session_id")
+        sid = session_id if isinstance(session_id, str) and session_id else None
+        git_root = _find_git_root(payload.get("cwd") or os.getcwd())
+        if git_root is None:
+            return
+        path = _override_log_path(git_root, sid)
+        if path is None:
+            return
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(
+                "%s | %s | %s | %s | %s\n"
+                % (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    sid or "no-session",
+                    key,
+                    leg,
+                    command[:_LOG_CMD_CHARS].replace("\n", " "),
+                )
+            )
+    except OSError as exc:
+        print("%s: failed to write override audit log: %s" % (GUARD_NAME, exc), file=sys.stderr)
+
+
+def _deny_text(leg: str, fact: str, alternative: str) -> Dict[str, Any]:
+    return _deny("PreToolUse", "BLOCKED %s (%s leg): %s. %s." % (GUARD_NAME, leg, fact, alternative))
+
+
+def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
+    raw = payload.get("pid")
+    if isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _caller_pid(payload: Mapping[str, Any]) -> int:
+    pid = _payload_pid(payload)
+    return os.getpid() if pid is None else pid
+
+
+def _record(
+    payload: Mapping[str, Any],
+    command: str,
+    cls,
+    kind: str,
+    reason: str,
+    anchor=None,
+    census=None,
+) -> Dict[str, Any]:
+    """The would-deny log line. pid_source and the census names are what the morning review
+    needs to tell a real deny from a mis-anchored or MCP-inflated one."""
+    return {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "kind": kind,
+        "reason": reason,
+        "command": command[:_LOG_CMD_CHARS].replace("\n", " "),
+        "heavy_class": cls.heavy_class.value if cls.heavy_class is not None else None,
+        "scoped": cls.scoped,
+        "background": cls.background,
+        "session_id": payload.get("session_id"),
+        "agent_id": payload.get("agent_id"),
+        "agent_type": payload.get("agent_type"),
+        "cwd": payload.get("cwd"),
+        "caller_pid": _caller_pid(payload),
+        "pid_source": "payload" if _payload_pid(payload) is not None else "guard-process",
+        "anchor_pid": anchor.pid if anchor is not None else None,
+        "census_heavy": sorted(r.name for r in census.heavy) if census is not None else None,
+        "census_shells": len(census.shells) if census is not None else None,
+    }
+
+
+def _deny_reason(envelope: Mapping[str, Any]) -> str:
+    hso = envelope.get("hookSpecificOutput")
+    return str(hso.get("permissionDecisionReason", "")) if isinstance(hso, dict) else ""
+
+
+def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None:
+    """Advisory only: log each session heavy process whose working set is over the ceiling."""
+    ceiling = _positive_int(config, KEY_WORKER_RSS_CEILING_MB)
+    if ceiling is None or census is None:
+        return
+    for row in census.heavy:
+        mb = _working_set_mb(row.pid)
+        if mb is not None and mb > ceiling:
+            _append_log(
+                _record(
+                    payload, command, cls, ADVISORY_WORKER_RSS,
+                    "pid %d (%s) holds %d MB, ceiling %d MB" % (row.pid, row.name, mb, ceiling),
+                    anchor, census,
+                )
+            )
+
+
+# --------------------------------------------------------------------------- legs
+
+def _identity_leg(payload: Dict[str, Any], heavy_name: str) -> Optional[Dict[str, Any]]:
+    from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
+
+    has_agent = bool(payload.get("agent_id"))
+    verdict = identity_verdict(
+        payload,
+        allowlist=load_allowlist(),
+        workflow_runs=_live_workflow_runs(payload.get("session_id")) if has_agent else (),
+    )
+    if verdict.allowed:
+        return None
+    return _deny_text(
+        LEG_IDENTITY,
+        "%s launch refused, %s" % (heavy_name, verdict.reason),
+        "The EM or a listed reviewer runs heavy commands",
+    )
+
+
+def _ram_leg(config: Mapping[str, Any], primitives) -> Optional[Dict[str, Any]]:
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+
+    floor = _positive_int(config, KEY_FREE_RAM_FLOOR_MB)
+    reserve = _positive_int(config, KEY_LEASE_RESERVE_MB)
+    if floor is None or reserve is None:
+        return _deny_text(
+            LEG_RAM_FLOOR,
+            "free-RAM floor or lease reserve is unconfigured",
+            "Hand the box owner this remediation: %s" % _SETUP_REMEDY,
+        )
+    reading = _read_available()
+    if not reading.trusted or reading.avail_mb is None:
+        return _deny_text(
+            LEG_RAM_FLOOR,
+            "available RAM is unreadable or untrusted (%s)" % reading.source,
+            "Retry once the host reading recovers",
+        )
+    leases.reap(primitives)
+    reserved = leases.unattributed_count() * reserve
+    effective = reading.avail_mb - reserved
+    if effective >= floor:
+        return None
+    held = leases.holders()
+    return _deny_text(
+        LEG_RAM_FLOOR,
+        "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s"
+        % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none"),
+        "Wait for a holder to finish, then retry",
+    )
+
+
+def _chain_pids(by_pid: Mapping[int, Any], start: int, anchor_pid: int) -> set:
+    """The caller's own wrapper chain, caller pid up to the session anchor."""
+    chain = set()
+    node = by_pid.get(start)
+    while node is not None and node.pid != anchor_pid and node.pid not in chain:
+        chain.add(node.pid)
+        node = by_pid.get(node.ppid)
+    return chain
+
+
+def _second_typecheck(anchor, primitives) -> List[int]:
+    """Holder pids of the session's live, attributed typecheck leases."""
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+
+    leases.reap(primitives)
+    return [
+        r.holder_pid
+        for r in leases.live_leases()
+        if r.heavy_class == HeavyClass.TYPECHECK.value
+        and r.session_pid == anchor.pid
+        and r.session_ctime == anchor.ctime
+        and (r.holder_pid, r.holder_ctime) != (r.session_pid, r.session_ctime)
+    ]
+
+
+def _cap_leg(
+    config: Mapping[str, Any],
+    payload: Dict[str, Any],
+    primitives,
+    *,
+    heavy: bool,
+    background: bool,
+    typecheck: bool = False,
+):
+    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None)."""
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    heavy_cap = _positive_int(config, KEY_SESSION_HEAVY_CAP)
+    bg_cap = _positive_int(config, KEY_SESSION_BACKGROUND_CAP)
+    if (heavy and heavy_cap is None) or (background and bg_cap is None):
+        return (
+            _deny_text(
+                LEG_SESSION_CAP,
+                "session cap is unconfigured",
+                "Hand the box owner this remediation: %s" % _SETUP_REMEDY,
+            ),
+            None,
+            None,
+        )
+    rows = primitives.snapshot()
+    if rows is None:
+        return (
+            _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
+            None,
+            None,
+        )
+    caller = _caller_pid(payload)
+    anchor = census_mod.resolve_anchor({"pid": caller}, primitives, snapshot=rows)
+    if anchor is None:
+        return (
+            _deny_text(
+                LEG_SESSION_CAP,
+                "no session anchor found above pid %d" % caller,
+                "Launch from inside a Claude session",
+            ),
+            None,
+            None,
+        )
+    by_pid = {r.pid: r for r in rows}
+    census = census_mod.session_census(
+        anchor, primitives, snapshot=rows, exclude_pids=_chain_pids(by_pid, caller, anchor.pid)
+    )
+    if census is None:
+        return (
+            _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
+            None,
+            None,
+        )
+    running = _second_typecheck(anchor, primitives) if typecheck else []
+    if running:
+        return (
+            _deny_text(
+                LEG_SESSION_CAP,
+                "session already runs a typecheck: pids %s" % ", ".join(str(p) for p in running),
+                "Wait for it to finish",
+            ),
+            anchor,
+            census,
+        )
+    if heavy and len(census.heavy) >= heavy_cap:
+        pids = ", ".join(str(r.pid) for r in census.heavy)
+        return (
+            _deny_text(
+                LEG_SESSION_CAP,
+                "session holds %d heavy commands (cap %d): pids %s" % (len(census.heavy), heavy_cap, pids),
+                "Wait for one to finish",
+            ),
+            anchor,
+            census,
+        )
+    if background and len(census.shells) >= bg_cap:
+        pids = ", ".join(str(r.pid) for r in census.shells)
+        return (
+            _deny_text(
+                LEG_SESSION_CAP,
+                "session holds %d background shells (cap %d): pids %s" % (len(census.shells), bg_cap, pids),
+                "Stop an idle shell first",
+            ),
+            anchor,
+            census,
+        )
+    return None, anchor, census
+
+
+def _write_lease(heavy_name: str, anchor, census, primitives) -> None:
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+
+    if census is not None and census.heavy:
+        newest = max(census.heavy, key=lambda r: r.ctime)
+        leases.attribute(anchor.pid, anchor.ctime, newest.pid, newest.ctime)
+    leases.write_lease(
+        LeaseRecord(
+            holder_pid=anchor.pid,
+            holder_ctime=anchor.ctime,
+            session_pid=anchor.pid,
+            session_ctime=anchor.ctime,
+            heavy_class=heavy_name,
+            admitted_at=time.time(),
+        )
+    )
+
+
+# --------------------------------------------------------------------------- entry
+
+def check(
+    payload: Dict[str, Any],
+    resolve_wiki_citation: Optional[Callable[[str], str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """None (allow) or the hard-deny envelope. Every deny, and every crash, is appended to the
+    would-deny log whatever the guard's level. `resolve_wiki_citation` is accepted for the
+    chain's call signature and unused."""
+    del resolve_wiki_citation
+    if not isinstance(payload, dict) or payload.get("tool_name") not in MATCHERS:
+        return None
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        return None
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+    cls = classify(command, tool_input, cwd)
+    if cls.heavy_class is None and not cls.background:
+        return None
+
+    config = None
+    if cls.heavy_class is HeavyClass.TEST_TIER and "vitest" in command.lower():
+        config = _read_config()
+        cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
+        if cls.heavy_class is None and not cls.background:
+            return None
+
+    try:
+        return _admit(payload, command, cls, config)
+    except Exception as exc:
+        _append_log(_record(payload, command, cls, "crash", "%s: %s" % (type(exc).__name__, exc)))
+        raise
+
+
+def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[str, Any]]:
+    heavy = cls.heavy_class is not None
+    heavy_name = cls.heavy_class.value if heavy else "background"
+
+    def denied(leg: str, envelope, anchor=None, census=None):
+        _append_log(_record(payload, command, cls, leg, _deny_reason(envelope), anchor, census))
+        if census is not None:
+            _flag_runaway_workers(config, payload, command, cls, anchor, census)
+        return envelope
+
+    if heavy and not _bypassed(LEG_IDENTITY, payload, command):
+        envelope = _identity_leg(payload, heavy_name)
+        if envelope is not None:
+            return denied(LEG_IDENTITY, envelope)
+
+    if config is None:
+        config = _read_config()
+    primitives = _primitives()
+
+    if heavy and not _bypassed(LEG_RAM_FLOOR, payload, command):
+        envelope = _ram_leg(config, primitives)
+        if envelope is not None:
+            return denied(LEG_RAM_FLOOR, envelope)
+
+    anchor = census = None
+    if not _bypassed(LEG_SESSION_CAP, payload, command):
+        envelope, anchor, census = _cap_leg(
+            config, payload, primitives, heavy=heavy, background=cls.background,
+            typecheck=cls.heavy_class is HeavyClass.TYPECHECK,
+        )
+        if envelope is not None:
+            return denied(LEG_SESSION_CAP, envelope, anchor, census)
+
+    if heavy:
+        _flag_runaway_workers(config, payload, command, cls, anchor, census)
+    if heavy and anchor is not None:
+        _write_lease(heavy_name, anchor, census, primitives)
+    return None

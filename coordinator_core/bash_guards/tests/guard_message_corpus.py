@@ -750,6 +750,15 @@ def _subagent_heavy_ue_launch_setup(
     return dict(_EXECUTOR_IDENTITY)
 
 
+def _deploy_dirty_tree_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    from coordinator_core.bash_guards import guard_deploy_dirty_tree as guard
+
+    mp.setattr(guard, "_dirty_paths", lambda cwd: ["src/app.ts"])
+    return {}
+
+
 def _noncanonical_branch_creation_hazard_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1388,6 +1397,33 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         "guard-subagent-heavy-ue-launch",
         "guard-subagent-heavy-ue-launch-control",
         "git log -- scripts/build-plugin.ps1",
+        False,
+        _DENY,
+        False,
+        setup=_subagent_heavy_ue_launch_setup,
+    ),
+    CorpusRow(
+        "deploy-dirty-tree",
+        "deploy-dirty-tree-fire",
+        "firebase deploy",
+        True,
+        _DENY,
+        False,
+        setup=_deploy_dirty_tree_setup,
+    ),
+    CorpusRow(
+        "guard-heavy-command-admission",
+        "guard-heavy-command-admission-fire",
+        "tsc --noEmit",
+        True,
+        _DENY,
+        False,
+        setup=_subagent_heavy_ue_launch_setup,
+    ),
+    CorpusRow(
+        "guard-heavy-command-admission",
+        "guard-heavy-command-admission-control",
+        "grep tsc README.md",
         False,
         _DENY,
         False,
@@ -3571,7 +3607,6 @@ from coordinator_core.hooks import enforce_agent_dispatch_mode as _hook_enforce_
 from coordinator_core.hooks import group_em_autofire as _hook_group_em_autofire
 from coordinator_core.hooks import guard_config_change_hookstack_selfdefence as _hook_guard_config_change_hookstack_selfdefence
 from coordinator_core.hooks import guard_doctrine_changelog_prose as _hook_guard_doctrine_changelog_prose
-from coordinator_core.hooks import guard_doctrine_surface_bash_write as _hook_guard_doctrine_surface_bash_write
 from coordinator_core.hooks import guard_doctrine_surface_ratio as _hook_guard_doctrine_surface_ratio
 from coordinator_core.hooks import guard_handoff_summary_cap_on_write as _hook_guard_handoff_summary_cap_on_write
 from coordinator_core.hooks import guard_hook_generation_self_probe as _hook_guard_hook_generation_self_probe
@@ -4486,20 +4521,6 @@ def _fire_guard_doctrine_changelog_prose_control() -> Optional[Dict[str, Any]]:
             return _to_envelope_or_none(
                 _run_maybe_async(_hook_guard_doctrine_changelog_prose._handler(payload))
             )
-
-
-def _fire_guard_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
-    payload = {"tool_name": "Bash", "tool_input": {"command": 'echo "hello" > CLAUDE.md'}}
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_guard_doctrine_surface_bash_write._handler(payload))
-    )
-
-
-def _fire_guard_doctrine_surface_bash_write_control() -> Optional[Dict[str, Any]]:
-    payload = {"tool_name": "Bash", "tool_input": {"command": "cat CLAUDE.md"}}
-    return _to_envelope_or_none(
-        _run_maybe_async(_hook_guard_doctrine_surface_bash_write._handler(payload))
-    )
 
 
 def _fire_guard_doctrine_surface_ratio() -> Optional[Dict[str, Any]]:
@@ -5804,15 +5825,6 @@ HOOK_ROWS: List[HookRow] = [
         "control-present-tense",
         False,
         _fire_guard_doctrine_changelog_prose_control,
-    ),
-    HookRow(
-        "guard_doctrine_surface_bash_write", "fire-bash-write", True, _fire_guard_doctrine_surface_bash_write
-    ),
-    HookRow(
-        "guard_doctrine_surface_bash_write",
-        "control-read-only",
-        False,
-        _fire_guard_doctrine_surface_bash_write_control,
     ),
     HookRow("guard_doctrine_surface_ratio", "fire-ratio-advisory", True, _fire_guard_doctrine_surface_ratio),
     HookRow(

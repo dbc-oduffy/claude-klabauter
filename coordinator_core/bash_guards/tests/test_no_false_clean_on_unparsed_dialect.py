@@ -131,6 +131,8 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "guard_subagent_heavy_ue_launch": (
         lambda mod: "& UnrealEditor-Cmd.exe Proj.uproject -run=Cook"
     ),
+    "guard_heavy_command_admission": lambda mod: "tsc --noEmit",
+    "guard_deploy_dirty_tree": lambda mod: "firebase deploy",
     # The two grant guards entered this test's population on 2026-08-19 with
     # the same subagent-boundary MATCHERS widening. Each fixture is the
     # `_MODULE_M_GRANT` constant from that guard's OWN test file, which its
@@ -296,6 +298,10 @@ def _hazard_repo_monkeypatch(mod: Any, mp: pytest.MonkeyPatch) -> None:
 #: the dialect/SILENT question at all, so this test drives them open the
 #: same way each guard's own author already does.
 _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]] = {
+    # Fails open on a clean tree, so the fixture needs a dirty one to reach a verdict.
+    "guard_deploy_dirty_tree": lambda mod, mp: (
+        mp.setattr(mod, "_dirty_paths", lambda cwd: ["src/app.ts"]) or {}
+    ),
     # This guard is behind the SAME `_is_hazard_repo` applicability gate
     # `guard_branch_set_precedence`/`guard_longlived_branch_naming` used to
     # share here before both were deleted (docs/plans/2026-08-21-the-

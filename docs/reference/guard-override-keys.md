@@ -462,6 +462,9 @@ rationale.
 | `COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS` | `plumbing-and-loops` (`_check_plumbing_and_loops`) | `bash_guards/guard_plumbing_and_loops.py` |
 | `COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD` | `grep-via-bash` (advisory-only leg, `check`) | `bash_guards/guard_grep_via_bash.py` |
 | `COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION` | `check-test-suite-invocation` | `bash_guards/check_test_suite_invocation.py` |
+| `COORDINATOR_ALLOW_HEAVY_IDENTITY` | `guard-heavy-command-admission` identity leg | `bash_guards/guard_heavy_command_admission.py` |
+| `COORDINATOR_ALLOW_HEAVY_RAM_FLOOR` | `guard-heavy-command-admission` ram-floor leg | `bash_guards/guard_heavy_command_admission.py` |
+| `COORDINATOR_ALLOW_HEAVY_SESSION_CAP` | `guard-heavy-command-admission` session-cap leg | `bash_guards/guard_heavy_command_admission.py` |
 | `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (Bash leg) | `block-dev-repo-sentinel-removal` | `bash_guards/block_dev_repo_sentinel_removal.py` |
 | `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (Write/Edit leg) | `block-dev-repo-sentinel-write` | `write_guards/block_dev_repo_sentinel_write.py` |
 | `COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY` (Bash leg) | `block-subagent-plan-body-write` | `bash_guards/block_subagent_plan_body_bash_write.py` |

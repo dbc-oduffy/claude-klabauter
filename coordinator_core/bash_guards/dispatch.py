@@ -528,6 +528,10 @@ _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
         "denies only for a subagent caller, which a command-text trigger cannot carry",
     ),
     (
+        "guard-heavy-command-admission",
+        "denies by caller identity and measured host state, so no command text alone proves a crash-path deny",
+    ),
+    (
         "block-reviewer-bash-outside-allowlist",
         "denies every command a confined reviewer runs that is not on its allowlist, so any text can deny",
     ),
@@ -2276,6 +2280,10 @@ def _build_guard_chain(
         check as _check_subagent_heavy_ue_launch,
         MATCHERS as _matchers_subagent_heavy_ue_launch,
     )
+    from coordinator_core.bash_guards.guard_heavy_command_admission import (
+        check as _check_heavy_command_admission,
+        MATCHERS as _matchers_heavy_command_admission,
+    )
     from coordinator_core.bash_guards.check_raw_pid_liveness import (
         check as _check_raw_pid_liveness,
         MATCHERS as _matchers_raw_pid_liveness,
@@ -2832,6 +2840,19 @@ def _build_guard_chain(
         # liveness`, formerly its sibling in this pair, RETIRED from here in C13
         # -- see its own new ADVISORY_REWRITE registration below.)
         GuardEntry("check-test-suite-invocation", lambda: _check_test_suite_invocation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_test_suite_invocation)),
+        # guard-heavy-command-admission -- a heavy command (typecheck, build, unscoped test
+        # tier, UE, reindex) is admitted by caller identity, box free-RAM floor and
+        # per-session cap, all from measured state. Directly after the DR-088 suite guard so
+        # its identity, grant and mutex legs diagnose suite runs first. Hard-deny and
+        # spawn-free; report-only (level off) until machine_profile.GUARD_DEFAULT_LEVEL flips it.
+        GuardEntry(
+            "guard-heavy-command-admission",
+            lambda: _check_heavy_command_admission(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_heavy_command_admission),
+        ),
         # block-subagent-grant-acquisition -- see module docstring entry 5i.
         # Hard-deny, identity-gated to subagents only (same posture as
         # block-subagent-stash-creation, 5h): denies a resolved subagent

@@ -2826,6 +2826,22 @@ def register_claude_klabauter_root(
     return claude_klabauter_root_resolved
 
 
+def seed_heavy_admission_defaults() -> None:
+    """Seed the machine-local heavy_admission.* keys from host RAM; never overwrites, never fatal.
+
+    Runs under --register-only too: it writes the machine-local registry, not the repo.
+    """
+    try:
+        from coordinator_core.bash_guards._heavy_admission_seed import seed_if_absent
+
+        written = seed_if_absent()
+    except Exception as exc:
+        print(f"[ADVISORY] heavy_admission seed skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+        return
+    if written:
+        print(f"[OK] heavy_admission seeded: {', '.join(sorted(written))}")
+
+
 def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     """Install-time warm-engine opt-in, written to `engine.warm.enabled` in
     the machine-local TOML registry — the same registry `register_claude_klabauter_root`
@@ -4685,6 +4701,7 @@ def main(argv: list[str]) -> int:
     if not args.register_only:
         write_environment_import(repo_root, "local")
     offer_warm_opt_in(repo_root, args)
+    seed_heavy_admission_defaults()
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)

@@ -146,6 +146,8 @@ from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_topic_branch
 from coordinator_core.bash_guards import block_editor_kill_by_name
 from coordinator_core.bash_guards import guard_subagent_heavy_ue_launch
+from coordinator_core.bash_guards import guard_heavy_command_admission
+from coordinator_core.bash_guards import guard_deploy_dirty_tree
 from coordinator_core.bash_guards import block_whole_filesystem_scan
 from coordinator_core.bash_guards import block_perforce_submit
 from coordinator_core.bash_guards import block_unreal_engine_resave
@@ -617,6 +619,14 @@ def _trigger_check_destructive_git_clean() -> Optional[Dict[str, Any]]:
         )
 
 
+def _trigger_deploy_dirty_tree() -> Optional[Dict[str, Any]]:
+    """An untracked file makes the scratch tree dirty; a clean tree passes."""
+    with _scratch_git_repo() as repo:
+        with open(os.path.join(repo, "app.ts"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("x\n")
+        return guard_deploy_dirty_tree.check(_payload("firebase deploy", agent_id=None, cwd=repo))
+
+
 def _trigger_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
     """Overwrites an EXISTING ``CLAUDE.md`` in a scratch repo: creating a
     missing one is a carve-out and stays silent, so the fire needs the file
@@ -702,6 +712,10 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "guard_subagent_heavy_ue_launch": lambda: guard_subagent_heavy_ue_launch.check(
         _payload("UnrealEditor-Cmd.exe Proj.uproject -run=Cook")
     ),
+    "guard_heavy_command_admission": lambda: guard_heavy_command_admission.check(
+        _payload("tsc --noEmit")
+    ),
+    "guard_deploy_dirty_tree": _trigger_deploy_dirty_tree,
     "block_whole_filesystem_scan": lambda: block_whole_filesystem_scan.check(
         _payload("find / -name altlive-probe", agent_id=None)
     ),

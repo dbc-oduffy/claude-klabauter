@@ -86,6 +86,15 @@ def test_floor_guards_has_the_thirteen_names():
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
 
 
+def test_heavy_command_admission_is_report_only_by_default(reg):
+    # The morning flip restores strict and FLOOR_GUARDS membership:
+    # state/bug-backlog/2026-10-10-heavy-command-admission-guard-is-report-8e3c3b48d41a.yaml.
+    assert mp.GUARD_DEFAULT_LEVEL["guard-heavy-command-admission"] == "off"
+    assert "guard-heavy-command-admission" not in mp.FLOOR_GUARDS
+    assert mp.apply_guard_level("guard-heavy-command-admission", _deny()) is None
+    assert mp.apply_guard_level("guard-heavy-command-admission", _deny(), subagent=True) is None
+
+
 def test_heavy_ue_launch_guard_is_a_subagent_floor():
     assert "guard-subagent-heavy-ue-launch" in mp.SUBAGENT_FLOOR_GUARDS
 
