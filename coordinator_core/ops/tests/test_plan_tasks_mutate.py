@@ -4235,8 +4235,6 @@ def test_resolve_one_row_edits_only_that_rows_lines(tmp_path, eol):
     )
     assert changed, "the resolve wrote nothing"
     assert changed == [
-        "-  title: \"Third: chunk\"",
-        "+  title: 'Third: chunk'",
         "+  disposition: coded",
         "+  disposition_ref: abc1234",
         "+  disposition_detail: shipped in abc1234",
@@ -4328,3 +4326,50 @@ def test_reopen_refuses_a_row_that_is_not_coded_or_has_no_reason(tmp_path):
     assert open_row["exit_code"] == 1 and "not 'coded'" in open_row["error"]
     assert no_reason["exit_code"] == 1 and "disposition_detail" in no_reason["error"]
     assert plan.read_text(encoding="utf-8") == before
+
+
+_PLAN_ROW_WITH_COMMENTS = """\
+---
+title: "Test Plan — commented row"
+status: draft
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First chunk
+  change_kind: script-edit
+  surface: a.py
+  queue_scope: project
+  deferred: false
+  # Review: eng-director F1 -- C0 edge removed; C1 reads only its own output.
+  writes:
+    - a.py
+  note: >-
+    folded
+    note
+  body: |
+    First.
+```
+"""
+
+
+def test_resolve_keeps_the_rows_comments_and_formatting(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-comments.md", _PLAN_ROW_WITH_COMMENTS)
+
+    result = _run(_handler(
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1", "disposition": "coded",
+         "disposition_ref": "abc1234", "disposition_detail": "shipped in abc1234"},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    text = plan.read_text(encoding="utf-8")
+    assert "  # Review: eng-director F1 -- C0 edge removed" in text
+    assert "  writes:\n    - a.py\n" in text
+    assert "  note: >-\n    folded\n    note\n" in text
+    assert "disposition: coded" in text

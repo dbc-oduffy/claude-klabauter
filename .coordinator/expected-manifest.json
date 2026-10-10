@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "8b47f03382f3680483d6c2783b8761b7da5d93e1",
-    "coordinator_core/_engine_stamp": "dff409beea60b6665c29c21d60f4ac4401bfa8ad",
+    "coordinator_core/_engine_published_at": "e2da3a89b3a5d8aa93a141ac43df01c5a31e6118",
+    "coordinator_core/_engine_stamp": "0dba7e403108c2a697575fbb1a79921e2e642f8c",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4837,7 +4837,7 @@
     "coordinator_core/ops/plan_status_transition.py": "c5ddf14746bcafc8d393d3b9e28b5613057b44b2",
     "coordinator_core/ops/plan_suggest_completion_steps.py": "ec250924543c54cd824244121d391d5466238fd4",
     "coordinator_core/ops/plan_tasks_grouping_digest.py": "1224a4f27fd22114c9c35965bc73fad1d410eff0",
-    "coordinator_core/ops/plan_tasks_mutate.py": "172727802f3f9dfab6565f677b37517d2daa7591",
+    "coordinator_core/ops/plan_tasks_mutate.py": "3415342b078c4bb30427a641f497684982fbdcd5",
     "coordinator_core/ops/plan_tasks_render.py": "2d21c313d33802b120bafafaf87dc9f52e585ddb",
     "coordinator_core/ops/plan_tasks_spine_drift_check.py": "f1e4648056991384d11634a47531e89c8abbe3eb",
     "coordinator_core/ops/platform_outcome_records.py": "745e70b0422a4038b946734605df02478b98962c",
@@ -5439,7 +5439,7 @@
     "coordinator_core/ops/tests/test_plan_status_transition_standdown.py": "b9c4f58ff3ac66b47a32db0ec89d60185a05e7cf",
     "coordinator_core/ops/tests/test_plan_tasks_dump_has_no_aliases.py": "2ef761b16d7651a8e8737f299e9c3978fa2555c7",
     "coordinator_core/ops/tests/test_plan_tasks_grouping_digest.py": "289cd8761b7bd971f7bcfdfcef7152a98a3ad903",
-    "coordinator_core/ops/tests/test_plan_tasks_mutate.py": "35f67a99d9b4475783c10f102086d55ca1f0d4a0",
+    "coordinator_core/ops/tests/test_plan_tasks_mutate.py": "eb962f4060bca92644611ea914bffaae35413955",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_clear_gate.py": "2849cd9b53a2475617a62ab3e8b7a05e02c15e65",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_evidence_append.py": "f13d50b7471d80732b173063ec464e68bf27f097",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_spawn_budget.py": "1a30c27c6d9bbbab5c914bf9d9d05c72fe73c8ae",
@@ -5520,7 +5520,7 @@
     "coordinator_core/ops/tests/test_signoff_digest.py": "8fcc448634bd776cfe53a623e3bf21e6b6399821",
     "coordinator_core/ops/tests/test_signoff_provenance.py": "5ca837e49ce86f518fdc657877f0199a4fc8071e",
     "coordinator_core/ops/tests/test_sizing_accept_exit_criterion.py": "6e525d951160a02b294c197e53a0281baed71187",
-    "coordinator_core/ops/tests/test_sizing_acceptance.py": "9cbf8bed82e14707927f1bff8639b9d63c3e0bcf",
+    "coordinator_core/ops/tests/test_sizing_acceptance.py": "1781df5e6782360a280de2e586985a4e6cd61b69",
     "coordinator_core/ops/tests/test_sizing_citation_archive_fallback.py": "97ea62bb38cc536ee0dc1f5cf64d70964f723564",
     "coordinator_core/ops/tests/test_sizing_decline.py": "1977d00bc1b72929461f4ae50e967d5d6a816cc9",
     "coordinator_core/ops/tests/test_sizing_discharge_surfaced.py": "d771d61fc50dea09401631a83467b24033fd211d",
@@ -7203,5 +7203,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "06b0e179bffcc7ce56ef59941b246232a2595bcb"
+  "source_head": "f6a904fc99562ad1ff0a7b7e35f325502341e718"
 }

@@ -255,9 +255,10 @@ the mutate closure never calls locked_rmw re-entrantly.
 
 Round-trip fidelity boundary (F1): byte-preservation applies to everything
 OUTSIDE the fence-body span (frontmatter, surrounding prose, fence markers).
-INSIDE the span, `safe_load` -> `safe_dump` normalization of comments/
-key-order/quoting on every mutation is an ACCEPTED loss — the `## Tasks`
-spine is machine-owned. Dump options (`sort_keys=False,
+INSIDE the span, an untouched row keeps its bytes and a changed row
+re-serializes only its changed keys (`_patch_row_chunk`); normalization of
+comments/key-order/quoting is an ACCEPTED loss only on the whole-row and
+whole-body fallbacks — the `## Tasks` spine is machine-owned. Dump options (`sort_keys=False,
 default_flow_style=False, allow_unicode=True, width=4096`) are pinned so
 serialization is deterministic and diff-stable across invocations, which is
 also what gives idempotency (F6) for free via `locked_rmw`'s byte-identity
@@ -1580,6 +1581,75 @@ def _split_row_chunks(body: str) -> tuple:
     return preamble, ["".join(lines[a:b]) for a, b in zip(bounds, bounds[1:])]
 
 
+_ROW_KEY_RE = re.compile(r"^(- |  )([A-Za-z_][\w-]*):(?=\s|$)")
+
+
+def _patch_row_chunk(chunk: str, orig: dict, row: dict, force: frozenset = frozenset()) -> Optional[str]:
+    """chunk with only the top-level keys whose values changed re-serialized, or None when the
+    chunk's keys do not map onto orig or the patched text does not load back as row.
+
+    A key's block runs to the next row-level key or row-level comment, so a comment between
+    keys survives; a comment nested inside a changed key's value does not.
+    """
+    # The fence's last row may end without a newline; an appended key must not join its last line,
+    # and a block scalar there changes chomping once a newline follows it, so it is re-rendered.
+    if not chunk.endswith("\n") and not force:
+        tail = [m.group(2) for ln in chunk.splitlines() if (m := _ROW_KEY_RE.match(ln))]
+        if tail:
+            return _patch_row_chunk(chunk, orig, row, frozenset(tail[-1:]))
+    lines =(chunk if chunk.endswith("\n") else chunk + "\n").splitlines(keepends=True)
+    starts = [(i, m.group(1), m.group(2)) for i, ln in enumerate(lines) if (m := _ROW_KEY_RE.match(ln))]
+    if [k for _, _, k in starts] != list(orig):
+        return None
+    stops = [i for i, ln in enumerate(lines) if _ROW_KEY_RE.match(ln) or ln.startswith("  #")]
+    span = {}
+    for i, prefix, key in starts:
+        end = next((j for j in stops if j > i), len(lines))
+        span[key] = (i, end, prefix)
+
+    def render(key: str, prefix: str) -> str:
+        text = _dump_rows([{key: row[key]}])
+        return prefix + text[2:]
+
+    out: list = []
+    pos = 0
+    last_key = None
+    for i, prefix, key in starts:
+        _, end, _ = span[key]
+        out.extend(lines[pos:i])
+        if key not in row:
+            pass
+        elif row[key] == orig[key] and key not in force:
+            out.extend(lines[i:end])
+        else:
+            out.append(render(key, prefix))
+        pos = end
+        last_key = key
+        for added in _keys_added_after(key, orig, row):
+            out.append(render(added, "  "))
+    out.extend(lines[pos:])
+    patched = "".join(out)
+    if last_key is None or not patched.startswith("- "):
+        return None
+    try:
+        return patched if yaml.safe_load(patched) == [row] else None
+    except yaml.YAMLError:
+        return None
+
+
+def _keys_added_after(key: str, orig: dict, row: dict) -> list:
+    """Keys new in row that follow key in row's order, up to the next key orig already had."""
+    keys = list(row)
+    if key not in row:
+        return []
+    out = []
+    for k in keys[keys.index(key) + 1:]:
+        if k in orig:
+            break
+        out.append(k)
+    return out
+
+
 def _patch_body(body: str, original_rows: list, rows: list) -> str:
     """The spine body with only the rows that changed re-serialized; every
     untouched row keeps its on-disk bytes. Falls back to a whole-body dump
@@ -1597,7 +1667,10 @@ def _patch_body(body: str, original_rows: list, rows: list) -> str:
     out = [preamble]
     for row in rows:
         kept = by_id.get(row.get("id")) if isinstance(row, dict) else None
-        text = kept[1] if kept and kept[0] == row else _dump_rows([row])
+        if kept and kept[0] == row:
+            text = kept[1]
+        else:
+            text = (kept and _patch_row_chunk(kept[1], kept[0], row)) or _dump_rows([row])
         out.append(text if text.endswith("\n") else text + "\n")
     patched = "".join(out)
     return patched[:-1] if not body.endswith("\n") and patched.endswith("\n") else patched

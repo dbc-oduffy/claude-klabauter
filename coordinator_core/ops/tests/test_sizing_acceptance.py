@@ -34,7 +34,9 @@ def test_source():
 def test_admissible_modes_match_the_schema_apm_mode_enum():
     schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
     accepted = schema["properties"]["exit_criterion"]["anyOf"][1]["properties"]["accepted"]
-    apm_shape = next(s for s in accepted["anyOf"] if s.get("properties", {}).get("source"))
+    apm_shape = next(
+        s for s in accepted["anyOf"] if s.get("properties", {}).get("source", {}).get("const") == "apm"
+    )
     assert tuple(apm_shape["properties"]["mode"]["enum"]) == APM_ADMISSIBLE_MODES
 
 
