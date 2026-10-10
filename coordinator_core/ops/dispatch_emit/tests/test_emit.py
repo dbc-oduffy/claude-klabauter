@@ -636,6 +636,17 @@ def test_a_landed_row_vetoes_the_no_op_halt():
     assert "const _landed = {};" in script
 
 
+def test_a_finished_row_with_no_commit_vetoes_the_no_op_halt():
+    """A verification row whose only write is gitignored finishes with no
+    commit, so _landed stays empty; the halt must still see it finished, or
+    the run skips its test phase and terminal judge."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
+    guard = script[: script.index("return { halted: 'no-op'")].rsplit("if (", 1)[1]
+    assert "!_finished.size" in guard
+    assert "const _finished = new Set();" in script
+    assert "if (!incomplete) _finished.add(id);" in script
+
+
 def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     """Defect: a workflow reported `completed: true` while a chunk's own
     agent report carried `Status: PARTIAL`. Runtime behaviour is not

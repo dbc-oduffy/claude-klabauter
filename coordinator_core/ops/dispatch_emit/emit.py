@@ -3444,6 +3444,7 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  const _falsifierBroken = new Map();\n"
         "  const _routedOut = [];\n"
         "  const _skippedDone = [];\n"
+        "  const _finished = new Set();\n"
         "  const _unusableChecks = [];\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
@@ -3534,6 +3535,10 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "schema: _ROW_VERIFY_SCHEMA }\n"
         "      ));\n"
         "    }\n"
+        # A row whose only write is gitignored (a verification row's evidence
+        # file) finishes with no commit; _finished keeps it from reading as a
+        # run that changed nothing, so it still reaches the judge.
+        "    if (!incomplete) _finished.add(id);\n"
         "    if (!incomplete && commit) {\n"
         "      _landed[id] = commit;\n"
         "    }\n"

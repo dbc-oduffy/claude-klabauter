@@ -385,6 +385,7 @@ def compose_execute_review(
             # slices guard instead of halting, so landed rows never skip review.
             f"  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
             f"(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
+            f"(typeof _finished === 'undefined' || !_finished.size) && "
             f"(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
             f"!(_reviewPrep.slices ?? []).some(s => (s?.files ?? []).length)) {{ "
             f"return {{ halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
