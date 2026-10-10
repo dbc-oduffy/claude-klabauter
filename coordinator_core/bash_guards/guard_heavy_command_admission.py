@@ -78,6 +78,20 @@ def _read_config() -> Mapping[str, Any]:
 _UNRESOLVED_RUN = "unresolved"
 
 
+def _run_in_transcript_path(payload: Mapping[str, Any]) -> Optional[str]:
+    """The workflow run id named in the subagent's own transcript path, or None. Path parse only,
+    no filesystem access, so the log can carry it on every record."""
+    transcript = payload.get("transcript_path")
+    if not payload.get("agent_id") or not isinstance(transcript, str):
+        return None
+    parts = transcript.replace("\\", "/").split("/")
+    if "subagents" not in parts:
+        return None
+    kind, *rest = parts[parts.index("subagents") + 1:] or [None]
+    run, *agent = rest or [None]
+    return run if kind == "workflows" and agent else None
+
+
 def _workflow_runs_of(payload: Mapping[str, Any]) -> List[str]:
     """The workflow run that spawned this subagent: [] for an Agent-tool dispatch, [run_id] for a
     workflow spawn, [_UNRESOLVED_RUN] when its transcript is in neither place (fails closed).
@@ -275,6 +289,7 @@ def _record(
         "session_id": payload.get("session_id"),
         "agent_id": payload.get("agent_id"),
         "agent_type": payload.get("agent_type"),
+        "workflow_run": _run_in_transcript_path(payload),
         "cwd": payload.get("cwd"),
         "caller_pid": _caller_pid(payload),
         "pid_source": _pid_and_source(payload)[1],
@@ -309,13 +324,14 @@ def _flag_runaway_workers(config, payload, command, cls, anchor, census) -> None
 # --------------------------------------------------------------------------- legs
 
 _EXECUTOR_TYPE = "coordinator:executor"
+ADMITTED_VERIFIER = "admitted-verifier"
 # Group EM ruling 2026-10-10: an execute run's own test phase and terminal judge verify inside
 # the workflow; they get test-tier and typecheck only, never builds, UE, watch modes or an
 # uncapped vitest/jest. Being inside a workflow run admits nothing by itself.
 _VERIFIER_TYPES = frozenset({"coordinator:test-runner", "coordinator:exit-criterion-judge"})
 
 
-def _identity_leg(payload: Dict[str, Any], heavy_name: str, cls) -> Optional[Dict[str, Any]]:
+def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -> Optional[Dict[str, Any]]:
     from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
 
     allowlist = load_allowlist()
@@ -332,6 +348,8 @@ def _identity_leg(payload: Dict[str, Any], heavy_name: str, cls) -> Optional[Dic
     if payload.get("agent_type") == _EXECUTOR_TYPE and payload.get("agent_id") and cls.noemit_tsc:
         return None
     if payload.get("agent_type") in _VERIFIER_TYPES and payload.get("agent_id") and cls.bounded_verify:
+        # Logged so a run's verifier traffic is attributable: a clean run shows admits, not silence.
+        _append_log(_record(payload, command, cls, ADMITTED_VERIFIER, verdict.reason))
         return None
     return _deny_text(
         LEG_IDENTITY,
@@ -590,7 +608,7 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
         return envelope
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
-        envelope = _identity_leg(payload, heavy_name, cls)
+        envelope = _identity_leg(payload, command, heavy_name, cls)
         if envelope is not None:
             return denied(LEG_IDENTITY, envelope)
 

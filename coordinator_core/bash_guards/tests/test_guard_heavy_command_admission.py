@@ -94,7 +94,7 @@ def host(tmp_path, monkeypatch):
     return h
 
 
-def _payload(command, *, agent_id=None, agent_type=None, background=False, env=None, cwd=None, tool="Bash"):
+def _payload(command, *, agent_id=None, agent_type=None, background=False, env=None, cwd=None, tool="Bash", transcript_path=None):
     p = {
         "tool_name": tool,
         "tool_input": {"command": command, "run_in_background": background},
@@ -103,6 +103,8 @@ def _payload(command, *, agent_id=None, agent_type=None, background=False, env=N
     }
     if cwd is not None:
         p["cwd"] = str(cwd)
+    if transcript_path is not None:
+        p["transcript_path"] = transcript_path
     if agent_id is not None:
         p["agent_id"] = agent_id
     if agent_type is not None:
@@ -781,6 +783,17 @@ class TestVerifierCarveOut:
     def test_another_workflow_subagent_gains_nothing(self, host):
         out = guard.check(_payload("pnpm exec tsc --noEmit -p .", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert out is not None and "identity" in _reason(out)
+
+    def test_an_admitted_verifier_and_a_denied_one_both_log_their_run(self, host, tmp_path):
+        judge = {
+            "agent_id": "deadbeef0123", "agent_type": "coordinator:exit-criterion-judge",
+            "transcript_path": str(tmp_path / "s" / "subagents" / "workflows" / "wf_test" / "agent-deadbeef0123.jsonl"),
+        }
+        assert guard.check(_payload("pnpm exec tsc --noEmit -p .", **judge)) is None
+        assert guard.check(_payload("pnpm exec vitest run test/a --maxWorkers=8", **judge)) is not None
+        admitted, denied = _log_lines(tmp_path)[-2:]
+        assert admitted["kind"] == guard.ADMITTED_VERIFIER and admitted["workflow_run"] == "wf_test"
+        assert denied["kind"] == "identity" and denied["workflow_run"] == "wf_test"
 
     def test_the_session_cap_still_bounds_a_verifier(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_second_typecheck", lambda anchor, primitives: [4242])
