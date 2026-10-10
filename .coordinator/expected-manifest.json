@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "9bf0f16d31aaae79caa61641cabf5c53486e73f2",
-    "coordinator_core/_engine_stamp": "3879a884809a681a36dca2a85632fbbaa57a7bb6",
+    "coordinator_core/_engine_published_at": "84ac8469882db97b56f56bd1b999bc26c6f2b393",
+    "coordinator_core/_engine_stamp": "9c35319123790835883a6932785f390635897bcb",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2177,7 +2177,7 @@
     "coordinator_core/bash_guards/commit_scope_rewrite.py": "dab16888f22e4c939fd9649636df98c41c569800",
     "coordinator_core/bash_guards/commit_tripwires.py": "9a08f53140dd24626714120bf010ba462c66c3cd",
     "coordinator_core/bash_guards/dispatch.py": "66e3f3f1b3479cfda23c44fc97cff6c0bf5cf8e7",
-    "coordinator_core/bash_guards/dispatch_checks.py": "009e52bd30c408149cdc69605984b95f13be03ed",
+    "coordinator_core/bash_guards/dispatch_checks.py": "d94fb082dea3971380e5527da1f836067963811f",
     "coordinator_core/bash_guards/find_exec_rewrite.py": "99ed12a6c9e94d0bb9e8a9cb2014698239e45a56",
     "coordinator_core/bash_guards/guard_background_publish.py": "20a5648a5d483b254793bef0f4af9d147b69e340",
     "coordinator_core/bash_guards/guard_deploy_dirty_tree.py": "c5c6091963be16099ac172a9ce61d742e4c5af6b",
@@ -2283,7 +2283,7 @@
     "coordinator_core/bash_guards/tests/test_check_blanket_git_add_subtree.py": "86a0cde3bc94042a369c984c72e1a6bbf0b20841",
     "coordinator_core/bash_guards/tests/test_check_destructive_git_orphan_check2.py": "3cffa817072dd00e1dfe694af127dc85628028d2",
     "coordinator_core/bash_guards/tests/test_check_destructive_git_revert_stash.py": "f174ff04ceb937b8653cc59ddfce2dc405f6b7ee",
-    "coordinator_core/bash_guards/tests/test_check_destructive_rm_repo_root.py": "f9e2e5aca31302b6bd0f8e192038a1202c8fb649",
+    "coordinator_core/bash_guards/tests/test_check_destructive_rm_repo_root.py": "0b25d18e98dfa6f484a05986871ab0cf1801ac64",
     "coordinator_core/bash_guards/tests/test_check_destructive_rm_status_batch.py": "35320b83592960fee04027ecc24b4498420aeafe",
     "coordinator_core/bash_guards/tests/test_check_heredoc_repo_write_advise.py": "96ed2e53f741efefac77d411957e515b47147df4",
     "coordinator_core/bash_guards/tests/test_check_no_verify.py": "d74935e12b2e4fe20a9a5bfe8831b459cce68274",
@@ -7204,5 +7204,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "1e314baaf0660e98ffdda60731fb9c80968e3107"
+  "source_head": "a22fb1d6cd1e8c37953c4fb2c330f0cb30cd19aa"
 }

@@ -116,6 +116,36 @@ class TestRepoRootIsDenied:
         assert not _denied(f"rm -rf {plain}")
 
 
+class TestUnbornScratchRepo:
+    """A repo with no ref, stash or reflog inside an enclosing repo's scratch/ holds no history."""
+
+    @pytest.fixture()
+    def scratch(self, tmp_path):
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        _git("init", "-q", cwd=str(outer))
+        s = outer / "scratch"
+        s.mkdir()
+        return s
+
+    def test_an_unborn_repo_under_scratch_is_allowed(self, scratch):
+        probe = scratch / "probe"
+        probe.mkdir()
+        _git("init", "-q", cwd=str(probe))
+        (probe / "copy.yaml").write_text("x: 1\n")
+        assert not _denied(f"rm -rf {probe}")
+
+    def test_a_repo_with_a_commit_under_scratch_stays_denied(self, scratch):
+        assert _denied(f"rm -rf {_make_repo(str(scratch / 'probe'))}")
+
+    def test_an_unborn_repo_outside_scratch_stays_denied(self, tmp_path):
+        probe = tmp_path / "outer" / "work" / "probe"
+        probe.mkdir(parents=True)
+        _git("init", "-q", cwd=str(tmp_path / "outer"))
+        _git("init", "-q", cwd=str(probe))
+        assert _denied(f"rm -rf {probe}")
+
+
 class TestCleanRepoRootStillDenied:
     def test_pristine_worktree_does_not_soften_the_deny(self, repo_outside_any_repo):
         out = subprocess.run(
