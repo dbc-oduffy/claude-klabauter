@@ -241,3 +241,16 @@ def test_baton_given_at_xs_is_refused_naming_the_arm(repo):
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/x.md")
     assert v.arm is None and v.halt["kind"] == "refusal" and "mints no baton" in v.halt["reason"]
+
+
+def test_missing_statement_halts_as_touchpoint_for_the_accept_stage(repo):
+    _put(repo, tshirt="S", route="spec-dispatch", mode="ceo", exit_criterion=None)
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "touchpoint"
+    assert "accept_exit_criterion" in v.halt["touchpoint"] and REL in v.halt["touchpoint"]
+
+
+def test_missing_statement_with_another_refusal_stays_a_refusal(repo):
+    _put(repo, tshirt="S", route="spec-dispatch", mode="ceo", exit_criterion=None, status="draft")
+    v = gate(repo, REL)
+    assert v.halt["kind"] == "refusal" and "statement" not in v.halt["reason"]

@@ -38,6 +38,54 @@ def test_landed_id_closed_in_the_spine_is_skipped_not_refused():
     assert kept == []
 
 
+def _git_repo(tmp_path):
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    r = tmp_path / "repo"
+    r.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=str(r), check=True, capture_output=True, **no_console_creationflags())
+
+    git("init", "-q")
+    git("config", "user.email", "t@t.example")
+    git("config", "user.name", "t")
+    return r, git
+
+
+def _commit_with(r, git, name, subject, *trailers):
+    (r / name).write_text(name, encoding="utf-8")
+    git("add", "--", name)
+    git("commit", "-q", "-m", subject, "-m", "\n".join(trailers))
+
+
+@pytest.mark.spawns_process
+def test_leading_id_commit_with_plan_trailer_counts_as_landed(tmp_path):
+    from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_rows
+
+    r, git = _git_repo(tmp_path)
+    _commit_with(r, git, "a", "C1: did it", "Checkpoint-Plan: docs/plans/a.md")
+    _commit_with(r, git, "b", "C2, C3: other plan", "Checkpoint-Plan: docs/plans/b.md")
+    _commit_with(r, git, "c", "C4: no trailer")
+
+    assert checkpoint_landed_rows(r, "docs/plans/a.md") == {"C1"}
+
+
+@pytest.mark.spawns_process
+def test_gate_owed_trailer_is_read_in_the_same_spawn(tmp_path):
+    from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_state
+
+    r, git = _git_repo(tmp_path)
+    _commit_with(
+        r, git, "a", "checkpoint(wave 1): 2 rows — C1, C2",
+        "Checkpoint-Plan: docs/plans/a.md", "Checkpoint-Gate-Owed: C2",
+    )
+
+    assert checkpoint_landed_state(r, "docs/plans/a.md") == (frozenset({"C1", "C2"}), frozenset({"C2"}))
+
+
 def test_landed_id_absent_from_rows_and_closed_set_still_refused():
     with pytest.raises(ValueError):
         _drop_landed_rows([_row("B")], frozenset({"A", "Z"}), frozenset({"A"}))

@@ -334,6 +334,13 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     dag_from_waves,
     transitive_dependents,
 )
+from coordinator_core.ops.dispatch_emit.gate_owed import (
+    GATE_OWED_JS_RE,
+    GATE_OWED_VAR,
+    KIND_GUARD_DENIED,
+    KIND_OUTSIDE_FOOTPRINT,
+    report_line,
+)
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     PLAN_HELD_VAR,
     completion_return_js,
@@ -1909,7 +1916,12 @@ def _build_gate_clause(commands: list) -> str:
         "fails, return PARTIAL naming the failing command and its error, never DONE. "
         "If every remaining error sits OUTSIDE your footprint (a sibling's file, or "
         "present at run_base), your row is delivered: return PARTIAL with the report "
-        "line `gate-blocker: outside-footprint: <first error>` and nothing else undone.\n"
+        f"line `{report_line(KIND_OUTSIDE_FOOTPRINT, '<first error>')}` and nothing else undone. "
+        "If a guard or hook refuses a gate command (it never ran), do not retry it or "
+        "route around the guard: return PARTIAL with the report line "
+        f"`{report_line(KIND_GUARD_DENIED, '<command> (<guard>)')}` and nothing else undone. "
+        "Either way, copy that `gate-blocker:` line verbatim as the second line of your "
+        "reply, under the status line.\n"
         + lines
         + f"{marker}_gateBaselineText({json.dumps(commands)}){marker}"
     )
@@ -2404,6 +2416,7 @@ def _row_return_contract(
     plan_path: str,
     *,
     shared: Optional[SharedBlocks] = None,
+    gate_owed_reply: bool = False,
 ) -> str:
     """Render the executor return contract (``executor_return_contract``)
     for one wave row: the footprint constraint (when the row declares
@@ -2475,6 +2488,7 @@ def _row_return_contract(
         done_summary_constraint(
             output_path_template=report_path,
             extra_fields=extra_fields,
+            gate_owed_reply=gate_owed_reply,
         )
     )
     parts.append(_stop_rule_clause())
@@ -2615,6 +2629,12 @@ def _row_prompt(
     prompt_head = _prompt_head(preamble, _is_verification_row(row))
     if not plan_path:
         return f"{prompt_head}\n\n{head}"
+    gate_commands = (
+        _row_build_gate_commands(row, plan_context.row_build_gates)
+        if plan_context is not None
+        else []
+    )
+    is_slot_row = plan_context is not None and row.id in plan_context.slot_row_ids
     body = (
         f"{head}\n\n"
         f"The plan is {plan_path}. Read all of it: you are a collaborator on "
@@ -2630,7 +2650,7 @@ def _row_prompt(
         "dressed as compliance. Anything you do beyond your row, report under "
         "`Beyond brief:` with your reason. Never take another row (a peer "
         "holds it) and never edit the plan (it is every peer's instructions)."
-        f"\n\n{_row_return_contract(row, plan_path, shared=shared)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=bool(gate_commands) and not is_slot_row)}"
     )
     if new_module_paths:
         body += (
@@ -2638,8 +2658,7 @@ def _row_prompt(
             "that imports them."
         )
     if plan_context is not None:
-        gate_commands = _row_build_gate_commands(row, plan_context.row_build_gates)
-        if row.id in plan_context.slot_row_ids:
+        if is_slot_row:
             body += f"\n\n{_slot_row_clause(gate_commands)}"
         elif gate_commands:
             body += f"\n\n{_build_gate_clause(gate_commands)}"
@@ -2969,6 +2988,7 @@ def _test_agent_call_expr(
     typecheck: Optional[TypecheckLeg] = None,
     review_edits_base: Optional[str] = None,
     prompt_head: Optional[str] = None,
+    owed_gates: Optional[dict] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -2982,6 +3002,8 @@ def _test_agent_call_expr(
     stages edited: the emitter cannot know them, so the prompt has the runner
     derive them from the tree diff against that base. ``prompt_head`` (a
     marker-bearing string) is prepended ahead of the precedence clause.
+    ``owed_gates`` ({row id: [build-gate commands]}) adds a runtime clause naming the
+    commands of the rows present in ``_gateOwed`` when the prompt is built.
     """
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
@@ -2993,6 +3015,7 @@ def _test_agent_call_expr(
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base)} " if review_edits_base else "")
         + f"{_test_runner_clause()} "
+        + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
         + (f"{_baseline_context_clause(review_edits_base)} " if _is_full_sha(review_edits_base) else "")
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
@@ -3009,6 +3032,31 @@ def _test_agent_call_expr(
         f"schema: {stage_schema_literal('test_result')} "
         "})"
     )
+
+
+def _owed_gates_clause(owed_gates: dict) -> str:
+    """Marker-bearing prompt text: empty at run time unless a listed row is in ``_gateOwed``.
+
+    Names only the gate-owed rows' commands; a command a guard refuses is reported, never retried.
+    """
+    marker = _SHARED_PATH_MARKER_DELIM
+    head = (
+        "Owed build gates: these rows were delivered with their build gate still owed (a guard refused it, "
+        "or its errors lay outside the row's footprint). Run each command below once from the repo root, "
+        "compare against the baseline, set build_clean false on any error absent from the baseline and true "
+        "when every owed command is clean. A command a guard or hook refuses (a Group EM box hold included) "
+        "never ran: do not retry it or route around the guard; put `gate-blocker: guard-denied: <command> "
+        "(<guard>)` in summary and set build_clean null."
+    )
+    expr = (
+        "((m) => { const ids = Object.keys(m).filter((i) => "
+        f"{GATE_OWED_VAR}[i]); if (!ids.length) return ''; "
+        "const cmds = [...new Set(ids.flatMap((i) => m[i]))]; "
+        f"return {json.dumps(head)} + '\\n' + ids.map((i) => '- ' + i + ': ' + m[i].map((c) => '`' + c + '`').join(', ')).join('\\n') "
+        "+ _gateBaselineText(cmds); })("
+        f"{json.dumps(owed_gates, sort_keys=True)})"
+    )
+    return f"{marker}{expr}{marker}"
 
 
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -3453,12 +3501,28 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
+        f"  const _DEP_BLOCKED_RE = {_BLOCKED_STATUS_JS_RE};\n"
+        f"  const _GATE_OWED_RE = {GATE_OWED_JS_RE};\n"
+        # The structured reply line is the only gate-owed signal; a BLOCKED reply
+        # carrying it is still BLOCKED.
+        "  function _gateOwedOf(t) {\n"
+        "    if (_DEP_BLOCKED_RE.test(t)) return null;\n"
+        "    const m = _GATE_OWED_RE.exec(t);\n"
+        "    return m ? 'gate-blocker: ' + m[1].toLowerCase() + m[2] : null;\n"
+        "  }\n"
+        "  function _heldDependentsReason() {\n"
+        "    const ids = Object.keys(_heldBy);\n"
+        "    if (!ids.length) return null;\n"
+        "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
+        "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';\n"
+        "  }\n"
         "  function _depBlocker(deps, results) {\n"
         "    for (let i = 0; i < results.length; i++) {\n"
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && "
         "(r.startsWith('ALREADY-DONE:') || r.startsWith('ROUTED-OUT:'));\n"
+        "      if (r != null && _gateOwedOf(t)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -3509,9 +3573,13 @@ def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
         "    const _text = JSON.stringify(result ?? null);\n"
         "    let incomplete = false;\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
-        f"      if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n"
-        "      _incompleteChunks.push(id);\n"
-        "      incomplete = true;\n"
+        "      const _owed = _gateOwedOf(_text);\n"
+        f"      if (_owed) {{ {GATE_OWED_VAR}[id] = _owed; }}\n"
+        "      else {\n"
+        f"        if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n"
+        "        _incompleteChunks.push(id);\n"
+        "        incomplete = true;\n"
+        "      }\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
         "      _incompleteChunks.push(id);\n"
         "      _unansweredBriefs.push(id);\n"
@@ -3956,8 +4024,14 @@ def _checkpoint_commit_js(
         "    const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];",
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
+        f"    const owed = done.filter((i) => {GATE_OWED_VAR}[i]);",
         "    const message = subject + "
-        + _checkpoint_trailer_js(plan_path, run_base_sha) + ";",
+        + _checkpoint_trailer_js(plan_path, run_base_sha)
+        + (
+            " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '');"
+            if plan_path and run_base_sha
+            else ";"
+        ),
         "    let r = null;",
         "    try {",
         "      r = await agent(",
@@ -4367,6 +4441,7 @@ def compose_script(
     slot_rows: Sequence[str] = (),
     seam: Optional[SeamInputs] = None,
     plan_text: Optional[str] = None,
+    carried_gate_owed: Optional[dict] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -4513,6 +4588,11 @@ def compose_script(
     # return` below unchanged; `_stoppedBy`/`_notStarted`/`_halted`/
     # `_verifications` are new with the DAG shape.
     body_blocks.append("  const _incompleteChunks = [];")
+    owed_seed = ", ".join(
+        f"{_js_string_literal(i)}: {_js_string_literal('gate-blocker: carried: gate owed by a prior run')}"
+        for i in sorted(carried_gate_owed or {})
+    )
+    body_blocks.append(f"  const {GATE_OWED_VAR} = {{ {owed_seed} }};")
     body_blocks.append("  const _blockedChunks = [];")
     body_blocks.append("  const _unansweredBriefs = [];")
     body_blocks.append("  const _stoppedBy = [];")
@@ -4959,6 +5039,12 @@ def compose_script(
         f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
         f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
     )
+    owed_gates: dict = dict(carried_gate_owed or {})
+    if plan_context is not None and not review_only:
+        for row in flat_rows:
+            cmds = _row_build_gate_commands(row, plan_context.row_build_gates)
+            if cmds:
+                owed_gates[row.id] = cmds
     try:
         scope = terminal_test_scope(waves, repo_root=repo_root)
     except NoTestTargetError as exc:
@@ -4987,6 +5073,16 @@ def compose_script(
         if not scope and ts_leg is None:
             guarded_blocks.append(_no_test_scope_narration())
             test_absent_note = "spine writes no testable surface"
+            if owed_gates:
+                phase_titles.append(_TEST_PHASE_TITLE)
+                guarded_blocks.append(
+                    f"  if (Object.keys({GATE_OWED_VAR}).length) {{\n"
+                    f"    phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
+                    f"    {_TEST_RESULT_VAR} = await "
+                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)};\n"
+                    "  }"
+                )
+                test_var = _TEST_RESULT_VAR
             # An all-prose spine has no test target but still owes its
             # criterion a verdict: that is a `criterion` leg, never a `tests` one.
             if criterion_expr is not None:
@@ -5000,7 +5096,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  [{_TEST_RESULT_VAR}, {_FALSIFIER_RESULT_VAR}] = await parallel([\n"
-                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'))},\n"
+                f"    () => {_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)},\n"
                 f"    () => {criterion_expr},\n"
                 "  ]);"
             )
@@ -5011,10 +5107,12 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'))};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_run_base_marker() if runtime_base else (run_base_sha or 'HEAD'), owed_gates=owed_gates)};"
             )
             test_var = _TEST_RESULT_VAR
 
+    if not review_only:
+        body_blocks.append("  if (!_halted) { const _r = _heldDependentsReason(); if (_r) _halted = _r; }")
     body_blocks.append(
         "  if (!_halted) {\n" + "\n\n".join(guarded_blocks) + "\n  }"
     )
@@ -5532,27 +5630,38 @@ def landed_rows_from_text(text: str) -> frozenset:
     return frozenset(ids)
 
 
-def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
-    """Row ids named by checkpoint commits whose ``Checkpoint-Plan:`` trailer names ``plan``.
-    One ``git log`` spawn; ``frozenset()`` when git cannot answer."""
-    from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, checkpoint_row_ids
+def checkpoint_landed_state(repo_root: Path, plan: str) -> tuple:
+    """``(landed, gate_owed)`` row ids from commits whose ``Checkpoint-Plan:`` trailer names
+    ``plan``; ``gate_owed`` is the ``Checkpoint-Gate-Owed:`` subset. One ``git log`` spawn;
+    empty sets when git cannot answer."""
+    from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
     from coordinator_core.git.run import run_git
 
     result = run_git(
         [
             "log", "-n", "500", "--grep=^Checkpoint-Plan: ",
-            "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)\x1e",
+            "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Checkpoint-Gate-Owed,valueonly,separator=%x1d)\x1e",
         ],
         cwd=str(repo_root),
     )
     if result.returncode != 0:
-        return frozenset()
+        return frozenset(), frozenset()
     ids: set = set()
+    owed: set = set()
     for record in result.stdout.split("\x1e"):
-        subject, _, trailer = record.strip("\r\n").partition("\x1f")
+        subject, _, rest = record.strip("\r\n").partition("\x1f")
+        trailer, _, owed_text = rest.partition("\x1f")
         if any(checkpoint_plan_matches(v, plan) for v in trailer.split("\x1d") if v.strip()):
-            ids.update(checkpoint_row_ids(subject))
-    return frozenset(ids)
+            ids.update(plan_commit_row_ids(subject))
+            owed.update(i.strip() for i in re.split(r"[,\s\x1d]+", owed_text) if i.strip())
+    return frozenset(ids), frozenset(owed & ids)
+
+
+def checkpoint_landed_rows(repo_root: Path, plan: str) -> frozenset:
+    """Row ids named by commits whose ``Checkpoint-Plan:`` trailer names ``plan`` (checkpoint
+    subjects and leading ``<id>:`` subjects alike)."""
+    return checkpoint_landed_state(repo_root, plan)[0]
 
 
 def emit_script(
@@ -5694,16 +5803,19 @@ def emit_script(
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
     # `landed_rows is not None` is the --only-incomplete request: a run text naming no rows
     # still excludes the rows this plan's checkpoints landed.
+    carried_gate_owed: tuple = ()
+    pre_drop_rows = rows
     if landed_rows is not None:
         closed_ids = frozenset(
             e["id"] for e in exclusions if e.get("reason") == "disposition"
         )
         if repo_root is not None:
             spine_ids = {r.id for r in rows} | set(closed_ids)
-            landed_rows = landed_rows | (
-                checkpoint_landed_rows(Path(repo_root), _spec_path_for_prompt(plan_path, repo_root).as_posix())
-                & spine_ids
+            trailer_landed, trailer_owed = checkpoint_landed_state(
+                Path(repo_root), _spec_path_for_prompt(plan_path, repo_root).as_posix()
             )
+            landed_rows = landed_rows | (trailer_landed & spine_ids)
+            carried_gate_owed = tuple(sorted(trailer_owed & spine_ids))
         rows = _drop_landed_rows(rows, landed_rows, closed_ids)
         if not rows:
             raise ValueError("every dispatchable row is already landed; nothing to re-emit")
@@ -5780,6 +5892,14 @@ def emit_script(
         slot_row_ids=frozenset(slot_rows),
     )
 
+    carried_owed_gates = {
+        r.id: cmds
+        for r in pre_drop_rows
+        if r.id in carried_gate_owed
+        for cmds in [_row_build_gate_commands(r, plan_context.row_build_gates)]
+        if cmds
+    }
+
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
     plan_id = _plan_id(plan_text) if plan_text else None
     falsifier = _prime_exit_criterion_falsifier(plan_text) if plan_text else None
@@ -5835,6 +5955,7 @@ def emit_script(
         ),
         precredited_rows=precredited_rows,
         review_only=review_only,
+        carried_gate_owed=carried_owed_gates,
         held_rows=held_rows,
         slot_rows=slot_rows,
         seam=None if review_only else seam_inputs_for(

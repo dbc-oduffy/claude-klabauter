@@ -15,6 +15,8 @@ Legs, in order, each denying once (no hold, sleep or retry):
                workflow did not spawn (read off where the agent's own transcript lives); a
                coordinator:executor running only one-shot `tsc --noEmit` is admitted here and
                bounded by the one-typecheck-per-session rule
+  box-hold     every heavy class, scoped tests included: a live Group EM box hold set by another
+               session denies; the holder is admitted; an absent, expired or malformed record admits
   ram-floor    available RAM minus the reserve of every still-unattributed lease stays at or
                above the machine-local floor; scoped test runs skip it
   session-cap  the session's live heavy and background-shell descendants stay under the
@@ -47,6 +49,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     KEY_SESSION_HEAVY_CAP,
     KEY_VITEST_MAX_WORKERS,
     KEY_WORKER_RSS_CEILING_MB,
+    LEG_BOX_HOLD,
     LEG_IDENTITY,
     LEG_RAM_FLOOR,
     LEG_SESSION_CAP,
@@ -358,6 +361,25 @@ def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -
     )
 
 
+def _read_box_hold():
+    from coordinator_core.group_em import box_hold
+
+    return box_hold.read_hold()
+
+
+def _box_hold_leg(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    hold = _read_box_hold()
+    if hold is None or hold.set_by_session == payload.get("session_id"):
+        return None
+    expires = time.strftime("%H:%M:%SZ", time.gmtime(hold.expires_at))
+    return _deny_text(
+        LEG_BOX_HOLD,
+        "the box is held by %s until %s: %s" % (hold.set_by_session, expires, hold.reason),
+        "Wait for expiry or the holder's clear; inside a workflow row or terminal test, "
+        "report the command as an owed gate (gate-blocker: guard-denied) and continue",
+    )
+
+
 def _ram_leg(config: Mapping[str, Any], primitives) -> Optional[Dict[str, Any]]:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
@@ -579,7 +601,7 @@ def check(
         return None
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
     cls = classify(command, tool_input, cwd)
-    if cls.heavy_class is None and not cls.background:
+    if cls.heavy_class is None and not cls.background and not cls.scoped:
         return None
 
     config = None
@@ -588,7 +610,7 @@ def check(
     if cls.heavy_class is not None and ("vitest" in command.lower() or "jest" in command.lower()):
         config = _read_config()
         cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
-        if cls.heavy_class is None and not cls.background:
+        if cls.heavy_class is None and not cls.background and not cls.scoped:
             return None
 
     try:
@@ -612,6 +634,13 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
         envelope = _identity_leg(payload, command, heavy_name, cls)
         if envelope is not None:
             return denied(LEG_IDENTITY, envelope)
+
+    if (heavy or cls.scoped) and not _bypassed(LEG_BOX_HOLD, payload, command):
+        envelope = _box_hold_leg(payload)
+        if envelope is not None:
+            return denied(LEG_BOX_HOLD, envelope)
+    if not heavy and cls.scoped and not cls.background:
+        return None
 
     if config is None:
         config = _read_config()

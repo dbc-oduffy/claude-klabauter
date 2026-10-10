@@ -2514,6 +2514,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.standing -- COMPUTE_ONLY: reads the nomination record, the
     # session registry and the watch heartbeat; writes nothing.
     "groupem.standing": OpClass.COMPUTE_ONLY,
+    # groupem.box_hold -- MUTATING: writes or removes
+    # <settings-home>/state/group-em/box/hold.json.
+    "groupem.box_hold": OpClass.MUTATING,
     # groupem.idle_report -- COMPUTE_ONLY: idle_report.build_report only
     # reads peer transcripts, the harness registry, and the Group-EM's own
     # offer log; it writes nothing.

@@ -29,6 +29,7 @@ from coordinator_core.ops.dispatch_emit.request_validation import Field, validat
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
+    STATEMENT_ABSENT_PREFIX,
     SizingFireRefused,
     collect_fire_refusals,
     effective_route,
@@ -115,6 +116,16 @@ def gate(
         needs_acceptance = any(
             t["id"] in _ACCEPT_TOUCHPOINTS
             for t in sa.touchpoints(mode, tshirt, sizing.get("route"))
+        )
+    if any(r.startswith(STATEMENT_ABSENT_PREFIX) for r in refusals):
+        # A sizing written exit-criterion-pending: the accept stage authors the statement in-run.
+        others = [r for r in refusals if not r.startswith((STATEMENT_ABSENT_PREFIX, _ACCEPTED_NULL_PREFIX))]
+        if others:
+            return _halt(HALT_REFUSAL, "; ".join(others))
+        return _halt(
+            HALT_TOUCHPOINT,
+            "no exit criterion on record",
+            touchpoint=f"coordinator-invoke sizing.accept_exit_criterion with a statement for {sizing_rel}",
         )
     if accepted_null and needs_acceptance:
         line = next((r for r in refusals if r.startswith(_ACCEPTED_NULL_PREFIX)), "")

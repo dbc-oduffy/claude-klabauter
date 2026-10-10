@@ -155,7 +155,7 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     harness = tmp_path / "harness.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_blockedChunks = [];\n"
+        "_blockedChunks = [], _gateOwed = {};\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
         "let _verifications = [{chunk:'C1', status:'pass'}];\n"
@@ -205,7 +205,7 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
     harness = tmp_path / "harness2.js"
     harness.write_text(
         "let _halted = 'stop rule fired', _incompleteChunks = [], "
-        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _blockedChunks = [];\n"
+        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _blockedChunks = [], _gateOwed = {};\n"
         "let _verifications = [];\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
@@ -239,7 +239,7 @@ def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **override
     harness.write_text(
         f"let _halted = null, _incompleteChunks = {json.dumps(list(incomplete))}, "
         "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _stoppedBy = [], "
-        f"_blockedChunks = {json.dumps(list(blocked))};\n"
+        f"_blockedChunks = {json.dumps(list(blocked))}, _gateOwed = {{}};\n"
         "let _testResult = {status:'pass', tests_run:1, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
         "let _verifications = [];\n"
@@ -395,7 +395,7 @@ def test_terminal_commit_params_carry_script_path_and_session_id():
     assert "script_path" not in wd.completion_return_js(**_kwargs())
 
 
-def _digest_for(tmp_path, *, test_js, verifications_js):
+def _digest_for(tmp_path, *, test_js, verifications_js, gate_owed_js="{}"):
     js = wd.completion_return_js(**_kwargs(review_vars=None, has_commit_request=False, skipped_rows=[]))
     node = _find_node()
     if node is None:
@@ -403,7 +403,7 @@ def _digest_for(tmp_path, *, test_js, verifications_js):
     harness = tmp_path / "skips.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_stoppedBy = [], _blockedChunks = [];\n"
+        "_stoppedBy = [], _blockedChunks = [], _gateOwed = " + gate_owed_js + ";\n"
         f"let _testResult = {test_js};\n"
         f"let _verifications = {verifications_js};\n"
         "let _falsifier = {status:'met', observation:'ok', sidecar_path:'f.md'};\n"
@@ -475,3 +475,40 @@ def test_clean_pass_is_unchanged(tmp_path):
     assert digest["tests"]["skipped"] == []
     assert digest["tests"]["per_row"]["passed"] == 1
     assert digest["tests"]["per_row"]["pass_with_skips"] == []
+
+
+_OWED = "{C2: 'gate-blocker: guard-denied: pnpm typecheck denied'}"
+_UNBUILT = "{status:'pass', tests_run:5, tests_failed:0, build_clean:false, summary:'ok', sidecar_path:'s.md'}"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_gate_owed_row_is_a_deviation_with_its_anchor_and_blocks_completed(tmp_path):
+    digest = _digest_for(tmp_path, test_js=_UNBUILT, verifications_js="[]", gate_owed_js=_OWED)
+    assert wd.validate_digest(digest) == []
+    assert digest["deviations"] == [
+        {"chunk": "C2", "kind": "gate_owed", "anchor": "gate-blocker: guard-denied: pnpm typecheck denied"}
+    ]
+    assert digest["outcome"] == "incomplete" and digest["completed"] is False
+    assert digest["decision_required"] == "owed build gate unverified: C2"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_gate_owed_completes_once_the_terminal_test_reports_build_clean(tmp_path):
+    digest = _digest_for(tmp_path, test_js=_CLEAN, verifications_js="[]", gate_owed_js=_OWED)
+    assert wd.validate_digest(digest) == []
+    assert digest["outcome"] == "completed" and digest["completed"] is True
+    assert digest["decision_required"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_no_owed_gate_leaves_outcome_unchanged(tmp_path):
+    digest = _digest_for(tmp_path, test_js=_UNBUILT, verifications_js="[]")
+    assert digest["outcome"] == "completed" and digest["deviations"] == []
+
+
+def test_gate_owed_var_is_appended_last_and_kind_is_in_the_schema():
+    assert wd.RUNTIME_VARS[-1] == "_gateOwed" and wd.RUNTIME_VARS[13] == "_runBase"
+    assert "gate_owed" in _schema()["properties"]["deviations"]["items"]["properties"]["kind"]["enum"]

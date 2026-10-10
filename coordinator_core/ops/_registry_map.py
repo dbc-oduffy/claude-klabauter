@@ -294,6 +294,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.resolve_addressee":              "coordinator_core.ops.group_em_resolve_addressee",
     "groupem.idle_report":                    "coordinator_core.ops.group_em_idle_report",
     "groupem.standing":                       "coordinator_core.ops.group_em_standing",
+    "groupem.box_hold":                       "coordinator_core.ops.group_em_box_hold",
     "session.work_state":                     "coordinator_core.ops.session_work_state",
     "session.artifact_owner":                 "coordinator_core.ops.session_artifact_owner",
     "session.incident_claim":                 "coordinator_core.ops.session_incident_claim",

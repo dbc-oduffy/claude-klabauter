@@ -41,6 +41,19 @@ def checkpoint_row_ids(subject: str) -> List[str]:
     return [r.strip() for r in m.group("ids").split(",") if r.strip()] if m else []
 
 
+_LEADING_IDS_RE = re.compile(r"^([A-Za-z][\w.\-]*(?:\s*,\s*[A-Za-z][\w.\-]*)*)\s*:(?:\s|$)")
+
+
+def plan_commit_row_ids(subject: str) -> List[str]:
+    """Row ids a plan-trailered commit subject names: a checkpoint subject's ids, else
+    the leading `<id>(, <id>)*:` list; `[]` otherwise. Not a commit-refusal predicate."""
+    ids = checkpoint_row_ids(subject)
+    if ids:
+        return ids
+    m = _LEADING_IDS_RE.match(subject.strip())
+    return [r.strip() for r in m.group(1).split(",")] if m else []
+
+
 def _drop_repo_key(path: str) -> str:
     head, sep, tail = path.partition(":")
     return tail if sep and len(head) > 1 and "/" not in head else path

@@ -176,6 +176,7 @@ def _scoped_test_call(
 
 _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
 HALT_USAGE_LIMIT = "usage_limit"
+HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
 
 
 def _usage_limit_helper_js() -> str:
@@ -295,6 +296,7 @@ def _row_runner_js() -> str:
     return "\n".join(
         [
             "  const _incompleteChunks = [];",
+            f"  const {_emit.GATE_OWED_VAR} = {{}};",
             "  const _blockedChunks = [];",
             "  const _unansweredBriefs = [];",
             "  const _stoppedBy = [];",
@@ -511,7 +513,8 @@ def compose_ask_script(
             "js:_sizingRel",
             " and judge its exit_criterion.statement: is it a done-state this ask can be held to? Rule "
             "it as written (verdict 'ruled', statement omitted), or amend it by returning the better "
-            "one-sentence statement. Return the ruling verbatim as ruling. Never rule on a merge, "
+            "one-sentence statement. When no statement is on record, author one from the sizing's "
+            "intent: verdict 'ruled' with the one-sentence done-state as statement. Return the ruling verbatim as ruling. Never rule on a merge, "
             "publish, push to main or cross-repo commit gate: return verdict 'pm-only' with "
             "pmOnlyGround and pmOnly true ONLY when the matter is important AND urgent AND has no clear "
             "right answer, or needs such an external or irreversible action. Being unsure is not a "
@@ -656,6 +659,10 @@ def compose_ask_script(
     b.append("  await Promise.all(Object.values(_rows));")
     b.append("  await Promise.all(_verifications);")
     b.append("  }")
+    b.append(
+        "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) "
+        f"_halted = {{ halted: {_lit(HALT_DEPENDENTS_UNSTARTED)}, detail: _r }}; }}"
+    )
 
     review_text = _single_exit_review(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]

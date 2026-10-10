@@ -69,6 +69,7 @@ def end_swap(engine_root: Path) -> None:
 def swap_in_progress(engine_root: Path) -> bool:
     """True while a live marker exists; a missing, unreadable, or past-deadline marker reads False."""
     path = os.path.join(os.fspath(engine_root), ".git", MARKER_NAME)
+    # The miss path is the hook hot path: one stat, no open. The contract tests pin this.
     try:
         os.stat(path)
     except OSError:

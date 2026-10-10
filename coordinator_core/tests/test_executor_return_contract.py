@@ -149,3 +149,18 @@ def test_done_summary_constraint_reply_rule_names_own_path():
     )
     assert "Reply EXACTLY `<STATUS>: some/path.md`" in rendered
     assert "`DONE`, `PARTIAL`, or `BLOCKED`" in rendered
+
+
+def test_done_summary_constraint_gate_owed_reply_is_additive_and_default_off():
+    base = done_summary_constraint(output_path_template="p.md", extra_fields=("f",))
+    off = done_summary_constraint(
+        output_path_template="p.md", extra_fields=("f",), gate_owed_reply=False
+    )
+    on = done_summary_constraint(
+        output_path_template="p.md", extra_fields=("f",), gate_owed_reply=True
+    )
+    assert off == base
+    assert on.startswith(base)
+    assert "gate-blocker" not in base
+    assert "`gate-blocker:` line" in on
+    assert "second line of the reply" in on

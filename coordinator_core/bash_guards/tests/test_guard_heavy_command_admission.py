@@ -87,6 +87,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_primitives", h.prims)
     monkeypatch.setattr(guard, "_read_available", h.reading)
     monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [])
+    monkeypatch.setattr(guard, "_read_box_hold", lambda: None)
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
     monkeypatch.setattr(guard, "_working_set_mb", lambda pid: h.working_sets.get(pid))
@@ -265,6 +266,61 @@ class TestScopedCarveOut:
     def test_bare_tier_run_stays_heavy(self, host):
         out = guard.check(_payload("python -m pytest", agent_id="deadbeef0123", agent_type="coordinator:executor"))
         assert out is not None and "identity" in _reason(out)
+
+
+class TestBoxHoldLeg:
+    SCOPED = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
+
+    @staticmethod
+    def _hold(session="sess-em", expires=None):
+        from coordinator_core.group_em.box_hold import Hold
+
+        t = time.time()
+        return Hold(session, "swap pressure", t, t + 600 if expires is None else expires)
+
+    def test_a_workflow_test_runner_scoped_test_is_denied_under_a_live_hold(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
+        out = guard.check(_payload(self.SCOPED, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        text = _reason(out)
+        assert "box-hold" in text and "sess-em" in text and "swap pressure" in text
+        assert "gate-blocker: guard-denied" in text
+        assert host.ram_reads == 0
+
+    def test_the_holder_session_is_admitted(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold("sess-heavy"))
+        assert guard.check(_payload(self.SCOPED)) is None
+
+    def test_an_expired_or_malformed_record_admits(self, host, monkeypatch, tmp_path):
+        from coordinator_core.group_em import box_hold
+
+        monkeypatch.undo()
+        monkeypatch.setattr(guard, "_read_config", lambda: host.config)
+        monkeypatch.setattr(guard, "_primitives", host.prims)
+        monkeypatch.setattr(guard, "_read_available", host.reading)
+        monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
+        monkeypatch.setattr(leases, "leases_dir", lambda: tmp_path / "leases")
+        monkeypatch.setattr(box_hold, "_hold_path", lambda directory=None: tmp_path / "hold.json")
+        (tmp_path / "hold.json").write_text("{not json", encoding="utf-8")
+        assert guard.check(_payload(self.SCOPED)) is None
+        (tmp_path / "hold.json").write_text(
+            json.dumps({"set_by_session": "x", "reason": "r", "set_at": 1, "expires_at": 2}), encoding="utf-8"
+        )
+        assert guard.check(_payload(self.SCOPED)) is None
+
+    def test_a_light_command_never_reads_the_hold(self, host, monkeypatch):
+        def boom():
+            raise AssertionError("hold read for a light command")
+
+        monkeypatch.setattr(guard, "_read_box_hold", boom)
+        assert guard.check(_payload("git status")) is None
+
+    def test_the_bypass_key_admits_and_logs(self, host, monkeypatch, tmp_path):
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
+        env = {OVERRIDE_KEYS["box-hold"]: "1"}
+        assert guard.check(_payload(self.SCOPED, env=env, cwd=tmp_path)) is None
+        logs = list((tmp_path / ".git" / "coordinator-sessions").rglob("overrides.log"))
+        assert OVERRIDE_KEYS["box-hold"] in "".join(p.read_text(encoding="utf-8") for p in logs)
 
 
 class TestSessionCapLeg:

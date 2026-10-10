@@ -543,6 +543,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.resolve_addressee":              "none",
     "groupem.idle_report":                    "none",
     "groupem.standing":                       "none",
+    "groupem.box_hold":                       "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
     # the case this table's own header comment names for "common_dir"

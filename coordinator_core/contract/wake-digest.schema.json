@@ -183,7 +183,7 @@
             "type": "string",
             "enum": [
               "partial", "blocked", "no_answer", "stop_rule", "not_started",
-              "already_done", "routed_out", "held"
+              "already_done", "routed_out", "held", "gate_owed"
             ]
           },
           "anchor": { "type": "string", "maxLength": 300 }

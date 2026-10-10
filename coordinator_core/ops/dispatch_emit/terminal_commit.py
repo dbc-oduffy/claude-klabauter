@@ -75,6 +75,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+from coordinator_core.ops.dispatch_emit import gate_owed  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
@@ -1050,12 +1051,6 @@ def _partial_chunks(
     return out
 
 
-_GATE_BLOCKER_RE = re.compile(
-    r"^[ \t>#-]*[*_`]{0,2}gate-blocker[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*outside-footprint\b(?P<rest>[^\n]*)",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
 def _reviewed_files_if_passed(inline_review: dict) -> Optional[set]:
     """The files the review wave covered (``prep.slice_files``), or ``None`` when the
     review did not pass: delivery verdict PASS, no unresolved finding, no confinement
@@ -1095,7 +1090,7 @@ def _regradable_chunks(
         text = _read_rel(worktree_root, chunk.report)
         if text is None or not _PARTIAL_REPORT_RE.search(text):
             continue
-        blocker = _GATE_BLOCKER_RE.search(text)
+        blocker = gate_owed.match(text, gate_owed.KIND_OUTSIDE_FOOTPRINT)
         if blocker is None:
             continue
         prefix_files = _own_prefix_files(worktree_root, chunk, report_cache)
@@ -1103,7 +1098,7 @@ def _regradable_chunks(
             continue
         files = set(chunk.paths) | set(prefix_files)
         if files and files <= reviewed:
-            out[chunk.id] = f"outside-footprint{blocker.group('rest').rstrip()}"[:_UNDONE_CAP]
+            out[chunk.id] = f"outside-footprint{blocker[1].rstrip()}"[:_UNDONE_CAP]
     return out
 
 

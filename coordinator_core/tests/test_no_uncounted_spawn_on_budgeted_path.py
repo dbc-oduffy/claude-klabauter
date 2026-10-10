@@ -456,6 +456,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_standing.py",
         ("_groupem_standing",),
     ),
+    "groupem.box_hold": (
+        "coordinator_core/ops/group_em_box_hold.py",
+        ("_groupem_box_hold",),
+    ),
     "groupem.stamp": (
         "coordinator_core/ops/group_em_stamp.py",
         ("_groupem_stamp",),

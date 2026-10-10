@@ -25,6 +25,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.ops.dispatch_emit.gate_owed import GATE_OWED_VAR
+
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wake-digest.schema.json"
 
 # The script-level arrays and flag C12 declares; completion_return_js references only
@@ -52,6 +54,7 @@ RUNTIME_VARS = (
     "_unusableChecks",
     "_reviews",
     "_runBase",
+    GATE_OWED_VAR,
 )
 
 # An observation that says the criterion is not met, or that what matched was the
@@ -519,9 +522,16 @@ def completion_return_js(
 
     routed_out_var, skipped_done_var = RUNTIME_VARS[9], RUNTIME_VARS[10]
     routed_out_or = f" || {routed_out_var}.length" if predispatch is not None else ""
+    gate_owed_var = RUNTIME_VARS[14]
+    owed_ids_js = f"Object.keys({gate_owed_var})"
+    owed_unverified_js = (
+        f"({owed_ids_js}.length && !({test_var} && {test_var}.build_clean === true))"
+        if test_var is not None
+        else f"{owed_ids_js}.length"
+    )
     outcome_expr = (
         f"({RUNTIME_VARS[4]} ? 'halted' : "
-        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length{routed_out_or}) ? 'incomplete' : 'completed'))"
+        f"(({RUNTIME_VARS[0]}.length || {RUNTIME_VARS[1]}.length || {RUNTIME_VARS[3]}.length{routed_out_or} || {owed_unverified_js}) ? 'incomplete' : 'completed'))"
     )
     completed_expr = f"({outcome_expr} === 'completed')"
 
@@ -556,7 +566,8 @@ def completion_return_js(
         + (f"({integration_var} && {integration_var}.rebuild_decision ? 'rebuild decision raised' : " if review_vars else "(")
         + (f"({integration_var} && {integration_var}.brief_conformance && {integration_var}.brief_conformance.unmet ? 'brief items unmet' : " if review_vars else "(")
         + f"({RUNTIME_VARS[0]}.length ? 'incomplete chunks' : "
-        + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null))"
+        + f"({owed_unverified_js} ? 'owed build gate unverified: ' + {owed_ids_js}.join(', ') : "
+        + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null)))"
         + ")))))))"
         + (")" if seam else "")
     )
@@ -569,7 +580,7 @@ def completion_return_js(
         f", ...{skipped_done_var}, ...{routed_out_var}" if predispatch is not None else ""
     )
     deviation_ids_expr = (
-        f"[...new Set([...{RUNTIME_VARS[0]}, ...{RUNTIME_VARS[1]}, ...{RUNTIME_VARS[3]}{pre_ids}])]"
+        f"[...new Set([...{RUNTIME_VARS[0]}, ...{RUNTIME_VARS[1]}, ...{RUNTIME_VARS[3]}{pre_ids}, ...{owed_ids_js}])]"
     )
     deviation_kind_expr = (
         f"({RUNTIME_VARS[3]}.includes(id) ? 'not_started' : "
@@ -582,14 +593,18 @@ def completion_return_js(
             f"({skipped_done_var}.includes(id) ? 'already_done' : "
             f"({routed_out_var}.includes(id) ? 'routed_out' : {deviation_kind_expr}))"
         )
-    deviation_anchor_expr = "''"
+    deviation_kind_expr = f"({gate_owed_var}[id] !== undefined ? 'gate_owed' : {deviation_kind_expr})"
+    deviation_anchor_expr = (
+        f"({gate_owed_var}[id] !== undefined ? _cap({gate_owed_var}[id], "
+        f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
+    )
     # A row its plan's halt kept from starting -- a seam drift at a wave gate,
     # or a sibling row's stop rule -- is held, and names the halt; not
     # `not_started`, which reads as a run that ran out.
     deviation_kind_expr = f"({PLAN_HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"
     deviation_anchor_expr = (
         f"({PLAN_HELD_VAR}[id] !== undefined ? _cap({PLAN_HELD_VAR}[id], "
-        f"{_maxlength(schema, 'deviations[].anchor')}) : '')"
+        f"{_maxlength(schema, 'deviations[].anchor')}) : {deviation_anchor_expr})"
     )
     if held:
         deviation_kind_expr = f"({HELD_VAR}[id] !== undefined ? 'held' : {deviation_kind_expr})"

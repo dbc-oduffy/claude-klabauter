@@ -32,6 +32,7 @@ _TSHIRT_ARM = {
 _FIREABLE_STATUS = ("sized", "routed")
 # Literal `_scaffold_sizing` in coordinator-doc-new writes for intent and premise.evidence.
 _SCAFFOLD_PLACEHOLDER = "PLACEHOLDER"
+STATEMENT_ABSENT_PREFIX = "`exit_criterion.statement` is absent"
 
 
 class SizingFireRefused(ValueError):
@@ -154,7 +155,7 @@ def collect_fire_refusals(
     ec = sizing.get("exit_criterion")
     ec = ec if isinstance(ec, Mapping) else {}
     if not ec.get("statement"):
-        out.append("`exit_criterion.statement` is absent — nothing to hand off as the exit criterion")
+        out.append(f"{STATEMENT_ABSENT_PREFIX} — nothing to hand off as the exit criterion")
     if lacks_human_acceptance(ec.get("accepted")) and not _acceptance_skipped(sizing):
         out.append(
             "`exit_criterion.accepted` is null — accept it first: "

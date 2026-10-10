@@ -48,6 +48,14 @@ def test_gated_row_brief_reads_the_baseline_at_runtime():
     assert '_gateBaselineText(["tsc --noEmit"])' in script
     assert "adds no NEW error" in script or "no NEW error" in script
     assert "gate-blocker: outside-footprint" in script
+    assert "gate-blocker: guard-denied: <command> (<guard>)" in script
+    assert "second line of your reply" in script
+    assert "second line of the reply" in script
+
+
+def test_ungated_row_reply_contract_has_no_gate_owed_line():
+    script = _compose([_row("A", "a.py")])
+    assert "second line of the reply" not in script
 
 
 def test_ungated_plan_emits_no_baseline_machinery():

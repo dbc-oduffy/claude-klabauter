@@ -126,6 +126,7 @@ def done_summary_constraint(
     *,
     output_path_template: str,
     extra_fields: Sequence[str] = (),
+    gate_owed_reply: bool = False,
 ) -> str:
     """Render the DONE-summary constraint: a one-screen summary at
     `output_path_template` carrying the invariant spine (status enum and
@@ -151,6 +152,12 @@ def done_summary_constraint(
     2026-09-11).
     """
     fields_text = ", ".join(extra_fields)
+    reply_tail = (
+        " When the summary carries a `gate-blocker:` line, add that line "
+        "verbatim as a second line of the reply."
+        if gate_owed_reply
+        else ""
+    )
     return (
         f"Write a one-screen summary to `{output_path_template}` with: "
         f"status (DONE | BLOCKED | PARTIAL), {fields_text}. Do not include "
@@ -158,4 +165,5 @@ def done_summary_constraint(
         f"this summary. Reply EXACTLY `<STATUS>: {output_path_template}`, "
         "where <STATUS> is the status your summary records — `DONE`, "
         "`PARTIAL`, or `BLOCKED`."
+        f"{reply_tail}"
     )

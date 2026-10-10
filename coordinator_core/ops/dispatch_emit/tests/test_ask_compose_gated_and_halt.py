@@ -54,5 +54,16 @@ def test_manifest_schema_carries_optional_gated():
     assert "gated" not in ask_compose._MANIFEST_SCHEMA["required"]
 
 
+def test_unstarted_dependents_halt_before_the_review(monkeypatch):
+    script = _script(monkeypatch)
+    halt = (
+        "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) "
+        f"_halted = {{ halted: '{ask_compose.HALT_DEPENDENTS_UNSTARTED}', detail: _r }}; }}"
+    )
+    assert script.count(halt) == 1
+    assert script.index("await Promise.all(_verifications);") < script.index(halt) < script.index("phase('review')")
+    assert "function _heldDependentsReason()" in script
+
+
 def test_script_stays_under_byte_cap(monkeypatch):
     assert len(_script(monkeypatch).encode("utf-8")) <= emit._WORKFLOW_SCRIPT_BYTE_CAP

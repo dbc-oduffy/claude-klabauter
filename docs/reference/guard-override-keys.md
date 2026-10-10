@@ -463,6 +463,7 @@ rationale.
 | `COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD` | `grep-via-bash` (advisory-only leg, `check`) | `bash_guards/guard_grep_via_bash.py` |
 | `COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION` | `check-test-suite-invocation` | `bash_guards/check_test_suite_invocation.py` |
 | `COORDINATOR_ALLOW_HEAVY_IDENTITY` | `guard-heavy-command-admission` identity leg | `bash_guards/guard_heavy_command_admission.py` |
+| `COORDINATOR_ALLOW_HEAVY_BOX_HOLD` | `guard-heavy-command-admission` box-hold leg | `bash_guards/guard_heavy_command_admission.py` |
 | `COORDINATOR_ALLOW_HEAVY_RAM_FLOOR` | `guard-heavy-command-admission` ram-floor leg | `bash_guards/guard_heavy_command_admission.py` |
 | `COORDINATOR_ALLOW_HEAVY_SESSION_CAP` | `guard-heavy-command-admission` session-cap leg | `bash_guards/guard_heavy_command_admission.py` |
 | `COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL` (Bash leg) | `block-dev-repo-sentinel-removal` | `bash_guards/block_dev_repo_sentinel_removal.py` |

@@ -94,6 +94,30 @@ def test_a_checkpoint_without_the_guard_lines_is_refused(repo):
         gcommit.commit_paths(repo, ["src/a.py"], "checkpoint(wave 1): 1 rows — A1")
 
 
+@pytest.mark.parametrize(
+    "subject, ids",
+    [
+        ("C1: TYPES add it", ["C1"]),
+        ("C2, C9, C3: land", ["C2", "C9", "C3"]),
+        ("checkpoint(wave 1): 2 rows — A1, B1", ["A1", "B1"]),
+        ("plan(x): note", []),
+        ("mark 3 rows coded (abc)", []),
+        ("review trail: stuff", []),
+    ],
+)
+def test_plan_commit_row_ids(subject, ids):
+    from coordinator_core.git.checkpoint_guard import plan_commit_row_ids
+
+    assert plan_commit_row_ids(subject) == ids
+
+
+def test_a_leading_id_subject_is_not_a_checkpoint_refusal(repo):
+    from coordinator_core.git.checkpoint_guard import checkpoint_refusal, checkpoint_row_ids
+
+    assert checkpoint_row_ids("C1: do it") == []
+    assert checkpoint_refusal(repo, repo / ".git", None, "C1: do it", []) is None
+
+
 def test_an_ordinary_commit_is_untouched(repo):
     _write(repo, "src/a.py", "v1\n")
     assert gcommit.commit_paths(repo, ["src/a.py"], "fix a")

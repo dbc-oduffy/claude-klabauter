@@ -12,12 +12,13 @@ from coordinator_core.bash_guards import _heavy_admission_contract as c
 
 def test_guard_name_and_legs():
     assert c.GUARD_NAME == "guard-heavy-command-admission"
-    assert c.LEGS == ("identity", "ram-floor", "session-cap")
+    assert c.LEGS == ("identity", "box-hold", "ram-floor", "session-cap")
 
 
 def test_override_keys_one_per_leg():
     assert c.OVERRIDE_KEYS == {
         "identity": "COORDINATOR_ALLOW_HEAVY_IDENTITY",
+        "box-hold": "COORDINATOR_ALLOW_HEAVY_BOX_HOLD",
         "ram-floor": "COORDINATOR_ALLOW_HEAVY_RAM_FLOOR",
         "session-cap": "COORDINATOR_ALLOW_HEAVY_SESSION_CAP",
     }
