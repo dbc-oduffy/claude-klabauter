@@ -581,6 +581,9 @@ def fire_row_for_audience(row: CorpusRow, audience: str) -> GuardCapture:
         scratch_dir = Path(scratch)
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
+            # A module-scoped caller runs outside the function-scoped real-home quarantine; a
+            # stateful guard (heavy admission's leases and log) must still never reach the real home.
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(scratch_dir / "settings-home"))
             extra: Dict[str, Any] = dict(row.setup(scratch_dir, mp)) if row.setup else {}
             cmd = extra.pop(_CMD_OVERRIDE_KEY, row.input)
             cwd = extra.pop(_CWD_OVERRIDE_KEY, str(scratch_dir))
@@ -618,6 +621,9 @@ def fire_row(row: CorpusRow) -> GuardCapture:
             # is what actually makes the per-cell isolation claim below true
             # for that guard, rather than relying on the fresh payload id.
             mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
+            # A module-scoped caller runs outside the function-scoped real-home quarantine; a
+            # stateful guard (heavy admission's leases and log) must still never reach the real home.
+            mp.setenv("COORDINATOR_SETTINGS_HOME", str(scratch_dir / "settings-home"))
             extra: Dict[str, Any] = dict(row.setup(scratch_dir, mp)) if row.setup else {}
             cmd = extra.pop(_CMD_OVERRIDE_KEY, row.input)
             cwd = extra.pop(_CWD_OVERRIDE_KEY, str(scratch_dir))

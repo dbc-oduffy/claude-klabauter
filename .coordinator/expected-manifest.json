@@ -2039,8 +2039,8 @@
     "coordinator_core/__main__.py": "c6fa412fc7c13b32bf0106cc0b1acba644c5db81",
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
-    "coordinator_core/_engine_published_at": "a85a71cdc1ff0e0f5f54d9dd62fe710c770f82e4",
-    "coordinator_core/_engine_stamp": "338aed1e7bd76fb56d0f05f8e97a2278d5b7d646",
+    "coordinator_core/_engine_published_at": "108040b82217425b8140f507a03f9240b69a301e",
+    "coordinator_core/_engine_stamp": "32fa052d49a0d22d61b4b4d346ff3fb3f7a597f5",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2210,7 +2210,7 @@
     "coordinator_core/bash_guards/tests/conftest.py": "2104980eb5dff86e85e961213310222e59088d0d",
     "coordinator_core/bash_guards/tests/data/check1_reset_prose_false_positive.cmd.txt": "98c33e4ede42d0b7aa3225facaf0ddce051b3ab3",
     "coordinator_core/bash_guards/tests/guard_message_capture.py": "4d73fccd94386ab562aeb32a9fe6ef6ba2bb097d",
-    "coordinator_core/bash_guards/tests/guard_message_corpus.py": "2d26f6155244d699a1e593bf38cde7c827fd1cb6",
+    "coordinator_core/bash_guards/tests/guard_message_corpus.py": "efc57c14dd53d97f5e6b311484114cbc13347228",
     "coordinator_core/bash_guards/tests/guard_message_exemptions.py": "85f17b567a110d1af1ee2d993ab5de595016c0ed",
     "coordinator_core/bash_guards/tests/test_ac5_bash_flip_runtime_probes.py": "ff2b4b0694cfc623b16cf95e894e2db53a80434f",
     "coordinator_core/bash_guards/tests/test_advisory_fire_counter.py": "33e4df6f31a02c6500aac48c14c7e4acea24fca9",
@@ -7203,5 +7203,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "aac72dae4d2da26b9ad1c2b333a1f0381c708020"
+  "source_head": "c132e8d01639b1d4263592e50c16bf56da6362d2"
 }
