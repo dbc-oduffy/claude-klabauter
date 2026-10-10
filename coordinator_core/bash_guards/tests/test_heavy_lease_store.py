@@ -100,11 +100,13 @@ def test_default_dir_under_settings_home(tmp_path, monkeypatch):
     assert len(store.live_leases()) == 1
 
 
-def _tree(pid, ctime, stems=("bash", "node")):
+def _tree(pid, ctime, heavy=("node",)):
+    """An orphan tree under a bash root whose heavy processes start in the order given."""
     from coordinator_core.bash_guards._session_census import OrphanTree
 
     root = ProcRow(pid, 999, ctime, "bash.exe")
-    return OrphanTree(root, frozenset(stems), (ProcRow(pid + 1, pid, ctime + 1, "node.exe"),))
+    rows = tuple(ProcRow(pid + 1 + i, pid, ctime + 1 + i, f"{stem}.exe") for i, stem in enumerate(heavy))
+    return OrphanTree(root, rows)
 
 
 def _open(launch, cls="typecheck", session=(1, 10), at=None):
@@ -124,7 +126,12 @@ class TestClaimOrphans:
 
     def test_a_tree_without_an_image_of_the_class_is_not_claimed(self, tmp_path):
         write_lease(_open(launch=100, cls="typecheck"), tmp_path)
-        assert claim_orphans([_tree(40, 110, stems=("bash", "python"))], window=60, directory=tmp_path) == 0
+        assert claim_orphans([_tree(40, 110, heavy=("python",))], window=60, directory=tmp_path) == 0
+
+    def test_a_tree_whose_command_is_another_class_is_not_claimed_for_a_later_image(self, tmp_path):
+        # Live 2026-10-10: a typecheck lease whose tsc had exited claimed a peer's UE python run.
+        write_lease(_open(launch=100, cls="typecheck"), tmp_path)
+        assert claim_orphans([_tree(40, 110, heavy=("python", "node"))], window=60, directory=tmp_path) == 0
 
     def test_two_leases_take_two_trees_in_launch_order(self, tmp_path):
         a = write_lease(_open(launch=100, session=(1, 10)), tmp_path)

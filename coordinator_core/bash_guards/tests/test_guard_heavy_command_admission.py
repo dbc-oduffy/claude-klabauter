@@ -747,6 +747,17 @@ class TestWorkflowSpawnSignal:
         (subagents / "agent-a1.jsonl").write_text("", encoding="utf-8")
         assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a1"}) == []
 
+    def test_a_verifier_row_logs_its_run_from_the_parent_session_transcript(self, tmp_path):
+        """The harness hands a subagent its parent session's transcript, so a path-only parse
+        logged every verifier row with workflow_run null and no run could clear the flip gate."""
+        transcript, subagents = self._session(tmp_path)
+        run = subagents / "workflows" / "wf_real"
+        run.mkdir(parents=True)
+        (run / "agent-a3.jsonl").write_text("", encoding="utf-8")
+        payload = {"transcript_path": str(transcript), "agent_id": "a3"}
+        assert guard._logged_run(dict(payload, agent_type="coordinator:test-runner")) == "wf_real"
+        assert guard._logged_run(dict(payload, agent_type="coordinator:executor")) is None
+
     def test_a_transcript_in_neither_place_fails_closed(self, tmp_path):
         transcript, _ = self._session(tmp_path)
         assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a9"}) == ["unresolved"]

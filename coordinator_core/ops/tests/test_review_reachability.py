@@ -113,3 +113,21 @@ def test_result_has_only_schema_keys_and_writes_nothing(tmp_path):
 def test_entry_kinds_filter(tmp_path):
     _, _, res = _run(tmp_path, "wired", entry_kinds=["page"])
     assert [e["kind"] for e in res["entries"]] == ["page"]
+
+
+def test_python_class_is_not_an_entry_point(tmp_path):
+    root = build("unwired", tmp_path / "k")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    _write(root, "lib/census.py", "class Tree:\n    pass\n\n\ndef trees():\n    return [Tree()]\n")
+    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["lib/census.py"]})
+    assert _verdicts(res) == {"lib/census.py:trees": "unreachable"}
+
+
+def test_tracked_declared_write_unchanged_in_range_adds_nothing(tmp_path):
+    root = build("unwired", tmp_path / "u")
+    _write(root, "lib/old.py", "def legacy():\n    return 1\n")
+    _git(root, "add", "lib/old.py")
+    _git(root, "commit", "-q", "-m", "old")
+    base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
+    res = _handler({"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["lib/old.py"]})
+    assert res["entries"] == []

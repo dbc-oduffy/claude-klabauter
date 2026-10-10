@@ -188,6 +188,40 @@ def test_divergence_by_an_unstamped_commit_is_refused(origin_and_clone, tmp_path
     assert "diverged" in result.reason
 
 
+def _peer_publish_on_origin(origin: Path, subject: str) -> None:
+    _git(origin, "checkout", "candidate")
+    (origin / "published").write_text("peer bytes", encoding="utf-8")
+    _git(origin, "add", "published")
+    _git(origin, "commit", "-m", subject)
+    _git(origin, "checkout", "parked")
+
+
+def test_fast_forward_over_a_peer_publish_the_source_lacks_is_refused(origin_and_clone, tmp_path):
+    # Live 2026-10-10: two boxes each fast-forwarded over the other's publish and reverted it.
+    origin, clone = origin_and_clone
+    src, peer = _source_with(tmp_path, merged=False)
+    _peer_publish_on_origin(origin, "percolate publish [source-head {0}]".format(peer[:12]))
+
+    before = _git(clone, "rev-parse", "HEAD")
+    out, err = _capture()
+    result = refresh_dest_from_origin(clone, out=out, err=err, source_root=src)
+
+    assert not result.ok
+    assert peer[:12] in result.reason
+    assert _git(clone, "rev-parse", "HEAD") == before
+
+
+def test_fast_forward_over_a_peer_publish_the_source_contains_proceeds(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    src, peer = _source_with(tmp_path, merged=True)
+    _peer_publish_on_origin(origin, "percolate publish [source-head {0}]".format(peer[:12]))
+
+    out, err = _capture()
+    result = refresh_dest_from_origin(clone, out=out, err=err, source_root=src)
+
+    assert result.ok and result.fast_forwarded
+
+
 def test_ahead_only_clone_passes(origin_and_clone):
     clone = origin_and_clone[1]
     _commit(clone, "unpushed-round")

@@ -56,7 +56,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.taskstop_reaper":                 "none",
     "hooks.nudge_unauthorized_handoff":      "none",
     "hooks.nudge_named_agent_report_delivery": "none",
-    "hooks.flag_em_poll_in_flight": "none",
     "hooks.postuse_advisory_dispatch":       "none",
     "hooks.nudge_autonomous_askuserquestion": "none",
     "hooks.sessionend_archive_session": "none",
