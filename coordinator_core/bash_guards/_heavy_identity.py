@@ -71,5 +71,6 @@ def identity_verdict(
     if agent_type not in allowlist:
         return IdentityVerdict(False, f"agent_type {agent_type} not on the heavy-command allow-list")
     if workflow_runs:
-        return IdentityVerdict(False, f"agent_type {agent_type} inside a live workflow run")
+        run = sorted(workflow_runs)[0]
+        return IdentityVerdict(False, f"agent_type {agent_type} spawned by workflow run {run}")
     return _ALLOW

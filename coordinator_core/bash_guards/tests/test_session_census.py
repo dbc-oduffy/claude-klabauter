@@ -60,7 +60,7 @@ def test_unresolvable_anchor_inputs():
 
 def test_census_counts_heavy_and_shells_and_stops_at_nested_claude():
     rows = [R(1, 0, 10, "claude.exe"), R(2, 1, 20, "bash"), R(3, 2, 30, "node.exe"),
-            R(4, 1, 25, "pwsh"), R(5, 1, 26, "claude.exe"), R(6, 5, 40, "node.exe"),
+            R(4, 1, 25, "pwsh"), R(5, 4, 26, "claude.exe"), R(6, 5, 40, "node.exe"),
             R(7, 1, 27, "conhost.exe")]
     p = _Prims(rows)
     c = session_census(rows[0], p)
@@ -68,11 +68,24 @@ def test_census_counts_heavy_and_shells_and_stops_at_nested_claude():
     assert sorted(r.pid for r in c.shells) == [2, 4]
 
 
-def test_orphan_attributed_by_image_and_ctime():
+def test_mcp_and_language_servers_are_never_counted():
+    # The live Windows shape: cmd-wrapped MCP, a native MCP exe, an LSP, and the Bash tool shell.
+    rows = [R(1, 0, 10, "claude.exe"),
+            R(2, 1, 11, "cmd.exe"), R(3, 2, 12, "node.exe"), R(4, 3, 13, "cmd.exe"), R(5, 4, 14, "node.exe"),
+            R(6, 1, 15, "notebooklm-mcp.exe"), R(7, 6, 16, "python.exe"),
+            R(8, 1, 17, "pyright-langserver.exe"), R(9, 8, 18, "python.exe"), R(10, 9, 19, "node.exe"),
+            R(11, 1, 20, "node.exe"),
+            R(12, 1, 21, "bash.exe"), R(13, 12, 22, "bash.exe"), R(14, 13, 23, "node.exe")]
+    c = session_census(rows[0], _Prims(rows))
+    assert [r.pid for r in c.heavy] == [14]
+    assert [r.pid for r in c.shells] == [12]
+
+
+def test_an_orphan_is_not_charged_to_the_session():
     rows = [R(1, 0, 10, "claude.exe"), R(8, 999, 50, "vitest"), R(9, 999, 5, "node"),
             R(10, 999, 60, "notepad")]
     c = session_census(rows[0], _Prims(rows))
-    assert [r.pid for r in c.heavy] == [8]
+    assert c.heavy == ()
 
 
 def test_reused_pid_child_not_descended():

@@ -18,12 +18,16 @@ HEAVY_IMAGES = frozenset(
      "ubt", "runuat"}
 )
 SHELL_IMAGES = frozenset({"bash", "sh", "zsh", "pwsh", "powershell", "cmd"})
+# The harness runs Bash/PowerShell tool commands under one of these as a direct child of claude.
+# MCP and language servers are direct children too, but never under these (Windows wraps a
+# stdio MCP server in cmd.exe, which is why cmd is not a tool shell).
+TOOL_SHELL_IMAGES = frozenset({"bash", "sh", "zsh", "pwsh", "powershell"})
 _MAX_HOPS = 64
 
 
 @dataclass(frozen=True)
 class SessionCensus:
-    """heavy and shells are live descendants (and attributed orphans for heavy) of the anchor."""
+    """shells are the anchor's live tool shells; heavy is the heavy-image processes under them."""
 
     anchor: ProcRow
     heavy: Sequence[ProcRow]
@@ -85,36 +89,39 @@ def session_census(
     snapshot: Optional[Sequence[ProcRow]] = None,
     exclude_pids: Collection[int] = (),
 ) -> Optional[SessionCensus]:
-    """Live heavy and shell descendants of anchor; None when the process table is unreadable.
+    """The session's tool shells and the heavy processes under them; None when the process table
+    is unreadable.
 
-    Descent stops at a nested claude. A heavy-image row whose ppid is absent from the snapshot
-    and whose ctime is after the anchor's is attributed to the session. A child older than its
-    parent is a reused pid and is not descended. exclude_pids drops the caller's own wrapper
-    chain from the counts.
+    Only the anchor's direct tool-shell children (TOOL_SHELL_IMAGES) are descended, so MCP and
+    language servers, which the harness starts as other direct children, are never counted.
+    shells is those tool shells; heavy is every heavy-image process below them. Descent stops at
+    a nested claude. A child older than its parent is a reused pid and is not descended.
+    exclude_pids drops the caller's own wrapper chain from the counts.
+
+    TRAP: a process whose parent has exited cannot be attributed to a session on Windows, so it is
+    not counted. Counting every such orphan on the box charged other sessions' leftovers to this one.
     """
     rows = snapshot if snapshot is not None else primitives.snapshot()
     if rows is None:
         return None
-    present = {r.pid for r in rows}
     children: Dict[int, List[ProcRow]] = {}
     for r in rows:
         children.setdefault(r.ppid, []).append(r)
 
     skip = set(exclude_pids)
-    seen = {anchor.pid}
     heavy: List[ProcRow] = []
     shells: List[ProcRow] = []
-
-    def classify(row: ProcRow) -> None:
-        if row.pid in skip:
-            return
-        stem = _stem(row.name)
-        if stem in SHELL_IMAGES:
-            shells.append(row)
-        elif stem in HEAVY_IMAGES:
-            heavy.append(row)
-
-    stack = [anchor]
+    tool_shells = [
+        c for c in children.get(anchor.pid, ())
+        if c.ctime >= anchor.ctime and _stem(c.name) in TOOL_SHELL_IMAGES
+    ]
+    seen = {anchor.pid}
+    stack: List[ProcRow] = []
+    for shell in tool_shells:
+        seen.add(shell.pid)
+        if shell.pid not in skip:
+            shells.append(shell)
+        stack.append(shell)
     while stack:
         cur = stack.pop()
         for child in children.get(cur.pid, ()):
@@ -123,14 +130,8 @@ def session_census(
             seen.add(child.pid)
             if _is_claude(child.name):
                 continue
-            classify(child)
+            if child.pid not in skip and _stem(child.name) in HEAVY_IMAGES:
+                heavy.append(child)
             stack.append(child)
-
-    for r in rows:
-        if r.pid in seen or r.ppid in present or r.ctime <= anchor.ctime:
-            continue
-        if _stem(r.name) in HEAVY_IMAGES and r.pid not in skip:
-            seen.add(r.pid)
-            heavy.append(r)
 
     return SessionCensus(anchor=anchor, heavy=tuple(heavy), shells=tuple(shells))

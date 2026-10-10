@@ -11,8 +11,8 @@ What this guard is, in four points (DoE tripwire A-BOX-CAP-COUNTS-COMMANDS-NOT-A
   4. A caller's claim of need never admits. No justification, priority or "light" field is read.
 
 Legs, in order, each denying once (no hold, sleep or retry):
-  identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt with no
-               live workflow run
+  identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt that a
+               workflow did not spawn (read off where the agent's own transcript lives)
   ram-floor    available RAM minus the reserve of every still-unattributed lease stays at or
                above the machine-local floor; scoped test runs skip it
   session-cap  the session's live heavy and background-shell descendants stay under the
@@ -72,17 +72,42 @@ def _read_config() -> Mapping[str, Any]:
     return machine_resolver.merged_flat_registry()
 
 
-def _live_workflow_runs(session_id: Optional[str]) -> List[str]:
-    if not isinstance(session_id, str) or not session_id:
+_UNRESOLVED_RUN = "unresolved"
+
+
+def _workflow_runs_of(payload: Mapping[str, Any]) -> List[str]:
+    """The workflow run that spawned this subagent: [] for an Agent-tool dispatch, [run_id] for a
+    workflow spawn, [_UNRESOLVED_RUN] when its transcript is in neither place (fails closed).
+
+    The harness keeps an Agent-tool dispatch's transcript at
+    <session>/subagents/agent-<id>.jsonl and a workflow agent's at
+    <session>/subagents/workflows/<run_id>/agent-<id>.jsonl, so this is a per-agent fact that a
+    finished run cannot leave stale. Direct stats plus one listing of the session's few run dirs.
+    """
+    transcript = payload.get("transcript_path")
+    agent_id = payload.get("agent_id")
+    if not isinstance(transcript, str) or not transcript or not isinstance(agent_id, str):
+        return [_UNRESOLVED_RUN]
+    if not agent_id or any(c in agent_id for c in ("/", "\\", "\0")) or ".." in agent_id:
+        return [_UNRESOLVED_RUN]
+    parts = transcript.replace("\\", "/").split("/")
+    if "subagents" in parts:
+        below = parts[parts.index("subagents") + 1:]
+        if below[:1] == ["workflows"] and len(below) > 1:
+            return [below[1]]
         return []
+    stem = os.path.splitext(os.path.basename(transcript))[0]
+    subagents = os.path.join(os.path.dirname(transcript), stem, "subagents")
+    name = "agent-%s.jsonl" % agent_id
+    if os.path.isfile(os.path.join(subagents, name)):
+        return []
+    workflows = os.path.join(subagents, "workflows")
     try:
-        import tempfile
-
-        from coordinator_core.hooks.flag_em_poll_in_flight import _run_ids_in_flight
-
-        return list(_run_ids_in_flight(tempfile.gettempdir(), session_id))
-    except Exception:
-        return []
+        runs = os.listdir(workflows)
+    except OSError:
+        runs = []
+    hits = [r for r in runs if os.path.isfile(os.path.join(workflows, r, name))]
+    return hits or [_UNRESOLVED_RUN]
 
 
 def _primitives():
@@ -265,12 +290,11 @@ def _identity_leg(payload: Dict[str, Any], heavy_name: str) -> Optional[Dict[str
     from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
 
     allowlist = load_allowlist()
-    # Only a listed subagent reaches the workflow check: the run lookup lists the temp dir.
     listed = bool(payload.get("agent_id")) and payload.get("agent_type") in allowlist
     verdict = identity_verdict(
         payload,
         allowlist=allowlist,
-        workflow_runs=_live_workflow_runs(payload.get("session_id")) if listed else (),
+        workflow_runs=_workflow_runs_of(payload) if listed else (),
     )
     if verdict.allowed:
         return None

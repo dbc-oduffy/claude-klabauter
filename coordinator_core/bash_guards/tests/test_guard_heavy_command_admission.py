@@ -29,7 +29,9 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
 )
 
 CLAUDE = ProcRow(pid=100, ppid=1, ctime=10, name="claude.exe")
-CALLER = ProcRow(pid=200, ppid=100, ctime=20, name="python.exe")
+# The Bash tool shell: the census only counts what runs under one.
+TOOL = ProcRow(pid=150, ppid=100, ctime=15, name="bash.exe")
+CALLER = ProcRow(pid=200, ppid=150, ctime=20, name="python.exe")
 CONFIG = {
     KEY_FREE_RAM_FLOOR_MB: "1000",
     KEY_SESSION_HEAVY_CAP: "2",
@@ -65,7 +67,7 @@ class _Host:
     def __init__(self, avail=5000, trusted=True, rows=None, config=None):
         self.avail = avail
         self.trusted = trusted
-        self.rows = [CLAUDE, CALLER] if rows is None else rows
+        self.rows = [CLAUDE, TOOL, CALLER] if rows is None else rows
         self.config = dict(CONFIG) if config is None else config
         self.ram_reads = 0
 
@@ -84,7 +86,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_read_config", lambda: h.config)
     monkeypatch.setattr(guard, "_primitives", h.prims)
     monkeypatch.setattr(guard, "_read_available", h.reading)
-    monkeypatch.setattr(guard, "_live_workflow_runs", lambda sid: [])
+    monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [])
     monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
     monkeypatch.setattr(guard, "_working_set_mb", lambda pid: h.working_sets.get(pid))
     h.working_sets = {}
@@ -128,7 +130,7 @@ class TestLightPath:
         def boom(*a, **k):
             raise AssertionError("light path touched a reader")
 
-        for name in ("_read_config", "_primitives", "_read_available", "_live_workflow_runs"):
+        for name in ("_read_config", "_primitives", "_read_available", "_workflow_runs_of"):
             monkeypatch.setattr(guard, name, boom)
         assert guard.check(_payload("git status")) is None
         assert guard.check(_payload("grep tsc README.md", agent_id="deadbeef0123")) is None
@@ -169,13 +171,13 @@ class TestIdentityLeg:
     def test_listed_persona_is_admitted(self, host):
         assert guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng")) is None
 
-    def test_listed_persona_inside_a_live_workflow_run_is_denied(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_live_workflow_runs", lambda sid: ["run-1"])
+    def test_listed_persona_spawned_by_a_workflow_is_denied(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["run-1"])
         out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng"))
         assert out is not None and "workflow run" in _reason(out)
 
     def test_main_thread_never_consults_workflow_runs(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_live_workflow_runs", lambda sid: pytest.fail("consulted"))
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: pytest.fail("consulted"))
         assert guard.check(_payload("tsc --noEmit")) is None
 
     def test_a_denied_identity_writes_no_lease(self, host, tmp_path):
@@ -264,8 +266,8 @@ class TestScopedCarveOut:
 
 class TestSessionCapLeg:
     def _heavy_rows(self, n):
-        return [CLAUDE, CALLER] + [
-            ProcRow(pid=300 + i, ppid=CLAUDE.pid, ctime=30 + i, name="node.exe") for i in range(n)
+        return [CLAUDE, TOOL, CALLER] + [
+            ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(n)
         ]
 
     def test_at_the_heavy_cap_denies_naming_the_pids(self, host):
@@ -283,7 +285,7 @@ class TestSessionCapLeg:
         assert guard.check(_payload("pnpm build")) is None
 
     def test_background_shells_over_cap_deny_naming_the_pids(self, host):
-        host.rows = [CLAUDE, CALLER] + [
+        host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
         ]
         out = guard.check(_payload("sleep 600", background=True))
@@ -295,7 +297,7 @@ class TestSessionCapLeg:
         assert _lease_files(tmp_path) == []
 
     def test_foreground_light_command_ignores_shell_count(self, host):
-        host.rows = [CLAUDE, CALLER] + [
+        host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(9)
         ]
         assert guard.check(_payload("ls")) is None
@@ -360,8 +362,8 @@ class TestOverrideKeys:
 
     def test_session_cap_key_bypasses_only_the_cap_leg(self, host, repo):
         env = {OVERRIDE_KEYS["session-cap"]: "1"}
-        host.rows = [CLAUDE, CALLER] + [
-            ProcRow(pid=300 + i, ppid=CLAUDE.pid, ctime=30 + i, name="node.exe") for i in range(5)
+        host.rows = [CLAUDE, TOOL, CALLER] + [
+            ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(5)
         ]
         assert guard.check(_payload("pnpm build", env=env, cwd=repo)) is None
         host.avail = 1
@@ -455,11 +457,11 @@ class TestDenyTextRegister:
         saved = host.config.pop(KEY_FREE_RAM_FLOOR_MB)
         out.append(guard.check(_payload("pnpm build")))
         host.config[KEY_FREE_RAM_FLOOR_MB] = saved
-        host.rows = [CLAUDE, CALLER] + [
-            ProcRow(pid=300 + i, ppid=CLAUDE.pid, ctime=30 + i, name="node.exe") for i in range(3)
+        host.rows = [CLAUDE, TOOL, CALLER] + [
+            ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(3)
         ]
         out.append(guard.check(_payload("pnpm build")))
-        host.rows = [CLAUDE, CALLER] + [
+        host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
         ]
         out.append(guard.check(_payload("sleep 9", background=True)))
@@ -581,27 +583,27 @@ class TestRunawayWorkerAdvisory:
 
 class TestOneTypecheckPerSession:
     def test_a_second_typecheck_while_one_runs_is_denied(self, host, tmp_path, monkeypatch):
-        tsc = ProcRow(pid=300, ppid=CLAUDE.pid, ctime=30, name="node.exe")
-        host.rows = [CLAUDE, CALLER, tsc]
+        tsc = ProcRow(pid=300, ppid=TOOL.pid, ctime=30, name="node.exe")
+        host.rows = [CLAUDE, TOOL, CALLER, tsc]
         leases.write_lease(
             LeaseRecord(tsc.pid, tsc.ctime, CLAUDE.pid, CLAUDE.ctime, "typecheck", 0.0),
             tmp_path / "leases",
         )
         monkeypatch.setattr(
-            guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (tsc.pid, tsc.ctime)})
+            guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (tsc.pid, tsc.ctime)})
         )
         text = _reason(guard.check(_payload("tsc --noEmit")))
         assert "already runs a typecheck" in text and "300" in text
 
     def test_a_build_beside_a_running_typecheck_is_not_denied_for_it(self, host, tmp_path, monkeypatch):
-        tsc = ProcRow(pid=300, ppid=CLAUDE.pid, ctime=30, name="node.exe")
-        host.rows = [CLAUDE, CALLER, tsc]
+        tsc = ProcRow(pid=300, ppid=TOOL.pid, ctime=30, name="node.exe")
+        host.rows = [CLAUDE, TOOL, CALLER, tsc]
         leases.write_lease(
             LeaseRecord(tsc.pid, tsc.ctime, CLAUDE.pid, CLAUDE.ctime, "typecheck", 0.0),
             tmp_path / "leases",
         )
         monkeypatch.setattr(
-            guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (tsc.pid, tsc.ctime)})
+            guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (tsc.pid, tsc.ctime)})
         )
         assert guard.check(_payload("pnpm build")) is None
 
@@ -621,9 +623,54 @@ class TestVitestWorkerCap:
 
 
 def test_an_unlisted_subagent_never_pays_for_the_workflow_run_lookup(host, monkeypatch):
-    def lookup(sid):
+    def lookup(payload):
         raise AssertionError("workflow-run lookup reached for an unlisted caller")
 
-    monkeypatch.setattr(guard, "_live_workflow_runs", lookup)
+    monkeypatch.setattr(guard, "_workflow_runs_of", lookup)
     out = guard.check(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
     assert "not on the heavy-command allow-list" in _reason(out)
+
+
+class TestWorkflowSpawnSignal:
+    """The run is read off where the subagent's own transcript lives, never off session records."""
+
+    def _session(self, tmp_path):
+        transcript = tmp_path / "proj" / "sess-1.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("", encoding="utf-8")
+        return transcript, tmp_path / "proj" / "sess-1" / "subagents"
+
+    def test_an_agent_tool_dispatch_is_not_a_workflow_spawn(self, tmp_path):
+        transcript, subagents = self._session(tmp_path)
+        subagents.mkdir(parents=True)
+        (subagents / "agent-a1.jsonl").write_text("", encoding="utf-8")
+        assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a1"}) == []
+
+    def test_a_workflow_agent_names_its_run(self, tmp_path):
+        transcript, subagents = self._session(tmp_path)
+        run = subagents / "workflows" / "wf_abc"
+        run.mkdir(parents=True)
+        (run / "agent-a2.jsonl").write_text("", encoding="utf-8")
+        assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a2"}) == ["wf_abc"]
+
+    def test_a_finished_run_elsewhere_in_the_session_does_not_taint_a_dispatch(self, tmp_path):
+        transcript, subagents = self._session(tmp_path)
+        (subagents / "workflows" / "wf_old").mkdir(parents=True)
+        (subagents / "workflows" / "wf_old" / "agent-zz.jsonl").write_text("", encoding="utf-8")
+        (subagents / "agent-a1.jsonl").write_text("", encoding="utf-8")
+        assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a1"}) == []
+
+    def test_a_transcript_in_neither_place_fails_closed(self, tmp_path):
+        transcript, _ = self._session(tmp_path)
+        assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": "a9"}) == ["unresolved"]
+
+    @pytest.mark.parametrize("agent_id", ["../x", "a/b", "", None])
+    def test_an_unsafe_or_missing_agent_id_fails_closed(self, tmp_path, agent_id):
+        transcript, _ = self._session(tmp_path)
+        assert guard._workflow_runs_of({"transcript_path": str(transcript), "agent_id": agent_id}) == ["unresolved"]
+
+    def test_a_subagent_shaped_transcript_path_is_read_directly(self):
+        own = "C:/u/.claude/projects/p/s/subagents/workflows/wf_9/agent-a3.jsonl"
+        assert guard._workflow_runs_of({"transcript_path": own, "agent_id": "a3"}) == ["wf_9"]
+        own = "C:/u/.claude/projects/p/s/subagents/agent-a3.jsonl"
+        assert guard._workflow_runs_of({"transcript_path": own, "agent_id": "a3"}) == []
