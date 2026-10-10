@@ -271,7 +271,7 @@ import re
 import shutil
 from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, NamedTuple, Optional, Sequence
+from typing import Callable, Mapping, NamedTuple, Optional, Sequence
 
 import yaml
 
@@ -3492,6 +3492,42 @@ def _gitignored_prefix_narration(dropped: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequence[str]) -> str:
+    """The script-wide bindings ``_run_row_helper_js`` and the wake digest
+    (``RUNTIME_VARS`` plus ``PLAN_HELD_VAR`` and ``GATE_OWED_VAR``) read,
+    declared once. ``carried_gate_owed`` seeds the rows a prior run left
+    owing their build gate.
+
+    Trap: every composer must take these from here. A composer that lists
+    them by hand drifts -- the review-only and ``--sizing`` shapes each
+    shipped without ``_planHeld`` and threw ReferenceError on a plan halt or
+    at the final digest.
+    """
+    row_plan_entries = ", ".join(
+        f"{_js_string_literal(rid)}: {_js_string_literal(plan)}" for rid, plan in row_plans.items()
+    )
+    owed_seed = ", ".join(
+        f"{_js_string_literal(i)}: {_js_string_literal('gate-blocker: carried: gate owed by a prior run')}"
+        for i in carried_gate_owed
+    )
+    return "\n".join(
+        [
+            "  const _incompleteChunks = [];",
+            f"  const {GATE_OWED_VAR} = {{ {owed_seed} }};",
+            "  const _blockedChunks = [];",
+            "  const _unansweredBriefs = [];",
+            "  const _stoppedBy = [];",
+            "  const _notStarted = [];",
+            f"  const {PLAN_HELD_VAR} = {{}};",
+            "  let _halted = null;",
+            "  const _verifications = [];",
+            f"  const _rowPlan = {{ {row_plan_entries} }};",
+            "  const _haltedPlans = new Set();",
+            "  const _haltedPlanReasons = new Map();",
+        ]
+    )
+
+
 def _run_row_helper_js(agent_type_host: Optional[str] = None) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -4616,44 +4652,22 @@ def compose_script(
     if agent_type_host == _AGENT_TYPE_HOST_DEGRADED:
         body_blocks.append(_agent_type_host_degraded_narration())
 
-    # RUNTIME_VARS (wake_digest.py) -- declared here, once, so C13's
-    # completion_return_js has a script-wide binding of each name to read.
-    # `_incompleteChunks`/`_unansweredBriefs` are consumed by `_completion_
-    # return` below unchanged; `_stoppedBy`/`_notStarted`/`_halted`/
-    # `_verifications` are new with the DAG shape.
-    body_blocks.append("  const _incompleteChunks = [];")
-    owed_seed = ", ".join(
-        f"{_js_string_literal(i)}: {_js_string_literal('gate-blocker: carried: gate owed by a prior run')}"
-        for i in sorted(carried_gate_owed or {})
+    # Always carries `_rowPlan`, single-plan or not -- a single-plan compose's
+    # `_rowPlan` is simply empty, so every row's plan-scoped check below is a
+    # guaranteed miss and the row is governed by the global `_halted` flag
+    # instead. One shape, no `_skipIfHalted`/multi-plan special case.
+    body_blocks.append(
+        _row_state_decls_js(
+            {rid: plan for rid, plan in _row_plans.items() if plan is not None},
+            sorted(carried_gate_owed or {}),
+        )
     )
-    body_blocks.append(f"  const {GATE_OWED_VAR} = {{ {owed_seed} }};")
-    body_blocks.append("  const _blockedChunks = [];")
-    body_blocks.append("  const _unansweredBriefs = [];")
-    body_blocks.append("  const _stoppedBy = [];")
-    body_blocks.append("  const _notStarted = [];")
-    # Read by the wake digest on every shape; review-only never emits `_runRow`.
-    body_blocks.append(f"  const {PLAN_HELD_VAR} = {{}};")
     if held_rows:
         body_blocks.append(
             "  const _heldRows = "
             + json.dumps({row_id: reason for row_id, reason in held_rows}, sort_keys=True)
             + ";\n  _notStarted.push(...Object.keys(_heldRows));"
         )
-    body_blocks.append("  let _halted = null;")
-    body_blocks.append("  const _verifications = [];")
-
-    # Always declared, single-plan or not -- a single-plan compose's
-    # `_rowPlan` is simply empty, so every row's plan-scoped check below is a
-    # guaranteed miss and the row is governed by the global `_halted` flag
-    # instead. One shape, no `_skipIfHalted`/multi-plan special case.
-    row_plan_entries = ", ".join(
-        f"{_js_string_literal(rid)}: {_js_string_literal(plan)}"
-        for rid, plan in _row_plans.items()
-        if plan is not None
-    )
-    body_blocks.append(f"  const _rowPlan = {{ {row_plan_entries} }};")
-    body_blocks.append("  const _haltedPlans = new Set();")
-    body_blocks.append("  const _haltedPlanReasons = new Map();")
 
     declared_write_paths = frozenset(
         path

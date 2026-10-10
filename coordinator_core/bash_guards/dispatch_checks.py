@@ -167,6 +167,8 @@ from coordinator_core.bash_guards.block_subagent_commit import (
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _PS_REMOVE_VERBS,
+    _normalize_executable_basename,
+    _normalize_windows_argv0_head_path_with_spaces,
     _ps_normalize_verb_token,
     _ps_resolve_head_verb,
 )
@@ -179,10 +181,6 @@ if TYPE_CHECKING:
 # <git_root>/.git/coordinator-sessions/<session_id>/ or a session_dir --
 # untracked guard bookkeeping, never a tracked repo artifact.
 GENERATES = []
-from coordinator_core.bash_guards.block_subagent_destructive_action import (
-    _normalize_executable_basename,
-    _normalize_windows_argv0_head_path_with_spaces,
-)
 from coordinator_core.bash_guards._command_tokenizer import (
     _extract_command_substitutions as _bt_extract_command_substitutions,
     _skip_wrapper_own_argv,
