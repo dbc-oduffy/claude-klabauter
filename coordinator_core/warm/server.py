@@ -191,6 +191,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple, Optional
 
+from coordinator_core import _engine_landing
 from coordinator_core.ipc import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
@@ -1552,6 +1553,7 @@ def _serve_line(
     record_invocation: Callable[[bool], None] = lambda warm: None,
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
     record_served_repo: Callable[[Any], None] = lambda repo_root: None,
+    engine_root: Optional[Path] = None,
 ) -> None:
     """Process one request frame for one connection: write exactly one
     response frame (or delegate that write to `warm.skew.evict_on_skew`'s
@@ -1662,6 +1664,12 @@ def _serve_line(
 
     if client_token is None:
         _write_and_release(_untrusted_caller_response(request_id))
+        return
+
+    # A publish swap window: refuse (no eviction, no drain, no exit record) so the caller goes
+    # cold and parks; eviction proceeds after the round. Ordered after the trust check.
+    if engine_root is not None and _engine_landing.swap_in_progress(engine_root):
+        _write_and_release(skew.build_skew_response(request_id, server_sha, client_token))
         return
 
     if version_state.is_skewed(client_token):
@@ -1809,6 +1817,7 @@ def _handle_connection(
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
     record_served_repo: Callable[[Any], None] = lambda repo_root: None,
     already_entered: bool = False,
+    engine_root: Optional[Path] = None,
 ) -> None:
     """One connection's request/response lifecycle, run on its own thread.
 
@@ -1903,6 +1912,7 @@ def _handle_connection(
             record_invocation=record_invocation,
             record_exit=record_exit,
             record_served_repo=record_served_repo,
+            engine_root=engine_root,
         )
     finally:
         _exit_once()
@@ -2636,6 +2646,7 @@ class _ServerContext:
                     record_exit=self.record_exit,
                     record_served_repo=self.record_served_repo,
                     already_entered=True,
+                    engine_root=self.engine_root,
                 )
             except Exception as exc:  # noqa: BLE001 -- see docstring: a dead worker is a permanent capacity loss, not a single lost response
                 print(

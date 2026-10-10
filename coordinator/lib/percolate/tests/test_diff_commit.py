@@ -94,21 +94,171 @@ def test_a_derived_path_overwrites_its_own_stale_worktree_copy(tmp_path):
 
 def test_failure_mid_write_restores_clean(tmp_path, monkeypatch):
     root = _dest(tmp_path, 5)
-    real = diff_commit._atomic_write
+    real = diff_commit._swap
     calls = []
 
-    def flaky(path, data, mode):
+    def flaky(tmp, path):
         calls.append(path)
         if len(calls) == 3:
             raise OSError("boom")
-        real(path, data, mode)
+        real(tmp, path)
 
-    monkeypatch.setattr(diff_commit, "_atomic_write", flaky)
+    monkeypatch.setattr(diff_commit, "_swap", flaky)
     writes = [_w(i, "new\n") for i in range(4)] + [DestWrite("fresh/new.txt", b"x", 0o100644)]
     with pytest.raises(OSError):
         land_diff(root, writes, [], "m", commit=True)
-    monkeypatch.setattr(diff_commit, "_atomic_write", real)
+    monkeypatch.setattr(diff_commit, "_swap", real)
     assert _status(root) == ""
+    assert not [p for p in root.rglob(".*.dc-*")]
+
+
+def _engine(tmp_path):
+    root = tmp_path / "engine"
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_bytes(b"s0\n")
+    (root / "mod_a.py").write_bytes(b"GEN = 1\n")
+    (root / "mod_b.py").write_bytes(b"GEN = 1\n")
+    _git(root, "init", "-q", "-b", "work/z")
+    _git(root, "config", "user.email", "t@local")
+    _git(root, "config", "user.name", "t")
+    _git(root, "config", "core.autocrlf", "false")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "seed")
+    return root
+
+
+def _engine_round():
+    return [
+        DestWrite("mod_a.py", b"GEN = 2\n", 0o100644),
+        DestWrite("coordinator_core/_engine_stamp", b"s1\n", 0o100644),
+        DestWrite("mod_b.py", b"GEN = 2\n", 0o100644),
+    ]
+
+
+def _trace(monkeypatch, root):
+    from coordinator_core import _engine_landing as landing
+
+    events = []
+    real_swap, real_commit = diff_commit._swap, diff_commit._gcommit.commit_paths
+
+    def swap(tmp, path):
+        events.append(("swap", path.name, landing.swap_in_progress(root)))
+        real_swap(tmp, path)
+
+    def commit(*a, **k):
+        events.append(("commit", None, landing.swap_in_progress(root)))
+        return real_commit(*a, **k)
+
+    monkeypatch.setattr(diff_commit, "_swap", swap)
+    monkeypatch.setattr(diff_commit._gcommit, "commit_paths", commit)
+    return events
+
+
+def test_engine_landing_stamp_last_marker_up_for_swap_and_down_for_commit(tmp_path, monkeypatch):
+    from coordinator_core import _engine_landing as landing
+
+    root = _engine(tmp_path)
+    sleeps = []
+    monkeypatch.setattr(diff_commit.time, "sleep", sleeps.append)
+    events = _trace(monkeypatch, root)
+    land_diff(root, _engine_round(), [], "m", commit=True)
+    assert [e[1] for e in events if e[0] == "swap"] == ["mod_a.py", "mod_b.py", "_engine_stamp"]
+    assert all(e[2] for e in events if e[0] == "swap")
+    assert [e for e in events if e[0] == "commit"] == [("commit", None, False)]
+    assert sleeps == [landing.SWAP_GRACE_S]
+    assert not landing.swap_in_progress(root) and not (root / ".git" / landing.MARKER_NAME).exists()
+    assert not list(root.rglob(".*.dc-*"))
+
+
+def test_engine_landing_marker_absent_after_post_write_failure_and_restore_ran_under_it(tmp_path, monkeypatch):
+    from coordinator_core import _engine_landing as landing
+
+    root = _engine(tmp_path)
+    monkeypatch.setattr(diff_commit.time, "sleep", lambda s: None)
+    seen = []
+    real_restore = diff_commit._restore
+
+    def restore(*a, **k):
+        seen.append(landing.swap_in_progress(root))
+        real_restore(*a, **k)
+
+    def lose(*a, **k):
+        raise diff_commit._gcommit.CommitRefused("lost CAS race")
+
+    monkeypatch.setattr(diff_commit, "_restore", restore)
+    monkeypatch.setattr(diff_commit._gcommit, "commit_paths", lose)
+    with pytest.raises(diff_commit._gcommit.CommitRefused):
+        land_diff(root, _engine_round(), [], "m", commit=True)
+    assert seen == [True]
+    assert not landing.swap_in_progress(root) and _status(root) == ""
+
+
+def test_engine_landing_swap_failure_restores_under_marker_and_clears_it(tmp_path, monkeypatch):
+    from coordinator_core import _engine_landing as landing
+
+    root = _engine(tmp_path)
+    monkeypatch.setattr(diff_commit.time, "sleep", lambda s: None)
+    real = diff_commit._swap
+    seen = []
+
+    def flaky(tmp, path):
+        if path.name == "mod_b.py":
+            raise OSError("boom")
+        real(tmp, path)
+
+    real_restore = diff_commit._restore
+
+    def restore(*a, **k):
+        seen.append(landing.swap_in_progress(root))
+        real_restore(*a, **k)
+
+    monkeypatch.setattr(diff_commit, "_swap", flaky)
+    monkeypatch.setattr(diff_commit, "_restore", restore)
+    with pytest.raises(OSError):
+        land_diff(root, _engine_round(), [], "m", commit=True)
+    assert seen == [True] and not landing.swap_in_progress(root) and _status(root) == ""
+    assert not list(root.rglob(".*.dc-*"))
+
+
+def test_non_engine_destination_raises_no_marker_and_no_grace(tmp_path, monkeypatch):
+    root = _dest(tmp_path, 3)
+    sleeps = []
+    monkeypatch.setattr(diff_commit.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        diff_commit._landing, "begin_swap", lambda *a, **k: pytest.fail("marker raised for a non-engine root")
+    )
+    land_diff(root, [_w(0, "new\n")], [], "m", commit=True)
+    assert sleeps == []
+
+
+def test_engine_root_without_git_dir_reports_unguarded(tmp_path, monkeypatch, capsys):
+    root = _engine(tmp_path)
+    monkeypatch.setattr(diff_commit._landing, "marker_path", lambda r: None)
+    monkeypatch.setattr(diff_commit.time, "sleep", lambda s: pytest.fail("grace slept with no marker"))
+    land_diff(root, _engine_round(), [], "m", commit=False)
+    assert "unguarded" in capsys.readouterr().err
+
+
+def test_winerror_32_fallback_is_still_taken_on_swap(tmp_path, monkeypatch):
+    root = _dest(tmp_path, 3)
+    real = os.replace
+    fallback = []
+
+    def replace(src, dst):
+        if Path(dst).name == "f0.txt" and not fallback:
+            raise PermissionError(32, "in use")
+        real(src, dst)
+
+    import coordinator_core.install.door_install as door
+
+    def image(tmp, path):
+        fallback.append(path)
+        real(tmp, path)
+
+    monkeypatch.setattr(diff_commit.os, "replace", replace)
+    monkeypatch.setattr(door, "_replace_possibly_running_image", image)
+    land_diff(root, [_w(0, "new\n")], [], "m", commit=True)
+    assert [p.name for p in fallback] == ["f0.txt"] and _status(root) == ""
 
 
 def test_lost_cas_race_restores_and_raises(tmp_path, monkeypatch):

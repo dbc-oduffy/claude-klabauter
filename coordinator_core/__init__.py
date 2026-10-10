@@ -21,6 +21,15 @@ Negative-spec:
 from __future__ import annotations
 
 import importlib
+import os as _os
+
+# Hold this import out of a publish swap window at its own engine root. Must never raise.
+try:
+    from coordinator_core import _engine_landing
+
+    _engine_landing.wait_until_clear(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+except Exception:  # noqa: BLE001 - the gate must not become a new way to fail every hook
+    pass
 
 # Op-scope parity surface — re-exported for cross-repo contract consumers (e.g. DoE shim).
 # DR § AC-1b: importable as `from coordinator_core import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS`.
