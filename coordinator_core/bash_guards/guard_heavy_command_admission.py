@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._heavy_admission_contract import (
@@ -226,9 +226,28 @@ def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
         return None
 
 
-def _caller_pid(payload: Mapping[str, Any]) -> int:
+def _env_pid() -> Optional[int]:
+    """CLAUDE_PID: the warm server binds the door's own pid here for the length of one request
+    (warm/entry_seam._environ_identity_borrow) and pops it when the door sent none; a cold hook
+    process inherits the harness's. Either one's ancestry reaches the session's claude."""
+    raw = os.environ.get("CLAUDE_PID", "")
+    return int(raw) if raw.isdigit() else None
+
+
+def _pid_and_source(payload: Mapping[str, Any]) -> Tuple[int, str]:
     pid = _payload_pid(payload)
-    return os.getpid() if pid is None else pid
+    if pid is not None:
+        return pid, "payload"
+    pid = _env_pid()
+    if pid is not None:
+        return pid, "caller-env"
+    # TRAP: in the warm server this is the server itself, which no session owns; it anchors
+    # nothing and the session-cap leg fails closed.
+    return os.getpid(), "guard-process"
+
+
+def _caller_pid(payload: Mapping[str, Any]) -> int:
+    return _pid_and_source(payload)[0]
 
 
 def _record(
@@ -255,7 +274,7 @@ def _record(
         "agent_type": payload.get("agent_type"),
         "cwd": payload.get("cwd"),
         "caller_pid": _caller_pid(payload),
-        "pid_source": "payload" if _payload_pid(payload) is not None else "guard-process",
+        "pid_source": _pid_and_source(payload)[1],
         "anchor_pid": anchor.pid if anchor is not None else None,
         "census_heavy": sorted(r.name for r in census.heavy) if census is not None else None,
         "census_shells": len(census.shells) if census is not None else None,

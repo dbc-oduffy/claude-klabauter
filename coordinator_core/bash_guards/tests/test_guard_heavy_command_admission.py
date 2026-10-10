@@ -87,6 +87,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_primitives", h.prims)
     monkeypatch.setattr(guard, "_read_available", h.reading)
     monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [])
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
     monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
     monkeypatch.setattr(guard, "_working_set_mb", lambda pid: h.working_sets.get(pid))
     h.working_sets = {}
@@ -674,3 +675,36 @@ class TestWorkflowSpawnSignal:
         assert guard._workflow_runs_of({"transcript_path": own, "agent_id": "a3"}) == ["wf_9"]
         own = "C:/u/.claude/projects/p/s/subagents/agent-a3.jsonl"
         assert guard._workflow_runs_of({"transcript_path": own, "agent_id": "a3"}) == []
+
+
+class TestForwardedCallerPid:
+    """The warm server binds the door's pid as CLAUDE_PID per request; the guard anchors on it."""
+
+    def _no_pid(self, command="tsc --noEmit"):
+        p = _payload(command)
+        p.pop("pid", None)
+        return p
+
+    def test_the_forwarded_pid_anchors_the_session(self, host, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PID", str(CALLER.pid))
+        assert guard.check(self._no_pid()) is None
+
+    def test_a_payload_pid_wins_over_the_forwarded_one(self, host, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PID", "999999")
+        assert guard._pid_and_source(_payload("tsc")) == (CALLER.pid, "payload")
+
+    def test_no_forwarded_pid_falls_back_to_the_guard_process_and_fails_closed(self, host, monkeypatch):
+        assert guard._pid_and_source(self._no_pid())[1] == "guard-process"
+        out = guard.check(self._no_pid())
+        assert out is not None and "no session anchor" in _reason(out)
+
+    @pytest.mark.parametrize("raw", ["", "abc", "-5", "12x"])
+    def test_a_malformed_forwarded_pid_is_ignored(self, host, monkeypatch, raw):
+        monkeypatch.setenv("CLAUDE_PID", raw)
+        assert guard._pid_and_source(self._no_pid())[1] == "guard-process"
+
+    def test_the_log_names_the_forwarded_source(self, host, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_PID", str(CALLER.pid))
+        host.config = dict(host.config, **{KEY_FREE_RAM_FLOOR_MB: "999999"})
+        guard.check(self._no_pid("pnpm build"))
+        assert _log_lines(tmp_path)[-1]["pid_source"] == "caller-env"
