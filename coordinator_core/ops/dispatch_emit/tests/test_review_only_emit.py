@@ -175,3 +175,18 @@ def test_empty_landed_set_refused(tmp_path, capsys):
 
     assert code == cli.EXIT_DATA_ERROR
     assert "names no row" in err
+
+
+def test_review_only_marker_tells_the_terminal_commit_to_leave_rows_alone():
+    from coordinator_core.ops.dispatch_emit.commit_request import (
+        ChunkCommit,
+        CommitRequest,
+        parse_marker,
+        render_marker,
+    )
+
+    request = parse_marker(_script("coordinator"))
+    assert request is not None and request.review_only is True
+    chunk = ChunkCommit(id="C1", title="t", paths=("a.py",), prefixes=(), report="")
+    plain = render_marker(CommitRequest(chunks=(chunk,)))
+    assert "review_only" not in plain and parse_marker(plain).review_only is False

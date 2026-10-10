@@ -1506,6 +1506,8 @@ def _terminal_commit(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     anchor_only = not request.chunks
+    # A review-only run closes no row: a row reopened since its emit must stay open.
+    rows_untouched = anchor_only or request.review_only
 
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
     # result carries no review-stage output cannot land code, however the
@@ -1889,7 +1891,7 @@ def _terminal_commit(
             reply["uncoded_absent"] = [c.id for c in unbuilt]
             noop_chunks = [c for c in noop_chunks if c not in unbuilt]
         checkpoint_of = (
-            {} if anchor_only or not noop_chunks
+            {} if rows_untouched or not noop_chunks
             else _checkpoint_attribution(worktree_root, str(reply["sha"]), request.plan_path, noop_chunks)
         )
         checkpoint_rows: dict = {}
@@ -1897,7 +1899,7 @@ def _terminal_commit(
             for plan_rel, ids in _source_rows_by_plan(worktree_root, request.plan_path, [chunk_id]).items():
                 checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
         noop_rows = (
-            {} if anchor_only
+            {} if rows_untouched
             else _source_rows_by_plan(
                 worktree_root, request.plan_path,
                 [c.id for c in noop_chunks if c.id not in checkpoint_of],
@@ -1905,7 +1907,7 @@ def _terminal_commit(
         )
         source_rows = (
             {request.plan_path: set()}
-            if anchor_only
+            if rows_untouched
             else _source_rows_by_plan(
                 worktree_root, request.plan_path, [c.id for c in coded_chunks]
             )

@@ -130,6 +130,9 @@ class CommitRequest:
     plan_path: Optional[str] = None
     expected_branch: Optional[str] = None
     version: int = 1
+    # A review-only run reviews a landed delta and executes no row: its terminal commit leaves
+    # every row disposition as it stands.
+    review_only: bool = False
 
 
 def _chunk_to_dict(chunk: ChunkCommit) -> dict:
@@ -194,6 +197,8 @@ def render_marker(req: CommitRequest) -> Optional[str]:
         "plan_path": req.plan_path,
         "expected_branch": req.expected_branch,
     }
+    if req.review_only:
+        payload["review_only"] = True
     body = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return f"{MARKER_PREFIX}{body}"
 
@@ -256,6 +261,7 @@ def parse_marker(script_text: str) -> Optional[CommitRequest]:
             plan_path=payload["plan_path"],
             expected_branch=payload.get("expected_branch"),
             version=payload["version"],
+            review_only=payload.get("review_only") is True,
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(

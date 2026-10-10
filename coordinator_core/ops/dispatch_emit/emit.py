@@ -4210,6 +4210,7 @@ def _terminal_commit_marker(
     session_id: Optional[str],
     expected_branch: Optional[str] = None,
     row_prefixes: dict[str, tuple[str, ...]],
+    review_only: bool = False,
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
     (``commit_request.render_marker``) recording what this run promises
@@ -4243,6 +4244,7 @@ def _terminal_commit_marker(
             session_id=session_id,
             plan_path=plan_path,
             expected_branch=expected_branch,
+            review_only=review_only,
         )
     )
     if marker is None:
@@ -4766,6 +4768,7 @@ def compose_script(
         session_id=session_id,
         expected_branch=expected_branch,
         row_prefixes=row_prefixes,
+        review_only=review_only,
     )
     if marker is not None:
         # Unindented: commit_request.parse_marker matches on line-start
