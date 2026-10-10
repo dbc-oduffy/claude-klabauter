@@ -746,3 +746,44 @@ class TestExecutorCarveOut:
         host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
         cmd = "pnpm vitest run a.test.ts --maxWorkers=1 2>&1 | tail -5; pnpm exec tsc --noEmit"
         assert guard.check(_payload(cmd, **self.EXEC)) is None
+
+
+class TestOrphanAttribution:
+    """Windows: a Git Bash command's tree is orphaned from launch; its lease claims it by launch mark."""
+
+    def _orphan(self, root_pid, ctime):
+        return [ProcRow(root_pid, 9999, ctime, "bash.exe"), ProcRow(root_pid + 1, root_pid, ctime + 1, "node.exe")]
+
+    def _live(self, monkeypatch, host):
+        monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set={(r.pid, r.ctime) for r in host.rows}))
+
+    def _open(self, cls, launch):
+        leases.write_lease(LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, cls, time.time(), launch))
+
+    def test_an_admitted_lease_carries_the_callers_launch_mark(self, host):
+        assert guard.check(_payload("pnpm build")) is None
+        (rec,) = leases.live_leases()
+        assert rec.launch_ctime == CALLER.ctime
+
+    def test_claimed_orphans_count_toward_the_session_heavy_cap(self, host, monkeypatch):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 22) + self._orphan(600, 23)
+        self._live(monkeypatch, host)
+        self._open("build", 20)
+        self._open("build", 21)
+        out = guard.check(_payload("pnpm build"))
+        assert out is not None and "session holds 2 heavy commands" in _reason(out)
+        assert {r.holder_pid for r in leases.live_leases()} == {500, 600}
+
+    def test_a_claimed_orphan_typecheck_holds_the_one_typecheck_rule(self, host, monkeypatch):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 22)
+        self._live(monkeypatch, host)
+        self._open("typecheck", 20)
+        out = guard.check(_payload("tsc --noEmit"))
+        assert out is not None and "already runs a typecheck" in _reason(out)
+
+    def test_an_orphan_created_before_the_launch_is_not_charged(self, host, monkeypatch):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 18) + self._orphan(600, 19)
+        self._live(monkeypatch, host)
+        self._open("build", 20)
+        self._open("build", 21)
+        assert guard.check(_payload("pnpm build")) is None

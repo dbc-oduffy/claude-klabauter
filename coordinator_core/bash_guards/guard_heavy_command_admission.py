@@ -50,6 +50,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     LEG_IDENTITY,
     LEG_RAM_FLOOR,
     LEG_SESSION_CAP,
+    ORPHAN_CLAIM_WINDOW_S,
     OVERRIDE_KEYS,
     HeavyClass,
     LeaseRecord,
@@ -399,7 +400,7 @@ def _cap_leg(
     background: bool,
     typecheck: bool = False,
 ):
-    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None)."""
+    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None, launch_ctime)."""
     from coordinator_core.bash_guards import _session_census as census_mod
 
     heavy_cap = _positive_int(config, KEY_SESSION_HEAVY_CAP)
@@ -413,6 +414,7 @@ def _cap_leg(
             ),
             None,
             None,
+            0,
         )
     rows = primitives.snapshot()
     if rows is None:
@@ -420,6 +422,7 @@ def _cap_leg(
             _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
             None,
             None,
+            0,
         )
     caller = _caller_pid(payload)
     anchor = census_mod.resolve_anchor({"pid": caller}, primitives, snapshot=rows)
@@ -432,16 +435,20 @@ def _cap_leg(
             ),
             None,
             None,
+            0,
         )
     by_pid = {r.pid: r for r in rows}
-    census = census_mod.session_census(
-        anchor, primitives, snapshot=rows, exclude_pids=_chain_pids(by_pid, caller, anchor.pid)
-    )
+    chain = _chain_pids(by_pid, caller, anchor.pid)
+    launch = by_pid[caller].ctime if caller in by_pid else 0
+    census = census_mod.session_census(anchor, primitives, snapshot=rows, exclude_pids=chain)
+    if census is not None:
+        census = _fold_claimed(census, rows, anchor, chain)
     if census is None:
         return (
             _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
             None,
             None,
+            0,
         )
     running = _second_typecheck(anchor, primitives) if typecheck else []
     if running:
@@ -453,6 +460,7 @@ def _cap_leg(
             ),
             anchor,
             census,
+            launch,
         )
     if heavy and len(census.heavy) >= heavy_cap:
         pids = ", ".join(str(r.pid) for r in census.heavy)
@@ -464,6 +472,7 @@ def _cap_leg(
             ),
             anchor,
             census,
+            launch,
         )
     if background and len(census.shells) >= bg_cap:
         pids = ", ".join(str(r.pid) for r in census.shells)
@@ -475,11 +484,40 @@ def _cap_leg(
             ),
             anchor,
             census,
+            launch,
         )
-    return None, anchor, census
+    return None, anchor, census, launch
 
 
-def _write_lease(heavy_name: str, anchor, census, primitives) -> None:
+def _fold_claimed(census, rows, anchor, chain):
+    """census with the session's claimed orphan commands added to heavy.
+
+    Open leases first claim the orphan trees created after their launch marks; then every tree
+    a lease of this session holds counts once.
+    """
+    from dataclasses import replace
+
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+    from coordinator_core.bash_guards import _session_census as census_mod
+    from coordinator_core.bash_guards._host_probe import ctime_units_per_second
+
+    since = leases.oldest_open_launch()
+    if since is not None:
+        trees = census_mod.orphan_trees(rows, since)
+        if trees:
+            leases.claim_orphans(trees, ORPHAN_CLAIM_WINDOW_S * ctime_units_per_second())
+    session = (anchor.pid, anchor.ctime)
+    roots = {
+        (r.holder_pid, r.holder_ctime)
+        for r in leases.live_leases()
+        if (r.session_pid, r.session_ctime) == session and (r.holder_pid, r.holder_ctime) != session
+    }
+    have = {r.pid for r in census.heavy}
+    extra = [r for r in census_mod.claimed_heavy(rows, roots) if r.pid not in have and r.pid not in chain]
+    return replace(census, heavy=tuple(census.heavy) + tuple(extra)) if extra else census
+
+
+def _write_lease(heavy_name: str, anchor, census, primitives, launch_ctime: int = 0) -> None:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
     if census is not None and census.heavy:
@@ -493,6 +531,7 @@ def _write_lease(heavy_name: str, anchor, census, primitives) -> None:
             session_ctime=anchor.ctime,
             heavy_class=heavy_name,
             admitted_at=time.time(),
+            launch_ctime=launch_ctime,
         )
     )
 
@@ -559,8 +598,9 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
             return denied(LEG_RAM_FLOOR, envelope)
 
     anchor = census = None
+    launch = 0
     if not _bypassed(LEG_SESSION_CAP, payload, command):
-        envelope, anchor, census = _cap_leg(
+        envelope, anchor, census, launch = _cap_leg(
             config, payload, primitives, heavy=heavy, background=cls.background,
             typecheck=cls.heavy_class is HeavyClass.TYPECHECK,
         )
@@ -570,5 +610,5 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[
     if heavy:
         _flag_runaway_workers(config, payload, command, cls, anchor, census)
     if heavy and anchor is not None:
-        _write_lease(heavy_name, anchor, census, primitives)
+        _write_lease(heavy_name, anchor, census, primitives, launch)
     return None

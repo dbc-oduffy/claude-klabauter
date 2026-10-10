@@ -380,3 +380,15 @@ class HostPrimitives:
     alive = staticmethod(alive)
     creation_time = staticmethod(creation_time)
     snapshot = staticmethod(snapshot)
+
+
+def ctime_units_per_second() -> int:
+    """How many ProcRow.ctime units make one second on this host (FILETIME, clock ticks, or µs)."""
+    if sys.platform == "win32":
+        return 10_000_000
+    if sys.platform == "darwin":
+        return 1_000_000
+    try:
+        return int(os.sysconf("SC_CLK_TCK"))
+    except (ValueError, OSError, AttributeError):
+        return 100

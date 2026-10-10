@@ -102,3 +102,38 @@ def test_exclude_pids_drops_own_wrapper():
 
 def test_unreadable_snapshot_returns_none():
     assert session_census(R(1, 0, 10, "claude"), _Prims(None)) is None
+
+
+def test_orphan_trees_finds_a_fork_stub_orphan_holding_a_heavy_image():
+    # The live Windows shape: the tool command's root bash has a parent (the fork stub) that exited.
+    from coordinator_core.bash_guards._session_census import orphan_trees
+
+    rows = [R(1, 0, 10, "claude.exe"), R(12, 999, 50, "bash.exe"), R(13, 12, 51, "bash.exe"),
+            R(14, 13, 52, "node.exe"), R(15, 14, 53, "cmd.exe"), R(16, 15, 54, "node.exe"),
+            R(20, 998, 60, "bash.exe"), R(21, 20, 61, "grep.exe")]
+    trees = orphan_trees(rows, since_ctime=40)
+    assert [t.root.pid for t in trees] == [12]
+    assert {"node", "bash", "cmd"} <= trees[0].stems
+    assert sorted(r.pid for r in trees[0].heavy) == [14, 16]
+
+
+def test_orphan_trees_ignores_roots_older_than_since_and_live_parented_rows():
+    from coordinator_core.bash_guards._session_census import orphan_trees
+
+    rows = [R(1, 0, 10, "claude.exe"), R(2, 1, 20, "bash"), R(3, 2, 30, "node"), R(12, 999, 5, "node")]
+    assert orphan_trees(rows, since_ctime=8) == []
+
+
+def test_a_reused_pid_parent_makes_its_child_an_orphan():
+    from coordinator_core.bash_guards._session_census import orphan_trees
+
+    rows = [R(7, 0, 90, "explorer.exe"), R(8, 7, 50, "node.exe")]
+    assert [t.root.pid for t in orphan_trees(rows, since_ctime=0)] == [8]
+
+
+def test_claimed_heavy_counts_one_command_per_tree():
+    from coordinator_core.bash_guards._session_census import claimed_heavy
+
+    rows = [R(12, 999, 50, "bash.exe"), R(14, 12, 52, "node.exe"), R(16, 14, 54, "node.exe")]
+    assert [r.pid for r in claimed_heavy(rows, {(12, 50)})] == [14]
+    assert claimed_heavy(rows, set()) == []

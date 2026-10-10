@@ -135,3 +135,75 @@ def session_census(
             stack.append(child)
 
     return SessionCensus(anchor=anchor, heavy=tuple(heavy), shells=tuple(shells))
+
+
+def _children(rows: Sequence[ProcRow]) -> Dict[int, List[ProcRow]]:
+    out: Dict[int, List[ProcRow]] = {}
+    for r in rows:
+        out.setdefault(r.ppid, []).append(r)
+    return out
+
+
+def _subtree(root: ProcRow, children: Mapping[int, List[ProcRow]]) -> List[ProcRow]:
+    """root and its live descendants, never descending into a reused pid or a nested claude."""
+    out = [root]
+    stack = [root]
+    seen = {root.pid}
+    while stack:
+        cur = stack.pop()
+        for child in children.get(cur.pid, ()):
+            if child.pid in seen or child.ctime < cur.ctime or _is_claude(child.name):
+                continue
+            seen.add(child.pid)
+            out.append(child)
+            stack.append(child)
+    return out
+
+
+@dataclass(frozen=True)
+class OrphanTree:
+    """A live process tree whose root's parent has exited: what a Git Bash fork stub or a
+    detached launch leaves behind. stems is every image stem in the tree."""
+
+    root: ProcRow
+    stems: frozenset
+    heavy: Sequence[ProcRow]
+
+
+def orphan_trees(rows: Sequence[ProcRow], since_ctime: int) -> List[OrphanTree]:
+    """Orphan trees whose root was created at or after since_ctime and that hold a heavy image.
+
+    TRAP: on Windows a Git Bash command's real process tree is orphaned from launch (its fork-stub
+    parent exits at once), so ppid descent from the session never reaches it.
+    """
+    by_pid = {r.pid: r for r in rows}
+    children = _children(rows)
+    out: List[OrphanTree] = []
+    for r in rows:
+        if r.ctime < since_ctime or _is_claude(r.name):
+            continue
+        parent = by_pid.get(r.ppid)
+        if parent is not None and parent.ctime <= r.ctime:
+            continue
+        tree = _subtree(r, children)
+        heavy = tuple(p for p in tree if _stem(p.name) in HEAVY_IMAGES)
+        if heavy:
+            out.append(OrphanTree(r, frozenset(_stem(p.name) for p in tree), heavy))
+    return out
+
+
+def claimed_heavy(rows: Sequence[ProcRow], roots: Collection[tuple]) -> List[ProcRow]:
+    """One row per live tree rooted at a (pid, ctime) key: its earliest heavy-image process.
+
+    One per tree because a lease is one command; an `npx tsc` tree holds two node processes.
+    """
+    if not roots:
+        return []
+    children = _children(rows)
+    out: List[ProcRow] = []
+    for r in rows:
+        if (r.pid, r.ctime) in roots:
+            heavy = [p for p in _subtree(r, children) if _stem(p.name) in HEAVY_IMAGES]
+            if heavy:
+                out.append(min(heavy, key=lambda p: p.ctime))
+    return out

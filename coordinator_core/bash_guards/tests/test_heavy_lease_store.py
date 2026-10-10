@@ -1,11 +1,15 @@
 """Tests for the heavy-admission lease store with a stubbed ProcessPrimitives."""
 
+import json
 import threading
+import time
 
 from coordinator_core.bash_guards import _heavy_lease_store as store
+from coordinator_core.bash_guards._heavy_lease_store import claim_orphans, live_leases, oldest_open_launch, write_lease
 from coordinator_core.bash_guards._heavy_admission_contract import (
     LEASE_ATTRIBUTION_TTL_S,
     LeaseRecord,
+    ProcRow,
 )
 
 
@@ -94,3 +98,54 @@ def test_default_dir_under_settings_home(tmp_path, monkeypatch):
     store.write_lease(_rec())
     assert (tmp_path / "heavy-admission" / "leases").is_dir()
     assert len(store.live_leases()) == 1
+
+
+def _tree(pid, ctime, stems=("bash", "node")):
+    from coordinator_core.bash_guards._session_census import OrphanTree
+
+    root = ProcRow(pid, 999, ctime, "bash.exe")
+    return OrphanTree(root, frozenset(stems), (ProcRow(pid + 1, pid, ctime + 1, "node.exe"),))
+
+
+def _open(launch, cls="typecheck", session=(1, 10), at=None):
+    return LeaseRecord(session[0], session[1], session[0], session[1], cls, time.time() if at is None else at, launch)
+
+
+class TestClaimOrphans:
+    def test_a_lease_claims_the_tree_created_soonest_after_its_launch(self, tmp_path):
+        path = write_lease(_open(launch=100), tmp_path)
+        assert claim_orphans([_tree(50, 130), _tree(40, 110), _tree(30, 90)], window=60, directory=tmp_path) == 1
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        assert (rec["holder_pid"], rec["holder_ctime"], rec["launch_ctime"]) == (40, 110, 100)
+
+    def test_outside_the_window_or_before_the_launch_nothing_is_claimed(self, tmp_path):
+        write_lease(_open(launch=100), tmp_path)
+        assert claim_orphans([_tree(30, 99), _tree(40, 161)], window=60, directory=tmp_path) == 0
+
+    def test_a_tree_without_an_image_of_the_class_is_not_claimed(self, tmp_path):
+        write_lease(_open(launch=100, cls="typecheck"), tmp_path)
+        assert claim_orphans([_tree(40, 110, stems=("bash", "python"))], window=60, directory=tmp_path) == 0
+
+    def test_two_leases_take_two_trees_in_launch_order(self, tmp_path):
+        a = write_lease(_open(launch=100, session=(1, 10)), tmp_path)
+        b = write_lease(_open(launch=105, session=(2, 20)), tmp_path)
+        assert claim_orphans([_tree(40, 103), _tree(50, 108)], window=60, directory=tmp_path) == 2
+        assert json.loads(a.read_text(encoding="utf-8"))["holder_pid"] == 40
+        assert json.loads(b.read_text(encoding="utf-8"))["holder_pid"] == 50
+
+    def test_a_held_tree_is_never_claimed_twice(self, tmp_path):
+        write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", time.time(), 90), tmp_path)
+        write_lease(_open(launch=100), tmp_path)
+        assert claim_orphans([_tree(40, 110)], window=60, directory=tmp_path) == 0
+
+    def test_a_lease_without_a_launch_mark_or_past_the_ttl_is_never_claimed(self, tmp_path):
+        write_lease(_open(launch=0), tmp_path)
+        write_lease(_open(launch=100, at=time.time() - 10_000), tmp_path)
+        assert claim_orphans([_tree(40, 110)], window=60, directory=tmp_path) == 0
+        assert oldest_open_launch(tmp_path) is None
+
+    def test_an_old_lease_file_without_launch_ctime_still_reads(self, tmp_path):
+        p = tmp_path / "1-10-x.json"
+        p.write_text(json.dumps({"holder_pid": 1, "holder_ctime": 10, "session_pid": 1, "session_ctime": 10,
+                                 "heavy_class": "build", "admitted_at": 1.0}), encoding="utf-8")
+        assert live_leases(tmp_path)[0].launch_ctime == 0

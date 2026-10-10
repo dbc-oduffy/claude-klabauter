@@ -49,6 +49,19 @@ ALLOWLIST_PATH = Path(__file__).resolve().parent / "heavy_command_allowlist.txt"
 # A lease still unattributed to a heavy descendant after this long is reaped.
 LEASE_ATTRIBUTION_TTL_S = 120
 
+# An orphaned process tree is claimed by a lease only if its root was created within this many
+# seconds after the lease's launch mark.
+ORPHAN_CLAIM_WINDOW_S = 30
+
+# The image stems a lease of each class may claim; a tree holding none of them is not its command.
+CLASS_IMAGES = {
+    "typecheck": frozenset({"node", "tsc"}),
+    "build": frozenset({"node", "next", "vite", "cargo", "rustc", "dotnet", "pnpm", "npm"}),
+    "test_tier": frozenset({"node", "vitest", "pytest", "python", "python3"}),
+    "ue": frozenset({"unrealeditor", "unrealeditor-cmd", "unrealbuildtool", "ubt", "runuat", "dotnet"}),
+    "reindex": frozenset({"python", "python3", "node"}),
+}
+
 
 class HeavyClass(str, enum.Enum):
     TYPECHECK = "typecheck"
@@ -90,7 +103,8 @@ class ProcRow:
 @dataclass(frozen=True)
 class LeaseRecord:
     """A (pid, creation_time) admission lease; the holder starts as the session anchor and is
-    narrowed by the next census."""
+    narrowed by the next census. launch_ctime is the hook caller's creation time, in the host's
+    native ctime units, so an orphaned command tree can be matched to it; 0 means unknown."""
 
     holder_pid: int
     holder_ctime: int
@@ -98,6 +112,7 @@ class LeaseRecord:
     session_ctime: int
     heavy_class: str
     admitted_at: float
+    launch_ctime: int = 0
 
 
 @runtime_checkable

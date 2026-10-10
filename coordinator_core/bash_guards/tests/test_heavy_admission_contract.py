@@ -50,6 +50,7 @@ def test_record_fields():
     assert c.ProcRow.__dataclass_fields__.keys() == {"pid", "ppid", "ctime", "name"}
     assert c.LeaseRecord.__dataclass_fields__.keys() == {
         "holder_pid", "holder_ctime", "session_pid", "session_ctime", "heavy_class", "admitted_at",
+        "launch_ctime",
     }
     with pytest.raises(FrozenInstanceError):
         c.ProcRow(1, 0, 1, "x").pid = 2
