@@ -301,3 +301,26 @@ def test_emitted_path_argument_contains_no_backslash(tmp_path):
 
     entry = _ship_directives(directives)[0]
     assert "\\" not in entry["args"][-1]
+
+
+def test_ship_sha_is_the_sessions_newest_own_commit_never_head(tmp_path, monkeypatch):
+    _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "peerhead")
+    monkeypatch.setattr(wsc, "_session_owned_shas", lambda root, sid: ["older", "newest"])
+
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path))
+
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--sha", "newest"]
+
+
+@pytest.mark.parametrize("owned", [None, []])
+def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, monkeypatch, owned):
+    _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+    monkeypatch.setattr(wsc, "_resolve_head_sha", lambda root: "peerhead")
+    monkeypatch.setattr(wsc, "_session_owned_shas", lambda root, sid: owned)
+
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path))
+
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]

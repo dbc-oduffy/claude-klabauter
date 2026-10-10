@@ -2042,8 +2042,8 @@
     "coordinator_core/_claude_klabauter_root.py": "1ca5fe4ac5ba344f54e592b457e2cce041b9d666",
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_engine_landing.py": "3d78a4de720653e66d45fdd8e45729734e838e83",
-    "coordinator_core/_engine_published_at": "13517c6e9fcfd9c6064558f414ea2129d6790fbc",
-    "coordinator_core/_engine_stamp": "f543777491926bf0c99a8dedd4269d661e9a4d2b",
+    "coordinator_core/_engine_published_at": "f0b5b8bba6391180f3f5070114701ff604ccd11f",
+    "coordinator_core/_engine_stamp": "769e180fff6cbd52e2bbe5d9c65d9e3e44975323",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6865,7 +6865,7 @@
     "coordinator_core/workflow_watch/tests/test_stall_usage_limit.py": "70fbe8102b96310adbe73abddb927cbcb1b0e810",
     "coordinator_core/workflow_watch/tests/test_stamp.py": "c21cf9b9035a8a3e31a7174dea0113f436d1ca0c",
     "coordinator_core/workflow_watch/tests/test_terminal_detection.py": "d4ecc2d06e12e796f41591bff3d2b652f087948b",
-    "coordinator_core/workstream_complete/__init__.py": "e84061a329ef28c192de1d806227df9c2c83237e",
+    "coordinator_core/workstream_complete/__init__.py": "e5be7b60908641b0fe3f68e2b54278699ba03657",
     "coordinator_core/workstream_complete/apply.py": "843060c531494c087a1721a9edc3e2424819f51e",
     "coordinator_core/workstream_complete/completion_verdict.py": "243c7574b3d7de86b0564302a4680b015cdbd0cf",
     "coordinator_core/workstream_complete/directives_commit_tail.py": "e9ce002640ec417acc644fb095499d01897ad55f",
@@ -6909,7 +6909,7 @@
     "coordinator_core/workstream_complete/tests/test_close_ceremony_session_identity.py": "42644fcbdb1d2fa5ad5e41b16bcd59a811838d16",
     "coordinator_core/workstream_complete/tests/test_close_disposes_non_shipped.py": "10d6af629779c5d70f0e69fdfbad5302281fb848",
     "coordinator_core/workstream_complete/tests/test_close_ships_its_batons.py": "baa22e23103bb941be508327927255e12074e494",
-    "coordinator_core/workstream_complete/tests/test_close_ships_the_consumed_predecessor.py": "6b07bde8523f2e4089e94ad43ea03ff9875f447f",
+    "coordinator_core/workstream_complete/tests/test_close_ships_the_consumed_predecessor.py": "1e09c1726b92759fb1d21b0cb4afbf6eb6f62bfd",
     "coordinator_core/workstream_complete/tests/test_complete_entry_fill.py": "a24f84204b8a9befb3d0daf8441ccfbd53be2069",
     "coordinator_core/workstream_complete/tests/test_directives_memo_lifecycle_scoped_dirty_check.py": "a8ca56c90ebe715ecc0dd21967068a6da5b17a0f",
     "coordinator_core/workstream_complete/tests/test_dispatched_chunk_attribution.py": "3786d1d7341c6fbcb77ab30f5b7bcaf018b1566f",
@@ -7238,5 +7238,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "f3cf065e945831c2db20d08279f557739f7f2176"
+  "source_head": "db4d547525072520712825161d0780e1d1aee24c"
 }

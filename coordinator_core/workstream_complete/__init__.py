@@ -1784,7 +1784,7 @@ def build_directives(
     directives.extend(
         directives_memo_lifecycle.build_consumed_handoff_ship_directives(
             _consumed_ship_paths,
-            sha=_resolve_head_sha(repo_root) if _consumed_ship_paths else None,
+            sha=_newest_owned_sha(repo_root, gate.sid) if _consumed_ship_paths else None,
         )
     )
     deletion_blocks_check_directive = build_deletion_blocks_check_directive(
@@ -4401,6 +4401,18 @@ def _map_window_covers_session(
     if opened is None or started is None:
         return False
     return started >= opened
+
+
+def _newest_owned_sha(root: Path, session_id: Optional[str]) -> Optional[str]:
+    """Newest commit this session authored, by `Session-Id` trailer; None when it has none or
+    attribution fails.
+
+    TRAP: never HEAD. On a shared branch HEAD is routinely a peer's commit, and a ship stamp
+    naming it attributes the deliverable to work this session never did. None lets
+    `ship-handoff` derive the sha from the baton's own scope instead.
+    """
+    shas = _session_owned_shas(root, session_id) if session_id else None
+    return shas[-1] if shas else None
 
 
 def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
